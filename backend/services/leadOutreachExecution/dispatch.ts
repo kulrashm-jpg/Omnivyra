@@ -132,8 +132,8 @@ const NOT_SENT_OUTCOMES: readonly string[] = ['rejected', 'disabled'];
  * Null when a task returned to `queued` may be dispatched again; otherwise why
  * not. Every earlier attempt must have evidence, none may have been accepted,
  * and on an external transport each must have ended in an outcome that proves
- * nothing was sent — a timeout or provider error may have delivered, and a new
- * attempt carries a new idempotency key the provider cannot dedupe against.
+ * nothing was sent — a timeout or provider error may have delivered, and nothing
+ * at the provider would catch a second send.
  * An internal transport's outcome is authoritative (one work item per attempt).
  * An unreadable history refuses: a requeued task is never re-sent blind.
  */
@@ -204,6 +204,19 @@ export async function dispatchInternalOutreachTask(
   if (!transport) {
     recordDispatchOutcome('skipped');
     return result(taskId, 'skipped_no_transport', `no transport serves the "${task.channel}" channel`, startedMs, { status: task.status });
+  }
+
+  // A switched-off transport can do nothing, so nothing is attempted. This comes
+  // before governance because evaluating governance appends a decision row, and a
+  // sweep re-enters here every run: rows and quota (a raw attempt count) would
+  // grow for as long as the switch is off. The task keeps the state it was in.
+  if (transport.isAvailable?.() === false) {
+    recordDispatchOutcome('skipped');
+    recordStageOutcome('transport', 'skipped');
+    recordExternalOutcome(transport.external, 'disabled');
+    return result(taskId, 'skipped_transport_disabled', `the "${task.channel}" transport is disabled; nothing was attempted`, startedMs, {
+      status: task.status, provider: transport.provider, transportOutcome: 'disabled',
+    });
   }
 
   recordDispatchOutcome('started');
@@ -291,8 +304,9 @@ export async function dispatchInternalOutreachTask(
   // The attempt exists before the transport runs, so a crash mid-dispatch
   // leaves evidence that something was tried rather than a silent gap.
   const attemptNumber = await nextAttemptNumber(companyId, task.id);
-  // Deterministic — identity only, never time or randomness. Carried to the
-  // provider so a duplicate request can be refused by the provider itself.
+  // Deterministic — identity only, never time or randomness. Recorded on the
+  // attempt and passed to the port; today's provider function ignores it, so it
+  // does not stop a duplicate send (see `buildIdempotencyKey`).
   const idempotencyKey = buildIdempotencyKey(companyId, task.id, attemptNumber);
   const attempt = await appendAttempt({
     companyId,

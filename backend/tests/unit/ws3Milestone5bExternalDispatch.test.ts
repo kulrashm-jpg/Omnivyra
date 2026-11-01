@@ -287,7 +287,57 @@ describe('WS-3 M5B (2) — email dispatch', () => {
     expect(res.outcome).toBe('skipped_transport_disabled');
     // The gate sits before egress: the provider was never called.
     expect(provider.calls).toHaveLength(0);
-    expect((await getOutreachTaskById('co-a', id))?.status).toBe('queued');
+    // G-8: nothing was attempted, so the task keeps its state. This asserted
+    // `queued` while a disabled dispatch still claimed the task and wrote rows.
+    expect((await getOutreachTaskById('co-a', id))?.status).toBe('approved');
+  });
+
+  it('G-8: with the flag off, repeated dispatches write no row and use no quota', async () => {
+    delete process.env[EMAIL_ENABLED_ENV];
+    __clearTransportsForTests();
+    registerDefaultTransports({ emailProvider: testProvider });
+    configureTenant({ daily_limit_tenant: 2, daily_limit_lead: 2 });
+    const id = await approvedTask();
+    const before = JSON.stringify(db.tables);
+    db.filtersSeen = [];
+
+    for (let i = 0; i < 5; i += 1) {
+      const res = await dispatch(id);
+      expect(res).toMatchObject({ ok: false, outcome: 'skipped_transport_disabled', transportOutcome: 'disabled', attemptNumber: null });
+    }
+
+    expect(db.filtersSeen.filter((q) => q.op !== 'select')).toEqual([]);
+    expect(JSON.stringify(db.tables)).toBe(before);
+    expect([...fakeRedis.store.values()].every((v) => v === 0)).toBe(true);
+  });
+
+  it('G-8: turning the flag on after a long off period finds the task and the quota intact', async () => {
+    delete process.env[EMAIL_ENABLED_ENV];
+    __clearTransportsForTests();
+    registerDefaultTransports({ emailProvider: testProvider });
+    configureTenant({ daily_limit_tenant: 1, daily_limit_lead: 1 });
+    const id = await approvedTask();
+    for (let i = 0; i < 3; i += 1) await dispatch(id);
+
+    process.env[EMAIL_ENABLED_ENV] = 'true';
+    const res = await dispatch(id);
+    expect(res).toMatchObject({ outcome: 'sent', attemptNumber: 1 });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('G-8: the transport keeps its own gate if the flag flips after the early check', async () => {
+    let on = true;
+    const transport = createEmailTransport(testProvider, { enabled: () => on });
+    __clearTransportsForTests();
+    registerTransport(transport);
+    configureTenant();
+    expect(transport.isAvailable?.()).toBe(true);
+    on = false;
+    expect(transport.isAvailable?.()).toBe(false);
+    expect((await transport.send({
+      task: { companyId: 'co-a' } as never, attemptId: 'a', attemptNumber: 1, idempotencyKey: 'k', recipient: RECIPIENT, at: NOW,
+    })).outcome).toBe('disabled');
+    expect(provider.calls).toHaveLength(0);
   });
 
   it('rejects a missing or malformed recipient without calling the provider', async () => {

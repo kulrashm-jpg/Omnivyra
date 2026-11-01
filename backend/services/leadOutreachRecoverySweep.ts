@@ -32,6 +32,10 @@
  *    on. Concurrent or repeated sweeps are safe because every claim is a
  *    compare-and-set and every attempt number is unique per task.
  *  • Never approves, never enables a tenant, never reads outcomes.
+ *  • A task stuck in `dispatching` (a crash after the claim) is reported, and
+ *    only reported. It may have been sent, so nothing here retries or resolves
+ *    it, and it is not `queued`, so dispatch would not take it either. A person
+ *    has to establish what happened.
  *
  * ─── DRY RUN (non-production validation) ───────────────────────────────────
  * `dryRun: true` performs the same read and the same prior-attempt check and
@@ -44,6 +48,7 @@
 import {
   isLeadOutreachGloballyDisabled,
   listQueuedOutreachTasks,
+  listStaleDispatchingOutreachTasks,
   registerDefaultTransports,
   requeuedDispatchProblem,
   type OutreachTask,
@@ -57,7 +62,13 @@ export const RECOVERY_SWEEP_ENABLED_ENV = 'LEAD_OUTREACH_RECOVERY_SWEEP_ENABLED'
 export const isRecoverySweepEnabled = (): boolean =>
   String(process.env[RECOVERY_SWEEP_ENABLED_ENV] ?? '').toLowerCase() === 'true';
 
-export const RECOVERY_SWEEP_DEFAULTS = { scanLimit: 200, maxLeads: 25, timeBudgetMs: 45_000 } as const;
+export const RECOVERY_SWEEP_DEFAULTS = {
+  scanLimit: 200,
+  maxLeads: 25,
+  timeBudgetMs: 45_000,
+  /** Far beyond the 15s provider budget, so a dispatch in flight is not reported. */
+  staleDispatchingAfterMs: 15 * 60_000,
+} as const;
 
 /** Most unrecoverable tasks listed in one report; the count is always complete. */
 const MAX_LISTED = 20;
@@ -66,6 +77,7 @@ export interface RecoverySweepOptions {
   scanLimit?: number;
   maxLeads?: number;
   timeBudgetMs?: number;
+  staleDispatchingAfterMs?: number;
   /** Injected clock (ms), for deterministic tests. */
   clock?: () => number;
   /** Report what a real run would dispatch; dispatch is never called. */
@@ -92,6 +104,13 @@ export interface RecoverySweepReport {
   failures: Array<{ companyId: string; leadId: string; error: string }>;
   /** Dry run only: the tasks a real run would hand to dispatch, per lead (bounded like a real run). */
   wouldDispatch: Array<{ companyId: string; leadId: string; taskIds: string[] }>;
+  /**
+   * Tasks in `dispatching` for longer than any dispatch runs, at most `scanLimit`.
+   * Each needs a person: it may have been sent. Null means not known: this run read
+   * nothing, or the read failed (logged), and it must not be taken for none.
+   */
+  staleDispatching: number | null;
+  staleDispatchingTasks: Array<{ companyId: string; taskId: string; since: string | null }>;
 }
 
 const emptyReport = (enabled: boolean, skipped: RecoverySweepReport['skipped'], dryRun = false): RecoverySweepReport => ({
@@ -108,6 +127,8 @@ const emptyReport = (enabled: boolean, skipped: RecoverySweepReport['skipped'], 
   sent: 0,
   failures: [],
   wouldDispatch: [],
+  staleDispatching: null,
+  staleDispatchingTasks: [],
 });
 
 const positive = (v: number | undefined, fallback: number): number =>
@@ -136,6 +157,18 @@ export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOpt
   registerDefaultTransports({ email: 'engine' });
   const report = emptyReport(enabled, null, dryRun);
   report.scanned = queued.tasks.length;
+
+  // Report only, and read before this run claims anything. A failure here costs
+  // the report, not the recovery, and leaves the count unknown rather than zero.
+  const staleAfterMs = positive(options.staleDispatchingAfterMs, RECOVERY_SWEEP_DEFAULTS.staleDispatchingAfterMs);
+  const stale = await listStaleDispatchingOutreachTasks(new Date(started - staleAfterMs).toISOString(), scanLimit);
+  if (stale.ok === false) {
+    logger.error('outreach.recovery_sweep.stale_dispatching_unreadable', { error: stale.error });
+  } else {
+    report.staleDispatching = stale.tasks.length;
+    report.staleDispatchingTasks = stale.tasks.slice(0, MAX_LISTED)
+      .map((t) => ({ companyId: t.companyId, taskId: String(t.id), since: t.updatedAt }));
+  }
 
   // Group the recoverable tasks per (tenant, lead), oldest first.
   const groups = new Map<string, { companyId: string; leadId: string; taskIds: string[] }>();
@@ -182,6 +215,7 @@ export async function runOutreachDispatchRecoverySweep(options: RecoverySweepOpt
     scanned: report.scanned,
     recoverable: report.recoverable,
     unrecoverable: report.unrecoverable,
+    staleDispatching: report.staleDispatching,
     leadsProcessed: report.leadsProcessed,
     leadsDeferred: report.leadsDeferred,
     sent: report.sent,

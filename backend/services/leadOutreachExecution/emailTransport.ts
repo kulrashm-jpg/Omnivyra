@@ -80,7 +80,10 @@ export interface EmailProviderResponse {
   messageId: string | null;
   /** Provider-side rejection reason, when it rejected. */
   rejectionReason?: string | null;
-  /** True when the provider recognised the idempotency key as a repeat. */
+  /**
+   * True when the provider recognised the idempotency key as a repeat. The
+   * default provider's function never does: it ignores the key.
+   */
   duplicate?: boolean;
   /** Structured provider response, already free of message content. */
   raw?: Record<string, unknown>;
@@ -91,6 +94,31 @@ export interface EmailProviderPort {
   readonly name: string;
   send(request: EmailProviderRequest): Promise<EmailProviderResponse>;
 }
+
+/** The shape of what `functions.invoke` returns as `error`. Read, never constructed. */
+interface EdgeInvokeError {
+  name?: string;
+  message?: string;
+  context?: { status?: unknown };
+}
+
+/**
+ * True only when the function answered with a refusal that proves nothing left
+ * for the recipient. `send-transactional-email` returns a 4xx only from checks
+ * that run before it calls SES (method, caller auth, body, template, link), so a
+ * `FunctionsHttpError` with a 4xx is a definitive no.
+ *
+ * Everything else may have acted: a network failure can lose the answer to a
+ * call SES accepted, a relay error does not say how far the call got, a 5xx can
+ * follow SES accepting, and a 408 is a gateway giving up on a call that may still
+ * be running. Those throw, so the transport classifies them `provider_error`,
+ * which `dispatch` never sends again.
+ */
+const isDefinitiveRefusal = (error: EdgeInvokeError): boolean => {
+  if (error.name !== 'FunctionsHttpError') return false;
+  const status = error.context?.status;
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
+};
 
 /**
  * Default provider: the platform's existing transactional-email Edge Function.
@@ -106,7 +134,7 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
   async send(request: EmailProviderRequest): Promise<EmailProviderResponse> {
     // Imported lazily so the module graph carries no client for a transport
     // that is disabled by default.
-    const { supabase } = (await import('../../db/supabaseClient')) as { supabase: { functions: { invoke: (fn: string, opts: unknown) => Promise<{ data?: unknown; error?: { message?: string } }> } } };
+    const { supabase } = (await import('../../db/supabaseClient')) as { supabase: { functions: { invoke: (fn: string, opts: unknown) => Promise<{ data?: unknown; error?: EdgeInvokeError | null }> } } };
 
     const res = await supabase.functions.invoke('send-transactional-email', {
       body: {
@@ -121,7 +149,10 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
     });
 
     if (res.error) {
-      return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
+      if (!isDefinitiveRefusal(res.error)) {
+        throw new Error(`edge function outcome unknown (${String(res.error.name ?? 'error')}, status ${String(res.error.context?.status ?? 'none')}): ${String(res.error.message ?? '')}`);
+      }
+      return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? ''), status: res.error.context?.status } };
     }
     const data = (res.data ?? {}) as { messageId?: string; id?: string; duplicate?: boolean };
     return {
@@ -187,6 +218,7 @@ export function createEmailTransport(
     channel: 'email',
     provider: provider.name,
     external: true,
+    isAvailable: () => enabled(),
 
     async send(request: TransportRequest): Promise<TransportResult> {
       const base = { provider: provider.name, providerMessageId: null, duplicate: false } as const;
