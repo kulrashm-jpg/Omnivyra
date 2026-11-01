@@ -168,12 +168,17 @@ describe('promoteQuarantinedMedia', () => {
     delete mockMem.faults.move;
     expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toMatchObject({ ok: true, alreadyPromoted: false });
   });
-  it('a concurrent duplicate (delivery already holds the key) → ok, alreadyPromoted, quarantine leftover discarded, no overwrite', async () => {
+  it('a concurrent duplicate (delivery already holds the key) → NOT adopted by the service (unproven), no overwrite, nothing deleted', async () => {
     // J1 H3-1: the real race - validated here, then a concurrent winner's MOVE consumed the source.
+    // H3-FIX (F-H3-1): a consumed source + equal size/type/head does not PROVE a
+    // move (a planted object passes the same checks), so the service never
+    // adopts a non-image; the route accepts it only on a committed row.
     mockMem.put(QUARANTINE_BUCKET, KEY, MP4, 'video/mp4');
     const v = await validate('video/mp4');
     await mockMem.storage.from(QUARANTINE_BUCKET).move(KEY, KEY, { destinationBucket: DELIVERY_BUCKET });
-    expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toEqual({ ok: true, deliveryPath: KEY, alreadyPromoted: true });
+    expect(await promoteQuarantinedMedia({ objectPath: KEY, validated: v as any })).toMatchObject({ ok: false, unproven: true });
+    expect(mockMem.objects.get(`${DELIVERY_BUCKET}/${KEY}`)?.bytes.equals(MP4)).toBe(true);
+    expect(mockMem.events.some((e) => e.startsWith(`remove:${DELIVERY_BUCKET}:`))).toBe(false);
     expect(mockMem.has(QUARANTINE_BUCKET, KEY)).toBe(false);
   });
   it('images: uploads the NORMALIZED bytes (upsert:false) and removes the quarantined original', async () => {

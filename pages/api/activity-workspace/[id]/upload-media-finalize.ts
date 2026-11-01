@@ -67,6 +67,7 @@ import {
   removeDeliveryObject,
   readConsumedObjectPaths,
   appendConsumedObjectPath,
+  authorizedMimeForObjectPath,
 } from '@/backend/services/activityWorkspace/quarantinedMediaUpload';
 
 /** Delivery bucket (public). Only the server writes here, after validation. */
@@ -100,8 +101,54 @@ function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-/** Rejections before promotion delete the caller's QUARANTINED object only. */
+/**
+ * Rejections before promotion delete the caller's QUARANTINED object only.
+ *
+ * F-H3-1 / J3-1: exits decided by the REQUEST alone (declared size, declared
+ * type, expected_revision) never delete: a second, deliberately bad finalize
+ * of the same key must not be able to remove the quarantine source out from
+ * under an honest in-flight finalize. Such objects stay private (F-H3-7).
+ */
 const deleteStorageObject = discardQuarantinedObject;
+
+/**
+ * F-H3-1 - a committed row that records `objectPath` as this activity's
+ * PROMOTED delivery object. Only a request whose own move (or byte-identical
+ * image upload) succeeded can commit such a row, so it is the proof that a
+ * non-image object already at the delivery key is the validated one. Unlike
+ * committedRowReferencesObject this is fail-closed: a read error is "no".
+ */
+async function readCommittedPromotion(id: string, objectPath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data, error } = await supabase
+      .from('daily_content_plans')
+      .select('content')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return null;
+    const content = safeObject((data as { content?: unknown }).content);
+    return content.upload_quarantine_promoted === true
+      && content.upload_storage_bucket === UPLOAD_BUCKET
+      && content.upload_storage_object_path === objectPath
+      && PROMOTED_STATES.has(readLifecycleState(content))
+      ? content
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Bounded wait for a concurrent winner's row commit (F-H3-1). */
+const PROMOTION_PROOF_ATTEMPTS = 5;
+const PROMOTION_PROOF_DELAY_MS = 250;
+async function awaitCommittedPromotion(id: string, objectPath: string): Promise<Record<string, unknown> | null> {
+  for (let attempt = 0; attempt < PROMOTION_PROOF_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, PROMOTION_PROOF_DELAY_MS));
+    const committed = await readCommittedPromotion(id, objectPath);
+    if (committed) return committed;
+  }
+  return null;
+}
 
 /** Replacement of a prior DELIVERED object of this activity. */
 async function deletePriorDeliveredObject(objectPath: string): Promise<void> {
@@ -180,12 +227,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // is theirs to delete.
   const { data: rowData, error: rowError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, content_type, content, content_status, platform')
+    .select('id, campaign_id, content_type, content, content_status, platform, updated_at')
     .eq('id', id)
     .maybeSingle();
   if (rowError) return res.status(500).json({ error: 'Failed to load row.' });
   if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown };
+  const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown; updated_at?: string | null };
 
   // ── Resolve company + authorize ───────────────────────────────────────
   let companyId: string | null = null;
@@ -211,7 +258,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Authorized: size + attachment-required gates (orphan cleanup allowed) ─
   if (sizeBytes > MAX_FILE_BYTES) {
-    await deleteStorageObject(storagePath);
+    // A CLAIM by the caller (the stored size is checked in validation): no delete (F-H3-1).
     return res.status(413).json({ error: `Uploaded file exceeds ${MAX_FILE_BYTES} bytes.` });
   }
   const contentType = normalizeCreatorFormat(row.content_type || '');
@@ -234,10 +281,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     (expectedCategory === 'audio' && mimeBase.startsWith('audio/')) ||
     (expectedCategory === 'image' && mimeBase.startsWith('image/'));
   if (!matchesCategory) {
-    await deleteStorageObject(storagePath);
+    // Caller-declared: no delete (F-H3-1).
     return res.status(415).json({
       error: `Uploaded MIME "${mimeBase}" does not match expected category "${expectedCategory}" for "${contentType}".`,
       code: 'UPLOAD_MIME_MISMATCH',
+    });
+  }
+  // F-H3-2: the type is bound to the key minted at authorize (its extension).
+  // Any other declared type is refused, so the stored content type, which
+  // validation pins to the declared type, always agrees with the key. No
+  // delete: the declared type is the caller's (F-H3-1).
+  const authorizedMime = authorizedMimeForObjectPath(storagePath);
+  if (!authorizedMime || authorizedMime !== mimeBase) {
+    return res.status(415).json({
+      error: 'The declared type is not the type this upload was authorized for.',
+      code: 'UPLOAD_TYPE_NOT_AUTHORIZED',
     });
   }
   // ── Duplicate / replayed finalize (idempotent, never re-promoted) ──────
@@ -308,7 +366,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (expectedRevision !== null) {
     const actualRevision = readLifecycleRevision(currentContent);
     if (expectedRevision !== actualRevision) {
-      await deleteStorageObject(storagePath);
+      // Caller-supplied revision: no delete (F-H3-1). The object stays private.
       return res.status(409).json({
         error: `Row revision changed since fetch: expected ${expectedRevision}, actual ${actualRevision}.`,
         code: 'CONCURRENT_UPLOAD_CONFLICT',
@@ -413,6 +471,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       retryable: false,
     });
   }
+  if (promotion.ok === false && promotion.unproven === true) {
+    // F-H3-1: a non-image object sits at the delivery key and this request's
+    // move did not put it there. Accept it only if a concurrent winner has
+    // COMMITTED a row recording this key as promoted (that winner's move is the
+    // proof); otherwise refuse, retryably, and record nothing.
+    const committed = await awaitCommittedPromotion(id, storagePath);
+    if (committed) {
+      return res.status(200).json({
+        success: true,
+        idempotent_replay: true,
+        from: readLifecycleState(committed),
+        to: readLifecycleState(committed),
+        daily_plan_id: id,
+        content_type: contentType,
+        uploaded_media_url: committed.uploaded_media_url ?? null,
+        upload_source: committed.upload_source ?? source,
+        uploaded_mime_type: committed.uploaded_mime_type ?? null,
+        uploaded_size_bytes: committed.uploaded_size_bytes ?? null,
+        storage: { bucket: UPLOAD_BUCKET, object_path: storagePath },
+      });
+    }
+    console.error('[security][media-h3] delivery object not provably promoted by the server; refusing to adopt it', {
+      event: 'media_h3_delivery_unproven', daily_plan_id: id, objectPath: storagePath, companyId, reason: promotion.reason,
+    });
+    return res.status(503).json({
+      error: 'The upload could not be confirmed as published. Please retry finalize.',
+      code: 'UPLOAD_PROMOTION_UNCONFIRMED',
+      retryable: true,
+    });
+  }
   if (promotion.ok === false) {
     console.warn('[upload-media-finalize] promotion failed; object stays quarantined', {
       daily_plan_id: id, objectPath: storagePath, reason: promotion.reason,
@@ -424,16 +512,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  const { error: writeError } = await ownedDbTable('daily_content_plans')
+  // F-H3-6: compare-and-swap on the row read at the start (updated_at), so a
+  // concurrent finalize of a DIFFERENT session that committed in between is not
+  // silently overwritten. `count: 'exact'` reports the matched rows; 0 = lost.
+  let rowWrite = ownedDbTable('daily_content_plans')
     .update({
       content: JSON.stringify(toReady.content),
       content_status: toReady.contentStatus,
       failure_reason: null,
       failure_type: null,
       updated_at: new Date().toISOString(),
-    })
+    }, { count: 'exact' })
     .eq('id', id);
-  if (writeError) {
+  if (typeof row.updated_at === 'string') rowWrite = rowWrite.eq('updated_at', row.updated_at);
+  else if (row.updated_at === null) rowWrite = rowWrite.is('updated_at', null);
+  const { error: writeError, count: writeCount } = await rowWrite;
+  const lostRace = !writeError && typeof writeCount === 'number' && writeCount === 0;
+  if (writeError || lostRace) {
     // Roll the promoted object back out of the public bucket — but only if THIS
     // request promoted it. An alreadyPromoted object belongs to a concurrent
     // finalize whose row write may have succeeded; deleting it would leave that
@@ -447,7 +542,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!promotion.alreadyPromoted && !(await committedRowReferencesObject(id, storagePath))) {
       await removeDeliveryObject(storagePath);
     }
-    return res.status(500).json({ error: `Failed to record upload: ${writeError.message}` });
+    if (lostRace) {
+      return res.status(409).json({
+        error: 'The row changed while this upload was being finalized. Reload and retry.',
+        code: 'CONCURRENT_UPLOAD_CONFLICT',
+      });
+    }
+    // F-H3-8: the database error stays in the server log, never in the response.
+    console.error('[upload-media-finalize] row write failed', { daily_plan_id: id, objectPath: storagePath, message: writeError?.message });
+    return res.status(500).json({ error: 'Failed to record upload.', code: 'UPLOAD_RECORD_FAILED' });
   }
 
   // Post-upload auto-schedule: schedule THIS row now (insert scheduled_posts +

@@ -78,6 +78,29 @@ export function mintQuarantineObjectPath(input: { companyId: string; activityId:
   return { objectPath: `${input.companyId}/${input.activityId}/${subdir}/${stem}.${ext}`, stem };
 }
 
+/** `<subdir>/<ext>` suffix that mintQuarantineObjectPath produces for `mime`. */
+function mintedSuffixFor(mime: string): string {
+  const m = normalizeMime(mime);
+  return `${mimeCategory(m) ?? 'misc'}/${m.split('/')[1]?.replace(/[^a-z0-9]+/gi, '') || 'bin'}`;
+}
+
+/**
+ * F-H3-2 - the allowlisted type a server-minted key was AUTHORIZED for, read
+ * back from the `<subdir>/<stem>.<ext>` the key was minted with (authorize only
+ * mints for QUARANTINE_ALLOWED_MIME_TYPES). null = not a key minted for an
+ * allowed type. Finalize must refuse any declared type other than this one, so
+ * the stored content type always agrees with the key's extension.
+ */
+export function authorizedMimeForObjectPath(objectPath: string): string | null {
+  const parts = String(objectPath ?? '').split('/');
+  if (parts.length < 2) return null;
+  const file = parts[parts.length - 1];
+  const dot = file.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const suffix = `${parts[parts.length - 2]}/${file.slice(dot + 1)}`.toLowerCase();
+  return QUARANTINE_ALLOWED_MIME_TYPES.find((m) => mintedSuffixFor(m) === suffix) ?? null;
+}
+
 export type QuarantineValidationFailure = {
   ok: false;
   status: number;
@@ -258,8 +281,12 @@ export type PromotionResult =
   /**
    * `conflict: true` = an object already sits at the delivery key and it is NOT
    * the object this request validated (J1 H3-1). Never record or schedule it.
+   * `unproven: true` = a non-image object sits at the delivery key and this
+   * request cannot prove it came from a server move of the validated object
+   * (F-H3-1). Never adopt it on its own evidence; the caller may accept it only
+   * on a committed row that records the key as promoted.
    */
-  | { ok: false; reason: string; conflict?: boolean };
+  | { ok: false; reason: string; conflict?: boolean; unproven?: boolean };
 
 type DeliveryInfo = { exists: true; size: number; contentType: string } | { exists: false } | { exists: null; message: string };
 
@@ -289,6 +316,7 @@ async function quarantineObjectStillPresent(objectPath: string): Promise<boolean
 export type DeliveryMatch =
   | { verdict: 'match' }
   | { verdict: 'absent' }
+  | { verdict: 'unproven'; reason: string }
   | { verdict: 'mismatch'; reason: string }
   | { verdict: 'unverifiable'; reason: string };
 
@@ -306,8 +334,15 @@ export type DeliveryMatch =
  *                source. A delivery object that coexists with this session's
  *                quarantine source was therefore not produced by moving it, so
  *                it is a mismatch. The first HEAD_BYTES must also hash to what
- *                passed the signature check. (A full-content hash of a multi-GB
- *                video would need a full read; residual documented in J1-FIXES.)
+ *                passed the signature check.
+ *                F-H3-1 / J3-1: even then it is only `unproven`, never `match`.
+ *                A consumed source + equal size/type/head does not prove a
+ *                move: the source can disappear for other reasons (a concurrent
+ *                discard, an operator) while a planted object with the same
+ *                head and an arbitrary tail sits at the key. A full-content
+ *                hash of a multi-GB video would need a full read, so this
+ *                function never adopts a non-image; the finalize route accepts
+ *                one only when a committed row records the key as promoted.
  */
 export async function verifyExistingDeliveryObject(objectPath: string, validated: QuarantineValidationSuccess): Promise<DeliveryMatch> {
   const info = await inspectDeliveryObject(objectPath);
@@ -337,7 +372,9 @@ export async function verifyExistingDeliveryObject(objectPath: string, validated
   if (!validated.headSha256) return { verdict: 'unverifiable', reason: 'no validated fingerprint' };
   const head = await readHeadViaSignedRange(DELIVERY_BUCKET, objectPath, HEAD_BYTES);
   if (!head) return { verdict: 'unverifiable', reason: 'delivery head could not be read' };
-  return sha256Hex(head) === validated.headSha256 ? { verdict: 'match' } : { verdict: 'mismatch', reason: 'head_sha256_differs' };
+  return sha256Hex(head) === validated.headSha256
+    ? { verdict: 'unproven', reason: 'non_image_delivery_object_not_provably_moved' }
+    : { verdict: 'mismatch', reason: 'head_sha256_differs' };
 }
 
 /**
@@ -390,6 +427,12 @@ export async function promoteQuarantinedMedia(input: {
         validatedMime: validated.mime,
       });
       return { ok: false, reason: `delivery object conflict: ${match.reason}`, conflict: true };
+    }
+    if (match.verdict === 'unproven') {
+      // F-H3-1: not adopted, not deleted (it may be a concurrent winner's
+      // object that a committed row references). Nothing to discard: the
+      // quarantine source is already gone.
+      return { ok: false, reason: `${errorMessage}; ${match.reason}`, unproven: true };
     }
     if (match.verdict === 'unverifiable') return { ok: false, reason: `${errorMessage}; ${match.reason}` };
     return { ok: false, reason: errorMessage };
