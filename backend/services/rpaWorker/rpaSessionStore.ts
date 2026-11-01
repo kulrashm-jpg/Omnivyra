@@ -264,7 +264,8 @@ export async function saveRpaSession(
       account_tier: null,
       last_login_at: metadata?.last_login_at ?? now,
       expires_at: metadata?.expires_at ?? null,
-      last_verified_at: metadata?.last_verified_at ?? now,
+      // Saving verifies nothing: only a real verifier may stamp this.
+      last_verified_at: metadata?.last_verified_at ?? null,
       updated_at: now,
     },
     { onConflict: 'organization_id,platform' },

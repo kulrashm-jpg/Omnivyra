@@ -221,6 +221,81 @@ describe('D5 — a self-declared account tier is never trusted', () => {
   });
 });
 
+describe('session capture scope and metadata', () => {
+  const FOREIGN = { name: 'SID', value: 'FOREIGN-SECRET', domain: '.google.com', path: '/' };
+  const LOOKALIKE = { name: 'x', value: 'LOOKALIKE-SECRET', domain: '.linkedin.com.evil.com', path: '/' };
+  const NO_DOMAIN = { name: 'y', value: 'NO-DOMAIN-SECRET', path: '/' };
+  const MIXED = [...STATE.cookies, FOREIGN, LOOKALIKE, NO_DOMAIN];
+  const complete = (token: string, cookies: unknown[], extra: Record<string, unknown> = {}) =>
+    call(completeHandler, { method: 'POST', headers: {}, body: { session_token: token, capture: { cookies }, ...extra } });
+  const stored = async () => (await store.loadRpaSession(ORG_A, 'linkedin')) as { cookies: Array<{ name: string }> };
+
+  it('save-session stores only the platform\'s cookies', async () => {
+    const token = (await start()).body.session_token;
+    const r = await save(token, { storage_state: { cookies: MIXED, origins: [] } });
+    expect(r.statusCode).toBe(200);
+    expect((await stored()).cookies.map((c) => c.name)).toEqual(['li_at']);
+  });
+
+  it('complete stores only the platform\'s cookies and counts what it kept', async () => {
+    const token = (await start()).body.session_token;
+    const r = await complete(token, MIXED);
+    expect(r.statusCode).toBe(200);
+    expect(r.body.cookie_count).toBe(1);
+    expect((await stored()).cookies.map((c) => c.name)).toEqual(['li_at']);
+  });
+
+  it('nothing for this platform: refused, nothing stored, token not consumed', async () => {
+    const token = (await start()).body.session_token;
+    const a = await save(token, { storage_state: { cookies: [FOREIGN], origins: [] } });
+    expect(a.statusCode).toBe(400);
+    const b = await complete(token, [FOREIGN]);
+    expect(b.statusCode).toBe(400);
+    expect(JSON.stringify([a.body, b.body])).not.toContain('FOREIGN-SECRET');
+    expect(sessionRow()).toBeUndefined();
+    expect(mockDb.tables.rpa_auth_token_redemptions).toHaveLength(0);
+    expect((await save(token)).statusCode).toBe(200);
+  });
+
+  it('an unparseable expires_at is refused before the token is consumed', async () => {
+    const token = (await start()).body.session_token;
+    for (const bad of ['next tuesday', '1', '', 12345]) {
+      expect((await save(token, { expires_at: bad })).statusCode).toBe(400);
+      expect((await complete(token, STATE.cookies, { expires_at: bad })).statusCode).toBe(400);
+    }
+    expect(sessionRow()).toBeUndefined();
+    expect(mockDb.tables.rpa_auth_token_redemptions).toHaveLength(0);
+  });
+
+  it('a valid expires_at is stored normalised; absent stays null', async () => {
+    const token = (await start()).body.session_token;
+    expect((await save(token, { expires_at: '2030-01-02T03:04:05+00:00' })).statusCode).toBe(200);
+    expect(sessionRow()!.expires_at).toBe('2030-01-02T03:04:05.000Z');
+    const second = (await start()).body.session_token;
+    expect((await complete(second, STATE.cookies)).statusCode).toBe(200);
+    expect(sessionRow()!.expires_at).toBeNull();
+  });
+
+  it('saving a session does not claim it was verified, on either route', async () => {
+    const first = (await start()).body.session_token;
+    expect((await save(first)).statusCode).toBe(200);
+    expect(sessionRow()!.last_verified_at).toBeNull();
+    const second = (await start()).body.session_token;
+    expect((await complete(second, STATE.cookies)).statusCode).toBe(200);
+    expect(sessionRow()!.last_verified_at).toBeNull();
+    await store.saveRpaSession(ORG_A, 'linkedin', STATE);
+    expect(sessionRow()!.last_verified_at).toBeNull();
+  });
+
+  it('the only reader, the callback, reports the null as-is and still says registered', async () => {
+    const token = (await start()).body.session_token;
+    expect((await save(token)).statusCode).toBe(200);
+    const again = (await start()).body.session_token;
+    const r = await call(callbackHandler, { method: 'GET', headers: {}, query: { session_token: again } });
+    expect(r.body).toMatchObject({ status: 'registered', last_verified_at: null });
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 describe('D6 — session cookies are encrypted at rest', () => {
   it('no plaintext cookie value is stored; the row holds only the envelope', async () => {

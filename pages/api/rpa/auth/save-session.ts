@@ -22,8 +22,12 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-import { consumeRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
+import { consumeRpaAuthToken, verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { saveRpaSession } from '../../../../backend/services/rpaWorker/rpaSessionStore';
+import {
+  parseSessionExpiresAt,
+  scopeStorageStateToPlatform,
+} from '../../../../backend/services/rpaWorker/rpaSessionImporter';
 
 type SaveSessionBody = {
   session_token?: string;
@@ -48,11 +52,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const body = (req.body || {}) as SaveSessionBody;
     const token = (body.session_token ?? '').toString();
-    const storageState = body.storage_state;
+    const storageState = body.storage_state as Parameters<typeof saveRpaSession>[2];
 
     if (!token) return res.status(400).json({ error: 'session_token required' });
     if (!looksLikeStorageState(storageState)) {
       return res.status(400).json({ error: 'storage_state must be a Playwright storageState object' });
+    }
+    const expiresAt = parseSessionExpiresAt(body.expires_at);
+    if (expiresAt.ok === false) {
+      return res.status(400).json({ error: 'expires_at must be an ISO 8601 date' });
+    }
+    // The platform lives in the token. A plain verify consumes nothing, so a
+    // blob with no cookie for that platform does not burn the token.
+    const peeked = verifyRpaAuthToken(token);
+    if (peeked.ok === true && !scopeStorageStateToPlatform(storageState, peeked.payload.platform).cookies?.length) {
+      return res.status(400).json({ error: 'storage_state has no cookies for this platform' });
     }
 
     // Single-use, user-bound redemption: signature + expiry, the issuing user
@@ -73,11 +87,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // server-side verifier establishes it.
     const declaredTierIgnored = body.account_tier != null;
 
-    await saveRpaSession(organization_id, platform, storageState as Parameters<typeof saveRpaSession>[2], {
+    await saveRpaSession(organization_id, platform, scopeStorageStateToPlatform(storageState, platform), {
       account_tier: null,
       last_login_at: new Date().toISOString(),
-      expires_at: body.expires_at ?? null,
-      last_verified_at: new Date().toISOString(),
+      expires_at: expiresAt.value,
     });
 
     return res.status(200).json({
