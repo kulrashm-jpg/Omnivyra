@@ -6,7 +6,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * POST flow:
  *   1. Verify X-Hub-Signature-256 (HMAC-SHA256)
  *   2. Enqueue raw payload to whatsapp-webhook queue (jobId = sha256(body) for dedup)
- *   3. Return 200 immediately — processing happens in whatsappWebhookProcessor
+ *   3. Return 200 immediately — processing happens in whatsappWebhookProcessor.
+ *      Not queued → 503, so Meta redelivers it.
  *
  * Replay protection: identical payloads produce same jobId — BullMQ ignores duplicates.
  * Security: APP_SECRET required in every environment; unset → every POST is 401.
@@ -104,10 +105,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       if (!enqueued) {
         console.error('[whatsapp-webhook] enqueue shed by backpressure', { jobId });
+        return res.status(503).json({ error: 'Event not queued' });
       }
     } catch (err) {
-      // Log but still ack — prevents Meta from retrying a payload we may have partially queued
+      // Not acked: a 200 here would lose the event for good, a STOP included. Answering
+      // 503 when the job did reach Redis is safe. One body is one job, so a payload cannot
+      // be part-queued; the redelivery has the same jobId, which BullMQ ignores; and if it
+      // does run twice (retention expired, or different bytes) each event is idempotent.
       console.error('[whatsapp-webhook] enqueue failed', err);
+      return res.status(503).json({ error: 'Event not queued' });
     }
 
     // Ack immediately — Meta requires 200 within ~5s
