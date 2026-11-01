@@ -65,6 +65,7 @@ function fakePlaywright() {
   const calls = { launches: 0, gotos: [] as string[], clicks: 0 };
   const page = {
     goto: jest.fn(async (u: string) => { calls.gotos.push(u); }),
+    url: jest.fn(() => calls.gotos[calls.gotos.length - 1]),
     waitForTimeout: jest.fn(async () => undefined),
     screenshot: jest.fn(async () => { throw new Error('no screenshots in tests'); }),
     keyboard: { insertText: jest.fn(async () => undefined) },
@@ -199,6 +200,165 @@ describe('RPA runner — consequence classification', () => {
     const r = await runRpaScript(task(), likeScript(), deps(fake));
     expect(r.success).toBe(true);
     expect(fake.calls.gotos).toEqual([URL_OK]);
+  });
+});
+
+describe('RPA runner — redirect after navigation', () => {
+  it.each([
+    ['another host', 'https://evil.example/landing', 'RPA_TARGET_URL_HOST_NOT_ALLOWED'],
+    ['a lookalike host', 'https://linkedin.com.evil.com/x', 'RPA_TARGET_URL_HOST_NOT_ALLOWED'],
+    ['another platform', 'https://www.facebook.com/x', 'RPA_TARGET_URL_CROSS_PLATFORM'],
+    ['plain http', 'http://www.linkedin.com/x', 'RPA_TARGET_URL_NOT_HTTPS'],
+  ])('a redirect to %s refuses with no interaction', async (_name, landed, code) => {
+    const fake = fakePlaywright();
+    fake.page.url.mockReturnValue(landed);
+    const h = handle();
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(h);
+    const r = await runRpaScript(task(), likeScript(), deps(fake));
+    expect(r).toEqual({ success: false, error: `RPA_REDIRECT_REFUSED:${code}`, may_have_acted: false });
+    expect(waitAnyMock).not.toHaveBeenCalled();
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(h.click).not.toHaveBeenCalled();
+    expect(fake.page.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('a redirect that stays on the platform policy proceeds', async () => {
+    const fake = fakePlaywright();
+    fake.page.url.mockReturnValue('https://linkedin.com/posts/redirected');
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(handle());
+    const r = await runRpaScript(task(), likeScript(), deps(fake));
+    expect(r.success).toBe(true);
+  });
+});
+
+describe('RPA runner — screenshot evidence', () => {
+  const ACCESS_URL = 'https://storage.example/signed?token=SECRET';
+  const saved = (over: Record<string, any> = {}) => ({
+    object_path: 'o1/2026-11-02/a1.png', public_url: ACCESS_URL, bytes: 1, kind: 'screenshot' as const, durable: true, ...over,
+  });
+  const withShot = (fake: ReturnType<typeof fakePlaywright>) => {
+    fake.page.screenshot.mockImplementation(async () => Buffer.from('png') as any);
+  };
+  const throwingClick = () => handle(async () => { throw new Error('Target closed'); });
+  const spies: jest.SpyInstance[] = [];
+  const mirror = () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fsp = require('fs/promises');
+    const mkdir = jest.spyOn(fsp, 'mkdir').mockResolvedValue(undefined as never);
+    const writeFile = jest.spyOn(fsp, 'writeFile').mockResolvedValue(undefined as never);
+    spies.push(mkdir, writeFile);
+    return { mkdir, writeFile };
+  };
+
+  afterEach(() => {
+    spies.splice(0).forEach((s) => s.mockRestore());
+    delete process.env.RPA_SCREENSHOT_DIR;
+  });
+
+  it('a throw after the submit started still captures evidence and keeps its outcome', async () => {
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(throwingClick());
+    const saveArtifact = jest.fn(async () => saved());
+    const r = await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact });
+    expect(saveArtifact).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ success: false, error: 'Target closed', may_have_acted: true, screenshot_path: 'o1/2026-11-02/a1.png' });
+  });
+
+  it('a cancel after the submit started also captures evidence', async () => {
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(handle());
+    let n = 0;
+    const saveArtifact = jest.fn(async () => saved());
+    const r = await runRpaScript(task(), likeScript(), { ...deps(fake, async () => (++n >= 7)), saveArtifact });
+    expect(r).toEqual({ success: false, error: 'RPA_CANCELLED', may_have_acted: true, screenshot_path: 'o1/2026-11-02/a1.png' });
+  });
+
+  it('a failure before the submit takes no screenshot', async () => {
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValueOnce(false);
+    const saveArtifact = jest.fn(async () => saved());
+    const r = await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact });
+    expect(r.may_have_acted).toBe(false);
+    expect(fake.page.screenshot).not.toHaveBeenCalled();
+    expect(saveArtifact).not.toHaveBeenCalled();
+  });
+
+  it('a screenshot failure in the catch path cannot change the outcome', async () => {
+    const fake = fakePlaywright(); // its screenshot rejects
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(throwingClick());
+    const r = await runRpaScript(task(), likeScript(), deps(fake));
+    expect(fake.page.screenshot).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ success: false, error: 'Target closed', may_have_acted: true });
+  });
+
+  it('a storage failure in the catch path cannot change the outcome', async () => {
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(throwingClick());
+    const saveArtifact = jest.fn(async () => { throw new Error('storage down'); });
+    const r = await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact });
+    expect(r).toEqual({ success: false, error: 'Target closed', may_have_acted: true });
+  });
+
+  it.each([
+    ['a failure after the submit', () => throwingClick(), { success: false, may_have_acted: true }],
+    ['a success', () => handle(), { success: true }],
+  ])('a screenshot that never settles cannot hold up %s', async (_name, makeHandle, expected) => {
+    const fake = fakePlaywright();
+    fake.page.screenshot.mockImplementation(() => new Promise(() => undefined) as any);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(makeHandle());
+    const r = await runRpaScript(task(), likeScript(), { ...deps(fake), evidenceTimeoutMs: 5 });
+    expect(r).toMatchObject(expected);
+    expect(fake.page.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('the signed URL is never returned, so it cannot reach execution_result', async () => {
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(handle());
+    const ok = await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact: async () => saved() });
+    expect(ok.screenshot_path).toBe('o1/2026-11-02/a1.png');
+    expect(JSON.stringify(ok)).not.toContain(ACCESS_URL);
+
+    waitAnyMock.mockReset();
+    waitAnyMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const missed = await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact: async () => saved() });
+    expect(missed.error).toBe('RPA_POST_CONDITION_FAILED');
+    expect(JSON.stringify(missed)).not.toContain(ACCESS_URL);
+  });
+
+  it('writes no local mirror by default', async () => {
+    const m = mirror();
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(handle());
+    await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact: async () => saved() });
+    expect(fake.page.screenshot).toHaveBeenCalledTimes(1);
+    expect(m.mkdir).not.toHaveBeenCalled();
+    expect(m.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('writes the local mirror only when RPA_SCREENSHOT_DIR opts in', async () => {
+    process.env.RPA_SCREENSHOT_DIR = 'mirror-dir';
+    const m = mirror();
+    const fake = fakePlaywright();
+    withShot(fake);
+    waitAnyMock.mockResolvedValue(true);
+    resolveMock.mockResolvedValue(handle());
+    await runRpaScript(task(), likeScript(), { ...deps(fake), saveArtifact: async () => saved() });
+    expect(m.writeFile).toHaveBeenCalledTimes(1);
   });
 });
 

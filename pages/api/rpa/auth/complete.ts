@@ -23,9 +23,13 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-import { consumeRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
+import { consumeRpaAuthToken, verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { saveRpaSession } from '../../../../backend/services/rpaWorker/rpaSessionStore';
-import { importSessionCapture } from '../../../../backend/services/rpaWorker/rpaSessionImporter';
+import {
+  importSessionCapture,
+  parseSessionExpiresAt,
+  scopeStorageStateToPlatform,
+} from '../../../../backend/services/rpaWorker/rpaSessionImporter';
 
 type Body = {
   session_token?: string;
@@ -65,6 +69,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!storageState.cookies || storageState.cookies.length === 0) {
       return res.status(400).json({ error: 'capture yielded zero valid cookies' });
     }
+    const expiresAt = parseSessionExpiresAt(body.expires_at);
+    if (expiresAt.ok === false) {
+      return res.status(400).json({ error: 'expires_at must be an ISO 8601 date' });
+    }
+    // The platform lives in the token. A plain verify consumes nothing, so a
+    // capture with no cookie for that platform does not burn the token.
+    const peeked = verifyRpaAuthToken(token);
+    if (peeked.ok === true && !scopeStorageStateToPlatform(storageState, peeked.payload.platform).cookies?.length) {
+      return res.status(400).json({ error: 'capture has no cookies for this platform' });
+    }
 
     // Single-use, user-bound redemption: signature + expiry, the issuing user
     // must still hold the connector-management role for the organization, and
@@ -80,19 +94,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { organization_id, platform } = verified.payload;
     // A client-declared account_tier is never stored or trusted (see save-session).
-    await saveRpaSession(organization_id, platform, storageState, {
+    const scopedState = scopeStorageStateToPlatform(storageState, platform);
+    await saveRpaSession(organization_id, platform, scopedState, {
       account_tier: null,
       last_login_at: new Date().toISOString(),
-      expires_at: body.expires_at ?? null,
-      last_verified_at: new Date().toISOString(),
+      expires_at: expiresAt.value,
     });
 
     return res.status(200).json({
       success: true,
       organization_id,
       platform,
-      cookie_count: storageState.cookies.length,
-      origin_count: (storageState.origins ?? []).length,
+      cookie_count: scopedState.cookies?.length ?? 0,
+      origin_count: (scopedState.origins ?? []).length,
       account_tier: null,
       account_tier_status: 'unverified',
       declared_account_tier_ignored: body.account_tier != null,

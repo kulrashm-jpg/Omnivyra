@@ -6,7 +6,8 @@
  * Every RPA navigation MUST pass `validateRpaTarget` first. It is called by
  * `executeRpaTask` (before any queueing / environment work) and again by
  * `runRpaScript` immediately before `page.goto` (defence in depth: the
- * script's targetUrl must also be the validated task URL).
+ * script's targetUrl must also be the validated task URL), and once more on
+ * the URL the page landed on after `page.goto`, before any interaction.
  *
  * Rules (all must hold, else the task is refused and NOTHING is navigated):
  *   - the platform has a non-empty domain allowlist (missing/empty => refuse)

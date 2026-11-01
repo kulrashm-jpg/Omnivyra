@@ -131,6 +131,14 @@ describe('RPA platform scripts', () => {
     }
   });
 
+  it('no reply script extracts a platform id it cannot tell from the target\'s', () => {
+    for (const p of platforms) {
+      const s = buildScript(task(p, 'reply'));
+      if ('error' in s) throw new Error(s.error);
+      expect(s.steps.filter((st) => st.kind === 'extract_platform_id')).toEqual([]);
+    }
+  });
+
   it('like click candidates can never toggle an existing like off', () => {
     for (const p of platforms) {
       const s = buildScript(task(p, 'like'));
