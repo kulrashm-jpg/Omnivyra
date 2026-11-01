@@ -206,6 +206,13 @@ same trade-off applies to `source_records.source_record_id`, `contacts.platform_
   prove the schema is there. 20270115000000's preflight requires 20270112000001..03; 04/05 only
   replace policy functions 03 already defines and are not observable through the probe, so the
   version-order apply above is still required.
+- **SEC-B before erasure 02 (X-1).** SEC-B (20270111000003_function_execute_classwide_hardening)
+  must be applied BEFORE 20270112000002, and must never be re-run after 20270112000002: 02 turns
+  `prospect_score_evaluations_immutable()` into an owner-only SECURITY DEFINER function, and
+  SEC-B's preflight then aborts (atomically) with "SECURITY DEFINER flag differs", leaving its
+  hardening of the other functions out. Version order gives the right sequence. If production's
+  ledger lacks 20270111000003, the owner decides between the in-place two-state patch and a new
+  forward migration before 02 is applied.
 
 ## Open gaps (owner decisions)
 

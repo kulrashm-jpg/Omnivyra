@@ -29,7 +29,7 @@
 --
 -- J1 ER-1 (edited in place on privacy/erasure-remediation-fixes; this migration
 -- is unapplied everywhere). CREATE OR REPLACE resets proconfig, so the
--- replacement carries the SAME pin SEC-B (20270110000004, sec/integration; renumbered from 20270110000003) sets
+-- replacement carries the SAME pin SEC-B (20270111000003, origin/main; earlier 20270110000003/04) sets
 -- with ALTER FUNCTION ... SET search_path = pg_catalog, public. Every non-catalog
 -- reference in the body is schema-qualified (public.pi_erasure_authorization_held);
 -- to_jsonb / ~* resolve in pg_catalog. $verify$ asserts the pin. Applied after
