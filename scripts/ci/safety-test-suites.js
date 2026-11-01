@@ -124,6 +124,17 @@ const SAFETY_SUITE_REGISTRY = [
   // C1 grants/ACL check stays read-only and keeps its absolute anon/authenticated
   // assertions (P10), which catch exposures shared by both compared databases.
   'backend/tests/unit/grantsAclCheck.test.ts',
+  // Outreach engine fixes: a lost STOP, a false delivery status, a queued journey
+  // send after a reply or kill switch, an unauthorized cron publish, a mock id read
+  // as published, and a network candidate escaping the observation lock.
+  'backend/tests/unit/whatsappWebhookRedelivery.test.ts',
+  'backend/tests/unit/whatsappWebhookReplay.test.ts',
+  'backend/tests/unit/whatsappDeliveryStatus.test.ts',
+  'backend/tests/unit/whatsappEnqueuePagination.test.ts',
+  'backend/tests/unit/whatsappJourneySendControls.test.ts',
+  'backend/tests/unit/processScheduledPostsAuthorization.test.ts',
+  'backend/tests/unit/publishToPlatformHonestRefusals.test.ts',
+  'backend/tests/unit/networkActionCandidateService.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
