@@ -443,9 +443,28 @@ export async function retryFailed(broadcastId: string): Promise<void> {
 
 // ── Update delivery status (called by deliveryTracker) ───────────────────────
 
+/**
+ * The statuses each webhook event may move a recipient FROM, so status only goes
+ * forward. Meta does not order its webhooks and a job can replay them, so without this
+ * a late `sent` rewrites `delivered`, and a late `failed` makes a delivered message
+ * eligible for `retryFailed`: a duplicate. `failed` can still be overtaken: evidence
+ * that it arrived outranks it. A row only has a message id once `processBatch` wrote
+ * `sent`, so a `sent` event never has anything to advance, and `pending` or `sending`
+ * here mean a retry is in flight and the id belongs to the previous attempt.
+ */
+const DELIVERY_ADVANCES_FROM: Record<RecipientDeliveryUpdate['status'], readonly string[]> = {
+  sent:      [],
+  failed:    ['sent'],
+  delivered: ['sent', 'failed'],
+  read:      ['sent', 'failed', 'delivered'],
+};
+
 export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): Promise<void> {
+  const advancesFrom = DELIVERY_ADVANCES_FROM[update.status];
+  if (advancesFrom.length === 0) return;
+
   // No status_at: that column is on engagement_messages. Writing it here failed every
-  // delivery update, silently, because the result below reads as 'no such recipient'.
+  // delivery update, silently, because the result below read as 'no such recipient'.
   const updateData: Record<string, unknown> = {
     status:    update.status,
   };
@@ -455,12 +474,19 @@ export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): 
   if (update.error_code)             updateData.error_code   = update.error_code;
   if (update.error_message)          updateData.error_message = update.error_message;
 
-  const { data: recipient } = await ownedDbTable('whatsapp_broadcast_recipients')
+  // Not `.single()`: wa_message_id has no unique key on the chain, and zero rows is the
+  // normal answer for a message that is not ours or an event that has nothing to advance.
+  const { data: moved, error } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update(updateData)
     .eq('wa_message_id', update.wa_message_id)
-    .select('broadcast_id')
-    .single();
+    .in('status', [...advancesFrom])
+    .select('broadcast_id');
 
+  // Thrown so the webhook job is retried. Only rows that moved are counted below, so
+  // replaying an event that did apply cannot count it twice.
+  if (error) throw new Error(`[wa-delivery] delivery update failed: ${error.message}`);
+
+  const recipient = moved?.[0];
   if (!recipient) return;
 
   // Increment broadcast aggregate counter
