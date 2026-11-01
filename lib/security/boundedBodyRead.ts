@@ -26,13 +26,16 @@ export async function readBodyBounded(resp: BodyLike, limit: number, mode: 'trun
 
   const reader = resp.body?.getReader?.();
   if (!reader) {
-    // No stream interface: only safe when the length is declared and within the cap.
-    if (!resp.arrayBuffer || !Number.isFinite(declared) || (mode === 'fail' && declared > limit)) {
+    // No stream interface: arrayBuffer() buffers the WHOLE body, so it is only
+    // called when the length is declared and within the cap - in BOTH modes
+    // (F-H3-5 / J3-4: 'truncate' used to buffer a body declared far above the
+    // limit just to slice its head). A body larger than it declared is refused.
+    if (!resp.arrayBuffer || !Number.isFinite(declared) || declared < 0 || declared > limit) {
       return { ok: false, reason: 'read_failed' };
     }
     try {
       const all = Buffer.from(await resp.arrayBuffer());
-      if (mode === 'fail' && all.length > limit) return { ok: false, reason: 'too_large' };
+      if (all.length > limit) return mode === 'fail' ? { ok: false, reason: 'too_large' } : { ok: false, reason: 'read_failed' };
       return { ok: true, bytes: all.subarray(0, limit) };
     } catch {
       return { ok: false, reason: 'read_failed' };
