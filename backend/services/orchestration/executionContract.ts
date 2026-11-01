@@ -59,7 +59,7 @@ export interface NormalizedExecutionResult {
 
 const GATE_REFUSALS = new Set([
   'global_kill_switch', 'tenant_not_enabled', 'tenant_kill_switch', 'channel_not_enabled',
-  'blocked_governance', 'blocked_prior_attempt', 'tenant_scope_violation',
+  'blocked_governance', 'blocked_prior_attempt', 'blocked_send_control', 'cancel_requested', 'tenant_scope_violation',
 ]);
 const APPROVAL_OUTCOMES = new Set(['approval_required', 'not_approved', 'approval_unproven']);
 const NOT_CONFIGURED = new Set(['no_template', 'target_binding_unavailable', 'no_bound_action', 'person_identity_unbound', 'no_permission_source']);
@@ -92,7 +92,7 @@ function normalizeOutcome(r: EngineResult): Pick<NormalizedExecutionResult, 'sta
       if (GATE_REFUSALS.has(r.outcome)) return { state: 'REJECTED', certainty: definite, errorClass: 'gate_refused', retryability: 'human_only' };
       if (APPROVAL_OUTCOMES.has(r.outcome)) return { state: 'REQUESTED', certainty: definite, errorClass: 'approval_missing', retryability: 'human_only' };
       if (NOT_CONFIGURED.has(r.outcome)) return { state: 'REJECTED', certainty: definite, errorClass: 'not_configured', retryability: 'human_only' };
-      if (UNSUPPORTED.has(r.outcome)) return { state: 'REJECTED', certainty: definite, errorClass: 'unsupported', retryability: 'human_only' };
+      if (UNSUPPORTED.has(r.outcome) || r.outcome.startsWith('unsupported_') || r.outcome.startsWith('dm_refused:')) return { state: 'REJECTED', certainty: definite, errorClass: 'unsupported', retryability: 'human_only' };
       if (PROVIDER_REJECTED.has(r.outcome)) return { state: 'FAILED', certainty: definite, errorClass: 'provider_rejected', retryability: 'human_only' };
       return { state: 'FAILED', certainty: definite, errorClass: 'invalid_request', retryability: 'human_only' };
   }

@@ -124,6 +124,8 @@ const SAFETY_SUITE_REGISTRY = [
   // C1 grants/ACL check stays read-only and keeps its absolute anon/authenticated
   // assertions (P10), which catch exposures shared by both compared databases.
   'backend/tests/unit/grantsAclCheck.test.ts',
+  'backend/tests/unit/orchestrationCommunityAdapterGates.test.ts',
+  'backend/tests/unit/orchestrationExecutionContract.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */

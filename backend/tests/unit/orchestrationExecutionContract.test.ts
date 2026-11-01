@@ -199,6 +199,12 @@ describe('a result held for a person reads as what it is', () => {
   it('a repeat provider refusal is a provider rejection, only a person may retry', () => {
     expect(held('provider_refused_prior_attempt')).toMatchObject({ state: 'FAILED', errorClass: 'provider_rejected', retryability: 'human_only' });
   });
+  it('an engine refusal at send time, or a requested cancel, reads as a gate', () => {
+    for (const o of ['blocked_send_control', 'cancel_requested']) expect(held(o)).toMatchObject({ state: 'REJECTED', errorClass: 'gate_refused', retryability: 'human_only' });
+  });
+  it('an action the engine cannot do reads as unsupported, whatever its detail', () => {
+    for (const o of ['unsupported_mode:rpa', 'unsupported_dm_target', 'dm_refused:policy']) expect(held(o)).toMatchObject({ state: 'REJECTED', errorClass: 'unsupported' });
+  });
   it('a channel with no permission source is configuration, not a failure of the person', () => {
     expect(held('no_permission_source')).toMatchObject({ state: 'REJECTED', errorClass: 'not_configured', retryability: 'human_only' });
   });

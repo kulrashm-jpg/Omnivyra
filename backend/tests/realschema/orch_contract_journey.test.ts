@@ -290,6 +290,25 @@ describe('recovery', () => {
     });
   });
 
+  it('a run blocked mid-chain leaves no message a later approval could send', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId } = await setup(['email']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('a'), emailStep('b')] });
+      await sweep([realWs3()]);
+      const [task] = await handoffTasks(instanceId);
+      expect(task!.status).toBe('awaiting_approval');
+      const plan = await getPlanForInstance(ORG_A, instanceId);
+      const ready = await getReadyStep(ORG_A, plan.id);
+      await transitionPlanStep({ organizationId: ORG_A, stepId: ready.id, state: 'running' });
+      await transitionPlanStep({ organizationId: ORG_A, stepId: ready.id, state: 'failed' });
+      await sweep([realWs3()]);
+      expect(await instanceState(instanceId)).toBe('failed');
+      expect((await handoffTasks(instanceId))[0]!.status).toBe('cancelled');
+      expect((await ws3.approveOutreachTask(ORG_A, task!.id, { approverUserId: actor })).ok).toBe(false);
+      expect(sent).toHaveLength(0);
+    });
+  });
+
   it('an engine holding a step for a week is reported to a person, and nothing is retried or settled', async () => {
     await inRollback(async () => {
       const { actor, prospectId } = await setup(['internal']);

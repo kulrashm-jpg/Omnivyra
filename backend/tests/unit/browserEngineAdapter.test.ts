@@ -116,7 +116,7 @@ describe('browser adapter — exposes nothing', () => {
     // engineCapabilities is plain data: it imports only the pure execution contract.
     expect(imports).toEqual(['./engineCapabilities', './engineAdapters']);
     expect(fs.readFileSync(path.join(process.cwd(), 'backend/services/orchestration/engineCapabilities.ts'), 'utf8').match(/^import\s.*?from\s+'([^']+)'/gm))
-      .toEqual(["import { EXECUTION_CONTRACT_VERSION, type EngineCapabilityDeclaration } from './executionContract';"]);
+      .toEqual(["import { EXECUTION_CONTRACT_VERSION, type EngineCapabilityDeclaration } from './executionContract'"]);
     expect(/^import type /m.test(src)).toBe(true);
     expect(src).not.toMatch(/require\(|import\(/);
   });
