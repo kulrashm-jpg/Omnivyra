@@ -22,10 +22,11 @@ export type RpaResult = {
   success: boolean;
   /** Platform-native id surfaced by the runner when the script extracted one. */
   platform_id?: string;
-  /** Local filesystem path of the audit screenshot (legacy / fallback). */
+  /**
+   * Object path of the audit screenshot in the private rpa-artifacts bucket.
+   * The only reference that is persisted; sign on demand (rpaArtifactStore).
+   */
   screenshot_path?: string;
-  /** Durable public URL of the screenshot stored in the rpa-artifacts bucket. */
-  screenshot_url?: string;
   error?: string;
   /**
    * Consequence classification for a non-success result:
