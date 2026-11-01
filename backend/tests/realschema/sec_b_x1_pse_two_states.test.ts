@@ -165,6 +165,25 @@ describe('version order: SEC-B (20270111000003) then erasure 02 (20270112000002)
   });
 });
 
+describe('erasure 02 narrows the redaction marker (review L-2)', () => {
+  const MARKER = 'public.pi_score_evaluation_redaction_marker()';
+  it('with the Supabase default ACL emulated, re-applying 02 leaves no client EXECUTE and does not grant service_role', async () => {
+    await inRollback(async () => {
+      await q(`GRANT EXECUTE ON FUNCTION ${MARKER} TO PUBLIC, anon, authenticated`);
+      await q(`REVOKE ALL ON FUNCTION ${MARKER} FROM service_role`);
+      expect(await outcome(ERASURE_02)).toBe('ok');
+      const r = await one(
+        `SELECT has_function_privilege('anon', $1::regprocedure, 'EXECUTE') AS anon,
+                has_function_privilege('authenticated', $1::regprocedure, 'EXECUTE') AS authenticated,
+                has_function_privilege('service_role', $1::regprocedure, 'EXECUTE') AS service_role,
+                EXISTS (SELECT 1 FROM pg_proc p, aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x
+                         WHERE p.oid = $1::regprocedure AND x.grantee = 0) AS pub`, [MARKER]);
+      expect(r).toEqual({ anon: false, authenticated: false, service_role: false, pub: false });
+      for (const role of ['anon', 'authenticated']) expect(await asRole(role, `SELECT ${MARKER}`)).toBe('42501');
+    });
+  });
+});
+
 describe('HAZARD (documented): SEC-B must not be re-run after erasure 02', () => {
   it('re-running SEC-B in S2 aborts in $preflight$ and changes nothing', async () => {
     await inRollback(async () => {

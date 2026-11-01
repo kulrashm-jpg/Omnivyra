@@ -125,6 +125,12 @@ $fn$;
 -- already revokes the same roles; anon/authenticated exist on every target.
 REVOKE ALL ON FUNCTION public.prospect_score_evaluations_immutable() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.pi_erasure_redact_score_evaluations(uuid, uuid) FROM PUBLIC, anon, authenticated;
+-- The redaction marker is an IMMUTABLE constant with no data access, but the
+-- Supabase schema default ACL would otherwise give anon/authenticated EXECUTE
+-- on it (review L-2). The owner keeps EXECUTE; service_role is NOT granted:
+-- every production caller (the trigger, the redaction, the verifier) is
+-- SECURITY DEFINER and runs as the owner.
+REVOKE ALL ON FUNCTION public.pi_score_evaluation_redaction_marker() FROM PUBLIC, anon, authenticated;
 
 DO $revoke_fn$
 DECLARE r text;
@@ -147,6 +153,10 @@ BEGIN
                     AND p.proname = 'prospect_score_evaluations_immutable'
                     AND t.tgenabled <> 'D') THEN
     RAISE EXCEPTION 'PSE erasure postcondition: the immutability trigger is missing or disabled';
+  END IF;
+  IF has_function_privilege('anon', 'public.pi_score_evaluation_redaction_marker()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.pi_score_evaluation_redaction_marker()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'PSE erasure postcondition: a client role can execute pi_score_evaluation_redaction_marker()';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')
      AND has_function_privilege('service_role', 'public.pi_erasure_redact_score_evaluations(uuid, uuid)', 'EXECUTE') THEN
