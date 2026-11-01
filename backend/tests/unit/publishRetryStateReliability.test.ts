@@ -1196,6 +1196,28 @@ describe('G-4 — a confirmed rejection marked retryable:false is not retried', 
   });
 });
 
+describe('G-11 — the worker applies the publish capability the button applies', () => {
+  test.each(['reddit', 'threads', 'spotify'])('%s is refused before any platform call, not retried, and the post is failed', async (platform) => {
+    seedPost('sp-1', { platform });
+    seedJob('qj-1', 'sp-1');
+
+    const error = await processPublishJob(delivery('qj-1', 'sp-1', 0)).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnrecoverableError);
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'ACTION_NOT_SUPPORTED', platform_post_id: null });
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', error_code: 'ACTION_NOT_SUPPORTED', retry_state: 'exhausted' });
+  });
+
+  test.each(['linkedin', 'facebook', 'instagram', 'twitter', 'x', 'youtube', 'tiktok', 'pinterest'])('%s is not refused', async (platform) => {
+    seedPost('sp-1', { platform });
+    seedJob('qj-1', 'sp-1');
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').status).toBe('published');
+  });
+});
+
 describe('Closure-002 R5 — confirmed failures still retry', () => {
   test('a pre-send failure (delivery: not_sent) is retryable: failed + awaiting_retry, and the backoff delivery publishes', async () => {
     seedPost('sp-1');

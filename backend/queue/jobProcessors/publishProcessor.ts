@@ -81,6 +81,7 @@ import { createUserNotification } from '../../services/userNotificationService';
 // It remains a planning/diagnostic metric (Campaign Board, growth guidance,
 // campaign health); publication is authorized per post by this predicate.
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
+import { resolveEngagementCapability } from '../../../lib/engagementCapabilities';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { runJob } from '../../services/jobRunner';
 import { RETRY_STATE_EXHAUSTED, retryStateAfterFailedDelivery } from '../publishRetryState';
@@ -607,6 +608,24 @@ async function processPublishJobInner(params: {
       heldClaimFromStatus = claim.fromStatus;
       heldClaimToken = claim.token;
       heldClaimFromErrorCode = claim.fromErrorCode;
+    }
+
+    // Step 4a.1: Publish capability — the check the manual path already makes
+    // (pages/api/social/publish.ts). Permanent for this post, so not retried.
+    const publishCapability = resolveEngagementCapability(scheduledPost.platform, 'post_create');
+    if (publishCapability.status !== 'api_verified') {
+      const capabilityMessage = publishCapability.reason ?? `Publishing is not supported on ${scheduledPost.platform}.`;
+      await updateQueueJobStatus(jobId as string, 'failed', {
+        error_message: capabilityMessage,
+        error_code: 'ACTION_NOT_SUPPORTED',
+      });
+      await updateScheduledPostOnFailure(scheduled_post_id, capabilityMessage, undefined, 'ACTION_NOT_SUPPORTED').catch(() => {});
+      await createQueueJobLog(jobId as string, 'warn', 'Publish blocked: platform has no verified publish capability', {
+        code: 'ACTION_NOT_SUPPORTED', platform: scheduledPost.platform,
+      });
+      const unsupportedError: Error & { skipQueueStatusUpdate?: true } = new UnrecoverableError('ACTION_NOT_SUPPORTED');
+      unsupportedError.skipQueueStatusUpdate = true;
+      throw unsupportedError;
     }
 
     // Step 4b: Centralized publish-readiness gate (Round-4 item 1) — the
