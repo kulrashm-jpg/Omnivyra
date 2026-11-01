@@ -362,6 +362,55 @@ describe('WP3/L6 — only authentic, allow-listed, current messages are processe
     expect(fetched).toEqual([CERT_URL]);
   });
 
+  describe('G-7 — the operator can confirm from the log', () => {
+    const SUBSCRIBE_URL = 'https://sns.eu-north-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=x&Token=one-time';
+    const confirmation = (over: Record<string, unknown> = {}) => ({
+      Type: 'SubscriptionConfirmation', SubscribeURL: SUBSCRIBE_URL, Token: 'separate-token-field', ...over,
+    });
+    let warn: jest.SpyInstance;
+    let error: jest.SpyInstance;
+    const logged = () => JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+
+    beforeEach(() => {
+      warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    });
+    afterEach(() => { warn.mockRestore(); error.mockRestore(); });
+
+    it('a verified, allow-listed confirmation logs the SubscribeURL and no other envelope field', async () => {
+      const env = envelope('confirm', confirmation());
+      const res = await post(env);
+      expect(res.statusCode).toBe(200);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][1]).toEqual({
+        type: 'SubscriptionConfirmation', messageId: env.MessageId, subscribeUrl: SUBSCRIBE_URL,
+      });
+      expect(logged()).not.toContain('separate-token-field');
+      expect(logged()).not.toContain(String(env.Signature));
+      // The answer goes back to whoever posted; the URL stays in the log.
+      expect(JSON.stringify(res.body)).not.toContain('ConfirmSubscription');
+      expect(fetched).toEqual([CERT_URL]);
+    });
+
+    it('a bad signature logs no URL', async () => {
+      const res = await post(envelope('confirm', confirmation({ Signature: 'AAAA' }), false));
+      expect(res.statusCode).toBe(401);
+      expect(logged()).not.toContain('ConfirmSubscription');
+    });
+
+    it('a validly signed confirmation for a topic not on the allow-list logs no URL', async () => {
+      const res = await post(envelope('confirm', confirmation({ TopicArn: 'arn:aws:sns:eu-north-1:999999999999:other' })));
+      expect(res.statusCode).toBe(401);
+      expect(logged()).not.toContain('ConfirmSubscription');
+    });
+
+    it('an UnsubscribeConfirmation logs no URL: visiting it would re-subscribe', async () => {
+      const res = await post(envelope('confirm', confirmation({ Type: 'UnsubscribeConfirmation' })));
+      expect(res.statusCode).toBe(200);
+      expect(logged()).not.toContain('ConfirmSubscription');
+    });
+  });
+
   it('only POST is accepted', async () => {
     expect((await post(envelope(delivery()), 'GET')).statusCode).toBe(405);
   });

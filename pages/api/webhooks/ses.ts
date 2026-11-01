@@ -228,8 +228,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse): Promise<void>
   }
 
   if (verification.type === 'SubscriptionConfirmation' || verification.type === 'UnsubscribeConfirmation') {
+    // Signature, topic and age have all passed, and SubscribeURL is a signed field,
+    // so this is AWS's URL for an allow-listed topic. Logged for an operator to
+    // visit (ENG-003); never fetched here. Only a confirmation needs it: the URL in
+    // an UnsubscribeConfirmation would re-subscribe, which nobody is waiting to do.
+    const subscribeUrl = (envelope as { SubscribeURL?: unknown }).SubscribeURL;
     console.warn('[ses-webhook] subscription message received; operator action required', {
       type: verification.type, messageId: verification.messageId,
+      ...(verification.type === 'SubscriptionConfirmation' && typeof subscribeUrl === 'string' ? { subscribeUrl } : {}),
     });
     res.status(200).json({ ok: true, action: 'operator_confirmation_required' });
     return;
