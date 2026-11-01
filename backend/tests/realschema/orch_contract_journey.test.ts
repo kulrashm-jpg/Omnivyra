@@ -51,6 +51,7 @@ const { dispatchWorkflowEmailTask, ensureWorkflowTransports } = require('../../s
 const ws3 = require('../../services/leadOutreachExecution');
 const { ingestSesEvent } = require('../../services/providerEvents/sesProviderEventIngestion');
 const { readJourneyEvents } = require('../../services/orchestration/journeyEvents');
+const { buildEmailApprovalPreview, maskEmail } = require('../../services/orchestration/journeyApprovalPreview');
 const { buildJourneyReport } = require('../../services/orchestration/journeyReport');
 const { getReadyStep, listProgressionSteps, transitionPlanStep } = require('../../services/workflowExecution/stepProgressionStore');
 const { getPlanForInstance } = require('../../services/executionPlans/executionPlanStore');
@@ -586,6 +587,85 @@ describe('a WhatsApp reply counts only after this run actually reached out', () 
       const page = await readJourneyEvents(ORG_A, instanceId);
       expect(page.events.map((e: { type: string }) => e.type)).toContain('response.replied');
       expect(JSON.stringify(page)).not.toContain('hello');
+    });
+  });
+});
+
+describe('what a person would approve', () => {
+  async function awaiting() {
+    const { actor, prospectId, personId } = await setup(['email']);
+    const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('intro')] });
+    await sweep([realWs3()]);
+    const [task] = await handoffTasks(instanceId);
+    return { actor, personId, instanceId, taskId: task!.id as string };
+  }
+  const counts = async () => {
+    const out: Record<string, unknown> = {};
+    for (const table of ['outreach_tasks', 'outreach_approvals', 'outreach_attempts', 'outreach_delivery_evidence', 'execution_journey_decisions', 'email_outreach_content_evidence']) {
+      out[table] = (await one(`SELECT count(*) n FROM public.${table}`)).n;
+    }
+    return out;
+  };
+
+  it('shows exactly what the send path would send, masked, and writes nothing', async () => {
+    await inRollback(async () => {
+      const s = await awaiting();
+      await db.query(`UPDATE public.unified_persons SET first_name = 'Asha' WHERE id = $1`, [s.personId]);
+      const before = await counts();
+      const p = await buildEmailApprovalPreview(ORG_A, s.taskId, NOW());
+      expect(await counts()).toEqual(before);
+      expect(p).toMatchObject({
+        organizationId: ORG_A, status: 'awaiting_approval', channel: 'email', refusal: null,
+        recipient: { personId: s.personId, maskedEmail: maskEmail(ADDRESS) },
+        authorization: { executionMode: 'human', workflowRequiresApproval: true },
+        workflow: { executionInstanceId: s.instanceId, stepKey: 'intro' },
+        wouldBeBlockedBy: [],
+      });
+      expect(p.content.subject).toContain('Hello Asha');
+      expect(JSON.stringify(p)).not.toContain(ADDRESS);
+      expect(p.history.length).toBeGreaterThan(0);
+      expect(p.previewHash).toMatch(/^[0-9a-f]{64}$/);
+    });
+  });
+
+  it('the hash is stable, and changes when the message or the recipient changes', async () => {
+    await inRollback(async () => {
+      const s = await awaiting();
+      await db.query(`UPDATE public.unified_persons SET first_name = 'Asha' WHERE id = $1`, [s.personId]);
+      const first = (await buildEmailApprovalPreview(ORG_A, s.taskId, NOW())).previewHash;
+      expect((await buildEmailApprovalPreview(ORG_A, s.taskId, NOW())).previewHash).toBe(first);
+      await db.query(`UPDATE public.unified_persons SET first_name = 'Ravi' WHERE id = $1`, [s.personId]);
+      const renamed = (await buildEmailApprovalPreview(ORG_A, s.taskId, NOW())).previewHash;
+      expect(renamed).not.toBe(first);
+      await db.query(`UPDATE public.unified_persons SET primary_email = 'other@example.test' WHERE id = $1`, [s.personId]);
+      expect((await buildEmailApprovalPreview(ORG_A, s.taskId, NOW())).previewHash).not.toBe(renamed);
+    });
+  });
+
+  it('a message that could not be sent shows why and offers nothing to approve', async () => {
+    await inRollback(async () => {
+      const s = await awaiting();
+      await db.query(`UPDATE public.unified_persons SET primary_email = NULL WHERE id = $1`, [s.personId]);
+      const p = await buildEmailApprovalPreview(ORG_A, s.taskId, NOW());
+      expect(p).toMatchObject({ refusal: 'email_missing', content: null, recipient: null, previewHash: null });
+    });
+  });
+
+  it('what would stop it is shown, because approval does not lift a control', async () => {
+    await inRollback(async () => {
+      const s = await awaiting();
+      await db.query('UPDATE public.outreach_governance_config SET kill_switch = true WHERE company_id = $1', [ORG_A]);
+      await db.query(`INSERT INTO public.contact_governance_records (organization_id, person_id, channel, governance_type, source)
+        VALUES ($1,$2,'*','dnc_permanent','contract-test')`, [ORG_A, s.personId]);
+      const p = await buildEmailApprovalPreview(ORG_A, s.taskId, NOW());
+      expect(p.wouldBeBlockedBy).toEqual(['tenant_kill_switch', 'email_not_permitted']);
+    });
+  });
+
+  it('another tenant gets nothing', async () => {
+    await inRollback(async () => {
+      const s = await awaiting();
+      expect(await buildEmailApprovalPreview(ORG_B, s.taskId, NOW())).toBeNull();
     });
   });
 });
