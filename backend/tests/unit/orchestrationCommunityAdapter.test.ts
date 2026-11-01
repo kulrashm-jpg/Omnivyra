@@ -234,8 +234,16 @@ describe('community adapter — supported path', () => {
     expect(w.externalActions()).toBe(1);
   });
 
-  it('a browser-dispatched DM with an explicit thread waits, then completes from the engine row', async () => {
-    const w = world(approvedAction({ action_type: 'dm', execution_mode: 'browser', target_id: 'https://www.linkedin.com/messaging/thread/2-abcdefghijklmnop/' }));
+  it('a cancel-requested action goes to a person, not into an endless wait; nothing claimed or sent', async () => {
+    const w = world(approvedAction({ cancel_requested_at: '2026-10-28T09:00:00.000Z' }));
+    expect(await run(w)).toMatchObject({ outcome: 'cancel_requested', disposition: 'needs_human', externalRef: ACTION_ID });
+    expect(w.calls).toHaveLength(0);
+    expect(w.actions.get(ACTION_ID)!.status).toBe('approved');
+    expect(w.request()!.state).toBe('requested');
+  });
+
+  it('a browser-dispatched action waits, then completes from the engine row', async () => {
+    const w = world(approvedAction({ execution_mode: 'browser' }));
     w.setNext({ result: { ok: true, status: 'dispatched', execution_mode: 'browser', response: { dispatch: 'queued_for_extension' } }, rowStatus: 'pending', acted: false });
     const r = await run(w);
     expect(r).toMatchObject({ outcome: 'dispatched', disposition: 'wait', externalRef: ACTION_ID });
@@ -625,7 +633,8 @@ describe('community adapter — unsupported capabilities', () => {
     expect(ok({ action_type: 'like', platform: 'reddit' })).toBe(true);
     expect(ok({ action_type: 'share', platform: 'twitter' })).toBe(true);
     expect(ok({ action_type: 'follow', platform: 'twitter' })).toBe(true);
-    expect(ok({ action_type: 'dm', platform: 'instagram', execution_mode: 'browser', target_id: 'https://www.instagram.com/direct/t/1234567/' })).toBe(true);
-    expect(ok({ action_type: 'dm', platform: 'twitter', execution_mode: 'browser', target_id: 'some.handle' })).toBe(true); // start_new_dm(recipientHandle)
+    // Addressed DMs the engine's own DM policy refuses are refused here, before any claim.
+    expect(ok({ action_type: 'dm', platform: 'instagram', execution_mode: 'browser', target_id: 'https://www.instagram.com/direct/t/1234567/' })).toBe(false);
+    expect(ok({ action_type: 'dm', platform: 'twitter', execution_mode: 'browser', target_id: 'some.handle' })).toBe(false);
   });
 });

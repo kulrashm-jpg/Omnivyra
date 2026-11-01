@@ -195,6 +195,8 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
         return settle(ctx, 'submitted', 'completed', result(status, 'completed', null, broadcastId));
       case 'blocked_governance':
         return settle(ctx, 'submitted', 'skipped', result(status, 'skipped', 'contact governance refused the send', broadcastId));
+      case 'blocked_send_control':
+        return settle(ctx, 'submitted', 'failed', result(status, 'needs_human', 'a send-time control refused the message; nothing was sent', broadcastId));
       case 'failed':
         return settle(ctx, 'submitted', 'failed', result(status, 'needs_human', 'the provider refused the message', broadcastId));
       case 'send_uncertain':

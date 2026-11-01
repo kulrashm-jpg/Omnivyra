@@ -10,11 +10,13 @@
  *
  * ─── WHY IT CANNOT ACT PER TASK ──────────────────────────────────────────
  *   publishNow({ scheduled_post_id, social_account_id, user_id })
- *     (backend/services/publishNowService.ts:180, :522) needs a verified acting
- *     USER, which an execution task does not carry, and it does NOT evaluate the
+ *     (backend/services/publishNowService.ts:180, :522) does NOT evaluate the
  *     publish authorization predicate (publishNowService.ts:303: authorization
  *     stays at the route/worker layer). Calling it from a journey would bypass
- *     that gate and pull the post off the time it was RELEASED for.
+ *     that gate and pull the post off the time it was RELEASED for. The acting
+ *     user is not the blocker: the cron and the queue both use the row's user_id.
+ *     The blockers are one object versus N tasks, no approval provenance on the
+ *     row, and no held state.
  *   processPublishJob (backend/queue/jobProcessors/publishProcessor.ts:109) is a
  *     BullMQ consumer keyed by its job id, enqueued by the scheduler for a row
  *     already due; a journey task is not a job.

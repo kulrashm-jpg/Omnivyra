@@ -14,18 +14,18 @@
  *       approval, playbook, plan limits). `executeRpaTask` carries none of those
  *       gates, so calling it from here would bypass them; calling the community
  *       engine instead is the `community` adapter's job, not a second route.
- *       It also cannot meet the adapter contract:
- *         - it re-runs a task after it may have acted: the in-process queue
- *           retries ANY non-success (including a failed post-condition after the
- *           submit click) and any throw; the durable `rpa_retry_queue` retries
- *           up to 5 times with no cross-process claim, bypassing admission;
- *           `executeRpaTask` itself enqueues those retries on env-not-ready and
- *           BLOCKED — a second action the caller's ledger cannot see;
- *         - the target URL is navigated verbatim; nothing checks it belongs to
- *           the platform named;
+ *       It also cannot meet the adapter contract (re-read against this branch;
+ *       origin/main 5025f51d lacks the hardening and is worse):
+ *         - success is not proof: reply post-conditions match elements that may
+ *           already exist, and a like's is not scoped to the post;
+ *         - the target URL is checked by host only (before and after navigation),
+ *           not by path, so any page on the platform's host passes;
+ *         - one stored session per (org, platform), whoever last uploaded it;
+ *           no account identity, no logged-out detection, approver not carried;
  *         - cancellation is keyed on a `community_ai_actions` row id;
  *         - a journey step carries no target (post URL) and nothing maps a
  *           person to one.
+ *       The `community` adapter refuses execution_mode='rpa' for the same reason.
  *   rpaWorker/redditRpaHandler.executeRedditRpaTask   unreferenced; no session,
  *       hard-coded selectors.
  *   networkExpansion/rpaDiscoveryHandlers/redditDiscoveryRpa   internal

@@ -511,7 +511,7 @@ describe('community adapter — execution-time person re-check', () => {
       [(w) => { w.idw.claims[0].person_id = OTHER_PERSON; }, 'identity_mismatch'],
       [(w) => { w.idw.claims.push({ ...w.idw.claims[0], id: 'dupe' }); }, 'identity_ambiguous'],
       [(w) => { w.action.discovered_user_id = OTHER_DU; }, 'identity_missing'],
-      [(w) => { w.action.action_type = 'dm'; w.action.target_id = 'https://www.linkedin.com/messaging/thread/2-abcdefghijklmnop/'; w.action.execution_mode = 'browser'; }, 'dm_recipient_unproven'],
+      [(w) => { w.action.action_type = 'dm'; w.action.target_id = 'https://www.linkedin.com/messaging/thread/2-abcdefghijklmnop/'; w.action.execution_mode = 'browser'; }, 'unsupported_action'],
     ];
     for (const [mutate, code] of mutations) {
       const w = adapterWorld();

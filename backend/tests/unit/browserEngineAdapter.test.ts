@@ -113,7 +113,10 @@ describe('browser adapter — exposes nothing', () => {
   it('imports no browser, RPA, queue, executor or database module', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'backend/services/orchestration/browserEngineAdapter.ts'), 'utf8');
     const imports = [...src.matchAll(/^import\s.*?from\s+'([^']+)'/gm)].map((m) => m[1]);
-    expect(imports).toEqual(['./engineAdapters']);
+    // engineCapabilities is plain data: it imports only the pure execution contract.
+    expect(imports).toEqual(['./engineCapabilities', './engineAdapters']);
+    expect(fs.readFileSync(path.join(process.cwd(), 'backend/services/orchestration/engineCapabilities.ts'), 'utf8').match(/^import\s.*?from\s+'([^']+)'/gm))
+      .toEqual(["import { EXECUTION_CONTRACT_VERSION, type EngineCapabilityDeclaration } from './executionContract';"]);
     expect(/^import type /m.test(src)).toBe(true);
     expect(src).not.toMatch(/require\(|import\(/);
   });
