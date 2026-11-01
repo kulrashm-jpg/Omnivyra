@@ -15,7 +15,7 @@
 --     was before 20270112000005 replaced it:
 --       - no SET clause (the 20260910000000 state), or
 --       - search_path = pg_catalog, public when SEC-B
---         (20270110000003_function_execute_classwide_hardening) had already
+--         (20270110000004_function_execute_classwide_hardening) had already
 --         pinned it. CREATE OR REPLACE resets proconfig, so the pin cannot be
 --         read back from this function itself; the witness is its sibling
 --         public.ws3_protect_task_provenance() (same file, same SEC-B class-T
