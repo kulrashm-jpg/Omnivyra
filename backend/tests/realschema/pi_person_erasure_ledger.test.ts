@@ -272,6 +272,9 @@ describe('prospect_score_evaluations — append-only except the sanctioned erasu
       expect(await attempt('UPDATE public.prospect_score_evaluations SET score_overall=0.9 WHERE id=$1', [e])).toBe('23514');
       expect(await attempt(redactShape, [e])).toBe('23514');
       await db.query('GRANT ALL ON public.prospect_score_evaluations TO service_role');
+      // Supabase's schema-level default ACL grants EXECUTE on new public functions to service_role;
+      // a replay owned by `postgres` has 20261026000000's REVOKE-from-PUBLIC default instead.
+      await db.query('GRANT EXECUTE ON FUNCTION public.pi_score_evaluation_redaction_marker() TO service_role');
       expect(await asServiceRole('UPDATE public.prospect_score_evaluations SET score_overall=0.9 WHERE id=$1', [e])).toBe('23514');
       expect(await asServiceRole('UPDATE public.prospect_score_evaluations SET person_id=NULL WHERE id=$1', [e])).toBe('23514');
       expect(await asServiceRole(redactShape, [e])).toBe('23514');
