@@ -3,7 +3,8 @@
 -- NOT APPLIED ANYWHERE REAL. Owner-gated: apply only with explicit release
 -- authorization, against the verified target project, after a preview check
 -- that a SIGNED resumable upload (x-signature) still succeeds (see
--- H3-UPLOAD-SECURITY-REMEDIATION.md). Rollback:
+-- docs/MEDIA-H3-UPLOAD-QUARANTINE.md). Apply WITH or BEFORE the H-3 code.
+-- Rollback (owner-gated, see its header - never while H-3 code is live):
 -- supabase/migrations/rollbacks/media_h3_storage_quarantine_policies_rollback.sql
 --
 -- Model

@@ -272,6 +272,14 @@ function winnerMovesFirst(key = KEY) {
 describe('concurrent finalize of the same session (review additions)', () => {
   it('two concurrent finalizes: both succeed, exactly one delivery object, no 503 for the loser', async () => {
     mockMem.put(Q, KEY, MP4, 'video/mp4');
+    // H3-FIX (F-H3-1): the loser no longer adopts a non-image delivery object
+    // on its own evidence; it accepts it on the winner's COMMITTED row. Model
+    // the commit: a successful row write becomes visible to later reads.
+    // (mockOnWrite runs just before the harness records the write; read it a microtask later.)
+    mockOnWrite = () => queueMicrotask(() => {
+      const last = mockWrites[mockWrites.length - 1];
+      if (last) mockRows.daily_content_plans = { ...mockRows.daily_content_plans, content: last.content };
+    });
     const [a, b] = await Promise.all([finalize(body()), finalize(body())]);
     expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
     expect(deliveryKeys()).toEqual([`${D}/${KEY}`]);
@@ -284,8 +292,13 @@ describe('concurrent finalize of the same session (review additions)', () => {
     mockMem.put(Q, KEY, MP4, 'video/mp4');
     winnerMovesFirst();
     mockWriteError = { message: 'write failed' };
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const r = await finalize(body());
-    expect(r.statusCode).toBe(500);
+    // H3-FIX (F-H3-1): with no committed winner row the loser never adopts the
+    // non-image object (so it never reaches the row write): retryable 503.
+    expect(r.statusCode).toBe(503);
+    expect(r.body.code).toBe('UPLOAD_PROMOTION_UNCONFIRMED');
+    expect(mockWrites).toEqual([]);
     expect(mockMem.has(D, KEY)).toBe(true);
     expect(mockMem.has(Q, KEY)).toBe(false);
   });

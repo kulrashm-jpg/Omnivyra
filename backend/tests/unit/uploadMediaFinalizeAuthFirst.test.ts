@@ -163,17 +163,36 @@ describe('authenticated member of the owning company', () => {
   });
   it.each([
     ['TUS client key', `${PLAN_A}/video/${PLAN_A}-1726400000000-k3j9x2ab.mp4`],
-    ['direct-upload key', `${CO_A}/${PLAN_A}/misc/1726400000000-a1b2c3d4.bin`],
   ])('the exact %s shape the clients mint passes the segment allowlist', async (_n, path) => {
     const r = await finalize(PLAN_A, body({ storage_path: path }), 'A');
     expect(r.status).toBe(200);
     expect(r.body.storage).toEqual({ bucket: 'media-uploads', object_path: path });
   });
+  it('the direct-upload key shape passes the segment allowlist, but finalize refuses it: its type is not bound to video/mp4 (H3-FIX F-H3-2)', async () => {
+    // authorize never mints `misc/*.bin` keys (it mints only allowlisted types),
+    // so no quarantined object can legitimately exist there.
+    const path = `${CO_A}/${PLAN_A}/misc/1726400000000-a1b2c3d4.bin`;
+    const r = await finalize(PLAN_A, body({ storage_path: path }), 'A');
+    expect(r.status).toBe(415);
+    expect(r.body.code).toBe('UPLOAD_TYPE_NOT_AUTHORIZED'); // i.e. not UPLOAD_PATH_OUT_OF_SCOPE
+    expect(removed()).toEqual([]);
+    expect(mockEvents).not.toContain('db:write:daily_content_plans');
+  });
   it('an authorized early rejection cleans up ONLY its own object, after authorization', async () => {
-    const r = await finalize(PLAN_A, body({ size_bytes: 5 * 1024 ** 3 }), 'A');
-    expect(r.status).toBe(413);
+    // H3-FIX (F-H3-1): caller-controlled exits (e.g. the declared-size 413) no
+    // longer delete at all, so the cleanup branch exercised here is the
+    // server-state one: a session this row already consumed.
+    seed({ daily_content_plans: [plan(PLAN_A, CAMPAIGN_A, { upload_consumed_object_paths: [OWN_PATH] }), plan(PLAN_B, CAMPAIGN_B)] });
+    const r = await finalize(PLAN_A, body(), 'A');
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('UPLOAD_SESSION_CONSUMED');
     expect(removed()).toEqual([OWN_PATH]);
     expect(first('storage:remove:')).toBeGreaterThan(mockEvents.indexOf('authz:ok'));
+  });
+  it('H3-FIX (F-H3-1): a caller-controlled early rejection (declared size) deletes nothing', async () => {
+    const r = await finalize(PLAN_A, body({ size_bytes: 5 * 1024 ** 3 }), 'A');
+    expect(r.status).toBe(413);
+    expect(removed()).toEqual([]);
   });
 });
 
