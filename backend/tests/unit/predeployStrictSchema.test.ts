@@ -138,7 +138,7 @@ describe('verify-schema-parity — strict mode (fake catalog, no network)', () =
     const d = runVerifier({});
     expect(d.code).toBe(0);
     expect(d.check.strict).toBe(false);
-    expect(d.check.checked_stack).toEqual({ tables: 18, functions: 27, triggers: 17, check_constraints: 7 });
+    expect(d.check.checked_stack).toEqual({ tables: 20, functions: 29, triggers: 19, check_constraints: 7 });
     const s = runVerifier({ strict: true });
     expect(s.code).toBe(0);
     expect(s.check.strict).toBe(true);

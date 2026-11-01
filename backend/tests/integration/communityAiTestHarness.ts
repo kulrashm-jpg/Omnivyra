@@ -419,6 +419,8 @@ export const buildQuery = (table: string) => {
           state.inFilter = { field, values };
           return updateChain;
         }),
+        // The claim also requires `cancel_requested_at IS NULL`; no fixture sets it.
+        is: jest.fn(() => updateChain),
         select: jest.fn(() => updateChain),
         single: jest.fn(async () => resolveUpdateWithFilters(table, state)),
         maybeSingle: jest.fn(async () => resolveUpdateWithFilters(table, state)),

@@ -73,13 +73,14 @@ const TYPES = manifestArray<TypeReq>('REQUIRED_COLUMN_TYPES');
 // A shrink of the literal provenance manifest and a shrink of the stack are
 // detected separately: checked_* must equal literal + these numbers.
 const ORCH_STACK_PIN = {
-  tables: 18, columns: 208 /* 201 table columns + 7 added */, types: 5,
-  indexes: 45, uniqueIndexes: 18, functions: 27, triggers: 17, checks: 7,
+  tables: 20, columns: 228 /* 221 table columns + 7 added */, types: 5,
+  indexes: 48, uniqueIndexes: 18, functions: 29, triggers: 19, checks: 7,
 } as const;
 const ORCH_STACK_TABLE_NAMES = [
   'prospect_lists', 'prospect_list_members', 'prospect_campaigns', 'workflows', 'workflow_versions',
   'execution_instances', 'execution_plans', 'execution_plan_steps', 'execution_tasks',
-  'outreach_bridge_handoffs', 'execution_engine_requests', 'prospect_campaign_lists',
+  'outreach_bridge_handoffs', 'execution_engine_requests', 'email_outreach_content_evidence',
+  'execution_journey_decisions', 'prospect_campaign_lists',
   'prospect_campaign_targets', 'community_action_journey_links', 'rpa_auth_token_redemptions',
   'identity_verification_attestations', 'engagement_request_idempotency', 'rpa_session_invalidation_audit',
 ];
