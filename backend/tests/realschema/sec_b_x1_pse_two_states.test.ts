@@ -1,12 +1,24 @@
 /**
- * X-1 — SEC-B (20270110000004) and privacy/erasure 20270112000002 on the same
- * database, against real PostgreSQL.
+ * X-1 — SEC-B (20270111000003, as shipped on origin/main 5025f51d) and
+ * privacy/erasure 20270112000002 on the same database, against real PostgreSQL.
  *
  * 20270112000002 recreates public.prospect_score_evaluations_immutable() as
  * SECURITY DEFINER with search_path = '' (state S2). SEC-B was reviewed against
  * the 20261031000000 original: INVOKER, search_path = public, pg_temp (state
- * S1). SEC-B accepts EXACTLY those two states and refuses every other one,
- * null-safely, in both its $preflight$ and its $verify$ block.
+ * S1), and the shipped file accepts ONLY S1. It is authoritative and possibly
+ * already applied in production, so it is not edited here.
+ *
+ * What this suite pins is the TRUE behaviour of the shipped files:
+ *   - version order (SEC-B 20270111000003 before erasure 20270112000002)
+ *     applies cleanly and ends in S2 with no client EXECUTE;
+ *   - re-running SEC-B (or its standalone $verify$) AFTER erasure 02 aborts:
+ *     a documented operational hazard - do not re-run SEC-B once 02 is in;
+ *   - every third state is refused by SEC-B;
+ *   - the SEC-B rollback restores the authenticated grant ONLY in S1 and never
+ *     re-widens the S2 definer.
+ * The S2-acceptance cases of the RC's two-state suite belong to the owner-
+ * selectable in-place patch (evidence rebase2/X1-INPLACE-PATCH.diff), valid
+ * only if SEC-B is confirmed unapplied in production.
  *
  * Expects the merged replay: SEC-B applied, then the erasure migrations (S2).
  * Every test runs inside a rolled-back transaction; nothing persists. A green
@@ -19,7 +31,7 @@ import { db, inRollback, seedTenants, attempt, ORG_A, ORG_B, newPerson, newLead 
 const MIG = path.join(__dirname, '..', '..', '..', 'supabase', 'migrations');
 const ROLLBACKS = path.join(MIG, 'rollbacks');
 const SEC_B_FILE = process.env.SEC_B_MIGRATION_FILE
-  || path.join(MIG, '20270110000004_function_execute_classwide_hardening.sql');
+  || path.join(MIG, '20270111000003_function_execute_classwide_hardening.sql');
 const read = (f: string) => fs.readFileSync(f, 'utf8');
 const stripTxn = (sql: string) => sql.replace(/^\s*(BEGIN|COMMIT)\s*;\s*$/gim, '');
 
@@ -101,93 +113,116 @@ async function asRole(role: string, sql: string, params: unknown[] = []): Promis
   }
 }
 
-const NEITHER = /is in neither reviewed state/;
+/** Main's SEC-B refusal for a PSE state other than S1 in $preflight$. */
+const REFUSED_PRE = /^P0001\|SEC-B preflight: public\.prospect_score_evaluations_immutable\(\) (SECURITY DEFINER flag differs from the reviewed state|carries an unexpected proconfig)/;
+/** ... or in its postcondition, when only a property $preflight$ does not check differs. */
+const REFUSED_ANY = /^P0001\|SEC-B (preflight|postcondition): public\.prospect_score_evaluations_immutable\(\) /;
+const REFUSED_VERIFY = /^P0001\|SEC-B postcondition: public\.prospect_score_evaluations_immutable\(\) (SECURITY DEFINER flag changed|proconfig is )/;
+
+/** Production's pre-SEC-B state for this one function: S1 with EXECUTE to authenticated only. */
+async function s1WithProdAcl(): Promise<void> {
+  await q(S1_DEF);
+  await q(`REVOKE ALL ON FUNCTION ${PSE} FROM PUBLIC, anon, authenticated`);
+  await q(`GRANT EXECUTE ON FUNCTION ${PSE} TO authenticated`);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('X-1 contract shape', () => {
+describe('X-1 contract shape (shipped files)', () => {
   it('the replay is in S2: SECURITY DEFINER, search_path="", table owner, erasure-authorization body', async () => {
     expect(await state()).toEqual({ secdef: true, cfg: ['search_path=""'], ownerIsTableOwner: true, held: true });
   });
 
-  it('the two-state predicate is byte-identical in $preflight$ and $verify$, and null-safe', () => {
-    const preds = [...SEC_B.matchAll(/-- X-1 state predicate[^\n]*\n(\s*IF NOT COALESCE\(\(SELECT[\s\S]*?\), false\) THEN)/g)].map((m) => m[1]);
-    expect(preds).toHaveLength(2);
-    expect(preds[0]).toBe(preds[1]);
-    expect(preds[0]).toContain('COALESCE(');
-  });
-
-  it('the NULL sentinel exists for exactly one signature', () => {
-    const rows = SEC_B.split('\n').filter((l) => /^\s*\('public\.[^']+', '[TBA]', NULL::boolean/.test(l));
+  it('the shipped SEC-B reviews this function in S1 only, in both $preflight$ and $verify$ (no two-state sentinel)', () => {
+    const rows = SEC_B.split('\n').filter((l) => l.includes(`('${PSE}',`));
     expect(rows).toHaveLength(2); // $preflight$ + $verify$
-    for (const r of rows) expect(r).toContain(`'${PSE}'`);
+    for (const r of rows) expect(r).toContain(`('${PSE}', 'T', false, false, '{"search_path=public, pg_temp"}'::text[], 1)`);
+    expect(SEC_B).not.toMatch(/NULL::boolean/);
+    expect(SEC_B).not.toMatch(/X-1 state predicate/);
   });
 });
 
-describe('SEC-B is re-runnable in both reviewed states', () => {
-  it('S2 (after erasure 02): SEC-B applies and its re-verifier passes; the function is unchanged', async () => {
+describe('version order: SEC-B (20270111000003) then erasure 02 (20270112000002)', () => {
+  it('S1 -> SEC-B -> erasure 02: every step passes, ending in S2 with no client EXECUTE', async () => {
     await inRollback(async () => {
-      const before = await state();
-      expect(await outcome(SEC_B)).toBe('ok');
-      expect(await outcome(SEC_B_VERIFY)).toBe('ok');
-      expect(await state()).toEqual(before);
-      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
-    });
-  });
-
-  it('S1 -> SEC-B -> erasure 02 -> SEC-B again: every step passes, ending in S2 with no client EXECUTE', async () => {
-    await inRollback(async () => {
-      await q(S1_DEF);
-      // production's pre-SEC-B ACL for this function: authenticated only
-      await q(`REVOKE ALL ON FUNCTION ${PSE} FROM PUBLIC, anon, authenticated`);
-      await q(`GRANT EXECUTE ON FUNCTION ${PSE} TO authenticated`);
+      await s1WithProdAcl();
       expect((await state()).secdef).toBe(false);
       expect(await outcome(SEC_B)).toBe('ok');
       expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
       expect(await outcome(ERASURE_02)).toBe('ok');
       expect(await state()).toEqual({ secdef: true, cfg: ['search_path=""'], ownerIsTableOwner: true, held: true });
-      expect(await outcome(SEC_B)).toBe('ok');
-      expect(await outcome(SEC_B_VERIFY)).toBe('ok');
+      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
     });
   });
 
-  it('erasure 02 re-applied on top of S2 + SEC-B keeps the state SEC-B accepts', async () => {
+  it('erasure 02 re-applied on top of S2 + SEC-B passes and keeps S2', async () => {
     await inRollback(async () => {
+      const before = await state();
       expect(await outcome(ERASURE_02)).toBe('ok');
-      expect(await outcome(SEC_B)).toBe('ok');
+      expect(await state()).toEqual(before);
+      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
     });
   });
 });
 
-describe('every third state fails closed, in the migration AND in the standalone re-verifier', () => {
+describe('HAZARD (documented): SEC-B must not be re-run after erasure 02', () => {
+  it('re-running SEC-B in S2 aborts in $preflight$ and changes nothing', async () => {
+    await inRollback(async () => {
+      const before = await state();
+      expect(await outcome(SEC_B)).toMatch(REFUSED_PRE);
+      expect(await state()).toEqual(before);
+      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
+    });
+  });
+
+  it('the standalone $verify$ of SEC-B reports S2 as a changed state', async () => {
+    await inRollback(async () => {
+      expect(await outcome(SEC_B_VERIFY)).toMatch(REFUSED_VERIFY);
+    });
+  });
+
+  it('S1 -> SEC-B -> erasure 02 -> SEC-B again: the re-run aborts (the case the RC two-state fix addressed)', async () => {
+    await inRollback(async () => {
+      await s1WithProdAcl();
+      expect(await outcome(SEC_B)).toBe('ok');
+      expect(await outcome(ERASURE_02)).toBe('ok');
+      expect(await outcome(SEC_B)).toMatch(REFUSED_PRE);
+    });
+  });
+
+  it('S1 re-run is fine: SEC-B is idempotent while the function is still the INVOKER original', async () => {
+    await inRollback(async () => {
+      await s1WithProdAcl();
+      expect(await outcome(SEC_B)).toBe('ok');
+      expect(await outcome(SEC_B)).toBe('ok');
+      expect(await outcome(SEC_B_VERIFY)).toBe('ok');
+    });
+  });
+});
+
+describe('every third state fails closed in SEC-B', () => {
   const mutants: Array<[string, string[]]> = [
-    ['S2 with search_path RESET (unpinned definer: the J3-8 NULL hole)', [S2_DEF, `ALTER FUNCTION ${PSE} RESET search_path`]],
+    ['S2 with search_path RESET (unpinned definer)', [S2_DEF, `ALTER FUNCTION ${PSE} RESET search_path`]],
     ['S1 with search_path RESET (NULL proconfig)', [S1_DEF, `ALTER FUNCTION ${PSE} RESET search_path`]],
     ['definer pinned to the S1 path', [S2_DEF, `ALTER FUNCTION ${PSE} SET search_path = public, pg_temp`]],
     ['invoker pinned to the S2 path', [S1_DEF, `ALTER FUNCTION ${PSE} SET search_path = ''`]],
     ['S1 flipped to SECURITY DEFINER', [S1_DEF, `ALTER FUNCTION ${PSE} SECURITY DEFINER`]],
-    ['S2 flipped to SECURITY INVOKER (bypass body under the caller)', [S2_DEF, `ALTER FUNCTION ${PSE} SECURITY INVOKER`]],
     ['S2 flags with a body that no longer consults the authorization', [
       `CREATE OR REPLACE FUNCTION ${PSE} RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$ BEGIN RETURN NEW; END $$`]],
-    ['S2 flags with a body that consults another scope', [
-      S2_DEF.replace(`'score_evaluations'`, `'outreach_decisions'`)]],
-    ['S2 owned by a role that does not own the table', [
-      S2_DEF, 'CREATE ROLE x1_other_owner NOLOGIN', `ALTER FUNCTION ${PSE} OWNER TO x1_other_owner`]],
   ];
   for (const [name, setup] of mutants) {
     it(name, async () => {
       await inRollback(async () => {
         for (const s of setup) await q(s);
-        const viaMigration = await outcome(SEC_B);
-        expect(viaMigration).toMatch(/^P0001\|SEC-B preflight: public\.prospect_score_evaluations_immutable\(\) is in neither reviewed state/);
-        const viaVerifier = await outcome(SEC_B_VERIFY);
-        expect(viaVerifier).toMatch(/^P0001\|SEC-B postcondition: public\.prospect_score_evaluations_immutable\(\) is in neither reviewed state/);
+        expect(await outcome(SEC_B)).toMatch(REFUSED_ANY);
+        expect(await outcome(SEC_B_VERIFY)).toMatch(REFUSED_VERIFY);
       });
     });
   }
 
-  it('a client grant on the function fails the standalone re-verifier (and SEC-B itself revokes it again)', async () => {
+  it('in S1, a client grant fails the standalone re-verifier and SEC-B revokes it again', async () => {
     await inRollback(async () => {
+      await q(S1_DEF);
       for (const grantee of ['anon', 'authenticated', 'PUBLIC']) {
         await q('SAVEPOINT g');
         await q(`GRANT EXECUTE ON FUNCTION ${PSE} TO ${grantee}`);
@@ -198,22 +233,12 @@ describe('every third state fails closed, in the migration AND in the standalone
       }
     });
   });
-
-  it('the NULL sentinel on any other signature is refused (no silent widening of the manifest)', async () => {
-    await inRollback(async () => {
-      const mutant = SEC_B.replace(
-        /\('public\.raise_audit_immutable\(\)', 'T', false, true, '\{"search_path=pg_catalog, public"\}'::text\[\], 1\)/,
-        `('public.raise_audit_immutable()', 'T', NULL::boolean, false, NULL::text[], 1)`);
-      expect(mutant).not.toBe(SEC_B);
-      expect(await outcome(mutant)).toMatch(/SEC-B preflight: public\.raise_audit_immutable\(\) has a NULL reviewed state/);
-    });
-  });
 });
 
-describe('behaviour in S2 after SEC-B', () => {
+describe('behaviour in S2 after the version-order replay', () => {
   it('anon and authenticated cannot EXECUTE the function (42501, before the trigger-only check)', async () => {
     await inRollback(async () => {
-      expect(await outcome(SEC_B)).toBe('ok');
+      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
       for (const role of ['anon', 'authenticated']) {
         expect(await asRole(role, `SELECT ${PSE.replace('()', '')}()`)).toBe('42501');
       }
@@ -258,7 +283,7 @@ describe('behaviour in S2 after SEC-B', () => {
   });
 });
 
-describe('SEC-B rollback in both states', () => {
+describe('SEC-B rollback (the rollback restores the authenticated grant in S1 only)', () => {
   /** Production's pre-SEC-B ACL/search_path for every function the rollback verifies (as sec_b_function_classwide does). */
   async function prodState(): Promise<void> {
     const rows = [...SEC_B_ROLLBACK.matchAll(/^\s*\('(public\.[^']+)', (true|false), (true|false), (true|false), (true|false)\)/gm)];
@@ -273,18 +298,6 @@ describe('SEC-B rollback in both states', () => {
     await q(emu.join(';\n'));
   }
 
-  it('S2: forward then rollback; the rollback never grants a client EXECUTE on the definer; forward re-applies', async () => {
-    await inRollback(async () => {
-      await prodState();
-      await q(`REVOKE ALL ON FUNCTION ${PSE} FROM PUBLIC, anon, authenticated`); // erasure 02 already narrowed it
-      expect(await outcome(SEC_B)).toBe('ok');
-      expect(await outcome(SEC_B_ROLLBACK)).toBe('ok');
-      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
-      expect((await state()).secdef).toBe(true);
-      expect(await outcome(SEC_B)).toBe('ok');
-    });
-  });
-
   it('S1: forward then rollback restores the production grant to authenticated (the exact pre-SEC-B ACL)', async () => {
     await inRollback(async () => {
       await prodState();
@@ -292,6 +305,19 @@ describe('SEC-B rollback in both states', () => {
       expect(await outcome(SEC_B)).toBe('ok');
       expect(await outcome(SEC_B_ROLLBACK)).toBe('ok');
       expect(await clientExec()).toEqual({ anon: false, authenticated: true, pub: false });
+    });
+  });
+
+  it('S2 (version order): forward in S1, erasure 02, then rollback: no client EXECUTE on the definer; a forward re-run then aborts', async () => {
+    await inRollback(async () => {
+      await prodState();
+      await q(S1_DEF);
+      expect(await outcome(SEC_B)).toBe('ok');
+      expect(await outcome(ERASURE_02)).toBe('ok');
+      expect(await outcome(SEC_B_ROLLBACK)).toBe('ok');
+      expect(await clientExec()).toEqual({ anon: false, authenticated: false, pub: false });
+      expect((await state()).secdef).toBe(true);
+      expect(await outcome(SEC_B)).toMatch(REFUSED_PRE);
     });
   });
 });
