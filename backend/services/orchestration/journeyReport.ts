@@ -10,6 +10,7 @@
  *   WS-3 actions & outcomes      outreach_bridge_handoffs → outreach_tasks /
  *                                outreach_outcomes (via the WS-3 readers)
  *   WhatsApp actions             execution_engine_requests (via its adapter's table)
+ *   decisions                    execution_journey_decisions (via its writer's reader)
  *
  * Bounded: at most `limit` runs are read (newest first) and `truncated` says so.
  * COST is not reported: no engine records a per-action cost on main, and a number
@@ -24,6 +25,7 @@ import { listInstanceHandoffs } from '../outreachBridge/outreachBridgeStore';
 import { getOutreachTaskById, outcomeTypesFor } from '../leadOutreachExecution';
 import { ownedDbTable } from '../../db/writeOwner';
 import { ENGINE_REQUESTS_TABLE } from './whatsappEngineAdapter';
+import { listJourneyDecisions } from './journeyDecisionLog';
 import type { ObjectiveOutcome } from './journeyPolicy';
 
 export interface StepReport {
@@ -44,6 +46,10 @@ export interface VersionReport {
   readonly steps: readonly StepReport[];
   /** Engine → outcome → count (WS-3 task status, WhatsApp request state). */
   readonly engines: Record<string, Record<string, number>>;
+  /** Decision → count, across this version's runs. */
+  readonly decisions: Record<string, number>;
+  /** Steps still waiting on a person: the operator's queue. Codes only. */
+  readonly needsHuman: ReadonlyArray<{ executionInstanceId: string; stepKey: string | null; outcome: string | null; reasons: readonly string[] }>;
   /** Individuals who reached the version's success outcome, and the share of those enrolled. */
   readonly attainment: { reached: number; rate: number | null; target: number | null; measured: boolean; note: string | null };
 }
@@ -103,6 +109,8 @@ export async function buildJourneyReport(input: {
     const steps = new Map<string, StepReport>();
     const engines: Record<string, Record<string, number>> = {};
     const successOutcome = v.definition.objective?.success_outcome ?? null;
+    const decisionCounts: Record<string, number> = {};
+    const needsHuman: Array<VersionReport['needsHuman'][number]> = [];
     let reached = 0;
 
     for (const run of vruns) {
@@ -114,6 +122,14 @@ export async function buildJourneyReport(input: {
         const sr = steps.get(s.stepKey) ?? { stepKey: s.stepKey, channel: s.channel, states: {} };
         bump(sr.states, s.state);
         steps.set(s.stepKey, sr);
+      }
+      const ready = planSteps.find((s) => s.state === 'ready') ?? null;
+      const runDecisions = await listJourneyDecisions(input.organizationId, run.id);
+      for (const d of runDecisions) bump(decisionCounts, d.decision);
+      // Only the latest word on the step that is still open is the queue.
+      const latest = ready === null ? null : runDecisions.filter((d) => d.planStepId === ready.id).pop() ?? null;
+      if (latest !== null && latest.decision === 'needs_human') {
+        needsHuman.push({ executionInstanceId: run.id, stepKey: latest.stepKey, outcome: latest.outcome, reasons: latest.reasons });
       }
 
       // WS-3: one handoff per bridged task; its outreach task status is the engine outcome.
@@ -147,6 +163,8 @@ export async function buildJourneyReport(input: {
       journeys,
       steps: [...steps.values()],
       engines,
+      decisions: decisionCounts,
+      needsHuman,
       attainment: {
         reached,
         rate: vruns.length > 0 && objective !== null ? reached / vruns.length : null,

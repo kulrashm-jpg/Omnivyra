@@ -38,7 +38,7 @@ import {
 } from './storage';
 import { evaluateTaskGovernance, loadTenantGovernanceConfig, type EvaluateOptions } from './governanceService';
 import { reconcileQuota, releaseQuota, reserveQuota } from './quota';
-import { buildIdempotencyKey, resolveTransport, type TransportOutcome } from './transport';
+import { buildIdempotencyKey, resolveTransport, type TransportContent, type TransportOutcome } from './transport';
 import { EXECUTION_RUNTIME_VERSION } from './runtimeVersion';
 import {
   recordDispatchDuration,
@@ -103,6 +103,8 @@ export interface DispatchResult {
 export interface DispatchOptions extends EvaluateOptions {
   /** Injected instant, for deterministic tests. */
   now?: string;
+  /** The authored message, handed to the transport untouched. */
+  content?: TransportContent;
 }
 
 const result = (
@@ -326,6 +328,7 @@ export async function dispatchInternalOutreachTask(
     idempotencyKey,
     recipient: options.recipient ?? null,
     at,
+    ...(options.content === undefined ? {} : { content: options.content }),
   });
   recordProviderResponse(transport.provider, dispatched.outcome);
   if (typeof dispatched.latencyMs === 'number') recordProviderLatency(dispatched.latencyMs);

@@ -14,8 +14,8 @@
  */
 
 import { getCurrentWorkflowVersion } from '../workflows/workflowStore';
-import { evaluateConditions } from './journeyPolicy';
-import { loadIndividualFacts, type IndividualIntelligencePort } from './individualIntelligence';
+import { evaluateConditions, isProspectClosedToJourneys } from './journeyPolicy';
+import { loadIndividualFacts, PROSPECT_STATE_UNREADABLE_GAP, type IndividualIntelligencePort } from './individualIntelligence';
 import type { SubjectRef } from '../executionSubject/subjectRef';
 
 export interface EnrollmentVerdict {
@@ -40,10 +40,20 @@ export async function checkEnrollmentEligibility(input: {
     return { eligible: false, assessedVersionId: null, reasons: ['no_published_version'] };
   }
   const conditions = version.definition.enrollment?.conditions ?? [];
-  if (conditions.length === 0) return { eligible: true, assessedVersionId: version.id, reasons: [] };
+  // A prospect is always assessed: PI's lifecycle verdict applies with or without
+  // authored conditions.
+  if (conditions.length === 0 && input.subject.kind !== 'prospect') {
+    return { eligible: true, assessedVersionId: version.id, reasons: [] };
+  }
 
   const now = input.now ?? new Date().toISOString();
   const facts = await loadIndividualFacts(input.organizationId, input.subject, now, input.intelligence);
+  if (isProspectClosedToJourneys(facts.facts)) {
+    return { eligible: false, assessedVersionId: version.id, reasons: ['prospect_lifecycle_closed'] };
+  }
+  if (facts.gaps.includes(PROSPECT_STATE_UNREADABLE_GAP)) {
+    return { eligible: false, assessedVersionId: version.id, reasons: [`gap: ${PROSPECT_STATE_UNREADABLE_GAP}`] };
+  }
   const verdict = evaluateConditions(conditions, facts.facts);
   return {
     eligible: verdict.holds,

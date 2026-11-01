@@ -31,6 +31,12 @@ export type TransportOutcome =
   | 'transport_error'
   | 'disabled';
 
+/** A message authored before dispatch. The boundary WS-4 was left: strings, never a writer. */
+export interface TransportContent {
+  readonly subject: string;
+  readonly body: string;
+}
+
 export interface TransportRequest {
   task: OutreachTask;
   /** The durable attempt this request belongs to. One attempt, one request. */
@@ -46,6 +52,8 @@ export interface TransportRequest {
   recipient: string | null;
   /** Injected instant — transports never read the clock. */
   at: string;
+  /** Authored content. Absent, the email transport falls back to its plan placeholder. */
+  content?: TransportContent;
 }
 
 export interface TransportResult {

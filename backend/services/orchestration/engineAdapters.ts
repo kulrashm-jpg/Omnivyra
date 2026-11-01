@@ -45,6 +45,7 @@
  * Adapters do not throw for engine refusals; a thrown error is an adapter defect.
  */
 
+import { ownedDbTable } from '../../db/writeOwner';
 import { bridgeExecutionTask } from '../outreachBridge/outreachBridgeStore';
 import {
   dispatchInternalOutreachTask,
@@ -104,6 +105,8 @@ export interface Ws3AdapterDeps {
   submitForApproval: typeof submitForApproval;
   dispatch: typeof dispatchInternalOutreachTask;
   registerTransports: () => void;
+  /** The person's canonical address: null when they have none, undefined when unreadable. */
+  readPersonEmail(organizationId: string, personId: string): Promise<string | null | undefined>;
 }
 
 export const defaultWs3Deps: Ws3AdapterDeps = {
@@ -112,6 +115,16 @@ export const defaultWs3Deps: Ws3AdapterDeps = {
   submitForApproval,
   dispatch: dispatchInternalOutreachTask,
   registerTransports: () => registerDefaultTransports(),
+  async readPersonEmail(organizationId, personId) {
+    const res = await ownedDbTable('unified_persons')
+      .select('primary_email')
+      .eq('company_id', organizationId)                  // TENANT FIRST
+      .eq('id', personId)
+      .maybeSingle();
+    if (res.error) return undefined;                     // unreadable ≠ absent
+    const v = (res.data as Record<string, unknown> | null)?.primary_email;
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  },
 };
 
 /**
@@ -125,6 +138,11 @@ export const defaultWs3Deps: Ws3AdapterDeps = {
  * the WS-3 approval API and waits. Autonomous dispatch needs a tenant autonomy
  * policy the owner has not authorized; until then every WS-3 action is
  * human-approved. This is the one place the conflict is resolved, explicitly.
+ *
+ * EMAIL. Refused BEFORE anything is bridged unless the step carries its authored
+ * message, so a task never reaches a person's approval queue with nothing to send.
+ * The recipient is read from the person's canonical address at dispatch, passed to
+ * the engine and never stored here: WS-3 governance evaluates that exact address.
  */
 export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineAdapter {
   const result = (outcome: string, disposition: EngineDisposition, reason: string | null, externalRef: string | null): EngineResult =>
@@ -134,6 +152,20 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
     engine: 'ws3',
     channels: ['internal', 'email'],
     async execute(ctx) {
+      const isEmail = ctx.channel === 'email';
+      const content = isEmail ? ctx.step?.email ?? null : null;
+      if (isEmail && content === null) {
+        return result('no_authored_content', 'needs_human', 'the email step has no authored subject and body', null);
+      }
+      let recipient: string | null = null;
+      if (isEmail) {
+        if (ctx.personId === null) return result('person_unresolved', 'skipped', 'no canonical person to email', null);
+        const address = await deps.readPersonEmail(ctx.organizationId, ctx.personId);
+        if (address === undefined) return result('email_unreadable', 'wait', 'the person could not be read', null);
+        if (address === null) return result('no_email_address', 'skipped', 'the person has no email address', null);
+        recipient = address;
+      }
+
       deps.registerTransports();
       let handoff;
       try {
@@ -161,7 +193,11 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
           return result('awaiting_approval', 'wait', 'awaiting human approval', taskId);
         case 'approved':
         case 'queued': {
-          const out = await deps.dispatch(ctx.organizationId, taskId, ctx.now === undefined ? {} : { now: ctx.now });
+          const out = await deps.dispatch(ctx.organizationId, taskId, {
+            ...(ctx.now === undefined ? {} : { now: ctx.now }),
+            ...(recipient === null ? {} : { recipient }),
+            ...(content === null ? {} : { content }),
+          });
           const outcome = String(out.outcome);
           if (outcome === 'sent') return result('sent', 'completed', null, taskId);
           if (outcome === 'blocked_governance' || outcome === 'blocked_prior_attempt' || outcome === 'failed' || outcome === 'rejected' || outcome === 'timeout') {

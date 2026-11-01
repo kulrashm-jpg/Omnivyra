@@ -33,6 +33,7 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { ownedDbTable } from '../../db/writeOwner';
+import { NON_CONTACT_CHANNELS } from '../orchestration/journeyPolicy';
 
 const PLANS_TABLE = 'execution_plans';
 const STEPS_TABLE = 'execution_plan_steps';
@@ -435,13 +436,16 @@ export async function lastCompletedActionAtForSubject(
   const sid = str(subjectId);
   if (sid === null) fail('subjectId is required', 'invalid_subject');
   const tasks = await ownedDbTable(TASKS_TABLE)
-    .select('plan_step_id')
+    .select('plan_step_id, channel')
     .eq('organization_id', organizationId)
     .eq('subject_kind', subjectKind)
     .eq('subject_id', sid)
     .limit(1000);
   if (tasks.error) translate(tasks.error, 'subject task read failed');
-  const stepIds = rows(tasks.data).map((r) => String(r.plan_step_id));
+  // Only an action that contacted this person counts toward their frequency policy.
+  const stepIds = rows(tasks.data)
+    .filter((r) => !NON_CONTACT_CHANNELS.includes(String(r.channel)))
+    .map((r) => String(r.plan_step_id));
   if (stepIds.length === 0) return null;
   const steps = await ownedDbTable(STEPS_TABLE)
     .select('completed_at')

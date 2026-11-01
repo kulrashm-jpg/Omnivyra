@@ -49,9 +49,9 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { supabase } from '../../db/supabaseClient';
 import {
   validateConditions, validateEnrollment, validateFrequencyPolicy, validateObjective,
-  validateWhatsAppSettings, JourneyPolicyError,
+  validateWhatsAppSettings, validateEmailSettings, JourneyPolicyError,
   type JourneyCondition, type JourneyEnrollment, type JourneyFrequencyPolicy,
-  type JourneyObjective, type WhatsAppStepSettings,
+  type JourneyObjective, type WhatsAppStepSettings, type EmailStepSettings,
 } from '../orchestration/journeyPolicy';
 import {
   SOCIAL_POST_CHANNEL, parseSocialPostSettings, type SocialPostStepSettings,
@@ -211,6 +211,12 @@ export interface WorkflowStep {
   readonly when?: readonly JourneyCondition[];
   /** Orchestration — engine settings, required for (and only allowed on) whatsapp steps. */
   readonly whatsapp?: WhatsAppStepSettings;
+  /**
+   * Orchestration — the message an email step sends. Only allowed on email steps, and
+   * optional at authoring so a draft can be completed later: the WS-3 adapter refuses
+   * to act on an email step without it.
+   */
+  readonly email?: EmailStepSettings;
   /**
    * Orchestration — the approved publishing object a `social_post` step awaits.
    * Required on (and only allowed on) social_post steps. A REFERENCE, never data:
@@ -610,6 +616,11 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
       ? asWorkflowError(() => validateWhatsAppSettings(s.whatsapp, key))
       : null;
 
+    if (s.email !== undefined && channel !== 'email') {
+      fail(`step "${key}" email settings are only allowed on an email step`, 'invalid_step_engine_settings');
+    }
+    const email = s.email === undefined ? null : asWorkflowError(() => validateEmailSettings(s.email, key));
+
     // Orchestration: a social_post step references one approved publishing object
     // and carries no authoring text (an instruction could be mistaken for copy).
     if (s.social_post !== undefined && channel !== SOCIAL_POST_CHANNEL) {
@@ -634,6 +645,7 @@ export function validateWorkflowDefinition(definition: unknown): WorkflowDefinit
       ...(s.requires_approval === true ? { requires_approval: true } : {}),
       ...(when.length > 0 ? { when } : {}),
       ...(whatsapp === null ? {} : { whatsapp }),
+      ...(email === null ? {} : { email }),
       ...(socialPost === null ? {} : { social_post: socialPost }),
     });
   }

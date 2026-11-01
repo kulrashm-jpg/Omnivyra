@@ -1020,6 +1020,7 @@ const STACK_MIGRATIONS = [
   '20261231000008_engagement_request_idempotency.sql',
   '20261231000009_migration_rerun_safety.sql',
   '20261231000010_rpa_legacy_session_invalidation.sql',
+  '20270120000000_orchestration_journey_decisions.sql',
 ];
 
 /**
@@ -1061,6 +1062,10 @@ const STACK_TABLES = [
   // 20261230000000_orchestration_engine_requests.sql:40 (RLS :104, REVOKE :110)
   { table: 'execution_engine_requests',          source: '20261230000000:40', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'execution_task_id', 'engine', 'state', 'external_ref', 'detail', 'created_at', 'updated_at'] },
+  // 20270120000000_orchestration_journey_decisions.sql:28
+  { table: 'execution_journey_decisions',        source: '20270120000000:28', revokesClientRoles: true,
+    serviceRoleGrants: ['SELECT', 'INSERT'],
+    columns: ['id', 'organization_id', 'execution_instance_id', 'plan_step_id', 'step_key', 'channel', 'engine', 'decision', 'outcome', 'reasons', 'decision_key', 'decided_at'] },
   // 20261231000000_orchestration_campaign_targeting.sql:164,194 (RLS :185,276; REVOKE :189,283)
   { table: 'prospect_campaign_lists',            source: '20261231000000:164', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'campaign_id', 'list_id', 'attached_by', 'attached_at'] },
@@ -1153,6 +1158,8 @@ const STACK_INDEXES = [
   { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
   { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
   // 20261230000000_orchestration_engine_requests.sql:74
+  { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id', 'decided_at'] },
+  { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_needs_human', unique: false, partial: true, keys: ['organization_id', 'decided_at'], predicate: ["'needs_human'"] },
   { table: 'execution_engine_requests', index: 'ix_execution_engine_requests_open', unique: false, partial: true, keys: ['organization_id', 'state'], predicate: ["'requested'", "'submitting'", "'submitted'"] },
   // 20261231000000_orchestration_campaign_targeting.sql:182-256
   { table: 'prospect_campaign_lists', index: 'uq_prospect_campaign_lists_identity', unique: true, partial: false, keys: ['organization_id', 'campaign_id', 'list_id'] },
@@ -1224,6 +1231,8 @@ const STACK_FUNCTIONS = [
   { name: 'bridge_execution_task', args: 'uuid, uuid, uuid, text, boolean, text, text, text, text, text', secdef: false, exec: 'service_role_only_invoker' },
   // 20261230000000_orchestration_engine_requests.sql:80
   { name: 'execution_engine_requests_guard', args: '', secdef: false },
+  // 20270120000000_orchestration_journey_decisions.sql:78
+  { name: 'execution_journey_decisions_guard', args: '', secdef: false },
   // 20261231000000_orchestration_campaign_targeting.sql:120,264
   { name: 'prospect_campaigns_targeting_guard', args: '', secdef: false },
   { name: 'prospect_campaign_targets_guard', args: '', secdef: false },
@@ -1259,6 +1268,7 @@ const STACK_TRIGGERS = [
   { table: 'execution_plan_steps',               trigger: 'trg_execution_plan_steps_guard',                          fn: 'execution_plan_steps_guard' },                     // 20261228000001:400
   { table: 'execution_tasks',                    trigger: 'trg_execution_tasks_guard',                               fn: 'execution_tasks_guard' },                          // 20261228000001:463
   { table: 'outreach_bridge_handoffs',           trigger: 'trg_outreach_bridge_handoffs_guard',                      fn: 'outreach_bridge_handoffs_guard' },                 // 20261229000000:266
+  { table: 'execution_journey_decisions',        trigger: 'trg_execution_journey_decisions_guard',                   fn: 'execution_journey_decisions_guard' },              // 20270120000000:96
   { table: 'execution_engine_requests',          trigger: 'trg_execution_engine_requests_guard',                     fn: 'execution_engine_requests_guard' },                // 20261230000000:100
   { table: 'prospect_campaigns',                 trigger: 'trg_prospect_campaigns_targeting_guard',                  fn: 'prospect_campaigns_targeting_guard' },             // 20261231000000:157
   { table: 'prospect_campaign_targets',          trigger: 'trg_prospect_campaign_targets_guard',                     fn: 'prospect_campaign_targets_guard' },                // 20261231000000:272

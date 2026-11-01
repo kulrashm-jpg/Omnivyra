@@ -205,8 +205,8 @@ export function createEmailTransport(
         };
       }
 
-      const subject = trim(request.task.action, 200) || 'Following up';
-      const body = trim(request.task.explanation, 4000) || subject;
+      const subject = trim(request.content?.subject ?? request.task.action, 200) || 'Following up';
+      const body = trim(request.content?.body ?? request.task.explanation, 4000) || subject;
       const startedMs = Date.now();
 
       try {

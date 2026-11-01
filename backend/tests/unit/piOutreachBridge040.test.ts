@@ -440,15 +440,15 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
 
   it('the legacy engine modules are byte-identical', () => {
     // RE-PINNED 2026-10-28 to the orchestration port: governance, quota and dispatch
-    // are origin/main's (pi-consol's WS-3 reconciliation is NOT ported — owner
-    // decision pending); personAnchor is pi-consol's subject-aware version.
-    expect(sha('backend/services/leadOutreachExecution/governance.ts')).toBe('b20a65e99ec955b4');
+    // are origin/main's plus the WS-3 re-dispatch fix (pi-consol's reconciliation is NOT
+    // ported; owner decision pending); personAnchor is pi-consol's subject-aware version.
+    expect(sha('backend/services/leadOutreachExecution/governance.ts')).toBe('1baa47982b4a4613');
     expect(sha('backend/services/leadOutreachExecution/approval.ts')).toBe('4ef1acc19f3feb64');
     expect(sha('backend/services/leadOutreachExecution/materialization.ts')).toBe('46d4461b56be2908');
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
     expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5835d9876ad97b5b');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('3c366bcc862b7bd4');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('da5583359593064e');
   });
 
   it('person resolution reuses the ONE existing mechanism', () => {
@@ -478,13 +478,13 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
     expect(sha('supabase/migrations/20261228000001_pi_execution_plans.sql'))
       .toBe('04de68f4eb360825');
     expect(sha('backend/services/executionPlans/executionPlanStore.ts'))
-      .toBe('97b68e9c17758e81');
+      .toBe('c2f0c2174cb2ca3c');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
     expect(sha('supabase/migrations/20261228000002_pi_execution_step_scheduling.sql'))
       .toBe('652e20fb2f6425e2');
     expect(sha('backend/services/workflowExecution/stepProgressionStore.ts'))
       .toBe('d70eaf7eed626960');
-    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('61df89e2b92a1b12');
+    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('1838a1d1139c3b51');
   });
 
   it('033 artefacts are byte-identical', () => {

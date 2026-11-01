@@ -293,8 +293,8 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // provider-facing request it builds is unchanged.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('eb4963aea1b7a6d2');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('94c581489768ceec');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('da5583359593064e');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

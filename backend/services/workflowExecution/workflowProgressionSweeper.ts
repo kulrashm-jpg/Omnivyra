@@ -9,28 +9,34 @@
  * is the only clock — no second scheduler), then, for the one ready step:
  *
  *   1. reads the individual's facts (individualIntelligence.ts — canonical sources);
- *   2. applies the step's IMPLICIT channel permission and its authored `when`
+ *   2. ends the journey if the person responded or PI closed the prospect
+ *      (journeyResponses.ts) — no further step, and any unsent WS-3 task is cancelled;
+ *   3. applies the step's IMPLICIT channel permission and its authored `when`
  *      conditions — if they do not hold, the step is SKIPPED: "no suitable
  *      action for this person" is a recorded decision, and the journey continues;
- *   3. applies the version's frequency policy — if the person was contacted too
+ *   4. applies the version's frequency policy — if the person was contacted too
  *      recently, the step WAITS (it is retried by a later sweep);
- *   4. hands the step to the channel's engine adapter (engineAdapters.ts), which
+ *   5. hands the step to the channel's engine adapter (engineAdapters.ts), which
  *      asks the EXISTING engine to act; the engine's own gates stay authoritative;
- *   5. settles the step from the engine's disposition: `completed` or `skipped`
+ *   6. settles the step from the engine's disposition: `completed` or `skipped`
  *      advance the journey; `wait` and `needs_human` leave it ready.
+ *
+ * Every decision is then recorded durably (journeyDecisionLog.ts) and the tenant's
+ * recent outcomes are fed to PI's lifecycle (journeyFeedback.ts).
  *
  * ─── WHAT IT NEVER DOES ───────────────────────────────────────────────────
  * It never approves, never overrides an opt-out or suppression, never retries an
- * action that may already have happened, never chooses `failed` (an absorbing
- * state reserved for a person), and never reads an outcome to change a decision —
- * outcome-driven adaptation is not authorized.
+ * action that may already have happened, and never chooses `failed` (an absorbing
+ * state reserved for a person). A response can only END a journey: no step is ever
+ * chosen, added or reordered because of one. Stopping contact narrows what a workflow
+ * does, which is why it needs no authoring and no autonomy policy.
  *
  * ─── CONCURRENCY ──────────────────────────────────────────────────────────
  * `advance_execution_plan` locks the run; step transitions are compare-and-set; the
  * WS-3 bridge and the engine-request ledger are unique per execution task; and
  * engines claim before sending. Two sweeps over the same run converge.
  */
-import { advanceExecutionRun, getReadyStep, transitionPlanStep } from './stepProgressionStore';
+import { advanceExecutionRun, cancelExecutionRun, getReadyStep, transitionPlanStep } from './stepProgressionStore';
 import {
   getPlanForInstance, lastCompletedActionAtForSubject, listInstanceTasks,
 } from '../executionPlans/executionPlanStore';
@@ -42,10 +48,21 @@ import {
   buildAdapterRegistry, createWs3Adapter, type EngineAdapter, type EngineResult,
 } from '../orchestration/engineAdapters';
 import { createWhatsAppAdapter } from '../orchestration/whatsappEngineAdapter';
-import { loadIndividualFacts, type IndividualIntelligencePort } from '../orchestration/individualIntelligence';
+import { createSocialPublishAdapter } from '../orchestration/socialPublishEngineAdapter';
+import { createBrowserAdapter } from '../orchestration/browserEngineAdapter';
 import {
-  channelPermissionFact, evaluateConditions, hoursBetween, type JourneyCondition,
+  loadIndividualFacts, PROSPECT_STATE_UNREADABLE_GAP, type IndividualIntelligencePort,
+} from '../orchestration/individualIntelligence';
+import {
+  channelPermissionFact, evaluateConditions, hoursBetween, isProspectClosedToJourneys,
+  NON_CONTACT_CHANNELS, type JourneyCondition,
 } from '../orchestration/journeyPolicy';
+import { assessJourneyExit, durableJourneyResponsePort, type JourneyResponsePort } from '../orchestration/journeyResponses';
+import { recordJourneyDecisions, type JourneyDecisionInput } from '../orchestration/journeyDecisionLog';
+import { feedRecentOutcomesToLifecycle, feedWhatsAppReplyToLifecycle, type LifecycleFeedbackReport } from '../orchestration/journeyFeedback';
+import { listInstanceHandoffs } from '../outreachBridge/outreachBridgeStore';
+import { getOutreachTaskById, transitionOutreachTaskState } from '../leadOutreachExecution';
+import { ensureProspectLifecycleOpen } from '../prospectLifecycle/lifecycleWriter';
 import type { WorkflowDefinition, WorkflowStep } from '../workflows/workflowStore';
 
 const CONFIG_TABLE = 'outreach_governance_config';
@@ -54,7 +71,7 @@ const CONFIG_TABLE = 'outreach_governance_config';
 export const OCCUPIED_LIFECYCLE_STATES = ['created', 'queued', 'active'] as const;
 
 /** Channels with an engine adapter. Everything else is visible as unsupported, never re-routed. */
-export const ROUTED_CHANNELS = ['internal', 'email', 'whatsapp'] as const;
+export const ROUTED_CHANNELS = ['internal', 'email', 'whatsapp', 'social_post', 'community'] as const;
 export type RoutedChannel = typeof ROUTED_CHANNELS[number];
 
 /**
@@ -65,7 +82,25 @@ export const SWEEP_LIMITS = {
   tenants: 25,
   instancesPerTenant: 50,
   tasksPerTenant: 25,
+  /** The occupied runs a sweep rotates its window across; beyond this is reported. */
+  instanceWindowPerTenant: 1000,
 } as const;
+
+/** The cadence the rotation assumes. A different cadence only changes how fast it cycles. */
+export const SWEEP_ROTATION_MS = 15 * 60 * 1000;
+
+/**
+ * Which part of a tenant's occupied runs this sweep looks at. Runs waiting on a human
+ * consume the task budget without settling, so always starting from the oldest would
+ * leave newer journeys unreached for as long as the old ones wait. Stateless on
+ * purpose: the instant picks the window, so no sweep cursor has to be stored or raced.
+ */
+export function rotateInstanceWindow(ids: readonly string[], now: string): string[] {
+  if (ids.length <= SWEEP_LIMITS.tasksPerTenant) return [...ids];
+  const tick = Math.floor(Date.parse(now) / SWEEP_ROTATION_MS);
+  const start = Number.isFinite(tick) ? (tick * SWEEP_LIMITS.tasksPerTenant) % ids.length : 0;
+  return [...ids.slice(start), ...ids.slice(0, start)];
+}
 
 export interface SweepCounters {
   instances_scanned: number;
@@ -83,6 +118,10 @@ export interface SweepCounters {
   tasks_needing_human: number;
   unsupported_channels: number;
   settlement_converged: number;
+  /** Journeys ended because the person responded or PI closed the prospect. */
+  journeys_exited: number;
+  /** PI lifecycle transitions written from recorded responses. */
+  lifecycle_transitions_written: number;
   errors: number;
 }
 
@@ -97,11 +136,12 @@ export interface SweepIssue {
 /** One journey decision, for the operator report. Codes only — never personal data. */
 export interface JourneyDecision {
   readonly executionInstanceId: string;
-  readonly planStepId: string;
-  readonly stepKey: string;
-  readonly channel: string;
+  /** Null only for the run-level `exited`. */
+  readonly planStepId: string | null;
+  readonly stepKey: string | null;
+  readonly channel: string | null;
   readonly engine: string | null;
-  readonly decision: 'executed' | 'skipped' | 'deferred' | 'waiting' | 'needs_human' | 'unsupported';
+  readonly decision: 'executed' | 'skipped' | 'deferred' | 'waiting' | 'needs_human' | 'unsupported' | 'exited';
   readonly outcome: string | null;
   readonly reasons: readonly string[];
 }
@@ -113,6 +153,8 @@ export interface TenantSweepResult {
   readonly unsupported: readonly string[];
   readonly decisions: readonly JourneyDecision[];
   readonly issues: readonly SweepIssue[];
+  /** What reached PI's lifecycle this sweep; null when the feed could not run. */
+  readonly lifecycleFeedback: LifecycleFeedbackReport | null;
   /** True when a bound stopped the work, so the next invocation has more to do. */
   readonly workRemains: boolean;
 }
@@ -129,7 +171,8 @@ export interface SweepReport {
 const zero = (): SweepCounters => ({
   instances_scanned: 0, steps_advanced: 0, tasks_seen: 0, steps_settled: 0, steps_skipped: 0,
   tasks_deferred_frequency: 0, tasks_waiting: 0, tasks_needing_human: 0,
-  unsupported_channels: 0, settlement_converged: 0, errors: 0,
+  unsupported_channels: 0, settlement_converged: 0, journeys_exited: 0,
+  lifecycle_transitions_written: 0, errors: 0,
 });
 
 const add = (a: SweepCounters, b: SweepCounters): SweepCounters => {
@@ -147,17 +190,54 @@ const errCode = (e: unknown): string =>
 export interface SweeperDeps {
   readonly adapters: readonly EngineAdapter[];
   readonly intelligence?: IndividualIntelligencePort;
+  readonly responses?: JourneyResponsePort;
+  /** The durable record and PI feed. Injected together: a unit test exercises neither. */
+  readonly recordDecisions?: typeof recordJourneyDecisions;
+  readonly feedLifecycle?: typeof feedRecentOutcomesToLifecycle;
+  readonly openLifecycle?: typeof ensureProspectLifecycleOpen;
 }
+
+/**
+ * The community engine's module graph (executor, RPA, session encryption) needs the
+ * full runtime configuration at load, so it is reached only when a community step is
+ * actually due. Every other journey keeps working without it.
+ */
+const communityAdapter: EngineAdapter = {
+  engine: 'community',
+  channels: ['community'],
+  execute: async (ctx) =>
+    (await import('../orchestration/communityEngineAdapter')).createCommunityAdapter().execute(ctx),
+};
 
 let defaultAdapters: readonly EngineAdapter[] | null = null;
 const realAdapters = (): readonly EngineAdapter[] =>
-  (defaultAdapters ??= [createWs3Adapter(), createWhatsAppAdapter()]);
+  (defaultAdapters ??= [
+    createWs3Adapter(), createWhatsAppAdapter(), createSocialPublishAdapter(),
+    communityAdapter, createBrowserAdapter(),
+  ]);
 
 /** The authored step and the run's policy, from the plan's FROZEN definition snapshot. */
 function readSnapshot(snapshot: unknown, stepKey: string): { step: WorkflowStep | null; definition: WorkflowDefinition | null } {
   const def = (snapshot && typeof snapshot === 'object' ? snapshot : null) as WorkflowDefinition | null;
   const steps = Array.isArray(def?.steps) ? def!.steps : [];
   return { step: steps.find((s) => s && s.key === stepKey) ?? null, definition: def };
+}
+
+/**
+ * End a journey: cancel its workflow records through the existing RPC, then withdraw
+ * any WS-3 task that has not started sending, so nobody approves or dispatches a moot
+ * message. A task already dispatching or sent is left to its engine. Each withdrawal
+ * is a compare-and-set, so losing a race to a dispatch is not a failure.
+ */
+async function exitJourney(organizationId: string, executionInstanceId: string): Promise<void> {
+  await cancelExecutionRun({ organizationId, executionInstanceId });
+  for (const h of await listInstanceHandoffs(organizationId, executionInstanceId)) {
+    const task = await getOutreachTaskById(organizationId, h.outreachTaskId);
+    const status = task?.status;
+    if (status === 'pending' || status === 'awaiting_approval' || status === 'approved' || status === 'queued') {
+      await transitionOutreachTaskState(organizationId, h.outreachTaskId, status, 'cancelled');
+    }
+  }
 }
 
 /**
@@ -218,6 +298,7 @@ export async function advanceAndDispatchWorkflowExecution(
   const now = options.now ?? new Date().toISOString();
   const registry = buildAdapterRegistry(options.deps?.adapters ?? realAdapters());
   const intelligence = options.deps?.intelligence;
+  const responses = options.deps?.responses ?? durableJourneyResponsePort;
 
   const counters = zero();
   const outcomes: Record<string, number> = {};
@@ -229,12 +310,17 @@ export async function advanceAndDispatchWorkflowExecution(
 
   let instanceIds: string[];
   try {
-    instanceIds = await listExecutionInstanceIdsInStates(organizationId, OCCUPIED_LIFECYCLE_STATES, SWEEP_LIMITS.instancesPerTenant);
+    instanceIds = await listExecutionInstanceIdsInStates(organizationId, OCCUPIED_LIFECYCLE_STATES, SWEEP_LIMITS.instanceWindowPerTenant);
   } catch (e) {
     counters.errors += 1;
     issues.push({ scope: 'tenant', organizationId, id: null, code: errCode(e), message: errText(e) });
-    return { organizationId, counters, outcomes, unsupported, decisions, issues, workRemains: true };
+    return { organizationId, counters, outcomes, unsupported, decisions, issues, lifecycleFeedback: null, workRemains: true };
   }
+  if (instanceIds.length > SWEEP_LIMITS.instanceWindowPerTenant) {
+    instanceIds = instanceIds.slice(0, SWEEP_LIMITS.instanceWindowPerTenant);
+    workRemains = true;                      // stated, not silently truncated
+  }
+  instanceIds = rotateInstanceWindow(instanceIds, now);
   if (instanceIds.length > SWEEP_LIMITS.instancesPerTenant) {
     instanceIds = instanceIds.slice(0, SWEEP_LIMITS.instancesPerTenant);
     workRemains = true;                      // stated, not silently truncated
@@ -293,7 +379,52 @@ export async function advanceAndDispatchWorkflowExecution(
       // ── 2. Who this person is, from canonical sources. ────────────────────
       const facts = await loadIndividualFacts(organizationId, subject, now, intelligence);
 
-      // ── 3. Implicit permission + authored conditions → skip when unmet. ──
+      // ── 3. The person responded, or PI closed them → the journey ends. ────
+      if (facts.gaps.includes(PROSPECT_STATE_UNREADABLE_GAP)) {
+        counters.tasks_waiting += 1;
+        decide({ engine: adapter.engine, decision: 'waiting', outcome: PROSPECT_STATE_UNREADABLE_GAP, reasons: ['the prospect state could not be read; no contact this sweep'] });
+        continue;
+      }
+      const exit = await assessJourneyExit(organizationId, executionInstanceId, facts.personId, responses);
+      const exitReason = exit.outcome ?? (isProspectClosedToJourneys(facts.facts) ? String(facts.facts.prospect_lifecycle_state) : null);
+      if (exitReason !== null) {
+        if (exit.whatsappReply !== null && subject.kind === 'prospect') {
+          // Best effort: the journey's stop must not depend on PI accepting the event.
+          try {
+            const fed = await feedWhatsAppReplyToLifecycle({
+              organizationId, prospectId: subject.id, now,
+              messageId: exit.whatsappReply.messageId, threadId: exit.whatsappReply.threadId,
+            });
+            if (fed.wrote) counters.lifecycle_transitions_written += 1;
+          } catch (e) {
+            issues.push({ scope: 'instance', organizationId, id: executionInstanceId, code: 'lifecycle_feedback_failed', message: errText(e) });
+          }
+        }
+        await exitJourney(organizationId, executionInstanceId);
+        counters.journeys_exited += 1;
+        decisions.push({
+          executionInstanceId, planStepId: null, stepKey: null, channel: null, engine: null,
+          decision: 'exited', outcome: exitReason, reasons: [`the journey ended: ${exitReason}`],
+        });
+        continue;
+      }
+
+      // PI abstains on a prospect with no ledger, so a response could never reach
+      // it. The first step a journey acts on opens one, through PI's own opener.
+      // Best effort: the opener is idempotent and the next sweep tries again.
+      if (facts.prospectLedgerAbsent) {
+        try {
+          await (options.deps?.openLifecycle ?? ensureProspectLifecycleOpen)({
+            organizationId, prospectId: subject.id, now,
+            reasoning: 'a journey first acted on this prospect',
+            evidence: { kind: 'human_action', detail: { reason: 'campaign_enrollment' } },
+          });
+        } catch (e) {
+          issues.push({ scope: 'instance', organizationId, id: executionInstanceId, code: 'lifecycle_open_failed', message: errText(e) });
+        }
+      }
+
+      // ── 4. Implicit permission + authored conditions → skip when unmet. ──
       const permission = channelPermissionFact(channel);
       const required: JourneyCondition[] = [
         ...(permission === null ? [] : [{ fact: permission, op: 'eq' as const, value: true }]),
@@ -306,9 +437,9 @@ export async function advanceAndDispatchWorkflowExecution(
         continue;
       }
 
-      // ── 4. Frequency policy across this tenant's journeys for the person. ──
+      // ── 5. Frequency policy across this tenant's journeys for the person. ──
       const gap = definition?.policy?.min_hours_between_actions;
-      if (typeof gap === 'number' && gap > 0) {
+      if (typeof gap === 'number' && gap > 0 && !NON_CONTACT_CHANNELS.includes(channel)) {
         const last = await lastCompletedActionAtForSubject(organizationId, subject.kind, subject.id);
         const since = last === null ? null : hoursBetween(last, now);
         if (since !== null && since < gap) {
@@ -318,7 +449,7 @@ export async function advanceAndDispatchWorkflowExecution(
         }
       }
 
-      // ── 5. The engine acts; its disposition settles the step. ─────────────
+      // ── 6. The engine acts; its disposition settles the step. ─────────────
       let r: EngineResult;
       try {
         r = await adapter.execute({
@@ -361,7 +492,26 @@ export async function advanceAndDispatchWorkflowExecution(
     workRemains = true;
   }
 
-  return { organizationId, counters, outcomes, unsupported, decisions, issues, workRemains };
+  const recorded = await (options.deps?.recordDecisions ?? recordJourneyDecisions)(
+    organizationId, decisions as readonly JourneyDecisionInput[],
+  );
+  if (recorded.failed > 0) {
+    counters.errors += recorded.failed;
+    issues.push({ scope: 'tenant', organizationId, id: null, code: 'decision_record_failed', message: recorded.firstError ?? 'a decision could not be recorded' });
+  }
+
+  let lifecycleFeedback: LifecycleFeedbackReport | null = null;
+  try {
+    lifecycleFeedback = await (options.deps?.feedLifecycle ?? feedRecentOutcomesToLifecycle)(organizationId, now);
+    counters.lifecycle_transitions_written += lifecycleFeedback.written;
+    counters.errors += lifecycleFeedback.errors;
+    if (lifecycleFeedback.truncated) workRemains = true;
+  } catch (e) {
+    counters.errors += 1;
+    issues.push({ scope: 'tenant', organizationId, id: null, code: errCode(e), message: errText(e) });
+  }
+
+  return { organizationId, counters, outcomes, unsupported, decisions, issues, lifecycleFeedback, workRemains };
 }
 
 /**

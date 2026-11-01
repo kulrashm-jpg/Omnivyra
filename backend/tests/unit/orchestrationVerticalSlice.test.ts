@@ -655,7 +655,7 @@ describe('sweeper invariants (from 041-A-I / 041-A-K)', () => {
     const r = await advanceAndDispatchWorkflowExecution(ORG_A, { now: world.clock, limit: 1, deps: { adapters: adapters(), intelligence } });
     expect(r.counters.tasks_seen).toBe(1);
     expect(r.workRemains).toBe(true);
-    expect(SWEEP_LIMITS).toEqual({ tenants: 25, instancesPerTenant: 50, tasksPerTenant: 25 });
+    expect(SWEEP_LIMITS).toEqual({ tenants: 25, instancesPerTenant: 50, tasksPerTenant: 25, instanceWindowPerTenant: 1000 });
   });
 
   it('a step another actor already settled is CONVERGENCE, not an error, and is not overwritten', async () => {

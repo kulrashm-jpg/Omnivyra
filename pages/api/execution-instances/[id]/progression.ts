@@ -55,6 +55,7 @@ import {
   listProgressionSteps, getReadyStep, StepProgressionError,
   STEP_STATES, type StepState,
 } from '../../../../backend/services/workflowExecution/stepProgressionStore';
+import { listJourneyDecisions } from '../../../../backend/services/orchestration/journeyDecisionLog';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -110,6 +111,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         plan,
         steps: await listProgressionSteps(companyId, plan.id),
         readyStep: await getReadyStep(companyId, plan.id),
+        decisions: await listJourneyDecisions(companyId, instanceId),
       });
     }
 

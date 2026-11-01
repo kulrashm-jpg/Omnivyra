@@ -53,13 +53,19 @@ describe('engine contract — shared vocabulary', () => {
     expect(ADAPTERS.map((a) => a.engine).sort()).toEqual([...ENGINE_NAMES].sort());
   });
 
-  it('the sweeper runs only adapters that can act today (ws3, whatsapp)', () => {
-    // social_publish and browser can only refuse; community has no production
-    // target binding. Registering them would add no capability, so they wait for
-    // the owner decisions their reports name (integration owner, 2026-10-28).
+  it('the sweeper runs every engine; each one fails closed on its own gates', () => {
+    // Since 2026-10-28 social_post gained its observe contract and community its
+    // verified-identity link, so a step on those channels now gets the engine's own
+    // answer instead of "no engine". The browser adapter claims no channel, so
+    // registering it routes nothing to it. WORKFLOW_ORCHESTRATION_ENABLED stays off.
     const sweeper = read('backend/services/workflowExecution/workflowProgressionSweeper.ts');
-    expect(sweeper).toMatch(/\[createWs3Adapter\(\), createWhatsAppAdapter\(\)\]/);
-    expect(sweeper).not.toMatch(/createSocialPublishAdapter|createCommunityAdapter|createBrowserAdapter/);
+    for (const make of ['createWs3Adapter', 'createWhatsAppAdapter', 'createSocialPublishAdapter', 'createCommunityAdapter', 'createBrowserAdapter']) {
+      expect(sweeper).toContain(`${make}()`);
+    }
+    // The registry entry is the lazy wrapper; its channel must stay what the adapter claims.
+    expect(createCommunityAdapter().channels).toEqual(['community']);
+    expect(() => buildAdapterRegistry(ADAPTERS)).not.toThrow();
+    expect(buildAdapterRegistry(ADAPTERS).has('browser')).toBe(false);
   });
 
   it('the widening migration is additive, guarded and has a rollback that refuses while rows depend on it', () => {

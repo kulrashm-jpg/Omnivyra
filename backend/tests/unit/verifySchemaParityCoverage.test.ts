@@ -20,12 +20,12 @@ const MIGRATIONS = path.join(REPO, 'supabase', 'migrations');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const parity = require(path.join(REPO, 'scripts', 'verify-schema-parity.js'));
 
-/** The release series: 20261127000000 plus 20261226000000 … 20261231999999. */
+/** The release series: 20261127000000, 20261226000000 … 20261231999999, and the journey decision record. */
 const inSeries = (f: string): boolean => {
   const m = f.match(/^(\d{14})_.*\.sql$/);
   if (!m) return false;
   const v = m[1];
-  return v === '20261127000000' || (v >= '20261226000000' && v <= '20261231999999');
+  return v === '20261127000000' || v === '20270120000000' || (v >= '20261226000000' && v <= '20261231999999');
 };
 
 const seriesFiles = fs.readdirSync(MIGRATIONS).filter(inSeries).sort();
@@ -88,16 +88,16 @@ function inventory(): Inventory {
 const inv = inventory();
 
 describe('ORCH-STACK — the migration series the manifest is checked against', () => {
-  it('is exactly the 19 release migrations, and the verifier names the same list', () => {
-    expect(seriesFiles).toHaveLength(19);
+  it('is exactly the 20 release migrations, and the verifier names the same list', () => {
+    expect(seriesFiles).toHaveLength(20);
     expect(parity.STACK_MIGRATIONS).toEqual(seriesFiles);
   });
 
   it('parses a non-trivial inventory (an empty parse would pass every check below)', () => {
-    expect(inv.tables.size).toBe(18);
+    expect(inv.tables.size).toBe(19);
     expect(inv.indexes.length).toBeGreaterThanOrEqual(45);
     expect(inv.functions.length).toBeGreaterThanOrEqual(27);
-    expect(inv.triggers.length).toBe(17);
+    expect(inv.triggers.length).toBe(18);
     expect(inv.addedColumns.length).toBeGreaterThanOrEqual(13);
     for (const t of inv.tables.values()) expect(t.columns.length).toBeGreaterThan(0);
   });
@@ -169,8 +169,8 @@ describe('ORCH-STACK — every object the series creates is in the manifest', ()
       if (m && m.revokesClientRoles !== inv.revokedFromAuthenticated.has(table)) mismatch.push(table);
     }
     expect(mismatch).toEqual([]);
-    // 8 explicit-REVOKE tables; 10 rely on RLS only (authenticated → INFO).
-    expect(parity.STACK_TABLES.filter((t: any) => t.revokesClientRoles)).toHaveLength(8);
+    // 9 explicit-REVOKE tables; 10 rely on RLS only (authenticated → INFO).
+    expect(parity.STACK_TABLES.filter((t: any) => t.revokesClientRoles)).toHaveLength(9);
     expect(parity.STACK_TABLES.filter((t: any) => !t.revokesClientRoles)).toHaveLength(10);
   });
 });

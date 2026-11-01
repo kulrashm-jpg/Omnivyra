@@ -79,7 +79,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       issues: report.issues,
       message: report.counters.tasks_seen === 0
         ? 'No workflow execution was due'
-        : `${report.counters.steps_settled} executed, ${report.counters.steps_skipped} skipped, ${report.counters.tasks_waiting} waiting, ${report.counters.tasks_needing_human} need a human, of ${report.counters.tasks_seen} due`,
+        : `${report.counters.steps_settled} executed, ${report.counters.steps_skipped} skipped, ${report.counters.journeys_exited} exited, ${report.counters.tasks_waiting} waiting, ${report.counters.tasks_needing_human} need a human, of ${report.counters.tasks_seen} due`,
     });
   } catch (err) {
     const message = (err as Error)?.message ?? 'Workflow progression sweep failed';

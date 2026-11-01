@@ -9,6 +9,7 @@
  *   permission    contact_governance_records through the pure `mayContact`
  *   lead intel    lead_intelligence_profiles via getPersistedLeadIntelligence
  *   prospect intel the latest prospect_score_evaluations row
+ *   prospect state readCurrentProspectState (PI's lifecycle ledger)
  *
  * TENANT FIRST on every read. A fact that cannot be read is OMITTED, never
  * defaulted: journey policy treats an unknown fact as unmet (fail closed), and
@@ -24,6 +25,7 @@ import { resolveSubjectPersonId } from '../leadOutreachExecution/personAnchor';
 import { getPersistedLeadIntelligence } from '../leadIntelligenceOrchestration/readIntegration';
 import { loadTenantGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
 import { mayContact } from '../prospectIdentity/contactGovernance';
+import { readCurrentProspectState } from '../prospectLifecycle/lifecycleReader';
 import type { SubjectRef } from '../executionSubject/subjectRef';
 import type { JourneyFacts } from './journeyPolicy';
 
@@ -33,6 +35,8 @@ export interface IndividualFactsResult {
   readonly personId: string | null;
   /** Why a fact is missing — codes, never personal data. */
   readonly gaps: readonly string[];
+  /** True only when PI's lifecycle was read and this prospect has no ledger yet. */
+  readonly prospectLedgerAbsent: boolean;
 }
 
 /** Injected seams, so the journey engine is testable without a database. */
@@ -42,6 +46,8 @@ export interface IndividualIntelligencePort {
   readLeadIntelligence(organizationId: string, leadId: string): Promise<{ intentBand: string | null; qualificationBand: string | null; confidence: number | null } | null>;
   readProspectScore(organizationId: string, prospectId: string): Promise<{ intent: number | null; overall: number | null; confidence: number | null } | null>;
   channelPermission(organizationId: string, personId: string | null, channel: 'email' | 'whatsapp', target: string | null, now: string): Promise<boolean | null>;
+  /** PI's current state; null when the prospect has no ledger yet. A port without it has no lifecycle source. */
+  readProspectState?(organizationId: string, prospectId: string): Promise<string | null>;
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -98,7 +104,14 @@ export const durableIntelligencePort: IndividualIntelligencePort = {
     });
     return verdict.decision === 'allowed';
   },
+
+  async readProspectState(organizationId, prospectId) {
+    return (await readCurrentProspectState(organizationId, prospectId))?.state ?? null;
+  },
 };
+
+/** The state could not be read, so "closed" cannot be ruled out. Callers must not contact. */
+export const PROSPECT_STATE_UNREADABLE_GAP = 'prospect_state_unreadable';
 
 /**
  * The facts for one individual, at `now`. Never throws for a missing source: the
@@ -112,6 +125,7 @@ export async function loadIndividualFacts(
 ): Promise<IndividualFactsResult> {
   const facts: JourneyFacts = { subject_kind: subject.kind };
   const gaps: string[] = [];
+  let prospectLedgerAbsent = false;
 
   let personId: string | null = null;
   try {
@@ -168,7 +182,16 @@ export async function loadIndividualFacts(
       if (score.overall !== null) facts.prospect_score_overall = score.overall;
       if (score.confidence !== null) facts.prospect_score_confidence = score.confidence;
     }
+    if (port.readProspectState) {
+      try {
+        const state = await port.readProspectState(organizationId, subject.id);
+        if (state !== null) facts.prospect_lifecycle_state = state;
+        else prospectLedgerAbsent = true;
+      } catch {
+        gaps.push(PROSPECT_STATE_UNREADABLE_GAP);
+      }
+    }
   }
 
-  return { facts, personId, gaps };
+  return { facts, personId, gaps, prospectLedgerAbsent };
 }
