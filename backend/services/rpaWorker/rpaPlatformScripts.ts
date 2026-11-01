@@ -26,6 +26,12 @@ const composerTextarea: ResolverCandidate[] = [
   { kind: 'role', role: 'textbox' },
 ];
 
+/**
+ * A reply's post-condition matches elements that can already exist on the page
+ * before the submit, so a match does NOT prove the new reply exists.
+ * No reply script extracts a platform id: on the page of the post being
+ * answered, nothing here tells the new reply's link from the target's.
+ */
 const replyScripts: Record<string, ScriptBuilder> = {
   linkedin: (task) => {
     if (!task.text) return { error: 'TEXT_REQUIRED' };
@@ -198,11 +204,6 @@ const replyScripts: Record<string, ScriptBuilder> = {
           ],
           timeout: 10_000,
           commit: true,
-        },
-        {
-          kind: 'extract_platform_id',
-          selectors: ['article[role="article"] a[href*="/status/"]'],
-          attribute: 'href',
         },
       ],
       postCondition: {
