@@ -1,0 +1,2046 @@
+{
+  "schema": "omnivyra-programme-register/1",
+  "baseline": {
+    "date": "2026-11-02",
+    "main": "5025f51d7bb1420e3d3c5ef4ed626c64b953b3b0",
+    "release_candidate": "7bdd76ae (integration/release-candidate-5025f51d), 68 ahead / 0 behind, 8 migrations, not merged",
+    "integration_branch": "d682ab13 (integration/outreach-engines-20261102), 139 ahead, 23 migrations (22 to renumber), not merged",
+    "production_ledger": "93 rows, max 20270111000003 (owner-run read, 2026-11-01); current state unmeasured",
+    "sources": "Master Architecture Audit; Targeted Review; Execution-Readiness Package; Founder checklist; programme backlog (C:/omnivyra-archive/programme-20261102)"
+  },
+  "states": [
+    "open",
+    "implemented",
+    "t1",
+    "t2",
+    "accepted"
+  ],
+  "statuses": [
+    "Not Started",
+    "In Progress",
+    "Implemented",
+    "T1 Verified",
+    "T2 Verified",
+    "Accepted",
+    "Blocked",
+    "Deferred"
+  ],
+  "groups": {
+    "FND": "Containment, baseline and release foundations (Stages 0-2)",
+    "SF": "Shared-foundation contracts",
+    "PI": "Track 1 - Prospect Intelligence",
+    "AIO": "Track 2 - AI Intelligence and Orchestration",
+    "OUT": "Track 3 - Outreach Engines",
+    "VS": "Integrated vertical slice (AS-1..AS-9)"
+  },
+  "milestones": [
+    {
+      "id": "SEC-01",
+      "group": "FND",
+      "stage": 0,
+      "title": "Repository and public-branch containment",
+      "owner": "Founder",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-03",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T3",
+      "blockers": "Founder action (FA-02, FA-03, FA-05)",
+      "next_action": "Founder: gh repo edit --visibility private; list Actions secret names; delete preserve/creator-canonical-template-pool after archive verified",
+      "approval_required": "Founder executes",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Repository visibility is PRIVATE",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "Actions secret and variable names inventoried (names only)",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "c",
+          "text": "Public branch preserve/creator-canonical-template-pool removed (ls-remote empty)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-02",
+      "group": "FND",
+      "stage": 0,
+      "title": "Credential rotation phases A-E",
+      "owner": "Founder",
+      "deps": [
+        "SEC-01"
+      ],
+      "planned_start": "2026-11-03",
+      "target_window": "2026-11-03..2026-11-10",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T3",
+      "blockers": "Founder action; phase E needs a maintenance window",
+      "next_action": "Phase A control-plane tokens",
+      "approval_required": "Founder executes",
+      "criteria": [
+        {
+          "id": "A",
+          "text": "Phase A control plane rotated, old tokens revoked (redacted evidence)",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "B",
+          "text": "Phase B DB password + Supabase secret key rotated",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "C",
+          "text": "Phase C AI/data API keys rotated",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "D",
+          "text": "Phase D OAuth/AWS-SES/payment secrets rotated",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "E",
+          "text": "Phase E platform secrets rotated in a window",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-03",
+      "group": "FND",
+      "stage": 2,
+      "title": "ENCRYPTION_KEY dual-key support (unblocks rotation phase F)",
+      "owner": "Claude Code agent",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-04",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "T1 Verified",
+      "tier": "T2",
+      "blockers": "Phase F also needs: WhatsApp follow-up (after integration lands) and repositories bound for every encrypted column; rollback is one-way once k1: values are written",
+      "next_action": "Review 88b9378b; bind re-encryption repositories; WhatsApp follow-up on integration base",
+      "approval_required": "Push/merge; phase F cut-over by founder",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Legacy ciphertext decrypts; new ciphertext carries a key id",
+          "state": "t1",
+          "evidence": "commit 88b9378b; encryptionKeyRotation.test.ts (legacy fixtures from 5025f51d)"
+        },
+        {
+          "id": "b",
+          "text": "Rotation scenario (encrypt A, current B + previous A) decrypts and re-encrypts",
+          "state": "t1",
+          "evidence": "commit 88b9378b; 53/53 incl. pageSpeedSharedProvider (re-run independently 2026-11-02 with placeholder env)"
+        },
+        {
+          "id": "c",
+          "text": "Re-encryption utility, dry-run by default, counts only",
+          "state": "implemented",
+          "evidence": "scripts/ops/reencryptWithCurrentKey.ts (no repositories bound yet; exits 2)"
+        },
+        {
+          "id": "d",
+          "text": "WhatsApp encrypted_phone follow-up after integration lands",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-04",
+      "group": "FND",
+      "stage": 2,
+      "title": "Central log redaction and secret scanning",
+      "owner": "Claude Code agent",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-04",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "T1 Verified",
+      "tier": "T1",
+      "blockers": "~3.8k direct console.* calls bypass the logger (separate change)",
+      "next_action": "Review 73396d96; founder installs pre-commit hook and makes the check required after push",
+      "approval_required": "Push/merge; required-check wiring by founder",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Logger redacts credential patterns in messages and metadata",
+          "state": "t1",
+          "evidence": "commit 73396d96; logRedaction.test.ts 66/66 (re-run independently: 108/108 with scanner + secrets gate)"
+        },
+        {
+          "id": "b",
+          "text": "Staged-diff secret scanner + gitleaks config + PR workflow",
+          "state": "implemented",
+          "evidence": "commit 73396d96; scanner 19/19; gitleaks workflow not executed (runs only after push)"
+        },
+        {
+          "id": "c",
+          "text": "Secret scan is a required check (founder)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-05",
+      "group": "FND",
+      "stage": 0,
+      "title": "Tenant release cannot lift unsubscribe / consent withdrawn / complaint (GD-3 interim)",
+      "owner": "Claude Code (session a410c8dc)",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "T1 Verified",
+      "tier": "T2",
+      "blockers": "Merge approval",
+      "next_action": "Review + push approval for sec/governance-release-lock (ce1d6e15)",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "releaseSuppression refuses recipient-owned records in either store, writes nothing, fails closed",
+          "state": "t1",
+          "evidence": "commit ce1d6e15; backend/tests/unit/w2bSuppressionCorrectness.test.ts (GD-3 interim describe)"
+        },
+        {
+          "id": "b",
+          "text": "Route answers 409/503 and audits a blocked decision",
+          "state": "t1",
+          "evidence": "commit ce1d6e15; backend/tests/unit/sec91AExecutionCaps.test.ts"
+        },
+        {
+          "id": "c",
+          "text": "18 related suites green",
+          "state": "t1",
+          "evidence": "449/449 on 2026-11-02 (local)"
+        },
+        {
+          "id": "d",
+          "text": "Merged to main and CI green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-06",
+      "group": "FND",
+      "stage": 2,
+      "title": "Creator upload-session verification fails closed without its secret",
+      "owner": "Claude Code (session a410c8dc)",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "T1 Verified",
+      "tier": "T1",
+      "blockers": "Merge approval",
+      "next_action": "Review + push approval for sec/creator-upload-secret-fail-closed (a0c67c55)",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "No public literal fallback; forged session refused",
+          "state": "t1",
+          "evidence": "commit a0c67c55; creatorUploadAbuseGuard.test.ts 8/8"
+        },
+        {
+          "id": "b",
+          "text": "Merged to main",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-07",
+      "group": "FND",
+      "stage": 0,
+      "title": "revoke8 SQL Editor evidence (decide by 2026-11-04 12:00 UTC; window ~15:56 UTC)",
+      "owner": "Founder",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-04",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T3",
+      "blockers": "Founder decision; Supabase plan (Pro/Team) unconfirmed",
+      "next_action": "Founder: export (Route A) or record decision to let it expire",
+      "approval_required": "Founder decision + execution",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Decision recorded (export or expire)",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "If exported: gate + C02/C08b/C03/C07c outputs archived; token revoked",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SEC-08",
+      "group": "FND",
+      "stage": 0,
+      "title": "Counsel briefing on notification duties",
+      "owner": "Founder",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-06",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T3",
+      "blockers": "External (counsel)",
+      "next_action": "Founder briefs counsel with the prepared facts (no secret values)",
+      "approval_required": "Founder",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Written advice referenced (GDPR 33/34, DPDP, CERT-In, contracts, transcript exposure)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PRES-01",
+      "group": "FND",
+      "stage": 0,
+      "title": "Preservation of engineering work",
+      "owner": "Claude Code / Founder",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-03",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "In Progress",
+      "tier": "T2",
+      "blockers": "Off-machine copy needs founder (destination)",
+      "next_action": "Founder: gpg-encrypt and copy archive off-machine; verify hashes",
+      "approval_required": "Founder executes copy",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "All 26 dirty worktrees archived; every patch applies to its base",
+          "state": "t1",
+          "evidence": "C:/omnivyra-archive/preserve-20261102T123052Z/MANIFEST.tsv"
+        },
+        {
+          "id": "b",
+          "text": "All 812 refs bundled; git bundle verify passes",
+          "state": "t1",
+          "evidence": "all-refs.bundle sha256 7eee1f61…83e5; bundle-verify.txt"
+        },
+        {
+          "id": "c",
+          "text": "Encrypted off-machine copy verified by hash",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "BASE-01",
+      "group": "FND",
+      "stage": 1,
+      "title": "Production verification session (21 statements + dashboard checks)",
+      "owner": "Founder",
+      "deps": [],
+      "planned_start": "2026-11-03",
+      "target_window": "2026-11-03..2026-11-05",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T3",
+      "blockers": "Founder: route R1/R2 decision and ~100 minutes",
+      "next_action": "Founder runs C:/omnivyra-archive/execution-readiness-20261102/runbook",
+      "approval_required": "Founder executes (read-only)",
+      "criteria": [
+        {
+          "id": "P1",
+          "text": "Ledger vs repo classified",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "P3",
+          "text": "Required tables/RPCs and prospect_lists shape",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "P4",
+          "text": "Security migrations in effect",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "P9",
+          "text": "PI data counts",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "P11",
+          "text": "Credit HOLDs and wallet reservations",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "P5-8-12-13",
+          "text": "Flags, jobs, queues, isolation, SES/edge",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-01",
+      "group": "FND",
+      "stage": 2,
+      "title": "Typecheck gate cannot pass on a crash",
+      "owner": "Claude Code (session a410c8dc)",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-05",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "T1 Verified",
+      "tier": "T1",
+      "blockers": "Review + push approval",
+      "next_action": "Review a27ff537; push after repo private",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Invalid runs fail (14 new tests; 18 sibling tests)",
+          "state": "t1",
+          "evidence": "commit a27ff537; typecheckBaselineGate.test.ts"
+        },
+        {
+          "id": "b",
+          "text": "Real full typecheck of main passes through the new gate",
+          "state": "t1",
+          "evidence": "C:/omnivyra-archive/execution-readiness-20261102/tc-gate-real-run.log"
+        },
+        {
+          "id": "c",
+          "text": "Merged; post-merge forced-crash check fails the gate",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-02",
+      "group": "FND",
+      "stage": 2,
+      "title": "Migration controls (version reservations, applied-migration immutability)",
+      "owner": "Claude Code (session a410c8dc)",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-07",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "T1 Verified",
+      "tier": "T2",
+      "blockers": "Full human review; push approval",
+      "next_action": "Line-by-line review of 51d43e98",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "79/79 tests; migration-quality OK",
+          "state": "t1",
+          "evidence": "commit 51d43e98"
+        },
+        {
+          "id": "b",
+          "text": "Human review complete",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "c",
+          "text": "Merged; CI actor-FK check green on real-schema DB",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-03",
+      "group": "FND",
+      "stage": 2,
+      "title": "Reconcile gov2 actor contract with migration controls",
+      "owner": "unassigned",
+      "deps": [
+        "REL-02"
+      ],
+      "planned_start": null,
+      "target_window": "after REL-02",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T1",
+      "blockers": "REL-02 review",
+      "next_action": "One registry schema + one checker",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "gov2 + govH tests green together",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-04",
+      "group": "FND",
+      "stage": 2,
+      "title": "Release candidate 7bdd76ae landed (L-1..L-10)",
+      "owner": "Founder (operator) + Claude Code (prep)",
+      "deps": [
+        "BASE-01",
+        "SEC-01"
+      ],
+      "planned_start": "2026-11-04",
+      "target_window": "2026-11-04..2026-11-12",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T3",
+      "blockers": "L-1 probe (BASE-01); decisions RC04/RC05; push approval; repo private first",
+      "next_action": "Founder: L-1 probe + options 04/05",
+      "approval_required": "Push, migrations, merge, deploy",
+      "criteria": [
+        {
+          "id": "L1",
+          "text": "Pre-apply probe recorded",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "L5",
+          "text": "Erasure migrations applied in order with catalog checks",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "L6",
+          "text": "Merged; Railway SHA = merge SHA",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "L8",
+          "text": "Strict predeploy PASS on merged main",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "L9",
+          "text": "H-3 applied immediately before vercel --prod; smoke tests pass",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "L10",
+          "text": "Vercel SHA = Railway SHA; tagged",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-05",
+      "group": "FND",
+      "stage": 2,
+      "title": "Credit reaper and reconciliation scheduled safely",
+      "owner": "unassigned",
+      "deps": [
+        "BASE-01"
+      ],
+      "planned_start": null,
+      "target_window": "after P11",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T3",
+      "blockers": "P11 HOLD backlog, wallet consistency, idempotency and controlled-test evidence required first",
+      "next_action": "Read P11; dry-run reaper on a controlled copy",
+      "approval_required": "Production config change",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Outstanding HOLDs and wallet consistency assessed",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "Reaper idempotency proven in a controlled test",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "c",
+          "text": "Schedules registered; first run reviewed",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-06",
+      "group": "FND",
+      "stage": 2,
+      "title": "Backport scheduled-post authorization fix d8d79b74",
+      "owner": "unassigned",
+      "deps": [],
+      "planned_start": "2026-11-03",
+      "target_window": "2026-11-03",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Cherry-pick onto main in a local branch; run its tests",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Unauthorised scheduled post refused (test)",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "Merged",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-07",
+      "group": "FND",
+      "stage": 4,
+      "title": "Integration branch renumbered (keep 20261127000000; 22 -> 20270121000000-21) with fresh T2",
+      "owner": "Claude Code (after approval)",
+      "deps": [
+        "BASE-01",
+        "REL-04"
+      ],
+      "planned_start": null,
+      "target_window": "after GD-4 + P1/P3 clean",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T2",
+      "blockers": "GD-4 decision; production P1/P3 clean",
+      "next_action": "Wait for GD-4 approval and P1/P3",
+      "approval_required": "GD-4; then push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Rename applied, 105 must-change references updated",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "Fresh T2 at renamed tip",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "c",
+          "text": "Combined T2 with release candidate",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "d",
+          "text": "Rollback proofs",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "REL-08",
+      "group": "FND",
+      "stage": 2,
+      "title": "Jira/JEV governance adoption of pending branches",
+      "owner": "Founder",
+      "deps": [],
+      "planned_start": null,
+      "target_window": "suspended",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Deferred",
+      "tier": "T1",
+      "blockers": "Founder suspended Jira/JEV governance automation (2026-11-02)",
+      "next_action": "None while suspended",
+      "approval_required": "Founder",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Pending branches carry governance or an approved exception",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-01",
+      "group": "SF",
+      "stage": 3,
+      "title": "Canonical prospect/person identity contract",
+      "owner": "PI track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-05",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Contract tests (identity resolution + one-anchor rule)",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (SHARED-CONTRACTS.md §1)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-02",
+      "group": "SF",
+      "stage": 2,
+      "title": "Company and tenant identity contract",
+      "owner": "Platform",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-06",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T1",
+      "blockers": null,
+      "next_action": "Contract test: tenant key types on new tables",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§2)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-03",
+      "group": "SF",
+      "stage": 3,
+      "title": "Consent, lawful basis and jurisdiction contract",
+      "owner": "PI track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "after counsel K-1",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T2",
+      "blockers": "Counsel K-1 (lawful basis per channel/region)",
+      "next_action": "Schema design can proceed; policy values wait for counsel",
+      "approval_required": "Founder + counsel",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§3)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-04",
+      "group": "SF",
+      "stage": 3,
+      "title": "Suppression / unsubscribe / DNC / contact-eligibility contract",
+      "owner": "PI track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-08",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Single-store convergence (PI-08)",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§4)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "release",
+          "text": "Recipient-owned release refusal",
+          "state": "t1",
+          "evidence": "commit ce1d6e15"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green (egress + single store)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-05",
+      "group": "SF",
+      "stage": 4,
+      "title": "Per-send approval and content-hash contract (GD-1)",
+      "owner": "Orchestration track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "after GD-1",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "GD-1 decision before merge",
+      "next_action": "Implement on integration base after GD-1",
+      "approval_required": "GD-1",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§5)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-06",
+      "group": "SF",
+      "stage": 4,
+      "title": "Workflow / task / execution / correlation identifier contract",
+      "owner": "Orchestration track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-12",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Correlation joins (AIO-04)",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§6)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "ID chain queryable end to end (T2)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-07",
+      "group": "SF",
+      "stage": 6,
+      "title": "Outreach outcome and lifecycle-transition identifier contract (GD-2)",
+      "owner": "Feedback track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "after GD-2",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "GD-2 decision before merge",
+      "next_action": "Outcome key + subject_id resolution",
+      "approval_required": "GD-2",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§7)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-08",
+      "group": "SF",
+      "stage": 5,
+      "title": "Credit reservation / confirm / release / reconciliation contract",
+      "owner": "Billing track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-12",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "K-8 decision (charge per send)",
+      "next_action": "Adapter-level hold/confirm/release",
+      "approval_required": "K-8",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§8)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-09",
+      "group": "SF",
+      "stage": 6,
+      "title": "Domain-event and integration-handoff contract",
+      "owner": "Orchestration track",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-12",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Handoff row contract tests",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§9)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "SF-10",
+      "group": "SF",
+      "stage": 2,
+      "title": "Migration ownership, ordering and compatibility contract (GD-4)",
+      "owner": "Release controls",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-07",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T1",
+      "blockers": "GD-4 decision",
+      "next_action": "Land REL-02",
+      "approval_required": "GD-4",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§10)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "gate",
+          "text": "Reservation gate enforces it",
+          "state": "t1",
+          "evidence": "commit 51d43e98"
+        }
+      ]
+    },
+    {
+      "id": "SF-11",
+      "group": "SF",
+      "stage": 2,
+      "title": "Security, audit and tenant-isolation contract",
+      "owner": "Platform",
+      "deps": [],
+      "planned_start": "2026-11-02",
+      "target_window": "2026-11-02..2026-11-10",
+      "actual_start": "2026-11-02",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Route-auth in predeploy; governance-record trigger",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "doc",
+          "text": "Contract documented (§11)",
+          "state": "implemented",
+          "evidence": "docs/programme/SHARED-CONTRACTS.md"
+        },
+        {
+          "id": "test",
+          "text": "Contract tests green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-01",
+      "group": "PI",
+      "stage": 3,
+      "title": "CSV/manual ingestion into canonical records",
+      "owner": "unassigned",
+      "deps": [
+        "SF-01"
+      ],
+      "planned_start": "2026-11-04",
+      "target_window": "2026-11-04..2026-11-11",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "Flags off in prod; T2 not re-run this programme",
+      "next_action": "Run PI real-schema ingestion suites at main; record",
+      "approval_required": "None (flags: founder)",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "Ingestion boundary on main writes unified_persons, canonical_leads, source_records/assertions",
+          "state": "implemented",
+          "evidence": "Targeted Review D.1 step 1 (code read at 5025f51d)"
+        },
+        {
+          "id": "t2",
+          "text": "Replay adds 0 rows; one prospect per externalId row (T2)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-02",
+      "group": "PI",
+      "stage": 3,
+      "title": "Canonical identity and deduplication",
+      "owner": "unassigned",
+      "deps": [
+        "SF-01"
+      ],
+      "planned_start": "2026-11-04",
+      "target_window": "2026-11-04..2026-11-11",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "T2 of identity suites",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "Identity spine + duplicate parking on main",
+          "state": "implemented",
+          "evidence": "Master Audit C.2"
+        },
+        {
+          "id": "t2",
+          "text": "Identity real-schema suites green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-03",
+      "group": "PI",
+      "stage": 3,
+      "title": "Enrichment and evidence provenance",
+      "owner": "unassigned",
+      "deps": [
+        "SF-01"
+      ],
+      "planned_start": null,
+      "target_window": "2026-11-09..2026-11-20",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "No vendor credential (J-3)",
+      "next_action": "Provenance T2; vendor trial after J-3",
+      "approval_required": "J-3 for vendor",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "source_records/assertions supersede/revive; enrichment registry",
+          "state": "implemented",
+          "evidence": "Master Audit C.2"
+        },
+        {
+          "id": "t2",
+          "text": "Provenance suites green",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-04",
+      "group": "PI",
+      "stage": 3,
+      "title": "Qualification and ICP ratification",
+      "owner": "unassigned",
+      "deps": [],
+      "planned_start": null,
+      "target_window": "2026-11-09..2026-11-15",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "qualificationIntelligence has no caller",
+      "next_action": "Decide caller or retire",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "ICP propose/ratify on main",
+          "state": "implemented",
+          "evidence": "Targeted Review D.1 step 2"
+        },
+        {
+          "id": "t2",
+          "text": "Ratified ICP used by score job (T2)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-05",
+      "group": "PI",
+      "stage": 3,
+      "title": "Persisted score evaluations (one canonical scorer)",
+      "owner": "unassigned",
+      "deps": [
+        "PI-04"
+      ],
+      "planned_start": null,
+      "target_window": "2026-11-09..2026-11-20",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "13 competing scorers",
+      "next_action": "AS-2 T2; retire rival writers",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "prospect_score_evaluations keyed on canonical_leads",
+          "state": "implemented",
+          "evidence": "Targeted Review D.1 step 2"
+        },
+        {
+          "id": "single",
+          "text": "One writer of score",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "t2",
+          "text": "AS-2 at T2",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-06",
+      "group": "PI",
+      "stage": 6,
+      "title": "Lifecycle transitions from outcomes via handoff.subject_id",
+      "owner": "unassigned",
+      "deps": [
+        "SF-07",
+        "REL-07"
+      ],
+      "planned_start": null,
+      "target_window": "after REL-07",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "Integration branch not landed",
+      "next_action": "Prepare on integration base",
+      "approval_required": "GD-2",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Producer resolves via subject_id; actor path for rejected",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-07",
+      "group": "PI",
+      "stage": 3,
+      "title": "Consent / lawful-basis ledger",
+      "owner": "unassigned",
+      "deps": [
+        "SF-03"
+      ],
+      "planned_start": null,
+      "target_window": "after counsel K-1",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T2",
+      "blockers": "Counsel K-1",
+      "next_action": "Schema draft",
+      "approval_required": "Founder + counsel",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "mayContact considers consent; unknown region denied by default",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-08",
+      "group": "PI",
+      "stage": 3,
+      "title": "Single suppression store (contact_governance_records)",
+      "owner": "unassigned",
+      "deps": [
+        "SF-04"
+      ],
+      "planned_start": "2026-11-03",
+      "target_window": "2026-11-03..2026-11-12",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "WS-3 gate reads canonical; stop outreach_suppressions reads; retire suppression_entries dual-write plan",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Global suppression blocks a WS-3 send (test)",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "No reader of outreach_suppressions",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-09",
+      "group": "PI",
+      "stage": 4,
+      "title": "Prospect-keyed port for downstream consumers (PiProspectPort v1)",
+      "owner": "unassigned",
+      "deps": [
+        "SF-01",
+        "REL-07"
+      ],
+      "planned_start": null,
+      "target_window": "after REL-07",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "Integration branch not landed",
+      "next_action": "Define port; migrate orchestration reads",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Orchestration imports only the port",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "PI-10",
+      "group": "PI",
+      "stage": 4,
+      "title": "Ranked prospect list 6a6c3d9b",
+      "owner": "unassigned",
+      "deps": [
+        "REL-07"
+      ],
+      "planned_start": null,
+      "target_window": "after REL-07",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T2",
+      "blockers": "Lands after integration branch",
+      "next_action": "Cherry-pick after merge",
+      "approval_required": "Push/merge",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "6 suites green on merged main",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-01",
+      "group": "AIO",
+      "stage": 4,
+      "title": "Orchestration line (contract 0.2.0) on main",
+      "owner": "Founder (merge)",
+      "deps": [
+        "REL-07"
+      ],
+      "planned_start": null,
+      "target_window": "after REL-07",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "REL-07",
+      "next_action": "Merge after T2",
+      "approval_required": "Merge",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "Workflow versions, enrollment, plans, EngineAdapter, recovery (local d682ab13)",
+          "state": "implemented",
+          "evidence": "integration README: T2 71/71 at 21f62238 (self-reported, stale)"
+        },
+        {
+          "id": "t2",
+          "text": "Fresh T2 at renamed tip",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "merged",
+          "text": "On main",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-02",
+      "group": "AIO",
+      "stage": 4,
+      "title": "Enrollment records score_evaluation_id + icp_version (AS-3)",
+      "owner": "unassigned",
+      "deps": [
+        "AIO-01",
+        "PI-05"
+      ],
+      "planned_start": null,
+      "target_window": "after AIO-01",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "AIO-01",
+      "next_action": "Implement on integration base",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "AS-3 at T2",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-03",
+      "group": "AIO",
+      "stage": 4,
+      "title": "GD-1 per-send approval enforcement (content hash, atomic audit, role split)",
+      "owner": "unassigned",
+      "deps": [
+        "SF-05",
+        "AIO-01"
+      ],
+      "planned_start": null,
+      "target_window": "after GD-1 + AIO-01",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T2",
+      "blockers": "GD-1 decision",
+      "next_action": "Implement after decision",
+      "approval_required": "GD-1",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Changed content after approval refused",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "Approval + audit atomic",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-04",
+      "group": "AIO",
+      "stage": 4,
+      "title": "Correlation joins persisted across handoffs",
+      "owner": "unassigned",
+      "deps": [
+        "SF-06",
+        "AIO-01"
+      ],
+      "planned_start": null,
+      "target_window": "after AIO-01",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "AIO-01",
+      "next_action": "Design migration in post-renumber block",
+      "approval_required": "Migration apply",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "ID chain queryable end to end (T2)",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-05",
+      "group": "AIO",
+      "stage": 4,
+      "title": "Agent runtimes stop self-approving (truthful gates)",
+      "owner": "unassigned",
+      "deps": [],
+      "planned_start": null,
+      "target_window": "2026-11-09..2026-11-15",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "Product behaviour decision (which gates need a human)",
+      "next_action": "Inventory the 3 runtimes' gates",
+      "approval_required": "Founder (behaviour)",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "No synchronous_auto_approve writes",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-06",
+      "group": "AIO",
+      "stage": 4,
+      "title": "Retry, timeout, idempotency and recovery proven",
+      "owner": "unassigned",
+      "deps": [
+        "AIO-01"
+      ],
+      "planned_start": null,
+      "target_window": "with REL-07 T2",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "AIO-01",
+      "next_action": "Covered by fresh T2",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "Sweeper, requeue fix, may-have-acted handling (local)",
+          "state": "implemented",
+          "evidence": "d682ab13"
+        },
+        {
+          "id": "t2",
+          "text": "Recovery suites green at renamed tip",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "AIO-07",
+      "group": "AIO",
+      "stage": 8,
+      "title": "Recommendation planner keyed on canonical prospects",
+      "owner": "unassigned",
+      "deps": [
+        "PI-09"
+      ],
+      "planned_start": null,
+      "target_window": "Stage 8",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Deferred",
+      "tier": "T2",
+      "blockers": "Slice uses the authored workflow step instead",
+      "next_action": "None",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Planner sees CSV prospects",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-01",
+      "group": "OUT",
+      "stage": 5,
+      "title": "Channel-neutral contract and EngineAdapter",
+      "owner": "unassigned",
+      "deps": [
+        "AIO-01"
+      ],
+      "planned_start": null,
+      "target_window": "with AIO-01",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T2",
+      "blockers": "AIO-01",
+      "next_action": "Lands with integration branch",
+      "approval_required": "Merge",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "EngineAdapter + NormalizedExecutionResult (local)",
+          "state": "implemented",
+          "evidence": "d682ab13"
+        },
+        {
+          "id": "t2",
+          "text": "Adapter contract suites green at renamed tip",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-02",
+      "group": "OUT",
+      "stage": 5,
+      "title": "Email engine through the adapter (real provider)",
+      "owner": "unassigned",
+      "deps": [
+        "OUT-01"
+      ],
+      "planned_start": null,
+      "target_window": "after AIO-01",
+      "actual_start": "pre-programme",
+      "actual_done": null,
+      "status": "Implemented",
+      "tier": "T3",
+      "blockers": "Provider declared mocked; SES config unknown",
+      "next_action": "SES config (founder) + tags",
+      "approval_required": "Founder (SES)",
+      "criteria": [
+        {
+          "id": "code",
+          "text": "Email engine + stuck-queue fix (local)",
+          "state": "implemented",
+          "evidence": "d682ab13 (cb0e3419..b826e0f5)"
+        },
+        {
+          "id": "t3",
+          "text": "Real SES MessageId on test tenant",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-03",
+      "group": "OUT",
+      "stage": 5,
+      "title": "Mandatory egress governance (GD-3)",
+      "owner": "unassigned",
+      "deps": [
+        "SF-04"
+      ],
+      "planned_start": "2026-11-03",
+      "target_window": "2026-11-03..2026-11-12",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "GD-3 before merge (local build can start)",
+      "next_action": "Gate inside send-transactional-email + WS-3 transport",
+      "approval_required": "GD-3",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Direct edge-function call for a suppressed recipient refused",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "b",
+          "text": "Every engine path calls the gate",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-04",
+      "group": "OUT",
+      "stage": 5,
+      "title": "Per-send credit metering",
+      "owner": "unassigned",
+      "deps": [
+        "SF-08",
+        "OUT-01"
+      ],
+      "planned_start": null,
+      "target_window": "after K-8",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Blocked",
+      "tier": "T2",
+      "blockers": "K-8 decision",
+      "next_action": "Adapter-level hold/confirm/release",
+      "approval_required": "K-8",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Each send has hold + confirm/release ledger rows",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-05",
+      "group": "OUT",
+      "stage": 5,
+      "title": "Delivery evidence with SES tags",
+      "owner": "unassigned",
+      "deps": [
+        "OUT-02"
+      ],
+      "planned_start": null,
+      "target_window": "after AIO-01",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "AIO-01",
+      "next_action": "Tags tenant/task/correlation",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "AS-6 at T2",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-06",
+      "group": "OUT",
+      "stage": 6,
+      "title": "Inbound reply ingestion",
+      "owner": "unassigned",
+      "deps": [
+        "OUT-05"
+      ],
+      "planned_start": null,
+      "target_window": "after OUT-05",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "SES inbound not configured",
+      "next_action": "In-Reply-To matching",
+      "approval_required": "Founder (SES inbound)",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "AS-7 at T2",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-07",
+      "group": "OUT",
+      "stage": 6,
+      "title": "Engagement-history mirror for email",
+      "owner": "unassigned",
+      "deps": [
+        "OUT-05"
+      ],
+      "planned_start": null,
+      "target_window": "after OUT-05",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": null,
+      "next_action": "Mirror keyed by provider message id",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "AS-8 at T2",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-08",
+      "group": "OUT",
+      "stage": 6,
+      "title": "Channel-agnostic outcome key",
+      "owner": "unassigned",
+      "deps": [
+        "SF-07"
+      ],
+      "planned_start": null,
+      "target_window": "after AIO-01",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "AIO-01",
+      "next_action": "Outcome keyed by engine request/handoff",
+      "approval_required": "Migration apply",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "A WhatsApp reply can record an outcome",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-09",
+      "group": "OUT",
+      "stage": 5,
+      "title": "DM / extension / browser contact contained on main",
+      "owner": "unassigned",
+      "deps": [],
+      "planned_start": "2026-11-03",
+      "target_window": "2026-11-03..2026-11-06",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "J-5 scope decision (contain vs retire)",
+      "next_action": "mayContact before claim on main paths (or wait for integration fixes 30a421c2/1c328464)",
+      "approval_required": "J-5",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Suppressed recipient refused on each DM/extension/RPA path",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "OUT-10",
+      "group": "OUT",
+      "stage": 8,
+      "title": "WhatsApp, SMS and voice foundations",
+      "owner": "unassigned",
+      "deps": [
+        "PI-07",
+        "OUT-04"
+      ],
+      "planned_start": null,
+      "target_window": "Stage 8",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Deferred",
+      "tier": "T3",
+      "blockers": "Consent (K-1), metering (K-8), J-9",
+      "next_action": "None",
+      "approval_required": "Per-channel activation decision",
+      "criteria": [
+        {
+          "id": "a",
+          "text": "Per-channel gates",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "VS-01",
+      "group": "VS",
+      "stage": 6,
+      "title": "AS-1..AS-9 pass at T2 with full ID chain",
+      "owner": "unassigned",
+      "deps": [
+        "PI-01",
+        "PI-05",
+        "AIO-02",
+        "AIO-03",
+        "OUT-03",
+        "OUT-04",
+        "OUT-05",
+        "OUT-06",
+        "OUT-07",
+        "PI-06"
+      ],
+      "planned_start": null,
+      "target_window": "Stage 6",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T2",
+      "blockers": "Upstream milestones",
+      "next_action": "Write acceptance suite skeleton once AIO-01 lands",
+      "approval_required": "None",
+      "criteria": [
+        {
+          "id": "AS-1",
+          "text": "CSV in",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-2",
+          "text": "Profile and score",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-3",
+          "text": "Decision / enrollment",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-4",
+          "text": "Per-send approval",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-5",
+          "text": "Governed metered send",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-6",
+          "text": "Delivery",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-7",
+          "text": "Reply",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-8",
+          "text": "Engagement history",
+          "state": "open",
+          "evidence": null
+        },
+        {
+          "id": "AS-9",
+          "text": "Lifecycle + re-score",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    },
+    {
+      "id": "VS-02",
+      "group": "VS",
+      "stage": 7,
+      "title": "AS-1..AS-6 at T3 on tenant 0eda0896 (real SES MessageId)",
+      "owner": "Founder (operator)",
+      "deps": [
+        "VS-01",
+        "PI-07",
+        "SEC-02"
+      ],
+      "planned_start": null,
+      "target_window": "Stage 7",
+      "actual_start": null,
+      "actual_done": null,
+      "status": "Not Started",
+      "tier": "T3",
+      "blockers": "VS-01; counsel K-1; erasure live",
+      "next_action": "None yet",
+      "approval_required": "Founder (real send)",
+      "criteria": [
+        {
+          "id": "t3",
+          "text": "ID chain file with real provider evidence",
+          "state": "open",
+          "evidence": null
+        }
+      ]
+    }
+  ],
+  "effort_estimates": [
+    {
+      "scope": "FND (containment, baseline, release)",
+      "agent_hours": "18-30",
+      "founder_hours": "10-16",
+      "confidence": "medium",
+      "basis": "Prepared runbooks; rotation phases dominate founder time"
+    },
+    {
+      "scope": "SF contracts (tests + enforcement)",
+      "agent_hours": "16-28",
+      "founder_hours": "2-4",
+      "confidence": "low-medium",
+      "basis": "Docs done; tests depend on integration landing"
+    },
+    {
+      "scope": "PI track",
+      "agent_hours": "30-55",
+      "founder_hours": "2-4",
+      "confidence": "low",
+      "basis": "Most code exists; single store + consent + port are new; consent blocked on counsel"
+    },
+    {
+      "scope": "AIO track",
+      "agent_hours": "35-60",
+      "founder_hours": "3-6",
+      "confidence": "low",
+      "basis": "Renumber + T2 + GD-1 + correlation; blocked on GD-4 and P1/P3"
+    },
+    {
+      "scope": "OUT track",
+      "agent_hours": "45-80",
+      "founder_hours": "6-10",
+      "confidence": "low",
+      "basis": "Egress gate, metering, SES tags, reply ingestion, mirror; SES configuration is founder work"
+    },
+    {
+      "scope": "VS slice (T2 suite + T3 run)",
+      "agent_hours": "15-25",
+      "founder_hours": "3-5",
+      "confidence": "low",
+      "basis": "After upstream milestones"
+    }
+  ]
+}
