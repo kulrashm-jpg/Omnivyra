@@ -131,6 +131,8 @@
     "verify:vercel-render-parity": "node scripts/verify-vercel-render-parity.js",
     "check:file-lengths": "node scripts/check-file-lengths.js",
     "check:migrations": "node scripts/check-migration-quality.js",
+    "check:actor-fk": "node scripts/ci/check-actor-fk-compatibility.js",
+    "check:migrations:scan-refs": "node scripts/check-migration-quality.js --scan-refs",
     "test:realschema": "bash scripts/ci/real-schema-ci.sh",
     "db:baseline": "node scripts/ci/generate-schema-baseline.js",
     "db:drift": "node scripts/ci/check-schema-baseline-drift.js",
