@@ -18,6 +18,7 @@ import { createHash } from 'crypto';
 import { getOutreachTaskById } from '../leadOutreachExecution';
 import { EmailSendPathError, prepareEmailSend } from '../emailEngine/emailSendPath';
 import { getProgressionStep } from '../workflowExecution/stepProgressionStore';
+import { getExecutionInstance, TERMINAL_LIFECYCLE_STATES } from '../executionInstances/executionInstanceStore';
 import { channelRefusal } from './journeyGovernance';
 import { loadIndividualFacts } from './individualIntelligence';
 import { listJourneyDecisions } from './journeyDecisionLog';
@@ -52,10 +53,10 @@ export function maskEmail(email: string): string {
 
 /** Stable over the fields that define the message. Delimited so no two inputs can run together. */
 export function approvalPreviewHash(input: {
-  subject: string; body: string; channel: string; email: string; workflowVersionId: string;
+  organizationId: string; outreachTaskId: string; subject: string; body: string; channel: string; email: string; workflowVersionId: string;
 }): string {
   return createHash('sha256')
-    .update(JSON.stringify([input.subject, input.body, input.channel, input.email, input.workflowVersionId]))
+    .update(JSON.stringify([input.organizationId, input.outreachTaskId, input.subject, input.body, input.channel, input.email, input.workflowVersionId]))
     .digest('hex');
 }
 
@@ -75,6 +76,8 @@ export async function buildEmailApprovalPreview(
     ...base, content: null, recipient: null, refusal, workflow: null, authorization: null, timing: null, wouldBeBlockedBy, history: [], previewHash: null,
   });
 
+  if (task.status !== 'pending' && task.status !== 'awaiting_approval') return refused('not_awaiting_approval');
+
   let prepared;
   try {
     prepared = await prepareEmailSend(organizationId, outreachTaskId);
@@ -88,6 +91,8 @@ export async function buildEmailApprovalPreview(
   const facts = await loadIndividualFacts(organizationId, { kind: context.subjectKind, id: context.subjectId }, now);
   const gate = await channelRefusal(organizationId, 'email');
   const decisions = await listJourneyDecisions(organizationId, context.executionInstanceId);
+  const run = await getExecutionInstance(organizationId, context.executionInstanceId);
+  const runOpen = run !== null && !(TERMINAL_LIFECYCLE_STATES as readonly string[]).includes(run.lifecycleState);
 
   return {
     ...base,
@@ -103,12 +108,13 @@ export async function buildEmailApprovalPreview(
     },
     timing: { readyAt: step?.readyAt ?? null, delayAfterPreviousHours: step?.delayAfterPreviousHours ?? null },
     wouldBeBlockedBy: [
+      ...(runOpen ? [] : ['run_ended']),
       ...(gate === null ? [] : [gate]),
       ...(facts.facts.email_permitted === true ? [] : ['email_not_permitted']),
     ],
     history: decisions.map((d) => ({ stepKey: d.stepKey, decision: d.decision, outcome: d.outcome, decidedAt: d.decidedAt })),
     previewHash: approvalPreviewHash({
-      subject: rendered.subject, body: rendered.body, channel: 'email', email: recipient.email, workflowVersionId: context.workflowVersionId,
+      organizationId, outreachTaskId, subject: rendered.subject, body: rendered.body, channel: 'email', email: recipient.email, workflowVersionId: context.workflowVersionId,
     }),
   };
 }

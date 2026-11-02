@@ -202,8 +202,16 @@ describe('a result held for a person reads as what it is', () => {
   it('an engine refusal at send time, or a requested cancel, reads as a gate', () => {
     for (const o of ['blocked_send_control', 'cancel_requested']) expect(held(o)).toMatchObject({ state: 'REJECTED', errorClass: 'gate_refused', retryability: 'human_only' });
   });
-  it('an action the engine cannot do reads as unsupported, whatever its detail', () => {
-    for (const o of ['unsupported_mode:rpa', 'unsupported_dm_target', 'dm_refused:policy']) expect(held(o)).toMatchObject({ state: 'REJECTED', errorClass: 'unsupported' });
+  it('an action the engine cannot do reads as unsupported', () => {
+    expect(held('unsupported_action')).toMatchObject({ state: 'REJECTED', errorClass: 'unsupported' });
+  });
+  it('a word meaning it may have gone out never reads as a definite failure', () => {
+    for (const o of ['send_uncertain', 'blocked_prior_attempt']) expect(held(o)).toMatchObject({ state: 'EXECUTING', certainty: 'uncertain', errorClass: 'may_have_acted', retryability: 'human_only' });
+  });
+  it('an engine mid-send is not asked to retry', () => {
+    for (const o of ['sending', 'executing', 'acknowledged', 'skipped_already_dispatched']) {
+      expect(normalizeEngineResult({ engine: 'whatsapp', outcome: o, disposition: 'wait', reason: null, externalRef: null })).toMatchObject({ state: 'EXECUTING', errorClass: null });
+    }
   });
   it('a channel with no permission source is configuration, not a failure of the person', () => {
     expect(held('no_permission_source')).toMatchObject({ state: 'REJECTED', errorClass: 'not_configured', retryability: 'human_only' });

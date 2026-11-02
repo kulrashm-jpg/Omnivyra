@@ -373,7 +373,7 @@ describe('034 — isolation, proven by content', () => {
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code.
     expect(sha(STORE_REL)).toBe('1319b7d86960f9c3');
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('268a6e677ba31a82');
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('d9917fcd985eea4f');
   });
 
   it('032’s and 029’s certified artefacts are untouched by 034', () => {

@@ -273,7 +273,7 @@ describe('the execution window', () => {
 });
 
 describe('recovery', () => {
-  it('a failed step ends the run: unsent tasks withdrawn, re-enrolment possible', async () => {
+  it('a failed step ends the run and re-enrolment is possible', async () => {
     await inRollback(async () => {
       const { actor, prospectId } = await setup(['internal']);
       const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [internalStep('a'), internalStep('b')] });
@@ -487,7 +487,7 @@ describe('one whole journey, from PI to outcome reporting', () => {
       const once = await count();
       await ingestSesEvent(event);
       expect(await count()).toBe(once);
-      expect(once).toBeGreaterThanOrEqual(before);
+      expect(once).toBe(before + 1);
     });
   });
 
@@ -579,7 +579,7 @@ describe('a WhatsApp reply counts only after this run actually reached out', () 
     const account = await one(`INSERT INTO public.social_accounts (user_id, platform, platform_user_id, account_name, access_token, company_id)
       VALUES ($1,'whatsapp',$2,'wa','t',$3) RETURNING id`, [u.id, `wa-${instanceId}`, ORG_A]);
     await db.query(`INSERT INTO public.execution_engine_requests (organization_id, execution_task_id, engine, state, external_ref, created_at)
-      VALUES ($1,$2,'whatsapp',$3,$4, now() - interval '1 hour')`, [ORG_A, task.id, requestState, requestState === 'submitted' ? `ext-${instanceId}` : null]);
+      VALUES ($1,$2,'whatsapp',$3,$4, now() - interval '1 hour')`, [ORG_A, task.id, requestState, requestState === 'requested' ? null : `ext-${instanceId}`]);
     const thread = await one(`INSERT INTO public.engagement_threads (platform, platform_thread_id, organization_id, social_account_id)
       VALUES ('whatsapp',$1,$2,$3) RETURNING id`, [`wa:${account.id}:15551230002`, ORG_A, account.id]);
     await db.query(`INSERT INTO public.engagement_messages (thread_id, platform, platform_message_id, content, direction, status, created_at)
@@ -598,6 +598,15 @@ describe('a WhatsApp reply counts only after this run actually reached out', () 
     });
   });
 
+  it('a request settled failed that still names a broadcast counts: the message may have gone out', async () => {
+    await inRollback(async () => {
+      const { instanceId } = await whatsappRun('failed');
+      const r = await sweep([spy('whatsapp', ['whatsapp'], [])]);
+      expect(r.counters.journeys_exited).toBe(1);
+      expect(await instanceState(instanceId)).toBe('cancelled');
+    });
+  });
+
   it('after a submitted request the reply ends the journey and appears in the event view', async () => {
     await inRollback(async () => {
       const { instanceId } = await whatsappRun('submitted');
@@ -606,6 +615,111 @@ describe('a WhatsApp reply counts only after this run actually reached out', () 
       const page = await readJourneyEvents(ORG_A, instanceId);
       expect(page.events.map((e: { type: string }) => e.type)).toContain('response.replied');
       expect(JSON.stringify(page)).not.toContain('hello');
+    });
+  });
+});
+
+describe('skipping a step never leaves or repeats an action', () => {
+  it('once an engine holds the action, a changed fact does not skip to the next candidate', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId, personId } = await setup(['whatsapp', 'email'], { email: ADDRESS, phone: '+15551230003' });
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, {
+        steps: [humanStep('wa', 'whatsapp', { choice_group: 'first', whatsapp: { template_name: 'hello_1' } }), { ...emailStep('mail'), choice_group: 'first' }],
+      });
+      await sweep([]);
+      const task = await one('SELECT id FROM public.execution_tasks WHERE execution_instance_id = $1 AND channel = $2', [instanceId, 'whatsapp']);
+      await db.query(`INSERT INTO public.execution_engine_requests (organization_id, execution_task_id, engine, state, external_ref)
+        VALUES ($1,$2,'whatsapp','submitted',$3)`, [ORG_A, task.id, `ext-${instanceId}`]);
+      await db.query(`INSERT INTO public.contact_governance_records (organization_id, person_id, channel, governance_type, source)
+        VALUES ($1,$2,'whatsapp','dnc_channel','contract-test')`, [ORG_A, personId]);
+
+      const asked: string[] = [];
+      const r = await sweep([spy('whatsapp', ['whatsapp'], asked, 'wait', 'submitted'), realWs3()]);
+      expect(asked).toEqual(['wa']);
+      expect(r.decisions[0]).toMatchObject({ stepKey: 'wa', decision: 'waiting', outcome: 'submitted' });
+      expect(await handoffTasks(instanceId)).toHaveLength(0);
+      expect(sent).toHaveLength(0);
+    });
+  });
+
+  it('a step skipped because the person opted out withdraws its task, so a later approval sends nothing', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId, personId } = await setup(['email']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('a')] });
+      await sweep([realWs3()]);
+      const [task] = await handoffTasks(instanceId);
+      await db.query(`INSERT INTO public.contact_governance_records (organization_id, person_id, channel, governance_type, source)
+        VALUES ($1,$2,'*','dnc_permanent','contract-test')`, [ORG_A, personId]);
+      const r = await sweep([realWs3()]);
+      expect(r.decisions[0]).toMatchObject({ decision: 'skipped' });
+      expect((await handoffTasks(instanceId))[0]!.status).toBe('cancelled');
+      expect((await ws3.approveOutreachTask(ORG_A, task!.id, { approverUserId: actor })).ok).toBe(false);
+      expect(sent).toHaveLength(0);
+    });
+  });
+
+  it('a person skipping a step withdraws its task', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId } = await setup(['email']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('a')] });
+      await sweep([realWs3()]);
+      const plan = await getPlanForInstance(ORG_A, instanceId);
+      const ready = await getReadyStep(ORG_A, plan.id);
+      const res = await callRoute(progressionRoute, 'PATCH', instanceId, { stepId: ready.id, state: 'skipped' });
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({ engineHolds: false });
+      expect((await handoffTasks(instanceId))[0]!.status).toBe('cancelled');
+    });
+  });
+
+  it('a person is told when the engine already holds the step they settled, and the record says what happened', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId } = await setup(['whatsapp']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [humanStep('wa', 'whatsapp', { whatsapp: { template_name: 'hello_1' } })] });
+      await sweep([]);
+      const task = await one('SELECT id FROM public.execution_tasks WHERE execution_instance_id = $1 AND channel = $2', [instanceId, 'whatsapp']);
+      await db.query(`INSERT INTO public.execution_engine_requests (organization_id, execution_task_id, engine, state, external_ref)
+        VALUES ($1,$2,'whatsapp','submitted',$3)`, [ORG_A, task.id, `ext-${instanceId}`]);
+      const plan = await getPlanForInstance(ORG_A, instanceId);
+      const ready = await getReadyStep(ORG_A, plan.id);
+      const res = await callRoute(progressionRoute, 'PATCH', instanceId, { stepId: ready.id, state: 'running' });
+      expect(res.json).toMatchObject({ engineHolds: false });
+      const failed = await callRoute(progressionRoute, 'PATCH', instanceId, { stepId: ready.id, state: 'failed' });
+      expect(failed.json).toMatchObject({ engineHolds: true });
+      const recorded = (await decisions(instanceId)).map((d: { decision: string; outcome: string | null }) => `${d.decision}:${d.outcome}`);
+      expect(recorded).toEqual(expect.arrayContaining(['waiting:human_running', 'needs_human:human_failed']));
+    });
+  });
+
+  it('a choice group that already acted skips, even on a channel the tenant has turned off', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId } = await setup(['internal', 'email']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, {
+        steps: [internalStep('a', { choice_group: 'g' }), { ...emailStep('b'), choice_group: 'g' }],
+      });
+      await sweep([spy('ws3', ['internal', 'email'], [])]);
+      await db.query("UPDATE public.outreach_governance_config SET enabled_channels = '{internal}' WHERE company_id = $1", [ORG_A]);
+      const asked: string[] = [];
+      const r = await sweep([spy('ws3', ['internal', 'email'], asked)]);
+      expect(asked).toEqual([]);
+      expect(r.decisions.find((d: { stepKey: string }) => d.stepKey === 'b')).toMatchObject({ decision: 'skipped', outcome: 'branch_not_taken' });
+      await sweep([spy('ws3', ['internal', 'email'], asked)]);
+      expect(await instanceState(instanceId)).toBe('completed');
+    });
+  });
+
+  it('a step the gate has held for a week is reported to a person, and nothing moves', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId } = await setup(['community']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [humanStep('c', 'community')] });
+      await sweep([]);
+      await db.query('UPDATE public.outreach_governance_config SET kill_switch = true WHERE company_id = $1', [ORG_A]);
+      const later = new Date(Date.now() + 8 * 24 * 3600 * 1000).toISOString();
+      const asked: string[] = [];
+      const r = await sweep([spy('community', ['community'], asked)], later);
+      expect(asked).toEqual([]);
+      expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'stuck_waiting' });
+      expect(await instanceState(instanceId)).toBe('active');
     });
   });
 });
@@ -678,6 +792,14 @@ describe('what a person would approve', () => {
         VALUES ($1,$2,'*','dnc_permanent','contract-test')`, [ORG_A, s.personId]);
       const p = await buildEmailApprovalPreview(ORG_A, s.taskId, NOW());
       expect(p.wouldBeBlockedBy).toEqual(['tenant_kill_switch', 'email_not_permitted']);
+    });
+  });
+
+  it('a task no longer awaiting approval has nothing to approve', async () => {
+    await inRollback(async () => {
+      const s = await awaiting();
+      expect((await ws3.approveOutreachTask(ORG_A, s.taskId, { approverUserId: s.actor })).ok).toBe(true);
+      expect(await buildEmailApprovalPreview(ORG_A, s.taskId, NOW())).toMatchObject({ refusal: 'not_awaiting_approval', previewHash: null, content: null });
     });
   });
 
