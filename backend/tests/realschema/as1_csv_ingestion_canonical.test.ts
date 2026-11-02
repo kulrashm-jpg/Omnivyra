@@ -187,8 +187,11 @@ describe('AS-1 — CSV in: rows become canonical records with provenance (real p
     });
   });
 
-  // CONTRACT DEVIATION — kept asserting the contract, marked failing.
-  // Contract: a row without externalId produces NO prospect (WS-1
+  // PENDING FOUNDER DECISION (CSV identity, design A vs B) — this case is NOT
+  // an approved contract. It records design A (mandatory source external ID);
+  // design B (provisional identity with evidence status) would keep the
+  // current digest behaviour. Re-state or remove this case once decided.
+  // Design-A expectation: a row without externalId produces NO prospect (WS-1
   // `insufficient_evidence`) and is reported, not silently dropped.
   // Production: the CSV adapter never lets a row reach the orchestrator without
   // an externalId. `csvExternalId` (backend/services/leadIngestion/adapters/
@@ -199,8 +202,8 @@ describe('AS-1 — CSV in: rows become canonical records with provenance (real p
   // that digest. The orchestrator's insufficient_evidence branch
   // (leadIngestion/orchestrator.ts:346-381) is therefore unreachable from CSV.
   // The digest is deterministic, so this does NOT break replay idempotency
-  // (asserted in the next test) — but it is not the stated contract.
-  it.failing('CONTRACT: a row without externalId yields no prospect (insufficient_evidence) and is reported', async () => {
+  // (asserted in the next test) — but it differs from design A.
+  it.failing('PENDING CSV-IDENTITY DECISION (design A): a row without externalId yields no prospect (insufficient_evidence) and is reported', async () => {
     await inRollback(async () => {
       await seedTenant(AS1_ORG, 'AS1 Tenant');
       await setTenantFlag(AS1_ORG, true);
