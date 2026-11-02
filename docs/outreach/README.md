@@ -28,7 +28,7 @@ These are findings from reading code. Production usage was not measured.
 | Community API failure falls back to browser; reply and like ids are random; the reaper marks possibly-sent rows failed | Duplicate actions by whichever account is logged in | Whether community actions run in production |
 | WhatsApp send path: no send-once claim, status updates fail silently | Double send on retry, statuses lost | Operator POSTs return 400 first (WA-1), so likely unreachable |
 
-Branch fixes that depend on migrations need 20261231000002 to 000010 applied first; see the runbook.
+Branch fixes that depend on migrations need 20261231000002 to 000010 applied first; see `docs/release/orchestration-engine-adapters-migration-runbook.md`.
 
 ## What was fixed
 
@@ -86,7 +86,8 @@ Also not run: mutants for this round, PostgREST-level journey, real Redis or Bul
 | Community responses not read by journeys | Recorded gap, blocked behind identity |
 | Non-WS-3 outcomes have no store (`outreach_outcomes.task_id` NOT NULL) | Recorded gap |
 | Adapter changes from this round | Applied by orchestration as 96c12e8b, except G-5. See `PROPOSED-ADAPTER-CHANGES.md` |
-| Contract v0.2 | `CONTRACT-V0.2-PROPOSALS.md`. Sent to the owner of the contract; not decided, not built |
+| Inbound message ending a journey | Narrowed by orchestration: same tenant, and only after this run first messaged the person (`orch_engines_real`, `orch_journey_lifecycle`). Any later inbound from that person still ends the journey, related or not |
+| Contract v0.2 | `CONTRACT-V0.2-PROPOSALS.md`, committed here for the contract owner to pick up. Not decided, not built |
 | Merge order | Orchestration first, then this branch. One conflict was resolved as a union and tested. Orchestration's work continues: uncommitted changes in its worktree are not in this test |
 
 ## Provider dependency register
