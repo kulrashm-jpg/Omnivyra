@@ -10,7 +10,8 @@
  *
  * WHAT IT CATCHES (each a named pattern; see PATTERNS):
  *   OpenAI / Anthropic keys (sk-…, sk-proj-…, sk-ant-…), Supabase secret keys
- *   (sb_secret_…), Supabase JWTs whose payload says role=service_role, GitHub
+ *   (sb_secret_…) and access tokens (sbp_…), Google OAuth client secrets
+ *   (GOCSPX-…), Railway tokens (rw_…), Supabase JWTs whose payload says role=service_role, GitHub
  *   tokens (ghp_/gho_/ghu_/ghs_/ghr_/github_pat_), Slack tokens (xox[baprs]-),
  *   AWS access key ids (AKIA/ASIA…), PEM private keys, Stripe live secrets and
  *   webhook secrets (sk_live_/rk_live_/whsec_), postgres URLs with an inline
@@ -96,6 +97,10 @@ const PATTERNS = [
       return true;
     },
   },
+  // SEC log-redaction programme: families also redacted by backend/security/logRedaction.ts.
+  { name: 'supabase-access-token', re: /\b(sbp_[A-Za-z0-9_]{36,})/g, check: (m) => /[0-9]/.test(m) },
+  { name: 'google-oauth-client-secret', re: /\b(GOCSPX-[A-Za-z0-9_-]{24,})/g },
+  { name: 'railway-token', re: /\b(rw_[A-Za-z0-9_-]{24,})/g, check: (m) => /[0-9]/.test(m) && /[A-Za-z]{3}/.test(m.slice(3)) },
   { name: 'github-token', re: /\b((?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,})/g },
   { name: 'github-fine-grained-pat', re: /\b(github_pat_[A-Za-z0-9_]{50,})/g },
   { name: 'slack-token', re: /\b(xox[baprs]-[A-Za-z0-9]{8,}-[A-Za-z0-9-]{8,})/g },
@@ -177,7 +182,7 @@ const DOTENV_OK = /\.(?:example|sample|template)$/;
 const isTrackedDotenv = (rel) => DOTENV_FILE.test(rel) && !DOTENV_OK.test(rel);
 
 // Cheap prefilter: a file with none of these substrings cannot match any pattern.
-const TRIGGERS = /sk-|sb_secret_|eyJ|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|PRIVATE KEY|_live_|whsec_|postgres|RAILWAY_|ENCRYPTION_KEY|Bearer/;
+const TRIGGERS = /sk-|sb_secret_|sbp_|GOCSPX-|rw_|eyJ|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|PRIVATE KEY|_live_|whsec_|postgres|RAILWAY_|ENCRYPTION_KEY|Bearer/;
 
 function scanRepo({ allowlistPath = ALLOWLIST_PATH } = {}) {
   const allowlist = loadAllowlist(allowlistPath);
