@@ -627,23 +627,23 @@
       "group": "FND",
       "stage": 2,
       "title": "Backport scheduled-post authorization fix d8d79b74",
-      "owner": "unassigned",
+      "owner": "Claude Code (session a410c8dc)",
       "deps": [],
       "planned_start": "2026-11-03",
       "target_window": "2026-11-03",
-      "actual_start": null,
+      "actual_start": "2026-11-02",
       "actual_done": null,
-      "status": "Not Started",
+      "status": "T1 Verified",
       "tier": "T2",
-      "blockers": null,
-      "next_action": "Cherry-pick onto main in a local branch; run its tests",
+      "blockers": "Merge approval",
+      "next_action": "Review + push approval for fix/scheduled-post-authorization-backport (c51bfda9)",
       "approval_required": "Push/merge",
       "criteria": [
         {
           "id": "a",
           "text": "Unauthorised scheduled post refused (test)",
-          "state": "open",
-          "evidence": null
+          "state": "t1",
+          "evidence": "commit c51bfda9 (cherry-pick of d8d79b74); 7 suites 133/133"
         },
         {
           "id": "b",

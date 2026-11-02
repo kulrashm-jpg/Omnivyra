@@ -2,3 +2,4 @@ date,contributor,milestone_ids,activity,start_utc,end_utc,minutes,method,notes
 2026-11-02,Claude Code session a410c8dc,SEC-05,Recipient-owned release refusal + tests,,,75,inferred (no timer before this register existed),commit ce1d6e15
 2026-11-02,Claude Code session a410c8dc,SEC-06,Creator upload secret fail-closed + test,,,15,inferred (no timer before this register existed),commit a0c67c55
 2026-11-02,Claude Code session a410c8dc,FND;SF,Register + shared contracts,,,45,inferred (no timer before this register existed),programme/execution-register
+2026-11-02,Claude Code session a410c8dc,REL-06,Backport d8d79b74 + tests,,,10,inferred (no timer),commit c51bfda9

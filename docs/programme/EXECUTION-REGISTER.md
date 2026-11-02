@@ -79,17 +79,17 @@ _Generated 2026-11-02 from docs/programme/milestones.json. Percentages count acc
 
 | Scope | Criteria | Accepted | T2 verified | T1 verified | Implemented, unverified | Open |
 | --- | --- | --- | --- | --- | --- | --- |
-| Containment, baseline and release foundations (Stages 0-2) | 56 | 0% | 0% | 21% | 4% | 75% |
+| Containment, baseline and release foundations (Stages 0-2) | 56 | 0% | 0% | 23% | 4% | 73% |
 | Shared-foundation contracts | 23 | 0% | 0% | 9% | 48% | 43% |
 | Track 1 - Prospect Intelligence | 17 | 0% | 0% | 0% | 29% | 71% |
 | Track 2 - AI Intelligence and Orchestration | 11 | 0% | 0% | 0% | 18% | 82% |
 | Track 3 - Outreach Engines | 13 | 0% | 0% | 0% | 15% | 85% |
 | Integrated vertical slice (AS-1..AS-9) | 10 | 0% | 0% | 0% | 0% | 100% |
-| **Overall programme** | 130 | 0% | 0% | 11% | 17% | 72% |
+| **Overall programme** | 130 | 0% | 0% | 12% | 17% | 72% |
 
 ### Milestones by status
 
-Not Started: 21 · In Progress: 1 · Implemented: 19 · T1 Verified: 6 · T2 Verified: 0 · Accepted: 0 · Blocked: 8 · Deferred: 3
+Not Started: 20 · In Progress: 1 · Implemented: 19 · T1 Verified: 7 · T2 Verified: 0 · Accepted: 0 · Blocked: 8 · Deferred: 3
 
 ### Milestone register
 
@@ -111,7 +111,7 @@ Not Started: 21 · In Progress: 1 · Implemented: 19 · T1 Verified: 6 · T2 Ver
 | REL-03 | Reconcile gov2 actor contract with migration controls | Not Started | unassigned | after REL-02 | — | n/a | T1 | REL-02 review | One registry schema + one checker | Push/merge |
 | REL-04 | Release candidate 7bdd76ae landed (L-1..L-10) | Blocked | Founder (operator) + Claude Code (prep) | 2026-11-04..2026-11-12 | — | on window | T3 | L-1 probe (BASE-01); decisions RC04/RC05; push approval; repo private first | Founder: L-1 probe + options 04/05 | Push, migrations, merge, deploy |
 | REL-05 | Credit reaper and reconciliation scheduled safely | Blocked | unassigned | after P11 | — | n/a | T3 | P11 HOLD backlog, wallet consistency, idempotency and controlled-test evidence required first | Read P11; dry-run reaper on a controlled copy | Production config change |
-| REL-06 | Backport scheduled-post authorization fix d8d79b74 | Not Started | unassigned | 2026-11-03 | — | on window | T2 | — | Cherry-pick onto main in a local branch; run its tests | Push/merge |
+| REL-06 | Backport scheduled-post authorization fix d8d79b74 | T1 Verified | Claude Code (session a410c8dc) | 2026-11-03 | 0 | on window | T2 | Merge approval | Review + push approval for fix/scheduled-post-authorization-backport (c51bfda9) | Push/merge |
 | REL-07 | Integration branch renumbered (keep 20261127000000; 22 -> 20270121000000-21) with fresh T2 | Blocked | Claude Code (after approval) | after GD-4 + P1/P3 clean | — | n/a | T2 | GD-4 decision; production P1/P3 clean | Wait for GD-4 approval and P1/P3 | GD-4; then push/merge |
 | REL-08 | Jira/JEV governance adoption of pending branches | Deferred | Founder | suspended | — | n/a | T1 | Founder suspended Jira/JEV governance automation (2026-11-02) | None while suspended | Founder |
 | **SF** | **Shared-foundation contracts** | | | | | | | | | |
@@ -173,6 +173,6 @@ Not Started: 21 · In Progress: 1 · Implemented: 19 · T1 Verified: 6 · T2 Ver
 
 ### Effort log
 
-Recorded: 0.0 h in 0 entries (start/end captured). Inferred: 2.3 h in 3 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
+Recorded: 0.0 h in 0 entries (start/end captured). Inferred: 2.4 h in 4 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
 
 <!-- GENERATED:END -->
