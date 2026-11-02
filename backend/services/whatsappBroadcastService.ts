@@ -311,8 +311,11 @@ export async function processBatch(
       const reason = verdict
         ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
         : `governance unreadable: ${governance.error ?? 'unknown'}`;
+      // `error_code` is an INTEGER column (Meta's numeric code); the governance
+      // cause is text and goes in `error_message`. Writing the text code into the
+      // integer column failed the whole update, leaving the recipient `pending`.
       await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'blocked_governance', error_code: 'contact_governance', error_message: reason })
+        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${reason}` })
         .eq('id', recipient.id);
       failedCount++;
       continue;

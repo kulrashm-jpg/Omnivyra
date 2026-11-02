@@ -46,6 +46,13 @@ jest.mock('../../db/writeOwner', () => ({
     const run = async () => {
       if (db.failTable === table) return { data: null, error: { message: 'governance store unreadable' } };
       if (st.op === 'update') {
+        // Like Postgres: `whatsapp_broadcast_recipients.error_code` is INTEGER
+        // (supabase/_schema/baseline.sql), so a non-integer value fails the whole
+        // statement with 22P02 and no column of the row changes.
+        const code = (st.patch as Row).error_code;
+        if (table === 'whatsapp_broadcast_recipients' && code != null && !Number.isInteger(code)) {
+          return { data: null, error: { code: '22P02', message: 'invalid input syntax for type integer' } };
+        }
         db.updates.push({ table, patch: st.patch as Row });
         rows().filter(match).forEach((r) => Object.assign(r, st.patch));
         return { data: null, error: null };
@@ -137,7 +144,10 @@ describe('W0-C — WhatsApp broadcast is governed before the external send', () 
 
     expect(fetchCalls).toHaveLength(0);
     expect(recipient().status).toBe('blocked_governance');
-    expect(String(recipient().error_code)).toBe('contact_governance');
+    // error_code is an INTEGER column; the cause is text and lives in
+    // error_message. The former text write failed the update in Postgres.
+    expect(recipient().error_code ?? null).toBeNull();
+    expect(String(recipient().error_message)).toMatch(/^contact_governance: /);
     expect(String(recipient().error_message)).toContain('dnc_channel');
   });
 
