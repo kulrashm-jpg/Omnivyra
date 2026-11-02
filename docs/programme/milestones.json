@@ -1086,8 +1086,8 @@
       "actual_done": null,
       "status": "T2 Verified",
       "tier": "T2",
-      "blockers": "Flags off in prod; T2 not re-run this programme",
-      "next_action": "Run PI real-schema ingestion suites at main; record",
+      "blockers": "Owner decision: CSV rows without referenceId get a synthesised csv:<sha256> key instead of insufficient_evidence (csvAdapter.ts:89-99) — contract test marked it.failing",
+      "next_action": "Owner: accept synthesised CSV key or require referenceId",
       "approval_required": "None (flags: founder)",
       "criteria": [
         {
@@ -1099,8 +1099,8 @@
         {
           "id": "t2",
           "text": "Replay adds 0 rows; one prospect per externalId row (T2)",
-          "state": "open",
-          "evidence": null
+          "state": "t2",
+          "evidence": "commit a0854cf5 (test/as1-as2-realschema): as1_csv_ingestion_canonical 9/9 + as2_score_evaluation_persisted 5/5; re-run independently 2026-11-02 14/14 on disposable pg 17.6; agent full suite 66/66, 1347/1347"
         }
       ]
     },
@@ -1214,7 +1214,7 @@
       "target_window": "2026-11-09..2026-11-20",
       "actual_start": "pre-programme",
       "actual_done": null,
-      "status": "Implemented",
+      "status": "T2 Verified",
       "tier": "T2",
       "blockers": "13 competing scorers",
       "next_action": "AS-2 T2; retire rival writers",
@@ -1235,8 +1235,8 @@
         {
           "id": "t2",
           "text": "AS-2 at T2",
-          "state": "open",
-          "evidence": null
+          "state": "t2",
+          "evidence": "commit a0854cf5 (test/as1-as2-realschema): as1_csv_ingestion_canonical 9/9 + as2_score_evaluation_persisted 5/5; re-run independently 2026-11-02 14/14 on disposable pg 17.6; agent full suite 66/66, 1347/1347"
         }
       ]
     },
@@ -1905,9 +1905,9 @@
       ],
       "planned_start": null,
       "target_window": "Stage 6",
-      "actual_start": null,
+      "actual_start": "2026-11-02",
       "actual_done": null,
-      "status": "Not Started",
+      "status": "T2 Verified",
       "tier": "T2",
       "blockers": "Upstream milestones",
       "next_action": "Write acceptance suite skeleton once AIO-01 lands",
@@ -1916,14 +1916,14 @@
         {
           "id": "AS-1",
           "text": "CSV in",
-          "state": "open",
-          "evidence": null
+          "state": "t2",
+          "evidence": "commit a0854cf5 (test/as1-as2-realschema): as1_csv_ingestion_canonical 9/9 + as2_score_evaluation_persisted 5/5; re-run independently 2026-11-02 14/14 on disposable pg 17.6; agent full suite 66/66, 1347/1347 (T2 only; T3 pending)"
         },
         {
           "id": "AS-2",
           "text": "Profile and score",
-          "state": "open",
-          "evidence": null
+          "state": "t2",
+          "evidence": "commit a0854cf5 (test/as1-as2-realschema): as1_csv_ingestion_canonical 9/9 + as2_score_evaluation_persisted 5/5; re-run independently 2026-11-02 14/14 on disposable pg 17.6; agent full suite 66/66, 1347/1347 (T2 only; T3 pending)"
         },
         {
           "id": "AS-3",

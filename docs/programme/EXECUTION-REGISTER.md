@@ -81,15 +81,15 @@ _Generated 2026-11-02 from docs/programme/milestones.json. Percentages count acc
 | --- | --- | --- | --- | --- | --- | --- |
 | Containment, baseline and release foundations (Stages 0-2) | 56 | 0% | 0% | 23% | 4% | 73% |
 | Shared-foundation contracts | 23 | 0% | 0% | 9% | 48% | 43% |
-| Track 1 - Prospect Intelligence | 17 | 0% | 35% | 6% | 6% | 53% |
+| Track 1 - Prospect Intelligence | 17 | 0% | 47% | 6% | 6% | 41% |
 | Track 2 - AI Intelligence and Orchestration | 11 | 0% | 0% | 0% | 18% | 82% |
 | Track 3 - Outreach Engines | 13 | 0% | 0% | 8% | 15% | 77% |
-| Integrated vertical slice (AS-1..AS-9) | 10 | 0% | 0% | 0% | 0% | 100% |
-| **Overall programme** | 130 | 0% | 5% | 13% | 14% | 68% |
+| Integrated vertical slice (AS-1..AS-9) | 10 | 0% | 20% | 0% | 0% | 80% |
+| **Overall programme** | 130 | 0% | 8% | 13% | 14% | 65% |
 
 ### Milestones by status
 
-Not Started: 18 · In Progress: 1 · Implemented: 15 · T1 Verified: 9 · T2 Verified: 4 · Accepted: 0 · Blocked: 8 · Deferred: 3
+Not Started: 17 · In Progress: 1 · Implemented: 14 · T1 Verified: 9 · T2 Verified: 6 · Accepted: 0 · Blocked: 8 · Deferred: 3
 
 ### Milestone register
 
@@ -127,11 +127,11 @@ Not Started: 18 · In Progress: 1 · Implemented: 15 · T1 Verified: 9 · T2 Ver
 | SF-10 | Migration ownership, ordering and compatibility contract (GD-4) | Implemented | Release controls | 2026-11-02..2026-11-07 | 0 | on window | T1 | GD-4 decision | Land REL-02 | GD-4 |
 | SF-11 | Security, audit and tenant-isolation contract | Implemented | Platform | 2026-11-02..2026-11-10 | 0 | on window | T2 | — | Route-auth in predeploy; governance-record trigger | None |
 | **PI** | **Track 1 - Prospect Intelligence** | | | | | | | | | |
-| PI-01 | CSV/manual ingestion into canonical records | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | Flags off in prod; T2 not re-run this programme | Run PI real-schema ingestion suites at main; record | None (flags: founder) |
+| PI-01 | CSV/manual ingestion into canonical records | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | Owner decision: CSV rows without referenceId get a synthesised csv:<sha256> key instead of insufficient_evidence (csvAdapter.ts:89-99) — contract test marked it.failing | Owner: accept synthesised CSV key or require referenceId | None (flags: founder) |
 | PI-02 | Canonical identity and deduplication | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | — | T2 of identity suites | None |
 | PI-03 | Enrichment and evidence provenance | T2 Verified | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | No vendor credential (J-3) | Provenance T2; vendor trial after J-3 | J-3 for vendor |
 | PI-04 | Qualification and ICP ratification | T2 Verified | unassigned | 2026-11-09..2026-11-15 | pre | on window | T2 | qualificationIntelligence has no caller | Decide caller or retire | None |
-| PI-05 | Persisted score evaluations (one canonical scorer) | Implemented | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | 13 competing scorers | AS-2 T2; retire rival writers | None |
+| PI-05 | Persisted score evaluations (one canonical scorer) | T2 Verified | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | 13 competing scorers | AS-2 T2; retire rival writers | None |
 | PI-06 | Lifecycle transitions from outcomes via handoff.subject_id | Not Started | unassigned | after REL-07 | — | n/a | T2 | Integration branch not landed | Prepare on integration base | GD-2 |
 | PI-07 | Consent / lawful-basis ledger | Blocked | unassigned | after counsel K-1 | — | n/a | T2 | Counsel K-1 | Schema draft | Founder + counsel |
 | PI-08 | Single suppression store (contact_governance_records) | T1 Verified | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | Owner decision: global legacy row now blocks WS-3 for every tenant (reverses an earlier code comment); removing outreach_suppressions reads needs P10 | Owner review of choice; P10 count of outreach_suppressions | Owner decision + push/merge |
@@ -157,7 +157,7 @@ Not Started: 18 · In Progress: 1 · Implemented: 15 · T1 Verified: 9 · T2 Ver
 | OUT-09 | DM / extension / browser contact contained on main | Not Started | unassigned | 2026-11-03..2026-11-06 | — | on window | T2 | J-5 scope decision (contain vs retire) | mayContact before claim on main paths (or wait for integration fixes 30a421c2/1c328464) | J-5 |
 | OUT-10 | WhatsApp, SMS and voice foundations | Deferred | unassigned | Stage 8 | — | n/a | T3 | Consent (K-1), metering (K-8), J-9 | None | Per-channel activation decision |
 | **VS** | **Integrated vertical slice (AS-1..AS-9)** | | | | | | | | | |
-| VS-01 | AS-1..AS-9 pass at T2 with full ID chain | Not Started | unassigned | Stage 6 | — | n/a | T2 | Upstream milestones | Write acceptance suite skeleton once AIO-01 lands | None |
+| VS-01 | AS-1..AS-9 pass at T2 with full ID chain | T2 Verified | unassigned | Stage 6 | 0 | n/a | T2 | Upstream milestones | Write acceptance suite skeleton once AIO-01 lands | None |
 | VS-02 | AS-1..AS-6 at T3 on tenant 0eda0896 (real SES MessageId) | Not Started | Founder (operator) | Stage 7 | — | n/a | T3 | VS-01; counsel K-1; erasure live | None yet | Founder (real send) |
 
 ### Effort (estimates are inferred ranges, not recorded time)
@@ -173,6 +173,6 @@ Not Started: 18 · In Progress: 1 · Implemented: 15 · T1 Verified: 9 · T2 Ver
 
 ### Effort log
 
-Recorded: 0.2 h in 1 entries (start/end captured). Inferred: 3.0 h in 5 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
+Recorded: 0.2 h in 2 entries (start/end captured). Inferred: 3.5 h in 6 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
 
 <!-- GENERATED:END -->
