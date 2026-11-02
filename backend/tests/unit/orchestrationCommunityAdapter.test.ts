@@ -541,6 +541,13 @@ describe('community adapter — failure paths', () => {
       expect(w.externalActions()).toBe(1);
     });
 
+    it('a stale claim is not begun again when the step only reports what the engine holds', async () => {
+      const w = world();
+      stale(w, ACTION_ID);
+      expect(await run(w, ctx({ holdOnly: true }))).toMatchObject({ outcome: 'not_begun', disposition: 'skipped' });
+      expect(w.calls).toHaveLength(0);
+    });
+
     it('a stale claim whose action is executing is uncertain, never re-executed', async () => {
       const w = world(approvedAction({ status: 'executing' }));
       stale(w, ACTION_ID);

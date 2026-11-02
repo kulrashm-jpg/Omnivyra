@@ -68,15 +68,19 @@ export interface JourneyReport {
 
 const bump = (m: Record<string, number>, k: string) => { m[k] = (m[k] ?? 0) + 1; };
 
-/** This tenant's WhatsApp request states by execution task (tenant-first, one read). */
-async function whatsappRequestStates(organizationId: string): Promise<Map<string, string>> {
+/**
+ * WhatsApp request states for these execution tasks. A failed read throws: an empty answer
+ * would report a message that may have gone out as never requested.
+ */
+export async function whatsappRequestStates(organizationId: string, executionTaskIds: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (executionTaskIds.length === 0) return out;
   const res = await ownedDbTable(ENGINE_REQUESTS_TABLE)
     .select('execution_task_id, state')
     .eq('organization_id', organizationId)
     .eq('engine', 'whatsapp')
-    .limit(5000);
-  const out = new Map<string, string>();
-  if (res.error || !Array.isArray(res.data)) return out;
+    .in('execution_task_id', [...executionTaskIds]);
+  if (res.error || !Array.isArray(res.data)) throw new Error('whatsapp request states could not be read');
   for (const r of res.data as Array<Record<string, unknown>>) out.set(String(r.execution_task_id), String(r.state));
   return out;
 }
@@ -91,10 +95,9 @@ export async function buildJourneyReport(input: {
   if (workflow === null) return null;
   const limit = input.limit ?? 500;
 
-  const [versions, runs, waStates] = await Promise.all([
+  const [versions, runs] = await Promise.all([
     listWorkflowVersions(input.organizationId, input.workflowId),
     listWorkflowExecutionInstances(input.organizationId, input.workflowId, limit),
-    whatsappRequestStates(input.organizationId),
   ]);
 
   const byVersion = new Map<string, ExecutionInstance[]>();
@@ -153,10 +156,9 @@ export async function buildJourneyReport(input: {
         }
       }
       // WhatsApp: the request ledger is keyed by execution task, which is per run.
-      for (const t of await listInstanceTasks(input.organizationId, run.id)) {
-        if (t.channel !== 'whatsapp') continue;
-        bump(engines.whatsapp ??= {}, waStates.get(t.id) ?? 'not_requested');
-      }
+      const whatsappTasks = (await listInstanceTasks(input.organizationId, run.id)).filter((t) => t.channel === 'whatsapp');
+      const waStates = await whatsappRequestStates(input.organizationId, whatsappTasks.map((t) => t.id));
+      for (const t of whatsappTasks) bump(engines.whatsapp ??= {}, waStates.get(t.id) ?? 'not_requested');
       if (successOutcome === 'step_completion' && run.lifecycleState === 'completed') personReached = true;
       if (personReached) reached += 1;
     }

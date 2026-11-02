@@ -562,6 +562,43 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
     expect(wa.broadcasts).toHaveLength(1);
   });
 
+  it('a stale claim is not begun again once the conditions no longer hold', async () => {
+    enrol(ORG_A, 'p-ready', waOnly());
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
+    people['p-ready'].whatsapp = false;
+    const r = await sweep();
+    expect(r.decisions[0]).toMatchObject({ decision: 'skipped', outcome: 'not_begun' });
+    expect(wa.broadcasts).toHaveLength(0);
+    expect((db.tables.execution_engine_requests as Array<{ state: string }>)[0].state).toBe('skipped');
+  });
+
+  it('a broadcast that cannot be read is not taken for no broadcast', async () => {
+    enrol(ORG_A, 'p-ready', waOnly());
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
+    const down = createWhatsAppAdapter({ ...waDeps, findBroadcastByName: async () => { throw new Error('down'); } });
+    const r = await advanceAndDispatchWorkflowExecution(ORG_A, { now: world.clock, deps: { adapters: [createWs3Adapter(), down], intelligence } });
+    expect(r.decisions[0]).toMatchObject({ decision: 'waiting', outcome: 'broadcast_unreadable' });
+    expect(wa.broadcasts).toHaveLength(0);
+    expect((db.tables.execution_engine_requests as Array<{ state: string }>)[0].state).toBe('submitting');
+  });
+
+  it('a settled request keeps the broadcast it names, which is how a later reply is recognised', async () => {
+    enrol(ORG_A, 'p-ready', waOnly());
+    wa.failEnqueue = 'the queue did not answer';
+    await sweep();
+    expect((db.tables.execution_engine_requests as Array<{ state: string; external_ref: string }>)[0]).toMatchObject({ state: 'failed', external_ref: 'bc-1' });
+  });
+
+  it('a read failure holds the step, and the step acts once the read answers', async () => {
+    enrol(ORG_A, 'p-ready', waOnly());
+    const r = await advanceAndDispatchWorkflowExecution(ORG_A, { now: world.clock, deps: { adapters: adapters(), intelligence: { ...intelligence, channelPermission: async () => null } } });
+    expect(r.decisions[0]).toMatchObject({ decision: 'waiting', outcome: 'facts_unreadable' });
+    expect(wa.broadcasts).toHaveLength(0);
+    expect((await sweep()).decisions[0]).toMatchObject({ outcome: 'submitted' });
+  });
+
   it('a stale claim WITH a broadcast goes to a human — a second send is never risked', async () => {
     enrol(ORG_A, 'p-ready', waOnly());
     const task = world.tasks[0].id;

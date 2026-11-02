@@ -14,9 +14,9 @@ Mandate section 5, against the code. "Real" means it ran on real PostgreSQL thro
 | Multi-step | **Real** | Linear plan and database clock | |
 | Multi-engine routing | **Real, engines limited** | Registry by channel | See engine table |
 | Scheduling and windows | **Real** | Delay, frequency, execution window in tenant or person timezone | |
-| Retry and recovery | **Partial** | Next-sweep waits, uncertain goes to a person, blocked runs end, stuck reported after 7 days | A person can skip or cancel but not retry a refused message (S-2) |
+| Retry and recovery | **Partial** | Next-sweep waits, uncertain goes to a person, blocked runs end, stuck reported after 7 days, a failed read holds the step | A person can skip or cancel but not retry a refused message (S-2) |
 | Human approval | **Partial** | WS-3 approval, read-only preview and hash | **Super-admin only.** No tenant route, role or hash check at send (A to E). WhatsApp has none, so it refuses |
-| Termination | **Real** | Response, PI closed, person, blocked step; unsent tasks withdrawn | A queued WhatsApp broadcast still sends after exit (B-17; Outreach reports a fix on its branch) |
+| Termination | **Real** | Response, PI closed, person, blocked step; unsent tasks withdrawn before the run ends | A queued WhatsApp broadcast still sends after exit (B-17; Outreach's fix is on its branch). A community action is not recalled (L-3) |
 | Consent and suppression | **Real for email, WhatsApp, community facts** | `mayContact`, `contact_governance_records` | |
 | Tenant and channel kill switches | **Real** | Central gate plus engine gates | No per-engine platform switch (G-5) |
 | Quotas | **Partial** | WS-3 counts attempts | None for WhatsApp or community in this path |
@@ -35,7 +35,7 @@ Mandate section 5, against the code. "Real" means it ran on real PostgreSQL thro
 | WS-3 email | Real schema, provider stubbed | **No** | B-3, B-4, B-5 |
 | WhatsApp | Real schema, Meta stubbed | **No, refuses** | B-6, B-8, WA-1, WA-2 |
 | Social publish | Real schema, observes only | Cannot address a person | By design |
-| Community | Real schema refusal paths; send path on fakes only | **No** | B-7 |
+| Community | Real schema refusal paths; send path on fakes only | **No** | B-7, as corrected in `CONTRACT-COMPATIBILITY-REPORT.md` |
 | Browser | Claims no actions | **No, by design** | No safe operation |
 
 ## Contract gaps for later versions
@@ -46,11 +46,22 @@ Mandate section 5, against the code. "Real" means it ran on real PostgreSQL thro
 | G-2 | No provider availability, configuration or health | Outreach proposes, from the existing `providerCapabilityModel` | Avoids a second model |
 | G-3 | No shared webhook verification contract | Outreach proposes | Each engine verifies its own today |
 | G-4 | Non-WS-3 outcomes have no store (`outreach_outcomes.task_id` is NOT NULL) | Orchestration, with B-7 | Needs a migration and a live producer |
-| G-5 | No per-engine platform kill switch | Orchestration | Config shape undecided |
+| G-5 | No per-engine platform kill switch. Check overlap with `PROVIDER_KILL_<ID>` and `LEAD_OUTREACH_EXECUTION_DISABLED` first. Not Outreach's social G-5, which is a separate unapplied proposal | Orchestration | Config shape undecided |
 | G-6 | Community responses are not read by journeys | Orchestration, with B-7 | No live producer |
-| G-7 | `approval.requested` and `execution.failed` event types are declared and not emitted | Orchestration | Needs an approval request record or a mapping |
+| G-7 | `approval.requested`, `execution.failed` and `execution.cancelled` event types are declared and not emitted | Orchestration | Needs an approval request record or a mapping |
 | G-8 | Event cursor can miss late rows with an earlier time | Orchestration | Documented; consumers re-read and dedupe |
 | G-9 | PostgREST query shapes not exercised by any journey suite | Orchestration | A local stack can do this without authorization |
+
+## Known limits, recorded and not fixed
+
+| ID | Limit | Reachable today? | Why not fixed here |
+|---|---|---|---|
+| L-1 | A person cancels while a sweep is already inside an adapter: the adapter does not re-read the run, so that one action can still start | Only with the flag on | Needs a re-read inside each adapter, or a lock. Decide with the approval build |
+| L-2 | `progression.ts` withdraws before it moves the step. If the move answers 409, the request row is already `skipped`, so the next sweep skips that step despite the error | Only with the flag on | The person asked to settle that step. Low impact |
+| L-3 | **Community contact after opt-out.** Withdrawal does not touch the action. An `approved` action with `scheduled_at` returns `wait` before the permission check, and `communityAiScheduler` executes it; the scheduler and retry queue have no governance check. Read in code, not run | **No: the identity link refuses first (B-7)** | The engine needs a check at execution. **Must be fixed before B-7 is unblocked** |
+| L-4 | A lost queue acknowledgement settles the WhatsApp request `failed` although the broadcast may still send. The request keeps the broadcast id, so a later reply counts, and it goes to a person | Only with the flag on and WhatsApp approval built | `enqueueOrThrow` does not separate a refusal from a lost answer |
+| L-5 | Two sweeps with different facts in the same moment: one skips a step while the other inserts its request row. Plausible by reading; the lock in the sweep's caller was not checked | Only with the flag on | Very narrow; needs a measured look |
+| L-6 | `channelPermitted` wiring on community is never run for real: every test injects it | No (B-7) | Blocked with the community path |
 
 ## Parked work not integrated
 

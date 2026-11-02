@@ -10,10 +10,11 @@ const mockTransition = jest.fn();
 const mockRequests = { data: [] as unknown[], error: null as unknown };
 const mockWithdrawn = { data: [{ id: 'r' }] as unknown[], error: null as unknown };
 const mockUpdate = jest.fn();
+const mockStates = { data: [] as unknown[], error: null as unknown };
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: () => ({
-    select: () => ({ eq: () => ({ eq: async () => mockRequests }) }),
+    select: () => ({ eq: () => ({ eq: () => Object.assign(Promise.resolve(mockRequests), { in: async () => mockStates }) }) }),
     update: (patch: unknown) => { mockUpdate(patch); return { eq: () => ({ eq: () => ({ eq: () => ({ select: async () => mockWithdrawn }) }) }) }; },
   }),
 }));
@@ -22,6 +23,7 @@ jest.mock('../../services/outreachBridge/outreachBridgeStore', () => ({ listInst
 jest.mock('../../services/leadOutreachExecution', () => ({ getOutreachTaskById: mockGet, transitionOutreachTaskState: mockTransition }));
 
 import { exitJourney, withdrawStepAction, withdrawUnsentTasks } from '../../services/orchestration/journeyExit';
+import { whatsappRequestStates } from '../../services/orchestration/journeyReport';
 
 const ORG = '00000000-0000-4000-8000-00000000000a';
 
@@ -93,6 +95,44 @@ describe('withdrawStepAction', () => {
     mockRequests.data = [{ state: 'requested' }];
     mockWithdrawn.error = { message: 'down' };
     await expect(withdrawStepAction(ORG, 'run', 'task')).rejects.toMatchObject({ code: 'withdrawal_incomplete' });
+  });
+
+  describe('a task that can still come back', () => {
+    const onThisStep = () => mockHandoffs.mockResolvedValue([{ outreachTaskId: 't1', executionTaskId: 'task' }]);
+
+    it('a paused task is cancelled: it can resume and send, and it has never sent', async () => {
+      onThisStep();
+      mockGet.mockResolvedValue({ status: 'paused' });
+      mockTransition.mockResolvedValue({ ok: true, changed: true });
+      await expect(withdrawStepAction(ORG, 'run', 'task')).resolves.toBe('none');
+      expect(mockTransition).toHaveBeenCalledWith(ORG, 't1', 'paused', 'cancelled');
+    });
+
+    it('a failed task may have reached the person: a step leaves it with a person', async () => {
+      onThisStep();
+      mockGet.mockResolvedValue({ status: 'failed' });
+      await expect(withdrawStepAction(ORG, 'run', 'task')).resolves.toBe('engine_holds');
+      expect(mockTransition).not.toHaveBeenCalled();
+    });
+
+    it('a run that ends cancels a failed task, so nobody can retry it', async () => {
+      mockGet.mockResolvedValue({ status: 'failed' });
+      mockTransition.mockResolvedValue({ ok: true, changed: true });
+      await withdrawUnsentTasks(ORG, 'run');
+      expect(mockTransition).toHaveBeenCalledWith(ORG, 't1', 'failed', 'cancelled');
+    });
+
+    it('a task on its way back to the queue cannot be confirmed withdrawn yet', async () => {
+      mockGet.mockResolvedValue({ status: 'resumed' });
+      await expect(exitJourney(ORG, 'run')).rejects.toMatchObject({ code: 'withdrawal_incomplete' });
+      expect(mockCancel).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a report refuses an unreadable ledger rather than saying nothing was requested', async () => {
+    mockStates.error = { message: 'down' };
+    await expect(whatsappRequestStates(ORG, ['t'])).rejects.toThrow('could not be read');
+    mockStates.error = null;
   });
 
   it('an unreadable request ledger decides nothing', async () => {
