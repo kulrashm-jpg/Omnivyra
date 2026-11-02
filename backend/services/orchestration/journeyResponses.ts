@@ -47,6 +47,8 @@ export interface JourneyResponsePort {
   whatsappReply(organizationId: string, executionInstanceId: string, personId: string | null): Promise<WhatsAppReply | null>;
 }
 
+const REACHED_OUT_STATES = ['submitted', 'completed', 'uncertain'];
+
 const unreadable = (what: string): Error =>
   Object.assign(new Error(`${what} unreadable; the journey is not advanced this sweep`), { code: 'responses_unreadable' });
 
@@ -68,14 +70,15 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
 
     // Only a message after this run first reached out is a response to it.
     const requests = await ownedDbTable(ENGINE_REQUESTS_TABLE)
-      .select('created_at')
+      .select('created_at, state, external_ref')
       .eq('organization_id', organizationId)
       .in('execution_task_id', taskIds)
-      .in('state', ['submitted', 'completed', 'uncertain'])
-      .order('created_at', { ascending: true })
-      .limit(1);
+      .order('created_at', { ascending: true });
     if (requests.error) throw unreadable('engine requests');
-    const since = ((requests.data ?? []) as unknown as Array<Record<string, unknown>>)[0]?.created_at;
+    // A settled `failed` can still hold a broadcast that went out (an interrupted submission),
+    // so a request that names one counts. One that never left the building does not.
+    const since = ((requests.data ?? []) as unknown as Array<Record<string, unknown>>)
+      .find((r) => REACHED_OUT_STATES.includes(String(r.state)) || r.external_ref != null)?.created_at;
     if (since == null) return null;
 
     const person = await ownedDbTable('unified_persons')

@@ -82,15 +82,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // A run that ended must not leave a task someone can still approve and send. Withdrawn
+    // first, so a failure leaves the run open; again after, for anything created meanwhile.
+    const ending = (TERMINAL_LIFECYCLE_STATES as readonly string[]).includes(lifecycleState);
+    if (ending) await withdrawUnsentTasks(companyId, instanceId);
     const updated = await setExecutionInstanceState({
       organizationId: companyId,                   // the VERIFIED tenant
       instanceId,
       lifecycleState: lifecycleState as LifecycleState,
     });
-    // A run that ended must not leave a task someone can still approve and send.
-    if (updated && (TERMINAL_LIFECYCLE_STATES as readonly string[]).includes(updated.lifecycleState)) {
-      await withdrawUnsentTasks(companyId, updated.id);
-    }
+    if (updated && ending) await withdrawUnsentTasks(companyId, updated.id);
     if (!updated) return res.status(404).json({ error: 'no such execution instance' });
     return res.status(200).json({ instance: updated });
   } catch (e) {

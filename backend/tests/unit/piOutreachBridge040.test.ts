@@ -486,7 +486,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
       .toBe('652e20fb2f6425e2');
     expect(sha('backend/services/workflowExecution/stepProgressionStore.ts'))
       .toBe('d70eaf7eed626960');
-    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('3ffd3867a8fe1764');
+    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('5fe8d426d8b7db66');
   });
 
   it('033 artefacts are byte-identical', () => {
@@ -495,7 +495,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('268a6e677ba31a82');
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('d9917fcd985eea4f');
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');
   });

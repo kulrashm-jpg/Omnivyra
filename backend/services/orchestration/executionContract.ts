@@ -59,15 +59,15 @@ export interface NormalizedExecutionResult {
 
 const GATE_REFUSALS = new Set([
   'global_kill_switch', 'tenant_not_enabled', 'tenant_kill_switch', 'channel_not_enabled',
-  'blocked_governance', 'blocked_prior_attempt', 'tenant_scope_violation',
+  'blocked_governance', 'blocked_send_control', 'cancel_requested', 'tenant_scope_violation',
 ]);
 const APPROVAL_OUTCOMES = new Set(['approval_required', 'not_approved', 'approval_unproven']);
 const NOT_CONFIGURED = new Set(['no_template', 'target_binding_unavailable', 'no_bound_action', 'person_identity_unbound', 'no_permission_source']);
 const UNSUPPORTED = new Set(['unsupported', 'unsupported_action', 'unsupported_channel']);
-const MAY_HAVE_ACTED = new Set(['uncertain', 'timeout', 'submission_interrupted']);
+const MAY_HAVE_ACTED = new Set(['uncertain', 'send_uncertain', 'timeout', 'submission_interrupted', 'blocked_prior_attempt']);
 const PROVIDER_REJECTED = new Set(['failed', 'rejected', 'submit_failed', 'provider_refused_prior_attempt']);
 const AWAITING = new Set(['awaiting_approval', 'pending']);
-const IN_FLIGHT = new Set(['dispatching', 'submitting', 'submitted', 'dispatched']);
+const IN_FLIGHT = new Set(['dispatching', 'submitting', 'submitted', 'dispatched', 'sending', 'executing', 'acknowledged', 'skipped_already_dispatched']);
 const SCHEDULED = new Set(['queued', 'scheduled']);
 
 function normalizeOutcome(r: EngineResult): Pick<NormalizedExecutionResult, 'state' | 'certainty' | 'errorClass' | 'retryability'> {

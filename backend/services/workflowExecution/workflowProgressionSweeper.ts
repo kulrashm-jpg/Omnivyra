@@ -11,16 +11,18 @@
  *   1. reads the individual's facts (individualIntelligence.ts — canonical sources);
  *   2. ends the journey if the person responded or PI closed the prospect
  *      (journeyResponses.ts) — no further step, and any unsent WS-3 task is cancelled;
- *   3. asks the central gate (journeyGovernance.ts) on a contact channel — a tenant or
+ *   3. skips a step whose choice group already acted;
+ *   4. asks the central gate (journeyGovernance.ts) on a contact channel — a tenant or
  *      platform control holds the step, whichever engine would have served it;
- *   4. applies the step's choice group, IMPLICIT channel permission and authored `when`
- *      conditions — if they do not hold, the step is SKIPPED: "no suitable
- *      action for this person" is a recorded decision, and the journey continues;
- *   5. applies the version's frequency policy and execution window — too recent or
+ *   5. applies IMPLICIT channel permission and authored `when` conditions — if they do
+ *      not hold, the step is SKIPPED and its unsent task withdrawn: "no suitable action
+ *      for this person" is a recorded decision, and the journey continues. Unless an
+ *      engine already holds the action: then its own record decides;
+ *   6. applies the version's frequency policy and execution window — too recent or
  *      out of hours, the step WAITS (it is retried by a later sweep);
- *   6. hands the step to the channel's engine adapter (engineAdapters.ts), which
+ *   7. hands the step to the channel's engine adapter (engineAdapters.ts), which
  *      asks the EXISTING engine to act; the engine's own gates stay authoritative;
- *   7. settles the step from the engine's disposition: `completed` or `skipped`
+ *   8. settles the step from the engine's disposition: `completed` or `skipped`
  *      advance the journey; `wait` and `needs_human` leave it ready.
  *
  * Every decision is then recorded durably (journeyDecisionLog.ts) and the tenant's
@@ -65,7 +67,7 @@ import {
 import { assessJourneyExit, durableJourneyResponsePort, type JourneyResponsePort } from '../orchestration/journeyResponses';
 import { recordJourneyDecisions, type JourneyDecisionInput } from '../orchestration/journeyDecisionLog';
 import { feedRecentOutcomesToLifecycle, feedWhatsAppReplyToLifecycle, type LifecycleFeedbackReport } from '../orchestration/journeyFeedback';
-import { exitJourney, withdrawUnsentTasks } from '../orchestration/journeyExit';
+import { exitJourney, withdrawStepAction, withdrawUnsentTasks } from '../orchestration/journeyExit';
 import { channelRefusal } from '../orchestration/journeyGovernance';
 import { COMMUNITY_CAPABILITIES } from '../orchestration/engineCapabilities';
 import { ensureProspectLifecycleOpen } from '../prospectLifecycle/lifecycleWriter';
@@ -344,6 +346,8 @@ export async function advanceAndDispatchWorkflowExecution(
         const planSteps = await listProgressionSteps(organizationId, plan.id);
         const blocking = planSteps.find((s) => (BLOCKING_STEP_STATES as readonly string[]).includes(s.state));
         if (blocking !== undefined) {
+          // Withdraw first: a terminal run is not swept again, so a failure must leave it open.
+          await withdrawUnsentTasks(organizationId, executionInstanceId);
           await setExecutionInstanceState({ organizationId, instanceId: executionInstanceId, lifecycleState: 'failed' });
           await withdrawUnsentTasks(organizationId, executionInstanceId);
           counters.journeys_exited += 1;
@@ -449,17 +453,15 @@ export async function advanceAndDispatchWorkflowExecution(
         }
       }
 
-      // ── 4. Tenant and platform controls: held, whichever engine serves this. ──
-      if (!NON_CONTACT_CHANNELS.includes(channel)) {
-        const refusal = await (options.deps?.channelGate ?? channelRefusal)(organizationId, channel);
-        if (refusal !== null) {
-          counters.tasks_waiting += 1;
-          decide({ engine: adapter.engine, decision: 'waiting', outcome: refusal, reasons: [`${channel} is not available: ${refusal}`] });
-          continue;
-        }
-      }
+      const heldHours = ready.readyAt === null ? null : hoursBetween(ready.readyAt, now);
+      const heldTooLong = heldHours !== null && heldHours >= STUCK_AFTER_HOURS;
 
-      // ── 5. Choice group, implicit permission, authored conditions → skip when unmet. ──
+      // Once an engine holds the action, conditions no longer decide this step: it goes to
+      // the engine, whose own record answers. Skipping would let the next candidate contact
+      // the same person a second time.
+      let engineHolds = false;
+
+      // ── 4. An earlier step in this choice group acted → this one has no decision left. ──
       if (typeof step?.choice_group === 'string') {
         const group = step.choice_group;
         const groupKeys = (Array.isArray(definition?.steps) ? definition!.steps : []).filter((s) => s.choice_group === group).map((s) => s.key);
@@ -467,11 +469,31 @@ export async function advanceAndDispatchWorkflowExecution(
           .filter((s) => s.stepOrder < ready.stepOrder && groupKeys.includes(s.stepKey));
         const chosen = earlier.find((s) => s.state === 'completed');
         if (chosen !== undefined) {
-          await settleStep(organizationId, ready.id, 'skipped', counters, issues);
-          decide({ engine: adapter.engine, decision: 'skipped', outcome: 'branch_not_taken', reasons: [`choice group ${group} already acted through ${chosen.stepKey}`] });
+          engineHolds = (await withdrawStepAction(organizationId, executionInstanceId, task.id)) === 'engine_holds';
+          if (!engineHolds) {
+            await settleStep(organizationId, ready.id, 'skipped', counters, issues);
+            decide({ engine: adapter.engine, decision: 'skipped', outcome: 'branch_not_taken', reasons: [`choice group ${group} already acted through ${chosen.stepKey}`] });
+            continue;
+          }
+        }
+      }
+
+      // ── 5. Tenant and platform controls: held, whichever engine serves this. ──
+      if (!NON_CONTACT_CHANNELS.includes(channel)) {
+        const refusal = await (options.deps?.channelGate ?? channelRefusal)(organizationId, channel);
+        if (refusal !== null) {
+          if (heldTooLong) {
+            counters.tasks_needing_human += 1;
+            decide({ engine: adapter.engine, decision: 'needs_human', outcome: 'stuck_waiting', reasons: [`${refusal} for ${heldHours.toFixed(0)}h`] });
+          } else {
+            counters.tasks_waiting += 1;
+            decide({ engine: adapter.engine, decision: 'waiting', outcome: refusal, reasons: [`${channel} is not available: ${refusal}`] });
+          }
           continue;
         }
       }
+
+      // ── 6. Implicit permission and authored conditions → skip when unmet. ──
       const permission = channelPermissionFact(channel);
       // A new contact channel with nothing that can say no would contact everyone. An engine
       // serving it is held until its permission source exists; the step stays with a person.
@@ -486,14 +508,17 @@ export async function advanceAndDispatchWorkflowExecution(
       ];
       const verdict = evaluateConditions(required, facts.facts);
       if (!verdict.holds) {
-        await settleStep(organizationId, ready.id, 'skipped', counters, issues);
-        decide({ engine: adapter.engine, decision: 'skipped', outcome: null, reasons: [...verdict.unmet, ...facts.gaps.map((g) => `gap: ${g}`)] });
-        continue;
+        engineHolds = (await withdrawStepAction(organizationId, executionInstanceId, task.id)) === 'engine_holds';
+        if (!engineHolds) {
+          await settleStep(organizationId, ready.id, 'skipped', counters, issues);
+          decide({ engine: adapter.engine, decision: 'skipped', outcome: null, reasons: [...verdict.unmet, ...facts.gaps.map((g) => `gap: ${g}`)] });
+          continue;
+        }
       }
 
-      // ── 6. Frequency policy and execution window. ─────────────────────────
+      // ── 7. Frequency policy and execution window. Neither delays reading an engine's record. ──
       const gap = definition?.policy?.min_hours_between_actions;
-      if (typeof gap === 'number' && gap > 0 && !NON_CONTACT_CHANNELS.includes(channel)) {
+      if (!engineHolds && typeof gap === 'number' && gap > 0 && !NON_CONTACT_CHANNELS.includes(channel)) {
         const last = await lastCompletedActionAtForSubject(organizationId, subject.kind, subject.id);
         const since = last === null ? null : hoursBetween(last, now);
         if (since !== null && since < gap) {
@@ -504,13 +529,13 @@ export async function advanceAndDispatchWorkflowExecution(
       }
 
       const window = definition?.policy?.execution_window;
-      if (window !== undefined && !NON_CONTACT_CHANNELS.includes(channel) && !isWithinExecutionWindow(window, now, facts.timezone ?? null)) {
+      if (!engineHolds && window !== undefined && !NON_CONTACT_CHANNELS.includes(channel) && !isWithinExecutionWindow(window, now, facts.timezone ?? null)) {
         counters.tasks_deferred_frequency += 1;
         decide({ engine: adapter.engine, decision: 'deferred', outcome: 'outside_execution_window', reasons: [`outside ${window.start_hour}:00-${window.end_hour}:00`] });
         continue;
       }
 
-      // ── 7. The engine acts; its disposition settles the step. ─────────────
+      // ── 8. The engine acts; its disposition settles the step. ─────────────
       let r: EngineResult;
       try {
         r = await adapter.execute({
@@ -540,10 +565,9 @@ export async function advanceAndDispatchWorkflowExecution(
           decide({ engine: r.engine, decision: 'needs_human', outcome: r.outcome, reasons });
           break;
         default: {
-          const waited = ready.readyAt === null ? null : hoursBetween(ready.readyAt, now);
-          if (waited !== null && waited >= STUCK_AFTER_HOURS) {
+          if (heldTooLong) {
             counters.tasks_needing_human += 1;
-            decide({ engine: r.engine, decision: 'needs_human', outcome: 'stuck_waiting', reasons: [`${r.outcome} for ${waited.toFixed(0)}h`, ...reasons] });
+            decide({ engine: r.engine, decision: 'needs_human', outcome: 'stuck_waiting', reasons: [`${r.outcome} for ${heldHours.toFixed(0)}h`, ...reasons] });
             break;
           }
           counters.tasks_waiting += 1;

@@ -59,6 +59,7 @@
  */
 
 import { COMMUNITY_CAPABILITIES } from './engineCapabilities';
+import { durableIntelligencePort } from './individualIntelligence';
 import { ownedDbTable } from '../../db/writeOwner';
 import { normalizePlatform } from '../../constants/platforms';
 import {
@@ -453,6 +454,8 @@ export interface CommunityAdapterDeps {
   /** The engine's own claim: `approved → executing`, tenant-filtered. True when this call moved it. */
   claimAction(organizationId: string, actionId: string, now: string): Promise<boolean>;
   preflight(row: CommunityActionRow): Promise<PreflightVerdict>;
+  /** Contact governance for this person right now. null = unreadable. */
+  channelPermitted(organizationId: string, personId: string, now: string): Promise<boolean | null>;
   executeAction: typeof executeAction;
 }
 
@@ -517,6 +520,8 @@ export const defaultCommunityDeps: CommunityAdapterDeps = {
   },
 
   preflight: (row) => enginePreflight(row),
+  channelPermitted: (organizationId, personId, now) =>
+    durableIntelligencePort.channelPermission(organizationId, personId, 'community', null, now),
   executeAction,
 };
 
@@ -767,6 +772,22 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
         return result('gate_unreadable', 'wait', 'the engine\'s gates could not be evaluated', row.id);
       }
       if (gate.allowed === false) return result(gate.code, gate.disposition, gate.reason, row.id);
+
+      // ── A person who has opted out is not acted on, whatever the sweeper read ──
+      // The engine holds no contact governance of its own, so this is the check at
+      // the moment of acting. Without a person no record could match, so "allowed"
+      // would mean nothing. Unreadable decides nothing and nothing is claimed.
+      if (ctx.personId === null) return result('person_unresolved', 'needs_human', 'no canonical person to check permission for', row.id);
+      let permitted: boolean | null;
+      try {
+        permitted = await deps.channelPermitted(ctx.organizationId, ctx.personId, nowIso);
+      } catch {
+        permitted = null;
+      }
+      if (permitted === null) return result('permission_unreadable', 'wait', 'contact governance could not be read', row.id);
+      if (!permitted) {
+        return settle(ctx, 'requested', 'skipped', result('blocked_governance', 'skipped', 'contact governance refused this person', row.id), row.id);
+      }
 
       // ── Claim: exactly one invocation proceeds ─────────────────────────────
       const claimed = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'submitting', external_ref: row.id });

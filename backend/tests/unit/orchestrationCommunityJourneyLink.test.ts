@@ -160,6 +160,7 @@ function db() {
       return true;
     },
     preflight: async () => ({ allowed: true }),
+    channelPermitted: async () => true,
     executeAction: (async (a: { id: string }) => {
       await tick();
       external += 1;

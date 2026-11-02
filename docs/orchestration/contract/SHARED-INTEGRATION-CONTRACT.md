@@ -53,7 +53,9 @@ Owned by the governance programme (session virality-b6; `backend/services/actorE
 
 **Not yet uniform.** Per the owner of that work, three implementations exist: only `problemObservationRepository` imports the shared check, `lifecycleWriter` matches it inline, and `relationshipAttributeIngestion` differs on a malformed actor.
 
-Orchestration's own lifecycle calls (`feedWhatsAppReplyToLifecycle`, `ensureProspectLifecycleOpen`) use `derived` with a null actor, compatible with rule 5 by code reading. Human-origin outcomes reach PI's writer through `outcomeInterpreter`. Not yet run against that branch.
+Orchestration's own lifecycle calls (`feedWhatsAppReplyToLifecycle`, `ensureProspectLifecycleOpen`) use `derived` with a null actor, compatible with rule 5 by code reading. Human-origin outcomes reach PI's writer through `outcomeLifecycleProducer`, with the actor from the outcome's `metadata.recordedByUserId`, which `pages/api/outreach/outcomes.ts` sets from `tenant.userId`. The actor must be `public.users.id`, not the auth uid. `authResolver.ts` returns `public.users.id` as `id`; the step through `requireTenantAccess` was not traced.
+
+**Which tree a test ran on matters.** `origin/main` has no actor validation, so any uuid passes. The governance branch refuses with `actor_not_a_uuid`, `actor_not_found` or `actor_unverifiable`. Orchestration's journey suites ran on the first, so they do not prove the second. Rules 6 and 7 are enforced by the lifecycle writer's branch, not yet by the relationship attribute branch. That work is uncommitted pending owner approval.
 
 **Enablement gate:** orchestration stays off until the writer validation and the FK removal land together, writer first, and the rule is ratified.
 

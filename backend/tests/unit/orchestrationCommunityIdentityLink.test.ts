@@ -482,6 +482,7 @@ function adapterWorld(linkPersonId: string | null = PROVEN_PERSON) {
       return true;
     },
     preflight: async () => ({ allowed: true }),
+    channelPermitted: async () => true,
     executeAction: (async () => { external += 1; action.status = 'executed'; return { ok: true, status: 'executed', execution_mode: 'api' }; }) as unknown as CommunityAdapterDeps['executeAction'],
   };
   return { idw, action, deps, externalActions: () => external, request: () => request };

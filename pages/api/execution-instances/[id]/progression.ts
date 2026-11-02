@@ -49,19 +49,23 @@ import { enforceCompanyAccess } from '../../../../backend/services/userContextSe
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { PROSPECT_ICP_MANAGE } from '../../../../shared/contracts/security';
 import { getExecutionInstance } from '../../../../backend/services/executionInstances/executionInstanceStore';
-import { getPlanForInstance } from '../../../../backend/services/executionPlans/executionPlanStore';
+import { getPlanForInstance, listInstanceTasks } from '../../../../backend/services/executionPlans/executionPlanStore';
 import {
   advanceExecutionRun, transitionPlanStep,
   listProgressionSteps, getReadyStep, StepProgressionError,
   STEP_STATES, type StepState,
 } from '../../../../backend/services/workflowExecution/stepProgressionStore';
 import { listJourneyDecisions, recordJourneyDecisions, type JourneyDecisionInput } from '../../../../backend/services/orchestration/journeyDecisionLog';
-import { exitJourney } from '../../../../backend/services/orchestration/journeyExit';
+import { exitJourney, withdrawStepAction } from '../../../../backend/services/orchestration/journeyExit';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 const METHODS = ['GET', 'POST', 'PATCH'];
 const ACTIONS = ['advance', 'cancel'];
+
+const PERSON_DECISIONS: Readonly<Record<string, JourneyDecisionInput['decision']>> = {
+  completed: 'executed', skipped: 'skipped', running: 'waiting',
+};
 
 const statusFor = (code: string): number => {
   if (code === 'instance_terminal' || code === 'already_settled') return 409;
@@ -138,6 +142,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const plan = await getPlanForInstance(companyId, instanceId);
       const belongs = plan === null ? undefined : (await listProgressionSteps(companyId, plan.id)).find((s) => s.id === stepId);
       if (!belongs) return res.status(404).json({ error: 'no such step in this run' });
+      // Settling a step ends its unsent task, or a later approval could still send it. If an
+      // engine already holds the action the person may still settle, and is told.
+      let engineHolds = false;
+      if (state !== 'running') {
+        const task = (await listInstanceTasks(companyId, instanceId)).find((t) => t.planStepId === stepId);
+        engineHolds = task !== undefined && (await withdrawStepAction(companyId, instanceId, task.id)) === 'engine_holds';
+      }
       const step = await transitionPlanStep({
         organizationId: companyId,            // the VERIFIED tenant, never the body's
         stepId,
@@ -146,9 +157,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!step) return res.status(409).json({ error: 'that step moved concurrently' });
       const settled = await recordPersonDecision(companyId, guard.principal.userId, {
         executionInstanceId: instanceId, planStepId: step.id, stepKey: step.stepKey, channel: step.channel, engine: null,
-        decision: step.state === 'completed' ? 'executed' : 'skipped', outcome: `human_${step.state}`, reasons: [],
+        decision: PERSON_DECISIONS[step.state] ?? 'needs_human', outcome: `human_${step.state}`, reasons: [],
       });
-      return res.status(200).json({ step, auditFailed: settled });
+      return res.status(200).json({ step, auditFailed: settled, engineHolds });
     }
 
     const action = str(body.action);

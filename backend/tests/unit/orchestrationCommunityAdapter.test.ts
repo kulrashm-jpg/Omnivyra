@@ -92,6 +92,7 @@ function world(initial: CommunityActionRow | null = approvedAction()) {
     usageAllowed: true,
   };
   let preflightThrows = false;
+  let permission: boolean | null | 'throws' = true;
 
   const preflightDeps: PreflightDeps = {
     getPolicy: async () => ({ execution_enabled: knobs.executionEnabled, auto_rules_enabled: true, require_human_approval: false, updated_at: null, updated_by: null }),
@@ -140,6 +141,10 @@ function world(initial: CommunityActionRow | null = approvedAction()) {
       if (preflightThrows) throw new Error('policy table unreadable');
       return enginePreflight(row, preflightDeps);
     },
+    channelPermitted: async () => {
+      if (permission === 'throws') throw new Error('governance store down');
+      return permission;
+    },
     executeAction: (async (action: { id: string }, approved: boolean, options: unknown) => {
       calls.push({ action, approved, options });
       await tick();
@@ -164,6 +169,7 @@ function world(initial: CommunityActionRow | null = approvedAction()) {
     externalActions: () => external,
     setNext: (b: EngineBehaviour) => { next = b; },
     setPreflightThrows: (v: boolean) => { preflightThrows = v; },
+    setPermission: (v: boolean | null | 'throws') => { permission = v; },
     request: () => ledger.get(`${CONTRACT_ORG}:${contractContext().executionTaskId}`),
   };
 }
@@ -232,6 +238,38 @@ describe('community adapter — supported path', () => {
     const again = await run(w);
     expect(again).toMatchObject({ outcome: 'completed', disposition: 'completed', externalRef: ACTION_ID });
     expect(w.externalActions()).toBe(1);
+  });
+
+  it('a person who opted out after the request existed is not acted on: settled skipped, nothing claimed or sent', async () => {
+    const w = world();
+    w.setPermission(null);
+    expect(await run(w)).toMatchObject({ outcome: 'permission_unreadable', disposition: 'wait' });
+    expect(w.request()!.state).toBe('requested');                // a request row now exists
+
+    w.setPermission(false);
+    expect(await run(w)).toMatchObject({ outcome: 'blocked_governance', disposition: 'skipped', externalRef: ACTION_ID });
+    expect(w.calls).toHaveLength(0);
+    expect(w.actions.get(ACTION_ID)!.status).toBe('approved');
+    expect(w.request()).toMatchObject({ state: 'skipped', external_ref: ACTION_ID });
+
+    w.setPermission(true);                                       // settled: a later allow does not revive it
+    expect(await run(w)).toMatchObject({ outcome: 'skipped', disposition: 'skipped' });
+    expect(w.calls).toHaveLength(0);
+  });
+
+  it('an unreadable governance store decides nothing: waits, nothing claimed or sent', async () => {
+    const w = world();
+    w.setPermission('throws');
+    expect(await run(w)).toMatchObject({ outcome: 'permission_unreadable', disposition: 'wait' });
+    expect(w.calls).toHaveLength(0);
+    expect(w.actions.get(ACTION_ID)!.status).toBe('approved');
+    expect(w.request()!.state).toBe('requested');
+  });
+
+  it('with no person, no permission can be evaluated: goes to a person, nothing claimed or sent', async () => {
+    const w = world();
+    expect(await run(w, ctx({ personId: null }))).toMatchObject({ outcome: 'person_unresolved', disposition: 'needs_human' });
+    expect(w.calls).toHaveLength(0);
   });
 
   it('a cancel-requested action goes to a person, not into an endless wait; nothing claimed or sent', async () => {
