@@ -508,6 +508,19 @@ export async function advanceAndDispatchWorkflowExecution(
       ];
       const verdict = evaluateConditions(required, facts.facts);
       if (!verdict.holds) {
+        // A fact missing because a read failed says nothing about the person. Skipping would
+        // lose the step to an outage, so it waits for a read that answers.
+        const unread = facts.gaps.filter((g) => g.endsWith('_unreadable'));
+        if (unread.length > 0 && verdict.unmet.some((u) => u.includes(' is unknown'))) {
+          if (heldTooLong) {
+            counters.tasks_needing_human += 1;
+            decide({ engine: adapter.engine, decision: 'needs_human', outcome: 'stuck_waiting', reasons: [`facts_unreadable for ${heldHours.toFixed(0)}h`, ...unread] });
+          } else {
+            counters.tasks_waiting += 1;
+            decide({ engine: adapter.engine, decision: 'waiting', outcome: 'facts_unreadable', reasons: unread });
+          }
+          continue;
+        }
         engineHolds = (await withdrawStepAction(organizationId, executionInstanceId, task.id)) === 'engine_holds';
         if (!engineHolds) {
           await settleStep(organizationId, ready.id, 'skipped', counters, issues);
@@ -541,6 +554,7 @@ export async function advanceAndDispatchWorkflowExecution(
         r = await adapter.execute({
           organizationId, executionInstanceId, executionTaskId: task.id, planStepId: ready.id,
           channel, subject, step, personId: facts.personId, now,
+          ...(engineHolds ? { holdOnly: true } : {}),
         });
       } catch (e) {
         counters.errors += 1;

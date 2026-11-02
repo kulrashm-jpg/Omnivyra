@@ -80,6 +80,11 @@ export interface EngineStepContext {
   readonly step: WorkflowStep | null;
   readonly personId: string | null;
   readonly now?: string;
+  /**
+   * This step's conditions no longer hold, and it reached the engine only because the engine
+   * may already hold the action. The engine reports what it holds and begins nothing new.
+   */
+  readonly holdOnly?: boolean;
 }
 
 export interface EngineResult {

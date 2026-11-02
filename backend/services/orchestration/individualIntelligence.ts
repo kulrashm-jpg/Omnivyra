@@ -44,7 +44,7 @@ export interface IndividualFactsResult {
 /** Injected seams, so the journey engine is testable without a database. */
 export interface IndividualIntelligencePort {
   resolvePerson(organizationId: string, subject: SubjectRef): Promise<{ ok: boolean; personId: string | null }>;
-  readPersonContacts(organizationId: string, personId: string): Promise<{ email: string | null; phone: string | null; timezone?: string | null } | null>;
+  readPersonContacts(organizationId: string, personId: string): Promise<{ email: string | null; phone: string | null; personTimezone?: string | null } | null>;
   readLeadIntelligence(organizationId: string, leadId: string): Promise<{ intentBand: string | null; qualificationBand: string | null; confidence: number | null } | null>;
   readProspectScore(organizationId: string, prospectId: string): Promise<{ intent: number | null; overall: number | null; confidence: number | null } | null>;
   channelPermission(organizationId: string, personId: string | null, channel: 'email' | 'whatsapp' | 'community', target: string | null, now: string): Promise<boolean | null>;

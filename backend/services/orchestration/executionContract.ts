@@ -15,7 +15,7 @@
 
 import type { EngineDisposition, EngineName, EngineResult } from './engineAdapters';
 
-export const EXECUTION_CONTRACT_VERSION = '0.1.0';
+export const EXECUTION_CONTRACT_VERSION = '0.2.0';
 
 /** Bumped when a field's meaning changes, never when an optional field is added. */
 export const JOURNEY_EVENT_VERSION = 1;

@@ -125,7 +125,9 @@ export const defaultWhatsAppDeps: WhatsAppAdapterDeps = {
       .eq('name', name)
       .order('created_at', { ascending: true })
       .limit(1);
-    if (res.error || !Array.isArray(res.data) || res.data.length === 0) return null;
+    // A failed read is not "no broadcast": that answer releases the claim and creates another.
+    if (res.error || !Array.isArray(res.data)) throw new Error('the broadcast could not be read');
+    if (res.data.length === 0) return null;
     return String((res.data[0] as Record<string, unknown>).id);
   },
 
@@ -181,7 +183,11 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
 
   /** Settle the request row (best effort; the step settlement is the authority) and report. */
   const settle = async (ctx: EngineStepContext, from: RequestState, state: RequestState, r: EngineResult): Promise<EngineResult> => {
-    await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, from, { state, detail: r.reason });
+    await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, from, {
+      state,
+      detail: r.reason,
+      ...(r.externalRef === null ? {} : { external_ref: r.externalRef }),
+    });
     return r;
   };
 
@@ -239,7 +245,12 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           const nowMs = Date.parse(ctx.now ?? new Date().toISOString());
           const age = row.updated_at ? nowMs - Date.parse(row.updated_at) : Number.POSITIVE_INFINITY;
           if (!(age >= STALE_SUBMISSION_MS)) return result('submitting', 'wait', 'another sweep is submitting this request', null);
-          const orphan = await deps.findBroadcastByName(ctx.organizationId, broadcastNameFor(ctx.executionTaskId));
+          let orphan: string | null;
+          try {
+            orphan = await deps.findBroadcastByName(ctx.organizationId, broadcastNameFor(ctx.executionTaskId));
+          } catch {
+            return result('broadcast_unreadable', 'wait', 'the broadcast could not be read', null);
+          }
           if (orphan !== null) {
             return settle(ctx, 'submitting', 'uncertain', result('submission_interrupted', 'needs_human', 'a submission was interrupted after the broadcast was created; review it before any resend', orphan));
           }
@@ -251,6 +262,10 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           break;
         default:
           return result(row.state, 'needs_human', 'unknown request state', row.external_ref);
+      }
+
+      if (ctx.holdOnly === true) {
+        return settle(ctx, 'requested', 'skipped', result('not_begun', 'skipped', 'the step no longer applies and nothing had been created', null));
       }
 
       // ── Controls and approval: nothing may be created without both ─────────

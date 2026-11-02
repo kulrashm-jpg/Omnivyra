@@ -686,6 +686,10 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
           return result(String(req.state), 'needs_human', 'unknown request state', req.external_ref);
       }
 
+      if (ctx.holdOnly === true) {
+        return settle(ctx, 'requested', 'skipped', result('not_begun', 'skipped', 'the step no longer applies and nothing had been handed to the engine', req.external_ref));
+      }
+
       // ── What to act on: only a bound, tenant-owned action ──────────────────
       let binding: BindingResult;
       try {
