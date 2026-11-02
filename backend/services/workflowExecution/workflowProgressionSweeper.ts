@@ -529,7 +529,7 @@ export async function advanceAndDispatchWorkflowExecution(
       }
 
       const window = definition?.policy?.execution_window;
-      if (!engineHolds && window !== undefined && !NON_CONTACT_CHANNELS.includes(channel) && !isWithinExecutionWindow(window, now, facts.timezone ?? null)) {
+      if (!engineHolds && window !== undefined && !NON_CONTACT_CHANNELS.includes(channel) && !isWithinExecutionWindow(window, now, facts.personTimezone ?? null)) {
         counters.tasks_deferred_frequency += 1;
         decide({ engine: adapter.engine, decision: 'deferred', outcome: 'outside_execution_window', reasons: [`outside ${window.start_hour}:00-${window.end_hour}:00`] });
         continue;

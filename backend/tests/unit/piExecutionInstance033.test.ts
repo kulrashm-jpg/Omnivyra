@@ -694,9 +694,10 @@ describe('033 — the routes', () => {
     // a NEW flat collection route still fails this, whatever it is named.
     // Sub-resources of the bound run, each added by a later ratified workstream:
     // `plan.ts` (036), `progression.ts` (037), `outreach-bridge.ts` (040),
-    // `community-link.ts` (community journey link, 2026-10-28 — path-scoped to the run).
+    // `community-link.ts` (community journey link, 2026-10-28 — path-scoped to the run),
+    // `events.ts` (execution contract v0.1, read-only).
     expect(fs.readdirSync(path.join(dir, '[id]')).sort())
-      .toEqual(['community-link.ts', 'outreach-bridge.ts', 'plan.ts', 'progression.ts']);
+      .toEqual(['community-link.ts', 'events.ts', 'outreach-bridge.ts', 'plan.ts', 'progression.ts']);
   });
 
   it('the method sets are exactly what the substrate needs, and NO DELETE', () => {

@@ -51,8 +51,8 @@ export const JOURNEY_FACT_TYPES = {
   prospect_score_overall: 'number',       // latest prospect_score_evaluations.score_overall
   prospect_score_confidence: 'number',    // latest prospect_score_evaluations.confidence
   prospect_lifecycle_state: 'string',     // latest prospect_lifecycle_transitions.state (absent: no ledger yet)
-  has_email: 'boolean',                   // unified_persons.primary_email present
-  has_phone: 'boolean',                   // unified_persons.primary_phone present
+  has_email: 'boolean',                   // the person's primary email is present
+  has_phone: 'boolean',                   // the person's primary phone is present
   email_permitted: 'boolean',             // mayContact(email) allowed
   whatsapp_permitted: 'boolean',          // mayContact(whatsapp) allowed
   community_permitted: 'boolean',         // mayContact(community) allowed

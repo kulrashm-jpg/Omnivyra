@@ -38,7 +38,7 @@ export interface IndividualFactsResult {
   /** True only when PI's lifecycle was read and this prospect has no ledger yet. */
   readonly prospectLedgerAbsent: boolean;
   /** The person's own timezone, when known. Not a journey fact: it only places a window. */
-  readonly timezone?: string | null;
+  readonly personTimezone?: string | null;
 }
 
 /** Injected seams, so the journey engine is testable without a database. */
@@ -67,8 +67,8 @@ export const durableIntelligencePort: IndividualIntelligencePort = {
     if (res.error) return null;
     const row = (res.data ?? null) as Record<string, unknown> | null;
     return row === null
-      ? { email: null, phone: null, timezone: null }
-      : { email: text(row.primary_email), phone: text(row.primary_phone), timezone: text(row.timezone) };
+      ? { email: null, phone: null, personTimezone: null }
+      : { email: text(row.primary_email), phone: text(row.primary_phone), personTimezone: text(row.timezone) };
   },
 
   async readLeadIntelligence(organizationId, leadId) {
@@ -143,7 +143,7 @@ export async function loadIndividualFacts(
 
   let email: string | null = null;
   let phone: string | null = null;
-  let timezone: string | null = null;
+  let personTimezone: string | null = null;
   if (personId !== null) {
     const contacts = await port.readPersonContacts(organizationId, personId).catch(() => null);
     if (contacts === null) {
@@ -151,7 +151,7 @@ export async function loadIndividualFacts(
     } else {
       email = contacts.email;
       phone = contacts.phone;
-      timezone = contacts.timezone ?? null;
+      personTimezone = contacts.personTimezone ?? null;
       facts.has_email = email !== null;
       facts.has_phone = phone !== null;
     }
@@ -209,5 +209,5 @@ export async function loadIndividualFacts(
     }
   }
 
-  return { facts, personId, gaps, prospectLedgerAbsent, timezone };
+  return { facts, personId, gaps, prospectLedgerAbsent, personTimezone };
 }
