@@ -81,15 +81,15 @@ _Generated 2026-11-02 from docs/programme/milestones.json. Percentages count acc
 | --- | --- | --- | --- | --- | --- | --- |
 | Containment, baseline and release foundations (Stages 0-2) | 56 | 0% | 0% | 23% | 4% | 73% |
 | Shared-foundation contracts | 23 | 0% | 0% | 9% | 48% | 43% |
-| Track 1 - Prospect Intelligence | 17 | 0% | 35% | 0% | 6% | 59% |
+| Track 1 - Prospect Intelligence | 17 | 0% | 35% | 6% | 6% | 53% |
 | Track 2 - AI Intelligence and Orchestration | 11 | 0% | 0% | 0% | 18% | 82% |
-| Track 3 - Outreach Engines | 13 | 0% | 0% | 0% | 15% | 85% |
+| Track 3 - Outreach Engines | 13 | 0% | 0% | 8% | 15% | 77% |
 | Integrated vertical slice (AS-1..AS-9) | 10 | 0% | 0% | 0% | 0% | 100% |
-| **Overall programme** | 130 | 0% | 5% | 12% | 14% | 70% |
+| **Overall programme** | 130 | 0% | 5% | 13% | 14% | 68% |
 
 ### Milestones by status
 
-Not Started: 20 · In Progress: 1 · Implemented: 15 · T1 Verified: 7 · T2 Verified: 4 · Accepted: 0 · Blocked: 8 · Deferred: 3
+Not Started: 18 · In Progress: 1 · Implemented: 15 · T1 Verified: 9 · T2 Verified: 4 · Accepted: 0 · Blocked: 8 · Deferred: 3
 
 ### Milestone register
 
@@ -134,7 +134,7 @@ Not Started: 20 · In Progress: 1 · Implemented: 15 · T1 Verified: 7 · T2 Ver
 | PI-05 | Persisted score evaluations (one canonical scorer) | Implemented | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | 13 competing scorers | AS-2 T2; retire rival writers | None |
 | PI-06 | Lifecycle transitions from outcomes via handoff.subject_id | Not Started | unassigned | after REL-07 | — | n/a | T2 | Integration branch not landed | Prepare on integration base | GD-2 |
 | PI-07 | Consent / lawful-basis ledger | Blocked | unassigned | after counsel K-1 | — | n/a | T2 | Counsel K-1 | Schema draft | Founder + counsel |
-| PI-08 | Single suppression store (contact_governance_records) | Not Started | unassigned | 2026-11-03..2026-11-12 | — | on window | T2 | — | WS-3 gate reads canonical; stop outreach_suppressions reads; retire suppression_entries dual-write plan | Push/merge |
+| PI-08 | Single suppression store (contact_governance_records) | T1 Verified | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | Owner decision: global legacy row now blocks WS-3 for every tenant (reverses an earlier code comment); removing outreach_suppressions reads needs P10 | Owner review of choice; P10 count of outreach_suppressions | Owner decision + push/merge |
 | PI-09 | Prospect-keyed port for downstream consumers (PiProspectPort v1) | Not Started | unassigned | after REL-07 | — | n/a | T2 | Integration branch not landed | Define port; migrate orchestration reads | None |
 | PI-10 | Ranked prospect list 6a6c3d9b | Blocked | unassigned | after REL-07 | — | n/a | T2 | Lands after integration branch | Cherry-pick after merge | Push/merge |
 | **AIO** | **Track 2 - AI Intelligence and Orchestration** | | | | | | | | | |
@@ -148,7 +148,7 @@ Not Started: 20 · In Progress: 1 · Implemented: 15 · T1 Verified: 7 · T2 Ver
 | **OUT** | **Track 3 - Outreach Engines** | | | | | | | | | |
 | OUT-01 | Channel-neutral contract and EngineAdapter | Implemented | unassigned | with AIO-01 | pre | n/a | T2 | AIO-01 | Lands with integration branch | Merge |
 | OUT-02 | Email engine through the adapter (real provider) | Implemented | unassigned | after AIO-01 | pre | n/a | T3 | Provider declared mocked; SES config unknown | SES config (founder) + tags | Founder (SES) |
-| OUT-03 | Mandatory egress governance (GD-3) | Not Started | unassigned | 2026-11-03..2026-11-12 | — | on window | T2 | GD-3 before merge (local build can start) | Gate inside send-transactional-email + WS-3 transport | GD-3 |
+| OUT-03 | Mandatory egress governance (GD-3) | T1 Verified | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | K-6 template classification (counsel); GD-3; edge gate untested against a real deployment (SUPABASE_URL / SUPABASE_SECRET_KEYS assumed present); DM/extension/RPA/social paths not gated (OUT-09) | Owner: K-6 options A/B/C; GD-3 | GD-3 + push/merge + edge-function deploy |
 | OUT-04 | Per-send credit metering | Blocked | unassigned | after K-8 | — | n/a | T2 | K-8 decision | Adapter-level hold/confirm/release | K-8 |
 | OUT-05 | Delivery evidence with SES tags | Not Started | unassigned | after AIO-01 | — | n/a | T2 | AIO-01 | Tags tenant/task/correlation | None |
 | OUT-06 | Inbound reply ingestion | Not Started | unassigned | after OUT-05 | — | n/a | T2 | SES inbound not configured | In-Reply-To matching | Founder (SES inbound) |
@@ -173,6 +173,6 @@ Not Started: 20 · In Progress: 1 · Implemented: 15 · T1 Verified: 7 · T2 Ver
 
 ### Effort log
 
-Recorded: 0.2 h in 1 entries (start/end captured). Inferred: 2.4 h in 4 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
+Recorded: 0.2 h in 1 entries (start/end captured). Inferred: 3.0 h in 5 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
 
 <!-- GENERATED:END -->

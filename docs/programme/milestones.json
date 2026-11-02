@@ -1300,29 +1300,29 @@
       "group": "PI",
       "stage": 3,
       "title": "Single suppression store (contact_governance_records)",
-      "owner": "unassigned",
+      "owner": "Claude Code agent",
       "deps": [
         "SF-04"
       ],
       "planned_start": "2026-11-03",
       "target_window": "2026-11-03..2026-11-12",
-      "actual_start": null,
+      "actual_start": "2026-11-02",
       "actual_done": null,
-      "status": "Not Started",
+      "status": "T1 Verified",
       "tier": "T2",
-      "blockers": null,
-      "next_action": "WS-3 gate reads canonical; stop outreach_suppressions reads; retire suppression_entries dual-write plan",
-      "approval_required": "Push/merge",
+      "blockers": "Owner decision: global legacy row now blocks WS-3 for every tenant (reverses an earlier code comment); removing outreach_suppressions reads needs P10",
+      "next_action": "Owner review of choice; P10 count of outreach_suppressions",
+      "approval_required": "Owner decision + push/merge",
       "criteria": [
         {
           "id": "a",
           "text": "Global suppression blocks a WS-3 send (test)",
-          "state": "open",
-          "evidence": null
+          "state": "t1",
+          "evidence": "commit 013b4e8a (gov/contact-eligibility-egress); pi08SingleSuppressionStore 18/18; re-run here: 6 suites 194/194"
         },
         {
           "id": "b",
-          "text": "No reader of outreach_suppressions",
+          "text": "No reader of outreach_suppressions (deliberately NOT done: kept as an extra fail-closed block until P10 proves the table empty)",
           "state": "open",
           "evidence": null
         }
@@ -1668,29 +1668,29 @@
       "group": "OUT",
       "stage": 5,
       "title": "Mandatory egress governance (GD-3)",
-      "owner": "unassigned",
+      "owner": "Claude Code agent",
       "deps": [
         "SF-04"
       ],
       "planned_start": "2026-11-03",
       "target_window": "2026-11-03..2026-11-12",
-      "actual_start": null,
+      "actual_start": "2026-11-02",
       "actual_done": null,
-      "status": "Not Started",
+      "status": "T1 Verified",
       "tier": "T2",
-      "blockers": "GD-3 before merge (local build can start)",
-      "next_action": "Gate inside send-transactional-email + WS-3 transport",
-      "approval_required": "GD-3",
+      "blockers": "K-6 template classification (counsel); GD-3; edge gate untested against a real deployment (SUPABASE_URL / SUPABASE_SECRET_KEYS assumed present); DM/extension/RPA/social paths not gated (OUT-09)",
+      "next_action": "Owner: K-6 options A/B/C; GD-3",
+      "approval_required": "GD-3 + push/merge + edge-function deploy",
       "criteria": [
         {
           "id": "a",
           "text": "Direct edge-function call for a suppressed recipient refused",
-          "state": "open",
-          "evidence": null
+          "state": "t1",
+          "evidence": "commit e6338166; out03EgressGovernanceParity 56/56 (23 shared fixtures mayContact = edge evaluator; real index.ts handler run with stubbed SES: 403, SES not called)"
         },
         {
           "id": "b",
-          "text": "Every engine path calls the gate",
+          "text": "Every engine path calls the gate (WS-3 send-time re-check done in e6338166 out03SendTimeRecheck 17/17; DM/extension/RPA/social/WhatsApp NOT yet)",
           "state": "open",
           "evidence": null
         }
