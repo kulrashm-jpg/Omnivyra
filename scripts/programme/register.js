@@ -41,9 +41,11 @@ function validate(reg) {
     if (m.status === 'Accepted' && (m.criteria || []).some((c) => c.state !== 'accepted' || !c.evidence)) {
       errors.push(`${m.id}: Accepted requires every criterion accepted with evidence`);
     }
+    // A milestone may claim a level only when EVERY criterion has reached it;
+    // otherwise it is In Progress (a partly verified milestone is not verified).
     const need = STATUS_MIN[m.status];
-    if (need !== undefined && !(m.criteria || []).some((c) => RANK[c.state] >= need)) {
-      errors.push(`${m.id}: status '${m.status}' but no criterion has reached that level`);
+    if (need !== undefined && !(m.criteria || []).every((c) => RANK[c.state] >= need)) {
+      errors.push(`${m.id}: status '${m.status}' but not every criterion has reached that level`);
     }
     if (m.status === 'Blocked' && !m.blockers) errors.push(`${m.id}: Blocked without a named blocker`);
     if (m.status !== 'Not Started' && m.status !== 'Deferred' && m.status !== 'Blocked' && !m.actual_start) {

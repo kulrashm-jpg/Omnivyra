@@ -81,15 +81,15 @@ _Generated 2026-11-02 from docs/programme/milestones.json. Percentages count acc
 | --- | --- | --- | --- | --- | --- | --- |
 | Containment, baseline and release foundations (Stages 0-2) | 56 | 0% | 0% | 23% | 4% | 73% |
 | Shared-foundation contracts | 23 | 0% | 0% | 9% | 48% | 43% |
-| Track 1 - Prospect Intelligence | 17 | 0% | 47% | 6% | 6% | 41% |
+| Track 1 - Prospect Intelligence | 17 | 0% | 47% | 0% | 12% | 41% |
 | Track 2 - AI Intelligence and Orchestration | 11 | 0% | 0% | 0% | 18% | 82% |
 | Track 3 - Outreach Engines | 13 | 0% | 0% | 8% | 15% | 77% |
 | Integrated vertical slice (AS-1..AS-9) | 10 | 0% | 20% | 0% | 0% | 80% |
-| **Overall programme** | 130 | 0% | 8% | 13% | 14% | 65% |
+| **Overall programme** | 130 | 0% | 8% | 12% | 15% | 65% |
 
 ### Milestones by status
 
-Not Started: 17 · In Progress: 1 · Implemented: 14 · T1 Verified: 9 · T2 Verified: 6 · Accepted: 0 · Blocked: 8 · Deferred: 3
+Not Started: 17 · In Progress: 26 · Implemented: 1 · T1 Verified: 0 · T2 Verified: 3 · Accepted: 0 · Blocked: 8 · Deferred: 3
 
 ### Milestone register
 
@@ -98,57 +98,57 @@ Not Started: 17 · In Progress: 1 · Implemented: 14 · T1 Verified: 9 · T2 Ver
 | **FND** | **Containment, baseline and release foundations (Stages 0-2)** | | | | | | | | | |
 | SEC-01 | Repository and public-branch containment | Not Started | Founder | 2026-11-02..2026-11-03 | — | on window | T3 | Founder action (FA-02, FA-03, FA-05) | Founder: gh repo edit --visibility private; list Actions secret names; delete preserve/creator-canonical-template-pool after archive verified | Founder executes |
 | SEC-02 | Credential rotation phases A-E | Not Started | Founder | 2026-11-03..2026-11-10 | — | on window | T3 | Founder action; phase E needs a maintenance window | Phase A control-plane tokens | Founder executes |
-| SEC-03 | ENCRYPTION_KEY dual-key support (unblocks rotation phase F) | T1 Verified | Claude Code agent | 2026-11-02..2026-11-04 | 0 | on window | T2 | Phase F also needs: WhatsApp follow-up (after integration lands) and repositories bound for every encrypted column; rollback is one-way once k1: values are written | Review 88b9378b; bind re-encryption repositories; WhatsApp follow-up on integration base | Push/merge; phase F cut-over by founder |
-| SEC-04 | Central log redaction and secret scanning | T1 Verified | Claude Code agent | 2026-11-02..2026-11-04 | 0 | on window | T1 | ~3.8k direct console.* calls bypass the logger (separate change) | Review 73396d96; founder installs pre-commit hook and makes the check required after push | Push/merge; required-check wiring by founder |
-| SEC-05 | Tenant release cannot lift unsubscribe / consent withdrawn / complaint (GD-3 interim) | T1 Verified | Claude Code (session a410c8dc) | 2026-11-02 | 0 | on window | T2 | Merge approval | Review + push approval for sec/governance-release-lock (ce1d6e15) | Push/merge |
-| SEC-06 | Creator upload-session verification fails closed without its secret | T1 Verified | Claude Code (session a410c8dc) | 2026-11-02 | 0 | on window | T1 | Merge approval | Review + push approval for sec/creator-upload-secret-fail-closed (a0c67c55) | Push/merge |
+| SEC-03 | ENCRYPTION_KEY dual-key support (unblocks rotation phase F) | In Progress | Claude Code agent | 2026-11-02..2026-11-04 | 0 | on window | T2 | Phase F also needs: WhatsApp follow-up (after integration lands) and repositories bound for every encrypted column; rollback is one-way once k1: values are written | Review 88b9378b; bind re-encryption repositories; WhatsApp follow-up on integration base | Push/merge; phase F cut-over by founder |
+| SEC-04 | Central log redaction and secret scanning | In Progress | Claude Code agent | 2026-11-02..2026-11-04 | 0 | on window | T1 | ~3.8k direct console.* calls bypass the logger (separate change) | Review 73396d96; founder installs pre-commit hook and makes the check required after push | Push/merge; required-check wiring by founder |
+| SEC-05 | Tenant release cannot lift unsubscribe / consent withdrawn / complaint (GD-3 interim) | In Progress | Claude Code (session a410c8dc) | 2026-11-02 | 0 | on window | T2 | Merge approval | Review + push approval for sec/governance-release-lock (ce1d6e15) | Push/merge |
+| SEC-06 | Creator upload-session verification fails closed without its secret | In Progress | Claude Code (session a410c8dc) | 2026-11-02 | 0 | on window | T1 | Merge approval | Review + push approval for sec/creator-upload-secret-fail-closed (a0c67c55) | Push/merge |
 | SEC-07 | revoke8 SQL Editor evidence (decide by 2026-11-04 12:00 UTC; window ~15:56 UTC) | Not Started | Founder | 2026-11-02..2026-11-04 | — | on window | T3 | Founder decision; Supabase plan (Pro/Team) unconfirmed | Founder: export (Route A) or record decision to let it expire | Founder decision + execution |
 | SEC-08 | Counsel briefing on notification duties | Not Started | Founder | 2026-11-02..2026-11-06 | — | on window | T3 | External (counsel) | Founder briefs counsel with the prepared facts (no secret values) | Founder |
 | PRES-01 | Preservation of engineering work | In Progress | Claude Code / Founder | 2026-11-02..2026-11-03 | 0 | on window | T2 | Off-machine copy needs founder (destination) | Founder: gpg-encrypt and copy archive off-machine; verify hashes | Founder executes copy |
 | BASE-01 | Production verification session (21 statements + dashboard checks) | Not Started | Founder | 2026-11-03..2026-11-05 | — | on window | T3 | Founder: route R1/R2 decision and ~100 minutes | Founder runs C:/omnivyra-archive/execution-readiness-20261102/runbook | Founder executes (read-only) |
-| REL-01 | Typecheck gate cannot pass on a crash | T1 Verified | Claude Code (session a410c8dc) | 2026-11-02..2026-11-05 | 0 | on window | T1 | Review + push approval | Review a27ff537; push after repo private | Push/merge |
-| REL-02 | Migration controls (version reservations, applied-migration immutability) | T1 Verified | Claude Code (session a410c8dc) | 2026-11-02..2026-11-07 | 0 | on window | T2 | Full human review; push approval | Line-by-line review of 51d43e98 | Push/merge |
+| REL-01 | Typecheck gate cannot pass on a crash | In Progress | Claude Code (session a410c8dc) | 2026-11-02..2026-11-05 | 0 | on window | T1 | Review + push approval | Review a27ff537; push after repo private | Push/merge |
+| REL-02 | Migration controls (version reservations, applied-migration immutability) | In Progress | Claude Code (session a410c8dc) | 2026-11-02..2026-11-07 | 0 | on window | T2 | Full human review; push approval | Line-by-line review of 51d43e98 | Push/merge |
 | REL-03 | Reconcile gov2 actor contract with migration controls | Not Started | unassigned | after REL-02 | — | n/a | T1 | REL-02 review | One registry schema + one checker | Push/merge |
 | REL-04 | Release candidate 7bdd76ae landed (L-1..L-10) | Blocked | Founder (operator) + Claude Code (prep) | 2026-11-04..2026-11-12 | — | on window | T3 | L-1 probe (BASE-01); decisions RC04/RC05; push approval; repo private first | Founder: L-1 probe + options 04/05 | Push, migrations, merge, deploy |
 | REL-05 | Credit reaper and reconciliation scheduled safely | Blocked | unassigned | after P11 | — | n/a | T3 | P11 HOLD backlog, wallet consistency, idempotency and controlled-test evidence required first | Read P11; dry-run reaper on a controlled copy | Production config change |
-| REL-06 | Backport scheduled-post authorization fix d8d79b74 | T1 Verified | Claude Code (session a410c8dc) | 2026-11-03 | 0 | on window | T2 | Merge approval | Review + push approval for fix/scheduled-post-authorization-backport (c51bfda9) | Push/merge |
+| REL-06 | Backport scheduled-post authorization fix d8d79b74 | In Progress | Claude Code (session a410c8dc) | 2026-11-03 | 0 | on window | T2 | Merge approval | Review + push approval for fix/scheduled-post-authorization-backport (c51bfda9) | Push/merge |
 | REL-07 | Integration branch renumbered (keep 20261127000000; 22 -> 20270121000000-21) with fresh T2 | Blocked | Claude Code (after approval) | after GD-4 + P1/P3 clean | — | n/a | T2 | GD-4 decision; production P1/P3 clean | Wait for GD-4 approval and P1/P3 | GD-4; then push/merge |
 | REL-08 | Jira/JEV governance adoption of pending branches | Deferred | Founder | suspended | — | n/a | T1 | Founder suspended Jira/JEV governance automation (2026-11-02) | None while suspended | Founder |
 | **SF** | **Shared-foundation contracts** | | | | | | | | | |
-| SF-01 | Canonical prospect/person identity contract | Implemented | PI track | 2026-11-02..2026-11-05 | 0 | on window | T2 | — | Contract tests (identity resolution + one-anchor rule) | None |
-| SF-02 | Company and tenant identity contract | Implemented | Platform | 2026-11-02..2026-11-06 | 0 | on window | T1 | — | Contract test: tenant key types on new tables | None |
+| SF-01 | Canonical prospect/person identity contract | In Progress | PI track | 2026-11-02..2026-11-05 | 0 | on window | T2 | — | Contract tests (identity resolution + one-anchor rule) | None |
+| SF-02 | Company and tenant identity contract | In Progress | Platform | 2026-11-02..2026-11-06 | 0 | on window | T1 | — | Contract test: tenant key types on new tables | None |
 | SF-03 | Consent, lawful basis and jurisdiction contract | Blocked | PI track | after counsel K-1 | 0 | n/a | T2 | Counsel K-1 (lawful basis per channel/region) | Schema design can proceed; policy values wait for counsel | Founder + counsel |
-| SF-04 | Suppression / unsubscribe / DNC / contact-eligibility contract | Implemented | PI track | 2026-11-02..2026-11-08 | 0 | on window | T2 | — | Single-store convergence (PI-08) | None |
-| SF-05 | Per-send approval and content-hash contract (GD-1) | Implemented | Orchestration track | after GD-1 | 0 | n/a | T2 | GD-1 decision before merge | Implement on integration base after GD-1 | GD-1 |
-| SF-06 | Workflow / task / execution / correlation identifier contract | Implemented | Orchestration track | 2026-11-02..2026-11-12 | 0 | on window | T2 | — | Correlation joins (AIO-04) | None |
-| SF-07 | Outreach outcome and lifecycle-transition identifier contract (GD-2) | Implemented | Feedback track | after GD-2 | 0 | n/a | T2 | GD-2 decision before merge | Outcome key + subject_id resolution | GD-2 |
-| SF-08 | Credit reservation / confirm / release / reconciliation contract | Implemented | Billing track | 2026-11-02..2026-11-12 | 0 | on window | T2 | K-8 decision (charge per send) | Adapter-level hold/confirm/release | K-8 |
-| SF-09 | Domain-event and integration-handoff contract | Implemented | Orchestration track | 2026-11-02..2026-11-12 | 0 | on window | T2 | — | Handoff row contract tests | None |
+| SF-04 | Suppression / unsubscribe / DNC / contact-eligibility contract | In Progress | PI track | 2026-11-02..2026-11-08 | 0 | on window | T2 | — | Single-store convergence (PI-08) | None |
+| SF-05 | Per-send approval and content-hash contract (GD-1) | In Progress | Orchestration track | after GD-1 | 0 | n/a | T2 | GD-1 decision before merge | Implement on integration base after GD-1 | GD-1 |
+| SF-06 | Workflow / task / execution / correlation identifier contract | In Progress | Orchestration track | 2026-11-02..2026-11-12 | 0 | on window | T2 | — | Correlation joins (AIO-04) | None |
+| SF-07 | Outreach outcome and lifecycle-transition identifier contract (GD-2) | In Progress | Feedback track | after GD-2 | 0 | n/a | T2 | GD-2 decision before merge | Outcome key + subject_id resolution | GD-2 |
+| SF-08 | Credit reservation / confirm / release / reconciliation contract | In Progress | Billing track | 2026-11-02..2026-11-12 | 0 | on window | T2 | K-8 decision (charge per send) | Adapter-level hold/confirm/release | K-8 |
+| SF-09 | Domain-event and integration-handoff contract | In Progress | Orchestration track | 2026-11-02..2026-11-12 | 0 | on window | T2 | — | Handoff row contract tests | None |
 | SF-10 | Migration ownership, ordering and compatibility contract (GD-4) | Implemented | Release controls | 2026-11-02..2026-11-07 | 0 | on window | T1 | GD-4 decision | Land REL-02 | GD-4 |
-| SF-11 | Security, audit and tenant-isolation contract | Implemented | Platform | 2026-11-02..2026-11-10 | 0 | on window | T2 | — | Route-auth in predeploy; governance-record trigger | None |
+| SF-11 | Security, audit and tenant-isolation contract | In Progress | Platform | 2026-11-02..2026-11-10 | 0 | on window | T2 | — | Route-auth in predeploy; governance-record trigger | None |
 | **PI** | **Track 1 - Prospect Intelligence** | | | | | | | | | |
 | PI-01 | CSV/manual ingestion into canonical records | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | Owner decision: CSV rows without referenceId get a synthesised csv:<sha256> key instead of insufficient_evidence (csvAdapter.ts:89-99) — contract test marked it.failing | Owner: accept synthesised CSV key or require referenceId | None (flags: founder) |
 | PI-02 | Canonical identity and deduplication | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | — | T2 of identity suites | None |
 | PI-03 | Enrichment and evidence provenance | T2 Verified | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | No vendor credential (J-3) | Provenance T2; vendor trial after J-3 | J-3 for vendor |
-| PI-04 | Qualification and ICP ratification | T2 Verified | unassigned | 2026-11-09..2026-11-15 | pre | on window | T2 | qualificationIntelligence has no caller | Decide caller or retire | None |
-| PI-05 | Persisted score evaluations (one canonical scorer) | T2 Verified | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | 13 competing scorers | AS-2 T2; retire rival writers | None |
+| PI-04 | Qualification and ICP ratification | In Progress | unassigned | 2026-11-09..2026-11-15 | pre | on window | T2 | qualificationIntelligence has no caller | Decide caller or retire | None |
+| PI-05 | Persisted score evaluations (one canonical scorer) | In Progress | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | 13 competing scorers | AS-2 T2; retire rival writers | None |
 | PI-06 | Lifecycle transitions from outcomes via handoff.subject_id | Not Started | unassigned | after REL-07 | — | n/a | T2 | Integration branch not landed | Prepare on integration base | GD-2 |
 | PI-07 | Consent / lawful-basis ledger | Blocked | unassigned | after counsel K-1 | — | n/a | T2 | Counsel K-1 | Schema draft | Founder + counsel |
-| PI-08 | Single suppression store (contact_governance_records) | T1 Verified | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | Owner decision: global legacy row now blocks WS-3 for every tenant (reverses an earlier code comment); removing outreach_suppressions reads needs P10 | Owner review of choice; P10 count of outreach_suppressions | Owner decision + push/merge |
+| PI-08 | Single suppression store (contact_governance_records) | In Progress | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | Owner decision: global legacy row now blocks WS-3 for every tenant (reverses an earlier code comment); removing outreach_suppressions reads needs P10 | Owner review of choice; P10 count of outreach_suppressions | Owner decision + push/merge |
 | PI-09 | Prospect-keyed port for downstream consumers (PiProspectPort v1) | Not Started | unassigned | after REL-07 | — | n/a | T2 | Integration branch not landed | Define port; migrate orchestration reads | None |
 | PI-10 | Ranked prospect list 6a6c3d9b | Blocked | unassigned | after REL-07 | — | n/a | T2 | Lands after integration branch | Cherry-pick after merge | Push/merge |
 | **AIO** | **Track 2 - AI Intelligence and Orchestration** | | | | | | | | | |
-| AIO-01 | Orchestration line (contract 0.2.0) on main | Implemented | Founder (merge) | after REL-07 | pre | n/a | T2 | REL-07 | Merge after T2 | Merge |
+| AIO-01 | Orchestration line (contract 0.2.0) on main | In Progress | Founder (merge) | after REL-07 | pre | n/a | T2 | REL-07 | Merge after T2 | Merge |
 | AIO-02 | Enrollment records score_evaluation_id + icp_version (AS-3) | Not Started | unassigned | after AIO-01 | — | n/a | T2 | AIO-01 | Implement on integration base | None |
 | AIO-03 | GD-1 per-send approval enforcement (content hash, atomic audit, role split) | Blocked | unassigned | after GD-1 + AIO-01 | — | n/a | T2 | GD-1 decision | Implement after decision | GD-1 |
 | AIO-04 | Correlation joins persisted across handoffs | Not Started | unassigned | after AIO-01 | — | n/a | T2 | AIO-01 | Design migration in post-renumber block | Migration apply |
 | AIO-05 | Agent runtimes stop self-approving (truthful gates) | Not Started | unassigned | 2026-11-09..2026-11-15 | — | on window | T2 | Product behaviour decision (which gates need a human) | Inventory the 3 runtimes' gates | Founder (behaviour) |
-| AIO-06 | Retry, timeout, idempotency and recovery proven | Implemented | unassigned | with REL-07 T2 | pre | n/a | T2 | AIO-01 | Covered by fresh T2 | None |
+| AIO-06 | Retry, timeout, idempotency and recovery proven | In Progress | unassigned | with REL-07 T2 | pre | n/a | T2 | AIO-01 | Covered by fresh T2 | None |
 | AIO-07 | Recommendation planner keyed on canonical prospects | Deferred | unassigned | Stage 8 | — | n/a | T2 | Slice uses the authored workflow step instead | None | None |
 | **OUT** | **Track 3 - Outreach Engines** | | | | | | | | | |
-| OUT-01 | Channel-neutral contract and EngineAdapter | Implemented | unassigned | with AIO-01 | pre | n/a | T2 | AIO-01 | Lands with integration branch | Merge |
-| OUT-02 | Email engine through the adapter (real provider) | Implemented | unassigned | after AIO-01 | pre | n/a | T3 | Provider declared mocked; SES config unknown | SES config (founder) + tags | Founder (SES) |
-| OUT-03 | Mandatory egress governance (GD-3) | T1 Verified | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | K-6 template classification (counsel); GD-3; edge gate untested against a real deployment (SUPABASE_URL / SUPABASE_SECRET_KEYS assumed present); DM/extension/RPA/social paths not gated (OUT-09) | Owner: K-6 options A/B/C; GD-3 | GD-3 + push/merge + edge-function deploy |
+| OUT-01 | Channel-neutral contract and EngineAdapter | In Progress | unassigned | with AIO-01 | pre | n/a | T2 | AIO-01 | Lands with integration branch | Merge |
+| OUT-02 | Email engine through the adapter (real provider) | In Progress | unassigned | after AIO-01 | pre | n/a | T3 | Provider declared mocked; SES config unknown | SES config (founder) + tags | Founder (SES) |
+| OUT-03 | Mandatory egress governance (GD-3) — PARTIAL: prospect email only; community/DM/extension/RPA/WhatsApp-reply paths not gated | In Progress | Claude Code agent | 2026-11-03..2026-11-12 | 0 | on window | T2 | K-6 template classification (counsel); GD-3; edge gate untested against a real deployment (SUPABASE_URL / SUPABASE_SECRET_KEYS assumed present); DM/extension/RPA/social paths not gated (OUT-09) | Owner: K-6 options A/B/C; GD-3 | GD-3 + push/merge + edge-function deploy |
 | OUT-04 | Per-send credit metering | Blocked | unassigned | after K-8 | — | n/a | T2 | K-8 decision | Adapter-level hold/confirm/release | K-8 |
 | OUT-05 | Delivery evidence with SES tags | Not Started | unassigned | after AIO-01 | — | n/a | T2 | AIO-01 | Tags tenant/task/correlation | None |
 | OUT-06 | Inbound reply ingestion | Not Started | unassigned | after OUT-05 | — | n/a | T2 | SES inbound not configured | In-Reply-To matching | Founder (SES inbound) |
@@ -157,7 +157,7 @@ Not Started: 17 · In Progress: 1 · Implemented: 14 · T1 Verified: 9 · T2 Ver
 | OUT-09 | DM / extension / browser contact contained on main | Not Started | unassigned | 2026-11-03..2026-11-06 | — | on window | T2 | J-5 scope decision (contain vs retire) | mayContact before claim on main paths (or wait for integration fixes 30a421c2/1c328464) | J-5 |
 | OUT-10 | WhatsApp, SMS and voice foundations | Deferred | unassigned | Stage 8 | — | n/a | T3 | Consent (K-1), metering (K-8), J-9 | None | Per-channel activation decision |
 | **VS** | **Integrated vertical slice (AS-1..AS-9)** | | | | | | | | | |
-| VS-01 | AS-1..AS-9 pass at T2 with full ID chain | T2 Verified | unassigned | Stage 6 | 0 | n/a | T2 | Upstream milestones | Write acceptance suite skeleton once AIO-01 lands | None |
+| VS-01 | AS-1..AS-9 pass at T2 with full ID chain | In Progress | unassigned | Stage 6 | 0 | n/a | T2 | Upstream milestones | Write acceptance suite skeleton once AIO-01 lands | None |
 | VS-02 | AS-1..AS-6 at T3 on tenant 0eda0896 (real SES MessageId) | Not Started | Founder (operator) | Stage 7 | — | n/a | T3 | VS-01; counsel K-1; erasure live | None yet | Founder (real send) |
 
 ### Effort (estimates are inferred ranges, not recorded time)
