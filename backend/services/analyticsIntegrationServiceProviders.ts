@@ -241,16 +241,23 @@ function resolveGoogleRedirectUri(
   );
 }
 
-function maybeDecrypt(value: string | null | undefined): string | null {
+/**
+ * Stored GA4/GSC tokens. A plaintext (legacy) token is returned as stored. A value in the
+ * encrypted iv:tag:data shape that cannot be decrypted (wrong or rotated key, corrupted
+ * row) is treated as NOT CONNECTED — returning it would send the ciphertext to Google as
+ * a bearer / refresh token. Same rule as analyticsProviderConfigService.decryptIfNeeded.
+ */
+export function maybeDecrypt(value: string | null | undefined): string | null {
   if (!value || !value.trim()) return null;
+  const parts = value.split(':');
+  if (!(parts.length === 3 && /^[0-9a-f]+$/i.test(parts[0]) && /^[0-9a-f]+$/i.test(parts[1]))) {
+    return value;
+  }
   try {
-    const parts = value.split(':');
-    if (parts.length === 3 && /^[0-9a-f]+$/i.test(parts[0]) && /^[0-9a-f]+$/i.test(parts[1])) {
-      return decryptCredential(value);
-    }
-    return value;
+    return decryptCredential(value);
   } catch {
-    return value;
+    console.warn('[analyticsIntegration] a stored token could not be decrypted; treated as not connected');
+    return null;
   }
 }
 

@@ -15,6 +15,7 @@
 import crypto from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { getToken, setToken } from './tokenStore';
+import { isPlatformInfrastructureSecretName } from '../services/externalApi/infrastructureSecretNames';
 
 // Meta deprecates Graph API versions ~24 months after release. Bump together
 // with all other Meta endpoints in the codebase — mismatched versions across
@@ -49,11 +50,20 @@ export interface TokenExchangeResult {
  * auth_client_id_ref can be: an env var name (e.g. "META_APP_ID")
  * or a direct encrypted value (detected by format).
  */
-function resolveClientRef(ref: string | null, envFallback: string | string[]): string | null {
+export function resolveClientRef(ref: string | null, envFallback: string | string[]): string | null {
   const fallbacks = Array.isArray(envFallback) ? envFallback : [envFallback];
   if (!ref) return fallbacks.map((key) => process.env[key]).find(Boolean) ?? null;
-  // If ref looks like an env var name (uppercase, underscores only) → resolve it
-  if (/^[A-Z][A-Z0-9_]+$/.test(ref)) return process.env[ref] ?? null;
+  // If ref looks like an env var name (uppercase, underscores only) → resolve it.
+  // SEC91-B2 backstop, as for provider accounts: a stored ref can never name a platform
+  // infrastructure secret (Supabase, DB, Redis, signing keys, ENCRYPTION_KEY) — the value
+  // would be sent to Meta as the OAuth client id/secret.
+  if (/^[A-Z][A-Z0-9_]+$/.test(ref)) {
+    if (isPlatformInfrastructureSecretName(ref)) {
+      console.warn('[metaAuthService] auth client ref names a platform infrastructure secret; refused');
+      return null;
+    }
+    return process.env[ref] ?? null;
+  }
   // Otherwise treat as direct value (encrypted or plaintext)
   return ref;
 }
