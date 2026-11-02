@@ -717,7 +717,7 @@ describe('coverage limits are stated in the tool output, not left to silence', (
 
 // ───────────────────────────────────────────────────────────────────────────
 describe('safety — the detector cannot be pointed at production', () => {
-  const PROD = 'postgresql://u:p@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres';
+  const PROD = 'postgresql://u:placeholder@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres';
 
   it('CRITICAL: refuses a non-loopback host', () => {
     expect(() => actorFk.assertLocalTarget(PROD)).toThrow(/non-loopback/);
