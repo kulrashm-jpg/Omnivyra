@@ -81,15 +81,15 @@ _Generated 2026-11-02 from docs/programme/milestones.json. Percentages count acc
 | --- | --- | --- | --- | --- | --- | --- |
 | Containment, baseline and release foundations (Stages 0-2) | 56 | 0% | 0% | 23% | 4% | 73% |
 | Shared-foundation contracts | 23 | 0% | 0% | 9% | 48% | 43% |
-| Track 1 - Prospect Intelligence | 17 | 0% | 0% | 0% | 29% | 71% |
+| Track 1 - Prospect Intelligence | 17 | 0% | 35% | 0% | 6% | 59% |
 | Track 2 - AI Intelligence and Orchestration | 11 | 0% | 0% | 0% | 18% | 82% |
 | Track 3 - Outreach Engines | 13 | 0% | 0% | 0% | 15% | 85% |
 | Integrated vertical slice (AS-1..AS-9) | 10 | 0% | 0% | 0% | 0% | 100% |
-| **Overall programme** | 130 | 0% | 0% | 12% | 17% | 72% |
+| **Overall programme** | 130 | 0% | 5% | 12% | 14% | 70% |
 
 ### Milestones by status
 
-Not Started: 20 · In Progress: 1 · Implemented: 19 · T1 Verified: 7 · T2 Verified: 0 · Accepted: 0 · Blocked: 8 · Deferred: 3
+Not Started: 20 · In Progress: 1 · Implemented: 15 · T1 Verified: 7 · T2 Verified: 4 · Accepted: 0 · Blocked: 8 · Deferred: 3
 
 ### Milestone register
 
@@ -127,10 +127,10 @@ Not Started: 20 · In Progress: 1 · Implemented: 19 · T1 Verified: 7 · T2 Ver
 | SF-10 | Migration ownership, ordering and compatibility contract (GD-4) | Implemented | Release controls | 2026-11-02..2026-11-07 | 0 | on window | T1 | GD-4 decision | Land REL-02 | GD-4 |
 | SF-11 | Security, audit and tenant-isolation contract | Implemented | Platform | 2026-11-02..2026-11-10 | 0 | on window | T2 | — | Route-auth in predeploy; governance-record trigger | None |
 | **PI** | **Track 1 - Prospect Intelligence** | | | | | | | | | |
-| PI-01 | CSV/manual ingestion into canonical records | Implemented | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | Flags off in prod; T2 not re-run this programme | Run PI real-schema ingestion suites at main; record | None (flags: founder) |
-| PI-02 | Canonical identity and deduplication | Implemented | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | — | T2 of identity suites | None |
-| PI-03 | Enrichment and evidence provenance | Implemented | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | No vendor credential (J-3) | Provenance T2; vendor trial after J-3 | J-3 for vendor |
-| PI-04 | Qualification and ICP ratification | Implemented | unassigned | 2026-11-09..2026-11-15 | pre | on window | T2 | qualificationIntelligence has no caller | Decide caller or retire | None |
+| PI-01 | CSV/manual ingestion into canonical records | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | Flags off in prod; T2 not re-run this programme | Run PI real-schema ingestion suites at main; record | None (flags: founder) |
+| PI-02 | Canonical identity and deduplication | T2 Verified | unassigned | 2026-11-04..2026-11-11 | pre | on window | T2 | — | T2 of identity suites | None |
+| PI-03 | Enrichment and evidence provenance | T2 Verified | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | No vendor credential (J-3) | Provenance T2; vendor trial after J-3 | J-3 for vendor |
+| PI-04 | Qualification and ICP ratification | T2 Verified | unassigned | 2026-11-09..2026-11-15 | pre | on window | T2 | qualificationIntelligence has no caller | Decide caller or retire | None |
 | PI-05 | Persisted score evaluations (one canonical scorer) | Implemented | unassigned | 2026-11-09..2026-11-20 | pre | on window | T2 | 13 competing scorers | AS-2 T2; retire rival writers | None |
 | PI-06 | Lifecycle transitions from outcomes via handoff.subject_id | Not Started | unassigned | after REL-07 | — | n/a | T2 | Integration branch not landed | Prepare on integration base | GD-2 |
 | PI-07 | Consent / lawful-basis ledger | Blocked | unassigned | after counsel K-1 | — | n/a | T2 | Counsel K-1 | Schema draft | Founder + counsel |
@@ -173,6 +173,6 @@ Not Started: 20 · In Progress: 1 · Implemented: 19 · T1 Verified: 7 · T2 Ver
 
 ### Effort log
 
-Recorded: 0.0 h in 0 entries (start/end captured). Inferred: 2.4 h in 4 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
+Recorded: 0.2 h in 1 entries (start/end captured). Inferred: 2.4 h in 4 entries (no timer; not evidence of time worked). Agent wall-clock is not human working time. Source: docs/programme/effort-log.csv.
 
 <!-- GENERATED:END -->

@@ -1084,7 +1084,7 @@
       "target_window": "2026-11-04..2026-11-11",
       "actual_start": "pre-programme",
       "actual_done": null,
-      "status": "Implemented",
+      "status": "T2 Verified",
       "tier": "T2",
       "blockers": "Flags off in prod; T2 not re-run this programme",
       "next_action": "Run PI real-schema ingestion suites at main; record",
@@ -1093,8 +1093,8 @@
         {
           "id": "code",
           "text": "Ingestion boundary on main writes unified_persons, canonical_leads, source_records/assertions",
-          "state": "implemented",
-          "evidence": "Targeted Review D.1 step 1 (code read at 5025f51d)"
+          "state": "t2",
+          "evidence": "T2 run 2026-11-02 at main 5025f51d: real-schema 64/64 suites, 1333/1333 (pg 17.6, 81 migrations replayed); log C:/Users/lenovo/AppData/Local/Temp/claude/c--virality/a410c8dc-32bf-4e04-abee-250334ae1710/scratchpad/t2main/t2-main-5025 (ingestion boundary: li2_source_records, aad_attribute_authority, b1b_arbitration, b2_apollo_slice)"
         },
         {
           "id": "t2",
@@ -1117,7 +1117,7 @@
       "target_window": "2026-11-04..2026-11-11",
       "actual_start": "pre-programme",
       "actual_done": null,
-      "status": "Implemented",
+      "status": "T2 Verified",
       "tier": "T2",
       "blockers": null,
       "next_action": "T2 of identity suites",
@@ -1126,14 +1126,14 @@
         {
           "id": "code",
           "text": "Identity spine + duplicate parking on main",
-          "state": "implemented",
-          "evidence": "Master Audit C.2"
+          "state": "t2",
+          "evidence": "T2 run 2026-11-02 at main 5025f51d: real-schema 64/64 suites, 1333/1333 (pg 17.6, 81 migrations replayed); log C:/Users/lenovo/AppData/Local/Temp/claude/c--virality/a410c8dc-32bf-4e04-abee-250334ae1710/scratchpad/t2main/t2-main-5025 (identity suites incl. w3_w4_identity_contracts, pi_prov_identity_ordering)"
         },
         {
           "id": "t2",
           "text": "Identity real-schema suites green",
-          "state": "open",
-          "evidence": null
+          "state": "t2",
+          "evidence": "T2 run 2026-11-02 at main 5025f51d: real-schema 64/64 suites, 1333/1333 (pg 17.6, 81 migrations replayed); log C:/Users/lenovo/AppData/Local/Temp/claude/c--virality/a410c8dc-32bf-4e04-abee-250334ae1710/scratchpad/t2main/t2-main-5025"
         }
       ]
     },
@@ -1150,7 +1150,7 @@
       "target_window": "2026-11-09..2026-11-20",
       "actual_start": "pre-programme",
       "actual_done": null,
-      "status": "Implemented",
+      "status": "T2 Verified",
       "tier": "T2",
       "blockers": "No vendor credential (J-3)",
       "next_action": "Provenance T2; vendor trial after J-3",
@@ -1159,14 +1159,14 @@
         {
           "id": "code",
           "text": "source_records/assertions supersede/revive; enrichment registry",
-          "state": "implemented",
-          "evidence": "Master Audit C.2"
+          "state": "t2",
+          "evidence": "T2 run 2026-11-02 at main 5025f51d: real-schema 64/64 suites, 1333/1333 (pg 17.6, 81 migrations replayed); log C:/Users/lenovo/AppData/Local/Temp/claude/c--virality/a410c8dc-32bf-4e04-abee-250334ae1710/scratchpad/t2main/t2-main-5025 (pi_prov_* suites)"
         },
         {
           "id": "t2",
           "text": "Provenance suites green",
-          "state": "open",
-          "evidence": null
+          "state": "t2",
+          "evidence": "T2 run 2026-11-02 at main 5025f51d: real-schema 64/64 suites, 1333/1333 (pg 17.6, 81 migrations replayed); log C:/Users/lenovo/AppData/Local/Temp/claude/c--virality/a410c8dc-32bf-4e04-abee-250334ae1710/scratchpad/t2main/t2-main-5025 (pi_prov_enrichment_scoring, pi_prov_contributions, pi_prov_acceptance_multisource)"
         }
       ]
     },
@@ -1181,7 +1181,7 @@
       "target_window": "2026-11-09..2026-11-15",
       "actual_start": "pre-programme",
       "actual_done": null,
-      "status": "Implemented",
+      "status": "T2 Verified",
       "tier": "T2",
       "blockers": "qualificationIntelligence has no caller",
       "next_action": "Decide caller or retire",
@@ -1190,8 +1190,8 @@
         {
           "id": "code",
           "text": "ICP propose/ratify on main",
-          "state": "implemented",
-          "evidence": "Targeted Review D.1 step 2"
+          "state": "t2",
+          "evidence": "T2 run 2026-11-02 at main 5025f51d: real-schema 64/64 suites, 1333/1333 (pg 17.6, 81 migrations replayed); log C:/Users/lenovo/AppData/Local/Temp/claude/c--virality/a410c8dc-32bf-4e04-abee-250334ae1710/scratchpad/t2main/t2-main-5025 (d1_tenant_icp)"
         },
         {
           "id": "t2",
