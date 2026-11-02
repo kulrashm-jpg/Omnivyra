@@ -57,6 +57,7 @@ function world(engineResult: ExecutionResult, rowAfter: string) {
       return true;
     },
     async preflight() { return { allowed: true }; },
+    async channelPermitted() { return true; },
     executeAction: (async (_action: unknown, _approved: unknown, options?: Record<string, unknown>) => {
       calls.push({ options });
       row.status = rowAfter;
