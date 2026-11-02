@@ -48,6 +48,11 @@ export async function withdrawUnsentTasks(organizationId: string, executionInsta
  * Before a step is skipped or settled: withdraw its unsent WS-3 task, and say whether an
  * engine already holds the action. If one does, conditions no longer decide this step,
  * because skipping it would let the next candidate contact the same person a second time.
+ *
+ * A `requested` row holds nothing: both ledger adapters claim with `requested → submitting`
+ * before they create anything. It is withdrawn here, or an adapter would go on to act for
+ * a person whose permission was just refused. The compare-and-set settles the race with a
+ * concurrent claim: whoever loses it moves nothing.
  */
 export async function withdrawStepAction(organizationId: string, executionInstanceId: string, executionTaskId: string): Promise<'none' | 'engine_holds'> {
   const requests = await ownedDbTable('execution_engine_requests')
@@ -56,7 +61,17 @@ export async function withdrawStepAction(organizationId: string, executionInstan
     .eq('execution_task_id', executionTaskId);
   if (requests.error) throw incomplete('an engine request');
   const rows = (requests.data ?? []) as unknown as Array<{ state: string }>;
-  if (rows.some((r) => r.state !== 'skipped')) return 'engine_holds';
+  if (rows.some((r) => r.state !== 'skipped' && r.state !== 'requested')) return 'engine_holds';
+  if (rows.some((r) => r.state === 'requested')) {
+    const withdrawn = await ownedDbTable('execution_engine_requests')
+      .update({ state: 'skipped', detail: 'withdrawn before any engine acted' })
+      .eq('organization_id', organizationId)
+      .eq('execution_task_id', executionTaskId)
+      .eq('state', 'requested')
+      .select('id');
+    if (withdrawn.error) throw incomplete('an engine request');
+    if (((withdrawn.data ?? []) as unknown[]).length !== 1) return 'engine_holds';
+  }
 
   const handoff = (await listInstanceHandoffs(organizationId, executionInstanceId)).find((h) => h.executionTaskId === executionTaskId);
   if (handoff === undefined) return 'none';

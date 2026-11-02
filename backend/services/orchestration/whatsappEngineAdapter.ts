@@ -241,7 +241,7 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           if (!(age >= STALE_SUBMISSION_MS)) return result('submitting', 'wait', 'another sweep is submitting this request', null);
           const orphan = await deps.findBroadcastByName(ctx.organizationId, broadcastNameFor(ctx.executionTaskId));
           if (orphan !== null) {
-            return settle(ctx, 'submitting', 'failed', result('submission_interrupted', 'needs_human', 'a submission was interrupted after the broadcast was created; review it before any resend', orphan));
+            return settle(ctx, 'submitting', 'uncertain', result('submission_interrupted', 'needs_human', 'a submission was interrupted after the broadcast was created; review it before any resend', orphan));
           }
           const released = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'requested', detail: 'stale claim released' });
           if (!released) return result('submitting', 'wait', 'the stale claim moved concurrently', null);

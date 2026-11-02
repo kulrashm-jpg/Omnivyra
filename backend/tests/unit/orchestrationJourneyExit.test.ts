@@ -8,9 +8,14 @@ const mockHandoffs = jest.fn();
 const mockGet = jest.fn();
 const mockTransition = jest.fn();
 const mockRequests = { data: [] as unknown[], error: null as unknown };
+const mockWithdrawn = { data: [{ id: 'r' }] as unknown[], error: null as unknown };
+const mockUpdate = jest.fn();
 
 jest.mock('../../db/writeOwner', () => ({
-  ownedDbTable: () => ({ select: () => ({ eq: () => ({ eq: async () => mockRequests }) }) }),
+  ownedDbTable: () => ({
+    select: () => ({ eq: () => ({ eq: async () => mockRequests }) }),
+    update: (patch: unknown) => { mockUpdate(patch); return { eq: () => ({ eq: () => ({ eq: () => ({ select: async () => mockWithdrawn }) }) }) }; },
+  }),
 }));
 jest.mock('../../services/workflowExecution/stepProgressionStore', () => ({ cancelExecutionRun: mockCancel }));
 jest.mock('../../services/outreachBridge/outreachBridgeStore', () => ({ listInstanceHandoffs: mockHandoffs }));
@@ -23,6 +28,7 @@ const ORG = '00000000-0000-4000-8000-00000000000a';
 beforeEach(() => {
   jest.clearAllMocks();
   mockRequests.data = []; mockRequests.error = null;
+  mockWithdrawn.data = [{ id: 'r' }]; mockWithdrawn.error = null;
   mockHandoffs.mockResolvedValue([{ outreachTaskId: 't1', executionTaskId: 'other' }]);
 });
 
@@ -69,6 +75,24 @@ describe('withdrawStepAction', () => {
     mockRequests.data = [{ state: 'skipped' }];
     await expect(withdrawStepAction(ORG, 'run', 'task')).resolves.toBe('none');
     expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('a requested row holds nothing: it is withdrawn, so the adapter is not asked to act', async () => {
+    mockRequests.data = [{ state: 'requested' }];
+    await expect(withdrawStepAction(ORG, 'run', 'task')).resolves.toBe('none');
+    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ state: 'skipped' }));
+  });
+
+  it('losing that race to a concurrent claim means the engine holds it', async () => {
+    mockRequests.data = [{ state: 'requested' }];
+    mockWithdrawn.data = [];
+    await expect(withdrawStepAction(ORG, 'run', 'task')).resolves.toBe('engine_holds');
+  });
+
+  it('a failed write decides nothing', async () => {
+    mockRequests.data = [{ state: 'requested' }];
+    mockWithdrawn.error = { message: 'down' };
+    await expect(withdrawStepAction(ORG, 'run', 'task')).rejects.toMatchObject({ code: 'withdrawal_incomplete' });
   });
 
   it('an unreadable request ledger decides nothing', async () => {

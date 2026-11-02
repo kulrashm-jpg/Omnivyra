@@ -571,6 +571,10 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
     const r = await sweep();
     expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'submission_interrupted' });
     expect(wa.broadcasts).toHaveLength(1);
+    // Later sweeps keep saying it may have gone out, never that the provider refused it.
+    const again = await sweep();
+    expect(again.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+    expect(wa.broadcasts).toHaveLength(1);
   });
 
   it('a fresh claim held by another sweep waits', async () => {

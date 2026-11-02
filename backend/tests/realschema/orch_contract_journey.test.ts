@@ -642,6 +642,24 @@ describe('skipping a step never leaves or repeats an action', () => {
     });
   });
 
+  it('a requested row is not an action: an opt-out still stops the step, and the engine is not asked', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId, personId } = await setup(['community']);
+      const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [humanStep('c', 'community')] });
+      await sweep([]);
+      const task = await one('SELECT id FROM public.execution_tasks WHERE execution_instance_id = $1 AND channel = $2', [instanceId, 'community']);
+      await db.query(`INSERT INTO public.execution_engine_requests (organization_id, execution_task_id, engine, state)
+        VALUES ($1,$2,'community','requested')`, [ORG_A, task.id]);
+      await db.query(`INSERT INTO public.contact_governance_records (organization_id, person_id, channel, governance_type, source)
+        VALUES ($1,$2,'*','dnc_permanent','contract-test')`, [ORG_A, personId]);
+      const asked: string[] = [];
+      const r = await sweep([spy('community', ['community'], asked)]);
+      expect(asked).toEqual([]);
+      expect(r.decisions[0]).toMatchObject({ decision: 'skipped' });
+      expect((await one('SELECT state FROM public.execution_engine_requests WHERE execution_task_id = $1', [task.id])).state).toBe('skipped');
+    });
+  });
+
   it('a step skipped because the person opted out withdraws its task, so a later approval sends nothing', async () => {
     await inRollback(async () => {
       const { actor, prospectId, personId } = await setup(['email']);
