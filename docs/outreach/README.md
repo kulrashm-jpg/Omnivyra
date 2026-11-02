@@ -1,6 +1,6 @@
 # Outreach Engines: completion and readiness report
 
-Status at 2026-11-02. Branch `integration/outreach-engines-20261102`, code tested at 21f62238, which contains `feat/orchestration-recovery` 30a421c2 and the five engine branches. Local only: nothing is pushed, merged, deployed, applied to production or sent to a provider.
+Status at 2026-11-02. Branch `integration/outreach-engines-20261102`, code tested at d682ab13, which contains `feat/orchestration-recovery` c74404c7 (contract 0.2.0, code at 019b6de5) and the five engine branches. Local only: nothing is pushed, merged, deployed, applied to production or sent to a provider.
 
 ## Bottom line
 
@@ -49,10 +49,11 @@ Agent-reported, and checked only through the T2 runs below: the per-fix "fails w
 | Level | Result |
 |---|---|
 | T1 | Per-engine affected suites passed in each branch (fakes) |
-| T2 real schema, at 21f62238 | **71 of 71 suites; 1488 passed, 3 skipped.** Disposable PostgreSQL 17.6 + pgvector rebuilt from baseline, 104 migrations |
-| T2 typecheck-ci, worker | Pass, at 21f62238 |
-| T2 route auth, route policy, migration quality, schema drift | Pass, at 21f62238 |
-| T2 whole-repo jest, at 21f62238 | Exit 1: 2293 of 2318 suites, 40249 of 40379 tests passed. 60 failures, **all in the recorded baseline of 70, none new** |
+| T2 real schema, at d682ab13 | **71 of 71 suites; 1488 passed, 3 skipped.** Disposable PostgreSQL 17.6 + pgvector rebuilt from baseline, 104 migrations |
+| T2 typecheck-ci, worker | Pass, at d682ab13 |
+| T2 route auth, route policy, migration quality, schema drift | Pass, at d682ab13 |
+| T2 whole-repo jest, at d682ab13 | Exit 1: 2293 of 2318 suites, 40259 of 40389 tests passed. 60 failures, **all in the recorded baseline of 70, none new** |
+| Earlier run, at 21f62238 (contract 0.1.0) | Same results: real schema 71 of 71 with 1488 passed, gates pass, 60 jest failures all in the baseline |
 | T3 | **Not run.** Needs authorization: production parity, predeploy at merged main, real sends on a test tenant |
 
 The 60 baseline failures were recorded at fa1a5e58 and are not diagnosed. Seven touch this area, so these suites give no protection today: `community_ai_core_apis` (3), `community_ai_webhooks` (2, including "does not call cross-tenant webhooks"), `community_ai_scheduling` (1) and `metaGraphApiVersionConsistency` (1).
@@ -77,7 +78,9 @@ Also not run: mutants for this round, PostgREST-level journey, real Redis or Bul
 
 | Item | Status |
 |---|---|
-| Contract v0.1 (`executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`) | Owned by orchestration, committed, merged here. Tested at sha256 77bc3e609177c85b / 3e45271a80c268e7 / 38c56967e4c56714 |
+| Execution contract (`executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`) | Owned by orchestration, committed, merged here at 0.2.0. 0.2.0 adds `holdOnly`: WhatsApp and community settle a stale claim `skipped`/`not_begun`; a failed WhatsApp broadcast read waits as `broadcast_unreadable` instead of creating a second broadcast |
+| Community action runs after an opt-out (L-3) | Open, engine-side. The community scheduler and retry queue execute an `approved` scheduled action with no governance check. Unreachable while identity refuses. **Must be fixed before B-7 is unblocked** |
+| Lost WhatsApp queue acknowledgement (L-4) | Open, engine-side. The request settles `failed` although the broadcast may still send; it keeps the broadcast id and goes to a person. `enqueueOrThrow` needs to tell a refusal from a lost answer. Reachable only with the flag on and WhatsApp approval built |
 | `uncertain` | Done: a `certainty` field, not a state, so it never reads as FAILED or RETRY_REQUIRED |
 | DELIVERED | Done: only from a delivery report. Community and browser declare `reportsDelivery: false` |
 | Rejected email re-sent each sweep | Fixed by orchestration; `orch_contract_journey` proves one provider call however many sweeps follow |
@@ -87,8 +90,9 @@ Also not run: mutants for this round, PostgREST-level journey, real Redis or Bul
 | Non-WS-3 outcomes have no store (`outreach_outcomes.task_id` NOT NULL) | Recorded gap |
 | Adapter changes from this round | Applied by orchestration as 96c12e8b, except G-5. See `PROPOSED-ADAPTER-CHANGES.md` |
 | Inbound message ending a journey | Narrowed by orchestration: same tenant, and only after this run first messaged the person (`orch_engines_real`, `orch_journey_lifecycle`). Any later inbound from that person still ends the journey, related or not |
-| Contract v0.2 | `CONTRACT-V0.2-PROPOSALS.md`, committed here for the contract owner to pick up. Not decided, not built |
-| Merge order | Orchestration first, then this branch. One conflict was resolved as a union and tested. Orchestration's work continues: uncommitted changes in its worktree are not in this test |
+| Provider availability and webhook verification | `CONTRACT-V0.2-PROPOSALS.md`, named before contract 0.2.0 existed and **not part of it**. Undecided, unbuilt; recorded in orchestration's compatibility report |
+| Merge order | Orchestration first, then this branch. One conflict was resolved as a union and tested. Orchestration's work continues: later changes are not in this test |
+| Single register | Orchestration's `DECISION-REGISTER.md`, `GAP-REGISTER.md` and `CONTRACT-COMPATIBILITY-REPORT.md` carry this programme's decisions and gaps too |
 
 ## Provider dependency register
 

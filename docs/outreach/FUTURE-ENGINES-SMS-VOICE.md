@@ -2,7 +2,7 @@
 
 **Neither engine is authorized or built.** This shows they could arrive through the existing contracts. Any implementation needs a separate scope and authorization decision. There are no empty engines, placeholder production adapters or speculative tables, and `ENGINE_NAMES` stays at five.
 
-Written against orchestration's contract v0.1 (77e90518). The fixtures-only test is `backend/tests/unit/outreachFutureEngineCompatibility.test.ts`.
+Written against orchestration's contract v0.1 (77e90518); the fixtures-only test, `backend/tests/unit/outreachFutureEngineCompatibility.test.ts`, also passes at 0.2.0 (d682ab13). 0.2.0 adds only `holdOnly`, which a future adapter would honour like WhatsApp and community do.
 
 **Permission is the extension point.** The sweeper now holds a step on any contact channel with no `channelPermissionFact` as `needs_human`/`no_permission_source`. So registering an adapter contacts nobody until a permission source exists for that channel, and the test pins this for `sms` and `phone`.
 
@@ -58,7 +58,7 @@ Both use the existing shapes, with nothing new:
 { engine: 'sms', outcome: 'sent', disposition: 'completed', reason: null, externalRef: '<provider id>' }
 
 // Normalized by normalizeEngineResult
-{ contractVersion: '0.1.0', engine: 'sms', state: 'ACCEPTED', certainty: 'definite',
+{ contractVersion: '0.2.0', engine: 'sms', state: 'ACCEPTED', certainty: 'definite',
   errorClass: null, retryability: 'not_retryable', engineOutcome: 'sent',
   disposition: 'completed', externalRef: '<provider id>' }
 ```
@@ -95,7 +95,7 @@ A lost provider response normalizes as `outcome: 'timeout'`, `certainty: 'uncert
 
 Fixes needed before either channel, also regardless: `sms` targets are stored casefolded in `contactGovernanceRepository.ts:58` and would not match a `phone` form. `voice_per_minute` credit already means voice interaction, so it needs a different name. Authoring and governance say `phone` while the capability model says `voice`: the declarations above use engine `voice` on channel `phone`.
 
-## The 15 requirements against contract v0.1
+## The 15 requirements against the contract (unchanged by 0.2.0)
 
 | # | Requirement | Status |
 |---|---|---|
