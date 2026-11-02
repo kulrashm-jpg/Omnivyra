@@ -1,6 +1,6 @@
-# Omnivyra shared integration contract, v0.1.0
+# Omnivyra shared integration contract, v0.2.0
 
-**Status: proposed.** Implemented on the local branch `feat/orchestration-recovery`. Not merged, not deployed, and `WORKFLOW_ORCHESTRATION_ENABLED` stays off. The PI lead has not reviewed sections A and B. The Outreach lead has agreed the ownership split in section D.
+**Status: proposed.** Implemented on the local branch `feat/orchestration-recovery`. Not merged, not deployed, and `WORKFLOW_ORCHESTRATION_ENABLED` stays off. The PI lead has not reviewed sections A and B. The Outreach lead has agreed the ownership split in section D, and its branch has merged an earlier commit of this contract (0.1.0, at `30a421c2`). It has not yet merged 0.2.0.
 
 Code of record: `backend/services/orchestration/executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`, `journeyGovernance.ts`, `journeyExit.ts`.
 
@@ -75,6 +75,8 @@ A version holds steps with `channel`, `instruction`, optional `when` conditions 
 
 The database clock (`advance_execution_plan`) is the only scheduler. A failed or cancelled step ends the run as `failed` and withdraws what was unsent.
 
+**A failed read decides nothing.** A fact missing because a read failed holds the step as `facts_unreadable` rather than skipping it, so an outage cannot lose a step. After 7 days it is reported to a person.
+
 ## D. Outreach execution
 
 An engine implements `EngineAdapter`: `execute(ctx)` returns `{ engine, outcome, disposition, reason, externalRef }`. **`disposition` alone settles a step.**
@@ -103,6 +105,19 @@ An engine implements `EngineAdapter`: `execute(ctx)` returns `{ engine, outcome,
 
 **A provider refusal goes to a person.** WS-3 returns a refused task to `queued`, which is right for a person retrying and wrong for a clock. The adapter stops at the first recorded refusal with `provider_refused_prior_attempt`, so the clock does not call the provider again. `disabled` never reached a provider and stays free to go.
 
+**Withdrawing a step.** Before a step is skipped or settled, `withdrawStepAction` decides what is left.
+
+| What exists | Result |
+|---|---|
+| Ledger row `requested` | Compare-and-set to `skipped`. It holds nothing, because adapters claim with `requested → submitting` before creating anything. The loser of a race moves nothing |
+| Any other ledger row except `skipped` | `engine_holds`. The step goes to the engine with `holdOnly` |
+| WS-3 task `pending`, `awaiting_approval`, `approved`, `queued`, `paused` | Cancelled |
+| WS-3 task `failed`, `escalated` | `engine_holds`: it may have reached the person. When a whole run ends, it is cancelled instead |
+| WS-3 task `retried`, `resumed`, `reassigned` | Incomplete: re-read, then reported. The run stays open |
+| WS-3 task `dispatching`, `sent`, `delivered`, `completed` | `engine_holds` |
+
+**`holdOnly` (added in 0.2.0).** An adapter given `holdOnly` reports what it holds and begins nothing new. A stale claim with nothing behind it settles `skipped` with `not_begun`, so a step whose conditions failed is not started by releasing a claim.
+
 **Capability declaration** (`engineCapabilities.ts`, checked by `checkCapabilityDeclaration`). Engine, provider and action are separate identities. Each action declares channel, `contactsPerson`, idempotency, approval model, `creditMetered`, delivery and response reporting, and providers with credentials and a verification level. The check is static: no runtime negotiation yet.
 
 **Verification levels:** `mocked`, `postgres_verified`, `sandbox_provider_verified`, `production_verified`. No engine claims either of the last two.
@@ -123,13 +138,15 @@ An engine implements `EngineAdapter`: `execute(ctx)` returns `{ engine, outcome,
 | Cursor | `after` is the last event seen; order is `(occurredAt, eventId)` |
 | No personal data | Codes only; `evidence`, `transport_response` and message content are never read |
 
-**Cursor limit.** A row that arrives late with an earlier `occurredAt`, as a provider event can, sorts before an existing cursor. A consumer needing completeness re-reads from the start and dedupes on `eventId`.
+**Cursor limit.** A row that arrives late with an earlier `occurredAt`, as a provider event can, sorts before an existing cursor. A ledger event's `code` is the row's current state, so a cursor reader does not see a later change to `uncertain`. A consumer needing completeness re-reads from the start and dedupes on `eventId`.
+
+**WhatsApp responses.** The view reads the same single message that ends a journey, so a later STOP replaces an earlier `response.replied` in a replay.
 
 **Types:** `prospect.lifecycle_changed`; `journey.enrolled`, `.terminated`, `.completed`; `decision.recorded`; `approval.requested`, `.granted`, `.rejected`; `execution.requested`, `.started`, `.accepted`, `.failed`, `.cancelled`; `delivery.confirmed`, `.failed`, `.bounced`, `.complained`; `response.replied`, `.unsubscribed`, `.rejected`, `.other`; `outcome.recorded`.
 
 `JOURNEY_EVENT_VERSION` is bumped when a field's meaning changes, not when an optional field is added. Only `response.replied` is positive engagement. A STOP, an unsubscribe, a bounce and a complaint never are.
 
-**Mandate events with no separate type.** `prospect discovered`, `qualified` and `updated` appear as `prospect.lifecycle_changed` from enrollment on; before enrollment they belong to PI. `approval.requested` is declared but not emitted yet: approvals expose only decisions. `execution.failed` and `.cancelled` are declared, while failures surface today as `decision.recorded` with a code.
+**Mandate events with no separate type.** `prospect discovered`, `qualified` and `updated` appear as `prospect.lifecycle_changed` from enrollment on; before enrollment they belong to PI. `approval.requested` is declared but not emitted yet: approvals expose only decisions. `execution.failed` and `.cancelled` are declared and not emitted either: they surface today as `decision.recorded` with a code.
 
 ## F. Governance
 
@@ -156,9 +173,16 @@ A hold is `waiting`, recorded and visible, and the step resumes when the control
 
 | Contract | Version | Consumers | Status |
 |---|---|---|---|
-| Execution contract | 0.1.0 | Five adapters | Implemented; merge with Outreach branch pending |
+| Execution contract | 0.2.0 | Five adapters | Implemented. Outreach branch tested at 0.1.0 (`30a421c2`); merge of 0.2.0 pending |
 | Event view | event version 1 | `events` route | Implemented |
-| Capability declarations | 0.1.0 | `checkCapabilityDeclaration`, Outreach fixtures | Implemented |
+| Capability declarations | 0.2.0 | `checkCapabilityDeclaration`, Outreach fixtures | Implemented |
 | PI lifecycle writer | Unversioned | Sweeper feed, opener | In use; actor validation pending |
 
 **Rules.** A breaking change bumps the major version, and `checkCapabilityDeclaration` then refuses a mismatched declaration. Adding an optional field bumps the minor. Changes are recorded here with the commit.
+
+| Version | Commit | Change |
+|---|---|---|
+| 0.1.0 | `77e90518` | First version |
+| 0.2.0 | `019b6de5` | Optional `holdOnly` on `EngineStepContext`; outcomes `not_begun`, `broadcast_unreadable`, `facts_unreadable` |
+
+Outreach's `CONTRACT-V0.2-PROPOSALS.md` (provider availability, webhook verification) was named before this version existed. It is undecided, unbuilt, and not part of 0.2.0.

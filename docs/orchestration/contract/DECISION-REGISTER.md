@@ -37,6 +37,21 @@
 | B-9 | Where a human `rejected` outcome comes from | Owner, PI | The tenant approval reject, or an operator route | `not_interested` is unreachable without it |
 | WA-1 | Fix the WhatsApp operator routes (400 on POST) | Owner, Outreach | Sequence with decision A | Fixing them opens a send path with no tenant approval |
 | WA-2 | WhatsApp columns and usage RPCs outside the chain | Owner, Outreach | Sequence with decision A | Same |
+| WA-3 | Who writes `phone_number_id` and `waba_id` | Owner, Outreach | Sequence with decision A | Same |
+
+## Raised by Outreach, recorded here so there is one register
+
+Detail is in `docs/outreach/README.md` on `integration/outreach-engines-20261102`.
+
+| ID | Decision | Owner | Recommendation (Outreach's) |
+|---|---|---|---|
+| O-1 | Backport the cron authorization fix to `main` ahead of the rest. The safety-net cron publishes with no `authorizePostPublish` **on main today**, by code reading | Owner | Yes. It stands alone |
+| O-2 | Measure production: RPA rows or sessions, community executions, `USE_MOCK_PLATFORMS`, `RPA_SCREENSHOT_DIR` | Owner | Yes, before merging |
+| O-3 | Is session-reuse RPA allowed at all (GAP-17) | Owner, counsel | Decide first |
+| O-4 | May journeys act on non-consented community recipients? A cold prospect will not complete OAuth, so B-7 is more than a missing writer | Owner | Decide. Build acting-account proof regardless |
+| O-5 | What one social post means for N people in a journey | Owner | Leave observe-only |
+| O-6 | Retention for dead letters, which now hold raw WhatsApp payloads | Owner | Set before merge |
+| O-7 | This work has no OMNI Story, so commits carry no `Governed-By` | Owner | Create one before merging. Only a human can |
 
 ## Standing positions, unchanged
 

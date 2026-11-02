@@ -55,5 +55,5 @@ The textual scan may miss dependencies through function bodies or dynamic SQL. W
 |---|---|
 | Measure which stack tables already exist in production | `prospect_lists` is recorded as live from a local-only branch. `IF NOT EXISTS` would hide a shape mismatch |
 | Extend the release runbook | 19 stack migrations sort before production's 2027 versions (B-19) |
-| Repeat the combined replay with the RC | Result in `RELEASE-READINESS.md` |
+| Repeat the combined replay with the RC at the merge commit | Last run at `019b6de5`; see `RELEASE-READINESS.md` |
 | Re-pin the verifier (A7-1) | B-20 |

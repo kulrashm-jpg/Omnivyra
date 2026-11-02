@@ -10,7 +10,7 @@ Evidence-backed. "Real schema" means disposable PostgreSQL 17.6 with pgvector, b
 | **WS-3 email** | Real adapter, certified engine, render, evidence, unsubscribe link, SES ingestion after signature check | **Provider**, Redis | **No.** Blocked: B-3, B-4, B-5 |
 | **WhatsApp** | Real adapter, broadcast service, enqueue validation, send path, webhook processor | **Meta HTTP**, token lookup, queue, Redis, and approval in send-path tests | **No, by design.** No approval path yet: B-6 |
 | **Social publish** | Real adapter over real `scheduled_posts` | Nothing | It observes only and **cannot publish per person** |
-| **Community** | Real adapter and refusal paths on the real schema | Nothing in these tests | **No.** No link can be created without a verified identity, and nothing writes one: B-7. The path that calls `executeAction` is unit-tested with fakes only |
+| **Community** | Real adapter and refusal paths on the real schema | Nothing in these tests | **No.** No link can be created without a verified identity, and nothing writes one: B-7. The path that calls `executeAction` is unit-tested with fakes only. A scheduled action can execute after an opt-out (L-3) |
 | **Browser** | Real adapter claims no channel | Nothing | **No, by design.** No RPA operation is safe to expose |
 
 None of these is a provider integration test. **No test here proves a real message reaches a real provider.** That is T3.
@@ -50,22 +50,33 @@ Each row ran through the path that really records the event.
 
 **T1, per change:** affected unit suites and mutants. **T2, per commit:** typechecks, gates, full real-schema, rollback, whole-repo compare. **T3, release, needs authorization:** production parity, predeploy at merged main, real sends on a test tenant.
 
-### T2 at this commit
+### T2 at the final commit
 
-Run sequentially at `f7ff85d0`, tree `79aa28f7`, clean before and after. Disposable database rebuilt for the run. Logs are in the evidence archive under `gates3/`.
+Run sequentially at `019b6de5`, tree `68ea57d7`, clean before and after. The disposable database was rebuilt for the run. Logs are in the evidence archive under `gates4/`.
 
 | Gate | Result |
 |---|---|
-| Full real-schema | **Pass.** 70 suites; 1445 passed, 3 skipped, 0 failed |
-| WhatsApp key migration | Rollback removes the constraint; re-apply restores it; with duplicate rows it refuses (rc 3) and names the problem |
-| `typecheck-ci` | **Pass.** 3 of 3 projects clean |
+| Build | 104 migrations above the baseline's ledger, 878 public tables |
+| Full real-schema | **Pass.** 71 of 71 suites; 1486 passed, 3 skipped, 0 failed |
+| WhatsApp key migration | Rollback and re-apply both rc 0 |
+| `typecheck-ci` | **Pass.** 3 of 3 projects, 0 errors |
 | Worker typecheck | **Pass** |
-| Route auth | **Pass.** It reports 2 known open binding findings, tracked and not fixed here |
-| Route policy, migration quality, schema drift | **Pass.** Migration quality: 129 new migrations, 0 violations |
-| Whole-repo jest | **Exit 1: 60 tests fail in 19 suites.** 39991 passed, 70 skipped, 40121 total. **All 60 are in the recorded baseline of 70; none is new.** No failure is in an orchestration, WhatsApp, email engine, lead outreach or schema-gate suite |
-| Mutants | **25 of 25 killed**, none survived; tree clean afterwards |
+| Route auth, route policy, migration quality, schema drift | **Pass** |
+| Whole-repo jest | **Exit 1: 61 tests fail in 20 suites.** 40055 passed, 70 pending, 40186 total |
+| Compared with `5025f51d` | **0 failures new.** Two baseline failures no longer fail: `extensionDispatchLeaseRenewal` and `extensionProductionTargeting`, which failed to run at the base |
+| Mutants | **59 of 59 killed.** Three were re-anchored after the last fix and run again |
 
-**Limits of this result.** The jest baseline was recorded at `fa1a5e58`, not at this branch's merge base `5025f51d`, so "not new" means "not outside that list". The 60 baseline failures remain failures, and they are not diagnosed here. All engine runs stub the provider. The combined check with RC `7bdd76ae` (111 migrations clean, 5 suites, 117 passed) was run at `073b8bce` and **has not been repeated** since the WhatsApp migration was added.
+**The baseline was re-established at this branch's merge base `5025f51d`**, replacing the earlier `fa1a5e58` comparison. It had 61 failing tests in 22 suites, and 2 suites failed to run. The baseline failures are not diagnosed here and remain failures. `plannerOperationalMaturity` is in that baseline and passes and fails between runs. Outreach notes that seven baseline failures are in community and Meta suites, so those suites give this area no protection today.
+
+**The typecheck gate is lenient in one way that matters here.** `strict` is off, so `.catch(() => null)` gives `any`, and a property read on a stale type is not reported. The reviewer reported a stale port type as a compile error. It was not one, and the type was corrected anyway.
+
+### Combined with the release candidate
+
+`019b6de5` merged with RC `7bdd76ae`, in a disposable worktree, never committed: merged with no conflicts; 112 migrations applied cleanly, 882 public tables; the five orchestration real-schema suites passed, 97 of 97 tests. Only the orchestration suites were run on the combination.
+
+### Independent review
+
+Two passes by a separate reviewer, with no conclusion handed to it. The first, on `f9f5d3f1`, found 10 issues; 8 were fixed and 2 recorded. The second, on the commits after it, found 7 defects and 2 plausible issues. Five were fixed in `019b6de5`, each with a test and a mutant. The others are recorded as L-1 to L-6 in `contract/GAP-REGISTER.md`.
 
 ### T3: not run
 
@@ -77,7 +88,27 @@ Run sequentially at `f7ff85d0`, tree `79aa28f7`, clean before and after. Disposa
 | Real WhatsApp on a test number | B-6, B-8, provider-send authorization |
 | PostgREST-level journey | Local stack; can be done without authorization |
 
-## Defects found in this phase
+## Defects found and fixed in this phase
+
+All in local commits. None was reachable in production, because orchestration is off there.
+
+| Defect | Found by | Fixed in |
+|---|---|---|
+| A provider-refused email was sent again on every sweep | Contract test | `77e90518` |
+| A new channel with no permission source would contact everyone | Contract test | `77e90518` |
+| A gate hold was checked after the choice group, so a held candidate let the next one act | Review | `108169cd` |
+| A skipped or cancelled step left a live WS-3 task that a later approval could send | Review | `108169cd` |
+| An exit marked the run terminal before withdrawal, so a failed withdrawal could not be retried | Review | `108169cd` |
+| A `requested` ledger row was read as an engine action, so an opt-out did not stop the step | Outreach, on community | `068e0343`, `30a421c2` |
+| An interrupted WhatsApp submission later read as provider-refused | Test | `068e0343` |
+| A stale claim could begin a step whose conditions had failed | Review | `019b6de5` |
+| A failed broadcast read released the claim and created a second broadcast: a double send | Review | `019b6de5` |
+| A settled WhatsApp request dropped its broadcast id, so a STOP after a failed submission was ignored | Review | `019b6de5` |
+| An outage skipped a step for good, instead of waiting | Review | `019b6de5` |
+| A failed WS-3 task was treated as nothing live, so a skip could let the next candidate contact the person again | Review | `019b6de5` |
+| The report read a failed or truncated ledger read as "not requested" | Review | `019b6de5` |
+
+## Defects found in the earlier phase
 
 Found by running real engines on the real schema. Fakes had hidden all of these.
 
@@ -99,7 +130,7 @@ Found by running real engines on the real schema. Fakes had hidden all of these.
 | B-4 | No outreach retention policy | `personErasure.ts`; `PI-C1-JEV-ARCHITECTURE-DECISION-002.md` records it as blocked | Any real email | **You**, counsel | Decide E-4 |
 | B-5 | Email externals not in place | Edge function, SES configuration, SNS, keys; last measured 2026-10-20 | Real email | Owner, Outreach | After B-3; re-measure |
 | B-6 | No tenant approval, and only super-admin can approve WS-3 | Design written; WhatsApp refuses | All real journeys at tenant level | **You**, then build | Decide A..E |
-| B-7 | No writer for verified identity | Community link refused | Community engine | **You** | Product decision |
+| B-7 | No writer for verified identity. **Corrected by Outreach:** the proof checks the recipient only, and nothing checks the acting account, so wiring a tenant OAuth flow would forge the evidence. A cold prospect will rarely complete OAuth | Community link refused | Community engine | **You** | O-4, then acting-account proof, then L-3 |
 | B-8 | `PHONE_HASH_SALT`, `ENCRYPTION_KEY` needed by WhatsApp | Runtime errors in tests; production values unmeasured | WhatsApp | Owner | Check by name, without reading values |
 | B-9 | `rejected` has no writer | `feedbackIngestion.ts` excludes it by design; nothing else writes it | `not_interested` unreachable | **You**, PI | Decide the human path; likely the tenant approval reject, or an operator route |
 | B-10 | WhatsApp schema in production unknown | `database/whatsapp_system.sql` is outside the chain; baseline lacks the key | Knowing whether main's broadcast works today | Owner | Run the probe below |
@@ -109,7 +140,7 @@ Found by running real engines on the real schema. Fakes had hidden all of these.
 | B-14 | Autonomous dispatch | Disabled; design written | Nothing now | **You** | AU-1, when ready |
 | B-15 | Legacy email noise: activate writes attempts for email it cannot send | Survey | Attempt-history quality | **You** | L-1, L-2 |
 | B-16 | `approveOutreachTaskForOperator` drops `auditFailed` and auto-submits | Verified in code | An approval with no record returns ok | WS-3 | Fix with the approval build |
-| B-17 | Queued WhatsApp broadcast still sends after a reply or later kill switch | Exit does not recall it; opt-out is honoured at send, kill switch is not | Edge | Outreach | Check tenant controls in `processBatch`, or accept |
+| B-17 | Queued WhatsApp broadcast still sends after a reply or later kill switch | Exit does not recall it; opt-out is honoured at send | Edge | Outreach | Send-time controls are fixed on Outreach's branch, not here. A reply still does not recall it |
 | B-18 | Prospect ambiguity: person with several prospects never reaches PI | Producer refuses by design | Feedback completeness | PI | Accept or decide |
 | B-19 | Release ordering: 19 stack migrations sort before production's 2027 versions | Runbook | Landing | Orchestration | Extend the runbook with 20270120* |
 | B-20 | Verifier pin A7-1 stale | Plan line 538 | Release gate | Orchestration | Re-pin at merge |
