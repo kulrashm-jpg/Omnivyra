@@ -18,7 +18,7 @@
 
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
-import { getExecutionInstance } from '../executionInstances/executionInstanceStore';
+import { EXECUTION_INSTANCES_TABLE, getExecutionInstance } from '../executionInstances/executionInstanceStore';
 import { listInstanceTasks } from '../executionPlans/executionPlanStore';
 import { listInstanceHandoffs } from '../outreachBridge/outreachBridgeStore';
 import { resolveSubjectPersonId } from '../leadOutreachExecution/personAnchor';
@@ -110,8 +110,8 @@ export async function readJourneyEvents(
     });
   };
 
-  push('journey.enrolled', { table: 'execution_instances', id: run.id }, run.createdAt);
-  if (run.lifecycleState === 'completed') push('journey.completed', { table: 'execution_instances', id: run.id }, run.updatedAt);
+  push('journey.enrolled', { table: EXECUTION_INSTANCES_TABLE, id: run.id }, run.createdAt);
+  if (run.lifecycleState === 'completed') push('journey.completed', { table: EXECUTION_INSTANCES_TABLE, id: run.id }, run.updatedAt);
 
   const tasks = await listInstanceTasks(organizationId, executionInstanceId);
   const taskByStep = new Map(tasks.map((t) => [t.planStepId, t]));

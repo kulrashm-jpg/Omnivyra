@@ -182,7 +182,7 @@ describe('social_publish adapter — identity and channel separation', () => {
   });
 
   it('exposes only execute — there is no cancel/publish/schedule operation', () => {
-    expect(Object.keys(createSocialPublishAdapter(depsOf(store))).sort()).toEqual(['channels', 'engine', 'execute']);
+    expect(Object.keys(createSocialPublishAdapter(depsOf(store))).sort()).toEqual(['capabilities', 'channels', 'engine', 'execute']);
   });
 });
 
@@ -362,7 +362,7 @@ describe('social_publish adapter — default dependencies only read', () => {
     expect(code).not.toMatch(/execution_engine_requests|publishNow|publishProcessor|boltQueue|scheduler/i);
     const imports = code.split('\n').filter((l) => /^\s*import\s/.test(l));
     expect(imports.map((l) => (/from '([^']+)'/.exec(l) ?? [])[1]).sort()).toEqual([
-      '../../db/writeOwner', './engineAdapters', './socialPostPublicationStatus', './socialPostStepContract',
+      '../../db/writeOwner', './engineAdapters', './engineCapabilities', './socialPostPublicationStatus', './socialPostStepContract',
     ]);
   });
 });

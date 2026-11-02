@@ -62,7 +62,7 @@ const GATE_REFUSALS = new Set([
   'blocked_governance', 'blocked_send_control', 'cancel_requested', 'tenant_scope_violation',
 ]);
 const APPROVAL_OUTCOMES = new Set(['approval_required', 'not_approved', 'approval_unproven']);
-const NOT_CONFIGURED = new Set(['no_template', 'target_binding_unavailable', 'no_bound_action', 'person_identity_unbound', 'no_permission_source']);
+const NOT_CONFIGURED = new Set(['no_template', 'target_binding_unavailable', 'no_bound_action', 'person_identity_unbound', 'no_permission_source', 'person_unresolved']);
 const UNSUPPORTED = new Set(['unsupported', 'unsupported_action', 'unsupported_channel']);
 const MAY_HAVE_ACTED = new Set(['uncertain', 'send_uncertain', 'timeout', 'submission_interrupted', 'blocked_prior_attempt']);
 const PROVIDER_REJECTED = new Set(['failed', 'rejected', 'submit_failed', 'provider_refused_prior_attempt']);
