@@ -104,15 +104,15 @@ Fixes needed before either channel, also regardless: `sms` targets are stored ca
 | 3 | Several providers per engine | **Met** in declaration, tested. No selection logic exists |
 | 4 | Provider adapters behind a normal interface | Met at engine level; no provider-level interface |
 | 5 | Declarations and negotiation | Declarations met. **Negotiation missing**: `checkCapabilityDeclaration` is a static check |
-| 6 | Availability, configuration, health | **Missing from the contract.** `providerCapabilityModel` is the existing candidate |
+| 6 | Availability, configuration, health | **Missing from the contract.** Proposed for v0.2 through `providerCapabilityModel`: `CONTRACT-V0.2-PROPOSALS.md` |
 | 7 | Normalized states and events | **Met**, tested. Events are a read-only view |
 | 8 | Per-channel consent, suppression, authorization | Partly: suppression via `contact_governance_records`; no consent store |
 | 9 | Tenant provider config and credentials | Declared; `integration_credentials` exists; no outreach consumer |
 | 10 | Quotas, usage, credits, rate limits | Partly: `ExecutionUsage` reports only; WS-3 quota only; nothing charges |
 | 11 | Idempotency, retries, timeouts, recovery | **Met** by the contract rules, tested; per-engine timeouts vary |
-| 12 | Webhook verification, normalization | By pattern per route; no shared helper |
+| 12 | Webhook verification, normalization | By pattern per route; no shared helper. Written contract proposed for v0.2 |
 | 13 | Analytics and attribution | **Gap:** non-WS-3 outcomes have no store |
 | 14 | Independent kill switches, tenant and platform | Exist per channel and globally; no per-engine platform switch in the contract |
 | 15 | No competing systems | **Met**: this round added no registry, workflow, prospect store or event system |
 
-So the foundation is proven for 2, 3, 7, 11 and 15. Items 5, 6, 12, 13 and 14 are real remaining contract work, sent to the orchestration owner, and 8 and 10 depend on owner decisions.
+So the foundation is proven for 2, 3, 7, 11 and 15, and 1, 4 and 9 are partly met. Items 5, 6, 12, 13 and 14 are real remaining contract work: all five are on the orchestration owner's v0.2 list, with proposals from this programme for 6 and 12. Items 8 and 10 depend on owner decisions.

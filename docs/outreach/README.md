@@ -1,10 +1,10 @@
 # Outreach Engines: completion and readiness report
 
-Status at 2026-11-02. Branch `integration/outreach-engines-20261102`, built on `feat/orchestration-recovery` dc7f2ae3. Local only: nothing is pushed, merged, deployed, applied to production or sent to a provider.
+Status at 2026-11-02. Branch `integration/outreach-engines-20261102`, code tested at 21f62238, which contains `feat/orchestration-recovery` 30a421c2 and the five engine branches. Local only: nothing is pushed, merged, deployed, applied to production or sent to a provider.
 
 ## Bottom line
 
-**The definition of success is not met.** An authorized workflow cannot yet get a real action from any of the five engines through a real provider. Every engine was inventoried, 24 defects were fixed, and T2 passes, but no provider call has been made, and the remaining blockers are decisions and external setup, not missing engineering alone.
+**The definition of success is not met.** An authorized workflow cannot yet get a real action from any of the five engines through a real provider. Every engine was inventoried, 24 defects were fixed in the engines, the adapter changes were applied by the orchestration owner, and T2 passes, but no provider call has been made, and the remaining blockers are decisions and external setup, not missing engineering alone.
 
 | Engine | Can a journey request it today? | What it can really do | Verified to |
 |---|---|---|---|
@@ -38,8 +38,8 @@ Each fix has a test shown to fail without it, unless marked. All engine-side evi
 |---|---|---|---|
 | WS-3 email | `outreach/ws3-email-20261102` 9c93fe42 | G-1 network or 5xx no longer reads as not sent; G-9a approval with no audit record is reported; G-7 SNS `SubscribeURL` logged after checks; G-4 stale `dispatching` reported; G-8 transport off writes nothing; G-3 false comments (no test possible) | G-2 and G-9b sit in shared code. G-4 reporting appears only when the unscheduled cron route is called |
 | WhatsApp | `outreach/whatsapp-20261102` 0bd12963 | WA-5 webhook 503 when not queued; WA-6 rethrow so attempts apply; WA-11 status errors read, forward-only; WA-20 inbound lookup; WA-13 pagination; B-17 send-time controls for journey sends | WA-1, WA-2, WA-3 each open a send path: owner |
-| Social | `outreach/social-20261102` fc41fac3 | G-1 cron authorization; G-2 no adapter is a definite refusal; G-3 mock providers refused in production; G-4 non-retryable honoured; G-11 unsupported platforms refused at the worker | G-5, G-15 are in the adapter: proposed |
-| Community | `outreach/community-20261102` ea0fe5bd | G-8 observation lock now applies to network candidates | **G-13 rejected:** the inventory called it safe; running it showed a refusal would turn into a browser dispatch by whichever account is logged in. G-6, G-7, GAP-02 proposed |
+| Social | `outreach/social-20261102` fc41fac3 | G-1 cron authorization; G-2 no adapter is a definite refusal; G-3 mock providers refused in production; G-4 non-retryable honoured; G-11 unsupported platforms refused at the worker; G-15 comment corrected by orchestration | G-5 (adapter reads the retry state) is still only proposed. A failed post that will retry reads as failed to a journey until then |
+| Community | `outreach/community-20261102` ea0fe5bd; `outreach/community-maycontact-20261102` ae5f5242 | G-8 observation lock now applies to network candidates. G-6, G-7, GAP-02 applied by orchestration (96c12e8b). Contact governance checked before the claim (30a421c2) | **G-13 rejected:** the inventory called it safe; running it showed a refusal would turn into a browser dispatch by whichever account is logged in. Browser mode and the API-to-browser fallback (G-10) stay unbound for rows that reach the engine outside a journey |
 | Browser | `outreach/browser-20261102` 4322048b | GAP-09 redirect re-check; GAP-10 screenshot after a failure; GAP-11 signed URL no longer stored; GAP-13 cookie domain filter; GAP-14 no false verification stamp; twitter reply id | **GAP-03 unfinished: replies can still falsely report `executed`.** The honest status would drop out of limit counters and let refused actions run. Owner, with GAP-17 |
 
 Agent-reported, and checked only through the T2 runs below: the per-fix "fails without the fix" proofs.
@@ -49,12 +49,15 @@ Agent-reported, and checked only through the T2 runs below: the per-fix "fails w
 | Level | Result |
 |---|---|
 | T1 | Per-engine affected suites passed in each branch (fakes) |
-| T2 real schema, at 63119e74 | **70 of 70 suites; 1447 passed, 3 skipped.** Disposable PostgreSQL 17.6 + pgvector rebuilt from baseline, 104 migrations |
-| T2 typecheck-ci, worker | Pass, at 63119e74 |
-| T2 route auth, route policy, migration quality, schema drift | Pass, at 63119e74 |
-| T2 whole-repo jest, at 63119e74 | Exit 1: 61 failures. 60 are in the recorded baseline of 70 (recorded at fa1a5e58, undiagnosed). **1 was new**: the safety selector caught two unregistered suites |
-| Fix for that failure, 4de88e73 | Registers 8 suites. Safety gate rerun: 56 of 56 suites, 1258 passed, 14 skipped. **Whole repo, real schema and typecheck not rerun at 4de88e73**; the change is one CI list |
+| T2 real schema, at 21f62238 | **71 of 71 suites; 1488 passed, 3 skipped.** Disposable PostgreSQL 17.6 + pgvector rebuilt from baseline, 104 migrations |
+| T2 typecheck-ci, worker | Pass, at 21f62238 |
+| T2 route auth, route policy, migration quality, schema drift | Pass, at 21f62238 |
+| T2 whole-repo jest, at 21f62238 | Exit 1: 2293 of 2318 suites, 40249 of 40379 tests passed. 60 failures, **all in the recorded baseline of 70, none new** |
 | T3 | **Not run.** Needs authorization: production parity, predeploy at merged main, real sends on a test tenant |
+
+The 60 baseline failures were recorded at fa1a5e58 and are not diagnosed. Seven touch this area, so these suites give no protection today: `community_ai_core_apis` (3), `community_ai_webhooks` (2, including "does not call cross-tenant webhooks"), `community_ai_scheduling` (1) and `metaGraphApiVersionConsistency` (1).
+
+Journey evidence, on the disposable database: `orch_contract_journey` runs one whole email journey from enrolment through approval, send, delivery, reply and PI update to reporting, with a recording provider. `orch_engines_real` runs the real WhatsApp service and webhook processor with Meta HTTP stubbed, observes a real social row, and proves community and browser refuse.
 
 Also not run: mutants for this round, PostgREST-level journey, real Redis or BullMQ, any real browser, any provider sandbox. A combined run with the release candidate has not been repeated.
 
@@ -74,16 +77,17 @@ Also not run: mutants for this round, PostgREST-level journey, real Redis or Bul
 
 | Item | Status |
 |---|---|
-| Contract v0.1 (`executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`) | Owned by orchestration. **Uncommitted when this was written.** Read at sha256 f3e125b13c0c7e84 / 3e45271a80c268e7 |
-| `uncertain` | Agreed: a `certainty` field, not a state, so it never reads as FAILED or RETRY_REQUIRED |
-| DELIVERED | Agreed: only from a delivery report. Community and browser declare `reportsDelivery: false` |
-| Rejected email re-sent each sweep | Orchestration verifying on real PostgreSQL |
-| `channelPermissionFact` null for unknown channels | Accepted by orchestration: will fail closed |
-| Unrelated inbound ending a journey | Accepted by orchestration |
+| Contract v0.1 (`executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`) | Owned by orchestration, committed, merged here. Tested at sha256 77bc3e609177c85b / 3e45271a80c268e7 / 38c56967e4c56714 |
+| `uncertain` | Done: a `certainty` field, not a state, so it never reads as FAILED or RETRY_REQUIRED |
+| DELIVERED | Done: only from a delivery report. Community and browser declare `reportsDelivery: false` |
+| Rejected email re-sent each sweep | Fixed by orchestration; `orch_contract_journey` proves one provider call however many sweeps follow |
+| `channelPermissionFact` null for unknown channels | Fixed by orchestration: the sweeper holds the step as `needs_human`/`no_permission_source`. Pinned for `sms` and `phone` |
+| A requested row could still act after an opt-out | Found here on community, fixed by orchestration (068e0343, 30a421c2). It could not be reached while identity refuses |
 | Community responses not read by journeys | Recorded gap, blocked behind identity |
 | Non-WS-3 outcomes have no store (`outreach_outcomes.task_id` NOT NULL) | Recorded gap |
-| Adapter changes from this round | `PROPOSED-ADAPTER-CHANGES.md`; go to orchestration after v0.1 commits. **Merging this branch without the WhatsApp line leaves blocked journeys waiting** |
-| Merge order | Clean at text level with dc7f2ae3. Not yet tested against orchestration's v0.1 changes |
+| Adapter changes from this round | Applied by orchestration as 96c12e8b, except G-5. See `PROPOSED-ADAPTER-CHANGES.md` |
+| Contract v0.2 | `CONTRACT-V0.2-PROPOSALS.md`. Sent to the owner of the contract; not decided, not built |
+| Merge order | Orchestration first, then this branch. One conflict was resolved as a union and tested. Orchestration's work continues: uncommitted changes in its worktree are not in this test |
 
 ## Provider dependency register
 
@@ -137,5 +141,7 @@ Names only. Nothing was read or retrieved.
 ## Other documents
 
 - `inventory/`: the six inventory reports with classifications, file references, 18-field compliance, state mappings and gap registers. They describe dc7f2ae3, before these fixes, and were produced by reading code.
-- `PROPOSED-ADAPTER-CHANGES.md`: changes for orchestration-owned files.
+- `PROPOSED-ADAPTER-CHANGES.md`: what was applied, and what remains for orchestration-owned files.
+- `CONTRACT-V0.2-PROPOSALS.md`: provider availability and webhook verification, for the contract owner.
 - `FUTURE-ENGINES-SMS-VOICE.md`: extensibility evidence.
+- `proposals/`: the copies sent to orchestration, kept as a record. The applied versions in `backend/` supersede them.

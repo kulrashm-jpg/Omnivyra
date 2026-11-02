@@ -1,31 +1,12 @@
 # Proposed changes to orchestration-owned files
 
-Not applied. These files have open work under the orchestration owner, so they go there once contract v0.1 commits. Diffs are against dc7f2ae3 and may need re-basing.
+Applied by the orchestration owner as 96c12e8b, and T2 passes with them: the WhatsApp send-time block (B-17), community G-6 with an explicit `cancel_requested`/`needs_human` check, G-7, GAP-02, and the G-15 and GAP-15 comments. The original copies are in `proposals/`, kept as a record.
 
-## 1. WhatsApp: settle a send-time block (required with B-17)
+Two items remain: G-5 and the acting-account design.
 
-Without this, a journey whose send was blocked stays in `wait`, even after the switch clears, because the status is terminal. It never completes wrongly.
+## Social: G-5, adapter reads the retry state
 
-`whatsappEngineAdapter.ts`, in `fromRecipient`, before `case 'failed':`
-
-```diff
-+      case 'blocked_send_control':
-+        return settle(ctx, 'submitted', 'failed', result(status, 'needs_human', 'a send-time control refused the message; nothing was sent', broadcastId));
-```
-
-## 2. Community: G-6, G-7, GAP-02
-
-Patch: `proposals/community-adapter.patch` (`git apply --check` passed at dc7f2ae3). Test: `proposals/orchestrationCommunityAdapterGates.test.ts.txt`, 13 tests on a fake DB; against the current adapter 10 fail and 3 controls pass; against a patched copy all 13 pass.
-
-- **G-6:** use the engine's own claim, which refuses a cancel-requested row. Caveat: such a row returns `action_moved`/`wait` on every sweep and the step never settles. It may need an explicit `needs_human` check first; that is not in the patch.
-- **G-7:** ask the engine's DM policy before the claim, so a refused DM doesn't consume the approved row. These tests change: `orchestrationCommunityAdapter.test.ts:237` and `:622`, `orchestrationCommunityIdentityLink.test.ts:514`.
-- **GAP-02:** refuse `mode === 'rpa'` for journeys until the acting account is proven. Browser mode and the API-to-browser fallback (G-10) remain unbound. Rows already `submitted` return before the classifier.
-
-Patched copy, 5 adapter suites: 150 pass, and only the 3 named tests fail.
-
-## 3. Social: G-5, adapter reads the retry state
-
-Not run. `socialPostAdapterSafety.test.ts:205` lists permitted imports and probably needs `publishRetryState` added.
+Not applied, not run. Optional: a failed post that will retry reads as failed to a journey until this lands. `socialPostAdapterSafety.test.ts:205` lists permitted imports and probably needs `publishRetryState` added. Diffs are against dc7f2ae3 and may need re-basing.
 
 `socialPublishEngineAdapter.ts`:
 
@@ -81,44 +62,7 @@ Not run. `socialPostAdapterSafety.test.ts:205` lists permitted imports and proba
 +    }
 ```
 
-## 4. Header comments: G-15, GAP-15
-
-`socialPublishEngineAdapter.ts`:
-
-```diff
-- *     (backend/services/publishNowService.ts:180, :522) needs a verified acting
-- *     USER, which an execution task does not carry, and it does NOT evaluate the
-- *     publish authorization predicate (publishNowService.ts:303: authorization
-- *     stays at the route/worker layer). Calling it from a journey would bypass
-- *     that gate and pull the post off the time it was RELEASED for.
-+ *     (backend/services/publishNowService.ts:180, :522) does NOT evaluate the
-+ *     publish authorization predicate (publishNowService.ts:303: authorization
-+ *     stays at the route/worker layer). Calling it from a journey would bypass
-+ *     that gate and pull the post off the time it was RELEASED for. The acting
-+ *     user is not the blocker: the cron and the queue both use the row's user_id.
-+ *     The blockers are one object versus N tasks, no approval provenance on the
-+ *     row, and no held state.
-```
-
-`browserEngineAdapter.ts`, replacing lines 17-27 (the allowlists stay empty):
-
-```
- *       It also cannot meet the adapter contract (re-read against this branch;
- *       origin/main 5025f51d lacks the hardening and is worse):
- *         - success is not proof: reply post-conditions match elements that may
- *           already exist, and a like's is not scoped to the post;
- *         - the target URL is checked by host only (before and after navigation),
- *           not by path, so any page on the platform's host passes;
- *         - one stored session per (org, platform), whoever last uploaded it;
- *           no account identity, no logged-out detection, approver not carried;
- *         - cancellation is keyed on a `community_ai_actions` row id;
- *         - a journey step carries no target (post URL) and nothing maps a
- *           person to one.
- *       RPA stays reachable through the `community` adapter (execution_mode='rpa'
- *       on reply/like); this adapter refusing does not close that route.
-```
-
-## 5. Designed, not written: acting-account proof (community G-1)
+## Designed, not written: acting-account proof (community G-1)
 
 Needs a migration, to be agreed with orchestration before it is written.
 
