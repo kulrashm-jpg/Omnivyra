@@ -18,6 +18,7 @@
  * Tolerates missing image buffer + missing OCR (degrades gracefully).
  */
 
+import type SharpModule from 'sharp';
 import type { CreatorOcrResult } from '../creatorOcrProvider';
 import type { GovernanceResult } from './brandGovernanceEngine';
 import type { AestheticRankResult } from './creativeAestheticRanking';
@@ -212,9 +213,9 @@ async function evaluateCvHeuristics(
     };
   }
 
-  let sharp: typeof import('sharp').default;
+  let sharp: typeof SharpModule;
   try {
-    sharp = require('sharp') as typeof import('sharp').default;
+    sharp = require('sharp') as typeof SharpModule;
   } catch {
     // sharp unavailable — degrade to image-unavailable handling.
     return {

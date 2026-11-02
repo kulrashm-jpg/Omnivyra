@@ -22,9 +22,10 @@
 
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
 
-// sharp 0.35's ESM types expose the factory as `.default`; require() still returns the
-// CJS factory itself (same annotation as creatorAssetRendererContracts.ts).
-const sharp = require('sharp') as typeof import('sharp').default;
+// sharp 0.35 ships separate ESM/CJS type entries; a type-only default import names the
+// factory under both (tsconfig.worker.json is CommonJS; same annotation as creatorAssetRendererContracts.ts).
+import type SharpModule from 'sharp';
+const sharp = require('sharp') as typeof SharpModule;
 
 const W = 240;
 const H = 240;
