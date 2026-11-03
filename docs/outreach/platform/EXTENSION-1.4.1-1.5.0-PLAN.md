@@ -67,6 +67,9 @@ Scope:
      [1.4.1 decision]  [events-signed deploy decision]  [repo P-1]  [D-01 settled]
      [c7: result mapping + evidence fields agreed]  [PI C-PI-1: social_accounts identity]
      [Billing: channel credit decision — before any CHARGED browser action]
+     [c7/GD-4: claim_community_ai_browser_command requires approved_at IS NOT NULL
+      (today 20261231000005:281-286 waives approval for low-risk/no-policy rows)]
+     [D-01: auto-rule path executes only status='approved' rows, claimed before the connector]
             │
  P1  contract + migration (coordinator) ─────────────────────────────────────────────
      extensionCommandSchema v2 (signed envelope)  +  ONE migration on existing tables
