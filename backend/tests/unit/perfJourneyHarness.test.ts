@@ -16,10 +16,12 @@ const source = () => fs.readFileSync(HARNESS, 'utf8');
 
 describe('performance harness safety', () => {
   it('refuses to run without operator-supplied credentials', () => {
-    const result = spawnSync('npx', ['tsx', HARNESS], {
+    // The installed tsx CLI, run by this node: no shell and no npx, whose npm-exec
+    // layer sat on top of the child's own start-up and falls back to a registry
+    // download when tsx is not installed.
+    const result = spawnSync(process.execPath, [require.resolve('tsx/cli'), HARNESS], {
       env: { ...process.env, PERF_E2E_EMAIL: '', PERF_E2E_PASSWORD: '' },
       encoding: 'utf8',
-      shell: true,
       timeout: 120_000,
     });
 
