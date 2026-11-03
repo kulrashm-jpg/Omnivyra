@@ -72,79 +72,88 @@ afterAll(() => {
   else process.env.ENABLE_LEAD_INGESTION = saved.enable;
 });
 
-describe('Agent G — CSV identity characterisation (ACTUAL behaviour, not a contract)', () => {
-  it('C1 role address, no reference: two different humans on info@ collapse into ONE person and ONE prospect', async () => {
+describe('Agent G — CSV identity characterisation (ACTUAL behaviour after PI-FIX round 2, not a contract)', () => {
+  // ── PI-FIX round 2 (2026-11-03) ──────────────────────────────────────────
+  // C1–C5 below were re-stated after the fix on fix/pi-csv-identity-safety. The
+  // ORIGINAL characterisation is kept in each test's comment so the before/after
+  // is readable in one place. Policy decisions D-1, D-3 and D-4 remain OPEN: the
+  // fix only makes ingestion REFUSE (with a reported reason) where it used to
+  // attach silently. It changes no key format and no stored key.
+
+  it('C1 role address, no reference: a second, differently-named human on info@ is REFUSED (identity_conflict), not fused', async () => {
+    // BEFORE: same digest, 1 person, 1 prospect, Bob's CTO superseded Alice's CEO, nothing parked.
     await inRollback(async () => {
       await seed();
       const r = await ingest([
         { email: 'info@agentg-acme.test', fullName: 'Alice Able', jobTitle: 'CEO' },
         { email: 'info@agentg-acme.test', fullName: 'Bob Baker', jobTitle: 'CTO' },
       ]);
-      expect(r).toMatchObject({ total: 2, succeeded: 2, failed: 0 });
+      expect(r).toMatchObject({ total: 2, succeeded: 1, failed: 1 });
       const [a, b] = r.outcomes;
-      expect(a.externalId).toBe(b.externalId);          // same csv:<digest>, the name is not in the digest
-      expect(a.prospectId).toBe(b.prospectId);
-      expect(a.personId).toBe(b.personId);
+      expect(a.ok).toBe(true);
+      expect(b).toMatchObject({
+        ok: false, rejection: 'identity_conflict',
+        identityConflict: { reason: 'role_address_name_mismatch', conflictingPersonId: a.personId, matchedBy: 'email' },
+      });
       expect(await n('canonical_leads', 'company_id')).toBe(1);
       expect(await n('unified_persons', 'company_id')).toBe(1);
-      expect(a.duplicatesParked + b.duplicatesParked).toBe(0);  // nothing surfaces the collapse
-      // Bob's row re-observes the SAME source record; Alice's claims are superseded.
+      expect(await n('source_records', 'organization_id')).toBe(1);
+      // Alice's claims are intact: Bob's row wrote nothing.
       const titles = (await q(
         `SELECT normalized_value, superseded_at IS NOT NULL AS superseded FROM public.source_assertions
           WHERE organization_id=$1 AND attribute='job_title' ORDER BY recorded_at, id`, [ORG])).rows;
-      expect(titles.map((t: { normalized_value: string }) => t.normalized_value).sort()).toEqual(['CEO', 'CTO']);
-      expect(titles.filter((t: { superseded: boolean }) => !t.superseded).map((t: { normalized_value: string }) => t.normalized_value)).toEqual(['CTO']);
+      expect(titles).toEqual([{ normalized_value: 'CEO', superseded: false }]);
     });
   });
 
-  it('C2 role address WITH distinct references: ONE person carrying TWO prospects; no duplicate is parked', async () => {
+  it('C2 role address WITH distinct references: the second named person is REFUSED; the first keeps its reference', async () => {
+    // BEFORE: 1 person carrying 2 prospects; external_keys.csv overwritten to 'agentg-B'; nothing parked.
     await inRollback(async () => {
       await seed();
       const r = await ingest([
         { referenceId: 'agentg-A', email: 'sales@agentg-acme.test', fullName: 'Alice Able' },
         { referenceId: 'agentg-B', email: 'sales@agentg-acme.test', fullName: 'Bob Baker' },
       ]);
-      expect(r).toMatchObject({ succeeded: 2, failed: 0 });
+      expect(r).toMatchObject({ succeeded: 1, failed: 1 });
       const [a, b] = r.outcomes;
-      expect(a.personId).toBe(b.personId);
-      expect(a.prospectId).not.toBe(b.prospectId);
-      expect(await n('canonical_leads', 'company_id')).toBe(2);
+      expect(b).toMatchObject({ rejection: 'identity_conflict', identityConflict: { reason: 'role_address_name_mismatch' } });
+      expect(await n('canonical_leads', 'company_id')).toBe(1);
       expect(await n('unified_persons', 'company_id')).toBe(1);
       expect(await leadPerson(a.prospectId)).toBe(a.personId);
-      expect(await leadPerson(b.prospectId)).toBe(a.personId);
-      // external_keys.csv.external_id is a SCALAR: the second reference overwrote the first.
       const keys = (await q(`SELECT external_keys FROM public.unified_persons WHERE id=$1`, [a.personId])).rows[0].external_keys;
-      expect(keys).toEqual({ csv: { external_id: 'agentg-B' } });
+      expect(keys).toEqual({ csv: { external_id: 'agentg-A' } });
     });
   });
 
-  it('C3 one reference namespace per tenant: a later upload reusing reference "1" for a DIFFERENT email is MERGED into the first person, and the new email is discarded', async () => {
+  it('C3 reference reuse with a DIFFERENT email: the later row is REFUSED (identity_conflict) instead of merged into the first person', async () => {
+    // BEFORE: matched Alice via external_keys, Bob's email stored nowhere, Bob's name a live claim on Alice, nothing parked.
     await inRollback(async () => {
       await seed();
       const first = await ingest([{ referenceId: '1', email: 'alice@agentg-one.test', fullName: 'Alice Able' }]);
       const second = await ingest([{ referenceId: '1', email: 'bob@agentg-two.test', fullName: 'Bob Baker' }]);
       const a = first.outcomes[0];
       const b = second.outcomes[0];
-      expect(b.ok).toBe(true);
-      // Email misses, so W1 falls through to external_keys {csv:{external_id:'1'}} and matches ALICE.
-      expect(b.personId).toBe(a.personId);
-      expect(b.prospectId).toBe(a.prospectId);
+      expect(a.ok).toBe(true);
+      expect(b).toMatchObject({
+        ok: false, externalId: '1', rejection: 'identity_conflict',
+        identityConflict: { reason: 'external_key_contact_mismatch', conflictingPersonId: a.personId, matchedBy: 'external_keys' },
+      });
+      expect(b.error).not.toMatch(/bob|alice@|Baker/i);   // ids and reason only
       expect(await n('canonical_leads', 'company_id')).toBe(1);
       expect(await n('unified_persons', 'company_id')).toBe(1);
-      // primary_email is fill-only-when-null, so Bob's address is stored NOWHERE on the spine.
-      const p = (await q(`SELECT primary_email FROM public.unified_persons WHERE id=$1`, [a.personId])).rows[0];
-      expect(p.primary_email).toBe('alice@agentg-one.test');
-      expect(b.duplicatesParked).toBe(0);               // nothing surfaces the conflict
-      // Bob's name is now a live claim about Alice; Alice's is superseded.
+      expect(await n('source_records', 'organization_id')).toBe(1);
       const names = (await q(
         `SELECT normalized_value, superseded_at IS NULL AS live FROM public.source_assertions
           WHERE organization_id=$1 AND person_id=$2 AND attribute='full_name'`, [ORG, a.personId])).rows;
-      expect(names.filter((r: { live: boolean }) => r.live).map((r: { normalized_value: string }) => r.normalized_value)).toEqual(['Bob Baker']);
-      expect(b.sourceRecordId).toBe(a.sourceRecordId);
+      expect(names).toEqual([{ normalized_value: 'Alice Able', live: true }]);
+      // Re-uploading Alice's own row with the same reference still converges.
+      const replay = await ingest([{ referenceId: '1', email: 'alice@agentg-one.test', fullName: 'Alice Able' }]);
+      expect(replay.outcomes[0]).toMatchObject({ ok: true, personId: a.personId, prospectId: a.prospectId });
     });
   });
 
-  it('C4 an operator reference that equals a synthesised digest is accepted verbatim and lands on the id-less row\'s prospect', async () => {
+  it('C4 an operator reference in the platform csv: namespace is REFUSED (normalization_failed), so it cannot land on an id-less row\'s prospect', async () => {
+    // BEFORE: accepted verbatim; a different person landed on the id-less row's prospect.
     await inRollback(async () => {
       await seed();
       const anon = { email: 'anon@agentg-x.test', fullName: 'Anon Row' };
@@ -152,12 +161,16 @@ describe('Agent G — CSV identity characterisation (ACTUAL behaviour, not a con
       expect(digest).toMatch(/^csv:[0-9a-f]{32}$/);
       const first = await ingest([anon]);
       const second = await ingest([{ referenceId: digest, email: 'carol@agentg-y.test', fullName: 'Carol Cole' }]);
-      expect(second.outcomes[0].personId).not.toBe(first.outcomes[0].personId);
-      expect(second.outcomes[0].prospectId).toBe(first.outcomes[0].prospectId);
+      expect(first.outcomes[0].ok).toBe(true);
+      expect(second.outcomes[0]).toMatchObject({ ok: false, rejection: 'normalization_failed' });
+      expect(second.outcomes[0].error).toMatch(/may not begin with 'csv:'/);
+      expect(await n('canonical_leads', 'company_id')).toBe(1);
+      expect(await n('unified_persons', 'company_id')).toBe(1);
     });
   });
 
-  it('C5 legacy raw key fallback is source-blind: CSV reference "42" matches a pre-namespacing prospect of ANOTHER source keyed "42"', async () => {
+  it('C5 legacy raw key fallback is confined to the same source: CSV reference "42" no longer adopts a pre-namespacing CRM prospect keyed "42"', async () => {
+    // BEFORE: matched the crm prospect (source-blind); it stayed person-less.
     await inRollback(async () => {
       await seed();
       const u = (await q(`INSERT INTO public.canonical_users (company_id, user_type, device) VALUES ($1,'known','unknown') RETURNING id`, [ORG])).rows[0].id;
@@ -166,9 +179,10 @@ describe('Agent G — CSV identity characterisation (ACTUAL behaviour, not a con
         [ORG, u])).rows[0].id;
       const r = await ingest([{ referenceId: '42', email: 'dave@agentg-z.test', fullName: 'Dave Dunn' }]);
       expect(r.outcomes[0].ok).toBe(true);
-      expect(r.outcomes[0].prospectId).toBe(legacy);
-      // A person-less legacy prospect is NOT anchored by ingestion (only reconciliation attaches).
-      expect(await leadPerson(legacy)).toBeNull();
+      expect(r.outcomes[0].prospectId).not.toBe(legacy);
+      const created = (await q(`SELECT source, external_lead_key, unified_person_id FROM public.canonical_leads WHERE id=$1`, [r.outcomes[0].prospectId])).rows[0];
+      expect(created).toEqual({ source: 'csv', external_lead_key: 'csv:42', unified_person_id: r.outcomes[0].personId });
+      expect(await leadPerson(legacy)).toBeNull();   // the CRM prospect is untouched
     });
   });
 

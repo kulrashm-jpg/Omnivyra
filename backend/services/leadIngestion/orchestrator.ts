@@ -31,7 +31,10 @@
  */
 
 import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
-import { resolveUnifiedPerson } from '../identityResolutionService';
+import { resolveUnifiedPerson, type IdentityConflictError } from '../identityResolutionService';
+
+const isIdentityConflict = (e: unknown): e is IdentityConflictError =>
+  (e as { name?: unknown } | null)?.name === 'IdentityConflictError';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
 import { piProspectCandidateKeys, recordPiIngestionContribution } from '../prospectProvenance/ingestion/piIngestionContribution';
@@ -316,9 +319,22 @@ export async function ingestNormalizedRecord(
         email: record.person?.email ?? null,
         phone: record.person?.phone ?? null,
         externalKeys: (record.person?.externalKeys ?? {}) as Record<string, { external_id?: string }>,
+        // Operator-asserted evidence is refused, not attached, when it
+        // contradicts the person it matched. Declared by the adapter on the
+        // record, so this file still names no source.
+        conflictGuard: record.operatorAsserted ? { fullName: record.person?.fullName ?? null } : null,
       });
       personId = identity.unifiedPersonId;
     } catch (e) {
+      // By name, not `instanceof`: a refusal must be recognised even where the
+      // resolver module is substituted (tests mock it), and a missed match would
+      // mislabel a deliberate refusal as an identity FAILURE.
+      if (isIdentityConflict(e)) {
+        return {
+          ...fail(externalId, 'identity_conflict', e),
+          identityConflict: { reason: e.reason, conflictingPersonId: e.conflictingPersonId, matchedBy: e.matchedBy },
+        };
+      }
       return fail(externalId, 'identity_failed', e);
     }
   }
@@ -365,6 +381,10 @@ export async function ingestNormalizedRecord(
       email: record.person?.email ?? null,
       phone: record.person?.phone ?? null,
       fullName: record.person?.fullName ?? null,
+      // An operator reference is free text: its raw legacy key may only adopt
+      // a prospect the SAME source wrote. Provider ids keep the established
+      // source-blind legacy fallback (legacy CRM rows carry a free-text source).
+      legacyMatchRequiresSameSource: record.operatorAsserted === true,
     }, at);
     prospectId = prospect.prospectId;
   } catch (e) {
@@ -632,12 +652,21 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
     throw e;
   }
 
+  // Unmapped input keys are REPORTED per record, never silently dropped. Only
+  // adapters that declare a vocabulary can say what they ignore; a failure to
+  // compute the list is not allowed to change the record's outcome.
+  const withIgnored = (o: IngestionRecordOutcome, raw: Record<string, unknown>): IngestionRecordOutcome => {
+    let ignored: string[] = [];
+    try { ignored = adapter.unmappedFields?.(raw ?? {}) ?? []; } catch { ignored = []; }
+    return ignored.length ? { ...o, ignoredColumns: ignored } : o;
+  };
+
   for (const raw of records) {
     let translated: AdapterResult;
     try {
       translated = adapter.translate(raw ?? {}, organizationId);
     } catch (e) {
-      outcomes.push(fail(null, 'normalization_failed', e));
+      outcomes.push(withIgnored(fail(null, 'normalization_failed', e), raw));
       continue;
     }
 
@@ -645,30 +674,30 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
     // one is a bug or an attack, and either way the record is refused rather
     // than written into whichever tenant it named.
     if (translated?.normalized?.organizationId !== organizationId) {
-      outcomes.push(fail(
+      outcomes.push(withIgnored(fail(
         translated?.normalized?.externalId ?? null,
         'validation_failed',
         `adapter returned tenant '${translated?.normalized?.organizationId}' for a batch owned by '${organizationId}'`,
-      ));
+      ), raw));
       continue;
     }
     // Likewise the source: provenance must name the adapter that produced it.
     if (translated.normalized.source !== adapter.source) {
-      outcomes.push(fail(
+      outcomes.push(withIgnored(fail(
         translated.normalized.externalId ?? null,
         'validation_failed',
         `adapter '${adapter.source}' returned source '${translated.normalized.source}'`,
-      ));
+      ), raw));
       continue;
     }
 
-    outcomes.push(await ingestNormalizedRecord(translated, {
+    outcomes.push(withIgnored(await ingestNormalizedRecord(translated, {
       ingestionRunId: input.ingestionRunId ?? null,
       now: at,
       // One decision for the batch. The kill switch is still re-read per
       // record inside, so a mid-batch flip still stops the next one.
       gateDecision,
-    }));
+    }), raw));
   }
 
   const succeeded = outcomes.filter((o) => o.ok).length;

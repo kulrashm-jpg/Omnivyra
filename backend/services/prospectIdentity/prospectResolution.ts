@@ -94,6 +94,16 @@ export interface ProspectCandidate {
    * only when, this call CREATES the prospect. Never written onto an existing row.
    */
   provenance?: { sourceCategory: string; platform: string | null; externalRef: string } | null;
+  /**
+   * When true, the LEGACY raw-key fallback only matches a row whose
+   * `canonical_leads.source` equals `source`. Set for operator-asserted records
+   * (CSV, manual), whose reference is free text shared across every upload: a
+   * CSV reference `42` must not adopt another source's prospect keyed `42`.
+   * Absent/false keeps the source-blind fallback, which provider resyncs rely
+   * on — legacy CRM rows carry the CRM's free-text lead source ('webinar',
+   * 'referral' ...), not the adapter key, so their source cannot be matched.
+   */
+  legacyMatchRequiresSameSource?: boolean;
 }
 
 export interface ProspectResolution {
@@ -112,13 +122,22 @@ const clean = (v: unknown): string | null => {
   return s === '' ? null : s;
 };
 
-/** Tenant-scoped lookup by the source's own key. */
-async function findByExternalKey(organizationId: string, key: string): Promise<string | null> {
-  const { data, error } = await ownedDbTable('canonical_leads')
+/**
+ * Tenant-scoped lookup by the source's own key.
+ *
+ * `source`, when given, additionally requires `canonical_leads.source` to equal
+ * it. Only the LEGACY raw-key lookup of an operator-asserted candidate passes
+ * it: a namespaced key already names its provider, but a raw key such as `42`
+ * does not, so without this a CSV reference `42` would adopt another source's
+ * prospect keyed `42`.
+ */
+async function findByExternalKey(organizationId: string, key: string, source?: string | null): Promise<string | null> {
+  let query = ownedDbTable('canonical_leads')
     .select('id')
     .eq('company_id', organizationId)   // tenant boundary — never optional
-    .eq('external_lead_key', key)
-    .limit(2);
+    .eq('external_lead_key', key);
+  if (source) query = query.eq('source', source);
+  const { data, error } = await query.limit(2);
   if (error) throw new Error(`canonical_leads lookup failed: ${error.message}`);
   const rows = (data ?? []) as Array<{ id: string }>;
   return rows.length === 1 ? rows[0].id : null;
@@ -152,8 +171,15 @@ export async function resolveProspectShadow(
   }
 
   // Legacy compatibility: rows written before namespacing carry the raw key.
-  if (namespacedKey && legacyKey && legacyKey !== namespacedKey) {
-    const legacy = await findByExternalKey(organizationId, legacyKey);
+  // A raw key carries no provider. For an operator-asserted record the match is
+  // confined to rows the SAME source wrote (`canonical_leads.source`); a raw-key
+  // row of another source is not adopted, and the record creates its own
+  // namespaced prospect — a visible duplicate rather than a silent attachment.
+  // Other candidates keep the source-blind fallback (see the candidate field).
+  const legacySource = candidate.legacyMatchRequiresSameSource ? clean(candidate.source) : null;
+  if (namespacedKey && legacyKey && legacyKey !== namespacedKey
+      && (legacySource || !candidate.legacyMatchRequiresSameSource)) {
+    const legacy = await findByExternalKey(organizationId, legacyKey, legacySource);
     if (legacy) {
       return { ...base, externalLeadKey: legacyKey, prospectId: legacy, outcome: 'matched',
         reason: 'matched an existing prospect by its legacy (un-namespaced) source key', matchedKey: 'legacy' };
