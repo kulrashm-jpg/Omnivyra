@@ -29,8 +29,15 @@ import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityServ
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
+import { getCommunityAiPlatformPolicy } from '@/backend/services/communityAiPlatformPolicyService';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
+
+/**
+ * Steps that only read the tenant's own inbox (queued by
+ * /api/engagement/platform-sync). Every other step can send, like or post.
+ */
+const READ_ONLY_EXTENSION_ACTIONS = new Set(['sync_dm_inbox', 'sync_comments_inbox']);
 
 const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
   reply: 'reply_comment',
@@ -161,7 +168,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let query = supabase
       .from('community_ai_actions')
-      .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
       .eq('execution_mode', 'browser');
@@ -192,6 +199,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const leaseExpiresAt = new Date(Date.now() + LEASE_TTL_SECONDS * 1000).toISOString();
     const commands: any[] = [];
 
+    // Handing a command to the extension is the last point before the browser
+    // sends, so the executor's platform gates (runExecution) are applied again
+    // here: a row prepared before execution was switched off, or before human
+    // approval became required, must not go out. An unreadable policy is
+    // fail-closed (execution off, approval required). A gated row is left
+    // unclaimed, which is provably unsent; dispatch recovery releases it later.
+    const policy = await getCommunityAiPlatformPolicy();
+
     for (const row of data || []) {
       // ── Chain-aware step selection ────────────────────────────────────────
       // When the row carries a command_chain, dispatch the step at
@@ -217,6 +232,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const cap = resolveEngagementCapability(row.platform, topAction as any);
       if (cap.status !== 'api_verified') continue;
       if (isCurrentlyDisabled(row.platform, topAction)) continue;
+
+      if (!READ_ONLY_EXTENSION_ACTIONS.has(capabilityAction)) {
+        if (!policy.execution_enabled) continue;
+        if (policy.require_human_approval && !(row as any).approved_at) continue;
+      }
 
       // Instagram DM business-tier enforcement. Instagram Direct is only
       // usable on business accounts via the browser runtime; dispatch a
