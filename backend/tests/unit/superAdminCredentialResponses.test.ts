@@ -15,6 +15,7 @@ const CLIENT_SECRET_PLAIN = 'SENTINEL-CLIENT-SECRET';
 const ACCESS = 'SENTINEL-ACCESS-TOKEN';
 const REFRESH = 'SENTINEL-REFRESH-TOKEN';
 const FORBIDDEN = [CT_ID, CT_SECRET, CLIENT_ID_PLAIN, CLIENT_SECRET_PLAIN, ACCESS, REFRESH, 'cc01', 'ff02'];
+const API_KEY_PLAIN = 'SENTINEL-PROVIDER-API-KEY';
 
 const mockTables: Record<string, Array<Record<string, unknown>>> = {
   platform_oauth_configs: [{
@@ -28,6 +29,14 @@ const mockTables: Record<string, Array<Record<string, unknown>>> = {
   }],
   user_company_roles: [{ user_id: 'u-1', company_id: 'co-1' }],
   companies: [{ id: 'co-1', name: 'Co' }],
+  analytics_provider_config: [{
+    provider: 'google_analytics', enabled: true, oauth_client_id_encrypted: CT_ID, oauth_client_secret_encrypted: CT_SECRET,
+    scopes: [], redirect_uri: null, status: 'active', updated_at: '2026-11-01T00:00:00Z', metadata: null,
+  }],
+  api_provider_accounts: [{
+    id: 'pa-1', api_source_id: 'src-1', account_name: 'Shared', priority: 1, is_active: true,
+    credentials_encrypted: JSON.stringify({ api_key_value: CT_SECRET, oauth_client_id_ref: CT_ID, oauth_client_secret: API_KEY_PLAIN }),
+  }],
 };
 
 jest.mock('../../db/supabaseClient', () => {
@@ -62,10 +71,12 @@ jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unk
 import platformOauthConfigs from '../../../pages/api/super-admin/platform-oauth-configs';
 import connectionHealth from '../../../pages/api/super-admin/connection-health';
 import integrationHealth from '../../../pages/api/super-admin/integration-health';
+import analyticsProviderConfig from '../../../pages/api/super-admin/analytics-provider-config';
+import providerAccounts from '../../../pages/api/provider-accounts';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-async function get(handler: Handler): Promise<{ status: number; body: unknown }> {
+async function get(handler: Handler, query: Record<string, string> = {}): Promise<{ status: number; body: unknown }> {
   let status = 0;
   let body: unknown;
   const res = {
@@ -74,7 +85,7 @@ async function get(handler: Handler): Promise<{ status: number; body: unknown }>
     setHeader() { return res; },
     end() { return res; },
   };
-  await handler({ method: 'GET', headers: {}, query: {}, cookies: {}, url: '/x' }, res);
+  await handler({ method: 'GET', headers: {}, query, cookies: {}, url: '/x' }, res);
   return { status, body };
 }
 
@@ -100,5 +111,37 @@ describe('super-admin credential GET responses hold no secret material', () => {
     expect(li.configured).toBe(true);
     expect(li.has_client_secret).toBe(true);
     expect(li.client_id_preview).toBe(`${CLIENT_ID_PLAIN.slice(0, 6)}…`);
+  });
+});
+
+/**
+ * SEC-FIX round 2 sweep of pages/api/** admin / super-admin reads: two more GET handlers
+ * read encrypted columns and were not pinned — analytics-provider-config (decrypts both
+ * GA OAuth values to report flags + a 6-character preview) and provider-accounts (lists
+ * api_provider_accounts rows, whose credentials_encrypted JSON must be stripped).
+ */
+describe('super-admin credential GET responses hold no secret material (round-2 sweep)', () => {
+  beforeEach(() => mockDecrypt.mockClear());
+
+  it('analytics-provider-config returns flags and a 6-character preview only', async () => {
+    const r = await get(analyticsProviderConfig as unknown as Handler);
+    expect(r.status).toBe(200);
+    const text = JSON.stringify(r.body);
+    for (const s of FORBIDDEN) expect(text).not.toContain(s);
+    const config = (r.body as { config: Record<string, unknown> }).config;
+    expect(config.configured).toBe(true);
+    expect(config.has_client_secret).toBe(true);
+    expect(config.client_id_preview).toBe(`${CLIENT_ID_PLAIN.slice(0, 6)}...`);
+  });
+
+  it('provider-accounts list strips credentials_encrypted', async () => {
+    const r = await get(providerAccounts as unknown as Handler, { api_source_id: 'src-1' });
+    expect(r.status).toBe(200);
+    const text = JSON.stringify(r.body);
+    for (const s of [...FORBIDDEN, API_KEY_PLAIN, 'credentials_encrypted']) expect(text).not.toContain(s);
+    const accounts = (r.body as { accounts: Array<Record<string, unknown>> }).accounts;
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].account_name).toBe('Shared');
+    expect(mockDecrypt).not.toHaveBeenCalled();
   });
 });
