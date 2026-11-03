@@ -15,6 +15,7 @@ import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
 import { ownedDbTable } from '../db/writeOwner';
+import { recheckCommunityRecipient, isRecipientRecheckRefusal } from './communityRecipientRecheck';
 
 import { type CommunityAiAction, type ExecutionMode, type ResultStatus, type ExecutionResult, type MetricEventType, deriveAutoIdempotencyKey, recordExecutionMetric, TERMINAL_ROW_STATUSES, validateAction, requiresApproval, loadHistoryMetrics, resolveExecutionMode, recordManualSimulation, runApiExecution, runRpaExecution, prepareBrowserDispatch, buildDmCommandChain, dmCommandChainRefusal } from './communityAiActionExecutorContracts';
 
@@ -613,6 +614,32 @@ const runExecution = async (
       error: { code: 'PLAN_LIMIT_EXCEEDED', ...enforcement },
       may_have_acted: false,
     };
+  }
+
+  // L-3: the recipient's consent, suppression and opt-out are rechecked here,
+  // after every other gate and immediately before the platform call / browser
+  // enqueue, so an opt-out recorded after approval still stops the action.
+  // Every entry point (manual execute, scheduler, retry flush, auto-rule,
+  // orchestration adapter) passes through this line. 'manual' is a recorded
+  // simulation that contacts no one.
+  if (executionMode !== 'manual') {
+    const recheck = await recheckCommunityRecipient(action);
+    if (isRecipientRecheckRefusal(recheck)) {
+      await logCommunityAiActionEvent({
+        action_id: action.id,
+        tenant_id: action.tenant_id,
+        organization_id: action.organization_id,
+        event_type: 'skipped',
+        event_payload: {
+          policy_flag: 'recipient_recheck',
+          code: recheck.code,
+          reason: recheck.reason,
+          governance: recheck.governance ?? null,
+          source: options?.source || 'unknown',
+        },
+      });
+      return { ok: false, status: 'skipped', reason: recheck.code, error: recheck.code, execution_mode: executionMode, may_have_acted: false };
+    }
   }
 
   // Every return above is a pre-dispatch gate: nothing reached the platform,

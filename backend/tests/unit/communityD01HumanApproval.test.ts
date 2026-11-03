@@ -20,6 +20,14 @@
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
 
 let mockDb: FakeDb = createFakeDb();
+// L-3: these tests exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement /
+// communityL3RecheckBrowserClaim. Here every recipient is treated as allowed.
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
   ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
