@@ -35,6 +35,12 @@ function rolesBuilder() {
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => rolesBuilder() } }));
 jest.mock('@/backend/db/supabaseClient', () => ({ supabase: { from: () => rolesBuilder() } }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
+// R-3 suspends ingestion on these routes; this suite proves the signature
+// layer underneath, which still guards them if ingestion is ever re-enabled.
+jest.mock('../../services/extensionIngestionSuspension', () => ({
+  ...jest.requireActual('../../services/extensionIngestionSuspension'),
+  EXTENSION_BROWSER_INGESTION_SUSPENDED: false,
+}));
 
 import { createHash, createHmac, randomBytes } from 'crypto';
 import handler from '../../../pages/api/extension/events';

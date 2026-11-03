@@ -3,12 +3,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { ingestExtensionEvent } from '../../../backend/services/extensionEventIngestionService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireExtensionAuth } from '../../../backend/middleware/extensionAuthMiddleware';
+import { EXTENSION_BROWSER_INGESTION_SUSPENDED, refuseSuspendedIngestion } from '../../../backend/services/extensionIngestionSuspension';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // R-3: browser ingestion is suspended. Refused before auth, parsing or any
+  // read/write, so nothing collected in a browser is stored.
+  if (EXTENSION_BROWSER_INGESTION_SUSPENDED) return refuseSuspendedIngestion(res);
 
   const organizationId =
     (req.body?.organization_id ?? req.body?.organizationId ?? req.body?.orgId ?? req.body?.companyId) as
