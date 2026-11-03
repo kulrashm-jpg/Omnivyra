@@ -214,6 +214,18 @@ export const envSchema = z.object({
     .regex(/^[a-f0-9]{64}$/, 'ENCRYPTION_KEY must be 64 hex characters')
     .describe('256-bit hex encryption key for AES-GCM at-rest token storage'),
 
+  // Key rotation (backend/auth/encryptionKeyRing.ts): previous ENCRYPTION_KEY values that
+  // are still accepted for DECRYPTION only, comma-separated. Unset outside a rotation.
+  // Malformed → boot refuses (a half-parsed list would silently orphan rows).
+  ENCRYPTION_KEY_PREVIOUS: z
+    .string()
+    .regex(
+      /^(?:\s*[a-fA-F0-9]{64}\s*(?:,\s*[a-fA-F0-9]{64}\s*)*)?$/,
+      'ENCRYPTION_KEY_PREVIOUS must be comma-separated 64-hex keys when set',
+    )
+    .optional()
+    .describe('Comma-separated previous 256-bit hex encryption keys, decrypt-only, used during ENCRYPTION_KEY rotation.'),
+
   // Dedicated key for OAuth state HMAC signing. Optional — when unset,
   // backend/auth/oauthState.ts signs with a domain-separated key DERIVED from
   // ENCRYPTION_KEY: HMAC-SHA256(ENCRYPTION_KEY, 'omnivyra/oauth-state/v1').
@@ -442,6 +454,7 @@ export function validateEnv(): EnvConfig {
       
       // Encryption
       ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
+      ENCRYPTION_KEY_PREVIOUS: process.env.ENCRYPTION_KEY_PREVIOUS,
       OAUTH_STATE_HMAC_KEY: process.env.OAUTH_STATE_HMAC_KEY,
       INTERNAL_METRICS_SECRET: process.env.INTERNAL_METRICS_SECRET,
       
