@@ -274,3 +274,119 @@ P0 #6 Billing ──────────────────────
 | R-4 | Release H0 alone: one schema-only `SELECT` that settles `approved_by` and the 1.5.0 migration |
 | P-1 | Record the Web Store publisher account |
 | C-1 | Name the extension client owner |
+
+---
+
+## Round 3: execution of the 2026-11-03 control-tower rulings
+
+### R-1: DEPLOYED and verified
+
+**Release**
+- PR #366, merged as `e04d827f`.
+- Its head was `d0567baa3`, not the authorised `68a15f96d`. CI's non-regression job required two non-runtime commits:
+  - `c27b5b185` removes the stale `events.ts` route-auth allow-list exception, which the gate itself demanded;
+  - `d0567baa3` replaces a fabricated JWT-shaped test literal that the secrets gate flagged.
+- Neither commit changes runtime code. Both were disclosed on the PR.
+
+**Deployed**
+- Web: `www.omnivyra.com` = `dpl_GYDw56tqCHoQGYMvR4Nm5XDFU3Rt` at `e04d827f`.
+- Worker: Railway `fe90d9b7`, boot `gitSha e04d827f`.
+
+**Verified in production**
+- `/api/extension/events` moved from the old `{"error":"Unauthorized"}` to the middleware's `INVALID_SESSION`.
+- Forged bearer tokens, and forged tokens sent with forged signature headers, are refused with 401.
+- Other extension routes are unchanged against the pre-deploy baseline.
+- The homepage returns 200.
+- The render-parity gate passes.
+
+**Not verifiable in production within the boundary** (proven by tests on the deployed SHA instead): a valid token without a signature, nonce replay, and 1.4.0 compatibility. Each needs a real production session, which means pairing as a logged-in user.
+
+**predeploy-check:** passed. Two gates were skipped (the critical-env check and schema parity) because they need the production `.env.local`, which was not read. Neither applies to this change: no environment change, no migration.
+
+**Rollback reference:** web `dpl_5xv4EYP8q8kiQnd5aoebDfAaQSCS`; worker `5c4ae72a`; both at `5025f51d`.
+
+**Tag:** `deploy/omnivyra-20261103-2146-r1`, local only.
+
+### R-3: DEPLOYED and verified
+
+**Release**
+- PR #367, one commit `9ecc56b0d`, rebased onto merged `main`, merged as `23a0a586`.
+- All 13 CI checks passed on the first run.
+
+**Deployed**
+- Web: `www` = `dpl_7Lr3iaMLrdxJFadxkeRGWwotc3iZ` at `23a0a586`.
+- Worker: Railway `7ee96a2c`, boot `gitSha 23a0a586`.
+
+**Verified in production**
+- `POST /api/extension/events`, `/events/dms` and `/events/comments` return **410** `BROWSER_SYNC_SUSPENDED` with the suspension message. They returned 401 before.
+- `platform-sync` (POST and GET), `commands`, `engagement/sync` and `health` answer exactly as in the pre-R-3 baseline.
+- The homepage returns 200, and render parity passes.
+
+**Verified by tests only** (each needs a signed-in session):
+- `platform-sync` POST returning 410;
+- `commands` never issuing sync commands;
+- the Command Center warning;
+- the inbox read paths.
+These are proven in `extensionIngestionSuspended` with positive controls.
+
+**Expected containment effect:** users still on 1.4.0 see the red "Omnivyra sync failed" toast on X, Facebook and Instagram, with the server's suspension message.
+
+**Rollback reference:** web `dpl_GYDw56tqCHoQGYMvR4Nm5XDFU3Rt` (R-1); worker `fe90d9b7`; both at `e04d827f`.
+
+**Tag:** `deploy/omnivyra-20261103-2259-r3`, local only.
+
+### 1.4.1
+Not published, as ruled. The pin branch `release/extension-1.4.1-pin` (`86dd45eb5`) stays separate.
+
+### R-4 / H0: BLOCKED, stopped as instructed
+- The approved read-only path is `run-readonly.js`: `BEGIN READ ONLY`, a URL with no password, the password taken from `pgpass`.
+- It failed before authentication (`SASL: client password must be a string`), because `pgpass` holds no password for this host. Nothing was read.
+- No other credential was looked for, `.env.local` was not read, and no role was created.
+- The exact query is ready, for you to run in the Supabase SQL editor:
+  `SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('community_ai_actions', 'extension_sessions') ORDER BY table_name, ordinal_position`
+- Expected output: one row per column. The rows that settle the open questions are `community_ai_actions.approved_by`, whether present and uuid, and the `extension_sessions` columns.
+
+### L-3 and L3-1: IMPLEMENTED, local
+**Commit:** `f4d7a2e8f` on `outreach/l3-community-recipient-recheck`, built on D-01 `4f8359114`. Preserve ref `refs/preserve/outreach-l3-recipient-recheck`.
+
+**Recheck**
+- Deterministic and read-only: exact keys only. Any ambiguity, missing identity or read failure refuses.
+- Consent comes from the canonical store, and only an explicit "allowed" proceeds.
+
+**Enforcement points**
+- `runExecution`, immediately before dispatch. This covers manual execute, the scheduler, retry flush, auto-rule and the adapter.
+- `commands.ts`, before the claim. This covers browser dispatch and chain steps.
+
+**Writer**
+- A thin adapter over PI's `recordContactGovernance`, so no new store.
+- PI contract gaps, all failing safe:
+  - **G1:** no actor column;
+  - **G2:** social identifiers are lower-cased;
+  - **G3:** a channel "do not engage" cannot be narrowed to community engagement only.
+- These need PI sign-off. No PI session was available.
+
+**Tests**
+- 9 suites, 205 of 205 pass. These include an opt-out written after approval blocking the action on every executeAction source and on the browser claim.
+- The broad community, engagement, RPA and extension-dispatch set passes: 57 suites.
+- Five existing suites received an "allowed recipient" stub, with no assertion changed.
+
+**Typecheck:** the root and backend projects show 0 errors. The test config's errors are all outside L-3's files.
+
+**Next:** Orchestration's race-fix lock now builds on `f4d7a2e8f`, and its diff comes to Outreach before commit.
+
+### D-03: hold relayed; conflict persists
+- Orchestration committed D-03 **locally** as `9a8dab9a` on a direct owner ruling it received, before my relay of the hold arrived. It is not pushed or merged.
+- Its evidence pack for items 2–5 is at `.../scratchpad/w1/B-d03-evidence.md`, sha256 `611909ec…ee92`, with 7 of 7 new real-schema tests passing.
+- You need to confirm which ruling stands. If it is HOLD, the commit stays local and unmerged.
+
+### P-A: claim-function fix, reviewed (test-database only, uncommitted)
+- **Diff:** sha256 `a8853bb1…5159`. I peer-approved it for the test database only.
+- **What it does:** the claim now requires `approved_at`, `approved_by` and the approval route's own log entry. The AI, risk and policy waiver is removed.
+- **Open for you:**
+  1. The 7-day approval expiry: enforce it in the claim, or leave it to D-02.
+  2. The kill switch fails open when no policy row exists.
+  3. The approval-policy rulings relayed to Orchestration conflict with yours on B (approver roles) and D (self-approval).
+
+### P-1 and C-1: need you
+- **P-1:** please give the controlling Google account or publisher ID for Web Store item `khlballmijciomdbigljpafliajdekbg`. Nothing has been inferred from the listing's display name.
+- **C-1:** please nominate the individual technical owner for the extension client.
