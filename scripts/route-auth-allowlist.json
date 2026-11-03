@@ -495,11 +495,6 @@
       "reason": "requireCompanyContext + withRBAC on companyId; stores are keyed by company, campaignId only filters that company's records.",
       "evidence": "requireCompanyContext\\("
     },
-    "pages/api/extension/events.ts": {
-      "kind": "inline-binding",
-      "reason": "Extension session org must equal companyId, plus an active-membership check; thread lookups are scoped by organization_id.",
-      "evidence": "extensionSession\\.orgId !== companyId"
-    },
     "pages/api/extension/redeem.ts": {
       "kind": "machine-token",
       "reason": "Browser-extension pairing: authorised by a single-use, 60-second claim code minted for an authenticated user/org; issues the extension session.",

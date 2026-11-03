@@ -30,6 +30,7 @@ import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/servic
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
 import { getCommunityAiPlatformPolicy } from '@/backend/services/communityAiPlatformPolicyService';
+import { EXTENSION_BROWSER_INGESTION_SUSPENDED, SUSPENDED_COLLECTION_COMMANDS } from '@/backend/services/extensionIngestionSuspension';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
 
@@ -55,6 +56,10 @@ const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
 };
 
 function mapCapabilityActionToExtensionAction(capabilityAction: string): string | null {
+  // R-3: collection commands are never handed to an extension while browser
+  // ingestion is suspended. An unmapped row is skipped below, not claimed, so
+  // already-queued sync rows stay untouched.
+  if (EXTENSION_BROWSER_INGESTION_SUSPENDED && SUSPENDED_COLLECTION_COMMANDS.has(capabilityAction)) return null;
   return EXTENSION_ACTION_BY_PAIR[capabilityAction] || null;
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizePlatform } from '@/utils/platformIcons';
 import { runSharedPoll } from '@/utils/pollingGuards';
+import { BROWSER_SYNC_SUSPENDED, BROWSER_SYNC_SUSPENDED_NOTICE } from '@/lib/engagement/browserSyncSuspension';
 
 type ExtensionAuthState = {
   isAuthenticated?: boolean;
@@ -293,6 +294,8 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
 
   const triggerPlatformSync = useCallback(
     async (platform: string) => {
+      // R-3: never ask the extension to collect while browser sync is suspended.
+      if (BROWSER_SYNC_SUSPENDED) throw new Error(BROWSER_SYNC_SUSPENDED_NOTICE);
       const result = await triggerPlatformSyncRequest(platform);
       if (!result?.success) {
         throw new Error(result?.message || `Unable to trigger ${platform} sync`);
