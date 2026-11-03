@@ -8,9 +8,14 @@ type CommunityAiPlatformPolicy = {
   updated_by: string | null;
 };
 
+/**
+ * Applies when the read succeeds and no policy row is configured. A missing
+ * policy must not authorise automated execution, so auto rules are off;
+ * manual (human-initiated) execution keeps its existing defaults.
+ */
 const DEFAULT_POLICY: CommunityAiPlatformPolicy = {
   execution_enabled: true,
-  auto_rules_enabled: true,
+  auto_rules_enabled: false,
   require_human_approval: false,
   updated_at: null,
   updated_by: null,
@@ -21,8 +26,7 @@ const DEFAULT_POLICY: CommunityAiPlatformPolicy = {
  * query returned an error or threw). An unreadable policy must never
  * authorise automatic execution: execution is off, auto rules are off and
  * human approval is required. This is distinct from DEFAULT_POLICY, which
- * applies when the read succeeds and no policy row is configured (that
- * default is an owner decision and is deliberately left unchanged here).
+ * applies when the read succeeds and no policy row is configured.
  *
  * Not cached, so the next call retries the read.
  */
@@ -77,10 +81,8 @@ export const getCommunityAiPlatformPolicy = async (): Promise<CommunityAiPlatfor
           typeof row.execution_enabled === 'boolean'
             ? row.execution_enabled
             : DEFAULT_POLICY.execution_enabled,
-        auto_rules_enabled:
-          typeof row.auto_rules_enabled === 'boolean'
-            ? row.auto_rules_enabled
-            : DEFAULT_POLICY.auto_rules_enabled,
+        // Anything but an explicit true is not an authorisation to automate.
+        auto_rules_enabled: row.auto_rules_enabled === true,
         require_human_approval:
           typeof row.require_human_approval === 'boolean'
             ? row.require_human_approval
@@ -96,7 +98,7 @@ export const getCommunityAiPlatformPolicy = async (): Promise<CommunityAiPlatfor
   }
 
   // Read succeeded and no policy row is configured: DEFAULT_POLICY applies
-  // (unchanged; see UNREADABLE_POLICY for the error case).
+  // (see UNREADABLE_POLICY for the error case).
   cachedPolicy = DEFAULT_POLICY;
   cacheExpiresAt = now + CACHE_TTL_MS;
   return cachedPolicy;

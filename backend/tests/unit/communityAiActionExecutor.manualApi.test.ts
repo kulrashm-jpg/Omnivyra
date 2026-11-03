@@ -29,6 +29,7 @@ jest.mock('../../db/supabaseClient', () => ({
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
   getCommunityAiPlatformPolicy: jest.fn(async () => ({
     execution_enabled: true,
+    auto_rules_enabled: true,
     require_human_approval: false,
   })),
 }));

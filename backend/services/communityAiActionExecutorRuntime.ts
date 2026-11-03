@@ -450,7 +450,7 @@ export const executeAction = async (
 const runExecution = async (
   action: CommunityAiAction,
   approved: boolean,
-  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk' }
+  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk'; auto?: boolean }
 ): Promise<ExecutionResult> => {
   const policy = await getCommunityAiPlatformPolicy();
   if (!policy.execution_enabled) {
@@ -475,6 +475,37 @@ const runExecution = async (
       },
     });
     return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY' };
+  }
+
+  // Final boundary for automation: callers check auto_rules_enabled too, but
+  // the platform call happens here, so an automated invocation is refused
+  // here whenever the policy does not explicitly allow auto rules.
+  if ((options?.source === 'auto' || options?.auto === true) && policy.auto_rules_enabled !== true) {
+    await logCommunityAiActionEvent({
+      action_id: action.id,
+      tenant_id: action.tenant_id,
+      organization_id: action.organization_id,
+      event_type: 'skipped_due_to_platform_policy',
+      event_payload: {
+        policy_flag: 'auto_rules_enabled',
+        source: options?.source || 'unknown',
+      },
+    });
+    return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY' };
+  }
+
+  // Scheduled dispatch runs with no human present, so it needs an approval of
+  // record. Rows approved by an auto rule carry status 'approved' but no
+  // approved_at; only the approve route stamps it.
+  if (options?.source === 'scheduler' && !action.approved_at) {
+    await logCommunityAiActionEvent({
+      action_id: action.id,
+      tenant_id: action.tenant_id,
+      organization_id: action.organization_id,
+      event_type: 'skipped_due_to_platform_policy',
+      event_payload: { policy_flag: 'approval_of_record', source: 'scheduler' },
+    });
+    return { ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED' };
   }
 
   if (policy.require_human_approval && !action.approved_at) {

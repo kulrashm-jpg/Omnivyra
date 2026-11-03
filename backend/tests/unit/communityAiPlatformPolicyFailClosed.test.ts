@@ -1,7 +1,7 @@
 /**
  * H-1 (read error): an unreadable community_ai_platform_policy must fail
- * closed. A missing row (read succeeded, nothing configured) keeps the
- * existing DEFAULT_POLICY, which is an open owner decision.
+ * closed. A missing row (read succeeded, nothing configured) turns auto
+ * rules off and leaves the manual defaults as they were.
  */
 
 type PolicyRead = () => Promise<{ data: unknown; error: unknown }>;
@@ -121,12 +121,12 @@ describe('community AI platform policy — unreadable store fails closed (H-1)',
     expect(policy.updated_at).toBe('2026-11-01T00:00:00Z');
   });
 
-  it('missing row (read ok, no policy configured) keeps the existing default — unchanged by this fix', async () => {
+  it('missing row (read ok, no policy configured) does not authorise auto rules; manual defaults unchanged', async () => {
     policyRead = async () => ({ data: [], error: null });
     const policy = await getCommunityAiPlatformPolicy();
     expect(policy).toMatchObject({
       execution_enabled: true,
-      auto_rules_enabled: true,
+      auto_rules_enabled: false,
       require_human_approval: false,
     });
   });
