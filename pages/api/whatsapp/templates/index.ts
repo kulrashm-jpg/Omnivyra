@@ -14,6 +14,7 @@ import {
   submitTemplate,
   type CreateTemplateInput,
 } from '../../../../backend/services/whatsappTemplateService';
+import { loadOwnedSenderAccount } from '../../../../backend/services/whatsappBroadcastService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET: list templates ───────────────────────────────────────────────────
@@ -61,6 +62,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const roleGate = await enforceRole({ req, res, allowedRoles: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN] });
     if (!roleGate) return;
+
+    // submitTemplate uses this account's Meta token; it must be company_id's.
+    // Unknown and foreign accounts get the same 404 (as the broadcast routes).
+    const owned = await loadOwnedSenderAccount(company_id, social_account_id);
+    if (!owned.ok) {
+      return owned.reason === 'unreadable'
+        ? res.status(503).json({ error: 'Social account lookup failed. Please try again.' })
+        : res.status(404).json({ error: 'Social account not found' });
+    }
 
     const input: CreateTemplateInput = {
       company_id,

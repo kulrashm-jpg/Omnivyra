@@ -69,6 +69,10 @@ jest.mock('../../db/writeOwner', () => ({
         const r = await run();
         return { data: Array.isArray(r.data) ? (r.data as Row[])[0] ?? null : r.data, error: r.error };
       },
+      maybeSingle: async () => {
+        const r = await run();
+        return { data: Array.isArray(r.data) ? (r.data as Row[])[0] ?? null : r.data, error: r.error };
+      },
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => run().then(res, rej),
     };
     return api;
@@ -103,7 +107,8 @@ const seed = (over: Row = {}) => {
     id: 'b1', company_id: ORG, social_account_id: 'sa1', status: 'running',
     template_name: 'tpl', language: 'en', body_params: [], ...over,
   });
-  db.accounts.push({ id: 'sa1', phone_number_id: 'pn1' });
+  // The sender account belongs to the broadcast's company (processBatch re-checks it).
+  db.accounts.push({ id: 'sa1', company_id: ORG, phone_number_id: 'pn1' });
   db.recipients.push({ id: 'r1', encrypted_phone: encrypt(PHONE), contact_name: 'A', status: 'pending', retry_count: 0 });
 };
 
