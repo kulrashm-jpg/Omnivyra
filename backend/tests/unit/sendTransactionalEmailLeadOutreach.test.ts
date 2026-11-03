@@ -290,11 +290,12 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // WP3 / L5 changed the transport (it now mints the unsubscribe link) and is
     // re-pinned here. Dispatch was re-pinned when it learned to claim a task an
     // earlier dispatch returned to `queued` (ws3RequeuedDispatch.test.ts); the
-    // provider-facing request it builds is unchanged.
+    // provider-facing request it builds is unchanged. Re-pinned again for D-03 (the
+    // journey hold before governance, orchJourneyHoldD03.test.ts); same request.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('a7ebe6619dd2a314');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('e70abcfe13d3cc93');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

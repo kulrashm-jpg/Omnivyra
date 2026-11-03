@@ -442,13 +442,15 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
     // RE-PINNED 2026-10-28 to the orchestration port: governance, quota and dispatch
     // are origin/main's plus the WS-3 re-dispatch fix (pi-consol's reconciliation is NOT
     // ported; owner decision pending); personAnchor is pi-consol's subject-aware version.
+    // Dispatch RE-PINNED 2026-11-03 for D-03: the journey hold before governance
+    // (orchJourneyHoldD03.test.ts), agreed with Outreach.
     expect(sha('backend/services/leadOutreachExecution/governance.ts')).toBe('1baa47982b4a4613');
     expect(sha('backend/services/leadOutreachExecution/approval.ts')).toBe('4ef1acc19f3feb64');
     expect(sha('backend/services/leadOutreachExecution/materialization.ts')).toBe('46d4461b56be2908');
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
     expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5835d9876ad97b5b');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c0683963a248bbc3');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('e70abcfe13d3cc93');
   });
 
   it('person resolution reuses the ONE existing mechanism', () => {

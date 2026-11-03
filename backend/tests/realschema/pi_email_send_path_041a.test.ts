@@ -333,6 +333,9 @@ async function bridged(opts: {
     organizationId: org, campaignId, workflowId, subjectKind: kind, subjectId,
   });
   const plan = await createExecutionPlan({ organizationId: org, executionInstanceId: instance.id });
+  // D-03 fixture: the run is under way, as advance_execution_plan leaves it once a
+  // step is eligible. A bridged task of a run that is not active is held, not sent.
+  await db.query(`UPDATE public.execution_instances SET lifecycle_state='active' WHERE id=$1`, [instance.id]);
   const [execTask] = await listInstanceTasks(org, instance.id);
   const { handoff } = await bridgeExecutionTask({
     organizationId: org, executionTaskId: execTask.id,
