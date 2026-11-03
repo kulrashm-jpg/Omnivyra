@@ -269,8 +269,19 @@ export interface IngestionRecordOutcome {
   error?: string;
   /** Present only with `rejection: 'identity_conflict'`. Ids and a reason only. */
   identityConflict?: {
-    reason: 'external_key_contact_mismatch' | 'role_address_name_mismatch';
+    reason: 'external_key_contact_mismatch' | 'phone_match_email_mismatch' | 'role_address_name_mismatch';
     conflictingPersonId: string;
+    matchedBy: 'email' | 'phone' | 'external_keys';
+  };
+  /**
+   * Present only on an ACCEPTED operator-asserted record whose name differs
+   * from the person it attached to. Advisory: the record was ingested (a name
+   * correction and a different human look alike — D-4), and this flags it for
+   * human review. Ids and a reason only.
+   */
+  identityReview?: {
+    reason: 'name_mismatch';
+    personId: string;
     matchedBy: 'email' | 'phone' | 'external_keys';
   };
   /**

@@ -312,6 +312,7 @@ export async function ingestNormalizedRecord(
   // Resolved FIRST so the evidence can be stored already linked to its person.
   // W1's resolver is the sole resolve-or-create path; nothing here re-derives it.
   let personId: string | null = null;
+  let identityReview: IngestionRecordOutcome['identityReview'];
   if (record.entityType === 'person') {
     try {
       const identity = await resolveUnifiedPerson({
@@ -325,6 +326,9 @@ export async function ingestNormalizedRecord(
         conflictGuard: record.operatorAsserted ? { fullName: record.person?.fullName ?? null } : null,
       });
       personId = identity.unifiedPersonId;
+      if (identity.review && identity.matchedBy !== 'created') {
+        identityReview = { reason: identity.review.reason, personId, matchedBy: identity.matchedBy };
+      }
     } catch (e) {
       // By name, not `instanceof`: a refusal must be recognised even where the
       // resolver module is substituted (tests mock it), and a missed match would
@@ -585,6 +589,7 @@ export async function ingestNormalizedRecord(
     canonicalWithheld: ingestion.canonicalWithheld,
     duplicatesParked,
     duplicatesAlreadyOpen,
+    ...(identityReview ? { identityReview } : {}),
   };
 }
 

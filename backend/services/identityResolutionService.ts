@@ -29,6 +29,13 @@ export type IdentityResolutionResult = {
   unifiedPersonId: string;
   matchedBy: 'email' | 'phone' | 'external_keys' | 'created';
   created: boolean;
+  /**
+   * Guarded (operator-asserted) matches only: the evidence ATTACHED, but the
+   * incoming name differs from the matched person's. Advisory — nothing is
+   * refused, because a name correction and a different human look alike
+   * (founder decision D-4); the operator is told so a human can review.
+   */
+  review?: { reason: 'name_mismatch' };
 };
 
 type UnifiedPersonRow = {
@@ -45,6 +52,9 @@ export type IdentityConflictReason =
   /** Matched only by an operator reference, but the matched person already
    *  holds a DIFFERENT email or phone than the incoming row. */
   | 'external_key_contact_mismatch'
+  /** Matched by phone (the row's email matched no one), but the matched person
+   *  already holds a DIFFERENT email than the incoming row. */
+  | 'phone_match_email_mismatch'
   /** Matched by a shared role-like mailbox (info@, sales@ ...), and the incoming
    *  row names a different person than the one already on that mailbox. */
   | 'role_address_name_mismatch';
@@ -99,12 +109,16 @@ const comparableName = (v?: string | null): string | null => {
 /**
  * Does the incoming evidence CONTRADICT the person the resolver matched?
  *
- * Only two contradictions are recognised, both strict and deterministic:
+ * Only three contradictions are recognised, all strict and deterministic:
  *  1. matched by `external_keys` alone, while the incoming email (or phone)
  *     differs from the email (or phone) the person already holds. The
  *     reference says "same person", the contact point says "different person",
  *     and the resolver used to keep the reference and silently drop the email.
- *  2. matched by a role-like email, while the incoming name and the person's
+ *  2. matched by phone, while the incoming email differs from the email the
+ *     person already holds (a shared office line or reused number). Same
+ *     shape as 1: the email matched no one, so the resolver fell through to
+ *     the phone and attached a second human's row to the first.
+ *  3. matched by a role-like email, while the incoming name and the person's
  *     current name are both present and differ.
  * Absent evidence is never a contradiction: a row without an email cannot
  * conflict on email, and a person with no name cannot conflict on name.
@@ -121,6 +135,9 @@ function findIdentityConflict(
       return new IdentityConflictError('external_key_contact_mismatch', person.id, 'external_keys');
     }
   }
+  if (matchedBy === 'phone' && incoming.email && person.primary_email && incoming.email !== person.primary_email) {
+    return new IdentityConflictError('phone_match_email_mismatch', person.id, 'phone');
+  }
   if (matchedBy === 'email' && isRoleLikeEmail(incoming.email)) {
     const a = comparableName(incoming.fullName);
     const b = comparableName(person.full_name);
@@ -129,6 +146,13 @@ function findIdentityConflict(
     }
   }
   return null;
+}
+
+/** Advisory only: an attached guarded match whose names both exist and differ. */
+function nameReview(person: UnifiedPersonRow, fullName: string | null): IdentityResolutionResult['review'] {
+  const a = comparableName(fullName);
+  const b = comparableName(person.full_name);
+  return a && b && a !== b ? { reason: 'name_mismatch' } : undefined;
 }
 
 /**
@@ -466,10 +490,12 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
 
     await dualWriteExternalIdentity(input.companyId, person.id, externalKeys);
 
+    const review = guard ? nameReview(person, guard.fullName) : undefined;
     return {
       unifiedPersonId: person.id,
       matchedBy,
       created: false,
+      ...(review ? { review } : {}),
     };
   }
 
@@ -510,7 +536,8 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
           matchedBy: raced.matchedBy,
         });
         await dualWriteExternalIdentity(input.companyId, raced.person.id, externalKeys);
-        return { unifiedPersonId: raced.person.id, matchedBy: raced.matchedBy, created: false };
+        const review = guard ? nameReview(raced.person, guard.fullName) : undefined;
+        return { unifiedPersonId: raced.person.id, matchedBy: raced.matchedBy, created: false, ...(review ? { review } : {}) };
       }
       // The conflicting row exists but we cannot see it — a different tenant's
       // row could not have collided, so this means the winner was removed, or

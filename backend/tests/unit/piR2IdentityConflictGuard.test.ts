@@ -217,6 +217,76 @@ describe('with conflictGuard — C1/C2: a shared role mailbox does not fold a se
   });
 });
 
+describe('with conflictGuard — r3: a phone match cannot fold a second email into the person (shared line)', () => {
+  it('REFUSES a phone match whose email differs from the person\'s, and writes nothing', async () => {
+    people.push(alice({ primary_phone: '+14155550103', external_keys: {} }));
+    const err = await resolveUnifiedPerson({
+      companyId: ORG, email: 'quin@two.test', phone: '+14155550103', conflictGuard: { fullName: 'Quin Quay' },
+    }).catch((e) => e);
+    expect(err).toMatchObject({ reason: 'phone_match_email_mismatch', conflictingPersonId: 'alice', matchedBy: 'phone' });
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+    expect(String(err.message)).not.toMatch(/quin|alice@|Quay/i);
+  });
+
+  it('attaches (and fills) when the matched person has no email — absence is not a contradiction', async () => {
+    people.push(alice({ primary_email: null, primary_phone: '+14155550104', external_keys: {} }));
+    const r = await resolveUnifiedPerson({
+      companyId: ORG, email: 'sue@two.test', phone: '+14155550104', conflictGuard: { fullName: 'Alice Able' },
+    });
+    expect(r).toEqual({ unifiedPersonId: 'alice', matchedBy: 'phone', created: false });
+    expect(personUpdates().some((u) => u.payload.primary_email === 'sue@two.test')).toBe(true);
+  });
+
+  it('a phone-only row still attaches', async () => {
+    people.push(alice({ primary_phone: '+14155550105', external_keys: {} }));
+    const r = await resolveUnifiedPerson({ companyId: ORG, phone: '+14155550105', conflictGuard: {} });
+    expect(r.unifiedPersonId).toBe('alice');
+  });
+
+  it('without conflictGuard the phone match still attaches (pre-existing behaviour for every other caller)', async () => {
+    people.push(alice({ primary_phone: '+14155550106', external_keys: {} }));
+    const r = await resolveUnifiedPerson({ companyId: ORG, email: 'quin@two.test', phone: '+14155550106' });
+    expect(r).toEqual({ unifiedPersonId: 'alice', matchedBy: 'phone', created: false });
+  });
+
+  it('the race-recovery path applies the phone guard too', async () => {
+    nextInsertError = {
+      code: '23505',
+      message: 'duplicate key value violates unique constraint "idx_unified_persons_company_phone_unique"',
+    };
+    appearsAfterConflict = [alice({ primary_phone: '+14155550107', external_keys: {} })];
+    await expect(resolveUnifiedPerson({
+      companyId: ORG, email: 'quin@two.test', phone: '+14155550107', conflictGuard: {},
+    })).rejects.toMatchObject({ reason: 'phone_match_email_mismatch' });
+  });
+});
+
+describe('with conflictGuard — r3: an ATTACHED match with a different name is flagged for review, never refused (D-4)', () => {
+  it.each([
+    ['external_keys', { externalKeys: { csv: { external_id: '1' } } }],
+    ['email', { email: 'alice@one.test' }],
+  ])('matched by %s with a different name -> attaches with review: name_mismatch', async (by, ev) => {
+    people.push(alice());
+    const r = await resolveUnifiedPerson({ companyId: ORG, ...ev, conflictGuard: { fullName: 'Kai Kent' } });
+    expect(r).toEqual({ unifiedPersonId: 'alice', matchedBy: by, created: false, review: { reason: 'name_mismatch' } });
+  });
+
+  it('same name modulo case/spacing, or either name absent -> no review', async () => {
+    people.push(alice());
+    for (const fullName of ['  alice  ABLE', null]) {
+      const r = await resolveUnifiedPerson({ companyId: ORG, email: 'alice@one.test', conflictGuard: { fullName } });
+      expect(r).not.toHaveProperty('review');
+    }
+  });
+
+  it('without conflictGuard there is never a review field', async () => {
+    people.push(alice());
+    const r = await resolveUnifiedPerson({ companyId: ORG, email: 'alice@one.test' });
+    expect(r).toEqual({ unifiedPersonId: 'alice', matchedBy: 'email', created: false });
+  });
+});
+
 describe('isRoleLikeEmail — detection only', () => {
   it.each([
     ['info@acme.test', true], ['Sales@Acme.test', true], ['support+eu@acme.test', true],
