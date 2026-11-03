@@ -42,6 +42,8 @@ import { issueExtensionSessionToken } from '../../services/extensionSessionServi
 const ROOT = path.resolve(__dirname, '../../..');
 const ROUTE_DIR = path.join(ROOT, 'pages/api/extension');
 const NON_TOKEN_ROUTES = new Set(['bootstrap.ts', 'redeem.ts', 'session.ts']);
+// R-3: these refuse with 410 before auth while browser ingestion is suspended.
+const SUSPENDED_UPLOAD_ROUTES = new Set(['events.ts', 'events/comments.ts', 'events/dms.ts']);
 
 function routeFiles(dir: string, base = ''): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -153,8 +155,14 @@ describe('behaviour: valid token, no signature → 401, database untouched', () 
       query: { organization_id: ORG },
       body: { organization_id: ORG, commandId: 'c1', leaseId: 'l1', status: 'failed', platform: 'linkedin', comments: [], threads: [] },
     }, res);
-    expect(res.statusCode).toBe(401);
-    expect(res.body).toMatchObject({ error: 'SIGNATURE_INVALID', reason });
+    if (SUSPENDED_UPLOAD_ROUTES.has(rel as string)) {
+      // R-3: browser ingestion is suspended — refused even earlier, before auth.
+      expect(res.statusCode).toBe(410);
+      expect(res.body).toMatchObject({ error: 'BROWSER_SYNC_SUSPENDED' });
+    } else {
+      expect(res.statusCode).toBe(401);
+      expect(res.body).toMatchObject({ error: 'SIGNATURE_INVALID', reason });
+    }
     expect(dbCalls).toEqual([]);
   });
 });

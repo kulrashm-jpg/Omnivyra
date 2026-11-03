@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { EXTENSION_BROWSER_INGESTION_SUSPENDED, refuseSuspendedIngestion } from '@/backend/services/extensionIngestionSuspension';
 
 const SYNC_COMMAND_PLATFORMS = new Set(['linkedin']);
 const IDEMPOTENCY_BUCKET_MS = 5 * 60 * 1000;
@@ -208,6 +209,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
 
     if (req.method === 'POST') {
+      // R-3: browser ingestion is suspended; queue no sync_*_inbox browser
+      // commands. The GET freshness read below is unaffected.
+      if (EXTENSION_BROWSER_INGESTION_SUSPENDED) return refuseSuspendedIngestion(res);
       const requestedAt = new Date().toISOString();
       const platforms = parsePlatforms(req.body?.platforms).filter((platform) => SYNC_COMMAND_PLATFORMS.has(platform));
       const unsupported = parsePlatforms(req.body?.platforms).filter((platform) => !SYNC_COMMAND_PLATFORMS.has(platform));
