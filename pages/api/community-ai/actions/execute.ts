@@ -4,7 +4,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { getCommunityAiActionById } from '../../../../backend/db/communityAiActionStore';
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
-import { executeAction } from '../../../../backend/services/communityAiActionExecutor';
+import { executeAction, claimCommunityActionForExecution } from '../../../../backend/services/communityAiActionExecutor';
 import { logCommunityAiActionEvent } from '../../../../backend/services/communityAiActionLogService';
 import { notifyCommunityAi } from '../../../../backend/services/communityAiNotificationService';
 import { sendCommunityAiWebhooks } from '../../../../backend/services/communityAiWebhookService';
@@ -156,26 +156,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // ── Atomic state-machine transition: pending/approved/scheduled → executing.
-  // Persists the executor's `execution_mode` choice up front and stamps
-  // `idempotency_key` (race-safe via the unique index — a concurrent caller
-  // with the same key fails the update and we surface the prior row).
+  // ── Atomic single-execution claim: approved (with approved_at, tenant-scoped,
+  // not cancelled) → executing, one conditional UPDATE shared with the
+  // scheduler, the auto-rule path and the orchestration adapter. Persists the
+  // executor's `execution_mode` choice up front and stamps `idempotency_key`
+  // (race-safe via the unique index — a concurrent caller with the same key
+  // fails the update and we surface the prior row). A 'pending' row (a browser
+  // dispatch awaiting or held by the extension) is never claimed here.
   const transitionAt = new Date().toISOString();
-  const transitionPayload: Record<string, any> = {
-    status: 'executing',
-    execution_mode: executionMode,
-    final_text: finalText,
-    updated_at: transitionAt,
-  };
-  if (idempotencyKey) transitionPayload.idempotency_key = idempotencyKey;
-
-  const { data: claimed, error: claimError } = await supabase
-    .from('community_ai_actions')
-    .update(transitionPayload)
-    .eq('id', actionId)
-    .in('status', Array.from(EXECUTABLE_FROM_STATUSES))
-    .select('id, status')
-    .maybeSingle();
+  const { claimed, error: claimError } = await claimCommunityActionForExecution({
+    actionId,
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+    stamp: { execution_mode: executionMode, final_text: finalText, idempotency_key: idempotencyKey },
+  });
 
   if (claimError) {
     // Most likely an idempotency-key uniqueness collision. Resolve by
@@ -196,7 +190,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
     }
-    console.error('[community-ai/execute] state transition failed:', claimError.message);
+    console.error('[community-ai/execute] state transition failed:', claimError);
     return res.status(500).json({ error: 'STATE_TRANSITION_FAILED' });
   }
   if (!claimed) {

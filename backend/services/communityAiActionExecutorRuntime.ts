@@ -153,6 +153,9 @@ export type CommandChainStep = {
  */
 const NON_TERMINAL_ROW_STATUSES = ['pending', 'approved', 'scheduled', 'dispatched', 'acknowledged', 'executing'];
 
+/** A pre-claim refusal never overwrites a row another worker has claimed. */
+const PRE_CLAIM_ROW_STATUSES = NON_TERMINAL_ROW_STATUSES.filter((s) => s !== 'executing');
+
 export async function persistExecutionResult(input: {
   actionId: string;
   organizationId: string;
@@ -417,8 +420,40 @@ export const executeAction = async (
     } as ExecutionResult;
   }
 
-  const runResult = await runExecution(action, approved, options);
+  // Single-execution claim. A caller that already won the atomic
+  // approved -> executing claim says so with expected_from_statuses
+  // ['executing'] (manual execute, scheduler, RPA retry flush, orchestration
+  // adapter). Any other persisting caller (the auto-rule service) is claimed
+  // HERE, by the same conditional UPDATE, after every pre-dispatch gate and
+  // immediately before the connector / RPA / browser step: a refusal therefore
+  // leaves the row unclaimed, and only the caller that gets the row back acts.
+  const expectedFrom = Array.isArray(options?.expected_from_statuses) && options!.expected_from_statuses!.length > 0
+    ? options!.expected_from_statuses!
+    : undefined;
+  const callerHoldsClaim = !!expectedFrom && expectedFrom.length === 1 && expectedFrom[0] === 'executing';
+  const selfClaim = options?.persist === true && !callerHoldsClaim;
+  let selfClaimed = false;
+  let claimLost = false;
+  const claim = selfClaim
+    ? async () => {
+        const c = await claimCommunityActionForExecution({
+          actionId: action.id,
+          tenantId: action.tenant_id,
+          organizationId: action.organization_id,
+        });
+        selfClaimed = c.claimed;
+        claimLost = !c.claimed;
+        return c.claimed;
+      }
+    : undefined;
+
+  const runResult = await runExecution(action, approved, options, claim);
   runResult.correlation_id = correlationId;
+  if (claimLost) {
+    // Another worker holds (or finished) the row, or it is no longer
+    // claimable: nothing was dispatched and the row is not ours to write.
+    return runResult;
+  }
   // Echo automation-entry metadata back on the result. These are pure
   // pass-throughs: the execution pipeline behaves identically whether
   // auto or manual. UIs use auto_executed to badge the outcome; ops
@@ -438,10 +473,15 @@ export const executeAction = async (
       idempotencyKey: options?.idempotency_key ?? null,
       final_text: options?.final_text ?? null,
       command_chain: Array.isArray(chain) && chain.length > 0 ? chain : undefined,
-      expectedFromStatuses:
-        Array.isArray(options?.expected_from_statuses) && options!.expected_from_statuses!.length > 0
-          ? options!.expected_from_statuses
-          : undefined,
+      // Claimed (by the caller or here): compare-and-set from 'executing', so a
+      // refusal after the claim ends terminal ('skipped' / 'failed') and a row
+      // changed underneath (reaper, cancel) is never overwritten. Refused
+      // before a self-claim: written only while no worker has claimed the row
+      // and no extension holds a lease on it.
+      expectedFromStatuses: selfClaim
+        ? (selfClaimed ? ['executing'] : PRE_CLAIM_ROW_STATUSES)
+        : expectedFrom,
+      requireUnleased: selfClaim && !selfClaimed ? true : undefined,
       rowHint: {
         platform: action.platform,
         action_type: action.action_type,
@@ -501,7 +541,9 @@ export const executeAction = async (
 const runExecution = async (
   action: CommunityAiAction,
   approved: boolean,
-  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk' }
+  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk' },
+  /** Atomic single-execution claim, run after every gate (see executeAction). */
+  claim?: () => Promise<boolean>
 ): Promise<ExecutionResult> => {
   const policy = await getCommunityAiPlatformPolicy();
   if (!policy.execution_enabled) {
@@ -646,6 +688,12 @@ const runExecution = async (
   // so each is marked may_have_acted:false (request idempotency releases
   // such an attempt for a same-key retry; see engagementRequestIdempotency).
 
+  // Single-execution claim (callers that did not claim before calling the
+  // executor): only the winner of the conditional UPDATE reaches the switch.
+  if (claim && !(await claim())) {
+    return { ok: false, status: 'skipped', reason: 'CLAIM_LOST', execution_mode: executionMode, may_have_acted: false };
+  }
+
   // ── Execute through the resolved mode, with a single API→Browser fallback.
   let result: ExecutionResult;
   const notify = options?.notify !== false;
@@ -778,18 +826,34 @@ export async function claimCommunityActionForExecution(input: {
   actionId: string;
   tenantId: string;
   organizationId: string;
+  /** Only ['approved'] is claimable (D-01); kept for existing callers. */
   fromStatuses?: string[];
+  /** Columns the manual execute route stamps in the same UPDATE as the claim. */
+  stamp?: { execution_mode?: string; final_text?: string | null; idempotency_key?: string | null };
 }): Promise<{ claimed: boolean; error?: string }> {
   const from = input.fromStatuses && input.fromStatuses.length > 0 ? input.fromStatuses : ['approved'];
   if (!input.actionId || !input.tenantId || !input.organizationId) {
     return { claimed: false, error: 'CLAIM_SCOPE_MISSING' };
   }
+  // Single-execution claim: one conditional UPDATE ... RETURNING. Only a
+  // human-approved row (status 'approved' AND approved_at, the D-01 evidence)
+  // that no one has claimed or cancelled is taken; exactly one concurrent
+  // caller gets the row back. A 'pending' row is never claimable here: with
+  // approved_at it is a browser dispatch the extension claims under a lease.
+  if (from.length !== 1 || from[0] !== 'approved') {
+    return { claimed: false, error: 'CLAIM_STATUS_UNSUPPORTED' };
+  }
+  const update: Record<string, unknown> = { status: 'executing', updated_at: new Date().toISOString() };
+  if (input.stamp?.execution_mode) update.execution_mode = input.stamp.execution_mode;
+  if (input.stamp && input.stamp.final_text !== undefined) update.final_text = input.stamp.final_text;
+  if (input.stamp?.idempotency_key) update.idempotency_key = input.stamp.idempotency_key;
   const { data, error } = await ownedDbTable('community_ai_actions')
-    .update({ status: 'executing', updated_at: new Date().toISOString() })
+    .update(update)
     .eq('id', input.actionId)
     .eq('tenant_id', input.tenantId)
     .eq('organization_id', input.organizationId)
-    .in('status', from)
+    .eq('status', 'approved')
+    .not('approved_at', 'is', null)
     .is('cancel_requested_at', null)
     .select('id, status')
     .maybeSingle();

@@ -455,6 +455,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         );
       } catch (error: any) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: record.id,
           organizationId: input.organization_id,
           correlationId: randomUUID(),
@@ -486,6 +489,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       );
       if (!recordValidation.allowed) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: record.id,
           organizationId: input.organization_id,
           correlationId: randomUUID(),
@@ -524,6 +530,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       );
       if (!guardrail.allowed) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: record.id,
           organizationId: input.organization_id,
           correlationId: randomUUID(),
@@ -538,7 +547,10 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return { ...action, blocked_reason: guardrail.reason ?? 'guardrail' };
       }
 
-      // Executor handles the terminal row write via persist:true.
+      // Executor handles the terminal row write via persist:true. It also takes
+      // the atomic approved -> executing claim (this call names no claim of its
+      // own), so a concurrent rule run, scheduler, retry flush or manual
+      // execute on the same row cannot both reach the connector.
       const execution = await executeAction(
         {
           id: record.id,
@@ -561,6 +573,14 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return {
           ...action,
           blocked_reason: 'Human approval required by platform policy',
+        };
+      }
+      if (execution.status === 'skipped' && execution.reason === 'CLAIM_LOST') {
+        // Another worker claimed (or already finished) this row: nothing was
+        // done here, so nothing is logged or counted.
+        return {
+          ...action,
+          blocked_reason: 'Action is not awaiting execution',
         };
       }
 
