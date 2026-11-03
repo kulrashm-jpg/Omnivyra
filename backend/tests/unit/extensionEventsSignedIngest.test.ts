@@ -148,7 +148,10 @@ describe('/api/extension/events requires a signed extension request', () => {
 
   it('no longer accepts a Supabase user JWT in place of an extension session', async () => {
     const body = event();
-    const res = await post(body, { authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl', ...sign('POST', '/api/extension/events', JSON.stringify(body)) });
+    // An obviously fake, JWT-shaped user token (three dot-separated parts):
+    // it is not an extension session, so the route must refuse it.
+    const fakeUserJwt = ['placeholder-header', 'placeholder-payload', 'placeholder-signature'].join('.');
+    const res = await post(body, { authorization: `Bearer ${fakeUserJwt}`, ...sign('POST', '/api/extension/events', JSON.stringify(body)) });
     expect(res.statusCode).toBe(401);
     expect(res.body.error).toBe('INVALID_SESSION');
     expect(ingested).toHaveLength(0);
