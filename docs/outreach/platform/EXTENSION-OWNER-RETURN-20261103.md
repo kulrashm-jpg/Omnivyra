@@ -134,6 +134,18 @@ The rollback and containment notes are in `RELEASE-1.4.1.md`. Rollback means pub
 - its tests;
 - every affected execution path with file and line: activate route, recovery sweep, adapter, `dispatchInternalOutreachTask`, and anything else that passes through `dispatch.ts`.
 
+**Update: diff received and reviewed (peer-approved, NOT committed).**
+- **Diff:** `C:/tmp/orch-w1-pause` at `5e84210c5`, sha256 `ab58d18a7a07a7ac4df1980a303e89bfe73e6a296b9eaa9b8ffcb8eed37994d8`. I verified it independently.
+- **Files:** 7, with 810 lines added and 3 removed.
+  - Runtime: `emailExecutionContext.ts` gains `resolveJourneyHold`, read-only, 74 lines. `dispatch.ts` gains 13 lines: the import, the `deferred_journey` outcome, and the hold placed after the transport guard and before governance.
+  - Tests: 35 new unit tests, 12 new real-schema tests, and a 3-line fixture change.
+  - Pins: the `dispatch.ts` hash pins in two tests move from `c0683963a248bbc3` to `e70abcfe13d3cc93`. I verified both values and signed off the change for exactly this diff.
+- **Affected paths:** `activate.ts` → `leadOutreachActivation.ts:221`; the recovery sweep at `:166`; the engine adapter's email path (`engineAdapters:250` → `workflowEmailDispatch:117`) and internal path (`:261`). All go through `dispatchInternalOutreachTask`.
+- **Orchestration's results:** unit 65 suites, 2,344 passed, 0 failed; real-schema 16 suites, 322 passed, 3 skipped; typecheck clean; mutants 10 of 10 killed.
+- **The six conditions:** met against the code.
+  - Runs in `created` or `queued` state are held. I accept that as fail-closed.
+  - A recorded follow-up, not a blocker: tasks whose journey has ended stay queued and held indefinitely. That is safe, but they should be disposed of.
+
 **RULING CONFLICT, needs you.** Orchestration says its owner message authorised Agent B to edit `dispatch.ts` under these conditions. Your message to me says "Do not implement yet". Orchestration is writing the diff in its own worktree, `C:/tmp/orch-w1-pause`, uncommitted and on no shared branch. Nothing will be committed until you say which ruling stands.
 
 ---
