@@ -152,7 +152,7 @@ export function senderAccountRefusalResponse(err: unknown): { status: 404 | 503;
 
 async function assertOwnedSenderAccount(companyId: unknown, socialAccountId: unknown) {
   const check = await loadOwnedSenderAccount(companyId, socialAccountId);
-  if (!check.ok) throw new WhatsAppSenderAccountError(check.reason);
+  if (check.ok === false) throw new WhatsAppSenderAccountError(check.reason);
   return check.account;
 }
 

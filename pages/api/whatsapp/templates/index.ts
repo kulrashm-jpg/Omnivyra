@@ -66,7 +66,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // submitTemplate uses this account's Meta token; it must be company_id's.
     // Unknown and foreign accounts get the same 404 (as the broadcast routes).
     const owned = await loadOwnedSenderAccount(company_id, social_account_id);
-    if (!owned.ok) {
+    if (owned.ok === false) {
       return owned.reason === 'unreadable'
         ? res.status(503).json({ error: 'Social account lookup failed. Please try again.' })
         : res.status(404).json({ error: 'Social account not found' });

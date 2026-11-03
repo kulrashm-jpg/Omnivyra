@@ -172,6 +172,7 @@ let cached: { currentRaw: string | undefined; previousRaw: string | undefined; r
 export function loadEncryptionKeyRing(): EncryptionKeyRing {
   const currentRaw = config.ENCRYPTION_KEY;
   const previousRaw = config.ENCRYPTION_KEY_PREVIOUS;
+  // ct-ok: memo-cache check between two server-held config reads; neither operand is request input.
   if (cached && cached.currentRaw === currentRaw && cached.previousRaw === previousRaw) return cached.ring;
   const ring = parseEncryptionKeyRing(currentRaw, previousRaw);
   cached = { currentRaw, previousRaw, ring };
