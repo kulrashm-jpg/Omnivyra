@@ -139,7 +139,9 @@ No new tables, registries, queues or second browser framework are planned. Serve
 ## 6. Test and verification evidence
 
 - §2 above.
-- Pending: the typecheck of `sec/extension-events-signed`. The result is added to the commit message.
+- `sec/extension-events-signed` is committed as `068d08f2d`.
+  - Typecheck: `tsconfig.json` OK and `tsconfig.backend.json` OK, both with 0 errors.
+  - `tsconfig.backend-tests.json` reports 153 errors that predate this branch, none of them in the changed or new files.
 - **T1 for 1.5.0, planned:**
   - envelope tamper, expiry and replay;
   - account mismatch at pairing and before submit;
