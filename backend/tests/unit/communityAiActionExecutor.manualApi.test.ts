@@ -89,6 +89,8 @@ const baseAction = () => ({
   target_id: 'urn:li:share:post-1',
   suggested_text: 'thanks!',
   playbook_id: null,
+  // D-01: every execution needs a persisted human approval.
+  approved_at: '2026-11-01T00:00:00Z',
 });
 
 describe('communityAiActionExecutor — manual api-mode', () => {

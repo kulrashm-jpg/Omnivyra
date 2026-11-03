@@ -17,6 +17,11 @@
  *
  * The response double is Next-faithful: json() returns undefined and a second
  * response on the same res throws.
+ *
+ * D-01: the REAL executor refuses an ad-hoc (auto_insert) like before writing
+ * any action row (skipped / HUMAN_APPROVAL_REQUIRED, may_have_acted=false), so
+ * the 'real' tests below assert that refusal. The 'fake' executor still models
+ * an acting executor; it exercises the request ledger, not approval.
  */
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
 
@@ -128,6 +133,12 @@ async function bulk(body: Record<string, unknown>, headers: Record<string, strin
 const actions = () => mockDb.tables.community_ai_actions;
 const records = () => mockDb.tables.engagement_request_idempotency ?? [];
 
+/** D-01 refusals: the real executor's pre-insert approval refusal, as logged. */
+const approvalRefusals = () =>
+  (jest.requireMock('../../services/communityAiActionLogService').logCommunityAiActionEvent as jest.Mock).mock.calls
+    .filter(([e]: any[]) => e?.event_type === 'skipped'
+      && e?.event_payload?.reason === 'ad_hoc_action_has_no_human_approval');
+
 beforeEach(() => {
   mockDb = createFakeDb({
     community_ai_actions: [],
@@ -150,6 +161,7 @@ beforeEach(() => {
   mockActs.length = 0;
   mockExecCalls.length = 0;
   mockIncrementLike.mockClear();
+  (jest.requireMock('../../services/communityAiActionLogService').logCommunityAiActionEvent as jest.Mock).mockClear();
   mockUserId = 'user_1';
   mockPlaybooks = [{ id: 'pb1', status: 'active' }];
   mockPolicy.execution_enabled = true;
@@ -211,16 +223,21 @@ describe('stable identity — same request → same ids; retry keeps ids', () =>
     expect(retry.body.items.map((x: any) => x.item)).toEqual([{ kind: 'thread', id: 't1' }, { kind: 'thread', id: 't2' }]);
   });
 
-  it('real executor: retry of a bulk request creates no new action rows', async () => {
+  // D-01: was "retry creates no new action rows" after 3 liked items. Every
+  // item is now refused before any row is written; a retry with the same key
+  // re-runs the gate (failed_not_acted, attempt 2) and still writes no row.
+  it('real executor: every item is refused for lack of approval; a retry still creates no action rows', async () => {
     mockExecutorMode = 'real';
     const first = await bulk({ message_ids: ['m1', 'm2', 'm3'] }, { 'idempotency-key': 'bulk-key-real-1' });
-    expect(first.body).toEqual({ success: true, liked: 3 });
-    expect(actions()).toHaveLength(3);
-    const idsBefore = actions().map((r) => r.id).sort();
+    expect(first.body).toMatchObject({ success: true, liked: 0 });
+    expect(first.body.items.every((x: any) => x.status === 502 && x.request_state === 'failed_not_acted')).toBe(true);
+    expect(approvalRefusals()).toHaveLength(3);
+    expect(actions()).toHaveLength(0);
     const retry = await bulk({ message_ids: ['m1', 'm2', 'm3'] }, { 'idempotency-key': 'bulk-key-real-1' });
-    expect(retry.body.liked).toBe(3);
-    expect(actions().map((r) => r.id).sort()).toEqual(idsBefore);
-    expect(records().every((r) => r.state === 'completed')).toBe(true);
+    expect(retry.body.liked).toBe(0);
+    expect(approvalRefusals()).toHaveLength(6);
+    expect(actions()).toHaveLength(0);
+    expect(records().every((r) => r.state === 'failed_not_acted' && r.attempt === 2)).toBe(true);
   });
 });
 
@@ -302,20 +319,26 @@ describe('uncertain item never resent; not-acted item retried with the same key'
     expect(mockActs).toEqual(['pm1']);
   });
 
-  it('kill switch (platform policy) blocks every item through the real executor; the retry runs the gate again', async () => {
+  // D-01: was "kill switch blocks; switching it back on lets the retry like".
+  // The approval refusal now comes before the kill switch for an ad-hoc like,
+  // so the kill switch is no longer observable on this path (that purpose no
+  // longer applies here). What remains: every retry re-runs the gate and is
+  // refused, whether execution is on or off — never replayed as success.
+  it('real executor: kill switch on or off, the item is refused for lack of approval; each retry runs the gate again', async () => {
     mockExecutorMode = 'real';
     mockPolicy.execution_enabled = false;
     const first = await bulk({ message_ids: ['m1'] }, { 'idempotency-key': 'bulk-key-0050' });
     expect(first.body.liked).toBe(0);
     expect(records()[0].state).toBe('failed_not_acted');
-    // still off → still blocked (gate re-evaluated, not replayed as success)
     const again = await bulk({ message_ids: ['m1'] }, { 'idempotency-key': 'bulk-key-0050' });
     expect(again.body.liked).toBe(0);
     expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 2 });
     mockPolicy.execution_enabled = true;
-    const ok = await bulk({ message_ids: ['m1'] }, { 'idempotency-key': 'bulk-key-0050' });
-    expect(ok.body).toEqual({ success: true, liked: 1 });
-    expect(records()[0]).toMatchObject({ state: 'completed', attempt: 3 });
+    const on = await bulk({ message_ids: ['m1'] }, { 'idempotency-key': 'bulk-key-0050' });
+    expect(on.body).toMatchObject({ success: true, liked: 0 });
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 3 });
+    expect(approvalRefusals()).toHaveLength(3);
+    expect(actions()).toHaveLength(0);
   });
 });
 

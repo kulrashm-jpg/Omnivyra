@@ -135,6 +135,18 @@ function connectorOk() {
 const actions = () => mockDb.tables.community_ai_actions;
 const records = () => mockDb.tables[TABLE] ?? [];
 
+/** D-01 refusals: the executor's pre-insert approval refusal, as logged. */
+const approvalRefusals = () =>
+  (jest.requireMock('../../services/communityAiActionLogService').logCommunityAiActionEvent as jest.Mock).mock.calls
+    .filter(([e]: any[]) => e?.event_type === 'skipped'
+      && e?.event_payload?.reason === 'ad_hoc_action_has_no_human_approval');
+
+/** A route answer for a D-01 refusal: skipped, provably not acted, retryable. */
+function expectApprovalRefused(r: any) {
+  expect(r.statusCode).toBe(502);
+  expect(r.body).toMatchObject({ status: 'skipped', request_state: 'failed_not_acted', retry_with_same_key: true });
+}
+
 function seedDb() {
   mockDb = createFakeDb({
     community_ai_actions: [],
@@ -192,6 +204,7 @@ beforeEach(() => {
   seedDb();
   mockConnector.mockReset();
   mockRpaTask.mockReset();
+  (jest.requireMock('../../services/communityAiActionLogService').logCommunityAiActionEvent as jest.Mock).mockClear();
   mockUserId = 'user_1';
   mockCapabilityMode = 'api';
   mockPolicy.execution_enabled = true;
@@ -417,216 +430,215 @@ describe('tenant isolation', () => {
     expect(r).toMatchObject({ kind: 'answer', answer: { status: 503 } });
   });
 
-  it('route: another user replaying the same key does not see the first user\'s outcome', async () => {
-    await like({ 'idempotency-key': 'like-key-0009' });
+  it('route: another user replaying the same key does not see the first user\'s outcome; both are refused', async () => {
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0009' }));
     mockUserId = 'user_2';
     const r = await like({ 'idempotency-key': 'like-key-0009' });
     expect(r.body.replayed).toBeUndefined();
-    expect(mockConnector).toHaveBeenCalledTimes(2);
+    expectApprovalRefused(r);
+    expect(approvalRefusals()).toHaveLength(2);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Routes (real executor)
 // ─────────────────────────────────────────────────────────────────────────────
+// D-01: every route below goes through executeAction({ auto_insert: true }),
+// which now refuses for lack of a human approval BEFORE writing any action row
+// (skipped / HUMAN_APPROVAL_REQUIRED, may_have_acted=false). Nothing completes,
+// so nothing is ever replayed; each test now proves the request ledger keeps
+// answering failed_not_acted, re-runs the gate on a retry, and never reaches
+// the platform. Where a test's original purpose depended on a completed or
+// uncertain outcome, the comment says so.
 describe('routes — durable replay, conflicts, ambiguity, not-acted retry', () => {
-  it('like: same key twice → ONE platform call; the replay carries the recorded outcome', async () => {
+  it('like: same key twice → refused both times (gate re-run as attempt 2), 0 platform calls', async () => {
     const a = await like({ 'idempotency-key': 'like-key-0001' });
     const b = await like({ 'idempotency-key': 'like-key-0001' });
-    expect(a.statusCode).toBe(200);
-    expect(b.statusCode).toBe(200);
-    expect(b.body).toMatchObject({ replayed: true, prior_status: 'executed', request_state: 'completed' });
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expectApprovalRefused(a);
+    expectApprovalRefused(b);
+    expect(mockConnector).not.toHaveBeenCalled();
+    expect(actions()).toHaveLength(0);
     expect(records()).toHaveLength(1);
-    expect(records()[0]).toMatchObject({ state: 'completed', attempt: 1, outcome_status: 'executed', scope: 'like' });
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 2, outcome_status: 'skipped', scope: 'like' });
   });
 
-  it('like: the replay is answered BEFORE any gate (the message has since disappeared → still the recorded 200, not 404)', async () => {
-    await like({ 'idempotency-key': 'like-key-0007' });
+  // Purpose ("a replay is answered before any gate") needs a completed outcome
+  // to replay; a refusal records none, so it no longer applies. What remains:
+  // the retry re-runs the gates, and the missing message is reported.
+  it('like: a refused request is never replayed; the retry re-runs the gates (message gone → 404), 0 platform calls', async () => {
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0007' }));
     mockDb.tables.engagement_messages = mockDb.tables.engagement_messages.filter((m) => m.id !== 'm1');
     const r = await like({ 'idempotency-key': 'like-key-0007' });
-    expect(r.statusCode).toBe(200);
-    expect(r.body.replayed).toBe(true);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expect(r.statusCode).toBe(404);
+    expect(r.body.replayed).toBeUndefined();
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
-  it('reply: an AI-draft replay is answered BEFORE the draft gate (draft already sent → replay, not AI_DRAFT_TERMINAL)', async () => {
+  // Purpose ("an AI-draft replay is answered before the draft gate") needs a
+  // sent draft; the reply is refused, so the draft is never sent.
+  it('reply: an AI-draft reply is refused and the draft is never marked sent; 0 platform calls', async () => {
     mockDb.tables.ai_message_drafts.push({ id: 'draft-c', thread_id: 't1', platform: 'linkedin', status: 'draft' });
     const body = { thread_id: 't1', ai_generated: true, ai_draft_id: 'draft-c' };
-    const a = await reply({}, body);
-    expect(a.statusCode).toBe(200);
-    expect(mockDb.tables.ai_message_drafts.find((d) => d.id === 'draft-c').status).toBe('sent');
+    expectApprovalRefused(await reply({}, body));
+    expect(mockDb.tables.ai_message_drafts.find((d) => d.id === 'draft-c').status).not.toBe('sent');
     const b = await reply({}, body);
-    expect(b.statusCode).toBe(200);
-    expect(b.body.replayed).toBe(true);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expect(b.statusCode).not.toBe(200);
+    expect(b.body.replayed).toBeUndefined();
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
   it('like: key reused for a DIFFERENT message → 422, nothing sent', async () => {
-    await like({ 'idempotency-key': 'like-key-0002' });
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0002' }));
     const r = await like({ 'idempotency-key': 'like-key-0002' }, { message_id: 'm2' });
     expect(r.statusCode).toBe(422);
     expect(r.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
   it('reply: key reused with different TEXT → 422, nothing sent', async () => {
-    await reply({ 'idempotency-key': 'reply-key-0001' }, { reply_text: 'First' });
+    expectApprovalRefused(await reply({ 'idempotency-key': 'reply-key-0001' }, { reply_text: 'First' }));
     const r = await reply({ 'idempotency-key': 'reply-key-0001' }, { reply_text: 'Second' });
     expect(r.statusCode).toBe(422);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
-  it('reply: concurrent identical requests (no key) → ONE platform call, one action row', async () => {
+  it('reply: concurrent identical requests (no key) → no success, 0 platform calls, no action row', async () => {
     const out = await Promise.all([reply(), reply(), reply(), reply()]);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
-    expect(actions()).toHaveLength(1);
-    expect(out.filter((r) => r.statusCode === 200 && !r.body.replayed)).toHaveLength(1);
+    expect(mockConnector).not.toHaveBeenCalled();
+    expect(actions()).toHaveLength(0);
+    expect(out.filter((r) => r.statusCode === 200)).toHaveLength(0);
+    expect(approvalRefusals().length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reply: NO key, two requests either side of the OLD 5-minute bucket boundary → ONE action', async () => {
+  it('reply: NO key, two requests either side of the OLD 5-minute bucket boundary → ONE request record, both refused', async () => {
     const boundary = Math.ceil(Date.now() / (5 * 60 * 1000)) * (5 * 60 * 1000) + 5 * 60 * 1000;
     setNow(boundary - 1);
     const a = await reply();
     setNow(boundary + 1);
     const b = await reply();
-    expect(a.statusCode).toBe(200);
-    expect(b.statusCode).toBe(200);
-    expect(b.body.replayed).toBe(true);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
-    expect(actions()).toHaveLength(1);
+    expectApprovalRefused(a);
+    expectApprovalRefused(b);
+    expect(records()).toHaveLength(1);
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 2 });
+    expect(mockConnector).not.toHaveBeenCalled();
+    expect(actions()).toHaveLength(0);
   });
 
-  it('reply: NO key, straddling requests in flight concurrently → ONE action', async () => {
+  it('reply: NO key, straddling requests in flight concurrently → ONE request record, 0 platform calls', async () => {
     const boundary = Math.ceil(Date.now() / (5 * 60 * 1000)) * (5 * 60 * 1000) + 10 * 60 * 1000;
     setNow(boundary - 1);
     const p1 = reply();
     setNow(boundary + 1);
     const p2 = reply();
     await Promise.all([p1, p2]);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
-    expect(actions()).toHaveLength(1);
+    expect(records()).toHaveLength(1);
+    expect(mockConnector).not.toHaveBeenCalled();
+    expect(actions()).toHaveLength(0);
   });
 
-  it('ambiguous delivery → uncertain; the same key is NEVER resent; a no-key repeat a day later is still refused; only a NEW key sends', async () => {
+  // Purpose ("an uncertain outcome is never resent") needs a connector call
+  // that may have acted; the connector is never reached, so no uncertain
+  // outcome can arise here. What remains: even a failing connector is never
+  // called, every attempt is provably not acted, and a new key is refused too.
+  it('a failing connector is never reached: same key, no key a day later, or a new key → refused, never uncertain', async () => {
     const t0 = Date.now();
     setNow(t0);
     mockConnector.mockRejectedValue(new Error('socket hang up'));
-    const first = await reply({ 'idempotency-key': 'reply-key-0002' });
-    expect(first.statusCode).toBe(502);
-    expect(first.body).toMatchObject({ request_state: 'uncertain', retry_with_same_key: false });
-    connectorOk();
-    const again = await reply({ 'idempotency-key': 'reply-key-0002' });
-    expect(again.statusCode).toBe(409);
-    expect(again.body).toMatchObject({ code: 'OUTCOME_UNCERTAIN', review_status: 'needs_review' });
-    expect(mockConnector).toHaveBeenCalledTimes(1);
-
-    // Same payload, no key, uncertain → refused at any age.
-    mockConnector.mockRejectedValueOnce(new Error('ETIMEDOUT'));
-    await reply({}, { reply_text: 'Unclear' });
+    expectApprovalRefused(await reply({ 'idempotency-key': 'reply-key-0002' }));
+    expectApprovalRefused(await reply({ 'idempotency-key': 'reply-key-0002' }));
+    expectApprovalRefused(await reply({}, { reply_text: 'Unclear' }));
     setNow(t0 + 30 * HOUR);
-    const later = await reply({}, { reply_text: 'Unclear' });
-    expect(later.statusCode).toBe(409);
-    expect(later.body.code).toBe('OUTCOME_UNCERTAIN');
-    expect(mockConnector).toHaveBeenCalledTimes(2);
-
-    // Deliberate new intent: a new key.
-    const fresh = await reply({ 'idempotency-key': 'reply-key-0003' }, { reply_text: 'Unclear' });
-    expect(fresh.statusCode).toBe(200);
-    expect(mockConnector).toHaveBeenCalledTimes(3);
-  });
-
-  it('provably-not-acted failure → retry with the SAME key re-runs every gate; it sends only once the gate passes', async () => {
-    mockPolicy.execution_enabled = false; // platform kill switch
-    const first = await like({ 'idempotency-key': 'like-key-0003' });
-    expect(first.statusCode).toBe(502);
-    expect(first.body).toMatchObject({ request_state: 'failed_not_acted', retry_with_same_key: true });
-    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 1 });
-
-    const stillBlocked = await like({ 'idempotency-key': 'like-key-0003' });
-    expect(stillBlocked.statusCode).toBe(502); // the kill switch is re-checked on the retry
-    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 2 });
+    expectApprovalRefused(await reply({}, { reply_text: 'Unclear' }));
+    expectApprovalRefused(await reply({ 'idempotency-key': 'reply-key-0003' }, { reply_text: 'Unclear' }));
+    expect(records().every((r) => r.state === 'failed_not_acted')).toBe(true);
     expect(mockConnector).not.toHaveBeenCalled();
+  });
 
+  // Was "the retry sends once the kill switch is lifted". The approval refusal
+  // now comes first for an ad-hoc like, so lifting the kill switch no longer
+  // lets it send; each retry re-runs the gate (attempt n+1).
+  it('provably-not-acted refusal → each retry with the SAME key re-runs the gate; kill switch on or off it never sends', async () => {
+    mockPolicy.execution_enabled = false; // platform kill switch
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0003' }));
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 1 });
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0003' }));
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 2 });
     mockPolicy.execution_enabled = true;
-    const ok = await like({ 'idempotency-key': 'like-key-0003' });
-    expect(ok.statusCode).toBe(200);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
-    expect(records()[0]).toMatchObject({ state: 'completed', attempt: 3 });
-    expect(actions().map((a) => a.status).sort()).toEqual(['executed', 'skipped', 'skipped']);
-    // ...and from now on it is a replay.
-    const replay = await like({ 'idempotency-key': 'like-key-0003' });
-    expect(replay.body.replayed).toBe(true);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    const on = await like({ 'idempotency-key': 'like-key-0003' });
+    expectApprovalRefused(on);
+    expect(on.body.replayed).toBeUndefined();
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted', attempt: 3 });
+    expect(approvalRefusals()).toHaveLength(3);
+    expect(actions()).toHaveLength(0);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
-  it('connector failure WITHOUT a not-acted flag → uncertain; the retry is refused (409), never resent', async () => {
+  // Purpose ("an unclassified connector failure is uncertain") needs a
+  // connector call; it no longer applies to ad-hoc likes.
+  it('a connector that would fail ambiguously is never called; the request stays failed_not_acted', async () => {
     mockConnector.mockResolvedValueOnce({ success: false, error: 'HTTP 500' });
-    const first = await like({ 'idempotency-key': 'like-key-0004' });
-    expect(first.statusCode).toBe(502);
-    expect(records()[0].state).toBe('uncertain');
-    const second = await like({ 'idempotency-key': 'like-key-0004' });
-    expect(second.statusCode).toBe(409);
-    expect(second.body.code).toBe('OUTCOME_UNCERTAIN');
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0004' }));
+    expect(records()[0].state).toBe('failed_not_acted');
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0004' }));
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
-  it('connector failure explicitly NOT acted → the executor single API→browser fallback queues it → completed; the retry replays the queued action, no second row', async () => {
+  // Purpose ("a not-acted API failure falls back to the browser queue once")
+  // needs a connector call; nothing is queued now.
+  it('a not-acted connector failure cannot arise: nothing is queued for the browser, no row', async () => {
     mockConnector.mockResolvedValueOnce({ success: false, error: 'TOKEN_EXPIRED', may_have_acted: false });
-    const first = await like({ 'idempotency-key': 'like-key-0006' });
-    expect(records()[0]).toMatchObject({ state: 'completed', outcome_status: 'dispatched' });
-    expect(first.statusCode).toBe(502); // the like route reports only 'executed' as success (unchanged)
-    const second = await like({ 'idempotency-key': 'like-key-0006' });
-    expect(second.statusCode).toBe(202);
-    expect(second.body).toMatchObject({ replayed: true, status: 'queued' });
-    expect(actions()).toHaveLength(1);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0006' }));
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0006' }));
+    expect(records()[0]).toMatchObject({ state: 'failed_not_acted' });
+    expect(actions()).toHaveLength(0);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
-  it('executeAction throwing before acting (auto-insert failure) → failed_not_acted; the same key may retry', async () => {
+  // Purpose ("an auto-insert failure before acting is failed_not_acted") no
+  // longer applies: the executor writes no action row on this path, so the
+  // injected insert failure is never reached. What remains: the outcome is
+  // failed_not_acted and the same key may retry (and is refused again).
+  it('no action row is inserted on this path (an insert failure cannot occur); failed_not_acted; the same key may retry', async () => {
     const origFrom = mockDb.from;
-    let failOnce = true;
+    let insertAttempts = 0;
     mockDb.from = (t: string) => {
       const q = origFrom(t);
-      if (t === 'community_ai_actions' && failOnce) {
+      if (t === 'community_ai_actions') {
         const origInsert = q.insert;
-        q.insert = (row: any) => {
-          if (failOnce) { failOnce = false; return { then: (res: any) => Promise.resolve({ data: null, error: { code: '08006', message: 'connection lost' } }).then(res) }; }
-          return origInsert(row);
-        };
+        q.insert = (row: any) => { insertAttempts += 1; return origInsert(row); };
       }
       return q;
     };
-    const first = await like({ 'idempotency-key': 'like-key-0005' });
-    expect(first.statusCode).toBe(500);
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0005' }));
     expect(records()[0].state).toBe('failed_not_acted');
+    expectApprovalRefused(await like({ 'idempotency-key': 'like-key-0005' }));
+    expect(insertAttempts).toBe(0);
     expect(mockConnector).not.toHaveBeenCalled();
-    const retry = await like({ 'idempotency-key': 'like-key-0005' });
-    expect(retry.statusCode).toBe(200);
-    expect(mockConnector).toHaveBeenCalledTimes(1);
   });
 
-  it('a deliberate repeat of the same reply AFTER the 24 h window (no key) is a new send; inside it is a replay', async () => {
+  // Was "inside 24 h a replay, after it a new send". A refusal is never
+  // replayed, so inside the window the gate re-runs; after it, too.
+  it('a repeat of the same reply inside or after the 24 h window (no key) re-runs the gate; never sends', async () => {
     const t0 = Date.now();
     setNow(t0);
-    await reply();
+    expectApprovalRefused(await reply());
     setNow(t0 + 23 * HOUR);
-    expect((await reply()).body.replayed).toBe(true);
+    const inside = await reply();
+    expectApprovalRefused(inside);
+    expect(inside.body.replayed).toBeUndefined();
     setNow(t0 + 48 * HOUR);
-    const later = await reply();
-    expect(later.statusCode).toBe(200);
-    expect(later.body.replayed).toBeUndefined();
-    expect(mockConnector).toHaveBeenCalledTimes(2);
+    expectApprovalRefused(await reply());
+    expect(approvalRefusals()).toHaveLength(3);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 
-  it('browser-mode reply: the replay of a queued action is 202 queued, never a second claimable row', async () => {
+  it('browser-mode reply: refused, never queued — no claimable row for the extension', async () => {
     mockCapabilityMode = 'browser';
-    const a = await reply({ 'idempotency-key': 'reply-key-0004' });
-    const b = await reply({ 'idempotency-key': 'reply-key-0004' });
-    expect(a.statusCode).toBe(202);
-    expect(b.statusCode).toBe(202);
-    expect(b.body).toMatchObject({ replayed: true, status: 'queued' });
-    expect(actions().filter((r) => r.status === 'pending' && r.execution_mode === 'browser')).toHaveLength(1);
+    expectApprovalRefused(await reply({ 'idempotency-key': 'reply-key-0004' }));
+    expectApprovalRefused(await reply({ 'idempotency-key': 'reply-key-0004' }));
+    expect(actions().filter((r) => r.status === 'pending' && r.execution_mode === 'browser')).toHaveLength(0);
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 });
 
@@ -672,7 +684,9 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
   const dmAction = (over: Record<string, any> = {}) => ({
     id: '00000000-0000-0000-0000-0000000000e1', tenant_id: ORG, organization_id: ORG, platform: 'linkedin', action_type: 'dm',
     target_id: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
-    suggested_text: 'hi', playbook_id: 'pb1', execution_mode: 'browser', ...over,
+    // D-01: a persisted human approval, so the direct (non auto_insert) calls
+    // reach the DM policy; auto_insert ignores it (an ad-hoc row has none).
+    suggested_text: 'hi', playbook_id: 'pb1', execution_mode: 'browser', approved_at: '2026-11-01T00:00:00Z', ...over,
   });
 
   it.each([
@@ -685,15 +699,19 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
     ['rpa mode', { execution_mode: 'rpa' }, 'DM_RECIPIENT_MAPPING_UNAVAILABLE'],
     ['direct_message type (rejected by validation)', { action_type: 'direct_message' }, null],
   ])('executor (%s) → refused, not acted, nothing dispatched', async (_l, over, code) => {
-    const r = await executeAction(dmAction(over), true, { source: 'manual', persist: true, auto_insert: true, notify: false, webhook: false });
+    // D-01: the ad-hoc (auto_insert) path is refused for lack of approval
+    // first — before any row and before the DM policy.
+    const adHoc = await executeAction(dmAction(over), true, { source: 'manual', persist: true, auto_insert: true, notify: false, webhook: false });
+    expect(adHoc).toMatchObject({ ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false });
+    expect(actions().find((a) => a.id === '00000000-0000-0000-0000-0000000000e1')).toBeUndefined();
+    // The DM policy itself, for an action that does carry an approval.
+    const r = await executeAction(dmAction(over), true, { source: 'manual', notify: false, webhook: false });
     expect(r.ok).toBe(false);
     expect(r.may_have_acted).toBe(false);
     if (code) expect(r.error).toBe(code);
     expect(mockConnector).not.toHaveBeenCalled();
     expect(mockRpaTask).not.toHaveBeenCalled();
-    const row = actions().find((a) => a.id === '00000000-0000-0000-0000-0000000000e1');
-    expect(row?.status).not.toBe('pending'); // never claimable by the extension
-    expect(row?.command_chain ?? null).toBeNull();
+    expect(actions().filter((a) => a.status === 'pending')).toHaveLength(0); // never claimable by the extension
   });
 
   it('executor: an Instagram DM is refused with the tier reason', async () => {

@@ -196,7 +196,8 @@ const resolveActionRecord = async (
       tone: action?.tone ?? null,
       tone_used: action?.tone_used ?? action?.tone ?? null,
       risk_level: action?.risk_level ?? null,
-      requires_human_approval: action?.requires_human_approval ?? true,
+      // D-01: the AI suggestion's requires_human_approval never waives approval.
+      requires_human_approval: true,
       requires_approval: action?.requires_approval ?? null,
       execution_mode: action?.execution_mode ?? 'manual',
       execution_modes_config: action?.execution_modes_config ?? null,
@@ -410,11 +411,14 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return action;
       }
 
+      // D-01: a matching auto-rule no longer approves. The action is recorded
+      // as 'pending' for a human, and executes only once a human approval
+      // (approved_at) exists on the row.
       const record = await resolveActionRecord(
         input.tenant_id,
         input.organization_id,
         normalizedAction,
-        'approved',
+        'pending',
         { allowAnyStatus: true }
       );
 
@@ -422,6 +426,23 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return {
           ...action,
           blocked_reason: 'No applicable playbook',
+        };
+      }
+
+      if (!record.approved_at) {
+        return {
+          ...action,
+          blocked_reason: 'Human approval required',
+        };
+      }
+
+      // D-01: an existing row of any other status (executed, uncertain,
+      // failed, executing, ...) is never acted on again from here; only a
+      // human-approved row still awaiting execution is.
+      if (record.status !== 'approved') {
+        return {
+          ...action,
+          blocked_reason: 'Action is not awaiting execution',
         };
       }
 
@@ -529,8 +550,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
           suggested_text: record.suggested_text,
           playbook_id: record.playbook_id,
           execution_mode: record.execution_mode,
-          requires_human_approval: false,
+          requires_human_approval: record.requires_human_approval ?? null,
           risk_level: record.risk_level,
+          approved_at: record.approved_at,
         },
         true,
         { source: 'auto', persist: true }

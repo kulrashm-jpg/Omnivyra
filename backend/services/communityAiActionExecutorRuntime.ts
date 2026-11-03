@@ -368,71 +368,52 @@ export const executeAction = async (
   });
 
   // auto_insert: for ad-hoc callers that synthesize an action id on the
-  // fly (engagement APIs, bulk engagement). The row is inserted already
-  // CLAIMED ('executing') by this caller. The primary key is the
-  // serialisation point: if a row with this id already exists (a retry of the
-  // same request, a concurrent duplicate, or an earlier terminal/uncertain
-  // row for the same deterministic id) this call does NOT execute — it
-  // reports the existing row. Exactly one caller ever performs the action.
-  let insertedClaim = false;
+  // fly (engagement APIs, bulk engagement). If a row with this id already
+  // exists (a retry of the same request, a concurrent duplicate, or an earlier
+  // terminal/uncertain row for the same deterministic id) this call does NOT
+  // execute — it reports the existing row.
+  //
+  // D-01: an ad-hoc action has no persisted human approval, so it is refused
+  // here, BEFORE any row is written: only the event log entry is recorded, no
+  // 'executing' row is left for the reaper to mark 'uncertain', and the id
+  // stays unused. The connector is never reached.
   if (options?.persist && options?.auto_insert) {
     const { data: existing } = await ownedDbTable('community_ai_actions')
       .select('id, status, organization_id')
       .eq('id', action.id)
       .maybeSingle();
-    let priorStatus: string | null = existing ? String((existing as { status?: string | null }).status ?? '') : null;
     if (!existing) {
-      const { error: insertError } = await ownedDbTable('community_ai_actions')
-        .insert({
-          id: action.id,
-          tenant_id: action.tenant_id,
-          organization_id: action.organization_id,
-          platform: action.platform,
-          action_type: action.action_type,
-          target_id: action.target_id,
-          suggested_text: action.suggested_text,
-          risk_level: action.risk_level ?? 'low',
-          requires_human_approval: false,
-          requires_approval: action.requires_approval ?? null,
-          execution_mode: action.execution_mode ?? null,
-          playbook_id: action.playbook_id ?? null,
-          tone_used: action.tone_used ?? null,
-          acting_user_id: action.acting_user_id ?? null,
-          // Inserted already CLAIMED by this caller ('executing'), never as a
-          // claimable 'pending' row: if a gate below refuses and the terminal
-          // write then fails, no extension / scheduler can pick the row up.
-          // (A stuck 'executing' row is reaped to 'uncertain', never re-dispatched.)
-          status: 'executing',
-          execution_correlation_id: correlationId,
-          approved_at: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-      if (!insertError) {
-        insertedClaim = true;
-      } else if (String(insertError.code || '') === '23505') {
-        // 23505 = unique_violation: a concurrent caller inserted it first.
-        const { data: raced } = await ownedDbTable('community_ai_actions')
-          .select('id, status, organization_id')
-          .eq('id', action.id)
-          .maybeSingle();
-        priorStatus = raced ? String((raced as { status?: string | null }).status ?? '') : 'executing';
-      } else {
-        throw new Error(`community_ai_action_auto_insert_failed:${insertError.message}`);
-      }
-    }
-    if (!insertedClaim) {
-      const status = priorStatus || 'unknown';
+      await logCommunityAiActionEvent({
+        action_id: action.id,
+        tenant_id: action.tenant_id,
+        organization_id: action.organization_id,
+        // 'skipped': the value community_ai_action_logs_event_type_check accepts.
+        event_type: 'skipped',
+        event_payload: {
+          policy_flag: 'require_human_approval',
+          reason: 'ad_hoc_action_has_no_human_approval',
+          source: options?.source || 'unknown',
+        },
+      });
       return {
-        ok: status === 'executed' || status === 'sent_unverified',
-        status: status as ResultStatus,
-        deduplicated: true,
-        prior_action_id: action.id,
+        ok: false,
+        status: 'skipped',
+        reason: 'HUMAN_APPROVAL_REQUIRED',
+        may_have_acted: false,
         correlation_id: correlationId,
         execution_mode: (action.execution_mode as ExecutionMode | undefined) ?? undefined,
-        response: { dedup: { reason: 'action_id_exists', prior_status: status, prior_action_id: action.id } },
       } as ExecutionResult;
     }
+    const status = String((existing as { status?: string | null }).status ?? '') || 'unknown';
+    return {
+      ok: status === 'executed' || status === 'sent_unverified',
+      status: status as ResultStatus,
+      deduplicated: true,
+      prior_action_id: action.id,
+      correlation_id: correlationId,
+      execution_mode: (action.execution_mode as ExecutionMode | undefined) ?? undefined,
+      response: { dedup: { reason: 'action_id_exists', prior_status: status, prior_action_id: action.id } },
+    } as ExecutionResult;
   }
 
   const runResult = await runExecution(action, approved, options);
@@ -459,10 +440,7 @@ export const executeAction = async (
       expectedFromStatuses:
         Array.isArray(options?.expected_from_statuses) && options!.expected_from_statuses!.length > 0
           ? options!.expected_from_statuses
-          // A row this call inserted is held as 'executing'; the terminal write
-          // is compare-and-set from that claim (a reaped/cancelled row is never
-          // overwritten).
-          : insertedClaim ? ['executing'] : undefined,
+          : undefined,
       rowHint: {
         platform: action.platform,
         action_type: action.action_type,
@@ -549,7 +527,10 @@ const runExecution = async (
     return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY', may_have_acted: false };
   }
 
-  if (policy.require_human_approval && !action.approved_at) {
+  // D-01: a persisted human approval is required whatever the platform policy
+  // says; require_human_approval=false no longer waives it. Refused as
+  // 'skipped' (never acted), which the approval-integrity CHECK permits.
+  if (!action.approved_at) {
     await logCommunityAiActionEvent({
       action_id: action.id,
       tenant_id: action.tenant_id,

@@ -96,10 +96,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ error: 'ACTION_NOT_PENDING', current_status: action.status });
   }
 
-  // Approval-integrity gate: any human-approval-required action MUST carry an
-  // approved_at before it may execute. Mirrors the DB CHECK constraint so the
-  // API can return a precise error rather than a generic CHECK violation.
-  if (action.requires_human_approval === true && !action.approved_at) {
+  // Approval-integrity gate: every action MUST carry a human approval
+  // (approved_at) before it may execute. D-01: requires_human_approval=false
+  // and a low risk_level are AI classifications and no longer waive it.
+  // Refused here, before the claim, so the row is left untouched.
+  if (!action.approved_at) {
     return res.status(403).json({ error: 'APPROVAL_REQUIRED', reason: 'NOT_APPROVED' });
   }
 
@@ -108,7 +109,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // to the central router inside the executor (which itself handles fallback).
   const executionMode = requestedMode || 'manual';
 
-  const finalText = (body.final_text ?? action.suggested_text ?? '').toString();
+  // D-01: the approved text is the row's suggested_text, which the approver
+  // saw (approve.ts stamps approved_at and changes no text). Those exact bytes
+  // are what executes; a client final_text never replaces them. For a reply,
+  // a final_text that differs (ignoring surrounding whitespace) was never
+  // approved and is refused; for any other action type it is ignored.
+  const approvedText = (action.suggested_text ?? '').toString();
+  if (
+    action.action_type === 'reply' &&
+    body.final_text != null &&
+    String(body.final_text).trim() !== approvedText.trim()
+  ) {
+    return res.status(409).json({ error: 'FINAL_TEXT_NOT_APPROVED' });
+  }
+  const finalText = approvedText;
   if (action.action_type === 'reply' && finalText.trim().length === 0) {
     return res.status(400).json({ error: 'FINAL_TEXT_REQUIRED' });
   }

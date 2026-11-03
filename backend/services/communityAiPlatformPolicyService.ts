@@ -8,10 +8,12 @@ type CommunityAiPlatformPolicy = {
   updated_by: string | null;
 };
 
+// D-01: with no policy row (or an unreadable one) community auto-rules are OFF
+// and every action needs a human approval. Fail closed.
 const DEFAULT_POLICY: CommunityAiPlatformPolicy = {
   execution_enabled: true,
-  auto_rules_enabled: true,
-  require_human_approval: false,
+  auto_rules_enabled: false,
+  require_human_approval: true,
   updated_at: null,
   updated_by: null,
 };
