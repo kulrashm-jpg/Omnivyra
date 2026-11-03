@@ -390,3 +390,38 @@ Not published, as ruled. The pin branch `release/extension-1.4.1-pin` (`86dd45eb
 ### P-1 and C-1: need you
 - **P-1:** please give the controlling Google account or publisher ID for Web Store item `khlballmijciomdbigljpafliajdekbg`. Nothing has been inferred from the listing's display name.
 - **C-1:** please nominate the individual technical owner for the extension client.
+
+---
+
+## Round 4: joint ruling of 4 November 2026 (recorded verbatim in substance)
+
+### Decision register
+
+| # | Ruling | Outreach status / evidence |
+|---|---|---|
+| 1 | **D-03 GO**, under six invariants: an active run plus a valid handoff; HOLD on any missing, unreadable, paused or non-active state; a hold consumes no attempt, decision, quota or retry; approval, retry and worker paths cannot bypass it; resume revalidates journey state and execution authorisation; resume executes exactly once. The race fix is approved for local commit and test-database use only. Order: L-3 → atomic claim → platform call. Manual Execute returns 409 when the extension holds the action. | **Accepted as the `dispatch.ts` owner.** D-03 is committed locally by Orchestration as `9a8dab9a`. Its mapping of invariants 4 and 5 to code and named tests has been received: the hold returns at `dispatch.ts:219`, ahead of governance, quota, attempt and send, and the resume tests cover the kill switch, quota, approval and prior attempts. The prior-attempt test file stays uncommitted, held for separate review. The race fix is committed locally as `ddc9735a` on top of L-3 `f4d7a2e8f`, and I reviewed it: L-3 recheck at :668, claim at :693, dispatch at :702. |
+| 2 | **B:** stranded legacy actions need a fresh approval bound to the exact action and content. No grandfathering. | Recorded. P-A (`80b5254a`, local) requires `approved_at`, `approved_by` and the approval route's own log entry, and removes the waiver. |
+| 3 | **D:** a dry run needs no approval only if it cannot mutate external state or consume an execution authorisation. | Recorded. The `manual` simulation mode is the only no-approval path in the executor, and the L-3 recheck skips only that mode. |
+| 4 | **Approval invariant:** approved state; an authenticated, authorised human approver; a server-side record; binding to the exact action and content; fresh execution authorisation immediately before the action. AI risk never waives approval. | Recorded. D-01, P-A, the race claim and L-3 together implement it locally. |
+| 5 | **Release NO-GO** for product. R-1 and R-3 stand as containment. 1.4.1 publication, 1.5.0, real browser execution, autonomous dispatch, provider sends and unapproved migrations all remain prohibited. | R-1 and R-3 stay live. Nothing else has been released. |
+| 6 | **1.4.1 is containment only.** Close and test the client hardening gaps; inventory the third gap. | **Done locally as `v1.4.1-rc2`** (`3c07931`, zip `8e5611ba…bb15`): token and secret isolated to worker-only session storage, capabilities fail closed, platform pages silent. The third gap (shipped collector code) is inventoried and shown unreachable, but not removed; removing it needs your go. 37 of 37 tests pass; 9 of 10 of the new tests fail on rc1; real Chromium confirms the storage layout. Evidence: `C:/tmp/omvx-ext/docs/RELEASE-1.4.1.md`. |
+| 7 | **Race follow-ups**, tracked to closure: the recheck→claim window; the losing-claim metric; guarding or removing `advanceCommandChain`. | All three recorded in this register. Owner: Orchestration. Must close before the 1.5.0 gate. |
+| 8 | **Both workstreams record this same ruling.** Local commit or test-database authorisation is not permission to push, merge, deploy, publish or execute. | Recorded here. **Discrepancy to note:** Orchestration reports that **the joint-ruling text never reached its session**. It holds a direct ruling that agrees on points 1–5 and adds three further points (below). |
+
+### Points Orchestration holds that are not in the joint text
+
+Raised so the control tower can confirm them for both sessions:
+- **Manual Execute:** 409 only for a genuine conflict (already claimed, or executing). An action the extension never picked up gets a distinct "not ready" response.
+- **Missing policy row:** fail closed when a tenant's policy row is absent.
+- **Approval expiry:** the 7-day expiry is enforced at the final claim, owned by D-02.
+
+### Evidence references
+
+| Item | Reference |
+|---|---|
+| R-1 | PR #366 → `e04d827f`; web `dpl_GYDw56tqCHoQGYMvR4Nm5XDFU3Rt`; worker `fe90d9b7`; tag `deploy/omnivyra-20261103-2146-r1` (local) |
+| R-3 | PR #367 → `23a0a586`; web `dpl_7Lr3iaMLrdxJFadxkeRGWwotc3iZ`; worker `7ee96a2c`; tag `deploy/omnivyra-20261103-2259-r3` (local) |
+| Production probes | Session scratchpad files `prod-probe-baseline.txt`, `prod-probe-postdeploy.txt`, `prod-probe-pre-r3.txt`, `prod-probe-post-r3.txt` |
+| L-3 | `f4d7a2e8f`, `refs/preserve/outreach-l3-recipient-recheck` |
+| 1.4.1 rc2 | `v1.4.1-rc2` (`3c07931`) in `C:/tmp/omvx-ext`; zip `8e5611ba…bb15`; app pin branch `86dd45eb5` (67 of 67 against rc2) |
+| D-03 / race / P-A (Orchestration, local) | `9a8dab9a` / `ddc9735a` / `80b5254a`, with preserve refs in Orchestration's worktrees |
