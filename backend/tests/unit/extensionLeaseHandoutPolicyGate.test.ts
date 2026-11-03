@@ -5,7 +5,9 @@
  * there, so a command prepared before execution was switched off, or before
  * human approval became required, is not handed out. The policy service is the
  * real one: an unreadable policy must fail closed. Read-only inbox syncs are
- * never gated.
+ * never gated by the policy, but while browser ingestion is suspended (R-3,
+ * extensionIngestionSuspension) they are not handed out either: the row is
+ * skipped, not claimed.
  */
 
 type Row = Record<string, any>;
@@ -128,10 +130,11 @@ describe('extension lease handout honours the community platform policy', () => 
     expect(claimed('dm-1')).toBe(false);
   });
 
-  it('execution switched off: a read-only inbox sync is still handed out', async () => {
+  it('execution switched off: outbound held; an inbox sync stays unclaimed while R-3 suspends ingestion', async () => {
     db.policy = policyRow({ execution_enabled: false });
     db.actions = [reply(), inboxSync()];
-    expect((await poll()).ids).toEqual(['sync-1']);
+    expect((await poll()).ids).toEqual([]);
+    expect(claimed('sync-1')).toBe(false);
     expect(claimed('reply-1')).toBe(false);
   });
 
@@ -142,10 +145,11 @@ describe('extension lease handout honours the community platform policy', () => 
     expect(claimed('unapproved')).toBe(false);
   });
 
-  it('unreadable policy fails closed: outbound held, inbox sync still handed out', async () => {
+  it('unreadable policy fails closed: outbound held; an inbox sync stays unclaimed while R-3 suspends ingestion', async () => {
     db.policy = 'error';
     db.actions = [reply(), dmChain(), inboxSync()];
-    expect((await poll()).ids).toEqual(['sync-1']);
+    expect((await poll()).ids).toEqual([]);
+    expect(claimed('sync-1')).toBe(false);
     expect(claimed('reply-1')).toBe(false);
     expect(claimed('dm-1')).toBe(false);
   });
