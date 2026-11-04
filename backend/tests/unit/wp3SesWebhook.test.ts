@@ -611,12 +611,66 @@ describe('WP3/L9 — transient failures are retried (503), terminal ones are not
     expect((await post(envelope(delivery()))).statusCode).toBe(503);
   });
 
-  it('an evidence WRITE failure is 503 and nothing is restricted', async () => {
+  // D7 — this case used to assert that NOTHING was restricted. The owner
+  // requirement is that a complaint is a deterministic governance event, so the
+  // restriction no longer waits on the evidence write: it is in force at once,
+  // the response is still 503 (never a false success), and SNS's retry repairs
+  // the evidence.
+  it('an evidence WRITE failure is 503 — and the complaint restriction is STILL in force', async () => {
+    await sentMessage();
+    const env = envelope(complaint());
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    const res = await post(env);
+    expect(res.statusCode).toBe(503);
+    expect(governance()).toHaveLength(2);
+    expect(evidenceRows()).toHaveLength(0);
+    expect((await isSuppressed(ORG, 'email', RECIPIENT)).suppressed).toBe(true);
+
+    db.failTable = null;
+    const retry = await post(env);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.body).toMatchObject({ duplicate: false, governance: { created: 0, alreadyPresent: 2 } });
+    expect(evidenceRows()).toHaveLength(1);
+    expect(governance()).toHaveLength(2);
+  });
+
+  it('a PERMANENT bounce whose evidence write fails still restricts the address (503)', async () => {
     await sentMessage();
     db.failTable = 'outreach_delivery_evidence';
     db.failOp = 'insert';
-    expect((await post(envelope(complaint()))).statusCode).toBe(503);
-    expect(governance()).toHaveLength(0);
+    expect((await post(envelope(bounce('Permanent')))).statusCode).toBe(503);
+    expect(governance()).toHaveLength(1);
+    expect(governance()[0]).toMatchObject({ governance_type: 'bounce_hard', target_normalized: NORMALISED });
+  });
+
+  it('a task READ failure still restricts the ADDRESS (503); the retry adds the person anchor', async () => {
+    await sentMessage();
+    const env = envelope(complaint());
+    db.failTable = 'outreach_tasks';
+    db.failOp = 'select';
+    const res = await post(env);
+    expect(res.statusCode).toBe(503);
+    expect(governance()).toHaveLength(1);
+    expect(governance()[0]).toMatchObject({ governance_type: 'complaint', person_id: null, target_normalized: NORMALISED });
+
+    db.failTable = null;
+    expect((await post(env)).statusCode).toBe(200);
+    expect(governance()).toHaveLength(2);
+    expect(governance().find((r) => r.person_id === PERSON)).toBeDefined();
+  });
+
+  it('a complaint-implied delivery is labelled as an inference, not a delivery receipt', async () => {
+    await sentMessage();
+    await post(envelope(complaint()));
+    expect(evidenceRows()[0].transport_response).toMatchObject({ deliveryInferredFrom: 'Complaint' });
+    expect(governance()[0].evidence).toMatchObject({ sesEventType: 'Complaint', deliveryInferredFrom: 'Complaint' });
+  });
+
+  it('a genuine Delivery carries no inference marker', async () => {
+    await sentMessage();
+    await post(envelope(delivery()));
+    expect(evidenceRows()[0].transport_response).not.toHaveProperty('deliveryInferredFrom');
   });
 
   it('a transient governance write failure is 503 — never a false success', async () => {

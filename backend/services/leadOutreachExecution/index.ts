@@ -261,6 +261,7 @@ export {
   listQueuedOutreachTasks,
   listStaleDispatchingOutreachTasks,
   setOutreachTaskState,
+  advanceOutreachTaskDeliveryStatus,
   setOutreachTaskPersonId,
   transitionOutreachTaskState,
   appendApproval,
