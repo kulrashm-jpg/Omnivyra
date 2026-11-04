@@ -271,6 +271,43 @@ export async function setOutreachTaskState(
 }
 
 /**
+ * D7 / Agent D — compare-and-set on a task's DELIVERY status.
+ *
+ * Feedback ingestion decides a delivery transition from a task it read a
+ * moment earlier. `setOutreachTaskState` writes unconditionally, so two
+ * provider events for one task processed concurrently (SES publishes Delivery,
+ * Bounce and Complaint as separate, independently retried notifications) could
+ * both read `confirmed`, both pass the state machine, and the later write would
+ * OVERWRITE the earlier terminal fact: `bounced` silently replaced by
+ * `delivered`, or the reverse. The `delivery_status = expected` predicate is
+ * evaluated by the database, so exactly one of them wins and the loser is told
+ * it lost. `delivered` and `bounced` are terminal, so the loser's transition is
+ * never legitimately applicable afterwards; its evidence row is already durable.
+ *
+ * `changed: false` is a legitimate outcome (a lost race), not an error.
+ */
+export async function advanceOutreachTaskDeliveryStatus(
+  companyId: string,
+  taskId: string,
+  expectedDeliveryStatus: DeliveryStatus,
+  next: { deliveryStatus: DeliveryStatus; status?: OutreachTaskStatus },
+): Promise<WriteResult<null> & { changed: boolean }> {
+  const patch: Row = { updated_at: new Date().toISOString(), delivery_status: next.deliveryStatus };
+  if (next.status !== undefined) patch.status = next.status;
+
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .update(patch)
+      .eq('company_id', companyId)
+      .eq('id', taskId)
+      .eq('delivery_status', expectedDeliveryStatus)
+      .select('id'),
+  );
+  if (res.error) return { ok: false, changed: false, error: errText(res.error) };
+  return { ok: true, changed: Array.isArray(res.data) ? res.data.length > 0 : false };
+}
+
+/**
  * A3 / Contract 12 — anchor a task to a canonical person, or unanchor it.
  *
  * The ONLY write path to `outreach_tasks.person_id`, deliberately separate from

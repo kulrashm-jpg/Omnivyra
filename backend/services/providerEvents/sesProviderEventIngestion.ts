@@ -17,6 +17,19 @@
  * succeeded and the restriction write did not, the retry repairs it, and an
  * already-present restriction is a no-op. A failed write is never a success.
  *
+ * D7 — A RESTRICTION DOES NOT WAIT FOR THE EVIDENCE WRITE. A complaint and a
+ * permanent bounce are deterministic governance events: once the event is
+ * authenticated and resolved to a tenant, the restriction follows from the
+ * event alone. It used to be written only AFTER the delivery evidence was
+ * appended, so an evidence-table outage that outlasted SNS's bounded retry
+ * policy lost the restriction for good while the tenant, the address and the
+ * person were all known. Now the restriction is attempted whenever the tenant
+ * resolved — on the ADDRESS even when the task could not be read (the person
+ * anchor follows on the retry) — and the response still reports the failed
+ * evidence write as a failure, so SNS retries and the evidence is repaired.
+ * Status precedence when several writes fail: retryable if ANY failure is
+ * retryable (a retry can still complete it), otherwise terminal.
+ *
  * Nothing here logs or returns an address.
  */
 import { normalizeSesEvent, type NormalizedSesEvent } from './sesEventNormalizer';
@@ -65,28 +78,59 @@ export async function ingestSesEvent(payload: unknown, snsMessageId: string): Pr
   // The evidence row references the task (ON DELETE RESTRICT), so a task that
   // does not come back is a failed read, not an absent task.
   const task = await getOutreachTaskById(companyId, taskId);
-  if (!task) return outcome('retryable', 'task_read_failed', { eventType: event.eventType });
 
-  const feedback = await ingestFeedback({
-    companyId,
-    taskId,
-    signal: event.signal,
-    occurredAt: event.occurredAt,
-    source: 'provider_webhook',
-    provider: event.provider,
-    providerEventId: event.providerEventId,
-    attemptId,
-    evidence: event.evidence,
-  });
-  if (!feedback.ok) {
-    const retryable = feedback.rejection === 'write_failed' || feedback.rejection === 'task_not_found';
-    return outcome(retryable ? 'retryable' : 'terminal', feedback.rejection, { eventType: event.eventType });
+  const failures: Array<{ status: 'terminal' | 'retryable'; reason: string }> = [];
+  let duplicate = false;
+  if (!task) {
+    failures.push({ status: 'retryable', reason: 'task_read_failed' });
+  } else {
+    const feedback = await ingestFeedback({
+      companyId,
+      taskId,
+      signal: event.signal,
+      occurredAt: event.occurredAt,
+      source: 'provider_webhook',
+      provider: event.provider,
+      providerEventId: event.providerEventId,
+      attemptId,
+      evidence: event.evidence,
+    });
+    if (feedback.ok) {
+      duplicate = feedback.duplicate;
+    } else {
+      const retryable = feedback.rejection === 'write_failed' || feedback.rejection === 'task_not_found';
+      failures.push({ status: retryable ? 'retryable' : 'terminal', reason: String(feedback.rejection) });
+    }
   }
 
-  if (!event.governance) {
-    return outcome('processed', null, { duplicate: feedback.duplicate, eventType: event.eventType });
+  let governance: SesIngestionOutcome['governance'] = null;
+  if (event.governance) {
+    const written = await writeGovernance(event, companyId, taskId, attemptId, task?.personId ?? null);
+    governance = { created: written.created, alreadyPresent: written.alreadyPresent };
+    if (written.failure) failures.push(written.failure);
   }
 
+  if (failures.length > 0) {
+    const status = failures.some((f) => f.status === 'retryable') ? 'retryable' : 'terminal';
+    return outcome(status, failures[0].reason, { eventType: event.eventType, duplicate, governance });
+  }
+  return outcome('processed', null, { duplicate, eventType: event.eventType, governance });
+}
+
+/**
+ * The standing restriction for a permanent bounce or a complaint, per decision
+ * A: the ADDRESS always, plus the PERSON when the task names one. Stops at the
+ * first failed write and reports it; earlier writes stand (a retry re-runs them
+ * as no-ops).
+ */
+async function writeGovernance(
+  event: NormalizedSesEvent,
+  companyId: string,
+  taskId: string,
+  attemptId: string,
+  personId: string | null,
+): Promise<{ created: number; alreadyPresent: number; failure: { status: 'terminal' | 'retryable'; reason: string } | null }> {
+  const action = event.governance as NonNullable<NormalizedSesEvent['governance']>;
   const evidence = {
     snsMessageId: event.providerEventId,
     providerMessageId: event.providerMessageId,
@@ -95,7 +139,7 @@ export async function ingestSesEvent(payload: unknown, snsMessageId: string): Pr
     ...event.evidence,
   };
   const anchors: Array<string | null> = [null];
-  if (event.governance.anchors === 'target_and_person' && task.personId) anchors.push(task.personId);
+  if (action.anchors === 'target_and_person' && personId) anchors.push(personId);
 
   // In force from the provider's event time — but never LATER than now: if the
   // provider's clock runs ahead of ours, a future start would leave the
@@ -105,13 +149,13 @@ export async function ingestSesEvent(payload: unknown, snsMessageId: string): Pr
 
   let created = 0;
   let alreadyPresent = 0;
-  for (const personId of anchors) {
+  for (const anchor of anchors) {
     try {
       const written = await recordContactGovernance({
         organizationId: companyId,
-        governanceType: event.governance.type,
-        channel: event.governance.channel,
-        personId,
+        governanceType: action.type,
+        channel: action.channel,
+        personId: anchor,
         target: event.recipient,
         source: SES_WEBHOOK_GOVERNANCE_SOURCE,
         evidence,
@@ -121,13 +165,8 @@ export async function ingestSesEvent(payload: unknown, snsMessageId: string): Pr
       else alreadyPresent += 1;
     } catch (e) {
       const code = e instanceof GovernanceWriteError ? e.code : 'governance_write_failed';
-      return outcome(isTerminalGovernanceError(e) ? 'terminal' : 'retryable', code, {
-        eventType: event.eventType, duplicate: feedback.duplicate, governance: { created, alreadyPresent },
-      });
+      return { created, alreadyPresent, failure: { status: isTerminalGovernanceError(e) ? 'terminal' : 'retryable', reason: code } };
     }
   }
-
-  return outcome('processed', null, {
-    duplicate: feedback.duplicate, eventType: event.eventType, governance: { created, alreadyPresent },
-  });
+  return { created, alreadyPresent, failure: null };
 }

@@ -46,7 +46,7 @@ import {
   listOutcomes,
 } from './storage';
 import { isDeliveryTransitionAllowed, isTransitionAllowed } from './lifecycle';
-import { setOutreachTaskState } from './storage';
+import { advanceOutreachTaskDeliveryStatus } from './storage';
 import { recordFeedbackIngestion, recordFeedbackRouting } from './telemetry';
 import type {
   BusinessOutcomeType,
@@ -450,12 +450,22 @@ async function advanceTaskState(
   const nextLifecycle = LIFECYCLE_FOR_DELIVERY[deliveryStatus];
   const lifecycleOk = nextLifecycle !== undefined && isTransitionAllowed(task.status, nextLifecycle);
 
-  const res = await setOutreachTaskState(task.companyId, String(task.id), {
+  // Compare-and-set on the delivery status this decision was made from. An
+  // unconditional write would let a concurrently processed event for the same
+  // task overwrite a terminal fact (`bounced` ↔ `delivered`) that the state
+  // machine already refused to change.
+  const res = await advanceOutreachTaskDeliveryStatus(task.companyId, String(task.id), from, {
     deliveryStatus,
     ...(lifecycleOk ? { status: nextLifecycle } : {}),
   });
 
   if (!res.ok) return { stateAdvanced: false, stateRefusal: res.error ?? 'state write failed' };
+  if (!res.changed) {
+    return {
+      stateAdvanced: false,
+      stateRefusal: `delivery status is no longer ${from}; a concurrent event settled it first and it is not overwritten`,
+    };
+  }
   return {
     stateAdvanced: true,
     stateRefusal: lifecycleOk ? null : `lifecycle ${task.status} → ${String(nextLifecycle)} is not permitted; delivery axis advanced alone`,
