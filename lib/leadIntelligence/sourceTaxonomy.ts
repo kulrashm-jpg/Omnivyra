@@ -115,6 +115,70 @@ export function resolveCanonicalSource(signals: SourceSignals): CanonicalLeadSou
   return 'other';
 }
 
+/**
+ * The canonical source of a `canonical_leads` row — the ONE definition.
+ *
+ * Any writer that projects a canonical prospect into `lead_intelligence` and the
+ * reader's `canonical_leads` bridge MUST agree on this value, because it is
+ * persisted inside dedupe keys (`lib/leadIntelligence/dedupe.ts`), lead keys
+ * (`lib/leadIntelligence/leadKey.ts`) and audience memberships.
+ *
+ * They did not agree, and it cost two acceptance suites. `resolveCanonicalSource`
+ * returns `'other'` for a PI-discovery provider such as `apollo` (no RAW_ALIASES
+ * entry, so it falls through), while `crmAdapter` coerces `'website'`/`'other'`
+ * to `'crm'` for a `canonical_leads` row. One prospect therefore produced TWO
+ * lead views — `crm` from the bridge, `other` from the durable row — which
+ * `dedupeViews` cannot collapse precisely BECAUSE the key embeds the source.
+ * The user-visible symptom is the same person listed twice, once as "Other".
+ *
+ * The coercion lives here rather than in the writer so there is nothing left to
+ * keep in sync, and it is expressed producer-side so main's observable lead keys
+ * do not move — notes and audience memberships are keyed on them.
+ *
+ * ─── IT IS RESOLVED FROM THE ROW'S OWN `source`, NOT FROM `unified_source` ──
+ * Sharing one FUNCTION was not enough, because the two sides were handed
+ * DIFFERENT SIGNALS. The reader (`crmAdapter`) passed three — `rawSource`,
+ * `unifiedSourceCategory`, `unifiedSourceOrigin` — while the writer
+ * (`leadIngestion/orchestrator`) passed one, `rawSource`. For a raw source with
+ * no `RAW_ALIASES` entry (`apollo`, `zoominfo`, `linkedin_sales_navigator`, …)
+ * resolution falls THROUGH to the unified layers, so the reader answered
+ * `import`/`webhook`/`api`/`manual`/`engagement` for a row carrying a
+ * `unified_source` while the writer answered `crm`. Same function, two values,
+ * two keys, one prospect listed twice — the original defect, reopened by the
+ * signal asymmetry rather than by a second definition.
+ *
+ * The writer CANNOT be given those signals. WS-1's `resolveOrCreateProspect`
+ * returns `{ prospectId, subjectId, outcome, externalLeadKey, reason }` and
+ * selects only `id`, and production's `canonical_leads` has no `unified_source`
+ * column at all (`20260620_unified_source_columns.sql` is deliberately
+ * unapplied, and no writer in the tree sets it on that table), so a read of it
+ * would fail rather than inform.
+ *
+ * That is ALSO why nothing needs closing on the READER side: a `canonical_leads`
+ * row read from the database carries no `unified_source`, so the reader's unified
+ * layers are already unreachable for it and both sides answer from the row's own
+ * `source` column — NOT NULL by `canonical_leads_source_not_blank`.
+ *
+ * The descriptor is therefore NOT withheld here, because withholding it MOVES A
+ * PERSISTED VALUE. `crmIngestionService.ts:514` hands `crmAdapter` an IN-MEMORY
+ * row carrying a freshly computed `unified_source` — on the CSV branch
+ * `normalizeSource(source, { origin: 'import' })`. For every CRM-CSV row whose
+ * `lead_source` has no `RAW_ALIASES` entry that row resolves to `import`, and
+ * `import` is persisted in `lead_intelligence.dedupe_key` (the upsert conflict
+ * target), in `audience_memberships.entity_id` and in operational note entity
+ * ids. Relabelling it `crm` orphans those rows and enrols them in
+ * `buyingIntent.CAPTURE_SOURCES`, whose own comment records why an import must
+ * not assert `lead_captured`.
+ *
+ * `resolveCanonicalSource` is deliberately NOT changed. Its unified layers serve
+ * `websiteAdapter` and the signal adapters, whose `leads`-table rows legitimately
+ * carry a `unified_source`; neutering them there would relabel those rows.
+ */
+export function canonicalProspectSource(signals: SourceSignals): CanonicalLeadSource {
+  const resolved = resolveCanonicalSource(signals);
+  return resolved === 'website' || resolved === 'other' ? 'crm' : resolved;
+}
+
 /* ── Provenance display (prospect_source_contributions.source_category) ───────
  * `source_category` is the discovery classification; it is NOT a
  * `CanonicalLeadSource` and is never mapped onto one (that vocabulary is

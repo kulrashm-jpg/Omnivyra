@@ -6,6 +6,7 @@
  */
 
 export * from './types';
+export * from './projectionResult';
 export * from './sourceTaxonomy';
 export * from './attribution';
 export * from './adapters';

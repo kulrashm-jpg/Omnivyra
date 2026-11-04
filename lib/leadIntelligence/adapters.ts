@@ -16,7 +16,7 @@ import type {
   SourceScore,
 } from './types';
 import { buildAttributionContract } from './attribution';
-import { resolveCanonicalSource, PI_DISCOVERY_PROVIDERS } from './sourceTaxonomy';
+import { resolveCanonicalSource, canonicalProspectSource, PI_DISCOVERY_PROVIDERS } from './sourceTaxonomy';
 import { toUnitScore, type ScoreScale } from '../prospectProvenance/contract';
 import { effectiveQualificationScore } from '../prospectProvenance/scoreSemantics';
 
@@ -172,11 +172,6 @@ export const marketPulseAdapter: SourceAdapter = (row) =>
 /** `canonical_leads` / CRM record (uses unified_source when present). */
 export const crmAdapter: SourceAdapter = (row) => {
   const us = obj(row.unified_source);
-  const resolved = resolveCanonicalSource({
-    rawSource: s(row.source),
-    unifiedSourceCategory: s(us.category),
-    unifiedSourceOrigin: s(us.origin),
-  });
   const raw = (s(row.source) ?? '').toLowerCase();
   // A prospect created by a PI discovery provider (Apollo) is not a CRM lead. Its
   // display SOURCE stays the persisted value (keys/memberships depend on it); the
@@ -184,7 +179,16 @@ export const crmAdapter: SourceAdapter = (row) => {
   const origin = PI_DISCOVERY_PROVIDERS.has(raw)
     ? { category: 'pi_discovery' as const, platform: raw, observedAt: s(row.created_at) }
     : undefined;
-  return assemble(resolved === 'website' || resolved === 'other' ? 'crm' : resolved, row, { table: 'canonical_leads', origin });
+  // `canonicalProspectSource` IS the former inline coercion, extracted verbatim so
+  // the WRITER can share the one definition. It receives the same three signals the
+  // inline version resolved from, so this adapter's output is identical to
+  // `origin/main`'s. The `origin` hint is computed from the RAW value, not the
+  // coerced one, which is why `raw` is read separately above.
+  return assemble(canonicalProspectSource({
+    rawSource: s(row.source),
+    unifiedSourceCategory: s(us.category),
+    unifiedSourceOrigin: s(us.origin),
+  }), row, { table: 'canonical_leads', origin });
 };
 
 /* ── Generic adapters (a lead row carrying a known source) ───────────────── */

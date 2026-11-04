@@ -28,6 +28,10 @@ function viewFromInput(input: CanonicalLeadInput, unifiedPersonId: string | null
     sourceRef: input.sourceRef ?? null,
     attribution: input.attribution,
     ...(input.origin ? { origin: input.origin } : {}),
+    // Carried through rather than dropped. `assemble()` in adapters.ts already
+    // populates this from each source row's name/title columns; until now it
+    // stopped here, which is why a lead rendered with no human-readable label.
+    display: input.display,
   };
 }
 

@@ -116,7 +116,25 @@ const PAGE_RULES: Array<{ match: RegExp; type: string }> = [
 ];
 
 /** Sources that represent a submitted/known lead (vs a passive signal). */
-const CAPTURE_SOURCES = new Set(['website', 'blog', 'manual', 'webhook', 'referral', 'partner', 'api', 'import', 'crm', 'other']);
+// ── WHY 'import' IS NOT HERE (PI-LDB-4 defect, found by the acquisition audit) ─
+// A member of this set asserts `lead_captured`, which is
+// `{ level: 'high', points: 15, label: 'Submitted a lead form' }`. For a
+// website or blog lead that is a true statement about something the person
+// did. For an IMPORT it is false: nobody submitted anything — an operator
+// pasted a spreadsheet — and the row would carry a high-confidence intent
+// signal on fabricated evidence.
+//
+// This mattered the moment the ingestion orchestrator began projecting into
+// `lead_intelligence` (PI-LDB-4). Before that, no CSV row reached
+// `materializeCanonicalScores` at all, so the membership was latent. The
+// wiring is what made it reachable, so removing it belongs with the wiring.
+//
+// REPORTED, NOT FIXED HERE: 'crm', 'manual' and 'other' carry the same false
+// claim, and 'crm' leads already have persisted scores derived from it. That
+// is a pre-existing defect with stored consequences and an owner decision
+// about back-correction, so it is deliberately left alone rather than
+// silently changed under cover of this one.
+const CAPTURE_SOURCES = new Set(['website', 'blog', 'manual', 'webhook', 'referral', 'partner', 'api', 'crm', 'other']);
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const numv = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);

@@ -411,6 +411,12 @@ function matchesSearch(v: CanonicalLeadView, q: string): boolean {
     v.source, v.sourceLabel, v.campaign, v.content, v.status, meta(v, 'name'), meta(v, 'company_name'), meta(v, 'opportunity_type'),
     v.account?.name,
     ...(v.linkedRecords ?? []).flatMap((r) => [r.source, r.sourceLabel, r.campaign, r.content]),
+    // The display fields the view now carries. Searching a prospect by NAME is
+    // the first thing anyone tries after an import, and the haystack held only
+    // `sourceMetadata.name` — populated for legacy bridge rows and empty for
+    // anything ingested through the adapter contract. So the same search worked
+    // on old leads and silently returned nothing for new ones.
+    v.display?.name, v.display?.title,
   ].map(lc).join(' ');
   return hay.includes(lc(q));
 }

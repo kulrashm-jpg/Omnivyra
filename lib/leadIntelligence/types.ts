@@ -10,6 +10,8 @@
 
 import type { ContributionRole, ProvenanceContribution, ScoreScale, SourceCategory } from '../prospectProvenance/contract';
 
+import type { LeadProjectionResult } from './projectionResult';
+
 /** The canonical lead-source taxonomy — every incoming lead resolves to exactly one. */
 export type CanonicalLeadSource =
   | 'website'
@@ -275,6 +277,20 @@ export interface CanonicalLeadView {
   /** Account of an account-only canonical prospect (read side; see LeadAccount). */
   account?: LeadAccount | null;
   accountStatus?: LeadAccountStatus;
+  /**
+   * How a human recognises this lead: a name, a job title, a snippet.
+   *
+   * Added because the view carried NO human-readable label at all — only
+   * identity (email, phone) and attribution. `CanonicalLeadInput.display` has
+   * always existed and `assemble()` has always populated it from the source
+   * row, but `viewFromInput` dropped it, so every consumer rendered a lead as
+   * an email address with no name beside it.
+   *
+   * OPTIONAL on purpose. A view projected from a source table with no name
+   * column genuinely has no name, and a required field would force every such
+   * reader to invent one. Absent means unknown, not empty.
+   */
+  display?: CanonicalLeadInput['display'];
 }
 
 /* ── Hexagonal ports (reuse existing infrastructure; never duplicated here) ── */
@@ -288,8 +304,13 @@ export interface IdentityResolverPort {
   }): Promise<{ unifiedPersonId: string | null; matchedBy?: string }>;
 }
 
+/**
+ * PI-LDB P0: `emit` returns its verdict. It used to be `Promise<void>`, which
+ * left the only function that knew whether the row landed with nowhere to say
+ * so, and made `emitted: true` a constant rather than a claim about a row.
+ */
 export interface LeadIntelligenceSink {
-  emit(lead: CanonicalLead): Promise<void>;
+  emit(lead: CanonicalLead): Promise<LeadProjectionResult>;
 }
 
 export interface IngestionPorts {
