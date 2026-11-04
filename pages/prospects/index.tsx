@@ -126,6 +126,15 @@ export default function ProspectListPage() {
                 <p className="mt-1 text-sm text-gray-500">
                   Prospects appear here once a lead source has been ingested for this company.
                 </p>
+                {/* PI-LDB — the empty state now names an action the operator
+                    can take. Describing where prospects come from without
+                    saying how to add any left this screen a dead end. */}
+                <Link
+                  href="/prospects/import"
+                  className="mt-4 inline-block rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-purple-700"
+                >
+                  Import prospects from a file
+                </Link>
               </div>
             ) : (
               <>
