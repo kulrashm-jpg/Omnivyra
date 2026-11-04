@@ -39,6 +39,12 @@ jest.mock('@/backend/db/supabaseClient', () => ({
   },
 }));
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => mockDb.from(t) }));
+// L-3 runs before the claim on this base; this suite is about the DM policy, so the
+// recipient recheck allows (as in extensionDispatchSafety.routes).
+jest.mock('@/backend/services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 let currentSession: { userId: string; orgId: string; hmacNonce: string } | null = null;
 jest.mock('@/backend/middleware/extensionAuthMiddleware', () => ({
   requireExtensionAuth: async () => (currentSession ? { session: currentSession } : null),
@@ -140,11 +146,15 @@ describe('DM rows are refused before any claim (no authoritative recipient mappi
     expect(claimCalls).toHaveLength(0);
   });
 
-  it('read-only DM inbox sync is NOT a send and is still dispatched', async () => {
+  it('read-only DM inbox sync is NOT a send: never failed as a DM (and, under R-3, never leased)', async () => {
+    // Before R-3 this sync was dispatched. R-3 (live) suspends browser collection, so it
+    // is not handed out at all; what this suite owns is that the DM send policy does
+    // not treat it as a send: the row is left pending, not failed, and never claimed.
     mockDb.tables.community_ai_actions.push(row({ command_chain: [{ action_type: 'sync_dm_inbox', payload: {} }] }));
     const res = await poll();
-    expect(res.body.commands).toHaveLength(1);
-    expect(res.body.commands[0].action).toBe('sync_dm_inbox');
+    expect(res.body.commands).toHaveLength(0);
+    expect(claimCalls).toHaveLength(0);
+    expect(mockDb.tables.community_ai_actions[0].status).toBe('pending');
   });
 
   it('a comment reply is unaffected', async () => {
