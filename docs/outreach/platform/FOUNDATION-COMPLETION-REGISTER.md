@@ -135,3 +135,51 @@ Integrated tip `1daf12601` on `outreach/foundation-base-20261104`. It merges A `
 **Sequence:** A T2 at unmodified `1daf12601` (report before migrations) → B migrations → C route fixes → D reconcile cross-workstream responses → E register. No final acceptance scenario until the closures are genuinely complete.
 
 **Scope:** local only. Release NO-GO.
+
+## Step A: T2 baseline at unmodified `1daf12601` (2026-11-04)
+
+- Detached worktree at `1daf12601`, tree `295f56601`. The tree was clean before and after the run.
+- Disposable pg-sandbox PG17 cluster on loopback, stopped afterwards. No migration touched any real environment.
+
+| Stage | Result |
+|---|---|
+| Schema build | bootstrap + baseline (1 expected `already exists`, 0 unexpected) + 105 migrations above ledgerMax `20260916000000`, all applied strictly |
+| Real-schema jest | 75 suites: 73 passed, 2 failed. 1582 tests: 1571 passed, 3 skipped, 8 failed |
+| typecheck-ci | PASS, at baseline |
+| Worker tsc | clean |
+| Gates (10) | all pass: route-auth, route-policy, migration-quality, schema-drift, tenant-authz, orgaccess-binding, withrbac-binding, outbound-ssrf, db-conventions, secrets |
+| Whole-repo jest | 2338 suites, 40989 tests. 81 failures: 60 in the 31 Oct baseline, 21 not in it |
+
+**Attribution: no failure comes from the foundation work (A–D or the coordinator fixes).**
+- **8 real-schema failures** (`d01_claim_human_approval`, `w1_community_single_execution`):
+  - reproduced exactly at `refs/scratch/w1-pair-diag` = `5a8b5ed04`, which is W1 `ddc9735a6` + P-A `80b5254a1` only;
+  - cause: an interaction between those two sibling commits;
+  - owner: Orchestration, Prompt 3 item 1 (accepted by c7).
+- **21 whole-repo failures not in the baseline:**
+  - all 21 reproduce at `5a8b5ed04`, which has no foundation or main code;
+  - at main `23a0a586` the same suites have none of them;
+  - the 20 Community-AI integration failures (`community_ai_action_connectors`, `_notifications_content_trends`, `_rbac`, `_rpa`, `_scheduling`) are suites that predate W1's community claim and approval gate (403, and a `.not` missing from their DB fake);
+  - `safetyTestSuitesSelector` is ungated because of W1's own `communityL3RecheckEnforcement.test.ts`;
+  - owner: Orchestration (W1).
+- Also failing at main and at `5a8b5ed04`: `community_ai_scheduling … executes due actions and logs execution`. It is in the existing failure set and is not counted above.
+
+Evidence: scratchpad `t2f/logs/` and `attr/` of the coordinator session.
+
+## Coordination routing (2026-11-04)
+
+- **PI:** session `virality-b6`. CR-SC7 and CR-PI1 delivered and queued. Technical findings:
+  - CR-PI1(1) confirmed: no runtime writer of `engagement_threads.unified_person_id`. PI's `prospectEngagementIntelligence.loadThreads` is therefore severed.
+  - CR-PI1(2): `contact_governance_records` is canonical, but every caller is email, SES, unsubscribe or erasure. Using it for social and community recipients is NOT PROVEN and is an owner decision.
+  - CR-SC7 blocker: `stop` and `not_interested` are not `GOVERNANCE_TYPES`, and `recordContactGovernance` rejects them.
+  - Complaint is purpose-scoped, so its `*` scope is not a blanket block.
+  - `rejected` may reach PI only through the human decision path. The classifier must be structurally unable to emit it.
+  - PI will not ratify §2–6 or Q-1..Q-5 while its delivery candidate is blocked; those are owner decisions.
+- **Billing:** no owning session identified. Sessions `orch-integration-c8` and `virality-0b` own neither PI nor Billing. `virality-ed` is holding messages, so the question was not delivered. CR-BL1 is not sent.
+
+## D-02 rebuilt on `6e96f6680`: peer review (2026-11-04)
+
+c7's staged diff `9bbbacd2…beaba` (45 files) is **NOT signed off**.
+- **What checked out:** hash; dispatch order and pins; the claim trigger as the only DB boundary into `dispatching`; passkey proof; S-03/S-04; no community files.
+- **F-1 High, reproduced:** after an ambiguous external attempt (a timeout), the re-review edge `queued → awaiting_approval` plus a fresh approval skips `redispatchProblem`, and the task is sent a second time (provider calls `[1,2]`). The same edge was in r2, which the coordinator had signed off.
+- **L-1:** the non-journey binding omits `explanation`. Latent.
+- **L-2:** an operator approval naming no recipient reports success.

@@ -92,7 +92,7 @@ The `source` CHECK needs a value for a recipient-initiated link. The schema chan
 | Request | To | Sent | Response |
 |---|---|---|---|
 | CR-SC7 | Orchestration | 2026-11-04 (c7) | — |
-| CR-SC7 | PI | Routing needed: no PI session identified | — |
+| CR-SC7 | PI | 2026-11-04 (virality-b6) | Queued. Blocker: `stop` and `not_interested` are not governance types; complaint is purpose-scoped; `rejected` only through the human path. Ratification is an owner decision. |
 | CR-SC4 / CR-4 | Orchestration | 2026-11-04 (c7) | — |
-| CR-BL1 | Billing | Routing needed: no Billing session identified | — |
-| CR-PI1 | PI | Routing needed | — |
+| CR-BL1 | Billing | Not sent: no Billing session identified | — |
+| CR-PI1 | PI | 2026-11-04 (virality-b6) | Queued. (1) No writer confirmed, and the PI read is severed. (2) Canonical store confirmed; social/community use not proven, so it goes to the owner. |
