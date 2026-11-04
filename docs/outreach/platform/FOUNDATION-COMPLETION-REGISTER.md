@@ -290,6 +290,14 @@ The behaviour fails closed but consumes approvals.
 - No D1 suite covered it.
 - **Owner: c7, Prompt 3.** Orchestration is not 'auto': it gets its own `source: 'orchestration'`, it requires a human approval of record, and policy refusals move before or into the claim. Regression test: with the default policy, an approved step is never `skipped` or consumed.
 
+**Correction to the D1 results (2026-11-05):** `egressBypassCharacterisation.test.ts` (round 3, `572cfc2b2`) was outside the focused D1 list. At the foundation head it fails 10 of 20.
+- All 10 are "CURRENT: sends to a suppressed recipient" characterisations whose bypass no longer exists.
+- 8 community and extension rows: W1's L-3 already refuses. Prompt 3 rewrites them to assert `RECIPIENT_RESTRICTED`.
+- 2 social/comments rows: step C removed the reply.
+  - **Owner: coordinator.** Rewrite them to assert 410 `REPLY_REMOVED` with no fetch, keeping GD-3's PENDING rows.
+  - c7 has been asked to fold this into the same file; otherwise the coordinator does it after Prompt 3.
+- These are not D1 safety regressions.
+
 **Other defects reported by c7, owned and fixed in Prompt 3 (migrations `20270126000000–03`)**
 - The `community_ai_action_logs` `event_type` CHECK rejects `skipped_due_to_platform_policy`, so policy-refusal logs are dropped.
 - `community_ai_platform_policy` has no tenant column.
