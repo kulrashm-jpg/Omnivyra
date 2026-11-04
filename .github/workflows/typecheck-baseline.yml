@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # CI-P13: on-demand full run of main (all steps run for this event).
+  workflow_dispatch: {}
 
 concurrency:
   # CI-P12: a newer push to the SAME pull request cancels that PR's superseded
@@ -39,10 +41,36 @@ jobs:
             package-lock.json
             tools/ts7/package-lock.json
 
+      # CI-P13: post-merge redundancy check (push to main only). The merge is
+      # FRESH when the PR head (parent 2) already contained the previous main
+      # (parent 1): the merged tree is then exactly the tree this job's PR run
+      # compiled, so re-compiling it on main buys no assurance. Anything else —
+      # a stale merge, a single-parent commit, an API error — is NOT fresh and
+      # runs everything (fail-safe). This step never fails the job, so the
+      # security gates below always run on every main commit.
+      - name: Post-merge freshness check
+        id: freshness
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          fresh=false
+          parents=$(gh api "repos/$REPO/commits/$SHA" --jq '[.parents[].sha] | join(" ")' 2>/dev/null) || parents=""
+          set -- $parents
+          if [ "$#" -eq 2 ]; then
+            behind=$(gh api "repos/$REPO/compare/$1...$2" --jq .behind_by 2>/dev/null) || behind=""
+            [ "$behind" = "0" ] && fresh=true
+          fi
+          echo "fresh=$fresh" >> "$GITHUB_OUTPUT"
+          echo "parents: ${parents:-unknown}; fresh=$fresh"
+
       - name: Install dependencies
         run: npm ci
 
       - name: TypeScript non-regression baseline
+        if: github.event_name != 'push' || steps.freshness.outputs.fresh != 'true'
         run: npm run typecheck:ci
 
       # GOV-IMPLEMENT-003: worker compilation gate. Railway builds the worker image
@@ -51,6 +79,7 @@ jobs:
       # identical to the local pre-commit hook (same tsconfig, --noEmit / no emit,
       # no external dependencies). Reuses the job's single `npm ci`.
       - name: Worker compilation typecheck
+        if: github.event_name != 'push' || steps.freshness.outputs.fresh != 'true'
         run: npx tsc -p tsconfig.worker.json --noEmit
 
       # ENG-IMPL-002: migration quality gate (preventative). Fails the PR if a NEW
@@ -216,7 +245,21 @@ jobs:
       # @typescript-eslint publishing TS7-capable releases — an external
       # dependency that must never fail an Omnivyra PR.
       - name: TypeScript 7 readiness (advisory)
+        if: github.event_name != 'push' || steps.freshness.outputs.fresh != 'true'
         continue-on-error: true
         run: |
           npm --prefix tools/ts7 ci
           npm run typecheck:ts7
+
+      # CI-P13: Certification, PI, Campaign, Report and Snapshot no longer run on
+      # push to main. A stale merge (PR head did not contain the previous main)
+      # landed code no PR run tested as a whole, so main goes red here until the
+      # full suite is dispatched on main. With strict up-to-date branch
+      # protection this cannot happen; it is the alarm if that setting is lost.
+      - name: Stale-merge alarm
+        if: always() && github.event_name == 'push' && steps.freshness.outputs.fresh != 'true'
+        run: |
+          echo "::error::Merge ${GITHUB_SHA} was not up to date with main when merged (or freshness could not be determined)."
+          echo "Run the full suite on main: gh workflow run <file> --ref main for typecheck-certification.yml, pi-verification.yml,"
+          echo "campaign-generation-contracts.yml, report-consistency.yml, snapshot-remediation-contracts.yml and typecheck-baseline.yml."
+          exit 1

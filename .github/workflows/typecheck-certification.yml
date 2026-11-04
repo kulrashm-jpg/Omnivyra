@@ -63,11 +63,12 @@ name: Backend TypeScript Certification
 
 on:
   pull_request:
-  # Also on pushes to main: an admin-override merge, a direct push, or a merge
-  # whose PR run predated a conflicting merge can all land debt that no PR run
-  # ever saw. This gives `main` its own certification history.
-  push:
-    branches: [main]
+  # CI-P13: no longer on pushes to main. The three ways debt could land unseen
+  # are closed elsewhere: admin override (enforce_admins=true), direct push
+  # (required checks block it), and a merge whose PR run predated a conflicting
+  # merge (strict up-to-date protection; TypeScript Baseline's "Stale-merge
+  # alarm" turns main red if a non-fresh merge ever lands). On-demand
+  # certification of main: `gh workflow run typecheck-certification.yml --ref main`.
   workflow_dispatch: {}
 
 permissions:

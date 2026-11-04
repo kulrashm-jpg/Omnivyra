@@ -30,8 +30,7 @@ name: PI Verification
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  # CI-P13: not on push to main; see typecheck-certification.yml (Stale-merge alarm).
   workflow_dispatch:
 
 concurrency:

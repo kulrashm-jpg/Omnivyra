@@ -45,8 +45,7 @@ on:
   # The suites below are unaffected: on a PR that touches nothing they simply
   # pass, which is exactly the signal a required check should give.
   pull_request:
-  push:
-    branches: [main]
+  # CI-P13: not on push to main; see typecheck-certification.yml (Stale-merge alarm).
   workflow_dispatch:
 
 concurrency:

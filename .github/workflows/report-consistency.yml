@@ -19,8 +19,7 @@ on:
   # No path filter, so the check is always reported (a path-filtered required check can leave a PR
   # waiting for a status that never arrives). The job is small.
   pull_request:
-  push:
-    branches: [main]
+  # CI-P13: not on push to main; see typecheck-certification.yml (Stale-merge alarm).
   workflow_dispatch:
 
 concurrency:
