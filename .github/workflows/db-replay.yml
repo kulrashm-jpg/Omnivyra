@@ -20,6 +20,8 @@ jobs:
   database-folder-guard:
     name: Reject reintroduction of database/*.sql
     runs-on: ubuntu-latest
+    # CI-P12: runaway cap (previously the 360-min default).
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,6 +34,9 @@ jobs:
     name: Clean replay + RLS audit
     runs-on: ubuntu-latest
     needs: database-folder-guard
+    # CI-P12: runaway cap (previously the 360-min default). `supabase start`
+    # pulls several images, hence the headroom.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

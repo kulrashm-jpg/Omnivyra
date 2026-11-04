@@ -40,13 +40,17 @@ on:
   # No path filter, so the check is always reported (a path-filtered required check can leave a PR
   # waiting for a status that never arrives).
   pull_request:
-  push:
-    branches: [main]
+  # CI-P13: not on push to main; see typecheck-certification.yml (Stale-merge alarm).
   workflow_dispatch:
 
 concurrency:
-  group: snapshot-remediation-contracts-${{ github.ref }}
-  cancel-in-progress: false
+  # CI-P12: a newer push to the SAME pull request cancels that PR's superseded
+  # run. Every other event (push to main, tags, release, workflow_dispatch) gets
+  # a group unique to its own run, so it is never cancelled and never queued
+  # behind (or replaced by) another run. The newest commit's run is never
+  # cancelled.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

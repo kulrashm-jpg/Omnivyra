@@ -24,8 +24,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: platform-parity-${{ github.ref }}
-  cancel-in-progress: true
+  # CI-P12: a newer push to the SAME pull request cancels that PR's superseded
+  # run. Every other event (push to main, tags, release, workflow_dispatch) gets
+  # a group unique to its own run, so it is never cancelled and never queued
+  # behind (or replaced by) another run. The newest commit's run is never
+  # cancelled.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   parity:
