@@ -225,6 +225,80 @@ export async function resolveEmailRecipient(
   };
 }
 
+/**
+ * D-03 — the provenance stamp only the 040 bridge writes on a legacy task
+ * (`BRIDGE_PLANNER_VERSION`, outreachBridgeStore.ts). Repeated rather than imported
+ * because that module loads the platform client, and the dispatcher must not; a test
+ * pins the two together.
+ */
+export const BRIDGED_TASK_PLANNER_VERSION = 'wf-bridge-1.0.0';
+
+export type JourneyHoldCode =
+  | 'handoff_missing' | 'journey_state_unreadable' | 'journey_paused' | 'journey_not_active';
+
+export interface JourneyHold {
+  readonly code: JourneyHoldCode;
+  readonly reason: string;
+}
+
+/**
+ * D-03 — whether the run behind a bridged task currently forbids acting on it.
+ *
+ * Null means "no journey objection": either the task never came from a journey (no
+ * bridge stamp, so nothing is read and behaviour is exactly as before), or its run is
+ * definitely `active`. Anything else holds, and FAILS CLOSED: a stamped task with no
+ * handoff, an unreadable handoff or run, and any state other than exactly `active`.
+ *
+ * Reads only, and never throws, because the dispatcher calls it before anything is
+ * written: a hold leaves no decision, claim, quota or attempt behind, so a resumed
+ * journey sends as if it had never been paused. The run is read through its own store,
+ * which owns that table, loaded only for a bridged task.
+ */
+export async function resolveJourneyHold(
+  organizationId: string, task: { id: string | null; plannerVersion: string },
+): Promise<JourneyHold | null> {
+  if (task.plannerVersion !== BRIDGED_TASK_PLANNER_VERSION) return null;
+  const unreadable = (detail: string): JourneyHold => ({
+    code: 'journey_state_unreadable',
+    reason: `the journey state behind this task could not be read (${detail}); it is held, not sent`,
+  });
+  try {
+    const handoff = await ownedDbTable(HANDOFFS_TABLE)
+      .select('execution_instance_id')
+      .eq('organization_id', organizationId)
+      .eq('outreach_task_id', task.id)
+      .maybeSingle();
+    if (handoff.error) return unreadable('handoff read failed');
+    const instanceId = str((handoff.data as Row | null)?.execution_instance_id);
+    if (instanceId === null) {
+      return {
+        code: 'handoff_missing',
+        reason: 'this task was handed off by a journey, but its handoff is missing; it is held, not sent',
+      };
+    }
+
+    const { getExecutionInstance } = await import('../executionInstances/executionInstanceStore');
+    let run: Awaited<ReturnType<typeof getExecutionInstance>>;
+    try {
+      run = await getExecutionInstance(organizationId, instanceId);
+    } catch {
+      return unreadable('run read failed');
+    }
+    if (run === null) return unreadable('run not found');
+    const state = str(run.lifecycleState);
+    if (state === 'active') return null;
+    if (state === 'paused') {
+      return { code: 'journey_paused', reason: 'the journey is paused; this task is held until it resumes' };
+    }
+    return {
+      code: 'journey_not_active',
+      reason: `the journey is "${state ?? 'unknown'}", not active; this task is held, not sent`,
+    };
+  } catch {
+    return unreadable('read threw');
+  }
+}
+
 export const OUTREACH_BRIDGE_HANDOFFS_TABLE = HANDOFFS_TABLE;
 export const UNIFIED_PERSONS_TABLE = PERSONS_TABLE;
 export const EMAIL_ADDRESS_PATTERN = EMAIL;

@@ -444,13 +444,17 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
     // ported; owner decision pending); personAnchor is pi-consol's subject-aware version.
     // RE-PINNED 2026-11-02: dispatch stops before writing when a transport is disabled
     // (G-8) and its comments no longer claim idempotency at the provider (G-3).
+    // Dispatch RE-PINNED 2026-11-03 for D-03: the journey hold before governance
+    // (orchJourneyHoldD03.test.ts), agreed with Outreach.
+    // Dispatch RE-PINNED 2026-11-04 for the outreach foundation base: G-8's
+    // disabled-transport guard, then the D-03 hold, then governance.
     expect(sha('backend/services/leadOutreachExecution/governance.ts')).toBe('1baa47982b4a4613');
     expect(sha('backend/services/leadOutreachExecution/approval.ts')).toBe('4ef1acc19f3feb64');
     expect(sha('backend/services/leadOutreachExecution/materialization.ts')).toBe('46d4461b56be2908');
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
     expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5835d9876ad97b5b');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c2a131f6aa8fa709');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('5251d7b70cb5b033');
   });
 
   it('person resolution reuses the ONE existing mechanism', () => {

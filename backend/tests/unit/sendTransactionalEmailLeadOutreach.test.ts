@@ -294,10 +294,12 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // RE-PINNED 2026-11-02: an invoke error that may have acted is no longer `rejected`
     // (G-1), a disabled transport stops dispatch before it writes (G-8), and comments no
     // longer claim idempotency at the provider (G-3). The posted payload is unchanged.
+    // Dispatch re-pinned 2026-11-04 for the foundation base: G-8 guard, then the D-03
+    // journey hold (orchJourneyHoldD03.test.ts), then governance; same request.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('c6e86299a89dc60f');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('c2a131f6aa8fa709');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('5251d7b70cb5b033');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

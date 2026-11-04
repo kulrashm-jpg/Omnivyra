@@ -52,6 +52,7 @@ import {
   recordLifecycleTransition,
   recordStageOutcome,
 } from './telemetry';
+import { resolveJourneyHold } from '../emailEngine/emailExecutionContext';
 import type { GovernanceEvaluation } from './governance';
 import type { OutreachTask } from './types';
 
@@ -63,6 +64,7 @@ export type DispatchOutcome =
   | 'blocked_governance'
   | 'deferred_governance'
   | 'deferred_quota'
+  | 'deferred_journey'
   | 'skipped_already_dispatched'
   | 'blocked_prior_attempt'
   | 'skipped_transport_disabled'
@@ -217,6 +219,17 @@ export async function dispatchInternalOutreachTask(
     return result(taskId, 'skipped_transport_disabled', `the "${task.channel}" transport is disabled; nothing was attempted`, startedMs, {
       status: task.status, provider: transport.provider, transportOutcome: 'disabled',
     });
+  }
+
+  // ── journey hold (D-03) ──────────────────────────────────────────────────
+  // A task a journey handed off is not acted on while that run is anything but
+  // active. Checked before governance, so a hold writes nothing — no decision, claim,
+  // quota or attempt — and a resumed journey dispatches as if never paused. Null for a
+  // task that never came from a journey.
+  const held = await resolveJourneyHold(companyId, task);
+  if (held !== null) {
+    recordDispatchOutcome('deferred');
+    return result(taskId, 'deferred_journey', held.reason, startedMs, { status: task.status });
   }
 
   recordDispatchOutcome('started');
