@@ -18,6 +18,8 @@ jobs:
   governance-nightly:
     name: Nightly governance integrity & drift monitoring
     runs-on: ubuntu-latest
+    # CI-P12: runaway cap (previously the 360-min default).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

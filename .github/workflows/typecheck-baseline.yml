@@ -5,10 +5,23 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  # CI-P12: a newer push to the SAME pull request cancels that PR's superseded
+  # run. Every other event (push to main, tags, release, workflow_dispatch) gets
+  # a group unique to its own run, so it is never cancelled and never queued
+  # behind (or replaced by) another run. The newest commit's run is never
+  # cancelled.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   typecheck-baseline:
     name: Non-regression TypeScript baseline
     runs-on: ubuntu-latest
+    # CI-P12: runaway cap only (the job previously had the 360-minute default).
+    # Generous on purpose: this job runs the full TS baseline, the worker tsc,
+    # ten static gates, two jest groups and the TS7 advisory install.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,6 +30,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          # CI-P12: npm download cache (~/.npm). `npm ci` below still performs a
+          # clean, lockfile-exact install; only the tarball downloads are reused.
+          # Both lockfiles key it because the TS7 advisory step runs its own
+          # `npm --prefix tools/ts7 ci`.
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            tools/ts7/package-lock.json
 
       - name: Install dependencies
         run: npm ci
