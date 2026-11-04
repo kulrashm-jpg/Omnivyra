@@ -96,3 +96,24 @@ Status labels: NOT STARTED, IN PROGRESS, IMPLEMENTED LOCALLY, INTEGRATION REQUIR
 | D-3 | D | WhatsApp L-4, send-once, WA-1/2/3 | Open | — | Agent D (later) | CR-X-01 | — | — | BLOCKED |
 | D-4 | D | Social publish authorization on main | Base and round 3 only | Part of release integration | Coordinator | Owner push | — | — | INTEGRATION REQUIRED |
 | D-5 | D | Outcome association for non-WS-3; channel credits | Open | — | Orchestration, Billing | SC-4, C-BL-1 | — | — | BLOCKED |
+
+## Checkpoint 1: Stage 3 integration (2026-11-04)
+
+Integrated tip `1daf12601` on `outreach/foundation-base-20261104`. It merges A `4ce2d83ed`, B `c889087b9`, C `1b4d4ce57` and D `25e1c8a96` into the base. All four merges were clean.
+
+**Results**
+
+| Check | Result |
+|---|---|
+| typecheck | 3/3 clean, at `92221b95` |
+| Combined targeted jest (all agents' suites, plus pins, D-03, L-3, D-01, P-A, R-1, R-3, WS-3, email, extension) | 53 suites: 52 passed, 1 skipped. 1648 tests: 1640 passed, 8 skipped |
+| Gates | All pass: route-auth, route-policy, tenant-authz, orgaccess-binding, withrbac-binding, outbound-ssrf, db-conventions, secrets |
+| T2 real-schema | **Not run at this tip** |
+
+**Integration fixes (coordinator, `1daf12601`).** These are Outreach-owned tests, and only fixtures changed.
+- `extensionDispatchSafety.routes`: a chain whose first step was `sync_*` is never leased under R-3. This failure was introduced by the main merge (found by bisect). The fixture now uses `like → reply`.
+- `dmDispatchSafety.extension`:
+  - adds the L-3 allow stub; this suite already failed at the W1 tip `ddc9735a`;
+  - the read-only sync test now asserts "not leased, not claimed, left pending" instead of "dispatched", as R-3 requires.
+
+**Closure status: none of A–D is complete.** What each closure is waiting on is listed in the completion register above. The integrated acceptance scenario has NOT been started, per the mandate.
