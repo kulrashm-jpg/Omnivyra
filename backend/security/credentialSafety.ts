@@ -20,8 +20,14 @@
  */
 export const ENV_VAR_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
-/** Encrypted-credential shape produced by `encryptCredential`: ivHex(24):tagHex(32):cipherHex. */
-export const ENCRYPTED_CREDENTIAL_PATTERN = /^[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/i;
+/**
+ * Encrypted-credential shape produced by `encryptCredential`: ivHex(24):tagHex(32):cipherHex,
+ * optionally prefixed `k1:<keyId(8 hex)>:` (the keyed format the ENCRYPTION_KEY key ring
+ * reads — see backend/auth/encryptionKeyRing.ts; this build still WRITES the legacy form).
+ * Both must match, or a keyed value would be classified as plaintext: returned as-is by
+ * readers instead of decrypted, and encrypted twice by writers.
+ */
+export const ENCRYPTED_CREDENTIAL_PATTERN = /^(?:k1:[0-9a-f]{8}:)?[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/i;
 
 /** Longest plausible env-var name. Anything longer is a secret, not a name. */
 const MAX_ENV_VAR_NAME_LENGTH = 128;

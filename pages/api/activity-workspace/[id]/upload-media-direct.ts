@@ -65,6 +65,7 @@ import {
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 import { unguessableObjectStem } from '@/lib/security/objectNames';
 import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
+import { nonImageBytesMatchDeclaredType } from '@/lib/security/mediaByteSignature';
 
 // Disable Next.js body parser so formidable can stream the upload.
 export const config = {
@@ -384,8 +385,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // anything to storage, so a spoofed upload never leaves an orphan.
   const sniffedMime = sniffMimeFromBytes(fileBuffer.slice(0, 32));
   const sniffResult = compareSniffedToClientMime({ sniffed: sniffedMime, claimed: mimeBase });
-  if (!sniffResult.ok) {
-    const failure = sniffResult as { ok: false; sniffed: string; claimed: string; reason: string };
+  // MEDIA-H3: the lenient comparison above accepts bytes the sniffer does not
+  // recognise. This route stores into the PUBLIC bucket, so bytes must
+  // POSITIVELY match the declared video/audio type (shared strict check).
+  const strictOk = nonImageBytesMatchDeclaredType(fileBuffer.subarray(0, 32), mimeBase);
+  if (!sniffResult.ok || !strictOk) {
+    const failure = sniffResult.ok
+      ? {
+        ok: false as const,
+        sniffed: sniffedMime ?? 'unknown',
+        claimed: mimeBase,
+        reason: `File bytes do not match the declared type "${mimeBase}".`,
+      }
+      : sniffResult as { ok: false; sniffed: string; claimed: string; reason: string };
     void recordUploadSpoofAttempt({ userId: access.userId, companyId, dailyPlanId: id });
     emitCreatorEvent({
       event: CREATOR_EVENTS.UPLOAD_MIME_SPOOF,

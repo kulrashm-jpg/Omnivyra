@@ -1,4 +1,5 @@
 /** Part 1/10 of creatorAssetRenderer.ts — verbatim split (barrel preserved; importers unchanged). */
+import type SharpModule from 'sharp';
 import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { config } from '../../config';
@@ -89,7 +90,7 @@ import { STYLE_CARD_SPECS } from './creatorAssetRendererText';
 import { buildOverlaySvg } from './creatorAssetRendererOverlay';
 import { type ImageSubtypeHint } from './creatorAssetRendererMedia';
 
-export const sharp = require('sharp') as typeof import('sharp');
+export const sharp = require('sharp') as typeof SharpModule;
 // Loaded only in the server renderer for deterministic downloadable PDF assets.
 export const PDFDocument = require('pdfkit');
 

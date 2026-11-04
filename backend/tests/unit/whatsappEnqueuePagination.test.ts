@@ -34,6 +34,9 @@ import { enqueueBroadcast } from '../../services/whatsappBroadcastService';
 
 const seed = (ids: string[], over: Record<string, unknown> = {}) => resetFakeDb({
   whatsapp_broadcasts: [{ id: 'b1', company_id: 'co-a', social_account_id: 'sa-1', message_type: 'template', template_name: 'hello', status: 'draft' }],
+  // The sender account belongs to the broadcast's company (round 3's
+  // assertOwnedSenderAccount runs before any recipient read, CR-X-01).
+  social_accounts: [{ id: 'sa-1', company_id: 'co-a', phone_number_id: 'pn-1' }],
   whatsapp_broadcast_recipients: ids.map((id) => ({ id, broadcast_id: 'b1', status: 'pending', ...over })),
 });
 const queued = () => mockBatches.flatMap((b) => b.ids);

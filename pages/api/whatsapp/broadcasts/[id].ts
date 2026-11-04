@@ -17,6 +17,7 @@ import {
   enqueueBroadcast,
   retryFailed,
   expandRecipients,
+  senderAccountRefusalResponse,
   type ContactInput,
 } from '../../../../backend/services/whatsappBroadcastService';
 
@@ -66,6 +67,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         await enqueueBroadcast(id, plan as string);
         return res.status(200).json({ enqueued: true });
       } catch (err) {
+        // A draft naming another company's account (created before the
+        // ownership check) is refused like an unknown account.
+        const refused = senderAccountRefusalResponse(err);
+        if (refused) return res.status(refused.status).json({ error: refused.error });
         return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
       }
     }

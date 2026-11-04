@@ -124,6 +124,23 @@ export interface ExtensionUser {
 }
 
 /**
+ * `req.extensionUser`, set by middleware/extensionAuthMiddleware.ts.
+ *
+ * Declared here, next to ExtensionUser, rather than in the middleware: the
+ * controller reads `req.extensionUser` but never imports the middleware, so an
+ * augmentation living only there was invisible to any program that loads the
+ * controller without it (e.g. tsconfig.backend-tests.json). Type-only; no
+ * runtime effect.
+ */
+declare global {
+  namespace Express {
+    interface Request {
+      extensionUser?: ExtensionUser;
+    }
+  }
+}
+
+/**
  * API Response wrapper
  */
 export interface ExtensionApiResponse<T> {

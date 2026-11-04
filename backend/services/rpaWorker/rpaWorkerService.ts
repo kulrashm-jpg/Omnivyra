@@ -78,7 +78,9 @@ export const rpaSchedulerHooks = {
       return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
     }
     // Platform kill switch: when execution is disabled nothing is claimed,
-    // so no action is consumed (mirrors the community scheduler).
+    // so no action is consumed and no retry row is touched (mirrors the
+    // community scheduler). An unreadable policy is fail-closed
+    // (execution_enabled=false).
     const policy = await getCommunityAiPlatformPolicy();
     if (!policy?.execution_enabled) {
       console.warn('[rpaRetryQueueFlush] skipped — community execution disabled by platform policy');
@@ -89,6 +91,7 @@ export const rpaSchedulerHooks = {
     // (approved → executing). The executor re-applies the platform kill
     // switch, approval, playbook and plan limits, and executeRpaTask
     // re-applies URL policy, env readiness and per-org admission.
+    // (CR-X-01: W1 retained; round 3's unclaimed handler gate is superseded.)
     return flushRpaRetryQueueRoundRobin({
       runAction: runClaimedRetryAction,
       limitPerOrg: opts?.limit_per_org,

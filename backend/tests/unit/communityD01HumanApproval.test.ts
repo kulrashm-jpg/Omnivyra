@@ -257,10 +257,24 @@ describe('D-01 auto-rules', () => {
     platform: 'linkedin',
     suggested_actions: [{ ...SUGGESTION }],
     context: { intent_scores: { question: 0.9 } },
+    // The engine path (ingestion worker). Read paths leave it unset and are
+    // covered by the CR-X-01 case below.
+    autoExecute: true,
   });
 
   beforeEach(() => {
     mockDb.tables.community_ai_auto_rules = [{ ...RULE }];
+  });
+
+  it('CR-X-01: a read path (no autoExecute) never executes, even a human-approved row', async () => {
+    await evaluateAutoRules(input());
+    Object.assign(actionRows()[0], { status: 'approved', approved_at: '2026-11-01T00:00:00Z', approved_by: 'human-1' });
+    const { autoExecute: _engine, ...readPath } = input();
+    const out = await evaluateAutoRules(readPath);
+    expect(out.autoExecuted).toBe(0);
+    expect(out.actions[0]).toMatchObject({ auto_execution_deferred: true });
+    expect(mockConnector).not.toHaveBeenCalled();
+    expect(actionRows()[0]).toMatchObject({ status: 'approved' });
   });
 
   it('a matching rule records a pending action requiring human approval and executes nothing', async () => {

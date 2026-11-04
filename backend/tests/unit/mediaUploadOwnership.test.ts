@@ -56,7 +56,7 @@ jest.mock('formidable', () => {
 
 jest.mock('fs', () => {
   const real = jest.requireActual('fs');
-  return { ...real, readFileSync: jest.fn(() => Buffer.from('bytes')), unlinkSync: jest.fn() };
+  return { ...real, readFileSync: jest.fn(() => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), unlinkSync: jest.fn() };
 });
 
 jest.mock('../../services/supabaseAuthService', () => ({

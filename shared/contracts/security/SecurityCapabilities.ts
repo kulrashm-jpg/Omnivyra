@@ -248,6 +248,37 @@ export const PROSPECT_ICP_MANAGE = 'prospect.icp.manage' as const;
  */
 export const PROSPECT_ENRICH_EXECUTE = 'prospect.enrich.execute' as const;
 
+/**
+ * ERASE one person from the tenant's prospect identity spine, and read the
+ * tenant's erasure requests — `/api/prospect-identity/erasure-requests` (the
+ * application entry point to `erasePerson` and its request ledger,
+ * 20270112000003 / 20270115000000).
+ *
+ * PER-TENANT, and its own capability rather than a reuse of the three above,
+ * for the reason they give about each other: it authorises a different act.
+ *
+ *   - `PROSPECT_INGEST` authorises an ASSERTION ABOUT ONE PERSON (one row,
+ *     reversible by later evidence).
+ *   - This capability authorises the IRREVERSIBLE removal of that person: the
+ *     person row is deleted, the provenance graph is redacted and governance
+ *     instructions are re-anchored and revoked. Nothing restores it.
+ *
+ * Holding the right to import someone does not imply the right to erase them,
+ * nor the reverse. Granted EXACTLY as narrowly as the other prospect
+ * capabilities — COMPANY_ADMIN and SUPER_ADMIN, nothing else — with no
+ * hierarchy relationship in either direction.
+ *
+ * STEP-UP GATED (STEP_UP_REQUIRED_CAPABILITIES), unlike the three above, because
+ * step-up is reserved for platform-tier and IRREVERSIBLE actions and this is
+ * the irreversible one. Routes that only READ request status opt out per route
+ * (`requireStepUp: req.method !== 'GET'`), the established pattern.
+ *
+ * Who may erase is an authorization choice made in this change by analogy with
+ * the existing prospect grants; it is recorded for owner review in
+ * ERASURE-APPLICATION-WIRING.md and is not an owner decision.
+ */
+export const PROSPECT_PERSON_ERASE = 'prospect.person.erase' as const;
+
 // ── Content Architect (Wave Phase 1 — replaces synthetic userId='content_architect') ──
 /** Read campaign/company-profile data across companies. Content Architect role. */
 export const CONTENT_ARCHITECT_READ = 'content_architect.read' as const;
@@ -308,6 +339,8 @@ export const ALL_CAPABILITIES = [
   PROSPECT_ICP_MANAGE,
   // Prospect enrichment — per-tenant authority to spend on a provider call
   PROSPECT_ENRICH_EXECUTE,
+  // Prospect person erasure — per-tenant, irreversible, step-up gated
+  PROSPECT_PERSON_ERASE,
   // Phase: Platform Authority Isolation — platform-tier billing capabilities
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
@@ -406,4 +439,6 @@ export const STEP_UP_REQUIRED_CAPABILITIES: ReadonlyArray<Capability> = [
   BLOG_PUBLISH_MANAGE,
   CRON_CONFIG_MANAGE,
   INTELLIGENCE_OVERRIDE_MANAGE,
+  // Person erasure — irreversible deletion of a prospect person (per-tenant).
+  PROSPECT_PERSON_ERASE,
 ] as const;

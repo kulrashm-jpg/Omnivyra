@@ -65,10 +65,16 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
 const MIG_DIR = path.join(process.cwd(), 'supabase', 'migrations');
+const ROLLBACK_DIR = path.join(MIG_DIR, 'rollbacks');
 const BASELINE = path.join(process.cwd(), 'scripts', 'migrations', 'historical-baseline.txt');
 const ORDERING_BASELINE = path.join(process.cwd(), 'scripts', 'migrations', 'ordering-baseline.txt');
+const RESERVATIONS = path.join(process.cwd(), 'scripts', 'migrations', 'version-reservations.json');
+const APPLIED_BOUNDARY = path.join(process.cwd(), 'scripts', 'migrations', 'applied-boundary.json');
+const KNOWN_SET_NULL = path.join(process.cwd(), 'scripts', 'migrations', 'set-null-known-defects.json');
 // Frozen shape of ordering-baseline.txt (STEP 3AH-91, main@f44b1387).
 const ORDERING_SNAPSHOT = { count: 415, floor: '20261026000000' };
 const NEW_NAME_RE = /^(\d{14})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
@@ -324,8 +330,477 @@ function securityViolations(sql) {
   return v;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// GOV-H EXTENSIONS (2026-11-01) — rules 5-8.
+//
+// WHY THESE LIVE HERE rather than in a new script: rules 5-8 are all
+// "read the migration file names and text in this checkout and decide whether
+// a NEW migration is admissible". That is precisely the contract this gate
+// already has (deterministic, read-only, no DB/network/secrets, identical
+// locally and in CI) and it already runs in the one required status check on
+// main ("Non-regression TypeScript baseline"). A separate script would need
+// its own CI wiring, its own baseline handling and its own frozen-history
+// logic, and would duplicate listSql/versionPrefix/readList.
+//
+// The catalog-level end-state detector is a DIFFERENT contract — it needs a
+// schema model and optionally a database — and lives in
+// scripts/ci/check-actor-fk-compatibility.js instead. Rule 8 here and that
+// detector are not duplicates: rule 8 catches a contradiction an author writes
+// INTO ONE FILE, at authoring time, with no database; the detector catches a
+// contradiction ASSEMBLED ACROSS SEVERAL migrations, which no single-file rule
+// can see.
+// ══════════════════════════════════════════════════════════════════════════
+
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+function readJson(file, fallback) {
+  if (!fs.existsSync(file)) return fallback;
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return { __parseError: e.message }; }
+}
+
+const slugOf = (name) => path.basename(name).replace(/^\d+_/, '').replace(/\.sql$/, '');
+
+/**
+ * RULE 5 — CROSS-BRANCH VERSION COLLISION.
+ *
+ * THE HOLE THIS CLOSES. The uniqueness rule above compares a new migration
+ * only with the files in THIS checkout. It therefore cannot see a version
+ * claimed by a sibling branch, and it is blind to a version that exists only
+ * as an UNCOMMITTED file in another worktree. That is not hypothetical: three
+ * independent branches each claimed 20270110000000 (PPO
+ * `pi_prospect_problem_actor_fk_removal`, SEC-A
+ * `canonical_leads_users_client_privileges_revoked`, and media H-3
+ * `media_h3_storage_quarantine_policies`). At the SEC-A commit the tree held
+ * exactly one file at that version, so this gate passed. The collision was
+ * resolved by renumbering the two UNMERGED migrations — never the merged one.
+ *
+ * The committed registry is the durable half: once a branch records its claim,
+ * every branch that rebases sees it, and a second claim on the same version
+ * fails here. `--scan-refs` is the pre-integration half (see scanRefs).
+ *
+ * A reservation is matched on version AND slug, so "reserved to track X" cannot
+ * be borrowed by an unrelated migration that happens to use the number.
+ */
+function reservationViolations(newFiles, reservations) {
+  const out = [];
+  if (!reservations || reservations.__parseError) {
+    if (reservations && reservations.__parseError) {
+      out.push(`scripts/migrations/version-reservations.json\n    ✗ unreadable (${reservations.__parseError}). A gate that cannot read its registry must fail, not pass.`);
+    }
+    return out;
+  }
+  const byVersion = new Map();
+  for (const r of reservations.reservations || []) {
+    if (byVersion.has(r.version)) {
+      out.push(`scripts/migrations/version-reservations.json\n    ✗ version ${r.version} is registered twice — the registry itself is the collision.`);
+    }
+    byVersion.set(r.version, r);
+  }
+  for (const f of newFiles) {
+    const v = versionPrefix(f);
+    if (!v) continue;
+    const r = byVersion.get(v);
+    if (!r) continue;
+    if (r.status === 'occupied_elsewhere') {
+      out.push(`${f}\n    ✗ version ${v} is already occupied outside this checkout — ${r.owner}: ${r.note}. ` +
+        'A version is claimed repository-wide, not per branch. Pick a free version and update ' +
+        'scripts/migrations/version-reservations.json in the same change.');
+      continue;
+    }
+    if (r.slug && slugOf(f) !== r.slug) {
+      out.push(`${f}\n    ✗ version ${v} is reserved to ${r.owner} for slug '${r.slug}', but this file's slug is '${slugOf(f)}'. ` +
+        'Either you are using someone else\'s reserved version, or the reservation needs updating in the same change.');
+    }
+  }
+  return out;
+}
+
+/**
+ * `--scan-refs` — the pre-integration collision scan. OFF by default and
+ * never run in CI, because it needs the full ref graph and sibling worktrees,
+ * neither of which a shallow CI checkout has. Keeping it opt-in is what lets
+ * the default path keep its "no shelling out, identical everywhere" contract.
+ *
+ * Reads, for every local branch tip and every registered worktree (including
+ * that worktree's UNCOMMITTED on-disk files — the case that actually bit):
+ * which migration versions exist. Reports every version claimed by more than
+ * one distinct slug. Report-only by design: another branch's duplicate is not
+ * this branch's failure, it is an integration decision.
+ */
+function scanRefs(repoRoot) {
+  const git = (args, cwd = repoRoot) =>
+    execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  const claims = new Map(); // version -> Map<slug, Set<origin>>
+  const record = (version, slug, origin) => {
+    if (!version) return;
+    if (!claims.has(version)) claims.set(version, new Map());
+    const m = claims.get(version);
+    if (!m.has(slug)) m.set(slug, new Set());
+    m.get(slug).add(origin);
+  };
+
+  const refs = git(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'])
+    .split('\n').map((s) => s.trim()).filter(Boolean);
+  for (const ref of refs) {
+    let listing;
+    try { listing = git(['ls-tree', '--name-only', ref, 'supabase/migrations/']); } catch { continue; }
+    for (const line of listing.split('\n')) {
+      const base = path.posix.basename(line.trim());
+      if (!base.endsWith('.sql')) continue;
+      record(versionPrefix(base), slugOf(base), `ref:${ref}`);
+    }
+  }
+
+  // Worktrees — and crucially their UNCOMMITTED files, which no ref holds.
+  let porcelain = '';
+  try { porcelain = git(['worktree', 'list', '--porcelain']); } catch { /* none */ }
+  const worktrees = porcelain.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9).trim());
+  for (const wt of worktrees) {
+    const dir = path.join(wt, 'supabase', 'migrations');
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith('.sql')) continue;
+      record(versionPrefix(e.name), slugOf(e.name), `worktree:${wt}`);
+    }
+  }
+
+  const collisions = [];
+  for (const [version, bySlug] of claims) {
+    if (bySlug.size < 2) continue;
+    collisions.push({
+      version,
+      slugs: [...bySlug.keys()].sort(),
+      origins: Object.fromEntries([...bySlug].map(([s, o]) => [s, [...o].sort()])),
+    });
+  }
+  collisions.sort((a, b) => (a.version < b.version ? -1 : 1));
+  return { versions_seen: claims.size, refs_scanned: refs.length, worktrees_scanned: worktrees.length, collisions };
+}
+
+/**
+ * RULE 6 — HISTORICAL APPLIED-MIGRATION IMMUTABILITY.
+ *
+ * WHERE THE BOUNDARY LIVES, AND WHY THAT IS HONEST. The production ledger max
+ * is DATA, in a database this gate must never connect to. So the boundary
+ * cannot be read here; it can only be ATTESTED. scripts/migrations/applied-boundary.json
+ * therefore records the LAST ATTESTED boundary with its provenance
+ * (`ledger_max`, `attested_at`, `attested_from`, `evidence_class`) plus the
+ * sha256 of every top-level migration at or below it.
+ *
+ * The claim this check makes is deliberately weaker than "nothing applied has
+ * changed", and is therefore true: *nothing at or below the last attested
+ * boundary has changed since that attestation*. It never asserts the
+ * attestation is current.
+ *
+ * How it avoids becoming a lie as the ledger moves on:
+ *   - it fails on any content change, deletion, or rename at or below the
+ *     boundary (a rename is a deletion plus an unpinned addition);
+ *   - a NEW file at or below the boundary fails: that is a migration numbered
+ *     into already-applied history;
+ *   - `staleness_versions` reports how many repository versions now sit above
+ *     the boundary, so an attestation that has stopped tracking reality is
+ *     visible in the gate's own output instead of silently narrowing coverage.
+ *     Re-attesting is an operator step (a production ledger read, which is
+ *     parent-gated) — not something this gate may do for itself.
+ */
+function immutabilityViolations(topLevelFiles, boundary, digestOf) {
+  const out = [];
+  if (!boundary) return { violations: out, checked: 0, boundary: null, staleVersions: 0 };
+  if (boundary.__parseError) {
+    out.push(`scripts/migrations/applied-boundary.json\n    ✗ unreadable (${boundary.__parseError}). A gate that cannot read its attestation must fail, not pass.`);
+    return { violations: out, checked: 0, boundary: null, staleVersions: 0 };
+  }
+  const max = String(boundary.ledger_max || '');
+  const digests = boundary.digests || {};
+  const atOrBelow = topLevelFiles.filter((f) => {
+    const v = versionPrefix(f);
+    return v && v.length === String(max).length ? v <= max : v && v.length <= max.length;
+  });
+  // Compare on the SAME scale: a legacy 8-digit version is below any 14-digit
+  // boundary whose first 8 digits are greater or equal.
+  const below = topLevelFiles.filter((f) => {
+    const v = versionPrefix(f);
+    if (!v) return false;
+    const a = v.padEnd(14, '0');
+    return a <= max.padEnd(14, '0');
+  });
+  void atOrBelow;
+
+  for (const f of below) {
+    const expected = digests[f];
+    const actual = digestOf(f);
+    if (!expected) {
+      out.push(`${f}\n    ✗ migration at version ${versionPrefix(f)} is at or below the attested applied boundary ` +
+        `${max} but is NOT in the attestation — a new migration numbered into already-applied history, or an unpinned rename. ` +
+        'Number it above the boundary.');
+      continue;
+    }
+    if (expected !== actual) {
+      out.push(`${f}\n    ✗ APPLIED MIGRATION MODIFIED. Version ${versionPrefix(f)} is at or below the attested applied ` +
+        `boundary ${max}; its content hash changed (${expected.slice(0, 12)}… -> ${actual.slice(0, 12)}…). ` +
+        'A migration that has already run in production is immutable: the database will never re-read it, so editing it ' +
+        'only makes the repository disagree with reality. Remediate forward with a NEW migration.');
+    }
+  }
+  const present = new Set(below);
+  for (const f of Object.keys(digests)) {
+    if (!present.has(f)) {
+      out.push(`${f}\n    ✗ APPLIED MIGRATION DELETED OR RENAMED. It is pinned in the applied-boundary attestation ` +
+        `(boundary ${max}) but is no longer at that path. Applied history is immutable; restore the file.`);
+    }
+  }
+  const staleVersions = new Set(
+    topLevelFiles.map(versionPrefix).filter((v) => v && v.padEnd(14, '0') > max.padEnd(14, '0')),
+  ).size;
+  return { violations: out, checked: below.length, boundary: max, staleVersions };
+}
+
+/**
+ * RULE 7 — ROLLBACK COMPANION NAMING.
+ *
+ * THE HAZARD, ANSWERED DIRECTLY. Rollbacks live at
+ * `supabase/migrations/rollbacks/<slug>_rollback.sql` with NO version prefix.
+ * That is UNSAFE as soon as two differently-versioned migrations share a slug:
+ * both rollbacks resolve to the SAME path. Two branches each adding one write
+ * the same file, and whichever merges second either conflicts or — after a
+ * rebase that takes "theirs" — silently replaces a rollback that belongs to a
+ * different migration. Nothing in the filename records which version it undoes,
+ * so the substitution is undetectable afterwards.
+ *
+ * This rule does not change the convention (that would rename 45 committed
+ * files and is an owner decision). It removes the ambiguity the convention
+ * depends on:
+ *   - a NEW migration may not reuse a slug already used at another version;
+ *   - every rollback file must resolve to exactly one top-level migration;
+ *   - a rollback must be named `<slug>_rollback.sql`.
+ */
+function rollbackViolations(topLevelFiles, rollbackFiles, newFiles) {
+  const out = [];
+  const bySlug = new Map();
+  for (const f of topLevelFiles) {
+    const s = slugOf(f);
+    if (!bySlug.has(s)) bySlug.set(s, []);
+    bySlug.get(s).push(f);
+  }
+  const newSet = new Set(newFiles);
+  for (const [slug, files] of bySlug) {
+    if (files.length < 2) continue;
+    if (!files.some((f) => newSet.has(f))) continue; // historical duplicates are frozen
+    out.push(`${files.filter((f) => newSet.has(f)).join(', ')}\n    ✗ slug '${slug}' is already used by ${files.length} migrations ` +
+      `(${files.sort().join(', ')}). Rollback companions are named '<slug>_rollback.sql' with NO version, so these ` +
+      'would share one rollback path and silently overwrite each other. Use a distinct slug.');
+  }
+  for (const rb of rollbackFiles) {
+    const base = path.basename(rb);
+    if (!/^(?:\d{8}|\d{14})?_?[a-z0-9]+(?:_[a-z0-9]+)*_rollback\.sql$/.test(base)) {
+      out.push(`supabase/migrations/rollbacks/${base}\n    ✗ invalid rollback name — expected '<slug>_rollback.sql' or ` +
+        "'<version>_<slug>_rollback.sql' (lower_snake slug).");
+      continue;
+    }
+    // BOTH forms are accepted, deliberately. 45 committed rollbacks on
+    // origin/main carry no version prefix; at least one branch
+    // (security/media-h3-fixes) uses
+    // `20270111000000_media_h3_storage_quarantine_policies_rollback.sql`
+    // instead. The version-prefixed form is the SAFER of the two — it is never
+    // ambiguous — so rejecting it would be the wrong call, and renaming the 45
+    // committed files is an owner decision, not this gate's.
+    //
+    // What the rule enforces is that whichever form is used, the rollback
+    // resolves to exactly ONE migration.
+    const versioned = /^(\d{8}|\d{14})_/.exec(base);
+    if (versioned) {
+      const slug = base.replace(/^\d+_/, '').replace(/_rollback\.sql$/, '');
+      const owners = (bySlug.get(slug) || []).filter((f) => versionPrefix(f) === versioned[1]);
+      if (owners.length === 0) {
+        out.push(`supabase/migrations/rollbacks/${base}\n    ✗ orphan rollback — no top-level migration is '${versioned[1]}_${slug}.sql'. ` +
+          'A version-prefixed rollback must name the exact migration it undoes.');
+      }
+      continue;
+    }
+    const slug = base.replace(/_rollback\.sql$/, '');
+    const owners = bySlug.get(slug) || [];
+    if (owners.length === 0) {
+      out.push(`supabase/migrations/rollbacks/${base}\n    ✗ orphan rollback — no top-level migration has slug '${slug}'. ` +
+        'Either the migration was renamed (so this rollback now undoes nothing) or the rollback is misnamed.');
+    } else if (owners.length > 1) {
+      out.push(`supabase/migrations/rollbacks/${base}\n    ✗ ambiguous rollback — slug '${slug}' is shared by ${owners.sort().join(', ')}. ` +
+        'The filename carries no version, so which migration this undoes is undecidable. ' +
+        `Rename it '${versionPrefix(owners.sort()[0])}_${slug}_rollback.sql' to say which one.`);
+    }
+  }
+  return out;
+}
+
+/**
+ * RULE 8 — FK / NOT NULL / CHECK CONTRADICTION WRITTEN INTO ONE MIGRATION.
+ *
+ * The DEFECT-008 class, caught at authoring time with no database. An
+ * `ON DELETE SET NULL` foreign key promises to write NULL into a column; a
+ * NOT NULL declaration, or a CHECK requiring the column non-NULL for some
+ * rows, refuses it. Written into the same file, that is statically detectable.
+ *
+ * It is CODE_VERIFIED that this shape has been committed:
+ * supabase/migrations/20261030000000_pi_prospect_archive_recommendations.sql
+ * declares `reviewed_by_user_id uuid REFERENCES public.users (id) ON DELETE
+ * SET NULL` at :63 and, at :90, a CHECK requiring it IS NOT NULL when status
+ * is confirmed or rejected.
+ *
+ * Deliberately conservative — it only looks at columns this file itself gives
+ * a SET NULL reference. Contradictions assembled across migrations are the
+ * catalog detector's job. Escape hatch: `-- set-null-ok: <reason>`.
+ */
+/**
+ * Table scopes in one migration: every CREATE TABLE body and every ALTER TABLE
+ * statement, keyed by table name. Without this, a NOT NULL on `provider_id` in
+ * one table was matched against a nullable `provider_id` in another table of
+ * the same file — two false positives on origin/main
+ * (20260906000000_ai_orchestration_foundation.sql, llm_models.provider_id vs
+ * ai_execution_bindings.provider_id). ALTER TABLE statements INSIDE a
+ * DO $$…$$ block are included deliberately: that is where composite tenant FKs
+ * are added (20261031000000_pi_score_evaluations.sql).
+ */
+function tableScopes(nc) {
+  const scopes = [];
+  for (const m of nc.matchAll(/\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?[A-Za-z_]\w*"?\.)?"?([A-Za-z_]\w*)"?\s*\(/gi)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0; let end = nc.length;
+    for (let i = open; i < nc.length; i++) {
+      if (nc[i] === '(') depth++;
+      else if (nc[i] === ')') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    scopes.push({ table: m[1].toLowerCase(), start: open + 1, end });
+  }
+  for (const m of nc.matchAll(/\bALTER\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+EXISTS\s+)?(?:"?[A-Za-z_]\w*"?\.)?"?([A-Za-z_]\w*)"?/gi)) {
+    let depth = 0; let end = nc.length;
+    for (let i = m.index; i < nc.length; i++) {
+      if (nc[i] === '(') depth++;
+      else if (nc[i] === ')') depth--;
+      else if (nc[i] === ';' && depth === 0) { end = i; break; }
+    }
+    scopes.push({ table: m[1].toLowerCase(), start: m.index, end });
+  }
+  return scopes;
+}
+
+/** Balanced-paren slices of every CHECK (...) in `text`, with absolute offsets. */
+function checkBodies(text, base) {
+  const out = [];
+  for (const m of text.matchAll(/\bCHECK\s*\(/gi)) {
+    let depth = 0; let end = text.length;
+    for (let i = m.index + m[0].length - 1; i < text.length; i++) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    out.push({ offset: base + m.index, body: text.slice(m.index, end + 1) });
+  }
+  return out;
+}
+
+// Column-definition patterns. Regex LITERALS on purpose: these were first
+// written as interpolated `new RegExp` templates and every escape in them was
+// silently eaten, so the rule matched nothing and reported a clean run. A gate
+// that cannot fail is worse than no gate, so the patterns stay literal.
+const TYPE = '(?:uuid|bigint|integer|int|text|smallint|serial|bigserial|boolean|bool|numeric|jsonb|json|timestamptz|date|citext|character)';
+const COL_SET_NULL_RE = new RegExp(
+  String.raw`(^|[,(\n])\s{0,12}"?([a-z_][a-z0-9_]*)"?\s+` + TYPE +
+  String.raw`\b([^,;()]*?)\bREFERENCES\s+[^,;]*?\bON\s+DELETE\s+SET\s+NULL\b`, 'gi');
+const COL_NOT_NULL_RE = new RegExp(
+  String.raw`(^|[,(\n])\s{0,12}"?([a-z_][a-z0-9_]*)"?\s+` + TYPE + String.raw`\b[^,;()]*\bNOT\s+NULL\b`, 'gi');
+const ADD_COL_NOT_NULL_RE = new RegExp(
+  String.raw`\bADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?\s+` + TYPE +
+  String.raw`\b[^,;]*\bNOT\s+NULL\b`, 'gi');
+/** `<col> IS NOT NULL` for one specific column, anywhere in a CHECK body. */
+const colIsNotNullRe = (col) =>
+  new RegExp(String.raw`(?:^|[^A-Za-z0-9_."])"?` + col.replace(/[^a-z0-9_]/gi, '') + String.raw`"?\s+IS\s+NOT\s+NULL`, 'i');
+
+function setNullContradictions(sql) {
+  const v = [];
+  const lines = sql.split('\n');
+  const nc = stripSqlComments(sql);
+  const byTable = new Map();
+  const scopeOf = (t) => {
+    if (!byTable.has(t)) byTable.set(t, { setNull: new Map(), notNull: new Set(), checks: [] });
+    return byTable.get(t);
+  };
+
+  for (const sc of tableScopes(nc)) {
+    const text = nc.slice(sc.start, sc.end);
+    const s = scopeOf(sc.table);
+
+    // (a) inline column definition giving the column a SET NULL reference.
+    for (const m of text.matchAll(COL_SET_NULL_RE)) {
+      const col = m[2].toLowerCase();
+      const abs = sc.start + m.index + m[1].length;
+      if (/\bNOT\s+NULL\b/i.test(m[3] || '')) s.notNull.add(col);
+      if (!s.setNull.has(col)) s.setNull.set(col, { offset: abs, text: m[0].replace(/\s+/g, ' ').trim().slice(0, 160) });
+    }
+
+    // (b) FOREIGN KEY (cols) REFERENCES … ON DELETE SET NULL [(cols)].
+    //     Without a column list PostgreSQL nulls EVERY referencing column, so a
+    //     composite tenant FK nulls the tenant column too. With a list (PG15)
+    //     only the listed columns are nulled.
+    for (const m of text.matchAll(/\bFOREIGN\s+KEY\s*\(([^)]*)\)\s*REFERENCES[^;]*?\bON\s+DELETE\s+SET\s+NULL\b\s*(?:\(([^)]*)\))?/gi)) {
+      const nulled = (m[2] || m[1]).split(',').map((x) => x.trim().replace(/"/g, '').toLowerCase()).filter(Boolean);
+      const abs = sc.start + m.index;
+      for (const col of nulled) {
+        if (!s.setNull.has(col)) s.setNull.set(col, { offset: abs, text: m[0].replace(/\s+/g, ' ').trim().slice(0, 160) });
+      }
+    }
+
+    // NOT NULL declared for a column of THIS table.
+    for (const m of text.matchAll(COL_NOT_NULL_RE)) s.notNull.add(m[2].toLowerCase());
+    for (const m of text.matchAll(/\bALTER\s+COLUMN\s+"?([a-z_][a-z0-9_]*)"?\s+SET\s+NOT\s+NULL\b/gi)) s.notNull.add(m[1].toLowerCase());
+    for (const m of text.matchAll(ADD_COL_NOT_NULL_RE)) s.notNull.add(m[1].toLowerCase());
+
+    s.checks.push(...checkBodies(text, sc.start));
+  }
+
+  for (const [table, s] of byTable) {
+    for (const [col, info] of s.setNull) {
+      const ln = lineOf(sql, info.offset);
+      if (s.notNull.has(col) && !annotated(lines, ln, 'set-null-ok')) {
+        v.push({
+          line: ln,
+          table,
+          column: col,
+          kind: 'set_null_on_not_null',
+          rule: `ON DELETE SET NULL nulls ${table}.${col}, which this migration declares NOT NULL — the FK promises to write a NULL the column refuses, so deleting the referenced row raises 23502 and can never succeed. `
+            + 'A composite FOREIGN KEY with no column list nulls EVERY referencing column, tenant key included. '
+            + 'Make the column nullable, list only the nullable columns in ON DELETE SET NULL (col, …), drop the FK and validate the referent in the writer '
+            + '(immutable actor attribution — see scripts/migrations/actor-field-registry.json), or use RESTRICT/NO ACTION. Else `-- set-null-ok: <reason>`.',
+          text: info.text,
+        });
+      }
+      for (const ch of s.checks) {
+        if (!colIsNotNullRe(col).test(ch.body)) continue;
+        const cln = lineOf(sql, ch.offset);
+        if (annotated(lines, cln, 'set-null-ok') || annotated(lines, ln, 'set-null-ok')) continue;
+        v.push({
+          line: cln,
+          table,
+          column: col,
+          kind: 'set_null_vs_check',
+          rule: `CHECK requires ${table}.${col} IS NOT NULL for some rows, but this migration also gives that column an ON DELETE SET NULL foreign key — `
+            + 'the delete then succeeds or fails depending on the row, and any row left NULL becomes permanently un-updatable (an UPDATE re-evaluates every table CHECK). '
+            + 'This is the DEFECT-008 shape. Drop the FK and validate the referent in the writer, or use RESTRICT/NO ACTION. Else `-- set-null-ok: <reason>`.',
+          text: ch.body.replace(/\s+/g, ' ').trim().slice(0, 160),
+        });
+      }
+    }
+  }
+  v.sort((a, b) => a.line - b.line);
+  return v;
+}
+
 function main() {
   if (!fs.existsSync(MIG_DIR)) { console.log('[migration-quality] no supabase/migrations — skip'); process.exitCode = 0; return; }
+  if (process.argv.includes('--scan-refs')) {
+    const report = scanRefs(process.cwd());
+    console.log(JSON.stringify({ event: 'migration_quality.scan_refs', ...report }, null, 2));
+    process.exitCode = 0;
+    return;
+  }
   const baseline = readList(BASELINE);
   const ordering = readList(ORDERING_BASELINE);
   const frozen = new Set([...baseline, ...ordering]);
@@ -339,6 +814,11 @@ function main() {
   // New = top-level .sql not in the frozen baseline.
   const newFiles = all.filter((f) => !baseline.has(f) && !f.includes('/'));
   const errors = [];
+
+  // Rule 8's frozen acknowledgement list (GOV-H).
+  const knownDefects = readJson(KNOWN_SET_NULL, { known: [] });
+  const knownSetNull = new Map((knownDefects.known || []).map((k) => [k.key, k]));
+  const knownSeen = new Set();
 
   // 3. Ordering — against the 3AH-91 snapshot. The snapshot is immutable:
   //    listing a new file in it would exempt that file from ordering.
@@ -380,6 +860,47 @@ function main() {
         errors.push(`${f}:${viol.line}\n    ✗ ${viol.rule}\n      ${viol.text}`);
       }
     }
+    // 8. FK / NOT NULL / CHECK contradiction (GOV-H).
+    //    Pre-existing instances are FROZEN in set-null-known-defects.json, for a
+    //    reason that is not cosmetic: every one of those files sits at or below
+    //    the applied boundary, which rule 6 declares immutable. A gate that
+    //    failed on files another rule forbids editing could never pass and would
+    //    be turned off. Frozen entries are REPORTED, never ignored.
+    for (const viol of setNullContradictions(sql)) {
+      const key = `${path.basename(f)}:${viol.column}`;
+      if (knownSetNull.has(key)) { knownSeen.add(key); continue; }
+      errors.push(`${f}:${viol.line}\n    ✗ ${viol.rule}\n      ${viol.text}`);
+    }
+  }
+
+  // 5. Cross-branch version reservations (GOV-H).
+  const reservations = readJson(RESERVATIONS, null);
+  errors.push(...reservationViolations(newFiles, reservations));
+
+  // 6. Historical applied-migration immutability (GOV-H).
+  const topLevel = all.filter((f) => !f.includes('/'));
+  const immut = immutabilityViolations(
+    topLevel,
+    readJson(APPLIED_BOUNDARY, null),
+    (f) => sha256(fs.readFileSync(path.join(MIG_DIR, f))),
+  );
+  errors.push(...immut.violations);
+
+  // 7. Rollback companion naming (GOV-H).
+  const rollbacks = fs.existsSync(ROLLBACK_DIR)
+    ? fs.readdirSync(ROLLBACK_DIR).filter((f) => f.endsWith('.sql'))
+    : [];
+  errors.push(...rollbackViolations(topLevel, rollbacks, newFiles));
+
+  // A freeze entry that no longer reproduces means the shape was fixed (or the
+  // file moved). Failing here is what stops the list quietly growing into a
+  // blanket suppression: an entry must be REMOVED once it stops reproducing.
+  for (const key of knownSetNull.keys()) {
+    if (!knownSeen.has(key)) {
+      errors.push(`scripts/migrations/set-null-known-defects.json\n    ✗ frozen entry '${key}' no longer reproduces — ` +
+        'the contradiction was fixed, or the migration was renamed. Remove the entry (and confirm the fix with ' +
+        '`node scripts/ci/check-actor-fk-compatibility.js --db <replayed schema>`), so the freeze list keeps matching reality.');
+    }
   }
 
   const out = {
@@ -389,9 +910,27 @@ function main() {
     ordering_floor: order.floor,
     total_migrations: all.length,
     new_migrations_validated: newFiles.length,
+    reserved_versions: reservations && reservations.reservations ? reservations.reservations.length : 0,
+    applied_boundary: immut.boundary,
+    applied_files_verified: immut.checked,
+    versions_above_boundary: immut.staleVersions,
+    rollback_companions: rollbacks.length,
+    set_null_known_open: knownSeen.size,
     violations: errors.length,
   };
   console.log(JSON.stringify(out));
+
+  // Known open items are printed every run, with their owner. They are
+  // acknowledged, not forgiven.
+  if (knownSeen.size) {
+    process.stdout.write(`\n[migration-quality] ${knownSeen.size} KNOWN OPEN FK/NOT NULL/CHECK contradiction(s) ` +
+      '(frozen in scripts/migrations/set-null-known-defects.json — remediate FORWARD, never by editing these files):\n');
+    for (const key of [...knownSeen].sort()) {
+      const k = knownSetNull.get(key);
+      process.stdout.write(`  ${key}\n    ${k.classification} — owner: ${k.owner}\n`);
+    }
+    process.stdout.write('\n');
+  }
 
   if (errors.length) {
     process.stderr.write('\n[migration-quality] VIOLATIONS in new migrations:\n\n');
@@ -412,4 +951,17 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { securityViolations, idempotencyViolations, orderingViolations, SECURITY_RULES_FROM };
+module.exports = {
+  securityViolations,
+  idempotencyViolations,
+  orderingViolations,
+  SECURITY_RULES_FROM,
+  // GOV-H (2026-11-01) — rules 5-8, each a pure function so it is testable
+  // without a filesystem, a database or a git repository.
+  reservationViolations,
+  immutabilityViolations,
+  rollbackViolations,
+  setNullContradictions,
+  scanRefs,
+  slugOf,
+};

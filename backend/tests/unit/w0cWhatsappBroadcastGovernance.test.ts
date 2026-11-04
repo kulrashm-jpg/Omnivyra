@@ -46,6 +46,13 @@ jest.mock('../../db/writeOwner', () => ({
     const run = async () => {
       if (db.failTable === table) return { data: null, error: { message: 'governance store unreadable' } };
       if (st.op === 'update') {
+        // Like Postgres: `whatsapp_broadcast_recipients.error_code` is INTEGER
+        // (supabase/_schema/baseline.sql), so a non-integer value fails the whole
+        // statement with 22P02 and no column of the row changes.
+        const code = (st.patch as Row).error_code;
+        if (table === 'whatsapp_broadcast_recipients' && code != null && !Number.isInteger(code)) {
+          return { data: null, error: { code: '22P02', message: 'invalid input syntax for type integer' } };
+        }
         db.updates.push({ table, patch: st.patch as Row });
         // Like PostgREST's `update().select()`: the rows the update matched, so a
         // compare-and-set claim can tell whether it won.
@@ -62,6 +69,10 @@ jest.mock('../../db/writeOwner', () => ({
       is: (c: string, v: unknown) => { st.eq.push([c, v]); return api; },
       in: (c: string, vs: unknown[]) => { st.ins.push([c, vs]); return api; },
       single: async () => {
+        const r = await run();
+        return { data: Array.isArray(r.data) ? (r.data as Row[])[0] ?? null : r.data, error: r.error };
+      },
+      maybeSingle: async () => {
         const r = await run();
         return { data: Array.isArray(r.data) ? (r.data as Row[])[0] ?? null : r.data, error: r.error };
       },
@@ -99,7 +110,8 @@ const seed = (over: Row = {}) => {
     id: 'b1', company_id: ORG, social_account_id: 'sa1', status: 'running',
     template_name: 'tpl', language: 'en', body_params: [], ...over,
   });
-  db.accounts.push({ id: 'sa1', phone_number_id: 'pn1' });
+  // The sender account belongs to the broadcast's company (processBatch re-checks it).
+  db.accounts.push({ id: 'sa1', company_id: ORG, phone_number_id: 'pn1' });
   db.recipients.push({ id: 'r1', encrypted_phone: encrypt(PHONE), contact_name: 'A', status: 'pending', retry_count: 0 });
 };
 

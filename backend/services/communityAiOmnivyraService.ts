@@ -96,7 +96,10 @@ const loadHistoryMetrics = async (
 };
 
 export const evaluateEngagement = async (
-  input: CommunityAiOmnivyraInput
+  input: CommunityAiOmnivyraInput,
+  /** autoExecute must be explicitly true for matching auto rules to run;
+   *  read-only callers (GET routes) leave it unset. */
+  options?: { autoExecute?: boolean }
 ): Promise<CommunityAiOmnivyraOutput> => {
   const brandVoice = normalizeBrandVoice(input.brand_voice);
   if (!isOmnivyraEnabled()) {
@@ -280,6 +283,7 @@ export const evaluateEngagement = async (
       platform: input.platform ?? null,
       suggested_actions: filteredActions,
       context: input.context,
+      autoExecute: options?.autoExecute === true,
     });
   } catch (error: any) {
     console.warn('COMMUNITY_AI_AUTO_RULES_FAILED', error?.message || error);

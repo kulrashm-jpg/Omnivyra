@@ -154,7 +154,9 @@ jest.mock('../../services/communityAiAutoRuleService', () => {
         });
 
         const id = `auto-${tenantId}-${counter++}`;
-        if (matchingRule) {
+        // Mirrors the service: only an explicit autoExecute:true runs a
+        // matching rule; otherwise the match is recorded as pending.
+        if (matchingRule && input.autoExecute === true) {
           // Rule matched → simulate auto-execution that ultimately failed
           // (the connector path can't actually reach the platform in the
           // test environment). The test asserts status='failed' AND an
@@ -209,7 +211,7 @@ describe('Community-AI Auto Rules', () => {
     autoRuleStore.length = 0;
   });
 
-  it('auto-executes when rule matches', async () => {
+  it('a GET with a matching rule records the action as pending and does not auto-execute', async () => {
     autoRuleStore.push({
       id: 'rule-1',
       tenant_id: 'tenant-1',
@@ -248,10 +250,12 @@ describe('Community-AI Auto Rules', () => {
     const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await platformHandler(req, res);
+    const { evaluateAutoRules } = jest.requireMock('../../services/communityAiAutoRuleService');
+    expect((evaluateAutoRules as jest.Mock).mock.calls[0][0].autoExecute).toBe(false);
     const rows = Array.from(actionStore.values());
     expect(rows.length).toBe(1);
-    expect(rows[0].status).toBe('failed');
-    expect(actionLogStore.some((row) => row.event_type === 'auto_executed')).toBe(true);
+    expect(rows[0].status).toBe('pending');
+    expect(actionLogStore.some((row) => row.event_type === 'auto_executed')).toBe(false);
   });
 
   it('keeps non-matching rule actions pending', async () => {

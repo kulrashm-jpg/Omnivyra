@@ -183,20 +183,58 @@ same trade-off applies to `source_records.source_record_id`, `contacts.platform_
   (`provenance_erasure_unavailable`) and a success without an event id — so the person is not
   deleted. There is no fallback to the contribution-only function.
 - Repeated calls change nothing and report zero counts. Each completed call writes one audit event.
-- Ordering trade-off, unchanged from 20270108000001: redaction is irreversible. If the later person
-  delete fails (for example a merge survivor), the person row survives with its own fields while the
-  graph is already redacted. A retry is idempotent.
+- **Erasure ledger (20270112000003):** `personErasure.erasePerson` runs under one
+  `person_erasure_requests` row per person, leased to one runner (a retry resumes it; a concurrent
+  request is refused with `erasure_in_progress`). Steps 3–5 (governance carry-forward, revocation,
+  employer-leg clearing) commit one by one and are marked; step 6 (this function), 6b (legacy `leads`
+  stamped `person_erased_at`, 20270112000001), 6c (`prospect_score_evaluations` redaction,
+  20270112000002), 6d/6e (owner-selectable retention hooks, default retain) and step 7 (the person
+  delete) run in ONE transaction (`pi_person_erasure_finalize`). If the delete fails — a merge
+  survivor, or any blocker, which is NAMED in the error — everything rolls back: the person is left as
+  before step 6, never "graph redacted, name kept". This supersedes the earlier ordering trade-off.
+  A completed request holds no person id (CHECK) and records only codes, never messages.
+- **Deploy order (erasure API, review M-1).** The migrations 20270112000000..05 and
+  20270115000000 (inventory capture + completion verification) are applied, in version order,
+  BEFORE the erasure API (`pages/api/prospect-identity/erasure-requests/*`) is reachable; rollbacks
+  run the other way round (application first, then 15 -> 05..00). `erasePerson` commits steps 3-5
+  before its `beforeFinalize` hook captures the verification inventory, so an attempt against a
+  schema without 20270115000000 would leave a PARTIALLY_COMPLETED request (governance revoked,
+  evidence links cleared, person not deleted). The API therefore probes the schema first
+  (`erasureSchemaReady`: `pi_person_erasure_verify` and `pi_person_erasure_capture_inventory` must
+  answer `request_not_found` for the nil request id, `pi_person_erasure_inconsistencies` must read)
+  and answers **503 `ERASURE_SCHEMA_NOT_READY`** without calling `erasePerson` when it cannot
+  prove the schema is there. 20270115000000's preflight requires 20270112000001..03; 04/05 only
+  replace policy functions 03 already defines and are not observable through the probe, so the
+  version-order apply above is still required.
+- **SEC-B before erasure 02 (X-1).** SEC-B (20270111000003_function_execute_classwide_hardening)
+  must be applied BEFORE 20270112000002, and must never be re-run after 20270112000002: 02 turns
+  `prospect_score_evaluations_immutable()` into an owner-only SECURITY DEFINER function, and
+  SEC-B's preflight then aborts (atomically) with "SECURITY DEFINER flag differs", leaving its
+  hardening of the other functions out. Version order gives the right sequence. If production's
+  ledger lacks 20270111000003, the owner decides between the in-place two-state patch and a new
+  forward migration before 02 is applied.
 
 ## Open gaps (owner decisions)
 
 1. `canonical_attribute_decisions.value` — append-only trigger; personal values survive with
    `person_id` NULL.
-2. `prospect_score_evaluations.evidence`/`.reasoning` — immutable trigger; possible excerpts survive
-   while the lead row survives.
+2. ~~`prospect_score_evaluations.evidence`/`.reasoning`~~ — CLOSED by 20270112000002: the erased
+   person's evaluations are redacted (person_id NULL; contributions/evidence/reasoning/context_gaps
+   emptied; facets = redaction marker) inside finalize. Scores, versions and `input_digest` remain.
 3. `engagement_authors` — global profile rows survive (links nulled).
-4. Outreach history, revenue events, touchpoints, visitor sessions, legacy `leads` — not covered.
+4. Outreach history, revenue events, touchpoints, visitor sessions — not covered. Legacy `leads`: the
+   person link is detached (20270112000001, `person_erased_at`); the lead's own fields are RETAINED by
+   default and redacted only under the owner-selectable option S (20270112000004). See
+   SUBJECT-ID-DECISION.md (release-closure evidence).
 5. `engagement_thread_events.detail` — not verified free of message text.
 6. `lead_intelligence` rows tied to the subject only by `dedupe_key`/`source_id` (no person link) are
    not found.
 7. Re-ingestion: a provider or sync that re-sends the subject recreates data; prevention belongs to
    suppression at ingestion.
+8. `outreach_decisions.person_id` has no foreign key and the table is append-only: the erased person's
+   uuid survives there by A3's design (20261011000000 §4). Retained by default; nulled only under the
+   owner-selectable 20270112000005.
+9. `subject_id` (lead/prospect key held by execution_instances / execution_tasks /
+   outreach_bridge_handoffs / outreach_tasks.lead_id, candidate stack): retained; whether it is
+   pseudonymous depends on its TARGET (redacted `canonical_leads` for prospects; legacy `leads` for
+   leads, see gap 4). Owner decision.

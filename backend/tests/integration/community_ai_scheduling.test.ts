@@ -106,6 +106,8 @@ describe('Community-AI Scheduling', () => {
       suggested_text: 'Appreciate it!',
       playbook_id: 'playbook-1',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
     });
@@ -137,6 +139,8 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-enabled',
       execution_mode: 'rpa',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
     });
@@ -168,6 +172,8 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-disabled',
       execution_mode: 'rpa',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
     });
@@ -200,6 +206,8 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-limit',
       execution_mode: 'rpa',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
     });
@@ -235,6 +243,8 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-enabled-2',
       execution_mode: 'rpa',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
     });
@@ -261,6 +271,8 @@ describe('Community-AI Scheduling', () => {
       suggested_text: 'Appreciate it!',
       execution_mode: 'api',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
       playbook_id: 'playbook-1',

@@ -18,6 +18,10 @@ module.exports = {
       diagnostics: false,
     }],
   },
+  // Same alias as jest.config.js: production modules on the real-schema path import `@/...` (e.g. the key ring imports @/config).
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/$1',
+  },
   testTimeout: 60000,
   maxWorkers: 1,
   setupFilesAfterEnv: ['<rootDir>/backend/tests/realschema/setup.ts'],

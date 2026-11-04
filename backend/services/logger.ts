@@ -7,6 +7,7 @@ type LogPayload = {
 };
 
 import { getRequestContext } from './requestContext';
+import { redact } from '../security/logRedaction';
 
 // HARDEN-001: structured level filtering. Existing info/warn/error behavior is
 // unchanged (default threshold 'info'); DEBUG is opt-in via LOG_LEVEL=debug so
@@ -22,6 +23,10 @@ const THRESHOLD = resolveThreshold();
 function write(level: LogLevel, payload: LogPayload): void {
   if (LEVEL_ORDER[level] < THRESHOLD) return;
   const ctx = getRequestContext();
+  // SEC log-redaction: every message and structured field passes through the central
+  // redactor (credential key names + token shapes; deep, cycle-safe, bounded). The
+  // request context fields are identifiers, not credentials, and are written as-is.
+  const safePayload = redact(payload) as LogPayload;
   const entry = JSON.stringify({
     level,
     ts: new Date().toISOString(),
@@ -30,7 +35,7 @@ function write(level: LogLevel, payload: LogPayload): void {
     user_id: ctx.userId,
     org_id: ctx.orgId,
     idempotency_key: ctx.idempotencyKey,
-    ...payload,
+    ...safePayload,
   });
 
   if (level === 'error') {

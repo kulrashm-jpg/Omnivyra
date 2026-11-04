@@ -56,6 +56,14 @@ const OAUTH_STATE_MAX_FUTURE_MS = 2 * 60 * 1000;
  *      verifying; they live at most OAUTH_STATE_MAX_AGE_MS (10 min), so only
  *      a consent screen open across the deploy has to be restarted.
  *
+ * ENCRYPTION_KEY rotation (ENCRYPTION_KEY_PREVIOUS, see ./encryptionKeyRing): only the
+ * CURRENT ENCRYPTION_KEY derives the fallback signing key — previous keys are deliberately
+ * NOT accepted for verification. A rotation is normally driven by a suspected exposure, and
+ * honouring a state signed under an exposed key would let its holder forge the tenant
+ * binding; the cost of refusing is only a consent screen open across the cut-over (≤ 10
+ * min) having to restart. Previous keys exist to DECRYPT data at rest, nothing else. A
+ * dedicated OAUTH_STATE_HMAC_KEY is unaffected by an ENCRYPTION_KEY rotation.
+ *
  * Both are read from `config` first (Zod-validated) and `process.env` only
  * as a defensive fallback for any caller that imports this module before
  * the `config` proxy is initialized.

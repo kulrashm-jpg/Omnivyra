@@ -250,11 +250,15 @@ export async function recordUploadFailure(input: { userId: string; companyId: st
 }
 
 /** Signed-upload session verification — checks that the `upload_session_id` on the row
- *  matches a token derived from `dailyPlanId + companyId + a secret`. */
+ *  matches a token derived from `dailyPlanId + companyId + a secret`.
+ *
+ *  Fails closed without CREATOR_UPLOAD_SESSION_SECRET: the old fallback was a
+ *  literal in a public repository, so any session "signed" with it proves nothing. */
 export function verifyUploadSession(input: { sessionId: string; dailyPlanId: string; companyId: string }): boolean {
   // Deterministic HMAC-style fingerprint without bringing in crypto deps —
   // suitable for opportunistic verification, not as the only auth gate.
-  const secret = process.env.CREATOR_UPLOAD_SESSION_SECRET ?? 'creator-upload-secret';
+  const secret = process.env.CREATOR_UPLOAD_SESSION_SECRET?.trim();
+  if (!secret) return false;
   const expected = simpleFingerprint(`${input.dailyPlanId}:${input.companyId}:${secret}`);
   return input.sessionId.length >= 16 && (input.sessionId.startsWith(expected.slice(0, 8)) || input.sessionId.includes(expected.slice(0, 12)));
 }

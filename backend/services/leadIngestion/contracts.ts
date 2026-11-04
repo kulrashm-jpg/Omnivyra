@@ -157,6 +157,17 @@ export interface NormalizedIngestionRecord {
   observedAt?: string | null;
   /** Provider-stated confidence for this record's claims, 0..1. */
   confidence?: number | null;
+  /**
+   * The identity signals (email, phone, reference) were typed or exported by a
+   * tenant OPERATOR — a CSV row, a manual entry — rather than issued by a source
+   * system. An operator reference is free text shared by every upload in the
+   * tenant, so it is weaker evidence than a provider id: when it, or a shared
+   * role mailbox, would attach this record to a person its own contact evidence
+   * contradicts, the record is REFUSED (`identity_conflict`) instead of being
+   * attached. Absent/false keeps the resolver's established behaviour, so no
+   * provider source changes.
+   */
+  operatorAsserted?: boolean;
 }
 
 /** What an adapter returns per record: what the provider said, and what we understood. */
@@ -186,6 +197,14 @@ export interface LeadSourceAdapter {
    * reported per record; it must never abort a batch.
    */
   translate(raw: Record<string, unknown>, organizationId: string): AdapterResult;
+  /**
+   * OPTIONAL. The keys of `raw` this adapter does not read, so the orchestrator
+   * can report them per record (`ignoredColumns`) instead of dropping them
+   * silently. Pure, like `translate`, and called on rows `translate` rejects
+   * too — an unmapped `E-mail` column is most useful to see on exactly the row
+   * that failed for want of an email.
+   */
+  unmappedFields?(raw: Record<string, unknown>): string[];
 }
 
 /** Why a record was rejected before anything was persisted. */
@@ -202,7 +221,11 @@ export type IngestionRejection =
   | 'prospect_resolution_failed'
   /** The ingestion capability is switched off. Reported, never thrown, so a
    *  batch stopped mid-flight still returns the outcomes it already had. */
-  | 'ingestion_disabled';
+  | 'ingestion_disabled'
+  /** Operator-asserted evidence contradicted the person it would have been
+   *  attached to (see `NormalizedIngestionRecord.operatorAsserted`). Nothing
+   *  was written; `identityConflict` says which person and why. */
+  | 'identity_conflict';
 
 /** The outcome of ONE record. A batch is a list of these — never a single verdict. */
 export interface IngestionRecordOutcome {
@@ -244,6 +267,29 @@ export interface IngestionRecordOutcome {
   /** Present only when `!ok`. */
   rejection?: IngestionRejection;
   error?: string;
+  /** Present only with `rejection: 'identity_conflict'`. Ids and a reason only. */
+  identityConflict?: {
+    reason: 'external_key_contact_mismatch' | 'phone_match_email_mismatch' | 'role_address_name_mismatch';
+    conflictingPersonId: string;
+    matchedBy: 'email' | 'phone' | 'external_keys';
+  };
+  /**
+   * Present only on an ACCEPTED operator-asserted record whose name differs
+   * from the person it attached to. Advisory: the record was ingested (a name
+   * correction and a different human look alike — D-4), and this flags it for
+   * human review. Ids and a reason only.
+   */
+  identityReview?: {
+    reason: 'name_mismatch';
+    personId: string;
+    matchedBy: 'email' | 'phone' | 'external_keys';
+  };
+  /**
+   * Input keys the source adapter does not read, reported rather than silently
+   * dropped. Column NAMES only, never values. Present only when non-empty and
+   * only for adapters that declare `unmappedFields`.
+   */
+  ignoredColumns?: string[];
 }
 
 export interface IngestionBatchResult {

@@ -15,6 +15,7 @@ import {
   createBroadcast,
   expandRecipients,
   enqueueBroadcast,
+  senderAccountRefusalResponse,
   type CreateBroadcastInput,
   type ContactInput,
 } from '../../../../backend/services/whatsappBroadcastService';
@@ -88,8 +89,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let broadcastId: string;
     try {
+      // createBroadcast refuses a social_account_id that does not belong to
+      // company_id. Unknown and foreign accounts get the same 404.
       broadcastId = await createBroadcast(input);
     } catch (err) {
+      const refused = senderAccountRefusalResponse(err);
+      if (refused) return res.status(refused.status).json({ error: refused.error });
       return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create broadcast' });
     }
 

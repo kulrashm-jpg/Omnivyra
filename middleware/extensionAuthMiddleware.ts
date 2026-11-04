@@ -15,16 +15,9 @@ import { ExtensionAuthService } from '../modules/extension/services/extensionAut
 // TYPES & INTERFACES
 // ============================================================================
 
-/**
- * Extended Express Request with extension user context
- */
-declare global {
-  namespace Express {
-    interface Request {
-      extensionUser?: ExtensionUser;
-    }
-  }
-}
+// `req.extensionUser` (Express.Request augmentation) is declared in
+// modules/extension/types/extension.types.ts, next to ExtensionUser.
+// The ExtensionUser import above brings that augmentation into scope here.
 
 // ============================================================================
 // MIDDLEWARE

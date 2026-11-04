@@ -200,9 +200,14 @@ async function manualExecute(org: string, id: string, mode = 'api') {
   return res;
 }
 
-/** communityAiAutoRuleService for a suggestion matching an active rule. */
+/**
+ * communityAiAutoRuleService for a suggestion matching an active rule, on the
+ * ingestion worker path (CR-X-01: without autoExecute: true round 3's read
+ * path defers before the claim under test).
+ */
 function autoRule(org: string, target: string) {
   return evaluateAutoRules({
+    autoExecute: true,
     tenant_id: org, organization_id: org, platform: 'linkedin',
     suggested_actions: [{
       platform: 'linkedin', action_type: 'reply', target_id: target, suggested_text: TEXT,

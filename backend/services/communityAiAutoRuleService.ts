@@ -27,6 +27,12 @@ type AutoRuleInput = {
   platform?: string | null;
   suggested_actions: any[];
   context?: any;
+  /**
+   * Only an explicit true lets a matching rule execute. Otherwise a match is
+   * recorded as a pending action and returned with auto_execution_deferred, so
+   * read paths (dashboard GETs) never cause an external action.
+   */
+  autoExecute?: boolean;
 };
 
 const riskRank: Record<string, number> = { low: 1, medium: 2, high: 3 };
@@ -409,6 +415,19 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
           { allowAnyStatus: true }
         );
         return action;
+      }
+
+      // Read paths (no explicit autoExecute) never act: the match is only
+      // recorded as pending.
+      if (input.autoExecute !== true) {
+        await resolveActionRecord(
+          input.tenant_id,
+          input.organization_id,
+          normalizedAction,
+          'pending',
+          { allowAnyStatus: true }
+        );
+        return { ...action, auto_execution_deferred: true };
       }
 
       // D-01: a matching auto-rule no longer approves. The action is recorded

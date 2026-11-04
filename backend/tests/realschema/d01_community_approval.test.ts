@@ -124,7 +124,10 @@ describe('D-01 on the real schema', () => {
         VALUES ($1, $1, 'auto-reply', '{}'::jsonb, 'reply', 'medium', true)`, [ORG_A]);
       const seeded = await db.query(`INSERT INTO public.community_ai_actions (tenant_id, organization_id, platform, action_type, target_id, suggested_text, status, execution_mode, requires_human_approval, risk_level, playbook_id)
         VALUES ($1,$1,'linkedin','reply',$2,'Thanks for sharing','pending','browser',true,'low',$3) RETURNING *`, [ORG_A, TARGET, PLAYBOOK.id]);
+      // CR-X-01: the ingestion worker path; round 3's read path would defer
+      // before the D-01 gate this case exercises.
       const out = await evaluateAutoRules({
+        autoExecute: true,
         tenant_id: ORG_A, organization_id: ORG_A, platform: 'linkedin',
         suggested_actions: [{
           platform: 'linkedin', action_type: 'reply', target_id: TARGET, suggested_text: 'Thanks for sharing',

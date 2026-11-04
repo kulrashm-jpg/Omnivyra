@@ -71,7 +71,10 @@ const pending = (over: Row = {}): Row => ({
   id: 'act-1', organization_id: 'org-l3', platform: 'linkedin', action_type: 'reply',
   target_id: 'urn:li:comment:(urn:li:activity:1,2)', discovered_user_id: null, suggested_text: 'Thanks!',
   execution_mode: 'browser', status: 'pending', created_at: new Date().toISOString(),
-  dispatch_lease_expires_at: null, execution_correlation_id: 'corr-1', command_chain: null, command_chain_index: 0, ...over,
+  dispatch_lease_expires_at: null, execution_correlation_id: 'corr-1', command_chain: null, command_chain_index: 0,
+  // Human-approved, as claim_community_ai_browser_command requires; the lease
+  // handout policy gate (CR-X-01, round 3) holds a row without approved_at.
+  approved_at: '2026-11-03T00:00:00.000Z', approved_by: 'human-1', ...over,
 });
 
 beforeEach(() => { rows.length = 0; rpcCalls.length = 0; persisted.length = 0; mockRecheck.mockReset(); });

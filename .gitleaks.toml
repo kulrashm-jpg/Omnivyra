@@ -1,0 +1,144 @@
+# gitleaks configuration (SEC log-redaction / secret-scan programme).
+#
+# Extends the gitleaks default ruleset with the credential families this repository has
+# actually leaked or handles (Supabase, OpenAI project keys, Anthropic, Google OAuth,
+# Railway, postgres URLs with passwords, encryption keys). The same families are enforced
+# by scripts/check-secrets.js (tracked files, CI), scripts/security/scan-staged-secrets.js
+# (pre-commit) and redacted from logs by backend/security/logRedaction.ts.
+#
+# Run with --redact so a finding never prints the value:
+#   gitleaks git --config .gitleaks.toml --redact --log-opts="origin/main..HEAD"
+#
+# Requires gitleaks >= 8.25 ([[allowlists]] / [[rules.allowlists]] syntax).
+# Regexes are Go RE2: no look-around, no backreferences.
+
+title = "Omnivyra gitleaks config"
+
+[extend]
+useDefault = true
+
+# ── Supabase ─────────────────────────────────────────────────────────────────
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase secret API key (sb_secret_)"
+regex = '''\b(sb_secret_[A-Za-z0-9_-]{20,})'''
+secretGroup = 1
+keywords = ["sb_secret_"]
+
+[[rules]]
+id = "supabase-access-token"
+description = "Supabase personal / management access token (sbp_)"
+regex = '''\b(sbp_[A-Za-z0-9_]{36,})'''
+secretGroup = 1
+keywords = ["sbp_"]
+
+[[rules]]
+id = "supabase-service-role-jwt"
+description = "JWT whose payload carries role=service_role (base64 of '\"role\":\"service_role\"' at any alignment)"
+regex = '''\b(eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]*(?:InJvbGUiOiJzZXJ2aWNlX3JvbGUi|b2xlIjoic2VydmljZV9yb2xl|cm9sZSI6InNlcnZpY2Vfcm9sZS)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{16,})'''
+secretGroup = 1
+keywords = ["eyj"]
+
+# ── LLM providers ────────────────────────────────────────────────────────────
+
+[[rules]]
+id = "openai-project-key"
+description = "OpenAI project / service-account / admin key (sk-proj-, sk-svcacct-, sk-admin-)"
+regex = '''\b(sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,})'''
+secretGroup = 1
+keywords = ["sk-proj-", "sk-svcacct-", "sk-admin-"]
+
+[[rules]]
+id = "anthropic-key"
+description = "Anthropic API / admin key (sk-ant-)"
+regex = '''\b(sk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{20,})'''
+secretGroup = 1
+keywords = ["sk-ant-"]
+
+# ── Cloud / platform ─────────────────────────────────────────────────────────
+
+[[rules]]
+id = "google-oauth-client-secret"
+description = "Google OAuth client secret (GOCSPX-)"
+regex = '''\b(GOCSPX-[A-Za-z0-9_-]{24,})'''
+secretGroup = 1
+keywords = ["gocspx-"]
+
+[[rules]]
+id = "railway-token"
+description = "Railway token (rw_ prefix)"
+regex = '''\b(rw_[A-Za-z0-9_-]{24,})'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["rw_"]
+
+[[rules]]
+id = "railway-token-assignment"
+description = "RAILWAY_TOKEN / RAILWAY_API_TOKEN assigned a literal"
+regex = '''\bRAILWAY_(?:API_)?TOKEN\s*[=:]\s*['"]?([A-Za-z0-9][A-Za-z0-9_-]{19,})'''
+secretGroup = 1
+keywords = ["railway_token", "railway_api_token"]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "AWS access key id (AKIA / ASIA)"
+regex = '''\b((?:AKIA|ASIA)[0-9A-Z]{16})\b'''
+secretGroup = 1
+keywords = ["akia", "asia"]
+
+# ── Connection strings / keys ────────────────────────────────────────────────
+
+[[rules]]
+id = "postgres-url-with-password"
+description = "postgres(ql):// URL with an inline password on a non-local host"
+regex = '''\bpostgres(?:ql)?://[^\s:/@'"`]+:([^\s@'"`]+)@([^\s:/'"`?]+)'''
+secretGroup = 1
+keywords = ["postgres://", "postgresql://"]
+
+  [[rules.allowlists]]
+  description = "local / docker database hosts and placeholder passwords"
+  regexTarget = "match"
+  regexes = [
+    '''@(?:localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal|db|postgres|postgresql|supabase[_-]?db|database|pg)(?:[:/]|$)''',
+    ''':(?:password|pass|pw|postgres|secret|\$\{?[A-Za-z_]+\}?|\[[^\]]*\])@''',
+  ]
+
+[[rules]]
+id = "encryption-key-assignment"
+description = "32-byte hex *_ENCRYPTION_KEY assigned a literal"
+regex = '''\b[A-Z0-9_]*ENCRYPTION_KEY\s*[=:]\s*['"]?([0-9a-fA-F]{64})\b'''
+secretGroup = 1
+keywords = ["encryption_key"]
+
+[[rules]]
+id = "authorization-bearer-literal"
+description = "Literal bearer / basic credential in an Authorization header"
+regex = '''(?i)\bauthorization['"]?\s*[:=]\s*['"]?(?:bearer|basic)\s+([A-Za-z0-9._~+/-]{32,}=*)'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["authorization"]
+
+# ── Global allowlists ────────────────────────────────────────────────────────
+
+[[allowlists]]
+description = "Synthetic-fixture test files: every credential-shaped value is generated at runtime and marked TESTONLY"
+paths = [
+  '''^backend/tests/unit/logRedaction\.test\.ts$''',
+  '''^backend/tests/unit/scanStagedSecrets\.test\.ts$''',
+  '''^backend/tests/unit/sec91FSecretsGate\.test\.ts$''',
+  '''^backend/tests/unit/sec91FGateHardening\.test\.ts$''',
+  '''^backend/tests/unit/socialIngestionRemediation\.test\.ts$''',
+  '''^scripts/security/secrets-allowlist\.json$''',
+  '''^\.gitleaks\.toml$''',
+]
+
+[[allowlists]]
+description = "Documented placeholders and the public Supabase CLI local-development (supabase-demo) JWTs"
+regexTarget = "secret"
+regexes = [
+  '''(?i)(?:your[_-]|example|placeholder|dummy|changeme|change[_-]me|redacted|xxxx|notreal|not[_-]a[_-]real|<[^>]*>|\$\{|\{\{)''',
+  '''(?i)testonly''',
+  # base64 of "supabase-demo" at each of the three alignments (the iss of the public demo keys)
+  '''c3VwYWJhc2UtZGVtb|N1cGFiYXNlLWRlbW|zdXBhYmFzZS1kZW1v''',
+]

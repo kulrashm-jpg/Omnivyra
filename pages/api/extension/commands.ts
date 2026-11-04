@@ -32,11 +32,18 @@ import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityServ
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
+import { getCommunityAiPlatformPolicy } from '@/backend/services/communityAiPlatformPolicyService';
 import { dmSendRefusal, wouldDispatchDm, INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED } from '@/backend/services/dmDispatchSafety';
 import { recheckCommunityRecipient, isRecipientRecheckRefusal } from '@/backend/services/communityRecipientRecheck';
 import { EXTENSION_BROWSER_INGESTION_SUSPENDED, SUSPENDED_COLLECTION_COMMANDS } from '@/backend/services/extensionIngestionSuspension';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
+
+/**
+ * Steps that only read the tenant's own inbox (queued by
+ * /api/engagement/platform-sync). Every other step can send, like or post.
+ */
+const READ_ONLY_EXTENSION_ACTIONS = new Set(['sync_dm_inbox', 'sync_comments_inbox']);
 
 const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
   reply: 'reply_comment',
@@ -163,7 +170,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   cancellation, the platform kill switch and approval.
     const query = supabase
       .from('community_ai_actions')
-      .select('id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
       .eq('execution_mode', 'browser')
@@ -186,6 +193,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     const leaseId = `lease-${randomBytes(8).toString('hex')}`;
     const commands: any[] = [];
+
+    // Handing a command to the extension is the last point before the browser
+    // sends, so the executor's platform gates (runExecution) are applied again
+    // here: a row prepared before execution was switched off, or before human
+    // approval became required, must not go out. An unreadable policy is
+    // fail-closed (execution off, approval required). A gated row is left
+    // unclaimed, which is provably unsent; dispatch recovery releases it later.
+    // (Round 3 74242b572, kept alongside W1's claim-RPC authority under CR-X-01.)
+    const policy = await getCommunityAiPlatformPolicy();
 
     for (const row of data || []) {
       // ── Chain-aware step selection ────────────────────────────────────────
@@ -212,6 +228,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const cap = resolveEngagementCapability(row.platform, topAction as any);
       if (cap.status !== 'api_verified') continue;
       if (isCurrentlyDisabled(row.platform, topAction)) continue;
+
+      if (!READ_ONLY_EXTENSION_ACTIONS.has(capabilityAction)) {
+        if (!policy.execution_enabled) continue;
+        if (policy.require_human_approval && !(row as any).approved_at) continue;
+      }
 
       const extensionAction = mapCapabilityActionToExtensionAction(capabilityAction);
 

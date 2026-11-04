@@ -19,7 +19,10 @@ jest.mock('../../db/writeOwner', () => ({
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
 }));
-const mockPolicy = { execution_enabled: true, require_human_approval: true };
+// auto_rules_enabled: a tenant that allows automation, so that for source=auto
+// the L-3 recheck (not round 3's auto-rules policy gate, CR-X-01) is the
+// refusal under test.
+const mockPolicy = { execution_enabled: true, auto_rules_enabled: true, require_human_approval: true };
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
   getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
 }));

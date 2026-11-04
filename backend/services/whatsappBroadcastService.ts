@@ -102,9 +102,77 @@ export function decryptPhone(encrypted: string): string {
   return decipher.update(enc, 'hex', 'utf8') + decipher.final('utf8');
 }
 
+// ── Sender-account ownership ──────────────────────────────────────────────────
+
+/**
+ * A broadcast is sent with the Meta token and phone number of
+ * `social_account_id`. That id arrives in the request body, so it must belong to
+ * the broadcast's company; otherwise an admin of company A could send through
+ * company B's WhatsApp number and token.
+ *
+ * Refusal reasons: `not_found` covers both "no such account" and "another
+ * company's account" (the caller must not learn which); `unreadable` is a failed
+ * lookup and also refuses (fail closed).
+ */
+export type SenderAccountRefusal = 'not_found' | 'unreadable';
+
+export class WhatsAppSenderAccountError extends Error {
+  constructor(public readonly reason: SenderAccountRefusal) {
+    super(reason === 'unreadable'
+      ? 'WhatsApp sender account could not be verified'
+      : 'WhatsApp sender account not found');
+    this.name = 'WhatsAppSenderAccountError';
+  }
+}
+
+export async function loadOwnedSenderAccount(
+  companyId: unknown,
+  socialAccountId: unknown,
+): Promise<
+  | { ok: true; account: { id: string; company_id: string; phone_number_id: string | null } }
+  | { ok: false; reason: SenderAccountRefusal }
+> {
+  if (typeof companyId !== 'string' || !companyId || typeof socialAccountId !== 'string' || !socialAccountId) {
+    return { ok: false, reason: 'not_found' };
+  }
+  let res: { data?: any; error?: unknown };
+  try {
+    res = await ownedDbTable('social_accounts')
+      .select('id, company_id, phone_number_id')
+      .eq('id', socialAccountId)
+      .eq('company_id', companyId)
+      .maybeSingle();
+  } catch {
+    return { ok: false, reason: 'unreadable' };
+  }
+  if (res.error) return { ok: false, reason: 'unreadable' };
+  // The predicate already scopes by company; the comparison is defence in depth.
+  if (!res.data || res.data.company_id !== companyId) return { ok: false, reason: 'not_found' };
+  return { ok: true, account: res.data };
+}
+
+/**
+ * HTTP mapping for routes, matching `pages/api/social/comments.ts`: an unknown
+ * and a foreign account both get 404, a failed lookup 503. Null for any other error.
+ */
+export function senderAccountRefusalResponse(err: unknown): { status: 404 | 503; error: string } | null {
+  if (!(err instanceof WhatsAppSenderAccountError)) return null;
+  return err.reason === 'unreadable'
+    ? { status: 503, error: 'Social account lookup failed. Please try again.' }
+    : { status: 404, error: 'Social account not found' };
+}
+
+async function assertOwnedSenderAccount(companyId: unknown, socialAccountId: unknown) {
+  const check = await loadOwnedSenderAccount(companyId, socialAccountId);
+  if (check.ok === false) throw new WhatsAppSenderAccountError(check.reason);
+  return check.account;
+}
+
 // ── Create broadcast ──────────────────────────────────────────────────────────
 
 export async function createBroadcast(input: CreateBroadcastInput): Promise<string> {
+  await assertOwnedSenderAccount(input.company_id, input.social_account_id);
+
   const { data, error } = await ownedDbTable('whatsapp_broadcasts')
     .insert({
       ...input,
@@ -180,6 +248,10 @@ export async function enqueueBroadcast(
     .single();
 
   if (error || !broadcast) throw new Error(`Broadcast not found: ${broadcastId}`);
+
+  // A draft created before the ownership check existed may name another
+  // company's account; refuse before its rate limit or queue is touched.
+  await assertOwnedSenderAccount(broadcast.company_id, broadcast.social_account_id);
 
   // Improvement 5 + Refinement 7: validate template before touching queue
   if (broadcast.message_type === 'template') {
@@ -364,14 +436,15 @@ export async function processBatch(
     }
   }
 
+  // Re-checked here, before the token is read, because a job may have been
+  // queued (or a draft created) before the route checked ownership, and the
+  // retry path reaches this function without the route. On refusal nothing is
+  // sent, recipients stay `pending`, and the job fails visibly.
+  const account = await assertOwnedSenderAccount(broadcast.company_id, broadcast.social_account_id);
+
+  if (!account.phone_number_id) throw new Error('phone_number_id not set on social account');
+
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
-
-  const { data: account } = await ownedDbTable('social_accounts')
-    .select('phone_number_id')
-    .eq('id', broadcast.social_account_id)
-    .single();
-
-  if (!account?.phone_number_id) throw new Error('phone_number_id not set on social account');
 
   const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id, encrypted_phone, contact_name')

@@ -155,6 +155,24 @@ jobs:
       - name: Real-schema CI
         run: bash scripts/ci/real-schema-ci.sh
 
+      # GOV-H: FK / NOT NULL / CHECK compatibility against the REPLAYED catalog.
+      # This is the only path that covers tables created AFTER the committed
+      # baseline's ledger position (supabase/_schema/baseline.json ledgerMax
+      # 20260916000000), which is where every PI actor column lives. The static
+      # run in typecheck-baseline.yml covers the baseline and nothing newer, so
+      # the two are complements, not duplicates.
+      #
+      # Runs AFTER the replay so the catalog is the end state of every
+      # migration — including a contradiction assembled across several of them,
+      # which no single-file rule can see.
+      #
+      # W6_DB_URL is this job's localhost service container, declared in `env:`
+      # above and deliberately NOT a repository secret, so this step is not
+      # secret-gated and can never skip silently. The script independently
+      # refuses any non-loopback host.
+      - name: Actor-FK / CHECK compatibility (replayed catalog)
+        run: node scripts/ci/check-actor-fk-compatibility.js --db "$W6_DB_URL"
+
       - name: Report failure context
         if: failure()
         run: |
