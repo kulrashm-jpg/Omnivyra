@@ -38,7 +38,16 @@ function builder(table: string) {
   };
   return api;
 }
-const fakeSupabase = { from: (t: string) => { db.calls.push(t); return builder(t); }, rpc: (n: string) => { db.calls.push(`rpc:${n}`); return Promise.resolve({ data: null, error: null }); } };
+// On the foundation base the lease is taken by the atomic claim RPC (P-A), not an
+// UPDATE; the fake records that claim in the same `db.claimed` the UPDATE fake used.
+const fakeSupabase = { from: (t: string) => { db.calls.push(t); return builder(t); }, rpc: (n: string, args?: { p_action_id?: string }) => {
+  db.calls.push(`rpc:${n}`);
+  if (n === 'claim_community_ai_browser_command' && args?.p_action_id) {
+    db.claimed.push(String(args.p_action_id));
+    return Promise.resolve({ data: [{ id: args.p_action_id, dispatch_lease_expires_at: null }], error: null });
+  }
+  return Promise.resolve({ data: null, error: null });
+} };
 jest.mock('../../db/supabaseClient', () => ({ supabase: fakeSupabase }));
 jest.mock('@/backend/db/supabaseClient', () => ({ supabase: fakeSupabase }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
@@ -54,6 +63,12 @@ jest.mock('@/backend/services/extensionReliabilityService', () => ({ isCurrently
 jest.mock('@/backend/services/extensionCommandSchema', () => ({ COMMAND_SCHEMA_VERSION: 'schema-test', validateCommandPayload: (_p: string, _a: string, payload: unknown) => ({ ok: true, payload }) }));
 jest.mock('@/backend/services/communityAiExecutionResultService', () => ({ recordExecutionMetric: () => undefined, persistExecutionResult: async () => ({ ok: true }) }));
 jest.mock('@/backend/services/rpaWorker/rpaAccountTier', () => ({ resolveAccountTier: async () => 'standard' }));
+// The foundation base also runs L-3 before the claim; this suite is about the R-3
+// suspension, so the recipient recheck allows (as in extensionDispatchSafety.routes).
+jest.mock('@/backend/services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 
 let suspended = true;
 jest.mock('../../services/extensionIngestionSuspension', () => {
@@ -130,6 +145,8 @@ describe('server-queued collection', () => {
     id, organization_id: 'org-r3', platform: 'linkedin', action_type: action, target_id: 'urn:li:activity:1',
     suggested_text: action === 'reply' ? 'thanks' : null, execution_mode: 'browser', status: 'pending',
     created_at: new Date().toISOString(), dispatch_lease_expires_at: null, command_chain: null, command_chain_index: 0,
+    // D-01 / P-A: only a row with a recorded human approval is offered for execution.
+    approved_at: new Date().toISOString(),
   });
   const poll = () => call(commandsHandler, { method: 'GET', url: '/api/extension/commands', headers: { 'x-omnivyra-capability-version': 'cap-test', 'x-omnivyra-dispatch-renewal': '1' } });
 
