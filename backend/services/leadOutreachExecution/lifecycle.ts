@@ -50,13 +50,21 @@ export const TERMINAL_STATUSES: readonly OutreachTaskStatus[] = [
  */
 export const TRANSIENT_STATUSES: readonly OutreachTaskStatus[] = ['retried', 'resumed', 'reassigned'] as const;
 
-/** The complete legal transition table from the frozen architecture. */
+/**
+ * The complete legal transition table from the frozen architecture.
+ *
+ * D-02 adds ONE edge, `approved | queued → awaiting_approval` (re-review): an approval
+ * that no longer binds the task's content (`approval_stale`) needs a fresh approval, and
+ * without this edge such a task could be neither sent nor approved again. Taken only by
+ * compare-and-set, and only by `approvalBinding.settleRefusedApproval` (a stale refusal at
+ * the dispatch gate) or `approvalBinding.requestFreshApproval` (an explicit resubmit).
+ */
 export const ALLOWED_TRANSITIONS: Readonly<Record<OutreachTaskStatus, readonly OutreachTaskStatus[]>> = {
   pending: ['awaiting_approval', 'queued', 'cancelled', 'expired'],
   awaiting_approval: ['approved', 'rejected', 'cancelled', 'expired'],
-  approved: ['queued', 'cancelled', 'expired'],
+  approved: ['queued', 'cancelled', 'expired', 'awaiting_approval'],
   rejected: [],
-  queued: ['dispatching', 'paused', 'cancelled', 'expired'],
+  queued: ['dispatching', 'paused', 'cancelled', 'expired', 'awaiting_approval'],
   dispatching: ['sent', 'failed'],
   sent: ['delivered', 'failed', 'completed'],
   delivered: ['completed'],

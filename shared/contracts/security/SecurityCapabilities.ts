@@ -89,6 +89,16 @@ export const INTEGRATION_PLATFORM_OAUTH_MANAGE = 'integration.platform.oauth.man
 export const OUTREACH_PLATFORM_MANAGE = 'outreach.platform.manage' as const;
 
 /**
+ * D-02 (orchestration Wave 1, owner decision) — the ROUTINE approval of a journey step
+ * handed to Lead Outreach, within the approver's own tenant. Tenant tier: granted to
+ * COMPANY_ADMIN and CONTENT_REVIEWER only, and deliberately NOT to SUPER_ADMIN — a
+ * platform super-admin is not the routine approver (the platform override stays on
+ * OUTREACH_PLATFORM_MANAGE). Not session-step-up gated: every external-execution approval
+ * instead needs a fresh passkey verification bound to that one approval.
+ */
+export const OUTREACH_JOURNEY_APPROVE = 'outreach.journey.approve' as const;
+
+/**
  * Closure-009 (owner decision) — publish RECOVERY across tenants: record a
  * reconciled outcome for an uncertain publish, resume a thread, or reconcile a
  * thread node against the provider. SUPER_ADMIN-only, platform-tier, step-up
@@ -306,6 +316,8 @@ export const ALL_CAPABILITIES = [
   OUTREACH_PLATFORM_MANAGE,
   PUBLISH_RECOVERY_MANAGE,
   PLATFORM_CONTROLS_MANAGE,
+  // D-02 — tenant-tier routine journey approval (COMPANY_ADMIN, CONTENT_REVIEWER)
+  OUTREACH_JOURNEY_APPROVE,
   // Bridge marker
   SUPER_ADMIN_LEGACY_BRIDGE,
 ] as const;

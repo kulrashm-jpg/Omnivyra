@@ -170,7 +170,10 @@ jest.mock('../../db/supabaseClient', () => ({
 import { bridgeExecutionTask } from '../../services/outreachBridge/outreachBridgeStore';
 import { createExecutionInstance } from '../../services/executionInstances/executionInstanceStore';
 import { createExecutionPlan, listInstanceTasks } from '../../services/executionPlans/executionPlanStore';
-import { transitionOutreachTaskState } from '../../services/leadOutreachExecution/storage';
+import { approveOutreachTask, submitForApproval } from '../../services/leadOutreachExecution/approval';
+// D-02 (S-02) — an external approval needs a passkey proof: the real ceremony over a WebAuthn double.
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
 import { resolveTransport, supportedChannels, __clearTransportsForTests } from '../../services/leadOutreachExecution/transport';
 import { registerDefaultTransports } from '../../services/leadOutreachExecution/transportRegistry';
 import { type EmailProviderPort, type EmailProviderRequest, type EmailProviderResponse } from '../../services/leadOutreachExecution/emailTransport';
@@ -347,11 +350,28 @@ async function bridged(opts: {
   };
 }
 
-/** Approve a bridged task so the dispatcher's claim can succeed. */
+/**
+ * Approve a bridged task so the dispatcher's claim can succeed. D-02: through the one
+ * approval path, which records the content binding the dispatch gate re-checks; a status
+ * written directly no longer authorises a send.
+ */
 async function approve(org: string, taskId: string): Promise<void> {
-  const r = await transitionOutreachTaskState(org, taskId, 'pending', 'approved');
+  expect((await submitForApproval(org, taskId)).ok).toBe(true);
+  const r = await approveWithPasskey(org, taskId, 'u-approver');
   expect(r.ok).toBe(true);
   expect(r.changed).toBe(true);
+}
+
+/**
+ * D-02 — a task whose message cannot be prepared has nothing to bind an approval to, so
+ * the approval path refuses it. The status is then forced, as a pre-D-02 approval would
+ * have left it, so the send path's own refusal is still what these tests observe.
+ */
+async function approveUnbindable(org: string, taskId: string): Promise<void> {
+  expect((await submitForApproval(org, taskId)).ok).toBe(true);
+  expect(await approveOutreachTask(org, taskId, { approverUserId: 'u-approver' }))
+    .toMatchObject({ ok: false, refusal: 'binding_unavailable' });
+  await db.query("UPDATE public.outreach_tasks SET status = 'approved' WHERE id = $1", [taskId]);
 }
 
 /** One real attempt against a bridged task, for the table-level tests. */
@@ -906,7 +926,7 @@ describe('041-A/T2 — what is not sendable is not sent', () => {
   it('NO ADDRESS → NO ATTEMPT, NO EVIDENCE, NO PROVIDER CALL', async () => {
     await inRollback(async () => {
       const r = await bridged({ email: null });
-      await approve(ORG_A, r.outreachTaskId);
+      await approveUnbindable(ORG_A, r.outreachTaskId);
 
       expect(await codeOf(sendEmailForOutreachTask({
         organizationId: ORG_A, outreachTaskId: r.outreachTaskId, now: AT,
@@ -925,7 +945,7 @@ describe('041-A/T2 — what is not sendable is not sent', () => {
   it('NO AUTHORED INSTRUCTION → NO SEND, and nothing is invented', async () => {
     await inRollback(async () => {
       const r = await bridged({ instruction: null });
-      await approve(ORG_A, r.outreachTaskId);
+      await approveUnbindable(ORG_A, r.outreachTaskId);
 
       expect(await codeOf(sendEmailForOutreachTask({
         organizationId: ORG_A, outreachTaskId: r.outreachTaskId, now: AT,
@@ -942,7 +962,7 @@ describe('041-A/T2 — what is not sendable is not sent', () => {
   it('A MISSING PERSONALIZATION VALUE REFUSES rather than sending a gap', async () => {
     await inRollback(async () => {
       const r = await bridged({ instruction: 'Hi {{last_name}}, about your work.' });
-      await approve(ORG_A, r.outreachTaskId);
+      await approveUnbindable(ORG_A, r.outreachTaskId);
       // The fixture person has no last_name.
       expect(await codeOf(sendEmailForOutreachTask({
         organizationId: ORG_A, outreachTaskId: r.outreachTaskId, now: AT,

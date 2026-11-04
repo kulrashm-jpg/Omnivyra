@@ -12,7 +12,8 @@
 
 import { createEmailTransport, type EmailProviderPort } from './emailTransport';
 import { internalTransport } from './internalTransport';
-import { registerTransport } from './transport';
+import { registerTransport, type TransportRequest } from './transport';
+import { assertRenderedEmailApproved } from './approvalBinding';
 import { emailContentHook, emailContentEvidenceHook } from '../emailEngine/emailSendPath';
 
 /**
@@ -40,8 +41,21 @@ export function registerDefaultTransports(
   registerTransport(internalTransport);
   registerTransport(options.email === 'engine'
     ? createEmailTransport(options.emailProvider, {
-      content: emailContentHook(),
+      content: approvedContent(emailContentHook()),
       recordContent: emailContentEvidenceHook(),
     })
     : createEmailTransport(options.emailProvider));
+}
+
+/**
+ * D-02 (S-03) — the engine render, then the approval binding recomputed over exactly those
+ * strings and the address the transport is about to use. A mismatch throws, which the
+ * transport reports as `content_unavailable` with no evidence row and no provider call.
+ */
+function approvedContent(render: ReturnType<typeof emailContentHook>) {
+  return async (request: TransportRequest) => {
+    const rendered = await render(request);
+    await assertRenderedEmailApproved(request.task.companyId, request.task, rendered, request.recipient);
+    return rendered;
+  };
 }

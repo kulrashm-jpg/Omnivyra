@@ -53,6 +53,7 @@ import {
   recordStageOutcome,
 } from './telemetry';
 import { resolveJourneyHold } from '../emailEngine/emailExecutionContext';
+import { settleRefusedApproval } from './approvalBinding';
 import type { GovernanceEvaluation } from './governance';
 import type { OutreachTask } from './types';
 
@@ -139,7 +140,7 @@ const NOT_SENT_OUTCOMES: readonly string[] = ['rejected', 'disabled'];
  * An internal transport's outcome is authoritative (one work item per attempt).
  * An unreadable history refuses: a requeued task is never re-sent blind.
  */
-async function redispatchProblem(companyId: string, taskId: string, external: boolean): Promise<string | null> {
+export async function redispatchProblem(companyId: string, taskId: string, external: boolean): Promise<string | null> {
   const history = await readAttemptHistory(companyId, taskId);
   if (history.ok === false) return `attempt history is unreadable (${history.error}); a requeued task is never re-sent blind`;
   for (const attempt of history.attempts) {
@@ -248,21 +249,25 @@ export async function dispatchInternalOutreachTask(
   if (evaluation.decision !== 'allowed') {
     const outcome: DispatchOutcome = evaluation.decision === 'deferred' ? 'deferred_governance' : 'blocked_governance';
     recordDispatchOutcome(evaluation.decision === 'deferred' ? 'deferred' : 'blocked');
-    return result(taskId, outcome, evaluation.reasoning, startedMs, { status: task.status, governance: evaluation });
+    // D-02 — CAS only: a lapsed approval ends the task `expired`; a stale one returns it to
+    // `awaiting_approval` for a fresh approval. Every other refusal leaves it as it was.
+    const status = await settleRefusedApproval(companyId, task, evaluation);
+    return result(taskId, outcome, evaluation.reasoning, startedMs, { status, governance: evaluation });
   }
 
   // ── 2. CLAIM the task — compare-and-set, so only one dispatcher proceeds ──
   // A task an earlier dispatch returned to `queued` (quota deferral, transport
   // failure) is claimed from there, but only when no earlier attempt can have
   // reached the recipient. Governance has already proved its approval.
+  // D-02 (F-1): the prior-attempt check runs for EVERY task, not only a requeued one — a
+  // task re-approved after re-review comes back `approved` with its earlier attempts.
   const requeued = evaluation.gates.some((g) => g.rule === 'eligibility.requeued_after_approval');
-  if (requeued) {
-    const problem = await redispatchProblem(companyId, task.id, transport.external);
-    if (problem !== null) {
-      recordDispatchOutcome('blocked');
-      return result(taskId, 'blocked_prior_attempt', problem, startedMs, { status: 'queued', governance: evaluation });
-    }
-  } else {
+  const problem = await redispatchProblem(companyId, task.id, transport.external);
+  if (problem !== null) {
+    recordDispatchOutcome('blocked');
+    return result(taskId, 'blocked_prior_attempt', problem, startedMs, { status: task.status, governance: evaluation });
+  }
+  if (!requeued) {
     const claimedQueued = await transitionOutreachTaskState(companyId, task.id, 'approved', 'queued');
     if (!claimedQueued.ok) {
       recordDispatchOutcome('failed');
@@ -290,6 +295,18 @@ export async function dispatchInternalOutreachTask(
   if (!claimedDispatching.ok || !claimedDispatching.changed) {
     recordDispatchOutcome('failed');
     return result(taskId, 'failed', 'could not claim task for dispatch', startedMs, { status: 'queued', governance: evaluation });
+  }
+
+  // D-02 (P-1): the prior-attempt check again, now UNDER the claim — the one above is only the
+  // early refusal, and another dispatcher may have attempted and requeued since. Sound only
+  // because the claim is exclusive and every attempt and its evidence are written while the
+  // claim is held, before the release to `queued`. A refusal (or an unreadable history)
+  // releases the claim and writes no attempt, reserves no quota and calls no provider.
+  const claimedProblem = await redispatchProblem(companyId, task.id, transport.external);
+  if (claimedProblem !== null) {
+    await transitionOutreachTaskState(companyId, task.id, 'dispatching', 'queued');
+    recordDispatchOutcome('blocked');
+    return result(taskId, 'blocked_prior_attempt', claimedProblem, startedMs, { status: 'queued', governance: evaluation });
   }
 
   // ── 3. RESERVE quota — after the claim, before the send ───────────────────

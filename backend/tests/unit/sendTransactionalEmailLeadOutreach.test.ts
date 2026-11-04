@@ -295,11 +295,13 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // (G-1), a disabled transport stops dispatch before it writes (G-8), and comments no
     // longer claim idempotency at the provider (G-3). The posted payload is unchanged.
     // Dispatch re-pinned 2026-11-04 for the foundation base: G-8 guard, then the D-03
-    // journey hold (orchJourneyHoldD03.test.ts), then governance; same request.
+    // journey hold (orchJourneyHoldD03.test.ts), then governance; same request. Re-pinned for D-02 rebuilt on 6e96f6680 (an expired
+    // approval ends the task in `expired`; a stale one returns to `awaiting_approval`); same request.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('c6e86299a89dc60f');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('5251d7b70cb5b033');
+    // Re-pinned for Outreach F-1 (prior-attempt check for every task) and P-1 (repeated under the claim); same request.
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('a23b5fbf0b38f5f2');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

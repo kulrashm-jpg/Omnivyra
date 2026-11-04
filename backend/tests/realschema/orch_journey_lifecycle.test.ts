@@ -138,6 +138,10 @@ const mockRedis = {
   async expire() { return 1; },
 };
 jest.mock('../../queue/bullmqClient', () => ({ getSharedRedisClient: () => mockRedis }));
+// D-02 (S-02) — an external approval needs a passkey proof: the real ceremony, over a WebAuthn
+// double (realschema/d02_approval_binding.test.ts exercises the real challenge store).
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const lists = require('../../services/prospectLists');
@@ -264,7 +268,7 @@ describe('one person, list to lifecycle', () => {
       expect((await listJourneyDecisions(ORG_A, instanceId))).toHaveLength(before);
 
       // Approved: dispatched with the authored message to the canonical address.
-      expect((await ws3.approveOutreachTask(ORG_A, tasks[0].id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, tasks[0].id, actor)).ok).toBe(true);
       r = await sweep();
       expect(r.issues).toEqual([]);
       expect(sent).toEqual([{ to: 'person@example.test', subject: 'Hello Ana, about intro', body: 'Hello Ana, about intro\nBody of intro' }]);
@@ -328,7 +332,7 @@ describe('one person, list to lifecycle', () => {
       await sweep();
       expect((await lifecycle(ORG_A, prospectId)).map((t) => t.state)).toEqual(['identified']);
       const [task] = await handoffTasks(instanceId);
-      expect((await ws3.approveOutreachTask(ORG_A, task.id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, task.id, actor)).ok).toBe(true);
       await sweep();
       await sweep();
       expect(await instanceState(instanceId)).toBe('completed');
@@ -475,7 +479,7 @@ describe('frequency policy counts contact, not bookkeeping', () => {
       });
       await sweep();
       const [task] = await handoffTasks(instanceId);
-      expect((await ws3.approveOutreachTask(ORG_A, task.id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, task.id, actor)).ok).toBe(true);
       await sweep();
       expect((await handoffTasks(instanceId))[0].status).toBe('sent');
       const r = await sweep();
@@ -498,14 +502,14 @@ describe('frequency policy does not hold back a step that contacts nobody', () =
         steps: [EMAIL_STEP('intro'), human('note', 'internal'), EMAIL_STEP('again')],
       });
       await sweep();
-      expect((await ws3.approveOutreachTask(ORG_A, (await handoffTasks(instanceId))[0].id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, (await handoffTasks(instanceId))[0].id, actor)).ok).toBe(true);
       await sweep();
       expect(sent).toHaveLength(1);
 
       let r = await sweep();                             // the internal step is due right after contact
       expect(r.counters.tasks_deferred_frequency).toBe(0);
       expect((await handoffTasks(instanceId)).map((t) => t.status)).toEqual(['sent', 'awaiting_approval']);
-      expect((await ws3.approveOutreachTask(ORG_A, (await handoffTasks(instanceId))[1].id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, (await handoffTasks(instanceId))[1].id, actor)).ok).toBe(true);
       await sweep();
 
       r = await sweep();                                 // the next email is real contact, within 48h

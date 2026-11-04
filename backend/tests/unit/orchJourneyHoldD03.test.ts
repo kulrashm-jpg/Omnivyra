@@ -84,6 +84,16 @@ const fakeRedis = {
   async expire() { return 1; },
 };
 jest.mock('../../queue/bullmqClient', () => ({ getSharedRedisClient: () => fakeRedis }));
+// D-02 — what a bridged email would say, so its approval can be bound to it (the fixture
+// handoff carries only the run). The real send path is exercised in realschema.
+jest.mock('../../services/emailEngine/emailSendPath', () => ({
+  ...jest.requireActual('../../services/emailEngine/emailSendPath'),
+  prepareEmailSend: async () => ({
+    context: { workflowVersionId: '00000000-0000-4000-8000-0000000000f1' },
+    recipient: { email: 'cto@bigcorp.example', personId: 'p-1', personalization: {} },
+    rendered: { subject: 'Hello', body: 'Intro', personalizationInputs: {}, contentSource: 'test' },
+  }),
+}));
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -97,6 +107,7 @@ import { BRIDGED_TASK_PLANNER_VERSION, resolveJourneyHold } from '../../services
 import { BRIDGE_PLANNER_VERSION } from '../../services/outreachBridge/outreachBridgeStore';
 import { createWs3Adapter, type Ws3AdapterDeps } from '../../services/orchestration/engineAdapters';
 import { renderEmailContent } from '../../services/emailEngine/emailContentGenerator';
+import { computeApprovalBinding } from '../../services/leadOutreachExecution/approvalBinding';
 
 const ORG = '00000000-0000-4000-8000-00000000000a';
 const NOW = '2026-11-03T12:00:00.000Z';
@@ -130,6 +141,18 @@ const configureTenant = () => {
 async function task(status: string, opts: { state?: string | null; handoff?: boolean; over?: Partial<NewOutreachTask> } = {}): Promise<string> {
   const id = (await insertOutreachTask(newTask(opts.over))).data!.id as string;
   await setOutreachTaskState(ORG, id, { status });
+  if (status === 'approved') {
+    // D-02 — an approved task carries the approval that authorised it, bound to its content.
+    // Bound to the dispatch recipient, with the passkey evidence an external approval records,
+    // decided now (expiry is judged against the server clock, T2).
+    const binding = await computeApprovalBinding(ORG, (await getOutreachTaskById(ORG, id))!, { recipient: RECIPIENT });
+    (db.tables.outreach_approvals ??= []).push({
+      company_id: ORG, task_id: id, decision: 'approved', approver_user_id: 'u-approver',
+      decided_at: new Date().toISOString(), approved_content_hash: binding.hash, missing_information: [],
+      approved_recipient: binding.recipient, // r3 L-3: the address the approval binds is stored with it
+      passkey_credential_id: 'cred-test', passkey_verified_at: new Date().toISOString(),
+    });
+  }
   if (opts.handoff !== false) {
     (db.tables.outreach_bridge_handoffs ??= []).push({ organization_id: ORG, outreach_task_id: id, execution_instance_id: RUN });
   }

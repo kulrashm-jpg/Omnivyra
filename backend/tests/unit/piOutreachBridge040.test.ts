@@ -448,13 +448,19 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
     // (orchJourneyHoldD03.test.ts), agreed with Outreach.
     // Dispatch RE-PINNED 2026-11-04 for the outreach foundation base: G-8's
     // disabled-transport guard, then the D-03 hold, then governance.
-    expect(sha('backend/services/leadOutreachExecution/governance.ts')).toBe('1baa47982b4a4613');
-    expect(sha('backend/services/leadOutreachExecution/approval.ts')).toBe('4ef1acc19f3feb64');
+    // Governance, approval and dispatch re-pinned again for D-02 rebuilt on 6e96f6680
+    // (bound approval, seven-day lifetime, revocation, F1 re-review edge; d02ApprovalBinding.test.ts).
+    // Re-pinned for the D-02 security-review fixes (S-02 passkey proof in the writer, S-04 recipient_mismatch verdict).
+    expect(sha('backend/services/leadOutreachExecution/governance.ts')).toBe('0281c45fab33619e');
+    // approval.ts re-pinned for the r3 Lows: the approval also records the address it binds (L-3).
+    // approval.ts re-pinned for Outreach L-2: a non-journey external approval must name its recipient.
+    expect(sha('backend/services/leadOutreachExecution/approval.ts')).toBe('657ae410108d32d5');
     expect(sha('backend/services/leadOutreachExecution/materialization.ts')).toBe('46d4461b56be2908');
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
     expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5835d9876ad97b5b');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('5251d7b70cb5b033');
+    // dispatch.ts re-pinned for Outreach F-1 (prior-attempt check for every task) and P-1 (repeated under the claim).
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('a23b5fbf0b38f5f2');
   });
 
   it('person resolution reuses the ONE existing mechanism', () => {

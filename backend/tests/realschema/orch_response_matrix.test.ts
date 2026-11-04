@@ -34,6 +34,10 @@ const mockRedis = {
   async expire() { return 1; },
 };
 jest.mock('../../queue/bullmqClient', () => ({ getSharedRedisClient: () => mockRedis }));
+// D-02 (S-02) — an external approval needs a passkey proof: the real ceremony, over a WebAuthn
+// double (realschema/d02_approval_binding.test.ts exercises the real challenge store).
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { advanceAndDispatchWorkflowExecution } = require('../../services/workflowExecution/workflowProgressionSweeper');
@@ -83,7 +87,7 @@ async function firstSent() {
   const { instanceId, workflowId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('intro'), emailStep('next')] });
   await sweep();
   const [first] = await handoffTasks(instanceId);
-  expect((await ws3.approveOutreachTask(ORG_A, first.id, { approverUserId: actor })).ok).toBe(true);
+  expect((await approveWithPasskey(ORG_A, first.id, actor)).ok).toBe(true);
   await sweep();
   expect(sent).toHaveLength(1);
   await sweep();
@@ -218,7 +222,7 @@ describe('journey state and isolation', () => {
       const s = await firstSent();
       const [, second] = await handoffTasks(s.instanceId);
       await db.query(`UPDATE public.execution_instances SET lifecycle_state = 'paused' WHERE id = $1`, [s.instanceId]);
-      expect((await ws3.approveOutreachTask(ORG_A, second.id, { approverUserId: s.actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, second.id, s.actor)).ok).toBe(true);
       await sweep();
       expect(sent).toHaveLength(1);
       await db.query(`UPDATE public.execution_instances SET lifecycle_state = 'active' WHERE id = $1`, [s.instanceId]);
@@ -236,7 +240,7 @@ describe('journey state and isolation', () => {
       const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('intro')] });
       await sweep();
       const [t] = await handoffTasks(instanceId);
-      await ws3.approveOutreachTask(ORG_A, t.id, { approverUserId: actor });
+      await approveWithPasskey(ORG_A, t.id, actor);
       await Promise.all([sweep(), sweep()]);
       expect(sent).toHaveLength(1);
     });
@@ -271,7 +275,7 @@ describe('journey state and isolation', () => {
 
       await sweep();
       const [t] = await handoffTasks(instance.id);
-      await ws3.approveOutreachTask(ORG_A, t.id, { approverUserId: actor });
+      await approveWithPasskey(ORG_A, t.id, actor);
       await sweep();
       expect(sent).toHaveLength(1);
       await feedback(t.id, 'replied');

@@ -408,7 +408,20 @@ export async function appendApproval(record: Omit<OutreachApproval, 'id'>): Prom
       reason: record.reason ?? null,
       notes: record.notes ?? null,
       missing_information: record.missingInformation ?? [],
-      decided_at: record.decidedAt,
+      // D-02 (T1) — the decision time is the DATABASE's: outside tests a caller's value is
+      // dropped and migration 20270120000011 stamps the server clock (and refuses a future
+      // one either way), so no caller can stretch or reorder an approval's lifetime.
+      ...(process.env.NODE_ENV === 'test' && record.decidedAt ? { decided_at: record.decidedAt } : {}),
+      // D-02 — written only when present, so every earlier row shape is unchanged.
+      ...(record.approvedContentHash ? { approved_content_hash: record.approvedContentHash } : {}),
+      ...(record.tier ? { tier: record.tier } : {}),
+      ...(record.approvedRecipient ? { approved_recipient: record.approvedRecipient } : {}),
+      // In tests a back-dated decision carries its verification with it, since the claim
+      // trigger holds passkey_verified_at to the five minutes before decided_at (L-1).
+      ...(record.passkeyCredentialId ? {
+        passkey_credential_id: record.passkeyCredentialId,
+        passkey_verified_at: (process.env.NODE_ENV === 'test' && record.decidedAt ? record.decidedAt : record.passkeyVerifiedAt) ?? null,
+      } : {}),
     }),
   );
   return res.error ? { ok: false, error: errText(res.error) } : { ok: true };
@@ -556,6 +569,26 @@ export const listAttempts = (companyId: string, taskId: string) => listFor(OUTRE
 export const listDeliveryEvidence = (companyId: string, taskId: string) => listFor(OUTREACH_DELIVERY_TABLE, companyId, taskId, 'observed_at');
 export const listOutcomes = (companyId: string, taskId: string) => listFor(OUTREACH_OUTCOMES_TABLE, companyId, taskId, 'occurred_at');
 export const listDecisions = (companyId: string, taskId: string) => listFor(OUTREACH_DECISIONS_TABLE, companyId, taskId, 'decided_at');
+
+/**
+ * D-02 — the approval log of one task, for the dispatch gate, which must not mistake a
+ * failed read for "no approval": an unreadable log refuses without sending the task back
+ * to review. Same query as `listApprovals`; only the failure is reported.
+ */
+export async function readApprovalHistory(
+  companyId: string,
+  taskId: string,
+): Promise<{ ok: true; approvals: Row[] } | { ok: false; error: string }> {
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_APPROVALS_TABLE)
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('task_id', taskId)
+      .order('decided_at', { ascending: true }),
+  );
+  if (res.error || !Array.isArray(res.data)) return { ok: false, error: res.error ? errText(res.error) : 'approval history unreadable' };
+  return { ok: true, approvals: res.data };
+}
 
 /**
  * Attempts and delivery evidence of one task, for decisions that must not

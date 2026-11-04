@@ -247,6 +247,16 @@ export {
   type ApprovalStateView,
   type DecisionInput,
 } from './approval';
+export { revokeOutreachApproval } from './approvalRevocation';
+export {
+  APPROVAL_LIFETIME_DAYS,
+  APPROVAL_LIFETIME_MS,
+  computeApprovalBinding,
+  resolveApprovalAuthority,
+  requestFreshApproval,
+  isJourneyTask,
+  type ApprovalBinding,
+} from './approvalBinding';
 export {
   OUTREACH_TASKS_TABLE,
   OUTREACH_APPROVALS_TABLE,

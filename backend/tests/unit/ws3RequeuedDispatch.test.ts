@@ -116,7 +116,6 @@ import {
   TRANSLATION_VERSION,
   __clearTransportsForTests,
   __resetQuotaRedisForTests,
-  approveOutreachTask,
   dispatchInternalOutreachTask,
   getOutreachTaskById,
   insertOutreachTask,
@@ -130,6 +129,10 @@ import {
   type NewOutreachTask,
   type TransportOutcome,
 } from '../../services/leadOutreachExecution';
+// D-02 — the one approval path (with its passkey ceremony); an email approval binds the dispatch address.
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
+// D-02 (S-02) — external approvals need a passkey proof: the real ceremony over a WebAuthn double.
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
 
 const NOW = '2026-08-05T12:00:00.000Z';
 
@@ -155,7 +158,7 @@ const approvedTask = async (over: Partial<NewOutreachTask> = {}): Promise<string
   const res = await insertOutreachTask(newTask(over));
   const id = res.data!.id as string;
   expect((await submitForApproval('co-a', id)).ok).toBe(true);
-  expect((await approveOutreachTask('co-a', id, { approverUserId: 'approver-1' })).ok).toBe(true);
+  expect((await approveWithPasskey('co-a', id, 'approver-1', { recipient: 'person@example.test' })).ok).toBe(true);
   expect((await getOutreachTaskById('co-a', id))?.status).toBe('approved');
   return id;
 };
@@ -407,5 +410,112 @@ describe('WS-3 requeued dispatch (4) — concurrency', () => {
     expect(results.filter((r) => r.outcome === 'sent')).toHaveLength(1);
     expect(await listInternalWorkItems('co-a', b)).toHaveLength(1);
     expect(await listAttempts('co-a', b)).toHaveLength(1);
+  });
+});
+
+// D-02 F-1 (Outreach review of 9bbbacd2) — re-review must never reopen a task whose earlier
+// external attempt may have sent. Converted from Outreach's repro (zzD02ReviewRepro).
+describe('D-02 F-1 — re-review never leads to a second send', () => {
+  const { requestFreshApproval } = jest.requireActual('../../services/leadOutreachExecution/approvalBinding') as typeof import('../../services/leadOutreachExecution/approvalBinding');
+
+  async function timedOut() {
+    configureTenant();
+    const calls = scriptedExternal(['timeout', 'accepted']);
+    const id = await approvedTask();
+    await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+    expect(await status(id)).toBe('queued');
+    expect(calls).toEqual([1]);
+    // Control (G-1): without a change, the requeued task is refused.
+    expect((await dispatchInternalOutreachTask('co-a', id, { now: NOW })).outcome).toBe('blocked_prior_attempt');
+    return { id, calls };
+  }
+
+  it('the repro: timeout → content edit → stale → (fresh approval) → still never sent twice', async () => {
+    const { id, calls } = await timedOut();
+    const row = (db.tables.outreach_tasks ?? []).find((r) => r.id === id)!;
+    row.action = 'Assign SDR (edited)';
+    const stale = await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+    expect(stale.governance?.blockingCondition).toBe('eligibility.approval_stale');
+    // Fix (b): the stale refusal does NOT take the re-review edge for a task that may have sent.
+    expect(await status(id)).toBe('queued');
+    expect(await requestFreshApproval('co-a', id)).toMatchObject({ ok: false, status: 'queued', reason: expect.stringMatching(/never be sent/) });
+    expect(await status(id)).toBe('queued');
+    expect((await approveWithPasskey('co-a', id, 'approver-1')).ok).toBe(false);
+    expect((await dispatchInternalOutreachTask('co-a', id, { now: NOW })).outcome).not.toBe('sent');
+    expect(calls).toEqual([1]);
+  });
+
+  it('fix (a): even if a task with a prior attempt reaches a fresh approval, dispatch is blocked_prior_attempt', async () => {
+    const { id, calls } = await timedOut();
+    // Whatever route put it back in review (a direct write here), a fresh approval follows.
+    await setOutreachTaskState('co-a', id, { status: 'awaiting_approval' });
+    expect((await approveWithPasskey('co-a', id, 'approver-1')).ok).toBe(true);
+    const again = await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+    expect(again).toMatchObject({ outcome: 'blocked_prior_attempt', status: 'approved' });
+    expect(calls).toEqual([1]);
+    expect(await listAttempts('co-a', id)).toHaveLength(1);
+  });
+
+  it('a task whose only attempt proved nothing was sent (rejected) may still be re-reviewed and sent', async () => {
+    configureTenant();
+    const calls = scriptedExternal(['rejected', 'accepted']);
+    const id = await approvedTask();
+    await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+    expect(await status(id)).toBe('queued');
+    (db.tables.outreach_tasks ?? []).find((r) => r.id === id)!.action = 'Assign SDR (edited)';
+    await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+    expect(await status(id)).toBe('awaiting_approval');
+    expect((await approveWithPasskey('co-a', id, 'approver-1')).ok).toBe(true);
+    expect((await dispatchInternalOutreachTask('co-a', id, { now: NOW })).outcome).toBe('sent');
+    expect(calls).toEqual([1, 2]);
+  });
+});
+
+// D-02 P-1 (review r5, R5-4) — a dispatcher that passed its prior-attempt check BEFORE another
+// dispatcher's may-have-sent attempt must not send: the check is repeated under the claim.
+describe('D-02 P-1 — the prior-attempt check is repeated under the claim', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const storage = require('../../services/leadOutreachExecution/storage');
+
+  /** A runs; right after its pre-claim history read, B runs a whole dispatch. Returns A's result. */
+  async function interleaved(id: string) {
+    const original = storage.readAttemptHistory;
+    let fired = false;
+    const spy = jest.spyOn(storage, 'readAttemptHistory').mockImplementation(async (...a: unknown[]) => {
+      const seen = await original(...a);
+      if (!fired) {
+        fired = true; // A has its (now stale) view; B dispatches to completion
+        await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+      }
+      return seen;
+    });
+    try {
+      const a = await dispatchInternalOutreachTask('co-a', id, { now: NOW });
+      expect(fired).toBe(true);
+      return a;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("B's provider_error lands between A's check and A's claim: A is refused, one provider call, one attempt, task queued", async () => {
+    configureTenant();
+    const calls = scriptedExternal(['provider_error', 'accepted']);
+    const id = await requeuedTask();
+    const a = await interleaved(id);
+    expect(a).toMatchObject({ outcome: 'blocked_prior_attempt', status: 'queued', attemptNumber: null });
+    expect(calls).toEqual([1]);
+    expect(await listAttempts('co-a', id)).toHaveLength(1);
+    expect(await status(id)).toBe('queued');
+  });
+
+  it("control: B's attempt was a clean rejection, so A may send — two provider calls", async () => {
+    configureTenant();
+    const calls = scriptedExternal(['rejected', 'accepted']);
+    const id = await requeuedTask();
+    const a = await interleaved(id);
+    expect(a).toMatchObject({ outcome: 'sent', attemptNumber: 2 });
+    expect(calls).toEqual([1, 2]);
+    expect(await status(id)).toBe('sent');
   });
 });

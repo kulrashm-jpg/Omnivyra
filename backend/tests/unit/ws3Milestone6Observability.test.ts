@@ -128,7 +128,10 @@ const configureTenant = (over: Row = {}) => {
 const approvedTask = async (over: Partial<NewOutreachTask> = {}): Promise<string> => {
   const res = await insertOutreachTask(newTask(over));
   const id = res.data!.id as string;
-  await setOutreachTaskState('co-a', id, { status: 'approved' });
+  // D-02 — an approved status alone no longer authorises a send: approve through the one
+  // approval path, which records the content binding the dispatch gate re-checks.
+  await setOutreachTaskState('co-a', id, { status: 'awaiting_approval' });
+  await approveOutreachTask('co-a', id, { approverUserId: 'u-approver' });
   return id;
 };
 

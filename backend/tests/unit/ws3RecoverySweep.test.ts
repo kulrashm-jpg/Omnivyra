@@ -103,7 +103,6 @@ import {
   TRANSLATION_VERSION,
   __clearTransportsForTests,
   __resetQuotaRedisForTests,
-  approveOutreachTask,
   getOutreachTaskById,
   insertOutreachTask,
   listAttempts,
@@ -114,6 +113,10 @@ import {
   type NewOutreachTask,
 } from '../../services/leadOutreachExecution';
 import * as activation from '../../services/leadOutreachActivation';
+// D-02 — the one approval path (with its passkey ceremony for an external channel).
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
+// D-02 (S-02) — external approvals need a passkey proof: the real ceremony over a WebAuthn double.
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
 import {
   RECOVERY_SWEEP_ENABLED_ENV,
   isRecoverySweepEnabled,
@@ -144,7 +147,8 @@ const approvedTask = async (over: Partial<NewOutreachTask> = {}): Promise<string
   const companyId = over.companyId ?? 'co-a';
   const id = (await insertOutreachTask(newTask(over))).data!.id as string;
   expect((await submitForApproval(companyId, id)).ok).toBe(true);
-  expect((await approveOutreachTask(companyId, id, { approverUserId: 'approver-1' })).ok).toBe(true);
+  // An external task's approval names the address it authorises (Outreach L-2); ignored for internal.
+  expect((await approveWithPasskey(companyId, id, 'approver-1', { recipient: 'person@example.test' })).ok).toBe(true);
   return id;
 };
 
