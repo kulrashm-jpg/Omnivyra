@@ -205,6 +205,44 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
     },
   },
   {
+    // PI-LDB-5 — AI semantic attribute mapping of an imported prospect schema.
+    //
+    // Two separate gates need this entry, and both fail CLOSED without it:
+    //   - assertCanonicalCreditAction() throws for an action the registry
+    //     cannot resolve to feature_key + action_key + pricing_key, so no
+    //     credit is reserved and no model call is made.
+    //   - logUsageEvent() refuses the usage_events AND unified_transactions
+    //     rows when resolveActionKey(process_type) returns null, and the
+    //     refusal is silent to the caller — it writes a cost_anomalies row
+    //     and returns. That is the failure mode the F0 audit found on 23
+    //     process types, where spend was real and telemetry was absent.
+    //
+    // Token-priced, like master content: the hold comes from
+    // estimateLlmHoldCredits(provider, model, maxTokens) and is partially
+    // confirmed against actual counts, so the flat credit_cost_config value is
+    // only the resolver fallback. Catalog rows: migration 20270201000004.
+    feature_key: 'intelligence.lead_attribute_mapping',
+    category: 'intelligence',
+    display_name: 'Lead Attribute Mapping',
+    display_group: 'Lead Detection',
+    display_color: 'bg-amber-500',
+    charge_mode: 'token_priced',
+    pricing_strategy: 'llm_model_pricing',
+    usage_metering_enabled: true,
+    requires_credit_hold: true,
+    plan_eligible: true,
+    enforcement_eligible: true,
+    visible_to_customer: true,
+    internal_only: false,
+    process_type_mapping: ['leadAttributeMapping'],
+    pricing_keys: {
+      action_key: 'lead_attribute_mapping',
+      credit_cost_config: 'lead_attribute_mapping',
+      action_pricing_config: 'lead_attribute_mapping',
+      usage_action_key: 'lead_attribute_mapping',
+    },
+  },
+  {
     feature_key: 'campaigns.creation',
     category: 'campaigns',
     display_name: 'Campaign Creation',

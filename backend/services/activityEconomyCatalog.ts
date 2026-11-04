@@ -96,6 +96,14 @@ export const ACTIVITY_CLASS_MAP: Record<CreditAction, ActivityClass> = {
   campaign_suggest_duration:       'REPLY',
   campaign_preplanning:            'REPLY',
   recommendations_preview_strategy:'REPLY',
+  // PI-LDB-5. A mapping proposal is one short classification call over a
+  // column list — the micro single-shot this class exists for. REPLY rather
+  // than INTELLIGENCE_SCAN on the economics, not the vocabulary: the real cost
+  // on gpt-4o-mini within this operation's token budget is about 0.0036 USD,
+  // which settles at 1 credit, and INTELLIGENCE_SCAN would reserve a 30-credit
+  // exposure envelope against it. The REPLY band (entry 1, min 1, max 3) is
+  // the honest envelope.
+  lead_attribute_mapping:          'REPLY',
   recommendations_group_preview:   'REPLY',
 
   // SHORT_GENERATION — short produced content

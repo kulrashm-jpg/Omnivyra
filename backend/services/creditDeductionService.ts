@@ -78,6 +78,11 @@ export type CreditAction =
   // charged per qualified lead — see leadQualifier.ts / leadPredictiveQualifier.ts.
   | 'lead_qualification'
   | 'lead_predictive_scoring'
+  // AI semantic attribute mapping of an imported prospect schema (PI-LDB-5).
+  // Token-priced via llm_model_pricing: the HOLD comes from
+  // estimateLlmHoldCredits, so getCreditCost is only the resolver fallback.
+  // Catalog rows ship in migration 20270201000004 (unapplied).
+  | 'lead_attribute_mapping'
   // Asset / image / video generation (Phase 10D — activity-economy catalog
   // coverage). Settled via per-asset cost profiles (creator/costProfiles.ts),
   // not a flat credit_cost_config row — like content_generation, getCreditCost
@@ -133,6 +138,8 @@ export const CREDIT_ACTIONS: CreditAction[] = [
   // Lead-capture intelligence (migration 20260821)
   'lead_qualification',
   'lead_predictive_scoring',
+  // PI-LDB-5
+  'lead_attribute_mapping',
   // Asset / image / video generation (Phase 10D)
   'image_generation',
   'video_generation',

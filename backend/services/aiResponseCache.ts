@@ -76,6 +76,21 @@ const NO_CACHE_OPS = new Set([
   'generateMasterContent',
   'generatePlatformVariants',
   'generateContentVariant',
+  // PI-LDB-5 — AI semantic attribute mapping of an imported prospect file.
+  // Two independent reasons, either sufficient on its own:
+  //   1. The prompt carries the column HEADINGS supplied by the tenant.
+  //      Sample values are redacted before they leave the process, but a
+  //      heading is not: it can name an internal segment, a client or a deal,
+  //      and this cache persists tokenised prompt words to Redis for
+  //      near-match reuse.
+  //   2. Near-match reuse fires at 80% Jaccard. Two prospect files differing
+  //      by one column are far above that, so a cached answer would map the
+  //      NEW column by what the old file said about a different one. The
+  //      mapping would then be wrong in exactly the way nobody re-checks.
+  // NOTE: deliberately NOT added to EXACT_ONLY_OPS below. isCacheable() tests
+  // that set FIRST, so membership there would make the ai-exact-cache flag
+  // able to re-enable caching for this operation.
+  'leadAttributeMapping',
 ]);
 
 // ── Cache TTL (seconds) per operation ────────────────────────────────────────
