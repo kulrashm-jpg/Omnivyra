@@ -2,6 +2,24 @@ import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Governance Service
  * Get and update engagement system controls per organization.
+ *
+ * AUTO REPLY — WHICH SWITCH GOVERNS (Outreach foundation, Agent C).
+ * Three switches have existed for the one decision "may the system reply on its
+ * own": `automation_config.auto_reply_enabled` (automation/automationConfigStore),
+ * `engagement_system_controls.auto_reply_enabled` (this file) and
+ * `response_rules.auto_reply`. The ONLY one that can authorize an autonomous reply
+ * is automation_config, evaluated by `automation/automationService.shouldAutoExecute`
+ * (the audited 7-step gate), after which the community executor still applies its
+ * own D-01 approval, L-3 recheck and single-execution claim.
+ *
+ * `auto_reply_enabled` here authorizes nothing: no gate reads it, and
+ * `response_rules.auto_reply` is reported by the response generator as
+ * information only (generation never sends). It is kept for the admin controls
+ * page and FAILS CLOSED: a missing row, a missing or non-boolean value, or an
+ * unreadable table reads as OFF. The database column default is still `true`
+ * (supabase/_schema/baseline.sql, database/engagement_system_controls.sql); this
+ * code no longer trusts it, and flipping that default needs a migration owned by
+ * the Outreach lead.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -17,7 +35,8 @@ export type EngagementControls = {
 };
 
 const DEFAULTS: EngagementControls = {
-  auto_reply_enabled: true,
+  // FAIL CLOSED: auto reply is OFF unless a row explicitly says true.
+  auto_reply_enabled: false,
   bulk_reply_enabled: true,
   ai_suggestions_enabled: true,
   triage_engine_enabled: true,
@@ -37,7 +56,7 @@ export async function getControls(organizationId: string): Promise<EngagementCon
   if (error || !data) return DEFAULTS;
 
   return {
-    auto_reply_enabled: data.auto_reply_enabled ?? true,
+    auto_reply_enabled: data.auto_reply_enabled === true,
     bulk_reply_enabled: data.bulk_reply_enabled ?? true,
     ai_suggestions_enabled: data.ai_suggestions_enabled ?? true,
     triage_engine_enabled: data.triage_engine_enabled ?? true,
@@ -77,7 +96,7 @@ export async function updateControls(
   }
 
   return {
-    auto_reply_enabled: data?.auto_reply_enabled ?? true,
+    auto_reply_enabled: data?.auto_reply_enabled === true,
     bulk_reply_enabled: data?.bulk_reply_enabled ?? true,
     ai_suggestions_enabled: data?.ai_suggestions_enabled ?? true,
     triage_engine_enabled: data?.triage_engine_enabled ?? true,

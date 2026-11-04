@@ -171,7 +171,8 @@ const HARDENED: ReadonlyArray<{ file: string; occurrence: number; what: string }
   { file: 'backend/services/insightIntelligenceService.ts', occurrence: 0, what: 'insight message sweep' },
   { file: 'backend/services/leadDetectionService.ts', occurrence: 0, what: 'lead detection sibling sweep' },
   { file: 'backend/services/leadDetectionService.ts', occurrence: 1, what: 'lead detection message read' },
-  { file: 'backend/services/responseOrchestrator.ts', occurrence: 0, what: 'orchestrator message read' },
+  // (responseOrchestrator.ts #0 'orchestrator message read' was REMOVED with the read itself: Agent C,
+  //  generation never executes. Its absence is asserted in the block below, which is stronger.)
   { file: 'backend/workers/responseStrategyLearningWorker.ts', occurrence: 0, what: 'strategy learning sweep' },
   { file: 'pages/api/engagement/generate-response.ts', occurrence: 0, what: 'signal -> thread resolution' },
   { file: 'pages/api/engagement/inbox.ts', occurrence: 0, what: 'inbox latest-message sweep' },
@@ -191,7 +192,14 @@ const HARDENED: ReadonlyArray<{ file: string; occurrence: number; what: string }
 
 describe('ENG-004 §B — every hardened site carries the tenant predicate', () => {
   it('the hardened set is non-empty and fully enumerated', () => {
-    expect(HARDENED).toHaveLength(26);
+    expect(HARDENED).toHaveLength(25);
+  });
+
+  it('responseOrchestrator no longer reads engagement_messages at all (Agent C: generation never executes)', () => {
+    // The site that was hardened here existed only to load the target of a send the
+    // orchestrator no longer makes. A site that does not exist cannot leak a tenant;
+    // if any engagement_messages access comes back, it must be re-added to HARDENED.
+    expect(() => chainAt('backend/services/responseOrchestrator.ts', 0)).toThrow(/no engagement_messages access/);
   });
 
   for (const { file, occurrence, what } of HARDENED) {
