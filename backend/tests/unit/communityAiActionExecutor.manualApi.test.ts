@@ -7,6 +7,14 @@
  * callers still need a playbook when mode !== 'manual'.
  */
 
+// L-3: these tests exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement /
+// communityL3RecheckBrowserClaim. Here every recipient is treated as allowed.
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: jest.fn(() => ({
@@ -89,6 +97,8 @@ const baseAction = () => ({
   target_id: 'urn:li:share:post-1',
   suggested_text: 'thanks!',
   playbook_id: null,
+  // D-01: every execution needs a persisted human approval.
+  approved_at: '2026-11-01T00:00:00Z',
 });
 
 describe('communityAiActionExecutor — manual api-mode', () => {

@@ -49,7 +49,7 @@ Outreach reports these. Each needs fixing behind its engine before that engine c
 | Webhook verification contract | Outreach proposes, Orchestration owns the contract | Undecided |
 | Non-WS-3 outcomes have no store (`outreach_outcomes.task_id` NOT NULL) | Orchestration, Outreach | G-4 |
 | Any later inbound message from the person ends a journey, related or not | Orchestration | Narrowed to the same tenant, and only after this run messaged the person. Not narrowed further |
-| Outreach's branch merged contract 0.1.0 (`30a421c2`), not 0.2.0 | Orchestration, Outreach | **0.2.0 changes two adapter files** (`whatsappEngineAdapter.ts`, `communityEngineAdapter.ts`). Outreach must merge `019b6de5` and re-run its T2 |
+| Outreach's branch on contract 0.1.0 (`30a421c2`) | Orchestration, Outreach | **Resolved.** Outreach merged `c74404c7` (0.2.0) as `d682ab13`, with no conflicts, and its T2 passed. It records L-3 and L-4 as open on the engine side (`docs/outreach/README.md`, `1edb0c90`) |
 
 ## Branch compatibility
 
@@ -57,7 +57,7 @@ Outreach reports these. Each needs fixing behind its engine before that engine c
 |---|---|---|
 | Orchestration `019b6de5` alone | T2 | Pass; see `../VERIFICATION-AND-BLOCKERS.md` |
 | Orchestration `30a421c2` with Outreach's five engine branches | Outreach's T2 at `21f62238` | Real schema 71 of 71, 1488 passed; 60 jest failures, none new by its baseline. Outreach ran this, not this work |
-| Orchestration `019b6de5` with Outreach | **Not tested** | Waiting on Outreach's merge |
+| Orchestration `c74404c7` (code `019b6de5`) with Outreach's five engine branches | Outreach's T2 at merge `d682ab13`, tree clean | Real schema 71 of 71, 1488 passed, 3 skipped; `typecheck-ci` 3 of 3 clean, worker typecheck, route auth, route policy, migration quality and schema drift pass; whole-repo jest 60 failures, none new by its `fa1a5e58` baseline. Outreach ran this; this work checked its logs in `C:/omnivyra-archive/evidence/outreach-engines-20261102/t2-final-d682ab13/` but did not re-run it |
 | Orchestration `019b6de5` with RC `7bdd76ae` | Merge and replay | See `RELEASE-READINESS.md` |
 | Parked: `feat/pi-enrichment-trigger`, `consolidate/pi-prospect-lists` | No | Not integrated. PI should say whether they matter |
 

@@ -104,6 +104,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'FAILED_TO_LOAD_POLICY' });
   }
 
+  // D-01: an omitted field keeps the stored value; with no stored row it falls
+  // back to the fail-closed defaults (auto-rules off, human approval required),
+  // the same as communityAiPlatformPolicyService.
   const nextPolicy = {
     execution_enabled:
       typeof input.execution_enabled === 'boolean'
@@ -112,11 +115,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     auto_rules_enabled:
       typeof input.auto_rules_enabled === 'boolean'
         ? input.auto_rules_enabled
-        : existing?.auto_rules_enabled ?? true,
+        : existing?.auto_rules_enabled ?? false,
     require_human_approval:
       typeof input.require_human_approval === 'boolean'
         ? input.require_human_approval
-        : existing?.require_human_approval ?? false,
+        : existing?.require_human_approval ?? true,
   };
 
   const updatedBy = admin.userId === 'super_admin_session' ? null : admin.userId;

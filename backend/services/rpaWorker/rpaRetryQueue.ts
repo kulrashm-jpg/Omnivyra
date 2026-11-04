@@ -172,6 +172,10 @@ export async function claimRetryActionRow(input: {
     .eq('organization_id', input.organizationId)
     .eq('tenant_id', input.tenantId)
     .eq('status', 'approved')
+    // D-01 evidence, in the same atomic UPDATE as the claim (as in
+    // claimCommunityActionForExecution): a row without approved_at is never
+    // taken, whatever its status.
+    .not('approved_at', 'is', null)
     .is('cancel_requested_at', null)
     .select('id, status')
     .maybeSingle();

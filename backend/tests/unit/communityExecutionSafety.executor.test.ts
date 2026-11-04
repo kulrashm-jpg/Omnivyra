@@ -18,6 +18,14 @@
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
 
 let mockDb: FakeDb = createFakeDb();
+// L-3: these tests exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement /
+// communityL3RecheckBrowserClaim. Here every recipient is treated as allowed.
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
   ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
@@ -300,7 +308,8 @@ describe('executor gates still refuse', () => {
 
   it('high-risk without persisted approval: refused, connector never called', async () => {
     const r = await executeAction(action({ risk_level: 'high', approved_at: null }), true, { source: 'scheduler', notify: false, webhook: false });
-    expect(r.error).toBe('APPROVAL_REQUIRED');
+    // D-01: refused at the human-approval gate, whatever the risk level.
+    expect(r).toMatchObject({ ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false });
     expect(mockConnector).not.toHaveBeenCalled();
   });
 
@@ -311,11 +320,12 @@ describe('executor gates still refuse', () => {
     expect(r).toMatchObject({ ok: false, status: 'failed', error: 'DM_TARGET_UNRESOLVED', may_have_acted: false });
   });
 
-  it('auto_insert creates the row already claimed (executing), never a claimable pending row', async () => {
+  // D-01: was 'auto_insert creates the row already claimed (executing)'. An ad-hoc
+  // action has no human approval, so it is now refused BEFORE any row is
+  // written: still never a claimable pending row, and no row at all.
+  it('auto_insert is refused before any row is written, never a claimable pending row', async () => {
     mockDb = createFakeDb({ community_ai_actions: [] });
     mockDb.statusCheck.community_ai_actions = COMMUNITY_STATUS_VOCABULARY;
-    const { validateActionAgainstPlaybook } = jest.requireMock('../../services/playbooks/playbookValidator');
-    validateActionAgainstPlaybook.mockReturnValueOnce({ allowed: false, reason: 'PLAYBOOK_VIOLATION' });
     const inserted: string[] = [];
     const origFrom = mockDb.from;
     mockDb.from = (t: string) => {
@@ -327,8 +337,9 @@ describe('executor gates still refuse', () => {
     const r = await executeAction(action({ execution_mode: 'browser' }), true, {
       source: 'scheduler', persist: true, auto_insert: true, notify: false, webhook: false,
     });
-    expect(inserted).toEqual(['executing']);
-    expect(r.status).toBe('failed');
-    expect(statusOf()).toBe('failed');
+    expect(inserted).toEqual([]);
+    expect(r).toMatchObject({ ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false });
+    expect(statusOf()).toBeUndefined();
+    expect(mockConnector).not.toHaveBeenCalled();
   });
 });

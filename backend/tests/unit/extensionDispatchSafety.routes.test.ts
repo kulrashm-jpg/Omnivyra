@@ -77,6 +77,14 @@ function reap() {
   }
 }
 
+// L-3: these tests exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement /
+// communityL3RecheckBrowserClaim. Here every recipient is treated as allowed.
+jest.mock('@/backend/services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 jest.mock('@/backend/db/supabaseClient', () => ({
   supabase: {
     from: (t: string) => mockDb.from(t),

@@ -25,6 +25,7 @@ The branch is `feat/orchestration-recovery` at `019b6de5` plus the documents com
 | T1 | Affected unit suites pass: 19 suites, 526 tests |
 | T2 | Pass at `019b6de5`: real schema 71 of 71; typechecks; gates; whole-repo jest has 0 failures new against `5025f51d`; 59 of 59 mutants killed |
 | Combined with RC `7bdd76ae` | merged with no conflicts; 112 migrations applied cleanly, 882 public tables; the five orchestration real-schema suites passed, 97 of 97 tests. Only the orchestration suites were run on the combination. |
+| Combined with Outreach `d682ab13` | Outreach's T2: real schema 71 of 71, 1488 passed; typechecks and gates pass; 60 jest failures, none new by its `fa1a5e58` baseline. Run by Outreach, logs checked here |
 | T3 | **Not run.** Each part needs authorization |
 
 ## What must happen before enabling, in order
@@ -34,7 +35,7 @@ The branch is `feat/orchestration-recovery` at `019b6de5` plus the documents com
 | 1 | Decide D-2 and D-3 | Owner | Landing `20270113000000` |
 | 2 | Land the RC, with H-3 under one version (F-3) | Owner | Everything below |
 | 3 | Ratify the actor rule; land writer validation with the actor-FK removal, writer first (F-1, F-2, F-4) | PI, governance, owner | Enabling |
-| 4 | Outreach merges `019b6de5` and re-runs its T2; then one merge order: Orchestration, then Outreach | Outreach | Merge |
+| 4 | Done locally: Outreach merged `c74404c7` as `d682ab13` and its T2 passed. Remaining: one merge order, Orchestration then Outreach | Outreach | Merge |
 | 5 | Measure production for the stack's tables, especially `prospect_lists`, live from a local-only branch (read-only) | Owner | Applying migrations |
 | 6 | Extend the release runbook (B-19), re-pin the verifier (B-20), predeploy at merged main | Orchestration, at merge | Release |
 | 7 | Tenant approval: decide A to E, then build | Owner, then Orchestration | Any tenant-level journey; WhatsApp |

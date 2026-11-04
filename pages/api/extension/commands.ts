@@ -33,6 +33,7 @@ import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/servic
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
 import { dmSendRefusal, wouldDispatchDm, INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED } from '@/backend/services/dmDispatchSafety';
+import { recheckCommunityRecipient, isRecipientRecheckRefusal } from '@/backend/services/communityRecipientRecheck';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
 
@@ -157,7 +158,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   cancellation, the platform kill switch and approval.
     const query = supabase
       .from('community_ai_actions')
-      .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
       .eq('execution_mode', 'browser')
@@ -306,6 +307,47 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           });
         } catch (persistErr: any) {
           console.warn('[extension/commands] payload validation failure persist failed:', persistErr?.message || persistErr);
+        }
+        continue;
+      }
+
+      // ── L-3: recipient recheck before the claim ─────────────────────────
+      //    Browser dispatch and every command-chain step pass through here,
+      //    not through runExecution, so the recipient's consent, suppression
+      //    and opt-out are rechecked immediately before a command is handed
+      //    out. A deterministic refusal is recorded terminally and never
+      //    claimed; an unreadable consent state leaves the row unclaimed.
+      const recheck = await recheckCommunityRecipient({
+        id: row.id,
+        organization_id: session.orgId,
+        platform: row.platform,
+        action_type: row.action_type,
+        target_id: row.target_id ?? null,
+        discovered_user_id: (row as any).discovered_user_id ?? null,
+      });
+      if (isRecipientRecheckRefusal(recheck)) {
+        if (recheck.code !== 'RECIPIENT_STATE_UNREADABLE') {
+          try {
+            const { persistExecutionResult } = await import('@/backend/services/communityAiExecutionResultService');
+            await persistExecutionResult({
+              actionId: row.id,
+              organizationId: session.orgId,
+              correlationId: (row as any).execution_correlation_id ?? randomUUID(),
+              result: {
+                ok: false,
+                status: 'skipped',
+                error: recheck.code,
+                response: { source: 'extension_commands', reason: 'recipient_recheck', code: recheck.code, message: recheck.reason },
+                execution_mode: 'browser',
+                may_have_acted: false,
+              },
+              rowHint: { platform: row.platform ?? null, action_type: row.action_type ?? null, target_id: row.target_id ?? null },
+              expectedFromStatuses: ['pending'],
+              requireUnleased: true,
+            });
+          } catch (persistErr: any) {
+            console.warn('[extension/commands] recipient recheck refusal persist failed:', persistErr?.message || persistErr);
+          }
         }
         continue;
       }

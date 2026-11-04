@@ -312,22 +312,12 @@ export const validateAction = (action: CommunityAiAction) => {
  * Approval gate. Returns true IFF a human must still approve before the
  * executor may proceed.
  *
- *   - requires_human_approval=true  → must be approved
- *   - risk_level='high'             → must be approved
- *   - caller's `approved` flag is honoured only when the action has actually
- *     been persisted as approved (approved_at set), to prevent a racy caller
- *     from claiming approval the row does not carry.
+ * D-01: every action needs the caller's `approved` flag AND a persisted human
+ * approval (approved_at). `requires_human_approval` and `risk_level` are
+ * AI-produced classifications: they may add a requirement but never waive
+ * one, so a low risk or requires_human_approval=false no longer skips this.
  */
 export const requiresApproval = (action: CommunityAiAction, approved: boolean) => {
-  const highRisk = action.risk_level === 'high';
-  const humanRequired = action.requires_human_approval === true;
-  const mustApprove = humanRequired || highRisk;
-
-  if (!mustApprove) {
-    // Still require a caller-provided approval flag to avoid drive-by execution.
-    return approved !== true;
-  }
-  // Gated: must be both approved flag AND persisted approved_at.
   if (approved !== true) return true;
   if (!action.approved_at) return true;
   return false;

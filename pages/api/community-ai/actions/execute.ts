@@ -4,7 +4,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { getCommunityAiActionById } from '../../../../backend/db/communityAiActionStore';
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
-import { executeAction } from '../../../../backend/services/communityAiActionExecutor';
+import { executeAction, claimCommunityActionForExecution } from '../../../../backend/services/communityAiActionExecutor';
 import { logCommunityAiActionEvent } from '../../../../backend/services/communityAiActionLogService';
 import { notifyCommunityAi } from '../../../../backend/services/communityAiNotificationService';
 import { sendCommunityAiWebhooks } from '../../../../backend/services/communityAiWebhookService';
@@ -96,10 +96,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ error: 'ACTION_NOT_PENDING', current_status: action.status });
   }
 
-  // Approval-integrity gate: any human-approval-required action MUST carry an
-  // approved_at before it may execute. Mirrors the DB CHECK constraint so the
-  // API can return a precise error rather than a generic CHECK violation.
-  if (action.requires_human_approval === true && !action.approved_at) {
+  // Approval-integrity gate: every action MUST carry a human approval
+  // (approved_at) before it may execute. D-01: requires_human_approval=false
+  // and a low risk_level are AI classifications and no longer waive it.
+  // Refused here, before the claim, so the row is left untouched.
+  if (!action.approved_at) {
     return res.status(403).json({ error: 'APPROVAL_REQUIRED', reason: 'NOT_APPROVED' });
   }
 
@@ -108,7 +109,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // to the central router inside the executor (which itself handles fallback).
   const executionMode = requestedMode || 'manual';
 
-  const finalText = (body.final_text ?? action.suggested_text ?? '').toString();
+  // D-01: the approved text is the row's suggested_text, which the approver
+  // saw (approve.ts stamps approved_at and changes no text). Those exact bytes
+  // are what executes; a client final_text never replaces them. For a reply,
+  // a final_text that differs (ignoring surrounding whitespace) was never
+  // approved and is refused; for any other action type it is ignored.
+  const approvedText = (action.suggested_text ?? '').toString();
+  if (
+    action.action_type === 'reply' &&
+    body.final_text != null &&
+    String(body.final_text).trim() !== approvedText.trim()
+  ) {
+    return res.status(409).json({ error: 'FINAL_TEXT_NOT_APPROVED' });
+  }
+  const finalText = approvedText;
   if (action.action_type === 'reply' && finalText.trim().length === 0) {
     return res.status(400).json({ error: 'FINAL_TEXT_REQUIRED' });
   }
@@ -142,26 +156,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // ── Atomic state-machine transition: pending/approved/scheduled → executing.
-  // Persists the executor's `execution_mode` choice up front and stamps
-  // `idempotency_key` (race-safe via the unique index — a concurrent caller
-  // with the same key fails the update and we surface the prior row).
+  // ── Atomic single-execution claim: approved (with approved_at, tenant-scoped,
+  // not cancelled) → executing, one conditional UPDATE shared with the
+  // scheduler, the auto-rule path and the orchestration adapter. Persists the
+  // executor's `execution_mode` choice up front and stamps `idempotency_key`
+  // (race-safe via the unique index — a concurrent caller with the same key
+  // fails the update and we surface the prior row). A 'pending' row (a browser
+  // dispatch awaiting or held by the extension) is never claimed here.
   const transitionAt = new Date().toISOString();
-  const transitionPayload: Record<string, any> = {
-    status: 'executing',
-    execution_mode: executionMode,
-    final_text: finalText,
-    updated_at: transitionAt,
-  };
-  if (idempotencyKey) transitionPayload.idempotency_key = idempotencyKey;
-
-  const { data: claimed, error: claimError } = await supabase
-    .from('community_ai_actions')
-    .update(transitionPayload)
-    .eq('id', actionId)
-    .in('status', Array.from(EXECUTABLE_FROM_STATUSES))
-    .select('id, status')
-    .maybeSingle();
+  const { claimed, error: claimError } = await claimCommunityActionForExecution({
+    actionId,
+    tenantId: scope.tenantId,
+    organizationId: scope.organizationId,
+    stamp: { execution_mode: executionMode, final_text: finalText, idempotency_key: idempotencyKey },
+  });
 
   if (claimError) {
     // Most likely an idempotency-key uniqueness collision. Resolve by
@@ -182,7 +190,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
     }
-    console.error('[community-ai/execute] state transition failed:', claimError.message);
+    console.error('[community-ai/execute] state transition failed:', claimError);
     return res.status(500).json({ error: 'STATE_TRANSITION_FAILED' });
   }
   if (!claimed) {
