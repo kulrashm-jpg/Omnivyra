@@ -59,7 +59,7 @@ Decision needed from the owner and the execution-programme owner (CR-X-01).
 
 | ID | Owner | Interface or decision required | Status | Blocking consequence | Evidence to close |
 |---|---|---|---|---|---|
-| CR-X-01 | Owner + execution programme + Orchestration | Reconcile round 3's duplicate community, RPA and WhatsApp safety code with W1 (table above) | OPEN | WhatsApp send-once and any round 3 integration | Merged resolution reviewed by both owners; suites green |
+| CR-X-01 | Owner + execution programme + Orchestration | Reconcile round 3's duplicate community, RPA and WhatsApp safety code with W1 (table above) | RESOLVED LOCALLY 2026-11-04: `0679a5908` (W1 retained, owner ruling item 1); accepted by c7 against OD-1..OD-3. See Step D1 | WhatsApp send-once stays blocked (owner ruling); REL-07 renumber now gates migration-quality | Done locally; T3 needs REL-07 and the release process |
 | CR-OR-D02 | Orchestration (c7) | D-02 rebased onto `a14002d0`, re-pinned there, F1 and `approval.revoked` included | REQUESTED 2026-11-04 | Inbox reply approval (C); approval invariants (C3) | Diff hash, my review, the owner's commit authorization |
 | CR-OR-RACE | Orchestration (c7) | Opt-out-to-claim window; claim-loss metric; unused `advanceCommandChain` | REQUESTED | C5 closure; 1.5.0 | Tests per item |
 | SC-3 | Orchestration | Journey step references `content_revision_id` | OPEN | A3 campaign → revision | Contract and migration on the base |
@@ -86,7 +86,7 @@ Status labels: NOT STARTED, IN PROGRESS, IMPLEMENTED LOCALLY, INTEGRATION REQUIR
 | B-2 | B | Suggestions with rationale, confidence, escalation, tone | `engagementAiAssistantService` | Extend | Agent B (later) | C-AI-1 | — | — | BLOCKED |
 | B-3 | B | Inbox send boundary | `/api/engagement/reply` | Formatter, governance, approval | Agent C | CR-OR-D02 | — | — | BLOCKED |
 | C-1 | C | D-01, L-3, atomic claim, P-A, D-03 | Committed locally; in the base | Integration verification | c7 / coordinator | — | base T1 pending | — | INTEGRATION REQUIRED |
-| C-2 | C | D-02 approval binding | Rebuilt on the base `6e96f6680`; round 3 `5254a30f…0768d2` (F-1, L-1, L-2, P-1) **signed off by the dispatch owner 2026-11-04**. Committed locally by c7 as `19498a2e4` on `orch/c2-approval-binding` (preserve ref `refs/preserve/orch-c2-d02-19498a2e`). The coordinator re-verified the diff sha256 and patch-id `f2717242`. Real-schema 52/52, typecheck-ci at baseline, worker tsc and 10 gates clean on the coordinator's own build. `approval.revoked` follows as contract 0.3.0 | Integrate `19498a2e4` into the foundation branch; 0.3.0 event change; `20270120000011` never applied to production | c7 | CR-OR-D02 | VERIFIED T1 | VERIFIED T2 (real-schema slice) | IMPLEMENTED LOCALLY (committed, not integrated) |
+| C-2 | C | D-02 approval binding | Rebuilt on the base `6e96f6680`; round 3 `5254a30f…0768d2` (F-1, L-1, L-2, P-1) **signed off by the dispatch owner 2026-11-04**. Committed locally by c7 as `19498a2e4` on `orch/c2-approval-binding` (preserve ref `refs/preserve/orch-c2-d02-19498a2e`). The coordinator re-verified the diff sha256 and patch-id `f2717242`. Real-schema 52/52, typecheck-ci at baseline, worker tsc and 10 gates clean on the coordinator's own build. `approval.revoked` follows as contract 0.3.0 | Integrated as `9c460a238` (Step D0); 0.3.0 event change; `20270120000011` never applied to production | c7 | CR-OR-D02 | VERIFIED T1 | VERIFIED T2 (real-schema slice) | IMPLEMENTED LOCALLY (integrated into the foundation branch) |
 | C-3 | C | No independent execution from `/api/response/generate`; Mode 3 off by default; one switch | Bypass present. Application fails closed (`1b4d4ce57`); column default `true` → `false` in migration `20270125000003`, written and tested, not applied (existing rows unchanged) | Fold into the canonical authority; turning off existing tenants is an operator decision at apply time | Agent C | — | — | — | IN PROGRESS |
 | C-4 | C | Inventory of entry-path authority (every route, worker, scheduler) | Executable inventory `executionAuthorityInventory.test.ts` (38 entries). Step C closed its two known gaps: super-admin thread resume now applies `authorizePostPublish` (409 `THREAD_NOT_AUTHORIZED`, audited); the direct LinkedIn/X reply in `social/comments` is removed (410 `REPLY_REMOVED`, no replacement API call). `KNOWN_GAPS` is empty | The inventory only covers the entries it lists; new entry paths must be added to it | Coordinator (owner ruling items 5, 6) | — | 9 suites 550/550; mutant (gate disabled): 5 refusal tests fail, 2 controls pass; typecheck-ci at baseline, worker tsc and 10 gates clean | not run | VERIFIED T1 |
 | C-5 | C | Race follow-ups | Tracked | — | c7 | CR-OR-RACE | — | — | IN PROGRESS |
@@ -221,3 +221,62 @@ New finding behind migration 4: `metaAuthService.resolveClientRef` would send an
 - **Item 6, `/api/social/comments`:** the reply action and its direct LinkedIn/X helpers are removed. A reply request answers 410 `REPLY_REMOVED`. No replacement call; no caller existed. Test `socialCommentsReplyRemoved.test.ts`.
 - **Execution-authority inventory:** both entries move from gap to compliant and `KNOWN_GAPS` is empty. The non-vacuity guard moves from "at least one gap" to "the register covers more than 30 entry points" (it holds 38).
 - **Affected suites:** 9 suites, 550/550.
+
+## Step D0: D-02 integrated (commit `9c460a238`)
+
+- `git merge --no-ff 19498a2e4` onto `086106170`. All 45 files are blob-identical to `19498a2e4`.
+- Diff `086106170..9c460a238`: sha256 `5254a30f…0768d2`, patch-id `f2717242…`. Both match the reviewed D-02 diff.
+- Focused T1: 19 suites, 618/618.
+
+## Step D1: CR-X-01, round 3 reconciled (commit `0679a5908`)
+
+**Commit**
+- `0679a59083275ec4bf7609ab830232586af3d4b8` on `outreach/foundation-base-20261104` (fast-forwarded; the reconcile worktree is removed).
+- Parents: `9c460a238` (foundation plus D-02) and `110a3423` (round 3, on main `23a0a586`).
+- Tree `21a480e2c`. Diff from `9c460a238`: 189 files, sha256 `a9bd61c6…fa6c`.
+- `19498a2e4` is an ancestor.
+
+**Six conflict files: W1 retained (owner ruling item 1)**
+
+Round-3 additions were merged only where they refuse more.
+- `communityAiPlatformPolicyService`: W1's default policy (human approval required). Round 3's unreadable-policy fail-closed path and `auto_rules_enabled` are added.
+- `communityAiAutoRuleService`: round 3's read-path deferral runs first. Then W1's D-01 path runs: pending, `approved_at`, claim. The deferral returns an existing row unchanged; c7 verified that it never resets a decided row.
+- `communityAiActionExecutorRuntime`: round 3's auto and scheduler gates run, then W1's unconditional `approved_at` gate.
+- `rpaWorkerService`: W1's claimed retry flush is kept. Round 3's unclaimed `checkRpaRetryAuthorised` is dropped, because it re-ran `failed` rows.
+- `whatsappBroadcastService`: W1's journey tenant control runs, then round 3's sender-account ownership check. W1's pending compare-and-set is kept. WhatsApp stays blocked.
+- `pages/api/extension/commands.ts`: W1's file, with 74242b572's policy gate re-applied. Read-only inbox syncs skip that gate but stay suspended under R-3.
+- `capabilityRegistry.ts`: union of `OUTREACH_JOURNEY_APPROVE` (D-02) and `PROSPECT_PERSON_ERASE` (round 3).
+  - **For the security owner:** `PROSPECT_PERSON_ERASE` enters the security-owned `SecurityCapabilities.ts` and `capabilityRegistry.ts` through round 3. It is not changed here (c7 note).
+
+**Verification (T1 plus a real-schema T2 slice, disposable pg-sandbox only)**
+
+| Check | Result |
+|---|---|
+| Focused unit (148 suites) | 147 passed, 1 skipped; 2490 passed, 17 skipped, 0 failed. Includes the RPA mutant: re-admitting `failed` fails exactly that case |
+| Integration, community and WhatsApp (18 suites) at `0679a5908` | 126 tests: 100 passed, 26 failed. The 26 are 21 W1/P-A expectation failures owned by Prompt 3 (c7) and 5 baseline failures (`community_ai_core_apis` ×3, `community_ai_webhooks` ×2; these also fail at `9c460a238` and in the 31 Oct baseline). The new CR-X-01 GET-path test passes |
+| Real-schema (6 suites: d01_claim, d01_community, d02, orch_pause, r3comm, w1) | 136 tests: 128 passed, 8 failed, 0 skipped. The 8 are c7's fixture failures (w1 ×7, browser rows seeded without `approved_at`; d01_claim ×1, `approved_by`). They are identical by name at `9c460a238`, where the same 2 suites give 76 tests and 8 failed |
+| typecheck-ci | At baseline (0) |
+| Worker tsc | 0 errors |
+| Gates | 9 of 10 pass: route-auth, route-policy, schema-drift, tenant-authz, orgaccess, withrbac, outbound-ssrf, db-conventions, secrets |
+| migration-quality | **23 violations** (0 at `9c460a238`). See below |
+
+**Test changes (adapted to W1, plus CR-X-01 regression cases)**
+- First run of the real-schema slice: 7 round-3 expectations conflicted with W1 and were adapted. None was a safety regression.
+  - Auto-rule helpers pass `autoExecute: true`, the worker path.
+  - With no policy row, approval is required.
+  - An approved row with no `approved_at` is never claimed and stays `approved`.
+  - The r3comm positive control mocks the L-3 recheck as allowed.
+- Unit and integration tests were adapted the same way, with new CR-X-01 cases:
+  - a read path never executes;
+  - auto rules enabled but no `approved_at` means no execution;
+  - the H-2 retry flush runs only claimed `approved` rows.
+
+**migration-quality: REL-07, not a D1 code defect**
+- The 23 violations are all foundation-line migrations: `20261127000000`, `20261226`–`20261231*`, `20270113000000` and `20270120000000`–`02`.
+- They are flagged by round 3's new controls, `applied-boundary.json` (boundary `20270111000003`) and `version-reservations.json`.
+- The fix is REL-07: the integration renumber under GD-4. It is blocked on GD-4 approval and clean production P1/P3 checks. Nothing was renumbered here.
+- c7 uses `0679a5908` as the migration-quality baseline for Prompt 3.
+
+**Follow-ups recorded, not changed**
+- An `approved` row with no `approved_at` never becomes terminal, so the scheduler re-reads it every tick. It is never dispatched. This is in c7's Prompt 3 inventory.
+- Orchestration branch `orch/c3-community-safety` is cut at `0679a5908` (c7).
