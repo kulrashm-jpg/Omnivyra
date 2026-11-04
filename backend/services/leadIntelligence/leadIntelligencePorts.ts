@@ -27,7 +27,7 @@
  * lead's identity hints (and therefore in `lead_intelligence`), as evidence.
  */
 
-import type { IdentityResolverPort, LeadIntelligenceSink, CanonicalLead } from '../../../lib/leadIntelligence';
+import { type IdentityResolverPort, type LeadIntelligenceSink, type CanonicalLead, pendingReconciliation } from '../../../lib/leadIntelligence';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import {
   hasContactEvidence,
@@ -75,5 +75,24 @@ export function createUnifiedPersonIdentityPort(deps: UnifiedPersonIdentityPortD
 /** Real in-memory sink (tests / buffering). Durable persistence is a deferred port. */
 export function createInMemorySink(): { sink: LeadIntelligenceSink; emitted: CanonicalLead[] } {
   const emitted: CanonicalLead[] = [];
-  return { sink: { async emit(lead) { emitted.push(lead); } }, emitted };
+  return {
+    sink: {
+      async emit(lead) {
+        emitted.push(lead);
+        // `pending_reconciliation`, NOT `persisted`.
+        //
+        // This buffered the lead in memory; no durable row exists. An earlier
+        // version answered `persisted` with a synthetic id, which made this a
+        // sink that writes nothing and claims persistence — the exact false
+        // success the projection contract exists to prevent, sitting in
+        // production code where any future test wiring this sink and asserting
+        // `isProjected(result)` would have gone green over zero rows.
+        //
+        // The status is also the honest one for the OTHER documented use of
+        // this sink: buffering. Accepted, not yet durable.
+        return pendingReconciliation('no_row_returned');
+      },
+    },
+    emitted,
+  };
 }
