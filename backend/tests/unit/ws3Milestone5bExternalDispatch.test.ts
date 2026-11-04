@@ -122,6 +122,10 @@ import {
   type EmailProviderResponse,
   type NewOutreachTask,
 } from '../../services/leadOutreachExecution';
+// D-02 — the one approval path (with its passkey ceremony), used by the approved-task fixture.
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
+// D-02 (S-02) — external approvals need a passkey proof: the real ceremony over a WebAuthn double.
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
 
 const NOW = '2026-08-05T12:00:00.000Z';
 const RECIPIENT = 'cto@bigcorp.com';
@@ -160,10 +164,13 @@ const configureTenant = (over: Row = {}) => {
   });
 };
 
-const approvedTask = async (over: Partial<NewOutreachTask> = {}): Promise<string> => {
+const approvedTask = async (over: Partial<NewOutreachTask> = {}, recipient: string | null = RECIPIENT): Promise<string> => {
   const res = await insertOutreachTask(newTask(over));
   const id = res.data!.id as string;
-  await setOutreachTaskState('co-a', id, { status: 'approved' });
+  // D-02 — an approved status alone no longer authorises a send: approve through the one
+  // approval path, which records the content binding the dispatch gate re-checks.
+  await setOutreachTaskState('co-a', id, { status: 'awaiting_approval' });
+  await approveWithPasskey('co-a', id, 'u-approver', { recipient });
   return id;
 };
 
@@ -342,8 +349,17 @@ describe('WS-3 M5B (2) — email dispatch', () => {
 
   it('rejects a missing or malformed recipient without calling the provider', async () => {
     configureTenant();
-    for (const recipient of [null, '', 'not-an-email', 'a@b']) {
+    // D-02 (S-04) — a MISSING recipient is now refused earlier, at the approval gate (an
+    // external approval authorises only its bound address): no attempt is written at all.
+    for (const recipient of [null, '']) {
       const id = await approvedTask({ planTaskId: `task-r-${String(recipient)}` });
+      const res = await dispatch(id, { recipient });
+      expect(res).toMatchObject({ outcome: 'blocked_governance', attemptNumber: null });
+      expect(res.governance?.blockingCondition).toBe('eligibility.approval_recipient_mismatch');
+    }
+    // A malformed address an approval did bind is still the transport's rejection.
+    for (const recipient of ['not-an-email', 'a@b']) {
+      const id = await approvedTask({ planTaskId: `task-r-${String(recipient)}` }, recipient);
       const res = await dispatch(id, { recipient });
       expect(res.outcome).toBe('rejected');
     }

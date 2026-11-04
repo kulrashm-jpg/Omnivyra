@@ -36,6 +36,10 @@ const mockRedis = {
   async expire() { return 1; },
 };
 jest.mock('../../queue/bullmqClient', () => ({ getSharedRedisClient: () => mockRedis }));
+// D-02 (S-02) — an external approval needs a passkey proof: the real ceremony, over a WebAuthn
+// double (realschema/d02_approval_binding.test.ts exercises the real challenge store).
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
 const mockActor = { id: 'unset' };
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: mockActor.id })),
@@ -304,7 +308,7 @@ describe('recovery', () => {
       await sweep([realWs3()]);
       expect(await instanceState(instanceId)).toBe('failed');
       expect((await handoffTasks(instanceId))[0]!.status).toBe('cancelled');
-      expect((await ws3.approveOutreachTask(ORG_A, task!.id, { approverUserId: actor })).ok).toBe(false);
+      expect((await approveWithPasskey(ORG_A, task!.id, actor)).ok).toBe(false);
       expect(sent).toHaveLength(0);
     });
   });
@@ -407,7 +411,7 @@ describe('one whole journey, from PI to outcome reporting', () => {
     });
     await sweep([realWs3()]);
     const [first] = await handoffTasks(instanceId);
-    expect((await ws3.approveOutreachTask(ORG_A, first!.id, { approverUserId: actor })).ok).toBe(true);
+    expect((await approveWithPasskey(ORG_A, first!.id, actor)).ok).toBe(true);
     await sweep([realWs3()]);
     expect(sent).toHaveLength(1);
     await sweep([realWs3()]);
@@ -511,7 +515,7 @@ describe('an engine result that needs a person is not repeated by the clock', ()
       const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('intro')] });
       await sweep([realWs3()]);
       const [task] = await handoffTasks(instanceId);
-      expect((await ws3.approveOutreachTask(ORG_A, task!.id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, task!.id, actor)).ok).toBe(true);
 
       providerRefuses.on = true;
       const first = await sweep([realWs3()]);
@@ -543,7 +547,7 @@ describe('an engine result that needs a person is not repeated by the clock', ()
       const { instanceId } = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('intro')] });
       await sweep([realWs3()]);
       const [task] = await handoffTasks(instanceId);
-      expect((await ws3.approveOutreachTask(ORG_A, task!.id, { approverUserId: actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, task!.id, actor)).ok).toBe(true);
       const attempt = await one(`INSERT INTO public.outreach_attempts (company_id, task_id, attempt_number, outcome, started_at) VALUES ($1,$2,1,'disabled',now()) RETURNING id`, [ORG_A, task!.id]);
       await db.query(`INSERT INTO public.outreach_delivery_evidence (company_id, task_id, attempt_id, delivery_status, provider, transport_response, observed_at)
         VALUES ($1,$2,$3,'failed','supabase_edge_ses',$4,now())`, [ORG_A, task!.id, attempt.id, JSON.stringify({ outcome: 'disabled' })]);
@@ -671,7 +675,7 @@ describe('skipping a step never leaves or repeats an action', () => {
       const r = await sweep([realWs3()]);
       expect(r.decisions[0]).toMatchObject({ decision: 'skipped' });
       expect((await handoffTasks(instanceId))[0]!.status).toBe('cancelled');
-      expect((await ws3.approveOutreachTask(ORG_A, task!.id, { approverUserId: actor })).ok).toBe(false);
+      expect((await approveWithPasskey(ORG_A, task!.id, actor)).ok).toBe(false);
       expect(sent).toHaveLength(0);
     });
   });
@@ -816,7 +820,7 @@ describe('what a person would approve', () => {
   it('a task no longer awaiting approval has nothing to approve', async () => {
     await inRollback(async () => {
       const s = await awaiting();
-      expect((await ws3.approveOutreachTask(ORG_A, s.taskId, { approverUserId: s.actor })).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, s.taskId, s.actor)).ok).toBe(true);
       expect(await buildEmailApprovalPreview(ORG_A, s.taskId, NOW())).toMatchObject({ refusal: 'not_awaiting_approval', previewHash: null, content: null });
     });
   });

@@ -52,13 +52,17 @@ const mockRedis = {
   async expire() { return 1; },
 };
 jest.mock('../../queue/bullmqClient', () => ({ getSharedRedisClient: () => mockRedis }));
+// D-02 (S-02) — an external approval needs a passkey proof: the real ceremony, over a WebAuthn
+// double (realschema/d02_approval_binding.test.ts exercises the real challenge store).
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
+import { approveWithPasskey, passkeyAssertion } from '../helpers/approvalPasskeyDouble';
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { advanceAndDispatchWorkflowExecution } = require('../../services/workflowExecution/workflowProgressionSweeper');
 const { createWs3Adapter, defaultWs3Deps } = require('../../services/orchestration/engineAdapters');
 const { dispatchWorkflowEmailTask, ensureWorkflowTransports } = require('../../services/emailEngine/workflowEmailDispatch');
 const { BRIDGED_TASK_PLANNER_VERSION } = require('../../services/emailEngine/emailExecutionContext');
-const { approveOutreachTaskForOperator, dispatchApprovedOutreachForLead } = require('../../services/leadOutreachActivation');
+const { approveOutreachTaskForOperator, beginOperatorApproval, dispatchApprovedOutreachForLead } = require('../../services/leadOutreachActivation');
 const { runOutreachDispatchRecoverySweep } = require('../../services/leadOutreachRecoverySweep');
 const ws3 = require('../../services/leadOutreachExecution');
 /* eslint-enable @typescript-eslint/no-var-requires */
@@ -116,6 +120,19 @@ async function handedOff(channel: 'email' | 'internal' = 'email') {
   return { actor, prospectId, instanceId, taskId: task.id };
 }
 
+/**
+ * D-02 — the platform override as its route drives it: `begin`, then the passkey bound to
+ * that approval, by an operator who did not publish or author the journey (S-01).
+ */
+async function operatorApprove(taskId: string) {
+  const operator = await newUser();
+  const b = await beginOperatorApproval(ORG_A, taskId, operator);
+  if (b.ok !== true) return b;
+  return approveOutreachTaskForOperator(ORG_A, taskId, operator, 'operator approves', null, {
+    passkey: b.passkeyRequired ? passkeyAssertion(String(b.passkeyOptions.challenge)) : null, expectedContentHash: b.contentHash,
+  });
+}
+
 /** Return an approved task to `queued` the way WS-3 does: a quota deferral, no attempt. */
 async function requeueByQuota(prospectId: string, taskId: string, channel: string) {
   await db.query('UPDATE public.outreach_governance_config SET daily_limit_tenant = 1 WHERE company_id = $1', [ORG_A]);
@@ -145,7 +162,7 @@ describe('D-03 — approval cannot bypass a paused journey', () => {
     await inRollback(async () => {
       const s = await handedOff();
       await setRun(s.instanceId, 'paused');
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       const before = await footprint(s.taskId);
       expect(before).toMatchObject({ status: 'approved', attempts: 0, providerCalls: 0 });
 
@@ -174,7 +191,7 @@ describe('D-03 — approval cannot bypass a paused journey', () => {
   it('an active journey still sends through the same route', async () => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       expect(await activate(s.prospectId, s.taskId)).toMatchObject({ outcome: 'sent' });
       expect(await countOf('outreach_attempts', s.taskId)).toBe(1);
       expect(providerCalls()).toBe(1);
@@ -186,7 +203,7 @@ describe('D-03 — fail closed', () => {
   it.each(['created', 'cancelled'])('a run in %s holds', async (state) => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       await setRun(s.instanceId, state);
       const before = await footprint(s.taskId);
       expect(await activate(s.prospectId, s.taskId)).toMatchObject({ outcome: 'deferred_journey' });
@@ -197,7 +214,7 @@ describe('D-03 — fail closed', () => {
   it('a lifecycle state outside the known set holds', async () => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       await db.query('ALTER TABLE public.execution_instances DROP CONSTRAINT execution_instances_lifecycle_valid');
       await setRun(s.instanceId, 'archived');
       const before = await footprint(s.taskId);
@@ -211,7 +228,7 @@ describe('D-03 — fail closed', () => {
   it('an unreadable journey state holds', async () => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       const before = await footprint(s.taskId);
       // The read of `lifecycle_state` now fails (42703) inside the real query path.
       await db.query('ALTER TABLE public.execution_instances RENAME COLUMN lifecycle_state TO lifecycle_state_unreadable');
@@ -239,7 +256,14 @@ describe('D-03 — fail closed', () => {
       });
       expect(ins.ok).toBe(true);
       const taskId = String(ins.data.id);
-      expect((await approveOutreachTaskForOperator(ORG_A, taskId, actor, 'operator approves')).ok).toBe(true);
+      // D-02: with no handoff there is no message to bind an approval to, so it cannot be
+      // approved at all. Force the status, as a pre-D-02 approval would have left it, to
+      // show the hold still comes first at dispatch.
+      // D-02 (S-01): refused before anything moves, since who published it cannot be established.
+      expect(await approveOutreachTaskForOperator(ORG_A, taskId, actor, 'operator approves'))
+        .toMatchObject({ ok: false, status: 'pending', reason: 'self_approval_unverifiable' });
+      expect(await rows('SELECT 1 FROM public.outreach_approvals WHERE task_id = $1', [taskId])).toHaveLength(0);
+      await db.query(`UPDATE public.outreach_tasks SET status = 'approved' WHERE id = $1`, [taskId]);
       expect(await rows('SELECT 1 FROM public.outreach_bridge_handoffs WHERE outreach_task_id = $1', [taskId])).toHaveLength(0);
       const before = await footprint(taskId);
       const r = await activate(prospectId, taskId);
@@ -254,7 +278,7 @@ describe('D-03 — a requeued task (the retry path) obeys the same hold', () => 
   it('held with no attempt, no blocked_prior_attempt and no decision; resumed it sends once', async () => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       await requeueByQuota(s.prospectId, s.taskId, 'email');
       await setRun(s.instanceId, 'paused');
       const before = await footprint(s.taskId);
@@ -280,7 +304,7 @@ describe('D-03 — the recovery sweep (the worker) obeys the same hold', () => {
   it('a held queued task stays recoverable, is reselected once per run, and sends once on resume', async () => {
     await inRollback(async () => {
       const s = await handedOff('internal');
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       await requeueByQuota(s.prospectId, s.taskId, 'internal');
       await setRun(s.instanceId, 'paused');
       const before = await footprint(s.taskId);
@@ -305,7 +329,7 @@ describe('D-03 — the recovery sweep (the worker) obeys the same hold', () => {
   it('a queued email task is still left to its own route by the sweep, as before', async () => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       await requeueByQuota(s.prospectId, s.taskId, 'email');
       await setRun(s.instanceId, 'paused');
       const report = await runOutreachDispatchRecoverySweep();
@@ -319,7 +343,7 @@ describe('D-03 — the orchestration adapter, reached on a paused run', () => {
   it('a dispatch made while the run is paused is held and the step waits', async () => {
     await inRollback(async () => {
       const s = await handedOff();
-      expect((await approveOutreachTaskForOperator(ORG_A, s.taskId, s.actor, 'operator approves')).ok).toBe(true);
+      expect((await operatorApprove(s.taskId)).ok).toBe(true);
       await setRun(s.instanceId, 'paused');
       const step = await one(
         `SELECT execution_task_id AS task_id, execution_plan_step_id AS plan_step_id, person_id
@@ -354,7 +378,9 @@ describe('D-03 — a task that never came from a journey', () => {
         materializedAt: new Date().toISOString(),
       });
       const taskId = String(ins.data.id);
-      expect((await approveOutreachTaskForOperator(ORG_A, taskId, actor, 'operator approves')).ok).toBe(true);
+      // D-02 (S-04) — a non-journey external approval names the one address it authorises.
+      expect((await ws3.submitForApproval(ORG_A, taskId)).ok).toBe(true);
+      expect((await approveWithPasskey(ORG_A, taskId, actor, { recipient: ADDRESS })).ok).toBe(true);
       ws3.__clearTransportsForTests();
       ws3.registerDefaultTransports({ emailProvider: provider });
       const r = await ws3.dispatchInternalOutreachTask(ORG_A, taskId, { recipient: ADDRESS });

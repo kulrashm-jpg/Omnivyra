@@ -99,7 +99,9 @@ const NOW = '2026-08-05T12:00:00.000Z';
 
 const newTask = (over: Partial<NewOutreachTask> = {}): NewOutreachTask => ({
   companyId: 'co-a', leadId: 'L1', planTaskId: 'task-1-intro',
-  taskOrder: 1, kind: 'outreach', action: 'Send intro email', channel: 'email',
+  // D-02 — the internal channel: these approval mechanics are channel-independent, and an
+  // external approval also needs a passkey proof (d02SecurityRegression.test.ts).
+  taskOrder: 1, kind: 'outreach', action: 'Send intro email', channel: 'internal',
   dependsOnPlanTaskId: null, estimatedDelayHours: 0, confidence: 0.7,
   explanation: 'Hot lead', requiresApproval: true,
   plannerVersion: 'lie-2.1.0', translationVersion: TRANSLATION_VERSION,

@@ -98,6 +98,8 @@ import {
   type NewOutreachTask,
   type OutreachTask,
 } from '../../services/leadOutreachExecution';
+// D-02 — the one approval path, used by the approved-task fixture.
+import { approveOutreachTask as approveBound } from '../../services/leadOutreachExecution';
 
 const NOW = '2026-08-05T12:00:00.000Z';
 
@@ -133,6 +135,9 @@ const input = (over: Partial<GovernanceEvaluationInput> = {}): GovernanceEvaluat
   globalKillSwitch: false,
   region: null,
   evaluatedAt: NOW,
+  // D-02 — the approved fixture task's approval is bound, unrevoked and in date; the
+  // binding itself is exercised in d02ApprovalBinding.test.ts.
+  approvalAuthority: { verdict: 'valid', reason: 'fixture approval matches', decidedAt: NOW, expiresAt: null },
   ...over,
 });
 
@@ -154,9 +159,14 @@ const configureTenant = (over: Row = {}) => {
 };
 
 const seedApprovedTask = async (): Promise<string> => {
-  const res = await insertOutreachTask(newTask());
+  // D-02 — on the internal channel: an approved external task also binds a recipient and a
+  // passkey (d02SecurityRegression.test.ts), which these gate-order tests do not exercise.
+  const res = await insertOutreachTask(newTask({ channel: 'internal' }));
   const id = res.data!.id as string;
-  await setOutreachTaskState('co-a', id, { status: 'approved' });
+  // D-02 — an approved status alone no longer authorises a send: approve through the one
+  // approval path, which records the content binding the dispatch gate re-checks.
+  await setOutreachTaskState('co-a', id, { status: 'awaiting_approval' });
+  await approveBound('co-a', id, { approverUserId: 'u-approver' });
   return id;
 };
 

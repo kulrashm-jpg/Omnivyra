@@ -86,7 +86,8 @@ import {
   evaluateTaskGovernance,
   resolveCanonicalGovernanceWithAnchor,
 } from '../../services/leadOutreachExecution/governanceService';
-import { setOutreachTaskPersonId } from '../../services/leadOutreachExecution/storage';
+import { rowToOutreachTask, setOutreachTaskPersonId } from '../../services/leadOutreachExecution/storage';
+import { computeApprovalBinding } from '../../services/leadOutreachExecution/approvalBinding';
 import type { OutreachTask } from '../../services/leadOutreachExecution/types';
 
 const ORG_A = '00000000-0000-4000-8000-00000000000a';
@@ -124,7 +125,7 @@ const govRow = (over: Row = {}): Row => ({
   ...over,
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   db.tables = {
     leads: [{ id: LEAD, company_id: ORG_A, unified_person_id: PERSON_LEAD }],
     outreach_tasks: [taskRow()],
@@ -141,6 +142,18 @@ beforeEach(() => {
   db.failures = {};
   db.queries = [];
   db.nextId = 1;
+  // D-02 — the stored task is approved, so it needs the approval that authorised it: one
+  // `approved` row bound to the default task row (approvalBinding.ts), to the recipient the
+  // evaluations name, carrying the passkey evidence an external approval records, and decided
+  // now (expiry is judged against the server clock, T2).
+  const binding = await computeApprovalBinding(ORG_A, rowToOutreachTask(taskRow())!, { recipient: TARGET });
+  db.tables.outreach_approvals = [{
+    id: 'a1', company_id: ORG_A, task_id: TASK_ID, decision: 'approved', approver_user_id: 'u-approver',
+    decided_at: new Date().toISOString(), approved_content_hash: binding.hash, missing_information: [],
+    approved_recipient: binding.recipient, // r3 L-3: the address the approval binds is stored with it
+    passkey_credential_id: 'cred-test', passkey_verified_at: new Date().toISOString(),
+  }];
+  db.queries = [];
 });
 
 const decisions = (): Row[] => db.tables.outreach_decisions ?? [];

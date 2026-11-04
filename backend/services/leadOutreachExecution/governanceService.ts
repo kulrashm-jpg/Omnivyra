@@ -97,6 +97,7 @@ import {
 import { resolveRecipientOwner } from '../prospectIdentity/recipientOwner';
 import { resolveLeadPersonId, resolvePersonAnchor, type PersonAnchorResolution } from './personAnchor';
 import { recordFailure, recordGovernanceEvaluation, recordGovernanceFailure, recordGovernanceGate, recordStageOutcome } from './telemetry';
+import { resolveApprovalAuthority } from './approvalBinding';
 import type { OutreachTask } from './types';
 
 /**
@@ -154,6 +155,7 @@ const unconfigured = (companyId: string): TenantGovernanceConfig => ({
   restrictedRegions: [],
   dailyLimitTenant: null,
   dailyLimitLead: null,
+  selfApprovalAllowed: false,
 });
 
 /**
@@ -179,6 +181,8 @@ export async function loadTenantGovernanceConfig(companyId: string): Promise<Ten
     restrictedRegions: strArray(r.restricted_regions),
     dailyLimitTenant: intOrNull(r.daily_limit_tenant),
     dailyLimitLead: intOrNull(r.daily_limit_lead),
+    // D-02 — only an explicit `true` enables it; absent column or row reads as off.
+    selfApprovalAllowed: r.self_approval_allowed === true,
   };
 }
 
@@ -576,6 +580,12 @@ export async function evaluateTaskGovernance(
       const approvals = await listApprovals(companyId, taskId);
       const latest = approvals.length > 0 ? String(approvals[approvals.length - 1].decision ?? '') : '';
       input.approvalOfRecord = latest === 'approved' || latest === 'rejected' ? latest : null;
+    }
+    // D-02 — the final execution boundary: is the approval of record still bound to this
+    // exact content and action, unrevoked, and under seven days old, and is the address
+    // this send would go to the one it binds? Never throws.
+    if (task.status === 'approved' || task.status === 'queued') {
+      input.approvalAuthority = await resolveApprovalAuthority(companyId, task, evaluatedAt, { recipient: options.recipient ?? null });
     }
   } catch (e) {
     recordGovernanceFailure('context_load');

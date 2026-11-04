@@ -2,10 +2,11 @@
  * What a person would be approving: a read-only preview of one journey email, and a hash
  * that binds an approval to exactly that message (TENANT-JOURNEY-APPROVAL-DESIGN.md).
  *
- * THIS GRANTS NOTHING. No route exposes it and nothing here approves, because who may
- * approve, with which capability, and for how long are open owner decisions (A to E). It
- * also writes nothing: the send path's own read-only preparation supplies the content, so
- * this can never disagree with what would really be sent.
+ * THIS GRANTS NOTHING, and writes nothing: the send path's own read-only preparation
+ * supplies the content, so this can never disagree with what would really be sent. D-02:
+ * the tenant approval surface (`journeyApproval.ts`) shows it; the approval itself binds to
+ * `approvalBinding.computeApprovalBinding`, which wraps `approvalPreviewHash` with the
+ * execution action, and is re-checked at dispatch.
  *
  * The address is masked. The hash covers the full address, so a changed recipient changes
  * it without the preview ever holding the address.
@@ -14,8 +15,8 @@
  * reason, never hidden, and has no hash, so there is nothing to approve.
  */
 
-import { createHash } from 'crypto';
 import { getOutreachTaskById } from '../leadOutreachExecution';
+import { approvalPreviewHash } from '../leadOutreachExecution/approvalBinding';
 import { EmailSendPathError, prepareEmailSend } from '../emailEngine/emailSendPath';
 import { getProgressionStep } from '../workflowExecution/stepProgressionStore';
 import { getExecutionInstance, TERMINAL_LIFECYCLE_STATES } from '../executionInstances/executionInstanceStore';
@@ -51,14 +52,11 @@ export function maskEmail(email: string): string {
   return `${email[0]}***${email.slice(at)}`;
 }
 
-/** Stable over the fields that define the message. Delimited so no two inputs can run together. */
-export function approvalPreviewHash(input: {
-  organizationId: string; outreachTaskId: string; subject: string; body: string; channel: string; email: string; workflowVersionId: string;
-}): string {
-  return createHash('sha256')
-    .update(JSON.stringify([input.organizationId, input.outreachTaskId, input.subject, input.body, input.channel, input.email, input.workflowVersionId]))
-    .digest('hex');
-}
+/**
+ * Stable over the fields that define the message. Delimited so no two inputs can run together.
+ * D-02: defined beside the approval binding that wraps it, unchanged, and re-exported here.
+ */
+export { approvalPreviewHash };
 
 /** One email task's preview. Null when the task is not in this tenant. */
 export async function buildEmailApprovalPreview(
