@@ -37,3 +37,30 @@ The run used a pg-sandbox PG17 cluster on loopback, stopped afterwards. The test
 | Re-forward | identical to the first forward |
 | Refusals | rollback 1 refuses while a `complained` row exists; rollback 2 refuses while a `recipient_link` row exists (append-only history kept); migration 4 refuses a database that already holds an unsafe value |
 | Gate | `check-migration-quality`: 0 violations |
+
+## Finding after the test: the writer role has no table privilege in the governed build
+
+Raised by PI (b6) from the privilege snapshot above, then measured with `has_table_privilege` on the same sandbox build:
+- `service_role` holds no SELECT or INSERT on any of the five tables.
+- Across `public` it can SELECT 15 of 878 tables. It is BYPASSRLS but has no grants, and `pg_default_acl` holds only postgres's own entry.
+- The governed bootstrap therefore does not reproduce Supabase's platform default grants.
+- The real-schema harness connects as a superuser, so it never observes this.
+
+The identical before/after snapshot proves these migrations add no exposure. It does **not** prove the writer can write.
+
+**Not fixed in these migrations, deliberately:**
+- A grant here would patch 2 of 863 tables.
+- It would also change production grants as a side effect of a column change.
+- It would leave the harness blind.
+
+**Recorded:**
+- **(1) Schema parity:** the bootstrap should emulate the Supabase default grants.
+- **(2) Precondition for wiring any writer to these columns:** a real-schema test running as `service_role`.
+- **(3) Production check, for the security track:** what `anon`/`authenticated` hold on these tables. Neither session read production.
+
+**Refinements (PI, 2026-11-04):**
+- **The build is blind in both directions.** With no `ALTER DEFAULT PRIVILEGES` in the bootstrap, the governed build can show neither a missing grant nor an excess one (`anon`/`authenticated`). A bootstrap that reproduced the Supabase defaults would make both visible at once. PI measured the same split independently: tables whose migration issues an explicit `GRANT … TO service_role` carry it, and tables relying on platform defaults do not.
+- **Two tests, not one.** `service_role` has `rolbypassrls = t`, so a test running as `service_role` proves the GRANT and nothing about RLS. The writer precondition (2) is therefore:
+  - a real-schema test that `SET ROLE service_role` and writes, which proves the grant;
+  - a separate test in a verified non-owner, non-superuser, NOBYPASSRLS session that `SET ROLE` to `authenticated` and `anon` and expects `42501` or zero rows, which proves the exposure is closed.
+  - PI used this shape to get its 19 genuine `42501` results.

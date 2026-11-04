@@ -159,10 +159,10 @@ const REGISTER: Record<string, Partial<Record<Channel, Status>>> = {
   'pages/api/engagement/linkedin/sync.ts': { community: 'compliant' },           // ingestion -> auto rules -> executor
   'pages/api/execution-instances/[id]/community-link.ts': { community: 'compliant' },
   'pages/api/response/generate.ts': {},                                          // generation never executes: reaches NO sink (asserted below)
-  'pages/api/social/comments.ts': { community: 'gap' },                          // fetch: auto-rule path (gated); reply: DIRECT platform POST
+  'pages/api/social/comments.ts': { community: 'compliant' },                    // fetch: auto-rule path (gated); reply removed (owner ruling 2026-11-04, item 6)
   'pages/api/extension/commands.ts': { browser: 'compliant' },
   'pages/api/social/publish.ts': { social: 'compliant' },
-  'pages/api/super-admin/threads/[threadId]/resume.ts': { social: 'gap' },
+  'pages/api/super-admin/threads/[threadId]/resume.ts': { social: 'compliant' },  // resumeThreadPublish applies authorizePostPublish (owner ruling item 5)
   'pages/api/whatsapp/broadcasts/index.ts': { whatsapp: 'compliant' },
   'pages/api/whatsapp/broadcasts/[id].ts': { whatsapp: 'compliant' },
   'pages/api/super-admin/outreach/activate.ts': { email_ws3: 'compliant' },
@@ -192,24 +192,8 @@ const REGISTER: Record<string, Partial<Record<Channel, Status>>> = {
 
 // ─── KNOWN GAPS — non-compliant TODAY. Listed, owned, never silently allowed. ─
 const KNOWN_GAPS: Array<{ entry: string; channel: Channel; owner: string; why: string }> = [
-  {
-    entry: 'pages/api/super-admin/threads/[threadId]/resume.ts',
-    channel: 'social',
-    owner: 'Social publishing engine',
-    why: 'threadPublishOrchestrator.resumeThreadPublish re-invokes publishThread -> publishToPlatform '
-      + 'without re-evaluating authorizePostPublish: a thread whose campaign was paused or cancelled after '
-      + 'the first node published can be resumed by a super-admin. Needs the predicate (or a recorded '
-      + 'operator-override ruling) before publishThread.',
-  },
-  {
-    entry: 'pages/api/social/comments.ts',
-    channel: 'community',
-    owner: 'Engagement / Community track',
-    why: 'action=reply POSTs directly to api.linkedin.com/v2/comments and api.twitter.com/2/tweets from '
-      + 'the route, with a placeholder token (`mock_token_<accountId>`): no D-01 approval, no L-3 '
-      + 'recheck, no claim. The placeholder token means the platform rejects it today; the shape is still '
-      + 'a bypass. Recommended: remove the reply action (replies go through /api/engagement/reply).',
-  },
+  // Closed 2026-11-04: super-admin thread resume now applies authorizePostPublish; the
+  // social-comments direct reply action was removed and not replaced.
 ];
 
 // ─── DORMANT — reached symbols with NO consumer. If one gains a caller, the
@@ -264,7 +248,6 @@ const DIRECT_WRITE_CLASSIFIED: Record<string, { cls: WriteClass; note: string }>
   'backend/services/platformAdapters/whatsappAdapter.ts': { cls: 'dormant_module', note: 'publishContent/replyToComment/likeComment have no caller' },
   'backend/services/socialPlatformPublisher.ts': { cls: 'dormant_module', note: 'deprecated; no importer' },
   'backend/services/platformAnalyticsIngester.ts': { cls: 'read_via_post', note: 'URL match is a read (YouTube videos GET); its only mutating method is the TikTok video/list POST, a read' },
-  'pages/api/social/comments.ts': { cls: 'gap', note: 'see KNOWN_GAPS' },
 };
 
 // ─── Compute ────────────────────────────────────────────────────────────────
@@ -420,7 +403,9 @@ describe('execution-authority inventory — the register', () => {
   it('every gap has exactly one KNOWN_GAPS row with an owner, and only gaps do', () => {
     const gaps = Object.entries(REGISTER).flatMap(([f, r]) =>
       (Object.entries(r) as Array<[Channel, Status]>).filter(([, s]) => s === 'gap').map(([ch]) => `${f}|${ch}`)).sort();
-    expect(gaps.length).toBeGreaterThan(0);
+    // Non-vacuous even with no open gap (both closed 2026-11-04): the register still covers
+    // every entry point, and each classification is checked against the computed graph.
+    expect(Object.keys(REGISTER).length).toBeGreaterThan(30);
     expect(KNOWN_GAPS.map((g) => `${g.entry}|${g.channel}`).sort()).toEqual(gaps);
     for (const g of KNOWN_GAPS) { expect(g.owner.trim()).not.toBe(''); expect(g.why.length).toBeGreaterThan(40); }
   });

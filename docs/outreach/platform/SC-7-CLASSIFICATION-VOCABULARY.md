@@ -163,7 +163,7 @@ These are **proposals**. Nothing in this change wires them. PI's outcome interpr
 
 | Canonical | Proposed business outcome (PI input) | Proposed PI lifecycle effect | Proposed Orchestration journey event |
 |---|---|---|---|
-| stop | `unsubscribed` | → `closed_disqualified` (existing map) + channel restriction in contact governance | exit journey (`unsubscribed`); suppress channel |
+| stop | `unsubscribed` | → `closed_disqualified` (existing map) + governance type **`dnc_channel`** (purpose-blind by design, DR-2). `stop` is NOT a governance type; `recordContactGovernance` rejects it as `unknown_governance_type` | exit journey (`unsubscribed`); suppress channel |
 | unsubscribe | `unsubscribed` | → `closed_disqualified` (existing map) + restriction | exit journey (`unsubscribed`) |
 | complaint | `unsubscribed` **plus** a `complaint` governance record (all channels `*`, as SES complaints are today) | → `closed_disqualified`; flag for review | exit journey; suppress all channels; alert operator |
 | not_interested | `replied` (derived); `rejected` only when an operator confirms (PI requires `rejected` to be human) | `replied` → `engaged`; operator may then record `rejected` → `not_interested` | exit journey (`replied`) |
@@ -173,10 +173,14 @@ These are **proposals**. Nothing in this change wires them. PI's outcome interpr
 | objection | `replied` | → `engaged` | exit journey (`replied`); hand to human |
 | follow_up | `replied` | → `engaged`; propose `nurture` with a follow-up date (needs PI policy) | pause/exit (`replied`); propose a re-entry timer (Q-4) |
 | support_request | `replied` | no change beyond `engaged`; route to support | exit journey (`replied`); route to support |
-| wrong_recipient | none (not engagement) | propose a contact-point invalidation, not a prospect transition | exit journey for that contact point; do not retry same address |
+| wrong_recipient | none (not engagement) | propose governance type **`invalid_contact`** (not purpose-scoped) on the contact point, not a prospect transition | exit journey for that contact point; do not retry same address |
 | out_of_office | none (not a reply) | no transition | do NOT exit; propose delaying the next step |
 | spam_suspicious | none | no transition | do not exit; flag |
-| ambiguous | `replied` (a human answered; tone unknown) | → `engaged` (consistent with PI's "reply says nothing about tone") | exit journey (`replied`) |
+| ambiguous | none; route to operator review | no transition (an undetected auto-reply or missed spam lands here, so "a human answered" is not established; PI review 2026-11-04) | do not exit; flag for review |
+
+**`not_interested` is two unrelated things.** The canonical CODE `not_interested` (this vocabulary) and PI's lifecycle STATE `not_interested` share a spelling only. The code yields outcome `replied` → state `engaged`; the state is reached only from a human-recorded `rejected`. The code must never produce the state without an operator.
+
+**Closure is irreversible; restriction is not.** `unsubscribed` → `closed_disqualified` is PI's only terminal state (`stateModel.ts:112,120`, no transitions out), while a governance restriction can be revoked (`revokeContactGovernance`). So a false-positive governance class permanently closes a prospect with no operator remedy. See Q-1.
 
 Note: today Orchestration treats ANY inbound WhatsApp message as `replied` (unless it is a whole-message opt-out), and an out-of-office auto-reply on email would end a journey. Adopting this table changes that; that is a decision for Orchestration.
 
@@ -184,7 +188,7 @@ Note: today Orchestration treats ANY inbound WhatsApp message as `replied` (unle
 
 `engagement_thread_classification.classification_category` is `TEXT NOT NULL` with **no CHECK** (`database/engagement_thread_classification.sql`, `supabase/migrations/20260701000000_runtime_missing_contract_tables.sql`). `engagement_message_intelligence.intent` is unconstrained TEXT too. So canonical codes COULD be written without a schema change, but **must not** be written into the legacy columns: `components/engagement/ThreadList.tsx`, `AIEngagementAssistant.tsx`, the inbox, priority and digest services read the legacy six categories, and `response_rules.intent_type` keys on legacy intents.
 
-No migration was written. Proposed schema change (for the Outreach lead, who owns migrations):
+**Superseded:** the coordinator wrote the migration as `supabase/migrations/20270125000000_engagement_canonical_classification.sql` (local, test database only; see `MIGRATIONS-20270125.md`). It also makes rule 1 structural: `governance_codes <@ ARRAY['stop','unsubscribe','complaint']`, plus a vocabulary version required whenever a code is present, all validated. The original proposal follows for the record.
 
 ```sql
 ALTER TABLE public.engagement_thread_classification
@@ -209,7 +213,7 @@ Grants: these tables already exist; adding columns does not change grants. The w
 
 ## 8. Open questions
 
-- **Q-1 (Governance, PI):** should phrase-level and channel-signal governance matches RECORD a contact-governance restriction, or only classify? Today only the WhatsApp whole-message keyword records. Recommendation: channel signals record (they are transport facts); phrase matches record `unsubscribe`/`stop` after one more review of the rule list; `complaint` phrases route to operator review before recording.
+- **Q-1 (Governance, PI):** should phrase-level and channel-signal governance matches RECORD a contact-governance restriction, or only classify? Today only the WhatsApp whole-message keyword records. Recommendation (revised after PI review, 2026-11-04): channel signals record (transport facts such as List-Unsubscribe or a provider complaint notification); **all phrase matches, `stop` and `unsubscribe` as well as `complaint`, route to operator review before anything is recorded**, because the resulting `closed_disqualified` is irreversible (§6). Still an owner decision.
 - **Q-2:** community-shaped triage labels (`competitor_complaint`, `problem_discussion`) have no reply-shaped equivalent. Keep them as a separate community dimension, or add canonical codes?
 - **Q-3:** who produces `not_interested`, `follow_up`, `wrong_recipient`, `out_of_office`? Options: deterministic rules (headers such as `Auto-Submitted`, `X-Autoreply` for out_of_office), extending the existing triage prompt (owned by Platform AI), or operator labelling.
 - **Q-4 (Orchestration):** `follow_up` and `out_of_office` imply re-timing a journey, which today has no outcome-driven branching by design.

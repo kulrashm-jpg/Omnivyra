@@ -82,18 +82,18 @@ Status labels: NOT STARTED, IN PROGRESS, IMPLEMENTED LOCALLY, INTEGRATION REQUIR
 | A-2 | A | Personalization guard (041-D allow-list) and no engine import in generation | The allow-list is imported (same object); unauthorized, missing and not-permitted placeholders are refused; the boundary test passes, with 10 probes and transitive checks | — | Agent A | C-AI-1 for AI drafts | Included above | — | VERIFIED T1 |
 | A-3 | A | Canonical save and revisions; campaign → approved revision | Tables exist; writes blocked | Policy change; link | Content Platform, Orchestration | C-CP-1, SC-3 | — | — | BLOCKED |
 | A-4 | A | Shared generation through the gateway for outreach types | Gateway exists; runtime flags off | Generation request contract | Content Platform | C-CP-1 | — | — | BLOCKED |
-| B-1 | B | One classification vocabulary plus deterministic STOP / unsubscribe / complaint | `c889087b9` on `outreach/b-engagement-classification`: `backend/services/engagementClassification/`, a 16-code vocabulary, the governance detector reusing `whatsappOptOut`, total mapping tables for 4 legacy producers, the `classifyMessage` entry point; additive edits to the 3 classifiers. **Not wired into any runtime path; canonical codes not persisted** | SC-7 agreement (Q-1..Q-5); a migration for `canonical_code` / `governance_codes` columns (coordinator, not written) | Agent B | SC-7, C-AI-1 | 8/8 suites, 448/448, re-run by the coordinator; typecheck 3/3 | — | VERIFIED T1 (draft contract) |
+| B-1 | B | One classification vocabulary plus deterministic STOP / unsubscribe / complaint | `c889087b9` on `outreach/b-engagement-classification`: `backend/services/engagementClassification/`, a 16-code vocabulary, the governance detector reusing `whatsappOptOut`, total mapping tables for 4 legacy producers, the `classifyMessage` entry point; additive edits to the 3 classifiers. **Not wired into any runtime path; canonical codes not persisted** | SC-7 agreement (Q-1..Q-5) and owner ratification. Columns migration `20270125000000` written and disposable-DB tested (`3926654ce`), not applied; any writer needs the two grant/exposure tests (MIGRATIONS-20270125.md) | Agent B | SC-7, C-AI-1 | 8/8 suites, 448/448, re-run by the coordinator; typecheck 3/3 | — | VERIFIED T1 (draft contract) |
 | B-2 | B | Suggestions with rationale, confidence, escalation, tone | `engagementAiAssistantService` | Extend | Agent B (later) | C-AI-1 | — | — | BLOCKED |
 | B-3 | B | Inbox send boundary | `/api/engagement/reply` | Formatter, governance, approval | Agent C | CR-OR-D02 | — | — | BLOCKED |
 | C-1 | C | D-01, L-3, atomic claim, P-A, D-03 | Committed locally; in the base | Integration verification | c7 / coordinator | — | base T1 pending | — | INTEGRATION REQUIRED |
-| C-2 | C | D-02 approval binding | Round 2 `eabc1c0a…ec99` on `9a8dab9a`: F1 re-review edge (two CAS writers), F2 VS-5, F3. **Signed off by the dispatch owner 2026-11-04** for a local commit. c7 reports T1 0 new failures and T2 baseline only (not re-run by me). `approval.revoked` follows as contract 0.3.0 | Rebase onto the base (waits for c7's owner); 0.3.0 event change | c7 | CR-OR-D02 | c7-reported | c7-reported | IMPLEMENTED LOCALLY (uncommitted) |
-| C-3 | C | No independent execution from `/api/response/generate`; Mode 3 off by default; one switch | Bypass present; default true | Fold into the canonical authority | Agent C | — | — | — | IN PROGRESS |
-| C-4 | C | Inventory of entry-path authority (every route, worker, scheduler) | Partial (L-3 and claim cover community) | Executable inventory test | Agent C | — | — | — | IN PROGRESS |
+| C-2 | C | D-02 approval binding | Rebuilt on the base `6e96f6680`; round 3 `5254a30f…0768d2` (F-1, L-1, L-2, P-1) **signed off by the dispatch owner 2026-11-04**. Committed locally by c7 as `19498a2e4` on `orch/c2-approval-binding` (preserve ref `refs/preserve/orch-c2-d02-19498a2e`). The coordinator re-verified the diff sha256 and patch-id `f2717242`. Real-schema 52/52, typecheck-ci at baseline, worker tsc and 10 gates clean on the coordinator's own build. `approval.revoked` follows as contract 0.3.0 | Integrate `19498a2e4` into the foundation branch; 0.3.0 event change; `20270120000011` never applied to production | c7 | CR-OR-D02 | VERIFIED T1 | VERIFIED T2 (real-schema slice) | IMPLEMENTED LOCALLY (committed, not integrated) |
+| C-3 | C | No independent execution from `/api/response/generate`; Mode 3 off by default; one switch | Bypass present. Application fails closed (`1b4d4ce57`); column default `true` → `false` in migration `20270125000003`, written and tested, not applied (existing rows unchanged) | Fold into the canonical authority; turning off existing tenants is an operator decision at apply time | Agent C | — | — | — | IN PROGRESS |
+| C-4 | C | Inventory of entry-path authority (every route, worker, scheduler) | Executable inventory `executionAuthorityInventory.test.ts` (38 entries). Step C closed its two known gaps: super-admin thread resume now applies `authorizePostPublish` (409 `THREAD_NOT_AUTHORIZED`, audited); the direct LinkedIn/X reply in `social/comments` is removed (410 `REPLY_REMOVED`, no replacement API call). `KNOWN_GAPS` is empty | The inventory only covers the entries it lists; new entry paths must be added to it | Coordinator (owner ruling items 5, 6) | — | 9 suites 550/550; mutant (gate disabled): 5 refusal tests fail, 2 controls pass; typecheck-ci at baseline, worker tsc and 10 gates clean | not run | VERIFIED T1 |
 | C-5 | C | Race follow-ups | Tracked | — | c7 | CR-OR-RACE | — | — | IN PROGRESS |
 | C-6 | C | Cache bypass; gateway bypass routes | Present | Platform AI change | Platform AI | C-AI-1 | — | — | BLOCKED |
-| D-1 | D | Email complaint state and unsubscribe evidence preserved | `25e1c8a96` on `outreach/d-engine-readiness`. **E-1:** delivery status only moves forward if unchanged since read (`advanceOutreachTaskDeliveryStatus`), so concurrent events can no longer overwrite each other. **E-2:** the complaint or hard-bounce restriction is written even when the evidence write fails (still 503, SNS retries). The complaint's `delivered` row is marked `deliveryInferredFrom: 'Complaint'`. Unsubscribe evidence is proven insert-only | Complaint as a business outcome needs CR-4 (S-1 migration); unsubscribe outcome row needs SC-4 | Agent D | SC-4, CR-4 | 39 suites, 1231 passed / 5 skipped, re-run by the coordinator; typecheck 3/3 | not run (new CAS matches the existing pattern; T2 still required) | VERIFIED T1 |
+| D-1 | D | Email complaint state and unsubscribe evidence preserved | `25e1c8a96` on `outreach/d-engine-readiness`. **E-1:** delivery status only moves forward if unchanged since read (`advanceOutreachTaskDeliveryStatus`), so concurrent events can no longer overwrite each other. **E-2:** the complaint or hard-bounce restriction is written even when the evidence write fails (still 503, SNS retries). The complaint's `delivered` row is marked `deliveryInferredFrom: 'Complaint'`. Unsubscribe evidence is proven insert-only | Complaint as a business outcome needs CR-4 (migration `20270125000001` written and tested, not applied); unsubscribe outcome row needs SC-4 (`recipient_link` source, migration `20270125000002` written and tested, not applied); complaint fail-closed exposure and reconciliation path (owner ruling item 7) is step D | Agent D | SC-4, CR-4 | 39 suites, 1231 passed / 5 skipped, re-run by the coordinator; typecheck 3/3 | not run (new CAS matches the existing pattern; T2 still required) | VERIFIED T1 |
 | D-2 | D | Per-engine D7 readiness evidence (5 engines) | `docs/outreach/platform/ENGINE-READINESS-D7.md` (on the D branch). Email integrated; WhatsApp no path reaches Meta (WA-1/2/3 confirmed; usage RPCs undefined; journey `hasApproval` always false); Social integrated, but account ownership is not checked; Community `proveActingAccount` absent; Browser GAP-03 confirmed and `executed` comes from a client flag | WhatsApp fix plan (10 steps, CR-X-01 first) | Agent D | CR-X-01, C-BL-1, C-PI-2 | n/a (documentation) | — | IMPLEMENTED LOCALLY |
-| D-3 | D | WhatsApp L-4, send-once, WA-1/2/3 | Open | — | Agent D (later) | CR-X-01 | — | — | BLOCKED |
+| D-3 | D | WhatsApp L-4, send-once, WA-1/2/3 | Open. WA-2 schema: migration `20270125000004` (client-ref columns, CHECKed against env-name exfiltration) written and tested, not applied | `resolveClientRef` code fix (allow-list + decrypt); WA-1, WA-3, L-4; WhatsApp stays blocked | Agent D (later) | CR-X-01 | — | — | BLOCKED |
 | D-4 | D | Social publish authorization on main | Base and round 3 only | Part of release integration | Coordinator | Owner push | — | — | INTEGRATION REQUIRED |
 | D-5 | D | Outcome association for non-WS-3; channel credits | Open | — | Orchestration, Billing | SC-4, C-BL-1 | — | — | BLOCKED |
 
@@ -171,15 +171,53 @@ Evidence: scratchpad `t2f/logs/` and `attr/` of the coordinator session.
   - CR-PI1(1) confirmed: no runtime writer of `engagement_threads.unified_person_id`. PI's `prospectEngagementIntelligence.loadThreads` is therefore severed.
   - CR-PI1(2): `contact_governance_records` is canonical, but every caller is email, SES, unsubscribe or erasure. Using it for social and community recipients is NOT PROVEN and is an owner decision.
   - CR-SC7 blocker: `stop` and `not_interested` are not `GOVERNANCE_TYPES`, and `recordContactGovernance` rejects them.
-  - Complaint is purpose-scoped, so its `*` scope is not a blanket block.
+  - ~~Complaint is purpose-scoped, so its `*` scope is not a blanket block.~~ **Withdrawn by PI:** a complaint with NULL `purpose_scope` applies to every purpose (`contactPurpose.ts:125-132`, DR-10), so the §6 complaint row is correct.
   - `rejected` may reach PI only through the human decision path. The classifier must be structurally unable to emit it.
   - PI will not ratify §2–6 or Q-1..Q-5 while its delivery candidate is blocked; those are owner decisions.
 - **Billing:** no owning session identified. Sessions `orch-integration-c8` and `virality-0b` own neither PI nor Billing. `virality-ed` is holding messages, so the question was not delivered. CR-BL1 is not sent.
 
 ## D-02 rebuilt on `6e96f6680`: peer review (2026-11-04)
 
-c7's staged diff `9bbbacd2…beaba` (45 files) is **NOT signed off**.
+c7's first staged diff `9bbbacd2…beaba` (45 files) was **not signed off**. Round 3 was (below).
 - **What checked out:** hash; dispatch order and pins; the claim trigger as the only DB boundary into `dispatching`; passkey proof; S-03/S-04; no community files.
 - **F-1 High, reproduced:** after an ambiguous external attempt (a timeout), the re-review edge `queued → awaiting_approval` plus a fresh approval skips `redispatchProblem`, and the task is sent a second time (provider calls `[1,2]`). The same edge was in r2, which the coordinator had signed off.
 - **L-1:** the non-journey binding omits `explanation`. Latent.
 - **L-2:** an operator approval naming no recipient reports success.
+- **Round 2, `de5513ca`:** F-1 fixed twice over. (a) `redispatchProblem` now runs for every task. (b) The re-review writers refuse a task whose earlier attempt may have sent. L-1 and L-2 fixed.
+- **Round 3, `5254a30f`:** adds P-1, found by Orchestration's independent security review: a double-send race in `dispatch.ts` that predates D-02. A dispatcher stalled between the prior-attempt check and the claim could send after another dispatcher's ambiguous attempt.
+  - The dispatch owner chose to fold it into D-02, with six conditions.
+  - The fix re-checks under the claim, before quota and attempt, and releases the claim by CAS.
+  - Coordinator verification at `5254a30f`:
+    - hash; interdiff = the hunk + 2 re-pins + test;
+    - pins: dispatch `a23b5fbf0b38f5f2`, approval `657ae410108d32d5`, governance `0281c45fab33619e`, emailTransport `c6e86299a89dc60f`;
+    - the coordinator's own F-1 repro passes; with fix (b) forced around, fix (a) alone blocks (1 provider call);
+    - 20 affected unit suites, 702/702;
+    - mutant with the post-claim check removed: the P-1 test fails, its control passes;
+    - real-schema `d02_approval_binding` + `orch_pause_handoff` 52/52 on the coordinator's own sandbox.
+  - typecheck-ci PASS (at baseline), worker tsc clean, all 10 gates rc=0, tree unchanged by the gates (45 dirty before and after).
+  - **SIGNED OFF `5254a30f…0768d2` by the dispatch owner, 2026-11-04**, for a local commit by c7 on `6e96f6680`. No push, no merge, and `20270120000011` is never applied to production. c7 committed it as `19498a2e4` (parent `6e96f6680`). The coordinator re-verified: diff sha256 `5254a30f…`, and patch-id `f2717242…` is identical to the reviewed index.
+
+## Owner delegation (2026-11-04): "do what is best for the omnivyra app"
+
+Coordinator decisions, inside the standing limits (local only; no push, deploy, production change or real send):
+
+1. Step B (migrations) proceeds: authorized in Checkpoint 1 item 4 once the T2 report was delivered.
+2. Billing: no owner found, so CR-BL1 stays unsent and nothing substitutes for it. Charged sends stay blocked.
+3. PI asked for a technical read of SC-7 only, with no ratification. The consent store is NOT extended to social or community recipients, because PI has not agreed to own that and building it would be the substitute the owner ruled out.
+4. D-02 N1: the governance evaluation row a refusal writes is kept. It is audit evidence of the refusal, not an approval decision.
+
+## Step B: migrations `20270125000000–04` (commit `3926654ce`)
+
+Mapping, rationale and evidence are in `docs/outreach/platform/MIGRATIONS-20270125.md`. The disposable-database test covered forward, idempotent re-apply, unchanged privileges, every CHECK accepting and refusing by name, a rollback round trip identical to the pre-state, and refusals that protect append-only history.
+
+New finding behind migration 4: `metaAuthService.resolveClientRef` would send any environment variable named in `auth_client_*_ref` to Meta. The DB CHECKs refuse such names. The code fix is a recorded follow-up; WhatsApp stays blocked.
+
+## Step C: route fixes (owner items 5 and 6)
+
+- **Item 5, super-admin thread resume:** `resumeThreadPublish` now applies `authorizePostPublish` before `publishThread`.
+  - Refused: a campaign that is not active, a missing campaign, an unreadable campaign, and a root never released. Each returns `NOT_AUTHORIZED` with the predicate's code; the route audits it and answers 409.
+  - A root already `published` counts as released, so a partly published thread still resumes.
+  - Tests in `publishThreadUncertainOutcome.test.ts` (5 refusals, 2 controls). With the gate removed, the 5 refusals fail and the controls pass.
+- **Item 6, `/api/social/comments`:** the reply action and its direct LinkedIn/X helpers are removed. A reply request answers 410 `REPLY_REMOVED`. No replacement call; no caller existed. Test `socialCommentsReplyRemoved.test.ts`.
+- **Execution-authority inventory:** both entries move from gap to compliant and `KNOWN_GAPS` is empty. The non-vacuity guard moves from "at least one gap" to "the register covers more than 30 entry points" (it holds 38).
+- **Affected suites:** 9 suites, 550/550.

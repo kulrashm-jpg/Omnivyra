@@ -5,7 +5,6 @@ import {
   ingestComments,
   getCommentsForScheduledPost,
 } from '../../../backend/services/engagementIngestionService';
-import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
@@ -47,39 +46,6 @@ async function authorizeSocialAccount(
   return false;
 }
 
-// Reply helpers left unchanged for now (deprecated later per canonical design).
-const replyToLinkedInComment = async (accessToken: string, commentId: string, replyText: string) => {
-  const response = await fetch('https://api.linkedin.com/v2/comments', {
-    method: 'POST',
-    headers: {
-      Authorization: bearerAuthorization(accessToken),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      message: replyText,
-      parentComment: `urn:li:comment:${commentId}`,
-    }),
-  });
-  if (!response.ok) throw new Error(`LinkedIn reply failed: ${response.statusText}`);
-  return response.json();
-};
-
-const replyToTwitterComment = async (accessToken: string, postId: string, replyText: string) => {
-  const response = await fetch('https://api.twitter.com/2/tweets', {
-    method: 'POST',
-    headers: {
-      Authorization: bearerAuthorization(accessToken),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      text: replyText,
-      reply: { in_reply_to_tweet_id: postId },
-    }),
-  });
-  if (!response.ok) throw new Error(`Twitter reply failed: ${response.statusText}`);
-  return response.json();
-};
-
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -92,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { platform, postId, accountId, action, commentId, replyText, scheduled_post_id } = req.body;
+    const { platform, postId, accountId, action, scheduled_post_id } = req.body;
 
     if (!action) {
       return res.status(400).json({ error: 'Missing required field: action' });
@@ -140,24 +106,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // Owner ruling 2026-11-04 (Checkpoint 1, item 6): this route no longer replies. Its reply
+    // action posted straight to LinkedIn/X with no governance, approval or channel gate, and
+    // reported Facebook/Instagram replies as posted when nothing was sent. It is not replaced
+    // by another direct platform call; replies go only through a governed engagement path.
     if (action === 'reply') {
-      if (!platform || !postId || !accountId || !replyText) {
-        return res.status(400).json({ error: 'Reply requires platform, postId, accountId, replyText' });
-      }
-      if (!(await authorizeSocialAccount(req, res, user.id, accountId))) return;
-      const mockAccessToken = `mock_token_${accountId}`;
-      let result: any;
-      if (platform === 'linkedin') {
-        if (!commentId) return res.status(400).json({ error: 'Comment ID is required for LinkedIn replies' });
-        result = await replyToLinkedInComment(mockAccessToken, commentId, replyText);
-      } else if (platform === 'twitter') {
-        result = await replyToTwitterComment(mockAccessToken, postId, replyText);
-      } else if (platform === 'facebook' || platform === 'instagram') {
-        result = { id: `reply_${Date.now()}`, message: 'Reply posted successfully' };
-      } else {
-        throw new Error(`Unsupported platform: ${platform}`);
-      }
-      return res.status(200).json({ success: true, platform, action: 'reply', data: result });
+      return res.status(410).json({
+        error: 'REPLY_REMOVED',
+        message: 'Replying through /api/social/comments has been removed; replies are sent only through the governed engagement path.',
+      });
     }
 
     if (action === 'delete') {

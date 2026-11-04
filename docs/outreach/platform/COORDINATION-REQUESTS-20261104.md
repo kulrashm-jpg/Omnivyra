@@ -92,7 +92,7 @@ The `source` CHECK needs a value for a recipient-initiated link. The schema chan
 | Request | To | Sent | Response |
 |---|---|---|---|
 | CR-SC7 | Orchestration | 2026-11-04 (c7) | — |
-| CR-SC7 | PI | 2026-11-04 (virality-b6) | Queued. Blocker: `stop` and `not_interested` are not governance types; complaint is purpose-scoped; `rejected` only through the human path. Ratification is an owner decision. |
+| CR-SC7 | PI | 2026-11-04 (virality-b6) | Technical read received. The governance-type blocker is resolved by storing codes in Outreach's own columns. Draft amended: `stop` → `dnc_channel`, `wrong_recipient` → `invalid_contact`, `ambiguous` → no outcome, the `not_interested` name collision noted, all phrase matches to operator review (Q-1) since `closed_disqualified` is irreversible. The complaint-scoping caveat was withdrawn by PI. Ratification is an owner decision. |
 | CR-SC4 / CR-4 | Orchestration | 2026-11-04 (c7) | — |
 | CR-BL1 | Billing | Not sent: no Billing session identified | — |
 | CR-PI1 | PI | 2026-11-04 (virality-b6) | Queued. (1) No writer confirmed, and the PI read is severed. (2) Canonical store confirmed; social/community use not proven, so it goes to the owner. |
