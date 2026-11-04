@@ -8,7 +8,11 @@ name: Governance Nightly Verification
 
 on:
   schedule:
-    - cron: '17 3 * * *'   # daily 03:17 UTC
+    # CI-P12: weekly (Monday 03:17 UTC), was daily. The frozen runtime can only
+    # drift through a commit, and every push to main already runs the same
+    # baseline + docs verification in governance-verification.yml. The weekly
+    # run keeps the deep orchestrator digest alarm; dispatch remains for ad hoc.
+    - cron: '17 3 * * 1'
   workflow_dispatch: {}
 
 permissions:
