@@ -48,6 +48,28 @@ describe('2 — Prospects sits beneath Prospect and points at /prospects', () =>
   });
 });
 
+describe('2b — PI-LDB: Import is reachable from the Prospect menu', () => {
+  // `/prospects/[id]` was reachable only by typing a URL until WS-10 added a
+  // list page that linked to it. An import flow nothing links to would be the
+  // same defect, so reachability is asserted rather than assumed.
+  it('is a child of Prospect', () => {
+    expect(childLabels('prospect')).toContain('Import');
+  });
+
+  it('points at the import route', () => {
+    expect(childHref('prospect', 'Import')).toBe('/prospects/import');
+  });
+
+  it('is a Prospect action, not a Lead Intelligence lens', () => {
+    const importItem = prospect().children.find((c) => c.label === 'Import');
+    expect(importItem?.group).toBeUndefined();
+  });
+
+  it('activates exactly the Prospect group and nothing else', () => {
+    expect(activeGroups('/prospects/import')).toEqual(['Prospect']);
+  });
+});
+
 describe('3/4 — Lead Intelligence nests under Prospect and keeps its two items', () => {
   it('Overview and All Leads are grouped under Lead Intelligence', () => {
     const grouped = prospect().children.filter((c) => c.group === 'Lead Intelligence').map((c) => c.label);

@@ -321,7 +321,18 @@ describe('G-6 §8 — structural proof, read from the PostgreSQL catalog', () =>
     // (source_assertions_relationship_tenant_fk) added on this branch by
     // 20261122000000_pi_person_account_relationships.sql (re-created with
     // SET NULL (relationship_id) by 20261125000000_pi_relationship_evidence_detachment.sql).
-    expect(byTable.source_assertions).toBe(4);
+    // 5, not 4: PI-LDB adds a FIFTH composite tenant leg,
+    // `source_assertions_mapping_profile_tenant_fk`
+    // (20270201000001_pi_ldb_assertion_mapping_provenance), so an assertion can
+    // cite the exact mapping profile version that decided its field. Like the
+    // other four it is composite and tenant-second, so the invariant this test
+    // exists for is unchanged and only the count moved.
+    //
+    // This is the THIRD pin of this shape the PI-LDB branch has had to move
+    // (see also li2_source_records and the PI-LDB-2 rollback postcondition).
+    // A literal count over a table several tracks extend breaks every time one
+    // of them does its job; assert by name if this moves again.
+    expect(byTable.source_assertions).toBe(5);
     // 4, not 3: assertion, person, account + the relationship leg
     // (canonical_decisions_relationship_tenant_fk) added on this branch by
     // 20261124000000_pi_relationship_canonical_decisions.sql.

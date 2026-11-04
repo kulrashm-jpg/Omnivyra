@@ -232,7 +232,25 @@ describe('P0 · nothing outside the cache changed', () => {
     for (const op of ['chatModeration', 'responseGeneration', 'generateMasterContent', 'profileEnrichment']) {
       expect(block).toContain(op);
     }
-    expect((block.match(/'/g) ?? []).length / 2).toBe(13); // unchanged membership count
+    // PI-LDB-5 raised this from 13 to 14 by registering 'leadAttributeMapping'.
+    // The membership count is now read as QUOTED IDENTIFIERS rather than raw
+    // apostrophes / 2. The old arithmetic was not measuring membership: an
+    // apostrophe in a comment ("the tenant's file") moved the count by a half,
+    // and a quoted non-member in a comment moved it by a whole one. Either
+    // would have failed this pin while the set was untouched, or — in pairs —
+    // let a real addition through. The regex counts what the assertion claims.
+    const members = block.match(/'[A-Za-z][A-Za-z0-9_]*'/g) ?? [];
+    expect(members).toHaveLength(14);
+    expect(members).toContain("'leadAttributeMapping'");
+  });
+
+  it('the mapping operation is never-cacheable through the LIVE predicate, not just the list', () => {
+    // Membership in the source text is not the behaviour. isCacheable() tests
+    // EXACT_ONLY_OPS *before* NO_CACHE_OPS, so an operation in both would be
+    // re-enabled by the ai-exact-cache flag. This asserts the real answer.
+    const { isCacheable, isExactOnlyOp } = require('../../services/aiResponseCache');
+    expect(isCacheable('leadAttributeMapping')).toBe(false);
+    expect(isExactOnlyOp('leadAttributeMapping')).toBe(false);
   });
 
   it('the gateway still threads companyId into both cache calls (tenant scoping intact)', () => {

@@ -1,11 +1,22 @@
-import { ingestCanonicalLead, ingestFromSource, routeToCanonicalInput, type IngestionPorts, type CanonicalLead } from '../../../lib/leadIntelligence';
+import { ingestCanonicalLead, ingestFromSource, routeToCanonicalInput, pendingReconciliation, type IngestionPorts, type CanonicalLead } from '../../../lib/leadIntelligence';
 
 function makePorts(resolved: { unifiedPersonId: string | null; matchedBy?: string } = { unifiedPersonId: 'up_1', matchedBy: 'email' }) {
   const emitted: CanonicalLead[] = [];
   const calls: Array<Record<string, unknown>> = [];
   const p: IngestionPorts = {
     identity: { async resolve(input) { calls.push(input as Record<string, unknown>); return resolved; } },
-    sink: { async emit(l) { emitted.push(l); } },
+    // Returns a verdict because `LeadIntelligenceSink.emit` is declared
+    // `Promise<LeadProjectionResult>` (lib/leadIntelligence/types.ts). A bare
+    // `push` inferred `Promise<void>` and did not satisfy the contract — a real
+    // type error that jest never saw, because ts-jest is transpile-only here.
+    //
+    // `pendingReconciliation`, NOT `persisted`: this double buffers in memory
+    // and no durable row exists, so a synthetic id would be a sink that writes
+    // nothing and claims persistence. That is the exact false success the
+    // projection contract exists to prevent, and it is the same verdict the
+    // production in-memory sink returns (`createInMemorySink`). The pipeline
+    // discards the value, so nothing observable here changes.
+    sink: { async emit(l) { emitted.push(l); return pendingReconciliation('no_row_returned'); } },
     now: () => '2026-06-29T00:00:00.000Z',
   };
   return { p, emitted, calls };

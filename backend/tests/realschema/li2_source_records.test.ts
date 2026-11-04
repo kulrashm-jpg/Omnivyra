@@ -45,18 +45,31 @@ describe('LI-2 — schema shape', () => {
     }
   });
 
-  it('has 6 composite tenant-safe foreign keys', async () => {
+  it('has 7 composite tenant-safe foreign keys', async () => {
     const { rows } = await db.query(`
       SELECT con.conname, pg_get_constraintdef(con.oid) d
         FROM pg_constraint con JOIN pg_class s ON s.oid=con.conrelid
        WHERE con.contype='f' AND s.relname IN ('source_records','source_assertions')
          AND array_length(con.conkey,1)=2 ORDER BY con.conname`);
-    // Six since migration 20261122000000 added
-    // `source_assertions_relationship_tenant_fk`, the relationship SUBJECT. The
-    // invariant below is what this test is really for and it is unchanged: the
-    // loop still runs over every composite FK, so widening the count strengthens
-    // the coverage rather than relaxing it.
-    expect(rows).toHaveLength(6);
+    // SEVEN, and neither branch said so.
+    //
+    // This conflict LOOKED already resolved: main and the sprint both land on
+    // `6`, so picking either comment leaves the number alone and the test fails
+    // against the merged schema. They are counting different keys.
+    //   * main   +1: `source_assertions_relationship_tenant_fk` (20261122000000),
+    //                the relationship SUBJECT.
+    //   * sprint +1: `source_assertions_mapping_profile_tenant_fk`
+    //                (20270201000001), so an assertion can cite the exact mapping
+    //                profile version that decided its field.
+    // Both are composite and tenant-second, both are present once merged, and
+    // this query spans source_records AND source_assertions — so 5 + 1 + 1 = 7.
+    //
+    // The sprint's own comment asked for this: "if a seventh appears without
+    // this comment changing, ask why." It appeared because two branches each
+    // added one. The invariant below is what the test is really for and it is
+    // untouched: the loop runs over every composite FK, so a widened count
+    // strengthens coverage rather than relaxing it.
+    expect(rows).toHaveLength(7);
     for (const r of rows as any[]) {
       expect(r.d).toMatch(/, organization_id\)/);   // tenant is always the second leg
     }
