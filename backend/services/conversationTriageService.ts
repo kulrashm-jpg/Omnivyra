@@ -7,6 +7,8 @@ import { supabase } from '../db/supabaseClient';
 import { parseModelOutputOr } from './ai/safety';
 import { getThreadMemory } from './conversationMemoryService';
 import { runCompletionWithOperation } from './aiGateway';
+import { TRIAGE_CATEGORY_TO_CANONICAL } from './engagementClassification/legacyMappings';
+import type { CanonicalClassificationCode } from './engagementClassification/vocabulary';
 
 export const CLASSIFICATION_CATEGORIES = [
   'question_request',
@@ -24,7 +26,18 @@ export type TriageResult = {
   classification_confidence: number;
   sentiment: string;
   triage_priority: number;
+  /**
+   * SC-7 (draft) canonical code for `classification_category`. Additive: the four
+   * fields above are unchanged, and the worker persists only those four. Never a
+   * governance class — governance comes from the deterministic detector alone.
+   */
+  canonical_code: CanonicalClassificationCode;
 };
+
+/** SC-7 (draft): the canonical code for a triage category. */
+export function canonicalCodeForTriageCategory(category: ClassificationCategory): CanonicalClassificationCode {
+  return TRIAGE_CATEGORY_TO_CANONICAL[category].code;
+}
 
 async function loadThreadContext(
   threadId: string,
@@ -152,6 +165,7 @@ Respond with JSON: {"classification_category":"...","classification_confidence":
       classification_confidence: confidence,
       sentiment,
       triage_priority: triagePriority,
+      canonical_code: canonicalCodeForTriageCategory(validCategory),
     };
   } catch (err) {
     console.warn('[conversationTriage] classifyThread error', threadId, (err as Error)?.message);

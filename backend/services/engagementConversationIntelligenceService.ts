@@ -10,6 +10,8 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { mapLegacyLabel } from './engagementClassification/legacyMappings';
+import type { CanonicalClassificationCode } from './engagementClassification/vocabulary';
 
 const INFLUENCER_FOLLOWER_THRESHOLD = 10000;
 
@@ -66,7 +68,11 @@ async function detectInfluencer(
   return false;
 }
 
-function ruleBasedAnalysis(content: string, sentimentScore: number | null): MessageIntelligenceResult {
+/**
+ * The deterministic rule-based pass. Pure. Exported (SC-7 draft) so the canonical
+ * entry point can reuse it instead of adding a classifier; behaviour unchanged.
+ */
+export function ruleBasedAnalysis(content: string, sentimentScore: number | null): MessageIntelligenceResult {
   const lower = (content ?? '').toString().trim().toLowerCase();
   const sentiment = sentimentScore != null && sentimentScore < -0.3 ? 'negative'
     : sentimentScore != null && sentimentScore > 0.3 ? 'positive'
@@ -94,6 +100,14 @@ function ruleBasedAnalysis(content: string, sentimentScore: number | null): Mess
     influencer_signal: false,
     confidence_score: 0.7,
   };
+}
+
+/**
+ * SC-7 (draft): the canonical code for this service's `intent`. Additive; the stored
+ * `intent` is unchanged. Unknown/null intents map to `ambiguous`, never governance.
+ */
+export function canonicalCodeForIntelligenceIntent(intent: string | null | undefined): CanonicalClassificationCode {
+  return mapLegacyLabel('intelligence_intent', intent).code;
 }
 
 /**

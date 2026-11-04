@@ -4,6 +4,8 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { mapLegacyLabel } from './engagementClassification/legacyMappings';
+import type { CanonicalClassificationCode } from './engagementClassification/vocabulary';
 
 export type MessageIntent =
   | 'greeting'
@@ -83,6 +85,15 @@ export async function resolveResponsePolicy(
     auto_reply: rule.auto_reply ?? false,
     platform_modifiers: profile ? { response_style: profile.response_style ?? '' } : undefined,
   };
+}
+
+/**
+ * SC-7 (draft): the canonical code for an intent as this engine normalises it.
+ * Additive; rule lookup still keys on the legacy `intent_type`. Intents outside
+ * MessageIntent map to `ambiguous`, never governance.
+ */
+export function canonicalCodeForPolicyIntent(raw: string | null | undefined): CanonicalClassificationCode {
+  return mapLegacyLabel('policy_intent', normalizeIntent(raw)).code;
 }
 
 function normalizeIntent(raw: string | null | undefined): string {
