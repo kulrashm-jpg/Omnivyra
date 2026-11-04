@@ -1,15 +1,19 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ingestExtensionEvent } from '../../../backend/services/extensionEventIngestionService';
-import { extractAccessToken, getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifyExtensionSessionToken } from '../../../backend/services/extensionSessionService';
+import { requireExtensionAuth } from '../../../backend/middleware/extensionAuthMiddleware';
+import { EXTENSION_BROWSER_INGESTION_SUSPENDED, refuseSuspendedIngestion } from '../../../backend/services/extensionIngestionSuspension';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // R-3: browser ingestion is suspended. Refused before auth, parsing or any
+  // read/write, so nothing collected in a browser is stored.
+  if (EXTENSION_BROWSER_INGESTION_SUSPENDED) return refuseSuspendedIngestion(res);
 
   const organizationId =
     (req.body?.organization_id ?? req.body?.organizationId ?? req.body?.orgId ?? req.body?.companyId) as
@@ -22,15 +26,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    const extensionSession = verifyExtensionSessionToken(extractAccessToken(req));
-    const effectiveUserId = extensionSession?.userId ?? user?.id ?? null;
+    // Same chain as /events/dms and /events/comments: extension session token
+    // AND a valid request signature (timestamp window, single-use nonce). A
+    // bearer token alone is no longer enough, and a Supabase user JWT is no
+    // longer accepted here; the extension is this route's only caller, and it
+    // has always signed /api/extension/* requests.
+    const auth = await requireExtensionAuth(req, res);
+    if (!auth) return;
+    const { session } = auth;
+    const effectiveUserId = session.userId;
 
-    if ((!extensionSession && error) || !effectiveUserId) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if (extensionSession && extensionSession.orgId !== companyId) {
+    if (session.orgId !== companyId) {
       return res.status(403).json({ error: 'Extension session organization mismatch' });
     }
 

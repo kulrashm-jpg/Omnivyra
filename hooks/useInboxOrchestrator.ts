@@ -55,6 +55,7 @@ import {
   type PlatformSyncTrustState,
 } from '@/components/engagement/inbox/helpers';
 import { getRecommendedThread } from '@/components/engagement/threadQueueModel';
+import { BROWSER_SYNC_SUSPENDED, BROWSER_SYNC_SUSPENDED_NOTICE } from '@/lib/engagement/browserSyncSuspension';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 
 // =====================================================================
@@ -306,6 +307,17 @@ export function useInboxOrchestrator(deps: UseInboxOrchestratorDeps) {
         EXTENSION_SYNC_PLATFORM_SET.has(platform)
       );
       if (uniquePlatforms.length === 0) return;
+
+      // R-3: browser sync is suspended. Queue nothing, wake nothing, and say
+      // so plainly rather than reporting a failed sync.
+      if (BROWSER_SYNC_SUSPENDED) {
+        setPlatformSyncTrust((current) => ({
+          status: 'warning',
+          lastSyncedAt: current.lastSyncedAt,
+          message: BROWSER_SYNC_SUSPENDED_NOTICE,
+        }));
+        return;
+      }
 
       setPlatformSyncTrust((current) => ({
         status: 'syncing',

@@ -56,6 +56,7 @@ import {
 import { isActionableDmPreview, isLinkedInMailboxSelfSender } from '@/lib/engagement/messageRoles';
 import { validateSyncRecord } from '@/lib/engagement/syncIngestion';
 import { parseMessageDateMs } from '@/lib/engagement/messageTime';
+import { EXTENSION_BROWSER_INGESTION_SUSPENDED, refuseSuspendedIngestion } from '@/backend/services/extensionIngestionSuspension';
 
 type IncomingThread = {
   platform_thread_id?: string;
@@ -168,6 +169,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
+
+  // R-3: browser ingestion is suspended. Refused before auth, parsing or any
+  // read/write, so nothing collected in a browser is stored.
+  if (EXTENSION_BROWSER_INGESTION_SUSPENDED) return refuseSuspendedIngestion(res);
 
   const auth = await requireExtensionAuth(req, res);
   if (!auth) return;
