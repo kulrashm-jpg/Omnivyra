@@ -34,6 +34,16 @@ import { ownedDbTable } from '../../db/writeOwner';
  *
  * EVERY decision, allowed or blocked, is audited. If the audit write
  * fails the decision is demoted to BLOCKED — no log, no automation.
+ *
+ * THE ONE AUTO-REPLY SWITCH. automation_config (enabled + auto_reply_enabled,
+ * both default false) evaluated here is the single switch that can authorize an
+ * autonomous reply. `engagement_system_controls.auto_reply_enabled` and
+ * `response_rules.auto_reply` authorize nothing (engagementGovernanceService.ts,
+ * responseOrchestrator.ts). An ALLOWED decision is necessary, not sufficient:
+ * `runAutoExecution` hands the action to the community executor, which still
+ * requires a persisted human approval (D-01) and refuses an ad-hoc action, so
+ * Mode 3 cannot send until a governed approval binding exists (D-02, owned by
+ * Orchestration). Pinned by executionAuthorityInventory.test.ts.
  */
 
 export type ShouldAutoExecuteInput = {
