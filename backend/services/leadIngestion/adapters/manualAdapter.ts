@@ -85,6 +85,24 @@ export interface ManualLeadInput {
   // employer would silently overwrite one with the other, so the employer's
   // geography follows the prefix convention `companyName`/`companyDomain`
   // already established in this contract.
+  /**
+   * What the EMPLOYER does, in a sentence or two.
+   *
+   * An employer firmographic like the rest of this block, not a note about the
+   * person — `metadata` is where an operator's own notes go, and it is capped
+   * and key-screened precisely because the two must not be confused. The
+   * canonical field registry says the same thing in the words a tenant sees:
+   * "Not a product description, and not a note about the person."
+   *
+   * This existed everywhere EXCEPT here: `NormalizedAccount.description`,
+   * `ACCOUNT_ATTRIBUTE_COLUMNS`, the `prospect_accounts.description` column
+   * and the registry key were all already in place, and the mapping engine
+   * could propose `description` for a `Company Overview` column. With no
+   * field on this type the adapter had nothing to read, so an approved mapping
+   * was dropped by an import that reported success. That is the worst shape a
+   * defect can take, and it is why this is a field rather than a workaround.
+   */
+  description?: string | null;
   industry?: string | null;
   employeeCount?: number | string | null;
   employeeBand?: string | null;
@@ -291,6 +309,10 @@ export function toNormalizedManualRecord(input: ManualLeadInput): NormalizedInge
         // eventually disagree. `NormalizedAccount` accepts the provider forms
         // (`'250'`, a JSON string) for exactly this reason — the same posture
         // `domain` already takes, where W4 owns normalisation.
+        // Pass-through, like its neighbours: `toAccountAttributes` already
+        // applies `normalizeDisplayText` to this field, and spelling that
+        // rule twice is how two spellings come to disagree.
+        description: input.description ?? null,
         industry: input.industry ?? null,
         employeeCount: input.employeeCount ?? null,
         employeeBand: (input.employeeBand ?? null) as NormalizedAccount['employeeBand'],

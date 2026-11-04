@@ -54,6 +54,28 @@ import {
   type NormalizedIngestionRecord,
 } from './contracts';
 import { getLeadSourceAdapter, UnsupportedSourceError } from './registry';
+// PI-LDB-4. The durable lead store and the canonical ingestion pipeline that
+// writes it already existed and had NO caller from this path: `assemble()`,
+// `ingestCanonicalLead` and `durableLeadIntelligenceSink` were all wired to
+// each other and to the read service, and nothing invoked them. A prospect
+// therefore reached `canonical_leads` and never reached the store the Lead
+// Database reads, so it surfaced only through the legacy bridge — which reads
+// name and email columns that `canonical_leads` deliberately does not have.
+import {
+  ingestCanonicalLead,
+  buildAttributionContract,
+  canonicalProspectSource,
+  resolveCanonicalSource,
+  failed,
+  needsAttention,
+  pendingReconciliation,
+  projectionFailureFrom,
+  skipped,
+  type LeadIntelligenceSink,
+  type LeadProjectionResult,
+} from '../../../lib/leadIntelligence';
+import type { CanonicalLeadInput, IdentityResolverPort } from '../../../lib/leadIntelligence';
+import { durableLeadIntelligenceSink } from '../leadIntelligence/durableLeadIntelligenceSink';
 import { evaluateFeatureFlag } from '../featureFlagService';
 
 /** A batch bounded so a single call cannot be used to exhaust the platform. */
@@ -576,6 +598,108 @@ export async function ingestNormalizedRecord(
     }
   }
 
+  // ── DURABLE LEAD PROJECTION (PI-LDB-4) ──────────────────────────────────
+  // Makes the prospect VISIBLE. Everything above made it true and auditable;
+  // without this step it appears on no surface with a name.
+  //
+  // Placed last on purpose: this is a read-model projection of a prospect that
+  // is already durable, so it must run after identity, employer, the canonical
+  // Prospect and provenance have all committed. Running it earlier would risk
+  // publishing a lead whose evidence then failed to record.
+  //
+  // FAIL-OPEN, and reported. A projection failure leaves the prospect, person,
+  // employer and evidence exactly as they are — all durable — so failing the
+  // record here would discard good intake over a display concern. But the
+  // outcome carries the failure, because a fail-open nobody is told about is
+  // how a channel comes to look operational while the screen stays empty.
+  let leadProjection: IngestionRecordOutcome['leadProjection'];
+  if (!prospectId) {
+    // No canonical Prospect means there is nothing to project. WS-1 returns a
+    // null prospectId for a record with no `externalId` rather than minting one,
+    // so this is the same legitimate partial-record case, not a fault.
+    leadProjection = skipped('no_prospect');
+  } else {
+    try {
+      // Identity is ALREADY resolved above. This port hands back that answer
+      // instead of resolving again: a second resolution could return a
+      // different person for the same record and split one prospect across two
+      // identities, and identity resolution is not this step's job.
+      const resolvedIdentity: IdentityResolverPort = {
+        resolve: async () => ({ unifiedPersonId: personId, matchedBy: 'ingestion_orchestrator' }),
+      };
+
+      const identityHints = {
+        email: record.person?.email ?? null,
+        phone: record.person?.phone ?? null,
+        unifiedPersonId: personId,
+        externalKeys: record.person?.externalKeys ?? undefined,
+      };
+
+      const input: CanonicalLeadInput = {
+        organizationId: record.organizationId,
+        // The free-text provider key mapped onto the ONE canonical taxonomy by
+        // its own resolver, rather than cast here. `csv` resolves to `import`,
+        // which is why an imported prospect is labelled Import and answers the
+        // `?source=import` filter.
+        // `canonicalProspectSource`, NOT `resolveCanonicalSource`: this row's
+        // `sourceRef` is the canonical prospect, so its source must match what
+        // the reader's `canonical_leads` bridge computes for that same row, or
+        // the two views get different dedupe keys and one prospect is listed
+        // twice. See the helper's comment for the measured failure.
+        source: canonicalProspectSource({ rawSource: record.source }),
+        identity: identityHints,
+        // The provider's record verbatim. `buildAttributionContract` keeps every
+        // key it does not map in `sourceMetadata`, which is what preserves the
+        // original data alongside the canonical interpretation.
+        attribution: buildAttributionContract(result.raw ?? {}, identityHints),
+        status: null,
+        occurredAt: record.observedAt ?? at,
+        // The human-readable label. This is the whole reason PI-LDB-4 exists:
+        // the person's name and job title have nowhere else to go on the read
+        // path, because `canonical_leads` stores no person attributes.
+        display: {
+          name: record.person?.fullName ?? null,
+          title: record.person?.jobTitle ?? null,
+          contentText: null,
+        },
+        sourceRef: { table: 'canonical_leads', id: prospectId },
+      };
+
+      // PI-LDB P0. The sink's verdict is the ONLY evidence that a row landed,
+      // so it is captured rather than discarded.
+      //
+      // It has to be captured through a wrapper because `ingestCanonicalLead`
+      // returns the lead it CONSTRUCTED, not the row that was written — a
+      // distinction that is the whole defect in miniature. Wrapping the sink
+      // here, rather than widening the pipeline's return type, leaves the pure
+      // `ingestCanonicalLead`/`ingestFromSource` signatures and every other
+      // caller of them exactly as they are.
+      const observed: { verdict: LeadProjectionResult | null } = { verdict: null };
+      const observedSink: LeadIntelligenceSink = {
+        async emit(l) {
+          const result = await durableLeadIntelligenceSink.emit(l);
+          observed.verdict = result;
+          return result;
+        },
+      };
+
+      await ingestCanonicalLead(input, { identity: resolvedIdentity, sink: observedSink, now: () => at });
+
+      // No verdict means the sink was never reached. Pessimistic deliberately:
+      // a later change that stops calling the sink degrades to "unconfirmed",
+      // never to "success". Defaulting the other way is precisely the bug.
+      leadProjection = observed.verdict
+        ?? pendingReconciliation('no_row_returned', 'the durable sink was not reached');
+    } catch (e) {
+      // A typed failure carries the classified verdict; unwrap it rather than
+      // flattening everything to `write_failed`, or an operator reading
+      // "the write failed" would go looking at the data when the real answer is
+      // an unapplied migration.
+      leadProjection = projectionFailureFrom(e)
+        ?? failed('write_failed', e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return {
     externalId,
     ok: true,
@@ -583,6 +707,7 @@ export async function ingestNormalizedRecord(
     personId,
     accountId,
     prospectId,
+    leadProjection,
     enrichmentPlan,
     provenanceOutcome: ingestion.outcome,
     canonicalApplied: ingestion.canonicalApplied,
@@ -630,6 +755,8 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
       total: records.length,
       succeeded: 0,
       failed: records.length,
+      projected: 0,
+      notProjected: 0,
       outcomes: records.map(() => fail(
         null,
         'ingestion_disabled',
@@ -651,6 +778,8 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
         total: records.length,
         succeeded: 0,
         failed: records.length,
+        projected: 0,
+        notProjected: 0,
         outcomes: records.map(() => fail(null, 'unsupported_source', e)),
       };
     }
@@ -706,12 +835,23 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
   }
 
   const succeeded = outcomes.filter((o) => o.ok).length;
+  // Reported ALONGSIDE `succeeded`, not folded into it. An ingested record
+  // whose projection did not confirm really did ingest — but a batch in which
+  // not one row reached `lead_intelligence` must not be able to answer
+  // `succeeded === total` and nothing else, which is how this defect looked
+  // from the outside.
+  const projected = outcomes.filter((o) => o.leadProjection?.status === 'persisted').length;
+  const notProjected = outcomes.filter(
+    (o) => o.leadProjection !== undefined && needsAttention(o.leadProjection),
+  ).length;
   return {
     organizationId,
     source,
     total: records.length,
     succeeded,
     failed: outcomes.length - succeeded,
+    projected,
+    notProjected,
     outcomes,
   };
 }
