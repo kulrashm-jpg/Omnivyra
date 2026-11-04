@@ -117,3 +117,21 @@ Integrated tip `1daf12601` on `outreach/foundation-base-20261104`. It merges A `
   - the read-only sync test now asserts "not leased, not claimed, left pending" instead of "dispatched", as R-3 requires.
 
 **Closure status: none of A–D is complete.** What each closure is waiting on is listed in the completion register above. The integrated acceptance scenario has NOT been started, per the mandate.
+
+## Owner ruling, Checkpoint 1 (2026-11-04), as given to the Outreach coordinator
+
+1. Keep the stricter W1 implementation across all six files in the round-3 conflict. Reconcile the exact diff and hash, retain fail-closed behaviour, and keep WhatsApp blocked until its remaining verification is done.
+2. Content Platform is the accountable owner of canonical content persistence, revisions, brand voice and generation integration.
+3. Platform AI is the accountable owner of the personalized/conversation cache bypass and of fixing the `gpt-chat.ts` and `claude-chat.ts` direct-provider routes.
+4. The five migrations may be written locally on the foundation branch and tested only on a disposable database, with rollbacks and an explicit mapping from each schema change to its migration file.
+5. The super-admin thread-resume publish authorization fix is authorized.
+6. Removing the direct LinkedIn/X reply action from the social-comments route is authorized. It must not be replaced with another direct API call.
+7. The corrected complaint behaviour is approved: the restriction stays fail-closed even if saving the evidence fails. The failure must be exposed, never reported as a success, and a reconciliation path provided.
+8. Content limits:
+   - Validation rules come only from evidence-backed platform/provider limits and verified existing constraints; agent-proposed limits do not become mandatory rules.
+   - `platformAdaptationProfiles.ts` is the canonical social source once its production authority is verified; the other competing sets are reconciled to it.
+9. The four shared-contract requests may be sent to PI, Orchestration and Billing. No substitute stores or interfaces while waiting.
+
+**Sequence:** A T2 at unmodified `1daf12601` (report before migrations) → B migrations → C route fixes → D reconcile cross-workstream responses → E register. No final acceptance scenario until the closures are genuinely complete.
+
+**Scope:** local only. Release NO-GO.
