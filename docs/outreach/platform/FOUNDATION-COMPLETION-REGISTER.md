@@ -280,3 +280,24 @@ Round-3 additions were merged only where they refuse more.
 **Follow-ups recorded, not changed**
 - An `approved` row with no `approved_at` never becomes terminal, so the scheduler re-reads it every tick. It is never dispatched. This is in c7's Prompt 3 inventory.
 - Orchestration branch `orch/c3-community-safety` is cut at `0679a5908` (c7).
+
+**D1 regression found after commit (c7, 2026-11-05; confirmed by the coordinator from the code)**
+
+The behaviour fails closed but consumes approvals.
+- `communityEngineAdapter.ts` claims approved → executing (:800), then calls the executor with `source:'auto', auto:true, persist:true` (:812).
+- Round 3's auto gate (`communityAiActionExecutorRuntime.ts:576`, absent at `9c460a238`) refuses whenever `auto_rules_enabled !== true`, which is the default.
+- So a human-approved journey step ends terminal `skipped`. The adapter preflight does not check auto rules.
+- No D1 suite covered it.
+- **Owner: c7, Prompt 3.** Orchestration is not 'auto': it gets its own `source: 'orchestration'`, it requires a human approval of record, and policy refusals move before or into the claim. Regression test: with the default policy, an approved step is never `skipped` or consumed.
+
+**Other defects reported by c7, owned and fixed in Prompt 3 (migrations `20270126000000–03`)**
+- The `community_ai_action_logs` `event_type` CHECK rejects `skipped_due_to_platform_policy`, so policy-refusal logs are dropped.
+- `community_ai_platform_policy` has no tenant column.
+
+**Coordinator approval:** a minimal D-02 `approvalPasskey.ts` extension (`subject: 'community_action'` changes only the digest domain), on these conditions:
+- (a) a golden vector pinned before the edit;
+- (b) domain-separation tests both ways;
+- (c) a strict subject allow-list;
+- (d) no change to exports, WebAuthn or the 48-byte challenge.
+
+The diff hash comes to the coordinator for review before c7 commits.
