@@ -4,6 +4,11 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  *   GET   /api/execution-instances/:id?company_id=<uuid>      -> { instance }
  *   PATCH /api/execution-instances/:id  { lifecycleState }    -> { instance }
+ *   PATCH /api/execution-instances/:id  { lifecycleState: 'active', returnDate }
+ *       -> { instance, notBefore }   Prompt 4: a person resumes a PAUSED run with a
+ *       structured return date ({ kind: 'date', date } | { kind: 'instant', at }); it is
+ *       validated server-side (not past, within a year), retimed through the journey
+ *       retiming engine, and persisted as the next step's `not_before`. Same guards.
  *
  * ─── PATCH MOVES LIFECYCLE STATE AND NOTHING ELSE ─────────────────────────
  * Identity and pinned attribution — campaign, workflow, workflow version, target,
@@ -28,6 +33,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withdrawUnsentTasks } from '../../../backend/services/orchestration/journeyExit';
+import { resumeJourneyWithReturnDate } from '../../../backend/services/orchestration/journeyRetiming';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { PROSPECT_ICP_MANAGE } from '../../../shared/contracts/security';
@@ -80,6 +86,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({
         error: `lifecycleState must be one of ${LIFECYCLE_STATES.join(' | ')}`,
       });
+    }
+
+    if (body.returnDate !== undefined) {
+      if (lifecycleState !== 'active') return res.status(400).json({ error: 'a returnDate is only given when resuming (lifecycleState: active)' });
+      const resumed = await resumeJourneyWithReturnDate(companyId, instanceId, body.returnDate);
+      if (resumed.ok !== true) {
+        const status = resumed.code === 'run_not_found' ? 404 : resumed.code === 'not_paused' || resumed.code === 'superseded' ? 409 : 400;
+        return res.status(status).json({ error: resumed.reason, code: resumed.code });
+      }
+      return res.status(200).json({ instance: resumed.instance, notBefore: resumed.notBefore });
     }
 
     // A run that ended must not leave a task someone can still approve and send. Withdrawn

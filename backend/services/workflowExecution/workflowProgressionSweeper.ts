@@ -9,8 +9,13 @@
  * is the only clock — no second scheduler), then, for the one ready step:
  *
  *   1. reads the individual's facts (individualIntelligence.ts — canonical sources);
- *   2. ends the journey if the person responded or PI closed the prospect
- *      (journeyResponses.ts) — no further step, and any unsent WS-3 task is cancelled;
+ *   2. ends the journey on a deterministic answer (booked, converted, rejected,
+ *      unsubscribed, a WhatsApp STOP) or when PI closed the prospect — no further step,
+ *      and any unsent WS-3 task is cancelled; SUSPENDS it (run `paused`, a `needs_human`
+ *      decision) on an unclassified reply a person has not yet evaluated (Prompt 4).
+ *      A canonical restriction (complaint, unsubscribe) is read before any reply, and a
+ *      complaint also ends a PAUSED run (Q-C1, the paused pass after the main loop);
+ *   2a. a step a person deferred to a return date (`not_before`) waits until then;
  *   3. skips a step whose choice group already acted;
  *   4. asks the central gate (journeyGovernance.ts) on a contact channel — a tenant or
  *      platform control holds the step, whichever engine would have served it;
@@ -47,7 +52,7 @@ import {
 import {
   getPlanForInstance, lastCompletedActionAtForSubject, listInstanceTasks,
 } from '../executionPlans/executionPlanStore';
-import { listExecutionInstanceIdsInStates, setExecutionInstanceState } from '../executionInstances/executionInstanceStore';
+import { getExecutionInstance, listExecutionInstanceIdsInStates, setExecutionInstanceState } from '../executionInstances/executionInstanceStore';
 import { ownedDbTable } from '../../db/writeOwner';
 import { recordProgressionSweep } from '../leadOutreachExecution/telemetry';
 import { logger } from '../logger';
@@ -64,8 +69,11 @@ import {
   channelPermissionFact, evaluateConditions, hoursBetween, isProspectClosedToJourneys,
   isWithinExecutionWindow, NON_CONTACT_CHANNELS, type JourneyCondition,
 } from '../orchestration/journeyPolicy';
-import { assessJourneyExit, durableJourneyResponsePort, type JourneyResponsePort } from '../orchestration/journeyResponses';
-import { recordJourneyDecisions, type JourneyDecisionInput } from '../orchestration/journeyDecisionLog';
+import {
+  assessComplaint, assessJourneyResponse, durableJourneyResponsePort, evaluatedReplyKeys, REPLY_AWAITING_EVALUATION, type JourneyResponsePort,
+} from '../orchestration/journeyResponses';
+import { APPROVAL_REVOKED } from '../orchestration/engineAdapters';
+import { listJourneyDecisions, recordJourneyDecisions, type JourneyDecisionInput } from '../orchestration/journeyDecisionLog';
 import { feedRecentOutcomesToLifecycle, feedWhatsAppReplyToLifecycle, type LifecycleFeedbackReport } from '../orchestration/journeyFeedback';
 import { exitJourney, withdrawStepAction, withdrawUnsentTasks } from '../orchestration/journeyExit';
 import { channelRefusal } from '../orchestration/journeyGovernance';
@@ -134,6 +142,8 @@ export interface SweepCounters {
   settlement_converged: number;
   /** Journeys ended because the person responded or PI closed the prospect. */
   journeys_exited: number;
+  /** Prompt 4 — journeys paused because the person replied and a person must evaluate it. */
+  journeys_suspended: number;
   /** PI lifecycle transitions written from recorded responses. */
   lifecycle_transitions_written: number;
   errors: number;
@@ -185,7 +195,7 @@ export interface SweepReport {
 const zero = (): SweepCounters => ({
   instances_scanned: 0, steps_advanced: 0, tasks_seen: 0, steps_settled: 0, steps_skipped: 0,
   tasks_deferred_frequency: 0, tasks_waiting: 0, tasks_needing_human: 0,
-  unsupported_channels: 0, settlement_converged: 0, journeys_exited: 0,
+  unsupported_channels: 0, settlement_converged: 0, journeys_exited: 0, journeys_suspended: 0,
   lifecycle_transitions_written: 0, errors: 0,
 });
 
@@ -205,6 +215,8 @@ export interface SweeperDeps {
   readonly adapters: readonly EngineAdapter[];
   readonly intelligence?: IndividualIntelligencePort;
   readonly responses?: JourneyResponsePort;
+  /** The run's recorded decisions, for the replies a person already evaluated. */
+  readonly readDecisions?: typeof listJourneyDecisions;
   /** The durable record and PI feed. Injected together: a unit test exercises neither. */
   readonly recordDecisions?: typeof recordJourneyDecisions;
   readonly feedLifecycle?: typeof feedRecentOutcomesToLifecycle;
@@ -413,8 +425,41 @@ export async function advanceAndDispatchWorkflowExecution(
         decide({ engine: adapter.engine, decision: 'waiting', outcome: PROSPECT_STATE_UNREADABLE_GAP, reasons: ['the prospect state could not be read; no contact this sweep'] });
         continue;
       }
-      const exit = await assessJourneyExit(organizationId, executionInstanceId, facts.personId, responses);
-      const exitReason = exit.outcome ?? (isProspectClosedToJourneys(facts.facts) ? String(facts.facts.prospect_lifecycle_state) : null);
+      const priorDecisions = await (options.deps?.readDecisions ?? listJourneyDecisions)(organizationId, executionInstanceId);
+      const evaluated = evaluatedReplyKeys(priorDecisions);
+      // RV-1 — suspensions a person already reviewed: the run is active again, so they resumed it.
+      const reviewed = new Set(priorDecisions.filter((d) => d.decision === 'needs_human' && d.outcome !== null).map((d) => d.outcome as string));
+      const exit = await assessJourneyResponse(organizationId, executionInstanceId, facts.personId, evaluated, responses, now);
+      // A PI closed state ends the run even while a reply awaits evaluation.
+      const closedBy = isProspectClosedToJourneys(facts.facts) ? String(facts.facts.prospect_lifecycle_state) : null;
+      const exitReason = exit.consequence === 'exit' ? exit.outcome : closedBy;
+      if (exitReason === null && exit.consequence === 'suspend') {
+        // Prompt 4 — an unclassified reply SUSPENDS the journey: the existing pause, which
+        // the sweeper never progresses and the D-03 hold keeps any handed-off task from
+        // sending. Nothing is withdrawn: a person resumes (PATCH lifecycleState `active`)
+        // or ends it (`cancelled`, which withdraws). PI hears the reply as before.
+        if (exit.whatsappReply !== null && subject.kind === 'prospect') {
+          try {
+            const fed = await feedWhatsAppReplyToLifecycle({
+              organizationId, prospectId: subject.id, now,
+              messageId: exit.whatsappReply.messageId, threadId: exit.whatsappReply.threadId,
+              outcome: exit.whatsappReply.outcome,
+            });
+            if (fed.wrote) counters.lifecycle_transitions_written += 1;
+          } catch (e) {
+            issues.push({ scope: 'instance', organizationId, id: executionInstanceId, code: 'lifecycle_feedback_failed', message: errText(e) });
+          }
+        }
+        // Paused FIRST: only a run that really is suspended records the decision that marks
+        // its reply as handed to a person.
+        await setExecutionInstanceState({ organizationId, instanceId: executionInstanceId, lifecycleState: 'paused' });
+        counters.journeys_suspended += 1;
+        decide({
+          engine: adapter.engine, decision: 'needs_human', outcome: `${REPLY_AWAITING_EVALUATION}:${exit.replyKey}`,
+          reasons: ['the person replied; the journey is paused until a person evaluates the reply (resume or end it)'],
+        });
+        continue;
+      }
       if (exitReason !== null) {
         if (exit.whatsappReply !== null && subject.kind === 'prospect') {
           // Best effort: the journey's stop must not depend on PI accepting the event.
@@ -451,6 +496,13 @@ export async function advanceAndDispatchWorkflowExecution(
         } catch (e) {
           issues.push({ scope: 'instance', organizationId, id: executionInstanceId, code: 'lifecycle_open_failed', message: errText(e) });
         }
+      }
+
+      // ── 3a. A person deferred this step to a return date: it waits until then. ──
+      if (typeof ready.notBefore === 'string' && !(Date.parse(now) >= Date.parse(ready.notBefore))) {
+        counters.tasks_deferred_frequency += 1;
+        decide({ engine: adapter.engine, decision: 'deferred', outcome: 'not_before', reasons: [`a person deferred this step until ${ready.notBefore}`] });
+        continue;
       }
 
       const heldHours = ready.readyAt === null ? null : hoursBetween(ready.readyAt, now);
@@ -574,6 +626,20 @@ export async function advanceAndDispatchWorkflowExecution(
           decide({ engine: r.engine, decision: 'skipped', outcome: r.outcome, reasons });
           break;
         case 'needs_human':
+          // RV-1 — a revoked approval PAUSES the run for a person, the reply-suspension
+          // pattern. Once a person resumed it (the suspension is on record and the run is
+          // active), the revoked task stays cancelled and the step is skipped as before.
+          if (r.outcome.startsWith(`${APPROVAL_REVOKED}:`)) {
+            if (reviewed.has(r.outcome)) {
+              await settleStep(organizationId, ready.id, 'skipped', counters, issues);
+              decide({ engine: r.engine, decision: 'skipped', outcome: `${APPROVAL_REVOKED}_reviewed`, reasons: ['a person resumed the journey after the revocation; the revoked action is not taken'] });
+              break;
+            }
+            await setExecutionInstanceState({ organizationId, instanceId: executionInstanceId, lifecycleState: 'paused' });
+            counters.journeys_suspended += 1;
+            decide({ engine: r.engine, decision: 'needs_human', outcome: r.outcome, reasons: ['the approval was revoked; the journey is paused until a person resumes or ends it'] });
+            break;
+          }
           counters.tasks_needing_human += 1;
           issues.push({ scope: 'task', organizationId, id: task.id, code: `needs_human:${r.outcome}`, message: r.reason ?? r.outcome });
           decide({ engine: r.engine, decision: 'needs_human', outcome: r.outcome, reasons });
@@ -596,6 +662,33 @@ export async function advanceAndDispatchWorkflowExecution(
 
   if (counters.tasks_seen >= taskBudget && instanceIds.length > counters.instances_scanned) {
     workRemains = true;
+  }
+
+  // ── Q-C1: a complaint ends a PAUSED run too. Nothing else is done to a paused run. ──
+  let pausedIds: string[] = [];
+  try {
+    pausedIds = await listExecutionInstanceIdsInStates(organizationId, ['paused'], SWEEP_LIMITS.instancesPerTenant);
+  } catch (e) {
+    counters.errors += 1;
+    issues.push({ scope: 'tenant', organizationId, id: null, code: errCode(e), message: `paused runs unreadable: ${errText(e)}` });
+  }
+  if (pausedIds.length > SWEEP_LIMITS.instancesPerTenant) { pausedIds = pausedIds.slice(0, SWEEP_LIMITS.instancesPerTenant); workRemains = true; }
+  for (const executionInstanceId of pausedIds) {
+    try {
+      const run = await getExecutionInstance(organizationId, executionInstanceId);
+      if (run === null || run.lifecycleState !== 'paused') continue;
+      const facts = await loadIndividualFacts(organizationId, { kind: run.subjectKind, id: run.subjectId }, now, intelligence);
+      if (!(await assessComplaint(organizationId, executionInstanceId, facts.personId, responses, now))) continue;
+      await exitJourney(organizationId, executionInstanceId);
+      counters.journeys_exited += 1;
+      decisions.push({
+        executionInstanceId, planStepId: null, stepKey: null, channel: null, engine: null,
+        decision: 'exited', outcome: 'complained', reasons: ['the journey ended: complained (it was paused)'],
+      });
+    } catch (e) {
+      counters.errors += 1;
+      issues.push({ scope: 'instance', organizationId, id: executionInstanceId, code: errCode(e), message: errText(e) });
+    }
   }
 
   const recorded = await (options.deps?.recordDecisions ?? recordJourneyDecisions)(

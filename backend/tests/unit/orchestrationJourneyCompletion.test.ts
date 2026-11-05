@@ -9,7 +9,9 @@ import {
   rotateInstanceWindow, SWEEP_LIMITS, SWEEP_ROTATION_MS, ROUTED_CHANNELS,
 } from '../../services/workflowExecution/workflowProgressionSweeper';
 import { createWs3Adapter, buildAdapterRegistry, type Ws3AdapterDeps } from '../../services/orchestration/engineAdapters';
-import { assessJourneyExit, JOURNEY_EXIT_OUTCOMES, type JourneyResponsePort } from '../../services/orchestration/journeyResponses';
+import {
+  assessJourneyResponse, evaluatedReplyKeys, JOURNEY_EXIT_OUTCOMES, REPLY_AWAITING_EVALUATION, replyReferenceKey, type JourneyResponsePort,
+} from '../../services/orchestration/journeyResponses';
 import { journeyDecisionKey } from '../../services/orchestration/journeyDecisionLog';
 import { isProspectClosedToJourneys, NON_CONTACT_CHANNELS } from '../../services/orchestration/journeyPolicy';
 import { loadIndividualFacts, PROSPECT_STATE_UNREADABLE_GAP, type IndividualIntelligencePort } from '../../services/orchestration/individualIntelligence';
@@ -174,33 +176,72 @@ describe('application callers compose the certified engine', () => {
   });
 });
 
-describe('what ends a journey', () => {
-  const port = (outcomes: string[], reply: { outcome: 'replied' | 'unsubscribed'; messageId: string; threadId: string } | null = null): JourneyResponsePort => ({
+describe('what ends a journey, and what suspends it (Prompt 4)', () => {
+  type Reply = { outcome: 'replied' | 'unsubscribed'; messageId: string; threadId: string; inboundMessageIds?: string[] };
+  const port = (outcomes: string[], reply: Reply | null = null, refs?: string[]): JourneyResponsePort => ({
     ws3Outcomes: async () => outcomes,
     whatsappReply: async () => reply,
+    ...(refs ? { ws3ReplyRefs: async () => refs } : {}),
+  });
+  const none = new Set<string>();
+  const assess = (p: JourneyResponsePort, evaluated: ReadonlySet<string> = none) => assessJourneyResponse(ORG, 'i', 'p', evaluated, p);
+
+  it('the deterministic answers are exactly complained (Q-C1), booked, converted, rejected, unsubscribed', () => {
+    expect([...JOURNEY_EXIT_OUTCOMES]).toEqual(['complained', 'meeting_booked', 'converted', 'rejected', 'unsubscribed']);
   });
 
   it.each(JOURNEY_EXIT_OUTCOMES)('%s ends it', async (o) => {
-    expect(await assessJourneyExit(ORG, 'i', 'p', port([o]))).toMatchObject({ exit: true, outcome: o });
+    expect(await assess(port([o]))).toMatchObject({ consequence: 'exit', outcome: o, replyKey: null });
   });
 
-  it.each(['opened', 'clicked', 'no_response'])('%s does not', async (o) => {
-    expect(await assessJourneyExit(ORG, 'i', 'p', port([o]))).toMatchObject({ exit: false, outcome: null });
+  it('a deterministic answer ends it even beside an unevaluated reply', async () => {
+    expect(await assess(port(['replied', 'unsubscribed'], { outcome: 'replied', messageId: 'w1', threadId: 't' }, ['o1'])))
+      .toMatchObject({ consequence: 'exit', outcome: 'unsubscribed' });
   });
 
-  it('a WhatsApp reply ends it, carrying the message identity for PI', async () => {
-    const reply = { outcome: 'replied' as const, messageId: 'wamid.1', threadId: 'th' };
-    expect(await assessJourneyExit(ORG, 'i', 'p', port([], reply))).toEqual({ exit: true, outcome: 'replied', whatsappReply: reply });
+  it.each(['opened', 'clicked', 'no_response'])('%s neither ends nor suspends it', async (o) => {
+    expect(await assess(port([o]))).toEqual({ consequence: 'continue', outcome: null, whatsappReply: null, replyKey: null });
   });
 
-  it('a WhatsApp opt-out ends it as an unsubscribe, not a reply', async () => {
+  it('a WhatsApp STOP still ends it as an unsubscribe', async () => {
     const stop = { outcome: 'unsubscribed' as const, messageId: 'wamid.2', threadId: 'th' };
-    expect(await assessJourneyExit(ORG, 'i', 'p', port([], stop))).toMatchObject({ exit: true, outcome: 'unsubscribed' });
+    expect(await assess(port([], stop))).toMatchObject({ consequence: 'exit', outcome: 'unsubscribed', whatsappReply: stop });
+  });
+
+  it('CHANGED: an unclassified WhatsApp reply SUSPENDS it, carrying the message identity for PI', async () => {
+    const reply = { outcome: 'replied' as const, messageId: 'wamid.1', threadId: 'th', inboundMessageIds: ['wamid.1'] };
+    expect(await assess(port([], reply))).toEqual({ consequence: 'suspend', outcome: 'replied', whatsappReply: reply, replyKey: replyReferenceKey('wa:wamid.1') });
+  });
+
+  it('CHANGED: a recorded WS-3 reply SUSPENDS it, keyed on the outcome row', async () => {
+    expect(await assess(port(['replied'], null, ['o-1']))).toMatchObject({ consequence: 'suspend', outcome: 'replied', replyKey: replyReferenceKey('ws3:o-1') });
+    // A port without row references keys the run's replies as one.
+    expect(await assess(port(['replied']))).toMatchObject({ consequence: 'suspend', replyKey: replyReferenceKey('ws3:i') });
+  });
+
+  it('an evaluated reply does not suspend again; a later one does', async () => {
+    const reply = { outcome: 'replied' as const, messageId: 'w1', threadId: 'th', inboundMessageIds: ['w1', 'w2'] };
+    const first = await assess(port([], { ...reply, inboundMessageIds: ['w1'] }));
+    expect(first.consequence).toBe('suspend');
+    const evaluated = evaluatedReplyKeys([{ decision: 'needs_human', outcome: `${REPLY_AWAITING_EVALUATION}:${first.replyKey}` }]);
+    expect(await assess(port([], { ...reply, inboundMessageIds: ['w1'] }), evaluated)).toMatchObject({ consequence: 'continue' });
+    expect(await assess(port([], reply), evaluated)).toMatchObject({ consequence: 'suspend', replyKey: replyReferenceKey('wa:w2') });
+  });
+
+  it('evaluatedReplyKeys reads only suspension decisions', () => {
+    expect([...evaluatedReplyKeys([
+      { decision: 'needs_human', outcome: `${REPLY_AWAITING_EVALUATION}:k1` },
+      { decision: 'needs_human', outcome: 'stuck_waiting' },
+      { decision: 'waiting', outcome: `${REPLY_AWAITING_EVALUATION}:k2` },
+      { decision: 'exited', outcome: null },
+    ])]).toEqual(['k1']);
   });
 
   it('an unreadable source throws: "we could not tell" is never "carry on"', async () => {
     const broken: JourneyResponsePort = { ws3Outcomes: async () => { throw new Error('down'); }, whatsappReply: async () => null };
-    await expect(assessJourneyExit(ORG, 'i', 'p', broken)).rejects.toThrow('down');
+    await expect(assess(broken)).rejects.toThrow('down');
+    const brokenRefs: JourneyResponsePort = { ws3Outcomes: async () => ['replied'], whatsappReply: async () => null, ws3ReplyRefs: async () => { throw new Error('refs down'); } };
+    await expect(assess(brokenRefs)).rejects.toThrow('refs down');
   });
 });
 

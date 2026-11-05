@@ -495,7 +495,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
     expect(sha('supabase/migrations/20261228000002_pi_execution_step_scheduling.sql'))
       .toBe('652e20fb2f6425e2');
     expect(sha('backend/services/workflowExecution/stepProgressionStore.ts'))
-      .toBe('d70eaf7eed626960');
+      .toBe('e36a36c6439315ab'); // RE-PINNED 2026-11-05 (Prompt 4): reads not_before; deferStepUntil (20270127000000)
     expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('5fe8d426d8b7db66');
   });
 
@@ -505,7 +505,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('d9917fcd985eea4f');
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('5bf14b6a3889a485'); // RE-PINNED 2026-11-05 (Prompt 4): PATCH resume may carry a returnDate (journeyRetiming)
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');
   });

@@ -105,14 +105,14 @@ const feedback = (task: string, signal: string, extra: Record<string, unknown> =
   ws3.ingestFeedback({ companyId: ORG_A, taskId: task, signal, occurredAt: NOW(), source: 'manual', ...extra });
 
 describe('what each response does', () => {
-  it('replied: journey ends, the next task is withdrawn, PI engaged', async () => {
+  it('replied (Prompt 4 — CHANGED): journey suspended for a person, the next task kept and held, PI engaged', async () => {
     await inRollback(async () => {
       const s = await firstSent();
       expect((await feedback(s.firstTask, 'replied')).ok).toBe(true);
       const r = await sweep();
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(s.instanceId)).toBe('cancelled');
-      expect((await handoffTasks(s.instanceId)).map((t) => t.status)).toEqual(['sent', 'cancelled']);
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(s.instanceId)).toBe('paused');
+      expect((await handoffTasks(s.instanceId)).map((t) => t.status)).toEqual(['sent', 'awaiting_approval']);
       expect(sent).toHaveLength(1);
       expect((await lifecycle(ORG_A, s.prospectId)).at(-1)).toMatchObject({ state: 'engaged', origin: 'derived' });
     });
@@ -280,8 +280,9 @@ describe('journey state and isolation', () => {
       expect(sent).toHaveLength(1);
       await feedback(t.id, 'replied');
       const r = await sweep();
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(instance.id)).toBe('cancelled');
+      // Prompt 4 — CHANGED: suspended for a person, not ended.
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instance.id)).toBe('paused');
     });
   });
 });

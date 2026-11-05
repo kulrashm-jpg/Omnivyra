@@ -159,6 +159,8 @@ const { whatsappReplyFingerprint } = require('../../services/orchestration/journ
 const ws3 = require('../../services/leadOutreachExecution');
 const { dispatchWorkflowEmailTask, ensureWorkflowTransports } = require('../../services/emailEngine/workflowEmailDispatch');
 const { ensureProspectLifecycleOpen, recordProspectTransition } = require('../../services/prospectLifecycle');
+const { withdrawUnsentTasks } = require('../../services/orchestration/journeyExit');
+const { setExecutionInstanceState } = require('../../services/executionInstances/executionInstanceStore');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const rnd = () => Math.random().toString(36).slice(2, 10);
@@ -284,16 +286,20 @@ describe('one person, list to lifecycle', () => {
       tasks = await handoffTasks(instanceId);
       expect(tasks.map((t) => t.status)).toEqual(['sent', 'awaiting_approval']);
 
-      // The person replies on the first message. The journey ends before the follow-up
-      // can be approved, and its task is withdrawn so nobody approves a moot message.
+      // The person replies on the first message. Prompt 4 — CHANGED: the journey is
+      // SUSPENDED for a person to evaluate (run paused, the follow-up held by D-03, not
+      // withdrawn); the person then ends it, which withdraws the follow-up.
       const fed = await ws3.ingestFeedback({
         companyId: ORG_A, taskId: tasks[0].id, signal: 'replied',
         occurredAt: new Date().toISOString(), source: 'manual',
       });
       expect(fed.ok).toBe(true);
       r = await sweep();
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(instanceId)).toBe('cancelled');
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instanceId)).toBe('paused');
+      expect((await handoffTasks(instanceId)).map((t) => t.status)).toEqual(['sent', 'awaiting_approval']);
+      await withdrawUnsentTasks(ORG_A, instanceId);
+      await setExecutionInstanceState({ organizationId: ORG_A, instanceId, lifecycleState: 'cancelled' });
       expect((await handoffTasks(instanceId)).map((t) => t.status)).toEqual(['sent', 'cancelled']);
       expect(sent).toHaveLength(1);
 
@@ -302,7 +308,7 @@ describe('one person, list to lifecycle', () => {
       let ledger = await lifecycle(ORG_A, prospectId);
       expect(ledger.at(-1)).toMatchObject({ state: 'engaged', evidence_kind: 'outreach_outcome' });
 
-      // Replays converge: no second exit, no second transition.
+      // Replays converge: no exit, no second transition.
       r = await sweep();
       expect(r.counters.journeys_exited).toBe(0);
       expect(r.lifecycleFeedback.written).toBe(0);
@@ -311,13 +317,15 @@ describe('one person, list to lifecycle', () => {
 
       // The durable record and the operator report agree.
       const decisions = await listJourneyDecisions(ORG_A, instanceId);
-      expect(decisions.map((d: Row) => d.decision)).toEqual(expect.arrayContaining(['waiting', 'executed', 'exited']));
-      const exited = decisions.find((d: Row) => d.decision === 'exited') as Row;
-      expect(exited).toMatchObject({ planStepId: null, outcome: 'replied' });
+      // Prompt 4 — CHANGED: the reply is a `needs_human` suspension, not an `exited` decision.
+      expect(decisions.map((d: Row) => d.decision)).toEqual(expect.arrayContaining(['waiting', 'executed', 'needs_human']));
+      expect(decisions.find((d: Row) => d.decision === 'exited')).toBeUndefined();
+      const suspended = decisions.find((d: Row) => d.decision === 'needs_human') as Row;
+      expect(String(suspended.outcome)).toMatch(/^reply_awaiting_evaluation:[0-9a-f]{32}$/);
       expect(JSON.stringify(decisions)).not.toContain('person@example.test');
       const journeyReport = await buildJourneyReport({ organizationId: ORG_A, workflowId });
       expect(journeyReport.versions[0].attainment.reached).toBe(1);
-      expect(journeyReport.versions[0].decisions.exited).toBe(1);
+      expect(journeyReport.versions[0].decisions.exited ?? 0).toBe(0);
     });
   });
 
@@ -457,8 +465,9 @@ describe('WhatsApp responses', () => {
         deps: { adapters: [...adapters(), { engine: 'whatsapp', channels: ['whatsapp'], execute }] },
       });
       expect(execute).not.toHaveBeenCalled();
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(instanceId)).toBe('cancelled');
+      // Prompt 4 — CHANGED: suspended for a person, not ended; PI still hears it.
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instanceId)).toBe('paused');
       const ledger = await lifecycle(ORG_A, prospectId);
       expect(ledger.at(-1)).toMatchObject({ state: 'engaged', evidence_kind: 'engagement_thread', source_event_key: `derivation:${whatsappReplyFingerprint('wamid.HBgM+abc=')}` });
     });
