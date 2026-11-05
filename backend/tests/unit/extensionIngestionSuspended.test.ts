@@ -80,6 +80,13 @@ jest.mock('@/backend/services/extensionIngestionSuspension', () => {
   return { ...actual, get EXTENSION_BROWSER_INGESTION_SUSPENDED() { return suspended; } };
 });
 
+// Prompt 3 (OD-1): the session tenant's execution policy is open here; the
+// policy gate itself is proven in extensionLeaseHandoutPolicyGate.test.ts.
+jest.mock('@/backend/services/communityAiPlatformPolicyService', () => ({
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  getCommunityExecutionPolicy: jest.fn(async () => ({ ok: true, policy: { execution_enabled: true, auto_rules_enabled: false }, version: 'v1' })),
+}));
+
 import eventsHandler from '../../../pages/api/extension/events';
 import dmsHandler from '../../../pages/api/extension/events/dms';
 import commentsHandler from '../../../pages/api/extension/events/comments';

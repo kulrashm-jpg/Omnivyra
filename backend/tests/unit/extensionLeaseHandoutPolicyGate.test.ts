@@ -1,17 +1,21 @@
 /**
  * GET /api/extension/commands is the last server-side point before the
- * browser extension sends a reply, like or DM. The executor's platform gates
- * (runExecution: execution_enabled, require_human_approval) are re-applied
- * there, so a command prepared before execution was switched off, or before
- * human approval became required, is not handed out. The policy service is the
- * real one: an unreadable policy must fail closed. Read-only inbox syncs are
- * never gated.
+ * browser extension sends a reply, like or DM. The executor's gates are
+ * re-applied there, so a command prepared before execution was switched off is
+ * not handed out. Prompt 3 (OD-1): the policy is the SESSION TENANT's own
+ * (community_execution_policy_decision for (org, org)); missing, unreadable or
+ * disabled all refuse, a human approval of record is required whatever the
+ * policy says, and every refusal writes one governance refusal record (claim
+ * point 'browser'). The policy service is the real one. Read-only inbox syncs
+ * are the one recorded exemption from this pre-check (never from the claim).
  */
 
 type Row = Record<string, any>;
 
 const ORG = 'org-1';
-const db: { actions: Row[]; policy: Row[] | 'error' } = { actions: [], policy: [] };
+const db: { actions: Row[]; policy: Row | 'error' } = { actions: [], policy: {} };
+const policyCalls: Row[] = [];
+const refusals: Row[] = [];
 
 function actionsQuery() {
   const filters: Array<(r: Row) => boolean> = [];
@@ -36,18 +40,8 @@ function actionsQuery() {
   return q;
 }
 
-function policyQuery() {
-  const q: any = {
-    select: () => q,
-    order: () => q,
-    limit: async () => (db.policy === 'error' ? { data: null, error: { code: '42501' } } : { data: db.policy, error: null }),
-  };
-  return q;
-}
-
 const from = (t: string) => {
   if (t === 'community_ai_actions') return actionsQuery();
-  if (t === 'community_ai_platform_policy') return policyQuery();
   // extension_sessions heartbeat (best-effort, fire-and-forget)
   const q: any = { update: () => q, eq: () => q, select: () => q, limit: async () => ({ data: [{ id: 's' }], error: null }), insert: async () => ({ error: null }) };
   return q;
@@ -57,6 +51,10 @@ const from = (t: string) => {
 // grants it to an unclaimed pending row; the SQL's own approval and kill-switch
 // checks are covered by the real-schema suites.
 const rpc = async (name: string, args: Row) => {
+  if (name === 'community_execution_policy_decision') {
+    policyCalls.push(args);
+    return db.policy === 'error' ? { data: null, error: { code: '42501' } } : { data: [db.policy], error: null };
+  }
   if (name !== 'claim_community_ai_browser_command') return { data: null, error: { message: 'unexpected rpc ' + name } };
   const hit = db.actions.find((r) => r.id === args.p_action_id && r.status === 'pending' && r.dispatch_lease_id == null);
   if (!hit) return { data: [], error: null };
@@ -86,12 +84,15 @@ jest.mock('@/backend/services/communityAiExecutionResultService', () => ({
   recordExecutionMetric: async () => undefined, persistExecutionResult: async () => ({ ok: true }),
 }));
 jest.mock('@/backend/services/rpaWorker/rpaAccountTier', () => ({ resolveAccountTier: async () => 'business' }));
+jest.mock('@/backend/services/communityExecutionRefusal', () => ({
+  recordCommunityExecutionRefusal: async (input: Row) => { refusals.push(input); return true; },
+}));
 
 import route from '../../../pages/api/extension/commands';
 import { __resetCommunityAiPlatformPolicyCacheForTests } from '../../services/communityAiPlatformPolicyService';
 
 const reply = (over: Row = {}): Row => ({
-  id: 'reply-1', organization_id: ORG, status: 'pending', execution_mode: 'browser', platform: 'linkedin',
+  id: 'reply-1', tenant_id: ORG, organization_id: ORG, status: 'pending', execution_mode: 'browser', platform: 'linkedin',
   action_type: 'reply', target_id: 'comment-1', suggested_text: 'Thanks!', created_at: '2026-11-03T10:00:00Z',
   dispatch_lease_id: null, dispatch_lease_expires_at: null, execution_correlation_id: 'corr-1',
   command_chain: null, command_chain_index: 0, approved_at: '2026-11-03T09:59:00Z', ...over,
@@ -106,9 +107,8 @@ const inboxSync = (over: Row = {}): Row => reply({
   command_chain: [{ action_type: 'sync_dm_inbox', payload: { navigate: true } }], ...over,
 });
 
-const policyRow = (over: Row = {}): Row[] => [{
-  execution_enabled: true, auto_rules_enabled: true, require_human_approval: false, updated_at: '2026-11-01T00:00:00Z', updated_by: null, ...over,
-}];
+const ALLOW: Row = { allowed: true, code: null, auto_rules_enabled: true, policy_version: '2026-11-01T00:00:00Z' };
+const REFUSE = (code: string): Row => ({ allowed: false, code, auto_rules_enabled: null, policy_version: null });
 
 async function poll(): Promise<{ status: number; ids: string[] }> {
   const res: any = { statusCode: 0, body: undefined };
@@ -124,7 +124,9 @@ const claimed = (id: string) => db.actions.find((r) => r.id === id)?.dispatch_le
 beforeEach(() => {
   __resetCommunityAiPlatformPolicyCacheForTests();
   db.actions = [];
-  db.policy = policyRow();
+  db.policy = ALLOW;
+  policyCalls.length = 0;
+  refusals.length = 0;
   jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 });
 afterEach(() => jest.restoreAllMocks());
@@ -134,15 +136,24 @@ describe('extension lease handout honours the community platform policy', () => 
     db.actions = [reply()];
     expect(await poll()).toEqual({ status: 200, ids: ['reply-1'] });
     expect(claimed('reply-1')).toBe(true);
+    expect(policyCalls).toEqual([{ p_org: ORG, p_tenant: ORG }]);
+    expect(refusals).toEqual([]);
   });
 
-  it('execution switched off: a prepared reply and a DM chain are not handed out or claimed', async () => {
-    db.policy = policyRow({ execution_enabled: false });
-    db.actions = [reply(), dmChain()];
-    expect(await poll()).toEqual({ status: 200, ids: [] });
-    expect(claimed('reply-1')).toBe(false);
-    expect(claimed('dm-1')).toBe(false);
-  });
+  it.each(['POLICY_EXECUTION_DISABLED', 'PLATFORM_KILL_SWITCH', 'POLICY_MISSING'])(
+    'tenant policy refuses (%s): a prepared reply and a DM chain are not handed out or claimed; each refusal recorded',
+    async (code) => {
+      db.policy = REFUSE(code);
+      db.actions = [reply(), dmChain()];
+      expect(await poll()).toEqual({ status: 200, ids: [] });
+      expect(claimed('reply-1')).toBe(false);
+      expect(claimed('dm-1')).toBe(false);
+      expect(refusals.map((r) => [r.actionId, r.claimPoint, r.code, r.organizationId, r.tenantId])).toEqual([
+        ['reply-1', 'browser', code, ORG, ORG],
+        ['dm-1', 'browser', code, ORG, ORG],
+      ]);
+    },
+  );
 
   // R-3 (live): browser ingestion is suspended, so a read-only inbox sync is
   // never handed out on any line, whatever the policy. Round 3 asserted the
@@ -155,18 +166,19 @@ describe('extension lease handout honours the community platform policy', () => 
   });
 
   it('execution switched off: neither a reply nor an inbox sync is handed out', async () => {
-    db.policy = policyRow({ execution_enabled: false });
+    db.policy = REFUSE('POLICY_EXECUTION_DISABLED');
     db.actions = [reply(), inboxSync()];
     expect((await poll()).ids).toEqual([]);
     expect(claimed('reply-1')).toBe(false);
     expect(claimed('sync-1')).toBe(false);
   });
 
-  it('human approval required: a row without approved_at is held, an approved row goes out', async () => {
-    db.policy = policyRow({ require_human_approval: true });
+  it('D-01: a row without approved_at is held whatever the policy says; an approved row goes out', async () => {
+    db.policy = ALLOW;
     db.actions = [reply({ id: 'unapproved', approved_at: null }), reply({ id: 'approved' })];
     expect((await poll()).ids).toEqual(['approved']);
     expect(claimed('unapproved')).toBe(false);
+    expect(refusals).toEqual([expect.objectContaining({ actionId: 'unapproved', code: 'HUMAN_APPROVAL_REQUIRED', claimPoint: 'browser' })]);
   });
 
   it('unreadable policy fails closed: outbound held (inbox sync held by R-3)', async () => {
@@ -178,8 +190,22 @@ describe('extension lease handout honours the community platform policy', () => 
   });
 
   it('a later chain step is gated again (continue_thread after open_thread)', async () => {
-    db.policy = policyRow({ execution_enabled: false });
+    db.policy = REFUSE('POLICY_EXECUTION_DISABLED');
     db.actions = [dmChain({ command_chain_index: 1 })];
     expect((await poll()).ids).toEqual([]);
+  });
+
+  it('F6: a refusal is recorded under the row scope (its own tenant and organization), never the session scope', async () => {
+    db.policy = REFUSE('POLICY_EXECUTION_DISABLED');
+    db.actions = [reply({ id: 'legacy-scope', tenant_id: 'tenant-legacy' })];
+    await poll();
+    expect(refusals.map((r) => [r.actionId, r.organizationId, r.tenantId])).toEqual([['legacy-scope', ORG, 'tenant-legacy']]);
+  });
+
+  it('the read-only exemption is exactly the two inbox syncs (a recorded owner decision)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const src: string = require('fs').readFileSync(require('path').join(__dirname, '../../../pages/api/extension/commands.ts'), 'utf8');
+    expect(src).toMatch(/const READ_ONLY_EXTENSION_ACTIONS: ReadonlySet<string> = new Set\(\['sync_dm_inbox', 'sync_comments_inbox'\]\);/);
+    expect(src).toMatch(/RECORDED EXEMPTION/);
   });
 });

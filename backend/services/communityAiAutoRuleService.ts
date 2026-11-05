@@ -5,7 +5,7 @@ import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { getPlaybookById, listPlaybooks } from './playbooks/playbookService';
 import { evaluatePlaybookForEvent } from './playbooks/playbookEvaluator';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
-import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from './communityAiPlatformPolicyService';
 import { canExecuteAction } from './executionGuardrailService';
 import { ownedDbTable } from '../db/writeOwner';
 
@@ -225,10 +225,19 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
     return { actions: input.suggested_actions || [], autoExecuted: 0 };
   }
 
-  const policy = await getCommunityAiPlatformPolicy();
-  if (!policy.auto_rules_enabled) {
+  // Prompt 3 (OD-1): this tenant's policy, fail closed. Auto rules run only when
+  // the tenant's execution is allowed AND auto_rules_enabled === true. No action
+  // has been evaluated yet, so this is a security audit row, not a per-action
+  // governance refusal (those are written by the executor and the claim).
+  const decision = await getCommunityExecutionPolicy({
+    organizationId: input.organization_id,
+    tenantId: input.tenant_id,
+  });
+  const autoRulesAllowed = decision.ok && decision.policy.auto_rules_enabled === true;
+  if (!autoRulesAllowed) {
+    const code = decision.ok === true ? 'POLICY_AUTO_RULES_DISABLED' : decision.code;
     console.debug('COMMUNITY_AI_PLATFORM_POLICY_BLOCK', {
-      reason: 'auto_rules_enabled=false',
+      reason: code,
       source: 'auto_rules',
     });
     await ownedDbTable('audit_logs').insert({
@@ -236,6 +245,8 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
       metadata: {
         policy_flag: 'auto_rules_enabled',
+        code,
+        organization_id: input.organization_id,
         source: 'auto_rules',
       },
       created_at: new Date().toISOString(),
@@ -600,6 +611,15 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return {
           ...action,
           blocked_reason: 'Action is not awaiting execution',
+        };
+      }
+      if (execution.status === 'skipped' && execution.response?.pre_claim_refusal === true) {
+        // Prompt 3: refused before the claim (policy, expiry, evidence). The row
+        // is untouched and the executor already wrote the one refusal record;
+        // this was not an auto-execution, so nothing is logged or counted.
+        return {
+          ...action,
+          blocked_reason: `Refused: ${String(execution.error ?? execution.reason ?? 'PLATFORM_POLICY')}`,
         };
       }
 

@@ -13,11 +13,18 @@
  */
 
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
 
 let mockDb: FakeDb = createFakeDb();
+// Prompt 3: the single claim (claim point 'rpa_retry') is the claim RPC, emulated
+// over the fake DB (helpers/communityClaimRpcEmulation; SQL proven in the RS suites).
+const mockRpc = (name: string, args: any) => require('./helpers/communityClaimRpcEmulation')
+  .communityRpcEmulation(() => mockDb, () => (mockPolicy.execution_enabled
+    ? { allowed: true, code: null, auto_rules_enabled: false }
+    : { allowed: false, code: 'PLATFORM_KILL_SWITCH', auto_rules_enabled: null })).rpc(name, args);
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
-  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbRpc: (name: string, args: any) => mockRpc(name, args),
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
@@ -30,11 +37,17 @@ jest.mock('../../services/rpaWorker/rpaEnv', () => ({
 }));
 const mockPolicy = { execution_enabled: true };
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({ ...mockPolicy }))),
 }));
 const mockExecuteAction = jest.fn();
 jest.mock('../../services/communityAiActionExecutorRuntime', () => ({
   executeAction: (...a: any[]) => mockExecuteAction(...a),
+  // The real wrapper over the (emulated) claim RPC.
+  claimCommunityActionForExecution: (...a: any[]) =>
+    jest.requireActual('../../services/communityAiActionExecutorRuntime').claimCommunityActionForExecution(...a),
 }));
 
 import {
@@ -48,12 +61,15 @@ const NOW = new Date('2026-10-28T12:00:00Z');
 const PAST = '2020-01-01T00:00:00.000Z';
 const A1 = '00000000-0000-0000-0000-0000000000a1';
 
-const actionRow = (over: Record<string, any> = {}) => ({
-  id: A1, tenant_id: 't1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
-  target_id: 'https://www.linkedin.com/feed/update/urn:li:activity:1/', suggested_text: null,
-  execution_mode: 'rpa', status: 'approved', cancel_requested_at: null, playbook_id: 'pb1',
-  approved_at: PAST, ...over,
-});
+// Prompt 3: an approved row carries its approval of record (approve.ts), < 7 days old.
+const actionRow = (over: Record<string, any> = {}) => {
+  const base = {
+    id: A1, tenant_id: 'o1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
+    target_id: 'https://www.linkedin.com/feed/update/urn:li:activity:1/', suggested_text: null,
+    execution_mode: 'rpa', status: 'approved', cancel_requested_at: null, playbook_id: 'pb1',
+  };
+  return { ...withApprovalEvidence(base), ...over };
+};
 const retryRow = (over: Record<string, any> = {}) => ({
   id: 'r1', action_id: A1, organization_id: 'o1', platform: 'linkedin', action_type: 'like',
   target_url: 'https://www.linkedin.com/feed/update/urn:li:activity:1/', text: null,
@@ -195,7 +211,7 @@ describe('rpa_retry_queue flush — deferral', () => {
 
   it('refuses to re-queue past max_attempts', async () => {
     mockDb.tables.rpa_retry_queue[0].attempts = 4;
-    const q = await enqueueRpaRetry({ tenant_id: 't1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
+    const q = await enqueueRpaRetry({ tenant_id: 'o1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
       target_url: 'https://www.linkedin.com/x', text: null, action_id: A1 }, { error: 'x' });
     expect(q).toMatchObject({ queued: false, error: 'MAX_ATTEMPTS_EXCEEDED' });
   });
@@ -209,9 +225,13 @@ describe('production wiring (rpaSchedulerHooks.flushRetries)', () => {
     expect(out.claimed).toBe(1);
     expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     const [act, approved, opts] = mockExecuteAction.mock.calls[0];
-    expect(act).toMatchObject({ id: A1, tenant_id: 't1', organization_id: 'o1', execution_mode: 'rpa' });
+    expect(act).toMatchObject({ id: A1, tenant_id: 'o1', organization_id: 'o1', execution_mode: 'rpa' });
     expect(approved).toBe(true);
     expect(opts).toMatchObject({ persist: true, expected_from_statuses: ['executing'], source: 'manual' });
+    // F1/F3: the correlation id the flush claimed with is forwarded to the executor.
+    const stamped = mockDb.tables.community_ai_actions[0].execution_correlation_id;
+    expect(stamped).toMatch(/^[0-9a-f-]{36}$/);
+    expect(opts.correlation_id).toBe(stamped);
   });
 
   it('kill switch: nothing claimed, nothing run', async () => {

@@ -16,6 +16,7 @@
  */
 
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
 
 let mockDb: FakeDb = createFakeDb();
 // L-3: these tests exercise other mechanics with fixtures that carry no
@@ -26,9 +27,15 @@ jest.mock('../../services/communityRecipientRecheck', () => ({
   ...jest.requireActual('../../services/communityRecipientRecheck'),
   recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
+// Prompt 3: the claim RPC and refusal recorder, emulated over the fake DB
+// (helpers/communityClaimRpcEmulation; the SQL is proven in the RS suites).
+const mockRpc = (name: string, args: any) => require('./helpers/communityClaimRpcEmulation')
+  .communityRpcEmulation(() => mockDb, () => (mockPolicy.execution_enabled
+    ? { allowed: true, code: null, auto_rules_enabled: false }
+    : { allowed: false, code: 'PLATFORM_KILL_SWITCH', auto_rules_enabled: null })).rpc(name, args);
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
-  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbRpc: (name: string, args: any) => mockRpc(name, args),
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
@@ -36,7 +43,10 @@ jest.mock('../../db/supabaseClient', () => ({
 
 const mockPolicy = { execution_enabled: true, require_human_approval: false };
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({ ...mockPolicy }))),
 }));
 jest.mock('../../services/usageEnforcementService', () => ({
   checkUsageBeforeExecution: jest.fn(async () => ({ allowed: true })),
@@ -76,9 +86,12 @@ import { runCommunityAiScheduler } from '../../services/communityAiScheduler';
 
 const ACTION_ID = '00000000-0000-0000-0000-0000000000a1';
 
-const row = (over: Record<string, any> = {}) => ({
+// Prompt 3: an approved row carries its approval of record (approve.ts), < 7 days old;
+// a fixture that sets approved_at: null describes a row nobody approved.
+const row = (over: Record<string, any> = {}) => {
+  const merged: Record<string, any> = {
   id: ACTION_ID,
-  tenant_id: 't1',
+  tenant_id: 'o1',
   organization_id: 'o1',
   platform: 'linkedin',
   action_type: 'like',
@@ -87,13 +100,15 @@ const row = (over: Record<string, any> = {}) => ({
   playbook_id: 'pb1',
   execution_mode: 'api',
   status: 'approved',
-  approved_at: '2026-10-01T00:00:00Z',
   scheduled_at: '2026-10-01T00:00:00Z',
   requires_human_approval: false,
   risk_level: 'low',
   cancel_requested_at: null,
-  ...over,
-});
+    ...over,
+  };
+  if ('approved_at' in over && over.approved_at === null) return merged;
+  return withApprovalEvidence(merged);
+};
 
 const action = (over: Record<string, any> = {}) => {
   const r = row(over);
@@ -210,43 +225,59 @@ describe('RPA execution — consequence mapping', () => {
 describe('claims — exactly one executor', () => {
   it('N concurrent claimants: exactly one wins', async () => {
     const results = await Promise.all(Array.from({ length: 5 }, () =>
-      claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't1', organizationId: 'o1' })));
+      claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 'o1', organizationId: 'o1', claimPoint: 'scheduler' })));
     expect(results.filter((r) => r.claimed)).toHaveLength(1);
     expect(statusOf()).toBe('executing');
   });
 
   it('tenant mismatch never claims', async () => {
-    const r = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't-other', organizationId: 'o1' });
+    const r = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't-other', organizationId: 'o1', claimPoint: 'scheduler' });
     expect(r.claimed).toBe(false);
-    const r2 = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't1', organizationId: 'o-other' });
+    const r2 = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 'o1', organizationId: 'o-other', claimPoint: 'scheduler' });
     expect(r2.claimed).toBe(false);
     expect(statusOf()).toBe('approved');
   });
 
   it('approval race: an action no longer approved (revoked / pending) is not claimed', async () => {
     mockDb.tables.community_ai_actions[0].status = 'pending';
-    const r = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't1', organizationId: 'o1' });
+    const r = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 'o1', organizationId: 'o1', claimPoint: 'scheduler' });
     expect(r.claimed).toBe(false);
   });
 
   it('a cancel-requested action is not claimed', async () => {
     mockDb.tables.community_ai_actions[0].cancel_requested_at = '2026-10-28T00:00:00Z';
-    const r = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't1', organizationId: 'o1' });
+    const r = await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 'o1', organizationId: 'o1', claimPoint: 'scheduler' });
     expect(r.claimed).toBe(false);
   });
 
   it('terminal write is CAS from executing: a row changed underneath (e.g. reaped) is not overwritten', async () => {
-    await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 't1', organizationId: 'o1' });
-    mockDb.tables.community_ai_actions[0].status = 'uncertain'; // reaper / reviewer moved it
-    mockConnector.mockResolvedValue({ success: true });
+    const corr = '7a1c1f7e-2f4c-4a51-9a1e-0000000000c3';
+    await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 'o1', organizationId: 'o1', claimPoint: 'scheduler', correlationId: corr });
+    // The reaper / a reviewer moves the row WHILE the platform call is in flight.
+    mockConnector.mockImplementation(async () => {
+      mockDb.tables.community_ai_actions[0].status = 'uncertain';
+      return { success: true };
+    });
     const r = await executeAction(action(), true, {
-      source: 'scheduler', persist: true, notify: false, webhook: false, expected_from_statuses: ['executing'],
+      source: 'scheduler', persist: true, notify: false, webhook: false, expected_from_statuses: ['executing'], correlation_id: corr,
     });
     expect(statusOf()).toBe('uncertain');
     expect(r.ok).toBe(false);
     expect(r.response?.persist_error).toBe('STATE_MISMATCH');
     // executed-but-unrecorded is surfaced as uncertain, never as a retryable failure
     expect(r.status).toBe('uncertain');
+  });
+
+  it('F3: a caller that says it holds the claim but does not (row moved before dispatch) sends nothing', async () => {
+    const corr = '7a1c1f7e-2f4c-4a51-9a1e-0000000000c4';
+    await claimCommunityActionForExecution({ actionId: ACTION_ID, tenantId: 'o1', organizationId: 'o1', claimPoint: 'scheduler', correlationId: corr });
+    mockDb.tables.community_ai_actions[0].status = 'uncertain';
+    const r = await executeAction(action(), true, {
+      source: 'scheduler', persist: true, notify: false, webhook: false, expected_from_statuses: ['executing'], correlation_id: corr,
+    });
+    expect(r).toMatchObject({ ok: false, reason: 'CLAIM_NOT_HELD' });
+    expect(mockConnector).not.toHaveBeenCalled();
+    expect(statusOf()).toBe('uncertain');
   });
 
   it('persist maps deferred -> approved and uncertain is terminal (lease fields cleared)', async () => {

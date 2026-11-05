@@ -12,6 +12,11 @@ import {
   seedPlaybook,
   setRole,
   tokenStore,
+  communityRpc,
+  seedExecutionPolicy,
+  executionPolicyStore,
+  refusalStore,
+  withApprovalEvidence,
 } from './communityAiTestHarness';
 
 jest.mock('../../services/userContextService', () => ({
@@ -27,6 +32,15 @@ jest.mock('../../services/userContextService', () => ({
     companyIds: ['tenant-1'],
     defaultCompanyId: 'tenant-1',
   }),
+}));
+
+// L-3: these suites exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement. Here every
+// recipient is allowed (the production gate is unchanged).
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -47,7 +61,12 @@ const { executeRpaTask } = jest.requireMock('../../services/rpaWorker/rpaWorkerS
 describe('Community-AI Scheduling', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+    executionPolicyStore.clear();
+    refusalStore.length = 0;
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     resetCommunityAiStores();
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     (executeLinkedinAction as jest.Mock).mockClear();
     (executeRpaTask as jest.Mock).mockClear();
     seedPlaybook();
@@ -96,7 +115,7 @@ describe('Community-AI Scheduling', () => {
       access_token: 'token-1',
     });
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('action-11', {
+    actionStore.set('action-11', withApprovalEvidence({
       id: 'action-11',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -106,11 +125,10 @@ describe('Community-AI Scheduling', () => {
       suggested_text: 'Appreciate it!',
       playbook_id: 'playbook-1',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     const updated = actionStore.get('action-11');
     expect(updated.status).toBe('executed');
@@ -128,7 +146,7 @@ describe('Community-AI Scheduling', () => {
       },
     });
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('rpa-sched-1', {
+    actionStore.set('rpa-sched-1', withApprovalEvidence({
       id: 'rpa-sched-1',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -139,11 +157,10 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-enabled',
       execution_mode: 'rpa',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     const updated = actionStore.get('rpa-sched-1');
     expect(updated.status).toBe('executed');
@@ -161,7 +178,7 @@ describe('Community-AI Scheduling', () => {
       },
     });
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('rpa-sched-2', {
+    actionStore.set('rpa-sched-2', withApprovalEvidence({
       id: 'rpa-sched-2',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -172,11 +189,10 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-disabled',
       execution_mode: 'rpa',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     const updated = actionStore.get('rpa-sched-2');
     expect(updated.status).toBe('failed');
@@ -195,7 +211,7 @@ describe('Community-AI Scheduling', () => {
       },
     });
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('rpa-sched-3', {
+    actionStore.set('rpa-sched-3', withApprovalEvidence({
       id: 'rpa-sched-3',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -206,11 +222,10 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-limit',
       execution_mode: 'rpa',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     const updated = actionStore.get('rpa-sched-3');
     expect(updated.status).toBe('failed');
@@ -232,7 +247,7 @@ describe('Community-AI Scheduling', () => {
       screenshot_path: 'rpa-shot.png',
     });
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('rpa-sched-4', {
+    actionStore.set('rpa-sched-4', withApprovalEvidence({
       id: 'rpa-sched-4',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -243,11 +258,10 @@ describe('Community-AI Scheduling', () => {
       playbook_id: 'playbook-rpa-enabled-2',
       execution_mode: 'rpa',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     const updated = actionStore.get('rpa-sched-4');
     expect(updated.execution_result?.response?.screenshot_path).toBe('rpa-shot.png');
@@ -261,7 +275,7 @@ describe('Community-AI Scheduling', () => {
   it('scheduler skips when token missing', async () => {
     setRole('CONTENT_PUBLISHER');
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('action-11b', {
+    actionStore.set('action-11b', withApprovalEvidence({
       id: 'action-11b',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -271,12 +285,11 @@ describe('Community-AI Scheduling', () => {
       suggested_text: 'Appreciate it!',
       execution_mode: 'api',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
       playbook_id: 'playbook-1',
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     const updated = actionStore.get('action-11b');
     expect(updated.status).toBe('failed');

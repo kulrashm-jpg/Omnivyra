@@ -9,8 +9,14 @@
  * Throwaway DB only; every case runs inside a rollback.
  */
 
-jest.mock('../../db/supabaseClient', () =>
-  require('./pgRestTranslator').makeSupabaseModule(() => require('./setup').db, 'r3comm'));
+// C3: the policy decision and the claim are table-returning RPCs; the
+// translator's rpc() is scalar-only, so rpc goes through pgTransport (rows, as
+// PostgREST returns them). Table access is unchanged.
+jest.mock('../../db/supabaseClient', () => {
+  const mod = require('./pgRestTranslator').makeSupabaseModule(() => require('./setup').db, 'r3comm');
+  const { pgRpc } = require('./helpers/pgTransport');
+  return { ...mod, supabase: { ...mod.supabase, rpc: pgRpc(() => require('./setup').db) } };
+});
 jest.mock('../../db/writeOwner', () => ({
   __esModule: true,
   ownedDbTable: (table: string) => require('../../db/supabaseClient').supabase.from(table),
@@ -54,10 +60,12 @@ jest.mock('../../../lib/security/safeFetch', () => ({
 }));
 
 import { db, inRollback } from './setup';
+import { bindingHashOf } from './helpers/c3ClaimFixtures';
+import { randomUUID } from 'crypto';
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const {
-  getCommunityAiPlatformPolicy,
+  getCommunityExecutionPolicy,
   __resetCommunityAiPlatformPolicyCacheForTests,
 } = require('../../services/communityAiPlatformPolicyService');
 const { runCommunityAiScheduler } = require('../../services/communityAiScheduler');
@@ -89,18 +97,55 @@ async function seedPlaybook(): Promise<string> {
   return r.rows[0].id;
 }
 
+/**
+ * C3: execution is open only through the tenant policy (platform row + this
+ * tenant's row), opened the supported way: inserted closed, requested by one
+ * operator, confirmed by another (20270126000003).
+ */
+const R3_REQUESTER = '0eda0896-0000-4000-8000-0000000000e1';
+const R3_CONFIRMER = '0eda0896-0000-4000-8000-0000000000e2';
+async function openPolicy(): Promise<void> {
+  for (const org of [null, ORG]) {
+    const where = org === null ? 'organization_id IS NULL' : 'organization_id = $1';
+    const p = org === null ? [] : [org];
+    await q(`INSERT INTO public.community_ai_platform_policy (organization_id, tenant_id, execution_enabled, auto_rules_enabled) VALUES ($1, $1, false, false)`, [org]);
+    await q(`UPDATE public.community_ai_platform_policy SET requested_execution_enabled = true, requested_auto_rules_enabled = true, requested_by = $${p.length + 1} WHERE ${where}`, [...p, R3_REQUESTER]);
+    await q(`UPDATE public.community_ai_platform_policy SET execution_enabled = true, auto_rules_enabled = true, updated_by = $${p.length + 1} WHERE ${where}`, [...p, R3_CONFIRMER]);
+  }
+}
+
+const R3_APPROVER = '0eda0896-0000-4000-8000-0000000000e3';
+
 // scheduled_at is timestamp WITHOUT time zone and the scheduler compares it
 // with a UTC ISO cutoff, so the fixture writes UTC wall-clock time.
+// An approved_at is the complete approval of record (C3): approver, content
+// hash, passkey evidence and the approve route's 'approved' log. The fixed
+// time is kept through the test-only back-date seam (superuser + GUC).
 async function seedScheduledApproved(playbookId: string, approvedAt: string | null): Promise<string> {
+  if (approvedAt) {
+    await q(`INSERT INTO public.users (id, email, name) VALUES ($1, 'r3-approver@example.invalid', 'r3') ON CONFLICT (id) DO NOTHING`, [R3_APPROVER]);
+    await q(`SET LOCAL omnivyra.community_action_test_backdate = 'i-am-a-test-fixture'`);
+  }
+  const newId = randomUUID();
+  const hash = approvedAt ? bindingHashOf({ id: newId, tenant_id: ORG, organization_id: ORG, platform: 'linkedin',
+    action_type: 'reply', target_id: 'comment-r3', suggested_text: 'Thanks!', playbook_id: playbookId }) : null;
   const r = await q(
     `INSERT INTO public.community_ai_actions
        (tenant_id, organization_id, platform, action_type, target_id, suggested_text, risk_level,
-        requires_human_approval, status, scheduled_at, approved_at, execution_mode, playbook_id, playbook_name)
+        requires_human_approval, status, scheduled_at, approved_at, execution_mode, playbook_id, playbook_name,
+        approved_by, approved_content_hash, passkey_credential_id, passkey_verified_at, id)
      VALUES ($1, $1, 'linkedin', 'reply', 'comment-r3', 'Thanks!', 'low',
-             false, 'approved', (now() AT TIME ZONE 'UTC') - interval '1 minute', $2, 'api', $3, 'R3 playbook')
-     RETURNING id`,
-    [ORG, approvedAt, playbookId],
+             false, 'approved', (now() AT TIME ZONE 'UTC') - interval '1 minute', $2, 'api', $3, 'R3 playbook',
+             $4, $5::text,
+             CASE WHEN $2::timestamptz IS NULL THEN NULL ELSE 'cred-r3' END, $2::timestamptz - interval '30 seconds', $6)
+     RETURNING id, to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at`,
+    [ORG, approvedAt, playbookId, approvedAt ? R3_APPROVER : null, hash, newId],
   );
+  if (approvedAt) {
+    await q(`INSERT INTO public.community_ai_action_logs (action_id, tenant_id, organization_id, event_type, event_payload)
+             VALUES ($1, $2, $2, 'approved', $3::jsonb)`,
+      [r.rows[0].id, ORG, JSON.stringify({ approved: true, user_id: R3_APPROVER, timestamp: r.rows[0].at })]);
+  }
   return r.rows[0].id;
 }
 
@@ -113,20 +158,25 @@ beforeEach(() => {
 });
 
 describe('community_ai_platform_policy default (real table)', () => {
-  it('no row: auto rules off, human approval required (W1 D-01, CR-X-01)', async () => {
+  it('no row: nothing executes, auto rules included (W1 D-01, CR-X-01; C3 closed default: POLICY_MISSING)', async () => {
     await inRollback(async () => {
       await q(`DELETE FROM public.community_ai_platform_policy`);
-      const policy = await getCommunityAiPlatformPolicy();
-      expect(policy).toMatchObject({ execution_enabled: true, auto_rules_enabled: false, require_human_approval: true });
+      const policy = await getCommunityExecutionPolicy({ organizationId: ORG, tenantId: ORG });
+      expect(policy).toEqual({ ok: false, code: 'POLICY_MISSING' });
     });
   });
 
-  it('a row inserted with column defaults re-enables auto rules (the operator remedy, D-B3)', async () => {
+  it('rows inserted with column defaults are CLOSED (C3 LD-5 replaces the D-B3 remedy: opening needs request + a second operator)', async () => {
     await inRollback(async () => {
       await q(`DELETE FROM public.community_ai_platform_policy`);
       await q(`INSERT INTO public.community_ai_platform_policy DEFAULT VALUES`);
-      const policy = await getCommunityAiPlatformPolicy();
-      expect(policy).toMatchObject({ execution_enabled: true, auto_rules_enabled: true, require_human_approval: false });
+      await q(`INSERT INTO public.community_ai_platform_policy (organization_id, tenant_id) VALUES ($1, $1)`, [ORG]);
+      expect(await getCommunityExecutionPolicy({ organizationId: ORG, tenantId: ORG })).toEqual({ ok: false, code: 'PLATFORM_KILL_SWITCH' });
+      __resetCommunityAiPlatformPolicyCacheForTests();
+      await q(`DELETE FROM public.community_ai_platform_policy`);
+      await openPolicy();
+      expect(await getCommunityExecutionPolicy({ organizationId: ORG, tenantId: ORG }))
+        .toMatchObject({ ok: true, policy: { execution_enabled: true, auto_rules_enabled: true } });
     });
   });
 
@@ -151,14 +201,17 @@ describe('scheduled dispatch needs an approval of record (real rows)', () => {
   it('an approved, due row with no approved_at is not dispatched', async () => {
     await inRollback(async () => {
       await q(`DELETE FROM public.community_ai_platform_policy`);
-      await q(`INSERT INTO public.community_ai_platform_policy DEFAULT VALUES`);
+      await openPolicy();
       const playbookId = await seedPlaybook();
       const id = await seedScheduledApproved(playbookId, null);
 
       const run = await runCommunityAiScheduler(new Date());
 
-      // The row was picked up (so the refusal is not vacuous) and not dispatched.
-      expect(run.processed).toBeGreaterThanOrEqual(1);
+      // C3: the scheduler no longer loads a row without approved_at at all
+      // (communityAiScheduler filters it in the query, and the single claim
+      // refuses it anyway). Not vacuous: the positive control below runs the
+      // same fixture WITH an approval of record and it is dispatched once.
+      expect(run.processed).toBe(0);
       expect(dispatches()).toBe(0);
       const row = await rowStatus(id);
       expect(row.status).not.toBe('executed');
@@ -176,9 +229,9 @@ describe('scheduled dispatch needs an approval of record (real rows)', () => {
   it('positive control: the same row with approved_at is dispatched once and recorded executed', async () => {
     await inRollback(async () => {
       await q(`DELETE FROM public.community_ai_platform_policy`);
-      await q(`INSERT INTO public.community_ai_platform_policy DEFAULT VALUES`);
+      await openPolicy();
       const playbookId = await seedPlaybook();
-      const id = await seedScheduledApproved(playbookId, '2026-11-03T09:00:00Z');
+      const id = await seedScheduledApproved(playbookId, new Date(Date.now() - 3600_000).toISOString());
 
       const run = await runCommunityAiScheduler(new Date());
 

@@ -15,31 +15,29 @@ jest.mock('../../services/communityRecipientRecheck', () => ({
   ...jest.requireActual('../../services/communityRecipientRecheck'),
   recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
+// Prompt 3: an in-memory database that stores (and returns) the action row with
+// its approval of record, which the executor's evidence gate reads.
+import { createFakeDb, type FakeDb } from './helpers/communityExecutionFakeDb';
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
+
+let mockDb: FakeDb = createFakeDb();
 jest.mock('../../db/supabaseClient', () => ({
+  // The claim RPC and refusal recorder, emulated over the fake DB (helpers/communityClaimRpcEmulation).
   supabase: {
-    from: jest.fn(() => ({
-      insert: jest.fn(() => Promise.resolve({ error: null })),
-      select: jest.fn(() => ({
-        eq: jest.fn(() => ({
-          eq: jest.fn(() => ({
-            eq: jest.fn(() => ({
-              eq: jest.fn(() => ({
-                gte: jest.fn(() => Promise.resolve({ data: [] })),
-              })),
-            })),
-          })),
-        })),
-      })),
-    })),
+    from: (t: string) => mockDb.from(t),
+    rpc: (name: string, args: any) => require('./helpers/communityClaimRpcEmulation').communityRpcEmulation(() => mockDb).rpc(name, args),
   },
 }));
 
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({
     execution_enabled: true,
     auto_rules_enabled: true,
     require_human_approval: false,
-  })),
+  }))),
 }));
 
 jest.mock('../../services/usageEnforcementService', () => ({
@@ -87,19 +85,27 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
   executeAction: (...args: LinkedInExecuteArgs) => mockLinkedInExecuteAction(...args),
 }));
 
-import { executeAction } from '../../services/communityAiActionExecutor';
+import { executeAction as realExecuteAction } from '../../services/communityAiActionExecutor';
+
+/** A person approved exactly this action (approve.ts): store it with its evidence, then execute it. */
+const executeAction: typeof realExecuteAction = (action, ...rest) => {
+  const stored = withApprovalEvidence({ ...(action as Record<string, any>), status: 'approved' } as never) as any;
+  mockDb = createFakeDb({ community_ai_actions: [stored] });
+  // SEC3-F3: an external mode needs a held claim; the executor takes it itself (persist: true).
+  return realExecuteAction(stored, rest[0], { persist: true, ...(rest[1] || {}) });
+};
 
 const baseAction = () => ({
   id: 'action-1',
   tenant_id: 'tenant-1',
-  organization_id: 'org-1',
+  organization_id: 'tenant-1',
   platform: 'linkedin',
   action_type: 'reply' as const,
   target_id: 'urn:li:share:post-1',
   suggested_text: 'thanks!',
   playbook_id: null,
-  // D-01: every execution needs a persisted human approval.
-  approved_at: '2026-11-01T00:00:00Z',
+  // D-01 / Prompt 3: every execution needs a persisted human approval of record;
+  // executeAction below stores the row with it (withApprovalEvidence).
 });
 
 describe('communityAiActionExecutor — manual api-mode', () => {

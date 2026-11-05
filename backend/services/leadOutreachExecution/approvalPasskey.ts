@@ -37,8 +37,17 @@ import {
 } from '../../security/webauthn/WebAuthnAuthenticationService';
 
 const DOMAIN = 'omnivyra.outreach.approval.passkey.v1';
+/**
+ * Prompt 3 — the community-action approval domain. Same ceremony, same 48-byte shape;
+ * a different digest domain, so an outreach approval assertion never verifies as a
+ * community one and the reverse. `subject` absent is the outreach domain, unchanged.
+ */
+const COMMUNITY_DOMAIN = 'omnivyra.community.approval.passkey.v1';
 const NONCE_BYTES = 16;
 const DIGEST_BYTES = 32;
+
+/** The only accepted `subject`. Anything else is refused (throws), never defaulted. */
+export type ApprovalPasskeySubject = 'community_action';
 
 export interface ApprovalPasskeyBinding {
   readonly userId: string;
@@ -46,6 +55,16 @@ export interface ApprovalPasskeyBinding {
   readonly taskId: string;
   readonly action: 'approve';
   readonly bindingHash: string;
+  /** Absent (or undefined) = outreach task approval. 'community_action' = community action id in `taskId`. */
+  readonly subject?: ApprovalPasskeySubject;
+}
+
+/** The digest domain for `binding`. Throws on any subject outside the allow-list. */
+function domainFor(binding: { subject?: unknown }): string {
+  const subject = binding.subject;
+  if (subject === undefined) return DOMAIN;
+  if (subject === 'community_action') return COMMUNITY_DOMAIN;
+  throw new Error('approvalPasskey: unsupported approval subject');
 }
 
 export type ApprovalPasskeyRefusal =
@@ -96,7 +115,8 @@ export function redeemApprovalPasskeyProof(
   ISSUED.delete(proof);
   const p = proof as ApprovalPasskeyProof;
   if (p.action !== 'approve' || p.userId !== expected.userId || p.organizationId !== expected.organizationId
-    || p.taskId !== expected.taskId || p.bindingHash !== expected.bindingHash) {
+    || p.taskId !== expected.taskId || p.bindingHash !== expected.bindingHash
+    || p.subject !== expected.subject) {
     return { ok: false, reason: 'the passkey verification was made for a different approval or content' };
   }
   // L-1 — fresh means fresh: a proof is redeemable only within the challenge TTL of its ceremony.
@@ -111,7 +131,7 @@ export function redeemApprovalPasskeyProof(
 export function approvalChallengeBytes(nonce: Buffer, binding: ApprovalPasskeyBinding): Buffer {
   const digest = createHash('sha256')
     .update(JSON.stringify([
-      DOMAIN, nonce.toString('hex'), binding.userId, binding.organizationId, binding.taskId, binding.action, binding.bindingHash,
+      domainFor(binding), nonce.toString('hex'), binding.userId, binding.organizationId, binding.taskId, binding.action, binding.bindingHash,
     ]))
     .digest();
   return Buffer.concat([nonce, digest]);
@@ -158,7 +178,12 @@ export async function verifyApprovalPasskey(
   if (signed.length !== NONCE_BYTES + DIGEST_BYTES) {
     return { ok: false, code: 'passkey_wrong_binding', detail: 'the passkey was not verified for an approval' };
   }
-  const expected = approvalChallengeBytes(signed.subarray(0, NONCE_BYTES), binding);
+  let expected: Buffer;
+  try {
+    expected = approvalChallengeBytes(signed.subarray(0, NONCE_BYTES), binding);
+  } catch {
+    return { ok: false, code: 'passkey_wrong_binding', detail: 'the approval subject is not supported' };
+  }
   if (!timingSafeEqual(expected, signed)) {
     return { ok: false, code: 'passkey_wrong_binding', detail: 'the passkey was verified for a different approval or content' };
   }
@@ -184,6 +209,7 @@ export async function verifyApprovalPasskey(
       const proof: ApprovalPasskeyProof = Object.freeze({
         userId: binding.userId, organizationId: binding.organizationId, taskId: binding.taskId,
         action: binding.action, bindingHash: binding.bindingHash, credentialId, verifiedAt,
+        ...(binding.subject !== undefined ? { subject: binding.subject } : {}),
       });
       ISSUED.add(proof);
       return { ok: true, proof };

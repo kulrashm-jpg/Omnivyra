@@ -16,7 +16,10 @@
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: jest.fn() } }));
 jest.mock('../../queue/bullmqClient', () => ({ withHeavyJobSlot: (fn: () => any) => fn() }));
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ execution_enabled: true, require_human_approval: false })),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({ execution_enabled: true, require_human_approval: false }))),
 }));
 
 const resolveMock = jest.fn();

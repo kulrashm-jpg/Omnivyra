@@ -32,18 +32,30 @@ import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityServ
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
-import { getCommunityAiPlatformPolicy } from '@/backend/services/communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from '@/backend/services/communityAiPlatformPolicyService';
+import { recordCommunityExecutionRefusal } from '@/backend/services/communityExecutionRefusal';
 import { dmSendRefusal, wouldDispatchDm, INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED } from '@/backend/services/dmDispatchSafety';
 import { recheckCommunityRecipient, isRecipientRecheckRefusal } from '@/backend/services/communityRecipientRecheck';
 import { EXTENSION_BROWSER_INGESTION_SUSPENDED, SUSPENDED_COLLECTION_COMMANDS } from '@/backend/services/extensionIngestionSuspension';
+
+/** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
+const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
 
 /**
  * Steps that only read the tenant's own inbox (queued by
  * /api/engagement/platform-sync). Every other step can send, like or post.
+ *
+ * RECORDED EXEMPTION (Prompt 3, OD-1): these two steps skip the tenant
+ * execution-policy and approval pre-check below, because they contact no one.
+ * They are NOT exempt from the claim: claim_community_ai_browser_command still
+ * requires the policy, a human approval of record and the 7-day lifetime, and
+ * platform-sync rows carry no approved_by, so today they are never handed out
+ * (and R-3 suspends collection commands anyway). Widening this set is an owner
+ * decision; extensionLeaseHandoutPolicyGate.test.ts pins its contents.
  */
-const READ_ONLY_EXTENSION_ACTIONS = new Set(['sync_dm_inbox', 'sync_comments_inbox']);
+const READ_ONLY_EXTENSION_ACTIONS: ReadonlySet<string> = new Set(['sync_dm_inbox', 'sync_comments_inbox']);
 
 const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
   reply: 'reply_comment',
@@ -170,7 +182,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   cancellation, the platform kill switch and approval.
     const query = supabase
       .from('community_ai_actions')
-      .select('id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
+      .select('id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
       .eq('execution_mode', 'browser')
@@ -195,13 +207,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const commands: any[] = [];
 
     // Handing a command to the extension is the last point before the browser
-    // sends, so the executor's platform gates (runExecution) are applied again
-    // here: a row prepared before execution was switched off, or before human
-    // approval became required, must not go out. An unreadable policy is
-    // fail-closed (execution off, approval required). A gated row is left
-    // unclaimed, which is provably unsent; dispatch recovery releases it later.
-    // (Round 3 74242b572, kept alongside W1's claim-RPC authority under CR-X-01.)
-    const policy = await getCommunityAiPlatformPolicy();
+    // sends, so the executor's gates are applied again here: a row prepared
+    // before execution was switched off must not go out. The policy is the
+    // session tenant's own (OD-1; a community tenant is its organization):
+    // missing, unreadable, malformed or disabled all refuse. A gated row is left
+    // unclaimed, which is provably unsent, and one governance refusal record is
+    // written. The claim RPC re-applies all of it atomically and is authoritative.
+    const decision = await getCommunityExecutionPolicy({ organizationId: session.orgId, tenantId: session.orgId });
 
     for (const row of data || []) {
       // ── Chain-aware step selection ────────────────────────────────────────
@@ -230,8 +242,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (isCurrentlyDisabled(row.platform, topAction)) continue;
 
       if (!READ_ONLY_EXTENSION_ACTIONS.has(capabilityAction)) {
-        if (!policy.execution_enabled) continue;
-        if (policy.require_human_approval && !(row as any).approved_at) continue;
+        // D-01: a human approval is required whatever the policy says.
+        const gateCode = !decision.ok ? refusedCode(decision) : !(row as any).approved_at ? 'HUMAN_APPROVAL_REQUIRED' : null;
+        if (gateCode) {
+          // The refusal is recorded under the ROW's own scope (the record function
+          // refuses a scope that does not match the action).
+          await recordCommunityExecutionRefusal({
+            actionId: row.id,
+            organizationId: String((row as any).organization_id ?? session.orgId),
+            tenantId: String((row as any).tenant_id ?? ''),
+            claimPoint: 'browser',
+            code: gateCode,
+            payload: { route: '/api/extension/commands', step: capabilityAction },
+          });
+          continue;
+        }
       }
 
       const extensionAction = mapCapabilityActionToExtensionAction(capabilityAction);

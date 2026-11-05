@@ -8,9 +8,16 @@ import { persistExecutionResult, claimCommunityActionForExecution } from './comm
 import { getPlaybookById } from './playbooks/playbookService';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
-import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from './communityAiPlatformPolicyService';
+import { evaluateCommunityApprovalEvidence } from './communityApprovalBinding';
+import { recordCommunityExecutionRefusal } from './communityExecutionRefusal';
 import { canExecuteAction } from './executionGuardrailService';
 import { ownedDbTable } from '../db/writeOwner';
+
+/** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
+const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
+const evidenceRefusal = (e: { ok: boolean }): { code: string; detail: string } =>
+  ({ code: (e as { code?: string }).code ?? 'APPROVAL_EVIDENCE_REQUIRED', detail: (e as { detail?: string }).detail ?? '' });
 
 type SchedulerResult = {
   processed: number;
@@ -78,28 +85,18 @@ const loadHistoryMetrics = async (
 };
 
 export const runCommunityAiScheduler = async (now = new Date()): Promise<SchedulerResult> => {
-  const policy = await getCommunityAiPlatformPolicy();
-  if (!policy.execution_enabled) {
-    console.debug('COMMUNITY_AI_PLATFORM_POLICY_BLOCK', {
-      reason: 'execution_enabled=false',
-      source: 'scheduler',
-    });
-    await ownedDbTable('audit_logs').insert({
-      actor_user_id: null,
-      action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
-      metadata: {
-        policy_flag: 'execution_enabled',
-        source: 'scheduler',
-      },
-      created_at: new Date().toISOString(),
-    });
-    return { processed: 0, executed: 0, failed: 0 };
-  }
-
+  // The execution policy is per tenant (OD-1) and is decided for each action
+  // below, before anything is written or claimed. There is no global switch to
+  // read here: the platform kill switch is part of every tenant decision.
+  //
+  // Only rows with a human approval of record are loaded. An 'approved' row with
+  // no approved_at (a legacy auto-rule approval) is never claimable, and loading
+  // it re-read it on every run without ever settling it.
   const cutoff = now.toISOString();
   const { data: actions, error } = await ownedDbTable('community_ai_actions')
     .select('*')
     .eq('status', 'approved')
+    .not('approved_at', 'is', null)
     .gte('scheduled_at', '1970-01-01T00:00:00.000Z')
     .lte('scheduled_at', cutoff);
 
@@ -130,6 +127,26 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
         organization_id: action.organization_id || 'unknown',
         event_type: 'failed',
         event_payload: { error: 'TENANT_SCOPE_MISSING' },
+      });
+      continue;
+    }
+
+    // ── Policy and approval gates FIRST (LD-7): a refusal here writes one
+    // governance refusal record and leaves the row 'approved' (never burned).
+    const decision = await getCommunityExecutionPolicy({
+      organizationId: action.organization_id,
+      tenantId: action.tenant_id,
+    });
+    const evidence = decision.ok ? evaluateCommunityApprovalEvidence(action) : null;
+    const gateCode = !decision.ok ? refusedCode(decision) : evidence && !evidence.ok ? evidenceRefusal(evidence).code : null;
+    if (gateCode) {
+      await recordCommunityExecutionRefusal({
+        actionId: action.id,
+        organizationId: action.organization_id,
+        tenantId: action.tenant_id,
+        claimPoint: 'scheduler',
+        code: gateCode,
+        payload: { source: 'scheduler' },
       });
       continue;
     }
@@ -413,11 +430,16 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
     // A concurrent scheduler, the manual execute route, the orchestration
     // adapter or the RPA retry flush may race for the same row; exactly one
     // wins and every loser does nothing.
+    // The claim RPC re-applies policy, evidence and the 7-day lifetime; its
+    // refusal leaves the row 'approved' and is recorded there.
+    const correlationId = randomUUID();
     const claim = await claimCommunityActionForExecution({
       actionId: action.id,
       tenantId: action.tenant_id,
       organizationId: action.organization_id,
-      fromStatuses: ['approved'],
+      claimPoint: 'scheduler',
+      executionMode: action.execution_mode ?? null,
+      correlationId,
     });
     if (!claim.claimed) {
       continue;
@@ -432,6 +454,7 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       webhook: true,
       source: 'scheduler',
       persist: true,
+      correlation_id: correlationId,
       expected_from_statuses: ['executing'],
     });
 

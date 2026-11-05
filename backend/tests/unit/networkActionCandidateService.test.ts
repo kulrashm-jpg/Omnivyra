@@ -37,12 +37,14 @@ jest.mock('../../services/playbooks/playbookService', () => ({
 
 import { generateNetworkActionCandidates } from '../../services/networkExpansion/networkActionCandidateService';
 import { enginePreflight, type CommunityActionRow, type PreflightDeps } from '../../services/orchestration/communityEngineAdapter';
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
 
 const ORG = 'org-1';
 
 /** Every engine gate open, so only the observation lock can refuse. */
 const openGates: PreflightDeps = {
-  getPolicy: async () => ({ execution_enabled: true, auto_rules_enabled: true, require_human_approval: false, updated_at: null, updated_by: null }),
+  getPolicy: async () => ({ ok: true as const, policy: { execution_enabled: true as const, auto_rules_enabled: true }, version: 'v1' }),
+  recordRefusal: async () => true,
   guardrail: async () => ({ allowed: true }),
   getPlaybook: (async () => ({ id: 'pb-1' })) as unknown as PreflightDeps['getPlaybook'],
   loadHistory: async () => ({ replies_last_hour: 0, follows_today: 0, actions_today: 0 }),
@@ -81,7 +83,8 @@ describe('generateNetworkActionCandidates — intent the lock can read', () => {
 
   it('a written row is refused by the observation lock, approved or not', async () => {
     const row = await writtenRow();
-    const verdict = await enginePreflight({ ...row, status: 'approved', approved_at: '2026-10-28T08:00:00.000Z' }, openGates);
+    // Prompt 3: with a complete approval of record, so only the lock can refuse.
+    const verdict = await enginePreflight(withApprovalEvidence({ ...row, status: 'approved' } as never) as CommunityActionRow, openGates);
     expect(verdict).toMatchObject({ allowed: false, code: 'PHASE_5B_OBSERVATION_LOCK', disposition: 'needs_human' });
   });
 });

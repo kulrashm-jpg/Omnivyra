@@ -23,6 +23,13 @@ export const playbookStore: Array<any> = [];
 export const webhookStore: Array<any> = [];
 export const autoRuleStore: Array<any> = [];
 export const networkIntelligenceStore: Array<any> = [];
+/**
+ * Prompt 3 (OD-1): tenant execution policy rows, by organization. A tenant with
+ * no row is POLICY_MISSING (fail closed); there is no global fallback.
+ */
+export const executionPolicyStore = new Map<string, { execution_enabled: boolean; auto_rules_enabled: boolean }>();
+/** Governance refusal records (record_community_execution_refusal). */
+export const refusalStore: Array<any> = [];
 
 export const mockJsonResponse = (payload: any, ok = true, status = 200) => ({
   ok,
@@ -76,6 +83,82 @@ export const resetCommunityAiStores = () => {
   webhookStore.length = 0;
   autoRuleStore.length = 0;
   networkIntelligenceStore.length = 0;
+  executionPolicyStore.clear();
+  refusalStore.length = 0;
+};
+
+/** Open the tenant's execution policy (production: two-person confirmed). */
+export const seedExecutionPolicy = (opts: { tenantId?: string; executionEnabled?: boolean; autoRulesEnabled?: boolean } = {}) => {
+  executionPolicyStore.set(opts.tenantId ?? 'tenant-1', {
+    execution_enabled: opts.executionEnabled !== false,
+    auto_rules_enabled: opts.autoRulesEnabled === true,
+  });
+};
+
+/** A complete human approval of record on an action fixture (see communityApprovalEvidenceFixture). */
+export { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
+
+/** Store `row` as a human-approved action (approved, with its approval of record) and return it. */
+export const storeApproved = (row: Record<string, any>) => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { withApprovalEvidence: withEvidence } = jest.requireActual('../helpers/communityApprovalEvidenceFixture');
+  const r = withEvidence({ status: 'approved', ...row });
+  actionStore.set(r.id, r);
+  return r;
+};
+
+const policyDecision = (org: unknown, tenant: unknown) => {
+  if (typeof org !== 'string' || !org || org !== tenant) return { allowed: false, code: 'POLICY_SCOPE_INVALID', auto_rules_enabled: null, policy_version: null };
+  const row = executionPolicyStore.get(org);
+  if (!row) return { allowed: false, code: 'POLICY_MISSING', auto_rules_enabled: null, policy_version: null };
+  if (!row.execution_enabled) return { allowed: false, code: 'POLICY_EXECUTION_DISABLED', auto_rules_enabled: null, policy_version: 'v1' };
+  return { allowed: true, code: null, auto_rules_enabled: row.auto_rules_enabled, policy_version: 'v1' };
+};
+
+/**
+ * Emulates the Prompt 3 database functions for the in-memory harness (the SQL
+ * itself is proven in the real-schema suites): the tenant policy decision, the
+ * single approved -> executing claim (policy -> approval evidence + 7 days ->
+ * CAS; a refusal leaves the row and records once; a lost race records nothing)
+ * and the refusal recorder. Install with
+ * `(supabase.rpc as jest.Mock).mockImplementation(communityRpc)`.
+ */
+export const communityRpc = async (name: string, args: Record<string, any>) => {
+  if (name === 'community_execution_policy_decision') return { data: [policyDecision(args.p_org, args.p_tenant)], error: null };
+  if (name === 'record_community_execution_refusal') {
+    refusalStore.push({ action_id: args.p_action_id, organization_id: args.p_org, tenant_id: args.p_tenant, claim_point: args.p_claim_point, code: args.p_code });
+    return { data: true, error: null };
+  }
+  if (name === 'claim_community_ai_action_for_execution') {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { evaluateCommunityApprovalEvidence } = jest.requireActual('../../services/communityApprovalBinding');
+    const row = actionStore.get(args.p_action_id);
+    if (!row) return { data: [{ claimed: false, code: 'ACTION_NOT_FOUND', current_status: null }], error: null };
+    if (row.organization_id !== args.p_org || row.tenant_id !== args.p_tenant) {
+      return { data: [{ claimed: false, code: 'TENANT_SCOPE_VIOLATION', current_status: null }], error: null };
+    }
+    const decision = policyDecision(args.p_org, args.p_tenant);
+    let code: string | null = null;
+    if (!decision.allowed) code = decision.code;
+    else if (args.p_claim_point === 'auto' && decision.auto_rules_enabled !== true) code = 'POLICY_AUTO_RULES_DISABLED';
+    else {
+      const ev = evaluateCommunityApprovalEvidence(row);
+      if (!ev.ok) code = ev.code === 'HUMAN_APPROVAL_REQUIRED' ? 'APPROVAL_REQUIRED' : ev.code === 'APPROVAL_EXPIRED' ? 'APPROVAL_EXPIRED' : 'APPROVAL_EVIDENCE_REQUIRED';
+    }
+    if (code) {
+      refusalStore.push({ action_id: row.id, organization_id: row.organization_id, tenant_id: row.tenant_id, claim_point: args.p_claim_point, code });
+      return { data: [{ claimed: false, code, current_status: row.status }], error: null };
+    }
+    if (row.status !== 'approved' || row.cancel_requested_at) {
+      return { data: [{ claimed: false, code: 'CLAIM_CONFLICT', current_status: row.status }], error: null };
+    }
+    // As the SQL does: a well-formed correlation id is stamped with the claim.
+    const corr = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(args.p_correlation_id ?? ''))
+      ? args.p_correlation_id : row.execution_correlation_id;
+    actionStore.set(row.id, { ...row, status: 'executing', execution_mode: args.p_execution_mode || row.execution_mode, execution_correlation_id: corr });
+    return { data: [{ claimed: true, code: null, current_status: 'executing' }], error: null };
+  }
+  return { data: null, error: { message: `communityRpc: unexpected rpc ${name}` } };
 };
 
 /**
@@ -143,6 +226,7 @@ const resolveSelect = (table: string, state: any) => {
     if (state.filters.action_type) rows = rows.filter((row) => row.action_type === state.filters.action_type);
     if (state.filters.target_id) rows = rows.filter((row) => row.target_id === state.filters.target_id);
     if (state.filters.status) rows = rows.filter((row) => row.status === state.filters.status);
+    for (const f of state.notNull || []) rows = rows.filter((row) => row[f] !== null && row[f] !== undefined);
     if (state.lteFilter) {
       rows = rows.filter((row) => {
         const value = row[state.lteFilter.field];
@@ -391,6 +475,7 @@ export const buildQuery = (table: string) => {
     insertRows?: any[];
     limitValue?: number;
     single?: boolean;
+    notNull?: string[];
   } = { filters: {} };
   const query: any = {
     select: jest.fn().mockReturnThis(),
@@ -402,7 +487,10 @@ export const buildQuery = (table: string) => {
     order: jest.fn((field: string, options?: any) => { state.order = { field, ascending: options?.ascending !== false }; return query; }),
     single: jest.fn(async () => { state.single = true; return resolveSelect(table, state); }),
     maybeSingle: jest.fn(async () => { state.single = true; return resolveSelect(table, state); }),
-    not: jest.fn(() => query),
+    not: jest.fn((field: string, op: string, value: any) => {
+      if (op === 'is' && value === null) state.notNull = [...(state.notNull || []), field];
+      return query;
+    }),
     or: jest.fn(() => query),
     then: (resolve: any, reject: any) => Promise.resolve(resolveSelect(table, state)).then(resolve, reject),
     update: jest.fn((values: any) => {

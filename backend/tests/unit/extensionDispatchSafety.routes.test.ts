@@ -133,6 +133,13 @@ jest.mock('@/backend/services/communityAiActionExecutor', () =>
   jest.requireActual('../../services/communityAiExecutionResultService'));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
+// Prompt 3 (OD-1): the session tenant's execution policy is open here; the
+// policy gate itself is proven in extensionLeaseHandoutPolicyGate.test.ts.
+jest.mock('@/backend/services/communityAiPlatformPolicyService', () => ({
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  getCommunityExecutionPolicy: jest.fn(async () => ({ ok: true, policy: { execution_enabled: true, auto_rules_enabled: false }, version: 'v1' })),
+}));
+
 const commandsHandler = require('../../../pages/api/extension/commands').default;
 const actionResultHandler = require('../../../pages/api/extension/action-result').default;
 const { persistExecutionResult } = require('../../services/communityAiExecutionResultService');

@@ -40,7 +40,14 @@ describe('community execution safety migration (static contract)', () => {
       expect(vocab).toContain(s);
     }
     const runtime = code('backend/services/communityAiActionExecutorRuntime.ts');
-    expect(runtime).toMatch(/status: 'executing'/);
+    // C3: the approved -> executing move is the single claim's one atomic
+    // conditional UPDATE in SQL (claim_community_ai_action_for_execution);
+    // runtime.ts reaches it only through the RPC.
+    const claimSql = code('supabase/migrations/20270126000001_community_action_approval_claim.sql');
+    const fnStart = claimSql.indexOf('CREATE OR REPLACE FUNCTION public.claim_community_ai_action_for_execution(');
+    const claimFn = claimSql.slice(fnStart, claimSql.indexOf('$$;', claimSql.indexOf('AS $$', fnStart)));
+    expect(claimFn).toMatch(/UPDATE community_ai_actions a\s+SET status\s+= 'executing'[\s\S]*AND a\.status = 'approved'/);
+    expect(runtime).toMatch(/ownedDbRpc\('claim_community_ai_action_for_execution'/);
     expect(runtime).toMatch(/'deferred' \? 'approved'/);
   });
 

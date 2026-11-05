@@ -8,9 +8,22 @@
 import { createFakeDb, type FakeDb } from './helpers/communityExecutionFakeDb';
 
 let mockDb: FakeDb = createFakeDb();
+const mockClaimRpcCalls: Array<Record<string, unknown>> = [];
+// Prompt 3: the engine claim is claim_community_ai_action_for_execution (proven in
+// the RS suites). Emulated here as the tenant-scoped, cancel-aware CAS it ends in.
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
-  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbRpc: jest.fn(async (name: string, args: Record<string, any>) => {
+    if (name !== 'claim_community_ai_action_for_execution') return { data: null, error: { message: `unexpected rpc ${name}` } };
+    mockClaimRpcCalls.push(args);
+    const r = mockDb.tables.community_ai_actions.find((x: any) => x.id === args.p_action_id);
+    if (!r || r.organization_id !== args.p_org || r.tenant_id !== args.p_tenant) {
+      return { data: [{ claimed: false, code: 'TENANT_SCOPE_VIOLATION', current_status: null }], error: null };
+    }
+    if (r.status !== 'approved' || r.cancel_requested_at) return { data: [{ claimed: false, code: 'CLAIM_CONFLICT', current_status: r.status }], error: null };
+    r.status = 'executing';
+    return { data: [{ claimed: true, code: null, current_status: 'executing' }], error: null };
+  }),
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
@@ -57,6 +70,8 @@ describe('G-6: the default claim is the engine claim', () => {
     seed();
     expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW)).toBe(true);
     expect(stored().status).toBe('executing');
+    // LD-4: the journey claims at its own claim point, never 'auto'.
+    expect(mockClaimRpcCalls.at(-1)).toMatchObject({ p_action_id: ACTION_ID, p_org: ORG, p_tenant: ORG, p_claim_point: 'orchestration' });
   });
 
   it('does not claim an action with a cancel request', async () => {
