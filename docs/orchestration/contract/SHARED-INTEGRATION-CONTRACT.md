@@ -1,6 +1,6 @@
-# Omnivyra shared integration contract, v0.2.0
+# Omnivyra shared integration contract, v0.3.0
 
-**Status: proposed.** Implemented on the local branch `feat/orchestration-recovery`. Not merged, not deployed, and `WORKFLOW_ORCHESTRATION_ENABLED` stays off. The PI lead has not reviewed sections A and B. The Outreach lead has agreed the ownership split in section D, and its branch has merged an earlier commit of this contract (0.1.0, at `30a421c2`). It has not yet merged 0.2.0.
+**Status: proposed.** 0.3.0 is implemented on the local branch `orch/c4-a-contract` (Orchestration Prompt 4, on `7f2ca186f`), uncommitted; earlier versions on `feat/orchestration-recovery`. Not merged, not deployed, and `WORKFLOW_ORCHESTRATION_ENABLED` stays off. The PI lead has not reviewed sections A and B. The Outreach lead has agreed the ownership split in section D, and its branch has merged an earlier commit of this contract (0.1.0, at `30a421c2`). It has not yet merged 0.2.0.
 
 Code of record: `backend/services/orchestration/executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`, `journeyGovernance.ts`, `journeyExit.ts`.
 
@@ -136,17 +136,106 @@ An engine implements `EngineAdapter`: `execute(ctx)` returns `{ engine, outcome,
 | Deduplication | `eventId` derives from the source row and type |
 | Replay | Reading again gives the same events in the same order |
 | Cursor | `after` is the last event seen; order is `(occurredAt, eventId)` |
-| No personal data | Codes only; `evidence`, `transport_response` and message content are never read |
+| No personal data | Codes only. `evidence` and message content are never read. Of `transport_response`, only the complaint marker is used (0.3.0, E.3), and nothing of it is copied into an event |
 
 **Cursor limit.** A row that arrives late with an earlier `occurredAt`, as a provider event can, sorts before an existing cursor. A ledger event's `code` is the row's current state, so a cursor reader does not see a later change to `uncertain`. A consumer needing completeness re-reads from the start and dedupes on `eventId`.
 
 **WhatsApp responses.** The view reads the same single message that ends a journey, so a later STOP replaces an earlier `response.replied` in a replay.
 
-**Types:** `prospect.lifecycle_changed`; `journey.enrolled`, `.terminated`, `.completed`; `decision.recorded`; `approval.requested`, `.granted`, `.rejected`; `execution.requested`, `.started`, `.accepted`, `.failed`, `.cancelled`; `delivery.confirmed`, `.failed`, `.bounced`, `.complained`; `response.replied`, `.unsubscribed`, `.rejected`, `.other`; `outcome.recorded`.
+**Types:** `prospect.lifecycle_changed`; `journey.enrolled`, `.terminated`, `.completed`; `decision.recorded`; `approval.requested`, `.granted`, `.rejected`, `.revoked` (0.3.0); `execution.requested`, `.started`, `.accepted`, `.failed`, `.cancelled`; `delivery.confirmed`, `.failed`, `.bounced`, `.complained`; `response.replied`, `.unsubscribed`, `.rejected`, `.other`; `outcome.recorded`; and, added in 0.3.0, `journey.suspended` and `record.unmapped`.
 
-`JOURNEY_EVENT_VERSION` is bumped when a field's meaning changes, not when an optional field is added. Only `response.replied` is positive engagement. A STOP, an unsubscribe, a bounce and a complaint never are.
+`JOURNEY_EVENT_VERSION` is bumped when a field's meaning changes, not when an optional field or a new type is added. It is still 1 at 0.3.0, although 0.3.0 re-maps four delivery statuses: the reasoning is in `API-AND-EVENT-SCHEMAS.md`, "From 0.2.0 to 0.3.0", and the owner decision EV-1 is open. Only `response.replied` is positive engagement. A STOP, an unsubscribe, a bounce, a complaint, every approval event (`approval.revoked` included), `journey.suspended` and `record.unmapped` never are.
 
-**Mandate events with no separate type.** `prospect discovered`, `qualified` and `updated` appear as `prospect.lifecycle_changed` from enrollment on; before enrollment they belong to PI. `approval.requested` is declared but not emitted yet: approvals expose only decisions. `execution.failed` and `.cancelled` are declared and not emitted either: they surface today as `decision.recorded` with a code.
+### E.1 Event rules (written down in 0.3.0; unchanged in behaviour)
+
+| Rule | What holds |
+|---|---|
+| **Identity** | `eventId` is the first 32 hex characters of `sha256("<source.table>\|<source.id>\|<type>")`. One durable row and one type are one event, however often it is read. The time is not part of it |
+| **Correlation** | `correlationId` is `journey:<executionInstanceId>/step:<planStepId>`, or `journey:<executionInstanceId>` for a run-level event. Every event of one step shares it, across engines |
+| **Idempotency** | `idempotencyKey` is `task:<execution_task_id>` for an event about a step's task, otherwise null. It is the execution's key, not the event's, so many events share it. Deduplicate events on `eventId` |
+| **Tenant context** | `organizationId` is the tenant the run was resolved in. Every read is tenant first. Another tenant's run is not found (404 through the route), and no row of another tenant is read into a run |
+| **Actor context** | Optional `actor` (0.3.0), on `approval.granted`, `.rejected` and `.revoked` only: `{ kind: 'user', id, tier }` from `outreach_approvals.approver_user_id` and `.tier`. `actor.id` is the user who decided, or who revoked: an internal user uuid only, never a name or an address, and served only through the tenant-scoped route (owner decision AC-1, 2026-11-05). Absent when the row names nobody. The view does not re-verify the id against `public.users` (the actor rule in section A is unratified). The free-text `reason` and `notes` are never read |
+| **Ordering** | `(occurredAt, eventId)`, both ascending, compared as strings. `occurredAt` is the source row's own time, ISO-8601 UTC |
+| **Cursor** | `after` is `<occurredAt>\|<eventId>` of the last event seen. The page holds the events strictly after it |
+| **Replay** | Reading again gives the same events, ids and order, unless a source row was added or changed since (the cursor limit above) |
+| **Failure** | An unreadable source fails the whole read (`journey_events_unreadable`; 500 through the route). A partial page is never returned, so a retry is safe |
+
+**Producer responsibilities.** A domain that owns a source row writes it durably, append-only where its store is, with its own time. It never writes an event: the view derives events from its rows. A new event type is added to `JOURNEY_EVENT_TYPES` and mapped in `journeyEvents.ts` by the contract owner, Orchestration, with every stored value mapped deliberately.
+
+**Consumer responsibilities.** Deduplicate on `eventId`. Ignore a `type` it does not know, rather than fail. Never treat an approval event as engagement. Never act on `record.unmapped`: it is kept so nothing is lost, and it carries no consequence. Treat an event as a fact already recorded, never as a command. For completeness, re-read from the start and deduplicate, because a cursor alone can miss a late row. Treat `actor` as optional and `code` as a code.
+
+### E.2 `approval.revoked` (0.3.0)
+
+Produced from the `revoked` row that `revokeOutreachApproval` (`leadOutreachExecution/approvalRevocation.ts`) appends to `outreach_approvals`. No new store, writer or bus. The tenant surface is `POST /api/outreach/journey-approval` with `action: 'revoke'`.
+
+| `outreach_approvals.decision` | Event |
+|---|---|
+| `approved` | `approval.granted` |
+| `rejected`: a human declined, or withdrew a request before deciding | `approval.rejected` |
+| `revoked`: an approval withdrawn after it was given | `approval.revoked` |
+| Any other value | Cannot be stored (CHECK since `20270120000011`). Were one read, it is `approval.rejected`, never a grant |
+
+**Expiry is not revocation.** A lapsed approval ends the task `expired` and writes no decision row, so it never reads as `approval.revoked`.
+
+**A revocation never claims a send was undone.** It is refused once a task has left `approved` or `queued`. If a revoked row ever follows a send, the view shows both facts and retracts nothing.
+
+**What a revocation does downstream today**, proven on real PostgreSQL in `backend/tests/realschema/orch_c4_approval_revoked.test.ts`:
+
+- the task moves to `cancelled` by compare-and-set, so exactly one of a revocation and a claim wins;
+- the dispatch gate and the database claim trigger also refuse a task whose latest decision is `revoked`;
+- on the frozen base `7f2ca186f`, the next sweep reads the cancelled task as disposition `skipped`, the step settles `skipped` (decision `skipped`, outcome `cancelled`, shown as `decision.recorded`), and the journey moves to its next step.
+
+**RV-1, decided by the owner on 2026-11-05: a revocation PAUSES the run for human review.** Agent B implements the pause in the sweeper (not in this change). It is recorded as a `needs_human` decision whose outcome starts `approval_revoked:`, which the view reads as `journey.suspended` (E.4). The step-skipping behaviour above is superseded once that lands.
+
+### E.3 Delivery evidence, outcomes and the complaint marker (0.3.0)
+
+Every stored value is mapped deliberately. Only an observed delivery is `delivery.confirmed`.
+
+| `outreach_delivery_evidence.delivery_status` | 0.2.0 | 0.3.0 | Why |
+|---|---|---|---|
+| `delivered` | `delivery.confirmed` | `delivery.confirmed`, or `delivery.complained` when complaint-inferred | An observed delivery. A complaint's `delivered` row is an inference (D7) |
+| `confirmed` | `delivery.confirmed` | `execution.accepted` | The internal transport's acknowledgement. It proves no delivery |
+| `sent_unverified` | none (dropped) | `execution.accepted` | The email transport accepted it. It proves no delivery |
+| `suppressed` | none (dropped) | `execution.cancelled` | Refused at dispatch. Never sent |
+| `expired` | `delivery.failed` | `execution.cancelled`, code `expired` | Lapsed before it was sent. Not a delivery failure |
+| `bounced` | `delivery.bounced` | `delivery.bounced` | Unchanged. An SES `Reject` is also stored as `bounced` today: DF-5, pending with Outreach |
+| `failed` | `delivery.failed` | `delivery.failed` | Unchanged |
+| `queued`, `dispatched`, any other | none (dropped) | `record.unmapped`, original code | Nothing is dropped (Q-C4) |
+
+| `outreach_outcomes.outcome_type` | Event |
+|---|---|
+| `replied` | `response.replied` (the only positive engagement) |
+| `unsubscribed` | `response.unsubscribed` |
+| `rejected` | `response.rejected` |
+| `complained` (only in the unapplied `20270125000001`) | `delivery.complained` |
+| `meeting_booked`, `converted` | `outcome.recorded` |
+| `opened`, `clicked`, `no_response` | `response.other`, as in 0.2.0 |
+| Any other | `record.unmapped`, original code (in 0.2.0 it was `response.other`) |
+
+**Why one new type, `record.unmapped`, and not a reused one.** `response.other` says a response-axis fact that the contract chooses not to classify (`opened`, `clicked`, `no_response`). `outcome.recorded` says a business result. A `queued` delivery status is neither, and labelling it either way would give it a meaning it does not have. One additive type covers both stores (`source.table` tells them apart), so a consumer finds every unmapped code with one filter. It is never positive and carries **no consequence**: nothing ends, pauses or advances a journey on it.
+
+**The complaint marker (P-1, option E).** The SES adapter records a complaint as a `delivered` evidence row (a complaint implies the message arrived) whose `transport_response` holds `deliveryInferredFrom: 'Complaint'` beside `sesEventType: 'Complaint'` (`sesEventNormalizer.ts:191`, verified on a stored row). The view emits `delivery.complained` (code `complained`) for that row instead of `delivery.confirmed`, so one SES complaint is one event, keyed by its evidence row, which the provider event id already deduplicates.
+
+The rule is one exported function, `isComplaintInferredEvidence(row: { delivery_status: unknown; transport_response?: unknown }): boolean` in `journeyEvents.ts`. The journey's complaint exit (Agent B) calls the same function on the evidence it reads directly. It **fails toward complaint** and never throws:
+
+- any `delivery_status` counts, expected or not;
+- `transport_response` may be an object, a JSON string (even doubly encoded) or plain text naming the marker;
+- the key may be in any case, or spelled with `_` or `-`; the value counts when it contains "complaint" in any case, or is a list that does;
+- a row written before D7 (`25e1c8a96`), which has `sesEventType: 'Complaint'` and no marker, counts too;
+- nothing else in `transport_response` is looked at, and the function's answer is the only thing that reaches an event.
+
+**Pending, not built.** Once Outreach writes the `complained` outcome row (S-1, after `20270125000001` is applied and `complained` is added to `BUSINESS_OUTCOME_TYPES`), `delivery.complained` must be emitted once per provider event id, not once from the evidence row and again from the outcome row. That change belongs to the contract owner and lands with S-1.
+
+### E.4 Suspension and the end of a journey (0.3.0)
+
+- **An unclassified reply, or a revocation, suspends the journey.** The run is paused until a person resumes or ends it. The sweeper records it as a `needs_human` decision whose outcome starts `reply_awaiting_evaluation:` or `approval_revoked:`, and the view reads that decision as `journey.suspended`. Any other `needs_human` decision stays `decision.recorded`. Writing the decision is Agent B's work.
+- **`response.replied` is not terminal.** A reply is positive engagement, and its consequence is decided by the journey's rules, not by the event.
+- **A journey ends only with `journey.terminated`** (or `journey.completed` when its plan finishes). `journey.suspended` is never an end.
+- **Still terminal:** a WhatsApp STOP; a recorded `unsubscribed`, `rejected`, `converted` or `meeting_booked`; and now a complaint (owner decision Q-C1, 2026-11-05; the exit is Agent B's, through `isComplaintInferredEvidence`).
+- **Open: an unclassified WhatsApp inbound is still positive (DF-6; X-3 in the decision register).** The view still emits `response.replied` with `positiveEngagement: true` for every WhatsApp inbound that is not an opt-out keyword, and `feedWhatsAppReplyToLifecycle` still moves PI to `engaged`. Prompt 4 does not change that. It waits for SC7-R or a PI decision.
+- **No `journey.resumed` event.** Resuming writes no durable row of its own today, and the view emits only what a row records. A consumer sees the next decision or execution event of the run instead.
+
+**Mandate events with no separate type.** `prospect discovered`, `qualified` and `updated` appear as `prospect.lifecycle_changed` from enrollment on; before enrollment they belong to PI. `approval.requested` is declared but not emitted yet: approvals expose only decisions. `execution.failed` is declared and not emitted: a failed step surfaces as `decision.recorded` with a code. `execution.cancelled` is emitted since 0.3.0 for `suppressed` and `expired` evidence only; a cancelled or skipped step still surfaces as `decision.recorded`.
 
 ## F. Governance
 
@@ -169,13 +258,68 @@ Social publish is `NON_CONTACT`: it publishes to an account and addresses nobody
 
 A hold is `waiting`, recorded and visible, and the step resumes when the control clears. A refused permission settles the step `skipped`.
 
+## G. Shared message-outcome layers (0.3.0)
+
+From Agent C's draft (`docs/orchestration/completion/SHARED-MESSAGE-OUTCOME-CONTRACT.md` on `orch/c4-c-outcomes`), with the owner's decisions of 2026-11-05 applied. **SC-7 stays unratified** (owner decision SC7-R is open): layer (c) is named only as a dimension, no code is defined here, and no runtime path lets a classifier's output drive a journey. Migration `20270125000000` stays unapplied.
+
+Each layer is read from the store its owner already writes. No layer is stored twice, and none is a new event store. The journey event view (section E) reads (b), (d) and the WhatsApp inbound rows; it is not a layer.
+
+| Layer | What it is | Store (source of truth) | Writer |
+|---|---|---|---|
+| (a) Raw provider event | The provider's own status or event, as received | SES: `outreach_delivery_evidence.transport_response.sesEventType`. Meta: `whatsapp_broadcast_recipients.status`, `error_code`. Community: `community_ai_actions.status`, `execution_result` | The channel adapter |
+| (b) Normalized channel outcome | Two axes: **delivery** (`delivery_status`, 9 values) and **business** (`outcome_type`). A fact the adapter inferred says so with `deliveryInferredFrom`, and is never presented as observed | `outreach_delivery_evidence`, `outreach_outcomes` (append-only) | `ingestFeedback`, dispatch, the operator route |
+| (c) Message classification | What an inbound message means. **SC-7 `sc7-draft-1`, UNRATIFIED.** Governance classes would come from the deterministic detector only; a classifier would only recommend | None (`20270125000000` unapplied) | None at runtime |
+| (d) Orchestration decision | What the sweep decided for a step or a run | `execution_journey_decisions` | `recordJourneyDecisions` |
+| (e) Journey consequence | Continue, wait, suspend, skip, or end the run | `execution_instances.lifecycle_state` and the `exited` / `needs_human` decision rows | `workflowProgressionSweeper` |
+
+**The outcome `complained`** (owner decision Q-C2, 2026-11-05) is a business outcome distinct from `unsubscribed` (a recipient instruction) and from `bounced` and `failed` (delivery facts). Only an authenticated provider complaint path may write it, so it is never a feedback signal. **A complaint ends the run** (Q-C1).
+
+### Agreed mapping
+
+| Channel | Raw (a) | Normalized (b) | Event | Consequence (e) |
+|---|---|---|---|---|
+| Email | transport accepted | `sent_unverified` | `execution.accepted` | continue |
+| Internal | internal ack | `confirmed` | `execution.accepted` | continue |
+| Email | queue expiry, never sent | `expired` | `execution.cancelled`, code `expired` | continue |
+| Email | dispatch-time suppression | `suppressed` | `execution.cancelled`, code `suppressed` | step skipped by its gate |
+| Email | transport error | `failed` | `delivery.failed` | engine `needs_human` |
+| Email | SES `Delivery` | `delivered` | `delivery.confirmed` | continue |
+| Email | SES `Bounce` Permanent | `bounced`, plus restriction `bounce_hard` on email | `delivery.bounced` | later email steps skipped by the gate |
+| Email | SES `Bounce` Transient or Undetermined | `bounced`, no restriction | `delivery.bounced` | continue |
+| Email | SES `Reject` | `bounced` (DF-5) | `delivery.bounced` | continue. **Pending (Outreach): `failed`, code `rejected`** |
+| Email | SES `Complaint` | `delivered`, complaint-inferred, plus restriction `complaint` on every channel | `delivery.complained`, once | **the run ends** (Q-C1; Agent B) |
+| Email | operator `replied` | `replied` | `response.replied` (positive) | per the journey's rules; not terminal by itself (E.4) |
+| Email | operator-recorded `unsubscribed` | `unsubscribed`, plus governance | `response.unsubscribed` | the run ends |
+| Email | unsubscribe link | governance only: no `outreach_outcomes` row (`unsubscribeService.ts` calls neither `appendOutcome` nor `ingestFeedback`) | none yet (pending SC-4) | no exit; the dispatch governance gate refuses the later steps |
+| Email | `rejected` (human) | `rejected` | `response.rejected` | the run ends |
+| Email | `converted`, `meeting_booked` | outcome | `outcome.recorded` | the run ends |
+| Email | `opened`, `clicked`, `no_response` | outcome | `response.other` | continue |
+| Any | a stored code with no mapping | as stored | `record.unmapped`, original code | **none** |
+| WhatsApp | Meta `sent` | recipient `sent` | `execution.accepted`, through the `executed` decision | step completed |
+| WhatsApp | inbound opt-out keyword (STOP) | inbound message, plus governance on WhatsApp | `response.unsubscribed` | the run ends |
+| WhatsApp | any other inbound | inbound message | `response.replied` | the run is suspended for a person (Agent B) until SC-7 is ratified |
+| SMS, voice | none | none | none | the channel is unsupported |
+| Social publish | post status | `scheduled_posts` | `execution.accepted` or `decision.recorded` | completed, or needs a person; no per-person outcome |
+| Community | action `executed` / `sent_unverified` | `community_ai_actions.status` | `execution.accepted` | step completed |
+| Any | revocation of an approval | `outreach_approvals` `revoked` row | `approval.revoked`, then `journey.suspended` | the run is paused for review (RV-1; Agent B) |
+
+### Pending, not done
+
+| Item | Owner | State |
+|---|---|---|
+| DF-5: SES `Reject` recorded as `failed` with code `rejected`, not `bounced` | Outreach | Pending |
+| DF-7: a WhatsApp failure after the step settled is invisible to the journey; unmapped Meta statuses are dropped | Outreach (raw-status retention), Orchestration (reader) | Pending |
+| `complained` in `BUSINESS_OUTCOME_TYPES`, with migration `20270125000001` applied, and the S-1 writer | Outreach | Pending. Then `delivery.complained` once per provider event id (E.3) |
+| P-6: read `whatsapp_broadcast_recipients` for WhatsApp delivery and late failure | Orchestration | Out of scope for 0.3.0; follow-up |
+| SC-7 ratification (SC7-R) and any classifier-driven consequence | Owner | Open |
+
 ## Compatibility register
 
 | Contract | Version | Consumers | Status |
 |---|---|---|---|
-| Execution contract | 0.2.0 | Five adapters | Implemented. Outreach branch tested at 0.1.0 (`30a421c2`); merge of 0.2.0 pending |
-| Event view | event version 1 | `events` route | Implemented |
-| Capability declarations | 0.2.0 | `checkCapabilityDeclaration`, Outreach fixtures | Implemented |
+| Execution contract | 0.3.0 | Five adapters | Implemented locally, uncommitted. Outreach merged 0.2.0 (`d682ab13`); 0.3.0 is not merged by Outreach yet |
+| Event view | event version 1 | `events` route | Implemented. 0.3.0 adds `approval.revoked`, `journey.suspended`, `record.unmapped` and the optional `actor`, and re-maps four delivery statuses (E.3) |
+| Capability declarations | 0.3.0 | `checkCapabilityDeclaration`, Outreach fixtures | Implemented. A 0.2.0 or 0.1.0 declaration still passes: only the major is compared |
 | PI lifecycle writer | Unversioned | Sweeper feed, opener | In use; actor validation pending |
 
 **Rules.** A breaking change bumps the major version, and `checkCapabilityDeclaration` then refuses a mismatched declaration. Adding an optional field bumps the minor. Changes are recorded here with the commit.
@@ -184,5 +328,6 @@ A hold is `waiting`, recorded and visible, and the step resumes when the control
 |---|---|---|
 | 0.1.0 | `77e90518` | First version |
 | 0.2.0 | `019b6de5` | Optional `holdOnly` on `EngineStepContext`; outcomes `not_begun`, `broadcast_unreadable`, `facts_unreadable` |
+| 0.3.0 | Uncommitted, `orch/c4-a-contract` | Event types `approval.revoked`, `journey.suspended`, `record.unmapped`; optional `actor` on approval events; delivery re-mapping and the complaint marker (E.3); suspension and end rules (E.4); the event rules (E.1) written down; section G. Event version stays 1 (EV-1 open) |
 
 Outreach's `CONTRACT-V0.2-PROPOSALS.md` (provider availability, webhook verification) was named before this version existed. It is undecided, unbuilt, and not part of 0.2.0.

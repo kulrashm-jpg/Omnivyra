@@ -12,8 +12,12 @@
  *   replay         reading again gives the same events in the same order
  *   cursor         `after` is the last event seen; order is (occurredAt, eventId)
  *
- * Codes only. Never an address, a fact value or message content, including from
- * `evidence` and `transport_response`, which this module does not read.
+ * Codes only. Never an address, a fact value or message content. `evidence` is never
+ * read. From `transport_response` only ONE code is used, the complaint marker
+ * (`isComplaintInferredEvidence`); nothing else in it reaches an event.
+ *
+ * Nothing is dropped (0.3.0): a stored delivery status or outcome type with no mapping
+ * is emitted as `record.unmapped` with its original code, and carries no consequence.
  */
 
 import { createHash } from 'crypto';
@@ -26,7 +30,7 @@ import { listJourneyDecisions, type RecordedJourneyDecision } from './journeyDec
 import { durableJourneyResponsePort, type JourneyResponsePort } from './journeyResponses';
 import {
   executionCorrelationId, executionIdempotencyKey, JOURNEY_EVENT_VERSION, normalizeEngineResult,
-  POSITIVE_ENGAGEMENT_EVENTS, type JourneyEvent, type JourneyEventType,
+  POSITIVE_ENGAGEMENT_EVENTS, type JourneyEvent, type JourneyEventActor, type JourneyEventType,
 } from './executionContract';
 import type { EngineName } from './engineAdapters';
 
@@ -41,8 +45,18 @@ async function readRows(query: PromiseLike<{ data: unknown; error: unknown }>, w
   return Array.isArray(res.data) ? (res.data as Row[]) : [];
 }
 
+/**
+ * 0.3.0: a run paused for a person. An unclassified reply, or a revoked approval, holds
+ * the journey until a person resumes or ends it. Written by the sweeper as a
+ * `needs_human` decision with one of these outcome prefixes.
+ */
+export const JOURNEY_SUSPENSION_OUTCOME_PREFIXES = ['reply_awaiting_evaluation:', 'approval_revoked:'] as const;
+
 function decisionEventType(d: RecordedJourneyDecision): JourneyEventType {
   if (d.decision === 'exited') return 'journey.terminated';
+  if (d.decision === 'needs_human' && d.outcome !== null && JOURNEY_SUSPENSION_OUTCOME_PREFIXES.some((p) => d.outcome!.startsWith(p))) {
+    return 'journey.suspended';
+  }
   if (d.decision === 'executed') return d.outcome === 'human_completed' ? 'decision.recorded' : 'execution.accepted';
   if (d.decision === 'waiting' && d.engine !== null && d.outcome !== null) {
     const normalized = normalizeEngineResult({ engine: d.engine as EngineName, outcome: d.outcome, disposition: 'wait', reason: null, externalRef: null });
@@ -52,15 +66,100 @@ function decisionEventType(d: RecordedJourneyDecision): JourneyEventType {
   return 'decision.recorded';
 }
 
+/**
+ * 0.3.0: every value of `outreach_delivery_evidence.delivery_status` (its CHECK), mapped
+ * one by one. Only an observed delivery is `delivery.confirmed`.
+ *   confirmed, sent_unverified  accepted by the transport; neither proves delivery
+ *   suppressed                  refused at dispatch, never sent
+ *   expired                     lapsed before it was sent (never a delivery failure)
+ *   queued, dispatched          no mapping: `record.unmapped` (see UNMAPPED)
+ * A `delivered` row inferred from a complaint is `delivery.complained`, not confirmed.
+ */
 const DELIVERY_EVENTS: Readonly<Record<string, JourneyEventType>> = {
-  delivered: 'delivery.confirmed', confirmed: 'delivery.confirmed', bounced: 'delivery.bounced',
-  failed: 'delivery.failed', expired: 'delivery.failed',
+  delivered: 'delivery.confirmed', bounced: 'delivery.bounced', failed: 'delivery.failed',
+  confirmed: 'execution.accepted', sent_unverified: 'execution.accepted',
+  suppressed: 'execution.cancelled', expired: 'execution.cancelled',
 };
 
+/** A stored code with no mapping: emitted, never dropped, never a consequence. */
+const UNMAPPED: JourneyEventType = 'record.unmapped';
+
+const COMPLAINT = 'complaint';
+const MARKER_KEY = 'deliveryinferredfrom';
+const LEGACY_KEY = 'seseventtype';
+const mentionsComplaint = (v: unknown): boolean => {
+  if (typeof v === 'string') return v.toLowerCase().includes(COMPLAINT);
+  if (Array.isArray(v)) return v.some(mentionsComplaint);
+  return false;
+};
+
+/**
+ * P-1 (option E): is this evidence row the `delivered` row that the SES adapter infers
+ * from a complaint? The writer (`sesEventNormalizer.ts`) stores
+ * `transport_response.deliveryInferredFrom = 'Complaint'` (with `sesEventType:
+ * 'Complaint'`). Rows written before D7 (`25e1c8a96`) carry only `sesEventType`.
+ *
+ * FAILS TOWARD COMPLAINT and never throws: any delivery status, a JSON string instead
+ * of an object, extra keys, a key or value in another case, or a value that merely
+ * contains "complaint" all count. Only these two keys are looked at; nothing else in
+ * the response is read. Used by the event view and by the journey's complaint exit.
+ */
+export function isComplaintInferredEvidence(row: { delivery_status: unknown; transport_response?: unknown }): boolean {
+  try {
+    let response: unknown = row?.transport_response;
+    if (typeof response === 'string') {
+      const raw: string = response;
+      try {
+        response = JSON.parse(raw);
+      } catch {
+        // Not JSON: a marker written as text still counts.
+        const text = raw.toLowerCase();
+        return (text.includes('deliveryinferredfrom') || text.includes('seseventtype')) && text.includes(COMPLAINT);
+      }
+      if (typeof response === 'string') return isComplaintInferredEvidence({ delivery_status: row.delivery_status, transport_response: response });
+    }
+    if (response === null || typeof response !== 'object' || Array.isArray(response)) return false;
+    for (const [key, value] of Object.entries(response as Record<string, unknown>)) {
+      const k = key.replace(/[\s_-]/g, '').toLowerCase();
+      if ((k === MARKER_KEY || k === LEGACY_KEY) && mentionsComplaint(value)) return true;
+    }
+    return false;
+  } catch {
+    // A row that cannot be read counts as a complaint, like every other doubt here.
+    return true;
+  }
+}
+
+/**
+ * Contract 0.3.0: every value `outreach_approvals.decision` can hold (its CHECK since
+ * migration 20270120000011: approved, rejected, revoked), mapped one by one.
+ *   rejected  a human declined, or withdrew a request before deciding (approval.ts)
+ *   revoked   an approval withdrawn after it was given (approvalRevocation.ts)
+ * Expiry is NOT a decision row: an approval that lapses ends the task `expired` and
+ * writes nothing here, so it is never read as a revocation. A value outside the CHECK
+ * cannot be stored; were one read, it reads as `approval.rejected`, never as a grant.
+ */
+const APPROVAL_EVENTS: Readonly<Record<string, JourneyEventType>> = {
+  approved: 'approval.granted', rejected: 'approval.rejected', revoked: 'approval.revoked',
+};
+
+/** Who recorded the decision, from the row only; absent when the row names nobody. */
+function approvalActor(r: Row): JourneyEventActor | null {
+  const id = typeof r.approver_user_id === 'string' ? r.approver_user_id.trim() : '';
+  if (id === '') return null;
+  return { kind: 'user', id, tier: r.tier === 'tenant' || r.tier === 'platform' ? r.tier : null };
+}
+
+/**
+ * Every `outreach_outcomes.outcome_type` (BUSINESS_OUTCOME_TYPES, plus `complained` from
+ * the unapplied 20270125000001). `opened`, `clicked` and `no_response` stay
+ * `response.other`, as they were; a value outside this map is `record.unmapped`.
+ */
 const OUTCOME_EVENTS: Readonly<Record<string, JourneyEventType>> = {
   replied: 'response.replied', unsubscribed: 'response.unsubscribed', rejected: 'response.rejected',
   complained: 'delivery.complained', complaint: 'delivery.complained',
   meeting_booked: 'outcome.recorded', converted: 'outcome.recorded',
+  opened: 'response.other', clicked: 'response.other', no_response: 'response.other',
 };
 
 export interface JourneyEventsPage {
@@ -89,7 +188,7 @@ export async function readJourneyEvents(
     type: JourneyEventType,
     source: { table: string; id: string },
     occurredAt: unknown,
-    extra: { engine?: string | null; channel?: string | null; code?: string | null; planStepId?: string | null; taskId?: string | null } = {},
+    extra: { engine?: string | null; channel?: string | null; code?: string | null; planStepId?: string | null; taskId?: string | null; actor?: JourneyEventActor | null } = {},
   ): void => {
     if (typeof occurredAt !== 'string' && !(occurredAt instanceof Date)) return;
     events.push({
@@ -107,6 +206,7 @@ export async function readJourneyEvents(
       source,
       code: extra.code ?? null,
       positiveEngagement: POSITIVE_ENGAGEMENT_EVENTS.includes(type),
+      ...(extra.actor == null ? {} : { actor: extra.actor }),
     });
   };
 
@@ -133,18 +233,22 @@ export async function readJourneyEvents(
     const ctx = { engine: 'ws3', channel: channel === null ? null : String(channel), planStepId, taskId: executionTaskId };
     const scoped = (table: string, columns: string) => ownedDbTable(table).select(columns).eq('company_id', organizationId).eq('task_id', taskId);
 
-    for (const r of await readRows(scoped('outreach_approvals', 'id, decision, decided_at'), 'approvals')) {
-      push(r.decision === 'approved' ? 'approval.granted' : 'approval.rejected', { table: 'outreach_approvals', id: String(r.id) }, r.decided_at, { ...ctx, code: String(r.decision) });
+    for (const r of await readRows(scoped('outreach_approvals', 'id, decision, decided_at, approver_user_id, tier'), 'approvals')) {
+      const decision = String(r.decision);
+      push(APPROVAL_EVENTS[decision] ?? 'approval.rejected', { table: 'outreach_approvals', id: String(r.id) }, r.decided_at, { ...ctx, code: decision, actor: approvalActor(r) });
     }
     for (const r of await readRows(scoped('outreach_attempts', 'id, outcome, started_at'), 'attempts')) {
       push('execution.started', { table: 'outreach_attempts', id: String(r.id) }, r.started_at, { ...ctx, code: r.outcome == null ? null : String(r.outcome) });
     }
-    for (const r of await readRows(scoped('outreach_delivery_evidence', 'id, delivery_status, observed_at'), 'delivery evidence')) {
-      const type = DELIVERY_EVENTS[String(r.delivery_status)];
-      if (type !== undefined) push(type, { table: 'outreach_delivery_evidence', id: String(r.id) }, r.observed_at, { ...ctx, code: String(r.delivery_status) });
+    // `transport_response` is read for the complaint marker only, and never copied.
+    for (const r of await readRows(scoped('outreach_delivery_evidence', 'id, delivery_status, observed_at, transport_response'), 'delivery evidence')) {
+      const status = String(r.delivery_status);
+      const complaint = isComplaintInferredEvidence({ delivery_status: r.delivery_status, transport_response: r.transport_response });
+      const type = complaint ? 'delivery.complained' : DELIVERY_EVENTS[status] ?? UNMAPPED;
+      push(type, { table: 'outreach_delivery_evidence', id: String(r.id) }, r.observed_at, { ...ctx, code: complaint ? 'complained' : status });
     }
     for (const r of await readRows(scoped('outreach_outcomes', 'id, outcome_type, occurred_at'), 'outcomes')) {
-      push(OUTCOME_EVENTS[String(r.outcome_type)] ?? 'response.other', { table: 'outreach_outcomes', id: String(r.id) }, r.occurred_at, { ...ctx, code: String(r.outcome_type) });
+      push(OUTCOME_EVENTS[String(r.outcome_type)] ?? UNMAPPED, { table: 'outreach_outcomes', id: String(r.id) }, r.occurred_at, { ...ctx, code: String(r.outcome_type) });
     }
   }
 

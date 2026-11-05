@@ -15,9 +15,20 @@
 
 import type { EngineDisposition, EngineName, EngineResult } from './engineAdapters';
 
-export const EXECUTION_CONTRACT_VERSION = '0.2.0';
+/**
+ * Semver. A breaking change bumps the major, and `checkCapabilityDeclaration` then refuses
+ * a declaration of another major; an additive change (a new optional field, a new event
+ * type) bumps the minor. 0.3.0 adds `approval.revoked`, `journey.suspended`,
+ * `record.unmapped` and the optional `actor` on approval events, and re-maps four
+ * delivery statuses; a 0.2.0 declaration stays compatible.
+ */
+export const EXECUTION_CONTRACT_VERSION = '0.3.0';
 
-/** Bumped when a field's meaning changes, never when an optional field is added. */
+/**
+ * Bumped when a field's meaning changes, never when an optional field or a new type is
+ * added. Still 1 at contract 0.3.0: see docs/orchestration/contract/API-AND-EVENT-SCHEMAS.md
+ * ("From 0.2.0 to 0.3.0") for why 0.3.0 keeps it (owner decision EV-1 open).
+ */
 export const JOURNEY_EVENT_VERSION = 1;
 
 // ── Normalized execution state ──────────────────────────────────────────────
@@ -194,16 +205,26 @@ export interface ExecutionUsage {
 export const JOURNEY_EVENT_TYPES = [
   'prospect.lifecycle_changed',
   'journey.enrolled', 'journey.terminated', 'journey.completed',
+  // 0.3.0: the run paused for a person (an unclassified reply, a revoked approval).
+  // Never an end: a journey ends only with journey.terminated or journey.completed.
+  'journey.suspended',
   'decision.recorded',
-  'approval.requested', 'approval.granted', 'approval.rejected',
+  'approval.requested', 'approval.granted', 'approval.rejected', 'approval.revoked',
   'execution.requested', 'execution.started', 'execution.accepted', 'execution.failed', 'execution.cancelled',
   'delivery.confirmed', 'delivery.failed', 'delivery.bounced', 'delivery.complained',
   'response.replied', 'response.unsubscribed', 'response.rejected', 'response.other',
   'outcome.recorded',
+  // 0.3.0: a stored delivery status or outcome type with no mapping, kept with its code.
+  // Carries no consequence: nothing may end, pause or advance a journey on it.
+  'record.unmapped',
 ] as const;
 export type JourneyEventType = typeof JOURNEY_EVENT_TYPES[number];
 
-/** A STOP, an unsubscribe, a bounce and a complaint are never positive engagement. */
+/**
+ * A STOP, an unsubscribe, a bounce and a complaint are never positive engagement; nor is
+ * any approval event, `approval.revoked` included: a decision by the tenant, not the person;
+ * nor `journey.suspended` or `record.unmapped`.
+ */
 export const POSITIVE_ENGAGEMENT_EVENTS: readonly JourneyEventType[] = ['response.replied'];
 
 export interface JourneyEvent {
@@ -224,4 +245,19 @@ export interface JourneyEvent {
   /** A code, never personal data or content. */
   readonly code: string | null;
   readonly positiveEngagement: boolean;
+  /**
+   * Added in 0.3.0, OPTIONAL: who recorded an approval decision (`approval.granted`,
+   * `.rejected`, `.revoked`), read from the decision row. Absent on every other type and
+   * when the row names nobody. Never a name, an address or the free-text reason.
+   */
+  readonly actor?: JourneyEventActor;
+}
+
+/** The recorder of an approval decision, as the append-only row holds it. */
+export interface JourneyEventActor {
+  readonly kind: 'user';
+  /** `outreach_approvals.approver_user_id`, as written. Not re-verified by the view. */
+  readonly id: string;
+  /** `outreach_approvals.tier`: which surface recorded it; null on rows before D-02. */
+  readonly tier: 'tenant' | 'platform' | null;
 }
