@@ -454,3 +454,23 @@ T3 (sandbox or production) is out of scope until GD-4, the ratifications and the
 | C-CP-1 | Name the Content Platform owner |
 | CL-1..CL-6 | Content-limit discrepancies, for their owners (no Outreach change) |
 | Security owner | `PROSPECT_PERSON_ERASE` entering the security-owned capability files via round 3 |
+
+## Prompt 3 integrated and FU-10 (2026-11-05)
+
+- **Prompt 3** (c7, community execution safety): `47a8c5388d5b7fb08f387cf12b4c6bc26971f3a1` on `orch/c3-community-safety`, parent `0679a5908`, preserve ref `refs/preserve/orch-c3-community-47a8c538`.
+  - The coordinator signed off three successive hashes: `40fbeee0`; `18605332` (a test-only stub fix); `4a6c4699` (the policy route order restored to rate limit → capability → validation).
+  - Non-blocking notes N-1..N-3 are in c7's follow-up register.
+  - Verified: `git diff --binary 0679a5908 47a8c538` = `4a6c4699…5f9a`; patch-id `d30489e8`.
+- **Merge `b01ff5e5b`** (parents `59b47c90b` + `47a8c538`). No file overlaps D2–D4. The diff from `59b47c90b` hashes to the same `4a6c4699`, so the merge adds exactly the signed change. Migrations `20270126000000–03` are not applied anywhere.
+- **FU-10 `5ee390cc6`** (coordinator, test and registry only): the Step C follow-ups:
+  - egress social/comments is now a "removed" test (410, no fetch, plus a control);
+  - `routeAuth001SocialOAuth` now expects 410, with an own-account case;
+  - the stale allowlist effect `external-call fetch() pages/api/social/comments.ts` is removed.
+- **Focused T1 on the combined head** (the same 27-suite list as D2–D4): **1247/1247 pass**. The 12 earlier failures are gone: Prompt 3 cleared 8, FU-10 cleared 4.
+- c7's final runs at `4a6c4699`:
+  - typecheck 0;
+  - real-schema w1 53/53, c3b 10/10. The only full-run failure is `report1DurableHistoryEndToEnd`, which also fails at D1 (a harness DB-name issue);
+  - unit failures are a subset of D1's by name;
+  - `jevFlowAdoptionCli` passes alone (22/22).
+- `refs/scratch/w1-pair-diag` (`5a8b5ed04`) is kept: it is the evidence that the Step A integration failures belonged to W1 + P-A.
+- Next: the proposed T2 run (Steps D2–D4 section), steps 3–6, on head `5ee390cc6`, awaiting the owner's go-ahead.
