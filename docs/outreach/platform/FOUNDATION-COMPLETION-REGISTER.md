@@ -88,10 +88,10 @@ Status labels: NOT STARTED, IN PROGRESS, IMPLEMENTED LOCALLY, INTEGRATION REQUIR
 | C-1 | C | D-01, L-3, atomic claim, P-A, D-03 | Committed locally; in the base | Integration verification | c7 / coordinator | — | base T1 pending | — | INTEGRATION REQUIRED |
 | C-2 | C | D-02 approval binding | Rebuilt on the base `6e96f6680`; round 3 `5254a30f…0768d2` (F-1, L-1, L-2, P-1) **signed off by the dispatch owner 2026-11-04**. Committed locally by c7 as `19498a2e4` on `orch/c2-approval-binding` (preserve ref `refs/preserve/orch-c2-d02-19498a2e`). The coordinator re-verified the diff sha256 and patch-id `f2717242`. Real-schema 52/52, typecheck-ci at baseline, worker tsc and 10 gates clean on the coordinator's own build. `approval.revoked` follows as contract 0.3.0 | Integrated as `9c460a238` (Step D0); 0.3.0 event change; `20270120000011` never applied to production | c7 | CR-OR-D02 | VERIFIED T1 | VERIFIED T2 (real-schema slice) | IMPLEMENTED LOCALLY (integrated into the foundation branch) |
 | C-3 | C | No independent execution from `/api/response/generate`; Mode 3 off by default; one switch | Bypass present. Application fails closed (`1b4d4ce57`); column default `true` → `false` in migration `20270125000003`, written and tested, not applied (existing rows unchanged) | Fold into the canonical authority; turning off existing tenants is an operator decision at apply time | Agent C | — | — | — | IN PROGRESS |
-| C-4 | C | Inventory of entry-path authority (every route, worker, scheduler) | Executable inventory `executionAuthorityInventory.test.ts` (38 entries). Step C closed its two known gaps: super-admin thread resume now applies `authorizePostPublish` (409 `THREAD_NOT_AUTHORIZED`, audited); the direct LinkedIn/X reply in `social/comments` is removed (410 `REPLY_REMOVED`, no replacement API call). `KNOWN_GAPS` is empty | The inventory only covers the entries it lists; new entry paths must be added to it | Coordinator (owner ruling items 5, 6) | — | 9 suites 550/550; mutant (gate disabled): 5 refusal tests fail, 2 controls pass; typecheck-ci at baseline, worker tsc and 10 gates clean | not run | VERIFIED T1 |
+| C-4 | C | Inventory of entry-path authority (every route, worker, scheduler) | Executable inventory `executionAuthorityInventory.test.ts` (38 entries). Step C closed its two known gaps: super-admin thread resume now applies `authorizePostPublish` (409 `THREAD_NOT_AUTHORIZED`, audited); the direct LinkedIn/X reply in `social/comments` is removed (410 `REPLY_REMOVED`, no replacement API call). `KNOWN_GAPS` is empty | The inventory only covers the entries it lists; new entry paths must be added to it | Coordinator (owner ruling items 5, 6) | — | 9 suites 550/550; mutant (gate disabled): 5 refusal tests fail, 2 controls pass; typecheck-ci at baseline, worker tsc and 10 gates clean | T2 at `7f2ca186f`: no failure in its suites (whole-repo, integration, route-auth gate) | VERIFIED T2 |
 | C-5 | C | Race follow-ups | Tracked | — | c7 | CR-OR-RACE | — | — | IN PROGRESS |
 | C-6 | C | Cache bypass; gateway bypass routes | Present | Platform AI change | Platform AI | C-AI-1 | — | — | BLOCKED |
-| D-1 | D | Email complaint state and unsubscribe evidence preserved | `25e1c8a96` on `outreach/d-engine-readiness`. **E-1:** delivery status only moves forward if unchanged since read (`advanceOutreachTaskDeliveryStatus`), so concurrent events can no longer overwrite each other. **E-2:** the complaint or hard-bounce restriction is written even when the evidence write fails (still 503, SNS retries). The complaint's `delivered` row is marked `deliveryInferredFrom: 'Complaint'`. Unsubscribe evidence is proven insert-only | Complaint as a business outcome needs CR-4 (migration `20270125000001` written and tested, not applied); unsubscribe outcome row needs SC-4 (`recipient_link` source, migration `20270125000002` written and tested, not applied). **D2 done (`3f1c405a2`):** failures exposed truthfully (`persistence`), recorded once per event in `outreach_provider_evidence_reconciliation` (migration `20270125000005`, not applied), idempotent audited reconciliation that never weakens a restriction. The reconciliation runner (cron or operator) is an owner decision | Agent D / coordinator | SC-4, CR-4 | 39 suites, 1231 passed / 5 skipped; D2: wp3 + D7 87/87, 3 mutants killed; migration disposable-DB 22 assertions as service_role, rollback round trip | not run (proposed in Steps D2–D4) | VERIFIED T1 |
+| D-1 | D | Email complaint state and unsubscribe evidence preserved | `25e1c8a96` on `outreach/d-engine-readiness`. **E-1:** delivery status only moves forward if unchanged since read (`advanceOutreachTaskDeliveryStatus`), so concurrent events can no longer overwrite each other. **E-2:** the complaint or hard-bounce restriction is written even when the evidence write fails (still 503, SNS retries). The complaint's `delivered` row is marked `deliveryInferredFrom: 'Complaint'`. Unsubscribe evidence is proven insert-only | Complaint as a business outcome needs CR-4 (migration `20270125000001` written and tested, not applied); unsubscribe outcome row needs SC-4 (`recipient_link` source, migration `20270125000002` written and tested, not applied). **D2 done (`3f1c405a2`):** failures exposed truthfully (`persistence`), recorded once per event in `outreach_provider_evidence_reconciliation` (migration `20270125000005`, not applied), idempotent audited reconciliation that never weakens a restriction. The reconciliation runner (cron or operator) is an owner decision | Agent D / coordinator | SC-4, CR-4 | 39 suites, 1231 passed / 5 skipped; D2: wp3 + D7 87/87, 3 mutants killed; migration disposable-DB 22 assertions as service_role, rollback round trip | T2 at `7f2ca186f`: real-schema 94/94; D2 `service_role` suite 9/9 (see "T2 at `7f2ca186f`") | VERIFIED T2 (disposable DB; migration unapplied to any real environment) |
 | D-2 | D | Per-engine D7 readiness evidence (5 engines) | `docs/outreach/platform/ENGINE-READINESS-D7.md` (on the D branch). Email integrated; WhatsApp no path reaches Meta (WA-1/2/3 confirmed; usage RPCs undefined; journey `hasApproval` always false); Social integrated, but account ownership is not checked; Community `proveActingAccount` absent; Browser GAP-03 confirmed and `executed` comes from a client flag | WhatsApp fix plan (10 steps, CR-X-01 first) | Agent D | CR-X-01, C-BL-1, C-PI-2 | n/a (documentation) | — | IMPLEMENTED LOCALLY |
 | D-3 | D | WhatsApp L-4, send-once, WA-1/2/3 | Open. WA-2 schema: migration `20270125000004` (client-ref columns, CHECKed against env-name exfiltration) written and tested, not applied | `resolveClientRef` code fix (allow-list + decrypt); WA-1, WA-3, L-4; WhatsApp stays blocked | Agent D (later) | CR-X-01 | — | — | BLOCKED |
 | D-4 | D | Social publish authorization on main | Base and round 3 only | Part of release integration | Coordinator | Owner push | — | — | INTEGRATION REQUIRED |
@@ -473,4 +473,84 @@ T3 (sandbox or production) is out of scope until GD-4, the ratifications and the
   - unit failures are a subset of D1's by name;
   - `jevFlowAdoptionCli` passes alone (22/22).
 - `refs/scratch/w1-pair-diag` (`5a8b5ed04`) is kept: it is the evidence that the Step A integration failures belonged to W1 + P-A.
-- Next: the proposed T2 run (Steps D2–D4 section), steps 3–6, on head `5ee390cc6`, awaiting the owner's go-ahead.
+- ~~Next: the proposed T2 run (Steps D2–D4 section), steps 3–6, on head `5ee390cc6`, awaiting the owner's go-ahead.~~ Done: see the next section.
+
+## T2 at `7f2ca186f` (2026-11-05)
+
+**Verdict: PASSES WITH DOCUMENTED EXCEPTIONS.** There are **zero newly introduced regressions**, and no failure is unexplained. Owner GO 2026-11-05.
+
+**Frozen baseline.**
+- Verified commit: `7f2ca186f57078841ff579120e6a72619b7b1f56` on `outreach/foundation-base-20261104`.
+- The run script checked HEAD and a clean tree at the start and after each stage (A, B, C, end): identical and clean every time.
+- No implementation or test file changed during the run.
+- `refs/scratch/w1-pair-diag` = `5a8b5ed04`, kept.
+
+**Results**
+
+| Category | Result | By test name, against D1 / baselines |
+|---|---|---|
+| A. Real-schema, full project | 94/94 suites; 1930 tests: 1927 passed, 3 skipped, **0 failed** | D1's 8 failures (`d01_claim_human_approval`, `w1_community_single_execution`) are cleared by Prompt 3. `report1DurableHistoryEndToEnd` also passes here |
+| A. D2 `service_role` suite | 9/9 | New; see below |
+| B. Integration community/WhatsApp (the 18 D1 suites) | 15/18 suites; 126 tests: 120 passed, **6 failed** | All 6 are among D1's 26: `community_ai_core_apis` ×3 and `community_ai_webhooks` ×2 (registered baseline); `community_ai_scheduling` "executes due actions and logs execution" (also failing at main). Prompt 3 cleared the other 20 |
+| B. Whole-repo unit jest (`--maxWorkers=2`) | 2388 suites; 42402 tests: 42266 passed, 73 skipped, **63 failed** | 60 are in the 31 Oct baseline (and in the Step A list). 3 are not: see exceptions |
+| C. typecheck-ci | PASS, at baseline (1216 s) | Run with ≥6 GB free under the shared lock; no other typecheck running |
+| C. Worker tsc | Clean | |
+| D. Gates | 9/10 pass: route-auth, route-policy, schema-drift, tenant-authz, orgaccess-binding, withrbac-binding, outbound-ssrf, db-conventions, secrets. **migration-quality: 23 violations** | The 23 flagged files are identical, by name, to D1's. Not suppressed, not waived: GD-4 |
+
+**Documented exceptions (the 3 whole-repo failures outside the 31 Oct baseline):**
+1. `sec91FMigrationQuality` "check-migration-quality passes on the current migrations": runs the migration-quality gate, so it fails on the same 23. GD-4.
+2. `govHMigrationControls` "RULE 6 … the committed attestation matches every file it pins": the same boundary violations, reported through the attestation rule. GD-4.
+3. `snapshotReportService` "sorts actions and priorities by priority type then impact score": a 30 s timeout under whole-repo load.
+   - It passes alone at the frozen head, at 29.6 s.
+   - Neither the test nor the service changed between D1 `0679a5908` and `7f2ca186f`.
+   - Owner: Reports, not Outreach. It is a timing-margin defect in that test, not a regression.
+
+Exceptions 1 and 2 clear when GD-4 is decided, and not before.
+
+**Database and migration replay.**
+- A disposable pg-sandbox PG17 cluster on 127.0.0.1. The script refuses a non-loopback host and unsets every `PG*`, `DATABASE_URL`, `W6_*` and `SUPABASE*` variable first. The cluster was stopped afterwards.
+- Build: bootstrap, then baseline (1 expected `already exists`, 0 unexpected), then 124 migrations above ledgerMax `20260916000000`, applied strictly, through `20270126000003`. That includes D2's `20270125000005` and Prompt 3's `20270126000000–03`.
+- Real-schema ran on a stamped `w6` clone.
+- **No production or shared environment was touched.** No migration was applied to any real environment, and no provider, send, publish, browser action or flag was used.
+
+**D2 `service_role` suite: what it proves.**
+- The real writer `sesEvidenceReconciliation.ts` runs as `service_role` (`SET LOCAL ROLE`, asserted by `current_user`) inside rolled-back transactions.
+- Privileges:
+  - `service_role` has SELECT, INSERT and UPDATE only; DELETE and TRUNCATE are refused (42501), and it is not a superuser;
+  - `anon` and `authenticated` are refused every read and write.
+- A debt is recorded address-free. An SNS retry refreshes the single open row: earliest failure kept, records widened.
+- A later success resolves the row, and a resolved row is final: reopen and rewrite are refused (23514), delete is refused (42501), and a late duplicate leaves it unchanged.
+- Tenant and event identity are immutable (23514).
+- Evidence carrying an address is refused (`unrecorded`). Nothing is stored, and the address is not logged.
+- **Tenant isolation:** a reconciliation scoped to tenant A examines only A's debts, and tenant B's row is byte-identical afterwards.
+- The suite asserts the database URL host is loopback.
+- No security or tenant-isolation defect was found.
+- Scope: the debt table only. A replay that reaches a task needs grants that the governed build does not give `service_role` (see the governed-build grant finding); the unit suite covers that path.
+
+**Provenance of the suite.**
+- During the frozen run, the D2 suite ran from a **separate detached copy** of the same commit (`C:/tmp/omp-t2-d2rs`, one untracked file), so the frozen tree was never edited.
+- Its first attempt did not start: a harness setup error (the copy's dependency link pointed one directory too high). It ran after the link was fixed, against the same disposable database: 9/9.
+- **The committed file is subsequent evidence preservation, not part of the frozen T2 run.** The commit that adds it and this section is test and documentation only, on top of `7f2ca186f`.
+- One change from the run copy: the test-only PostgREST adapter now converts only this table's two array columns (`governance_record_ids`, `failed_operations`) and quotes each element. That is what PostgREST does for an array column; a `jsonb` value keeps JSON. It catches no error, so a refused privilege still reaches the writer and fails the suite.
+- The committed file (sha256 `ac43ae0853e6599c…`) was re-run from the foundation tree on a **fresh** disposable loopback cluster: same build, 124 migrations, **9/9**.
+- Mutants, each on a fresh copy of that database:
+
+| Mutant | Result |
+|---|---|
+| `REVOKE INSERT … FROM service_role` | 6 tests fail |
+| `GRANT DELETE … TO service_role` | 2 tests fail |
+| Guard trigger dropped | 2 tests fail |
+
+**Closure status: unchanged, no closure is complete.** T2 covers the integrated code; the closures still wait on the owner decisions below.
+
+**Owner decisions still open (unchanged, not resolved here):**
+- GD-4 / REL-07 (also clears exceptions 1 and 2);
+- D2-R;
+- SC7-R (Q-1, Q-2, Q-3, Q-5);
+- BL-A;
+- CN-1..CN-3;
+- C-CP-1;
+- CL-1..CL-6;
+- `PROSPECT_PERSON_ERASE` (security owner).
+
+Release remains **NO-GO**. Nothing is pushed, merged, deployed or applied.
