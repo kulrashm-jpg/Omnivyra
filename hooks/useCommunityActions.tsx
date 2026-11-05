@@ -5,6 +5,8 @@ import CommunityAiLayout from '../components/community-ai/CommunityAiLayout';
 import SectionCard from '../components/community-ai/SectionCard';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import type { PendingAction } from '../components/community-ai/types';
+import { readExecuteResponse, readApproveResponse } from '../components/community-ai/communityExecuteResponse';
+import { startAuthentication } from '@simplewebauthn/browser';
 import {
   validateActionAgainstPlaybook,
   type PlaybookValidationInput,
@@ -237,15 +239,18 @@ export function useCommunityActions() {
         }),
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(data?.error || 'Execution failed');
+      const outcome = readExecuteResponse(response.status, data);
+      if (!outcome.ok) {
+        if (outcome.reload) await loadActions();
+        throw new Error(outcome.message || 'Execution failed');
       }
+      if (outcome.message) setErrorMessage(outcome.message);
       setActions((prev) =>
         prev.map((entry) =>
           entry.action_id === action.action_id
             ? {
                 ...entry,
-                status: data?.status || 'executed',
+                status: outcome.status || data?.status || 'executed',
                 execution_result: data?.execution || null,
               }
             : entry
@@ -264,18 +269,41 @@ export function useCommunityActions() {
     setExecutingActionId(action.action_id);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/actions/approve', {
+      // OD-1: every external approval needs a fresh passkey, bound by the server
+      // to this approver, tenant, action and content (phase begin, then approve).
+      const scopeBody = { tenant_id: tenantId, organization_id: tenantId, action_id: action.action_id };
+      const begin = await fetchWithAuth('/api/community-ai/actions/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          organization_id: tenantId,
-          action_id: action.action_id,
-        }),
+        body: JSON.stringify({ ...scopeBody, phase: 'begin' }),
       });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(data?.error || 'Approval failed');
+      const beginData = await begin.json().catch(() => null);
+      const beginOutcome = readApproveResponse(begin.status, beginData);
+      if (!beginOutcome.ok) {
+        if (beginOutcome.reload) await loadActions();
+        throw new Error(beginOutcome.message || 'Approval failed');
+      }
+      let response: Response = begin;
+      let data: any = beginData;
+      // An already-approved (current) action is answered idempotently by begin.
+      if (beginData?.phase === 'begin') {
+        const passkey = await startAuthentication({ optionsJSON: beginData.passkey_options });
+        response = await fetchWithAuth('/api/community-ai/actions/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...scopeBody,
+            phase: 'approve',
+            passkey,
+            expected_content_hash: beginData.content_hash,
+          }),
+        });
+        data = await response.json().catch(() => null);
+      }
+      const outcome = readApproveResponse(response.status, data);
+      if (!outcome.ok) {
+        if (outcome.reload) await loadActions();
+        throw new Error(outcome.message || 'Approval failed');
       }
       setActions((prev) =>
         prev.map((entry) =>
@@ -336,15 +364,17 @@ export function useCommunityActions() {
         }),
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(data?.error || 'Execution failed');
+      const outcome = readExecuteResponse(response.status, data);
+      if (!outcome.ok) {
+        if (outcome.reload) await loadActions();
+        throw new Error(outcome.message || 'Execution failed');
       }
       setActions((prev) =>
         prev.map((entry) =>
           entry.action_id === manualAction.action_id
             ? {
                 ...entry,
-                status: data?.status || 'executed',
+                status: outcome.status || data?.status || 'executed',
                 execution_result: data?.execution || null,
                 final_text: finalText,
               }
@@ -402,15 +432,17 @@ export function useCommunityActions() {
         }),
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(data?.error || 'Execution failed');
+      const outcome = readExecuteResponse(response.status, data);
+      if (!outcome.ok) {
+        if (outcome.reload) await loadActions();
+        throw new Error(outcome.message || 'Execution failed');
       }
       setActions((prev) =>
         prev.map((entry) =>
           entry.action_id === platformViewAction.action_id
             ? {
                 ...entry,
-                status: data?.status || 'executed',
+                status: outcome.status || data?.status || 'executed',
                 execution_result: data?.execution || null,
                 final_text: finalText,
               }

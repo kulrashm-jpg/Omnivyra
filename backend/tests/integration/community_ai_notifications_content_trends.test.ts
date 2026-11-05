@@ -3,7 +3,7 @@ import executeHandler from '../../../pages/api/community-ai/actions/execute';
 import notificationsHandler from '../../../pages/api/community-ai/notifications';
 import contentKpisHandler from '../../../pages/api/community-ai/content-kpis';
 import trendsHandler from '../../../pages/api/community-ai/trends';
-import { executeAction as executeCommunityAction } from '../../services/communityAiActionExecutor';
+import { executeAction as realExecuteCommunityAction } from '../../services/communityAiActionExecutor';
 import {
   actionStore,
   analyticsStore,
@@ -15,7 +15,21 @@ import {
   seedPlaybook,
   setRole,
   tokenStore,
+  communityRpc,
+  seedExecutionPolicy,
+  executionPolicyStore,
+  refusalStore,
+  withApprovalEvidence,
 } from './communityAiTestHarness';
+
+/**
+ * SEC3-F3: an external-mode execution needs a held claim. These direct calls let
+ * the executor take it itself (persist: true → the single claim RPC), exactly as
+ * an unclaimed persisting caller does in production; nothing is bypassed.
+ */
+const executeCommunityAction: typeof realExecuteCommunityAction = (action, approved, options) =>
+  realExecuteCommunityAction(action, approved, { persist: true, ...(options || {}) });
+
 
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn().mockResolvedValue({
@@ -30,6 +44,15 @@ jest.mock('../../services/userContextService', () => ({
     companyIds: ['tenant-1'],
     defaultCompanyId: 'tenant-1',
   }),
+}));
+
+// L-3: these suites exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement. Here every
+// recipient is allowed (the production gate is unchanged).
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -53,7 +76,12 @@ const { supabase } = jest.requireMock('../../db/supabaseClient');
 describe('Community-AI Notifications', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+    executionPolicyStore.clear();
+    refusalStore.length = 0;
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     resetCommunityAiStores();
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     /**
      * G2R2 — both actions below carry `playbook_id: 'playbook-1'`, but this suite never seeded a
      * playbook. `getPlaybookById` therefore threw and
@@ -77,7 +105,7 @@ describe('Community-AI Notifications', () => {
       platform: 'linkedin',
       access_token: 'token-1',
     });
-    actionStore.set('notify-1', {
+    actionStore.set('notify-1', withApprovalEvidence({
       id: 'notify-1',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -88,7 +116,7 @@ describe('Community-AI Notifications', () => {
       playbook_id: 'playbook-1',
       status: 'approved',
       requires_human_approval: false,
-    });
+    }));
     // G2R: `headers` is required. `readIdempotencyKey` (execute.ts:30) reads
     // `req.headers['idempotency-key']`, and a real Next.js request always carries a headers object,
     // so omitting it threw before the handler could run. Empty is the honest default: this test
@@ -128,7 +156,7 @@ describe('Community-AI Notifications', () => {
       access_token: 'token-1',
     });
     seedPlaybook({ id: 'playbook-rpa', execution_modes: { rpa_allowed: true } });
-    actionStore.set('notify-2', {
+    actionStore.set('notify-2', withApprovalEvidence({
       id: 'notify-2',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -140,7 +168,7 @@ describe('Community-AI Notifications', () => {
       execution_mode: 'rpa',
       status: 'approved',
       requires_human_approval: false,
-    });
+    }));
     await executeCommunityAction(actionStore.get('notify-2'), true);
     expect(notificationStore.some((note) => note.event_type === 'failed')).toBe(true);
   });
@@ -206,7 +234,12 @@ describe('Community-AI Notifications', () => {
 describe('Community-AI Content KPIs', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+    executionPolicyStore.clear();
+    refusalStore.length = 0;
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     resetCommunityAiStores();
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
   });
 
   it('rejects content-kpis request without tenant/org', async () => {
@@ -275,7 +308,12 @@ describe('Community-AI Content KPIs', () => {
 describe('Community-AI Trends', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+    executionPolicyStore.clear();
+    refusalStore.length = 0;
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     resetCommunityAiStores();
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
   });
 
   it('requires tenant/org', async () => {

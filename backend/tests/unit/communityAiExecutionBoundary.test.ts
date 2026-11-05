@@ -15,7 +15,10 @@
 let policy: Record<string, unknown>;
 
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => policy),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => policy)),
 }));
 jest.mock('../../services/communityAiActionExecutorContracts', () => {
   const actual = jest.requireActual('../../services/communityAiActionExecutorContracts');
@@ -53,17 +56,34 @@ jest.mock('../../services/communityRecipientRecheck', () => ({
   recheckCommunityRecipient: jest.fn(async () => ({ ok: true, basis: 'recipient_allowed', recipient: { platform: 'linkedin', platformUserId: 'li-1', personId: null } })),
 }));
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
-jest.mock('../../db/writeOwner', () => {
-  const chain: any = {
-    insert: jest.fn(async () => ({ error: null })),
-    select: jest.fn(() => chain),
-    eq: jest.fn(() => chain),
-    maybeSingle: jest.fn(async () => ({ data: null, error: null })),
-  };
-  return { ownedDbTable: jest.fn(() => chain) };
-});
+// Prompt 3: an in-memory database holding the stored action row (with its
+// approval of record), and the claim RPC emulated over it
+// (helpers/communityClaimRpcEmulation) with the same policy knobs.
+let mockDb: any = null;
+const mockFakeDb = () => (mockDb ??= require('./helpers/communityExecutionFakeDb').createFakeDb({ community_ai_actions: [] }));
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbTable: (t: string) => mockFakeDb().from(t),
+  ownedDbRpc: (name: string, args: any) => require('./helpers/communityClaimRpcEmulation')
+    .communityRpcEmulation(() => mockFakeDb(), () => (policy && (policy as any).execution_enabled === true
+      ? { allowed: true, code: null, auto_rules_enabled: (policy as any).auto_rules_enabled === true }
+      : { allowed: false, code: 'PLATFORM_KILL_SWITCH', auto_rules_enabled: null })).rpc(name, args),
+}));
 
-import { executeAction } from '../../services/communityAiActionExecutorRuntime';
+import { executeAction as realExecuteAction } from '../../services/communityAiActionExecutorRuntime';
+import { withApprovalEvidence, approvedAgo } from '../helpers/communityApprovalEvidenceFixture';
+
+/**
+ * Prompt 3: an action with approved_at was approved by a person through approve.ts,
+ * so its stored row carries the approval of record (approver, content binding,
+ * passkey, < 7 days). One without approved_at is stored as it is.
+ */
+const executeAction: typeof realExecuteAction = (a: any, approved, options) => {
+  const stored = typeof a.approved_at === 'string' ? withApprovalEvidence({ status: 'approved', ...a }, { approvedAt: approvedAgo() }) : { status: 'approved', ...a };
+  mockDb = null;
+  mockFakeDb().tables.community_ai_actions = [stored];
+  // SEC3-F3: an external mode needs a held claim; the executor takes it itself.
+  return realExecuteAction(stored as any, approved, { persist: true, ...(options || {}) });
+};
 import { runApiExecution, runRpaExecution, prepareBrowserDispatch } from '../../services/communityAiActionExecutorContracts';
 
 const ALLOW_AUTO = { execution_enabled: true, auto_rules_enabled: true, require_human_approval: false };

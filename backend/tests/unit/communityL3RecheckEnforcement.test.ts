@@ -10,11 +10,21 @@
 import fs from 'fs';
 import path from 'path';
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
 
 let mockDb: FakeDb = createFakeDb();
+// Prompt 3: the single claim is claim_community_ai_action_for_execution (proven in
+// the RS suites); emulated as its final CAS. Refusal records are accepted.
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
-  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbRpc: jest.fn(async (name: string, args: Record<string, any>) => {
+    if (name === 'record_community_execution_refusal') return { data: true, error: null };
+    if (name !== 'claim_community_ai_action_for_execution') return { data: null, error: null };
+    const r = mockDb.tables.community_ai_actions.find((x: any) => x.id === args.p_action_id);
+    if (!r || r.status !== 'approved') return { data: [{ claimed: false, code: 'CLAIM_CONFLICT', current_status: r?.status ?? null }], error: null };
+    r.status = 'executing';
+    return { data: [{ claimed: true, code: null, current_status: 'executing' }], error: null };
+  }),
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
@@ -22,9 +32,12 @@ jest.mock('../../db/supabaseClient', () => ({
 // auto_rules_enabled: a tenant that allows automation, so that for source=auto
 // the L-3 recheck (not round 3's auto-rules policy gate, CR-X-01) is the
 // refusal under test.
-const mockPolicy = { execution_enabled: true, auto_rules_enabled: true, require_human_approval: true };
+const mockPolicy = { execution_enabled: true, auto_rules_enabled: true };
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  getCommunityExecutionPolicy: jest.fn(async () => (mockPolicy.execution_enabled
+    ? { ok: true, policy: { execution_enabled: true, auto_rules_enabled: mockPolicy.auto_rules_enabled }, version: 'v1' }
+    : { ok: false, code: 'PLATFORM_KILL_SWITCH' })),
 }));
 jest.mock('../../services/usageEnforcementService', () => ({ checkUsageBeforeExecution: jest.fn(async () => ({ allowed: true })) }));
 jest.mock('../../services/communityAiNotificationService', () => ({ notifyCommunityAi: jest.fn(async () => undefined) }));
@@ -55,12 +68,17 @@ import { executeAction } from '../../services/communityAiActionExecutor';
 import { runCommunityAiScheduler } from '../../services/communityAiScheduler';
 
 const ACTION_ID = '00000000-0000-0000-0000-0000000000c3';
-const row = (over: Record<string, any> = {}) => ({
-  id: ACTION_ID, tenant_id: 'o1', organization_id: 'o1', platform: 'linkedin', action_type: 'reply',
-  target_id: 'urn:li:comment:(urn:li:activity:1,2)', suggested_text: 'Thanks!', playbook_id: 'pb1',
-  execution_mode: 'api', status: 'approved', approved_at: '2026-11-01T00:00:00Z', scheduled_at: '2026-11-01T00:00:00Z',
-  requires_human_approval: true, risk_level: 'low', cancel_requested_at: null, ...over,
-});
+// Prompt 3: an approved row carries its approval of record (approver, content
+// binding, passkey, < 7 days), as approve.ts leaves it.
+const row = (over: Record<string, any> = {}) => {
+  const base = {
+    id: ACTION_ID, tenant_id: 'o1', organization_id: 'o1', platform: 'linkedin', action_type: 'reply',
+    target_id: 'urn:li:comment:(urn:li:activity:1,2)', suggested_text: 'Thanks!', playbook_id: 'pb1',
+    execution_mode: 'api', status: 'approved', scheduled_at: '2026-11-01T00:00:00Z',
+    requires_human_approval: true, risk_level: 'low', cancel_requested_at: null,
+  };
+  return { ...withApprovalEvidence(base), ...over };
+};
 const action = (over: Record<string, any> = {}) => row(over) as any;
 
 const OPTED_OUT = { ok: false, code: 'RECIPIENT_RESTRICTED', reason: 'do not engage (linkedin)', governance: { decision: 'blocked', governanceType: 'dnc_channel', recordId: 'gov-1' } };
@@ -115,7 +133,8 @@ describe('opt-out recorded after approval → no platform call, on every execute
 describe('positive controls and ordering', () => {
   it('an allowed recipient proceeds to the platform exactly once', async () => {
     mockRecheck.mockResolvedValue(ALLOWED);
-    await executeAction(action(), true, { source: 'manual', notify: false, webhook: false });
+    // SEC3-F3: the executor takes the claim itself (persist: true).
+    await executeAction(action(), true, { source: 'manual', persist: true, notify: false, webhook: false });
     expect(mockConnector).toHaveBeenCalledTimes(1);
   });
 

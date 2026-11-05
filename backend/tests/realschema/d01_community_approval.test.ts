@@ -60,7 +60,7 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
 }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
-const { getCommunityAiPlatformPolicy } = require('../../services/communityAiPlatformPolicyService');
+const { getCommunityExecutionPolicy } = require('../../services/communityAiPlatformPolicyService');
 const { executeAction } = require('../../services/communityAiActionExecutor');
 const { evaluateAutoRules } = require('../../services/communityAiAutoRuleService');
 /* eslint-enable @typescript-eslint/no-var-requires */
@@ -81,11 +81,11 @@ beforeEach(() => {
 afterEach(() => { nowSpy?.mockRestore(); nowSpy = null; });
 
 describe('D-01 on the real schema', () => {
-  it('no policy row: the real service resolves auto-rules off and approval required', async () => {
+  it('no policy row: the real service refuses execution, auto rules included (C3 closed default: POLICY_MISSING)', async () => {
     await inRollback(async () => {
       await db.query('DELETE FROM public.community_ai_platform_policy');
-      const policy = await getCommunityAiPlatformPolicy();
-      expect(policy).toMatchObject({ auto_rules_enabled: false, require_human_approval: true });
+      const policy = await getCommunityExecutionPolicy({ organizationId: ORG_A, tenantId: ORG_A });
+      expect(policy).toEqual({ ok: false, code: 'POLICY_MISSING' });
     });
   });
 
@@ -118,8 +118,20 @@ describe('D-01 on the real schema', () => {
   it('a matching auto-rule does not execute an existing unapproved row; the row is unchanged and unclaimable', async () => {
     await inRollback(async () => {
       await seedTenants();
-      await db.query(`INSERT INTO public.community_ai_platform_policy (execution_enabled, auto_rules_enabled, require_human_approval)
-        VALUES (true, true, false)`);
+      // C3: execution and auto rules opened the supported way (inserted closed,
+      // requested by one operator, confirmed by another); AI metadata says no
+      // approval is needed, which still waives nothing.
+      for (const org of [null, ORG_A]) {
+        const where = org === null ? 'organization_id IS NULL' : 'organization_id = $1';
+        const p = org === null ? [] : [org];
+        await db.query('DELETE FROM public.community_ai_platform_policy WHERE ' + where, p);
+        await db.query(`INSERT INTO public.community_ai_platform_policy (organization_id, tenant_id, execution_enabled, auto_rules_enabled, require_human_approval)
+          VALUES ($1, $1, false, false, false)`, [org]);
+        await db.query(`UPDATE public.community_ai_platform_policy SET requested_execution_enabled = true, requested_auto_rules_enabled = true,
+          requested_by = '00000000-0000-4000-8000-0000000000d3' WHERE ${where}`, p);
+        await db.query(`UPDATE public.community_ai_platform_policy SET execution_enabled = true, auto_rules_enabled = true,
+          updated_by = '00000000-0000-4000-8000-0000000000d4' WHERE ${where}`, p);
+      }
       await db.query(`INSERT INTO public.community_ai_auto_rules (tenant_id, organization_id, rule_name, condition, action_type, max_risk_level, is_active)
         VALUES ($1, $1, 'auto-reply', '{}'::jsonb, 'reply', 'medium', true)`, [ORG_A]);
       const seeded = await db.query(`INSERT INTO public.community_ai_actions (tenant_id, organization_id, platform, action_type, target_id, suggested_text, status, execution_mode, requires_human_approval, risk_level, playbook_id)

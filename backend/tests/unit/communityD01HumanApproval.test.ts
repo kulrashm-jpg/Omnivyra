@@ -18,6 +18,7 @@
  */
 
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
 
 let mockDb: FakeDb = createFakeDb();
 // L-3: these tests exercise other mechanics with fixtures that carry no
@@ -28,9 +29,15 @@ jest.mock('../../services/communityRecipientRecheck', () => ({
   ...jest.requireActual('../../services/communityRecipientRecheck'),
   recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
+// Prompt 3: the claim RPC and refusal recorder, emulated over the fake DB
+// (helpers/communityClaimRpcEmulation; the SQL is proven in the RS suites).
+const mockRpc = (name: string, args: any) => require('./helpers/communityClaimRpcEmulation')
+  .communityRpcEmulation(() => mockDb, () => (mockPolicy.execution_enabled
+    ? { allowed: true, code: null, auto_rules_enabled: mockPolicy.auto_rules_enabled === true }
+    : { allowed: false, code: 'PLATFORM_KILL_SWITCH', auto_rules_enabled: null })).rpc(name, args);
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
-  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbRpc: (name: string, args: any) => mockRpc(name, args),
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
@@ -46,7 +53,10 @@ jest.mock('../../db/communityAiActionStore', () => ({
 // requirement. D-01 must hold even here.
 const mockPolicy = { execution_enabled: true, auto_rules_enabled: true, require_human_approval: false };
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({ ...mockPolicy }))),
 }));
 jest.mock('../../services/usageEnforcementService', () => ({
   checkUsageBeforeExecution: jest.fn(async () => ({ allowed: true })),
@@ -89,7 +99,7 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
 }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../../pages/api/community-ai/utils', () => ({
-  requireTenantScope: jest.fn(async () => ({ tenantId: 't1', organizationId: 'o1' })),
+  requireTenantScope: jest.fn(async () => ({ tenantId: 'o1', organizationId: 'o1' })),
   enforceActionRole: jest.fn(async () => ({ userId: 'human-1' })),
 }));
 
@@ -100,9 +110,16 @@ import executeHandler from '../../../pages/api/community-ai/actions/execute';
 const ACTION_ID = '00000000-0000-0000-0000-0000000000d1';
 const TARGET = 'https://www.linkedin.com/feed/update/urn:li:activity:1/';
 
-const row = (over: Record<string, any> = {}) => ({
+// Prompt 3: a row with approved_at set is a row a person approved through
+// approve.ts, so it carries the whole approval of record (approver, content
+// binding, passkey) and a current approval time (< 7 days).
+const row = (over: Record<string, any> = {}) => {
+  const merged = rowFields(over);
+  return typeof merged.approved_at === 'string' ? withApprovalEvidence(merged, { approvedAt: new Date(Date.now() - 3600_000).toISOString() }) : merged;
+};
+const rowFields = (over: Record<string, any> = {}): Record<string, any> => ({
   id: ACTION_ID,
-  tenant_id: 't1',
+  tenant_id: 'o1',
   organization_id: 'o1',
   platform: 'linkedin',
   action_type: 'reply',
@@ -233,7 +250,7 @@ describe('D-01 executor', () => {
 describe('D-01 auto-rules', () => {
   const RULE = {
     id: 'rule-1',
-    tenant_id: 't1',
+    tenant_id: 'o1',
     organization_id: 'o1',
     rule_name: 'auto-reply',
     condition: {},
@@ -252,7 +269,7 @@ describe('D-01 auto-rules', () => {
     intent_scores: { question: 0.9 },
   };
   const input = () => ({
-    tenant_id: 't1',
+    tenant_id: 'o1',
     organization_id: 'o1',
     platform: 'linkedin',
     suggested_actions: [{ ...SUGGESTION }],
@@ -268,7 +285,7 @@ describe('D-01 auto-rules', () => {
 
   it('CR-X-01: a read path (no autoExecute) never executes, even a human-approved row', async () => {
     await evaluateAutoRules(input());
-    Object.assign(actionRows()[0], { status: 'approved', approved_at: '2026-11-01T00:00:00Z', approved_by: 'human-1' });
+    Object.assign(actionRows()[0], withApprovalEvidence({ ...actionRows()[0], status: 'approved' }, { approvedBy: 'human-1' }));
     const { autoExecute: _engine, ...readPath } = input();
     const out = await evaluateAutoRules(readPath);
     expect(out.autoExecuted).toBe(0);
@@ -313,7 +330,7 @@ describe('D-01 auto-rules', () => {
   it('after a human approval (approved_at) the rule executes the approved row', async () => {
     await evaluateAutoRules(input());
     // What pages/api/community-ai/actions/approve.ts writes.
-    Object.assign(actionRows()[0], { status: 'approved', approved_at: '2026-11-01T00:00:00Z', approved_by: 'human-1' });
+    Object.assign(actionRows()[0], withApprovalEvidence({ ...actionRows()[0], status: 'approved' }, { approvedBy: 'human-1' }));
     const out = await evaluateAutoRules(input());
     expect(mockConnector).toHaveBeenCalledTimes(1);
     expect(out.autoExecuted).toBe(1);

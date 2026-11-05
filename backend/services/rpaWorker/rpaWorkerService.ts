@@ -5,8 +5,11 @@ import { rpaEnvReady, assertRpaEnvReady, isProbeFailure } from './rpaEnv';
 import { admitRpaTask, observeAllActiveOrgs } from './rpaQueueState';
 import { enqueueRpaRetry, flushRpaRetryQueueRoundRobin, type RetryActionRunner } from './rpaRetryQueue';
 import { validateRpaTarget } from './rpaTargetUrlPolicy';
-import { getCommunityAiPlatformPolicy } from '../communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from '../communityAiPlatformPolicyService';
 import { withHeavyJobSlot } from '../../queue/bullmqClient';
+
+/** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
+const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
 
 export type RpaTask = {
   tenant_id: string;
@@ -77,28 +80,43 @@ export const rpaSchedulerHooks = {
       console.warn(`[rpaRetryQueueFlush] skipped — RPA env not ready: ${ready.reason}`);
       return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
     }
-    // Platform kill switch: when execution is disabled nothing is claimed,
-    // so no action is consumed and no retry row is touched (mirrors the
-    // community scheduler). An unreadable policy is fail-closed
-    // (execution_enabled=false).
-    const policy = await getCommunityAiPlatformPolicy();
-    if (!policy?.execution_enabled) {
-      console.warn('[rpaRetryQueueFlush] skipped — community execution disabled by platform policy');
-      return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
-    }
+    // Tenant execution policy (OD-1), per organization, BEFORE any retry row or
+    // action row of that organization is claimed: an org whose policy refuses
+    // (kill switch, missing, unreadable, disabled) is skipped untouched, so no
+    // action is consumed and no retry row is touched. The claim RPC
+    // (claim_point 'rpa_retry') re-applies the policy, the approval evidence
+    // and the 7-day lifetime per action, atomically.
     // Every retry row is re-run THROUGH THE EXECUTOR after the flush has
     // atomically claimed both the retry row and the action row
-    // (approved → executing). The executor re-applies the platform kill
-    // switch, approval, playbook and plan limits, and executeRpaTask
-    // re-applies URL policy, env readiness and per-org admission.
-    // (CR-X-01: W1 retained; round 3's unclaimed handler gate is superseded.)
+    // (approved → executing). The executor re-applies the policy, approval,
+    // playbook and plan limits, and executeRpaTask re-applies URL policy, env
+    // readiness and per-org admission.
     return flushRpaRetryQueueRoundRobin({
       runAction: runClaimedRetryAction,
+      orgGate: retryOrgPermitted,
       limitPerOrg: opts?.limit_per_org,
       maxOrgs: opts?.max_orgs,
     });
   },
 };
+
+/**
+ * Per-org gate of the retry flush. A community tenant is its organization
+ * (pages/api/community-ai/utils.ts), so the decision is read for (org, org).
+ * Any refusal or read failure skips the org (fail closed).
+ */
+export async function retryOrgPermitted(organizationId: string): Promise<boolean> {
+  try {
+    const decision = await getCommunityExecutionPolicy({ organizationId, tenantId: organizationId });
+    if (!decision.ok) {
+      console.warn('[rpaRetryQueueFlush] org skipped by execution policy:', refusedCode(decision));
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Map a claimed community_ai_actions row to the executor input. */
 export function retryRowToExecutorAction(row: Record<string, any>) {
@@ -123,13 +141,16 @@ export function retryRowToExecutorAction(row: Record<string, any>) {
   };
 }
 
-const runClaimedRetryAction: RetryActionRunner = async (actionRow) => {
+export const runClaimedRetryAction: RetryActionRunner = async (actionRow, ctx) => {
   const { executeAction } = await import('../communityAiActionExecutorRuntime');
   const deferredSource = actionRow?.execution_result?.response?.deferred_source;
   return executeAction(retryRowToExecutorAction(actionRow) as any, true, {
     source: deferredSource === 'manual' ? 'manual' : 'scheduler',
     persist: true,
     expected_from_statuses: ['executing'],
+    // The id the flush's claim (claim point 'rpa_retry') stamped: the executor
+    // confirms the held claim by it (F3) and gives it back by it (F1).
+    correlation_id: ctx?.correlationId,
     notify: true,
     webhook: true,
   });

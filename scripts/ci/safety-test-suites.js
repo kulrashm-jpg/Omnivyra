@@ -139,6 +139,18 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/outreachFutureEngineCompatibility.test.ts',
   'backend/tests/unit/orchestrationExecutionContract.test.ts',
   'backend/tests/unit/orchestrationJourneyExit.test.ts',
+  // Prompt 3 community execution safety (OD-1): L-3 enforcement, the execute route
+  // mapping and pre-claim gates, tenant-policy scheduler, the skip CAS, the UI
+  // response reader, and journey steps (LD-4: not auto, approval of record).
+  'backend/tests/unit/communityL3RecheckEnforcement.test.ts',
+  'backend/tests/unit/communityExecuteRouteMapping.test.ts',
+  'backend/tests/unit/communitySchedulerTenantPolicy.test.ts',
+  'backend/tests/unit/communityActionsSkipCas.test.ts',
+  'backend/tests/unit/communityExecuteResponseReader.test.ts',
+  'backend/tests/unit/orchestrationCommunityJourneyApproval.test.ts',
+  'backend/tests/unit/extensionLeaseHandoutPolicyGate.test.ts',
+  'backend/tests/unit/rpaRetryFlushGates.test.ts',
+  'backend/tests/unit/rpaRetryHeldClaimDispatch.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */

@@ -72,7 +72,9 @@ import {
   type CommunityAiAction,
   type ExecutionResult,
 } from '../communityAiActionExecutor';
-import { getCommunityAiPlatformPolicy } from '../communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy, COMMUNITY_POLICY_UNREADABLE } from '../communityAiPlatformPolicyService';
+import { evaluateCommunityApprovalEvidence } from '../communityApprovalBinding';
+import { recordCommunityExecutionRefusal } from '../communityExecutionRefusal';
 import { canExecuteAction } from '../executionGuardrailService';
 import { getPlaybookById } from '../playbooks/playbookService';
 import { validateActionAgainstPlaybook } from '../playbooks/playbookValidator';
@@ -85,6 +87,11 @@ import {
   type CommunityIdentityPort,
   type PersonProof,
 } from './communityIdentityProof';
+
+/** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
+const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
+const evidenceRefusal = (e: { ok: boolean }): { code: string; detail: string } =>
+  ({ code: (e as { code?: string }).code ?? 'APPROVAL_EVIDENCE_REQUIRED', detail: (e as { detail?: string }).detail ?? '' });
 
 export const ENGINE_REQUESTS_TABLE = 'execution_engine_requests';
 export const COMMUNITY_ACTIONS_TABLE = 'community_ai_actions';
@@ -196,6 +203,11 @@ export interface CommunityActionRow {
   requires_human_approval?: boolean | null;
   risk_level?: string | null;
   approved_at?: string | null;
+  /** Approval evidence (20270126000001), read by enginePreflight; never sent to the engine. */
+  approved_by?: string | null;
+  approved_content_hash?: string | null;
+  passkey_credential_id?: string | null;
+  passkey_verified_at?: string | null;
   status: string | null;
   execution_mode?: string | null;
   scheduled_at?: string | null;
@@ -355,7 +367,9 @@ const TRANSIENT_PLAYBOOK_REASONS = new Set([
 ]);
 
 export interface PreflightDeps {
-  getPolicy: typeof getCommunityAiPlatformPolicy;
+  getPolicy: typeof getCommunityExecutionPolicy;
+  /** The governance refusal record (LD-6); defaults to recordCommunityExecutionRefusal. */
+  recordRefusal?: typeof recordCommunityExecutionRefusal;
   guardrail: typeof canExecuteAction;
   getPlaybook: typeof getPlaybookById;
   loadHistory: typeof loadHistoryMetrics;
@@ -365,7 +379,8 @@ export interface PreflightDeps {
 }
 
 export const defaultPreflightDeps: PreflightDeps = {
-  getPolicy: getCommunityAiPlatformPolicy,
+  getPolicy: getCommunityExecutionPolicy,
+  recordRefusal: recordCommunityExecutionRefusal,
   guardrail: canExecuteAction,
   getPlaybook: getPlaybookById,
   loadHistory: loadHistoryMetrics,
@@ -381,9 +396,34 @@ const refuse = (disposition: 'wait' | 'needs_human', code: string, reason: strin
 export async function enginePreflight(row: CommunityActionRow, d: PreflightDeps = defaultPreflightDeps): Promise<PreflightVerdict> {
   const action = toEngineAction(row);
 
-  const policy = await d.getPolicy();
-  if (!policy.execution_enabled) return refuse('needs_human', 'PLATFORM_POLICY', 'community execution is disabled by the platform policy');
-  if (policy.require_human_approval && !action.approved_at) return refuse('needs_human', 'HUMAN_APPROVAL_REQUIRED', 'the platform policy requires a human approval');
+  // LD-4: a journey step is NOT an auto-rule execution. It runs only on a human
+  // approval of record, under the tenant's own execution policy, and both are
+  // decided here, before anything is claimed: a refusal leaves the row
+  // 'approved' (never consumed) and writes one governance refusal record. The
+  // claim RPC (claim_point 'orchestration') re-applies both atomically.
+  const recordRefusal = d.recordRefusal ?? recordCommunityExecutionRefusal;
+  const refuseRecorded = async (disposition: 'wait' | 'needs_human', code: string, reason: string, detail: string) => {
+    await recordRefusal({
+      actionId: action.id,
+      organizationId: action.organization_id,
+      tenantId: action.tenant_id,
+      claimPoint: 'orchestration',
+      code: detail,
+      payload: { source: 'orchestration' },
+    });
+    return refuse(disposition, code, reason);
+  };
+  const decision = await d.getPolicy({ organizationId: action.organization_id, tenantId: action.tenant_id });
+  if (!decision.ok) {
+    // An unreadable policy may read next time; every other refusal needs a person.
+    return refusedCode(decision) === COMMUNITY_POLICY_UNREADABLE
+      ? refuse('wait', 'PLATFORM_POLICY', `the tenant execution policy could not be read (${refusedCode(decision)})`)
+      : refuseRecorded('needs_human', 'PLATFORM_POLICY', `community execution is refused by the tenant execution policy (${refusedCode(decision)})`, refusedCode(decision));
+  }
+  const evidence = evaluateCommunityApprovalEvidence(row as never);
+  if (!evidence.ok) {
+    return refuseRecorded('needs_human', evidenceRefusal(evidence).code, evidenceRefusal(evidence).detail, evidenceRefusal(evidence).code);
+  }
 
   // The scheduler's Phase-5B lock: network-expansion actions are observed, not executed.
   if (row.intent_classification?.primary_intent === 'network_expansion') {
@@ -452,7 +492,8 @@ export interface CommunityAdapterDeps {
   /** Tenant-filtered read. null = no such action FOR THIS TENANT; undefined = unreadable. */
   readAction(organizationId: string, actionId: string): Promise<CommunityActionRow | null | undefined>;
   /** The engine's own claim: `approved → executing`, tenant-filtered. True when this call moved it. */
-  claimAction(organizationId: string, actionId: string, now: string): Promise<boolean>;
+  /** The single claim. `correlationId` is the attempt's id, passed to the engine too (F1 release). */
+  claimAction(organizationId: string, actionId: string, now: string, correlationId: string): Promise<boolean>;
   preflight(row: CommunityActionRow): Promise<PreflightVerdict>;
   /** Contact governance for this person right now. null = unreadable. */
   channelPermitted(organizationId: string, personId: string, now: string): Promise<boolean | null>;
@@ -512,10 +553,18 @@ export const defaultCommunityDeps: CommunityAdapterDeps = {
     return (res.data as CommunityActionRow | null) ?? null;
   },
 
-  async claimAction(organizationId, actionId) {
+  async claimAction(organizationId, actionId, _now, correlationId) {
     // The engine's own claim: tenant-scoped, and refuses a cancel-requested row.
     // A bound action's tenant_id equals its organization_id (checked before this).
-    const { claimed } = await claimCommunityActionForExecution({ actionId, tenantId: organizationId, organizationId });
+    const { claimed } = await claimCommunityActionForExecution({
+      actionId,
+      tenantId: organizationId,
+      organizationId,
+      claimPoint: 'orchestration',
+      // The same id the engine is called with (correlation_id): a pre-dispatch
+      // refusal after the claim releases the row by this id (F1), never burns it.
+      correlationId,
+    });
     return claimed;
   },
 
@@ -798,7 +847,7 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       if (!claimed) return result('submitting', 'wait', 'another sweep claimed this request', row.id);
       let engineClaimed = false;
       try {
-        engineClaimed = await deps.claimAction(ctx.organizationId, row.id, nowIso);
+        engineClaimed = await deps.claimAction(ctx.organizationId, row.id, nowIso, ctx.executionTaskId);
       } catch {
         engineClaimed = false;
       }
@@ -811,8 +860,8 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       let out: ExecutionResult;
       try {
         out = await deps.executeAction(toEngineAction(row), true, {
-          source: 'auto',
-          auto: true,
+          // LD-4: a journey step is human-approved, not auto-rule-originated.
+          source: 'orchestration',
           persist: true,
           correlation_id: ctx.executionTaskId,
           idempotency_key: `wf:${ctx.executionTaskId}`,

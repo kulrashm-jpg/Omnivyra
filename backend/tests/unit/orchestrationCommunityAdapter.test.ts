@@ -30,6 +30,7 @@ import {
 } from './helpers/engineAdapterContractKit';
 import { provenIdentity } from './helpers/communityIdentityFixture';
 import type { ExecutionResult } from '../../services/communityAiActionExecutor';
+import { withApprovalEvidence, approvedAgo } from '../helpers/communityApprovalEvidenceFixture';
 
 const ACTION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const NOW = '2026-10-28T09:00:00.000Z';
@@ -38,8 +39,9 @@ const tick = () => new Promise<void>((r) => setImmediate(r));
 const ctx = (over: Partial<EngineStepContext> = {}): EngineStepContext =>
   contractContext({ channel: 'community', personId: '77777777-7777-4777-8777-777777777777', now: NOW, ...over });
 
+/** Prompt 3: an approved action carries its approval of record (approve.ts), < 7 days old. */
 function approvedAction(over: Partial<CommunityActionRow> = {}): CommunityActionRow {
-  return {
+  const base: CommunityActionRow = {
     id: ACTION_ID,
     tenant_id: CONTRACT_ORG,
     organization_id: CONTRACT_ORG,
@@ -51,15 +53,22 @@ function approvedAction(over: Partial<CommunityActionRow> = {}): CommunityAction
     playbook_id: 'pb-1',
     requires_human_approval: true,
     risk_level: 'low',
-    approved_at: '2026-10-28T08:00:00.000Z',
     status: 'approved',
     execution_mode: 'api',
     scheduled_at: null,
     execution_correlation_id: null,
     execution_result: null,
     intent_classification: null,
-    ...over,
   };
+  // The approval binds the row as approved (overrides included); a fixture that
+  // sets approved_at itself describes a row without an approval of record.
+  if ('approved_at' in over) return { ...base, ...over } as CommunityActionRow;
+  try {
+    return withApprovalEvidence({ ...base, ...over } as never, { approvedAt: approvedAgo() }) as CommunityActionRow;
+  } catch {
+    // An unbindable override (e.g. a tenant mismatch): the approval of the base row, then the override.
+    return { ...withApprovalEvidence(base as never, { approvedAt: approvedAgo() }), ...over } as CommunityActionRow;
+  }
 }
 
 type EngineBehaviour =
@@ -95,7 +104,11 @@ function world(initial: CommunityActionRow | null = approvedAction()) {
   let permission: boolean | null | 'throws' = true;
 
   const preflightDeps: PreflightDeps = {
-    getPolicy: async () => ({ execution_enabled: knobs.executionEnabled, auto_rules_enabled: true, require_human_approval: false, updated_at: null, updated_by: null }),
+    // Prompt 3: the tenant's decision. auto_rules OFF: a journey step is not 'auto' (LD-4).
+    getPolicy: async () => (knobs.executionEnabled
+      ? { ok: true as const, policy: { execution_enabled: true as const, auto_rules_enabled: false }, version: 'v1' }
+      : { ok: false as const, code: 'POLICY_EXECUTION_DISABLED' }),
+    recordRefusal: async () => true,
     guardrail: async () => knobs.guardrail,
     getPlaybook: (async () => { if (knobs.playbookThrows) throw new Error('nope'); return { id: 'pb-1' }; }) as unknown as PreflightDeps['getPlaybook'],
     loadHistory: async () => ({ replies_last_hour: 0, follows_today: 0, actions_today: 0 }),
@@ -227,8 +240,10 @@ describe('community adapter — supported path', () => {
     expect(w.externalActions()).toBe(1);
     expect(w.calls).toHaveLength(1);
     expect(w.calls[0].approved).toBe(true);
+    expect((w.calls[0].options as Record<string, unknown>).auto).toBeUndefined();
     expect(w.calls[0].options).toMatchObject({
-      persist: true, source: 'auto', auto: true,
+      // LD-4: a journey step is human-approved, never 'auto' (no auto flag).
+      persist: true, source: 'orchestration',
       correlation_id: contractContext().executionTaskId,
       idempotency_key: `wf:${contractContext().executionTaskId}`,
       final_text: 'Thanks for sharing this.',
@@ -351,7 +366,8 @@ describe('community adapter — authorization', () => {
     const w = world(approvedAction({ status: 'pending', approved_at: null }));
     expect(await run(w)).toMatchObject({ outcome: 'awaiting_approval', disposition: 'wait' });
     expect(w.calls).toHaveLength(0);
-    Object.assign(w.actions.get(ACTION_ID)!, { status: 'approved', approved_at: '2026-10-28T08:30:00.000Z' });
+    // A person approves it (approve.ts: status, approver, content binding, passkey).
+    Object.assign(w.actions.get(ACTION_ID)!, withApprovalEvidence({ ...w.actions.get(ACTION_ID)!, status: 'approved' } as never, { approvedAt: approvedAgo(60_000) }));
     expect(await run(w)).toMatchObject({ outcome: 'executed', disposition: 'completed' });
     expect(w.externalActions()).toBe(1);
   });

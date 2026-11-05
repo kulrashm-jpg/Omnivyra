@@ -11,6 +11,7 @@
  * Responses use a Next-faithful double: res.json() returns undefined (never a
  * "handled" signal) and a second response on the same request throws.
  */
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
 
 let mockDb: FakeDb = createFakeDb();
@@ -22,16 +23,21 @@ jest.mock('../../services/communityRecipientRecheck', () => ({
   ...jest.requireActual('../../services/communityRecipientRecheck'),
   recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
+// Prompt 3: the claim RPC, emulated over the fake DB (helpers/communityClaimRpcEmulation).
+const mockRpc = (name: string, args: any) => require('./helpers/communityClaimRpcEmulation').communityRpcEmulation(() => mockDb).rpc(name, args);
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
-  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbRpc: (name: string, args: any) => mockRpc(name, args),
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => mockDb.from(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
 }));
 const mockPolicy = { execution_enabled: true, require_human_approval: false };
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({ ...mockPolicy }))),
 }));
 jest.mock('../../services/usageEnforcementService', () => ({ checkUsageBeforeExecution: jest.fn(async () => ({ allowed: true })) }));
 jest.mock('../../services/communityAiNotificationService', () => ({ notifyCommunityAi: jest.fn(async () => undefined) }));
@@ -696,6 +702,14 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
     // reach the DM policy; auto_insert ignores it (an ad-hoc row has none).
     suggested_text: 'hi', playbook_id: 'pb1', execution_mode: 'browser', approved_at: '2026-11-01T00:00:00Z', ...over,
   });
+  // Prompt 3: "an action that does carry an approval" = the row approve.ts leaves:
+  // stored, with its approval of record (approver, content binding, passkey, < 7 days).
+  const storeApproved = (r: Record<string, any>) => {
+    const { approved_at: _legacy, ...rest } = r;
+    const stored = withApprovalEvidence({ ...rest, status: 'approved' });
+    mockDb.tables.community_ai_actions = [...(mockDb.tables.community_ai_actions || []).filter((x: any) => x.id !== stored.id), stored];
+    return stored as any;
+  };
 
   it.each([
     ['browser, validated thread URL', {}, 'DM_RECIPIENT_MAPPING_UNAVAILABLE'],
@@ -713,7 +727,7 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
     expect(adHoc).toMatchObject({ ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false });
     expect(actions().find((a) => a.id === '00000000-0000-0000-0000-0000000000e1')).toBeUndefined();
     // The DM policy itself, for an action that does carry an approval.
-    const r = await executeAction(dmAction(over), true, { source: 'manual', notify: false, webhook: false });
+    const r = await executeAction(storeApproved(dmAction(over)), true, { source: 'manual', notify: false, webhook: false });
     expect(r.ok).toBe(false);
     expect(r.may_have_acted).toBe(false);
     if (code) expect(r.error).toBe(code);
@@ -723,7 +737,7 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
   });
 
   it('executor: an Instagram DM is refused with the tier reason', async () => {
-    const r = await executeAction(dmAction({ platform: 'instagram', target_id: 'https://www.instagram.com/direct/t/123456/' }), true, { source: 'manual', notify: false, webhook: false });
+    const r = await executeAction(storeApproved(dmAction({ platform: 'instagram', target_id: 'https://www.instagram.com/direct/t/123456/' })), true, { source: 'manual', notify: false, webhook: false });
     expect(r).toMatchObject({ ok: false, error: 'INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED', may_have_acted: false });
   });
 
@@ -735,7 +749,7 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
   });
 
   it('non-DM actions are untouched by the DM policy', async () => {
-    const r = await executeAction(dmAction({ action_type: 'reply', execution_mode: 'api', target_id: 'urn:li:activity:1' }), true, { source: 'manual', notify: false, webhook: false });
+    const r = await executeAction(storeApproved(dmAction({ action_type: 'reply', execution_mode: 'api', target_id: 'urn:li:activity:1' })), true, { source: 'manual', persist: true, notify: false, webhook: false });
     expect(r.status).toBe('executed');
     expect(mockConnector).toHaveBeenCalledTimes(1);
   });

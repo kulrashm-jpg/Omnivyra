@@ -7,7 +7,10 @@
  * (approved -> executing, tenant-scoped, not cancelled) and runs only what it
  * claimed, through the executor, which applies the approval of record. This
  * suite keeps round 3's intents against that path:
- *   - kill switch on: nothing claimed, run or touched;
+ *   - Prompt 3 (OD-1): the policy is the ORG's tenant policy, decided per org
+ *     BEFORE any of its retry rows is claimed (orgGate): refused (kill switch,
+ *     missing, disabled, unreadable) -> nothing claimed, run or touched for that
+ *     org, while another org's retries still run;
  *   - an action not in `approved` (failed, pending, rejected, executed, ...):
  *     never run (round 3 re-ran `failed`);
  *   - action row missing or in another organization: never run;
@@ -48,13 +51,32 @@ jest.mock('../../services/rpaWorker/rpaEnv', () => ({
   assertRpaEnvReady: jest.fn(),
   isProbeFailure: (r: any) => r && r.ok === false,
 }));
-const mockPolicy = { execution_enabled: true };
+const mockDecisions: Record<string, { ok: boolean; code?: string }> = {};
+const mockPolicyCalls: Array<Record<string, unknown>> = [];
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...mockPolicy })),
+  getCommunityExecutionPolicy: jest.fn(async (scope: { organizationId: string; tenantId: string }) => {
+    mockPolicyCalls.push(scope);
+    const d = mockDecisions[scope.organizationId] ?? { ok: false, code: 'POLICY_MISSING' };
+    return d.ok ? { ok: true, policy: { execution_enabled: true, auto_rules_enabled: false }, version: 'v1' } : { ok: false, code: d.code };
+  }),
 }));
 const mockExecuteAction = jest.fn();
+const mockClaimCalls: Array<Record<string, unknown>> = [];
+// The claim RPC is proven in the RS suites; here it is the CAS it ends in.
 jest.mock('../../services/communityAiActionExecutorRuntime', () => ({
   executeAction: (...a: any[]) => mockExecuteAction(...a),
+  claimCommunityActionForExecution: jest.fn(async (input: any) => {
+    mockClaimCalls.push(input);
+    const r = mockDb.tables.community_ai_actions.find((x: any) => x.id === input.actionId);
+    if (!r || r.organization_id !== input.organizationId || r.tenant_id !== input.tenantId) {
+      return { claimed: false, code: 'TENANT_SCOPE_VIOLATION', currentStatus: null };
+    }
+    if (r.status !== 'approved' || r.cancel_requested_at || !r.approved_at) {
+      return { claimed: false, code: 'CLAIM_CONFLICT', currentStatus: r.status };
+    }
+    r.status = 'executing';
+    return { claimed: true, code: null, currentStatus: 'executing' };
+  }),
 }));
 
 import { rpaSchedulerHooks } from '../../services/rpaWorker/rpaWorkerService';
@@ -63,7 +85,7 @@ const PAST = '2020-01-01T00:00:00.000Z';
 const A1 = '00000000-0000-0000-0000-0000000000a1';
 
 const actionRow = (over: Record<string, any> = {}) => ({
-  id: A1, tenant_id: 't1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
+  id: A1, tenant_id: 'o1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
   target_id: 'https://www.linkedin.com/feed/update/urn:li:activity:1/', suggested_text: null,
   execution_mode: 'rpa', status: 'approved', cancel_requested_at: null, playbook_id: 'pb1',
   approved_at: PAST, ...over,
@@ -84,7 +106,10 @@ const flush = () => rpaSchedulerHooks.flushRetries({ limit_per_org: 10, max_orgs
 beforeEach(() => {
   seed({});
   mockUnreadable = null;
-  mockPolicy.execution_enabled = true;
+  for (const k of Object.keys(mockDecisions)) delete mockDecisions[k];
+  mockDecisions.o1 = { ok: true };
+  mockPolicyCalls.length = 0;
+  mockClaimCalls.length = 0;
   mockExecuteAction.mockReset().mockImplementation(async () => {
     mockDb.tables.community_ai_actions[0].status = 'executed';
     return { ok: true, status: 'executed' };
@@ -92,13 +117,40 @@ beforeEach(() => {
 });
 
 describe('RPA retry flush gates (H-2), W1 claimed path', () => {
-  it('kill switch on: nothing is executed and the retry row is not touched', async () => {
-    mockPolicy.execution_enabled = false;
-    const out = await flush();
-    expect(out.claimed).toBe(0);
-    expect(mockExecuteAction).not.toHaveBeenCalled();
-    expect(mockDb.tables.rpa_retry_queue).toEqual([retryRow()]);
-    expect(mockDb.tables.community_ai_actions[0].status).toBe('approved');
+  it.each(['PLATFORM_KILL_SWITCH', 'POLICY_MISSING', 'POLICY_EXECUTION_DISABLED', 'POLICY_UNREADABLE'])(
+    'org policy refuses (%s): nothing is claimed or executed and the retry row is not touched',
+    async (code) => {
+      mockDecisions.o1 = { ok: false, code };
+      const out = await flush();
+      expect(out.claimed).toBe(0);
+      expect(mockPolicyCalls).toContainEqual({ organizationId: 'o1', tenantId: 'o1' });
+      expect(mockClaimCalls).toEqual([]);
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+      expect(mockDb.tables.rpa_retry_queue).toEqual([retryRow()]);
+      expect(mockDb.tables.community_ai_actions[0].status).toBe('approved');
+    },
+  );
+
+  it('the policy is per org: a refusing org is skipped, another org still runs', async () => {
+    const A2 = '00000000-0000-0000-0000-0000000000a2';
+    mockDb.tables.community_ai_actions.push(actionRow({ id: A2, tenant_id: 'o2', organization_id: 'o2' }));
+    mockDb.tables.rpa_retry_queue.push(retryRow({ id: 'r2', action_id: A2, organization_id: 'o2' }));
+    mockDecisions.o1 = { ok: false, code: 'POLICY_EXECUTION_DISABLED' };
+    mockDecisions.o2 = { ok: true };
+    mockExecuteAction.mockReset().mockImplementation(async (act: any) => {
+      mockDb.tables.community_ai_actions.find((r: any) => r.id === act.id)!.status = 'executed';
+      return { ok: true, status: 'executed' };
+    });
+    await flush();
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockExecuteAction.mock.calls[0][0].id).toBe(A2);
+    expect(mockDb.tables.rpa_retry_queue.map((r: any) => r.id)).toEqual(['r1']);
+    expect(mockDb.tables.community_ai_actions.find((r: any) => r.id === A1)!.status).toBe('approved');
+  });
+
+  it('the action claim is the single claim with claim point rpa_retry', async () => {
+    await flush();
+    expect(mockClaimCalls).toEqual([expect.objectContaining({ actionId: A1, organizationId: 'o1', tenantId: 'o1', claimPoint: 'rpa_retry' })]);
   });
 
   it.each(['failed', 'pending', 'rejected', 'executed', 'sent_unverified', 'skipped', 'uncertain'])(

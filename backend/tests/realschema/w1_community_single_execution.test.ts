@@ -6,7 +6,7 @@
  * community scheduler, the RPA retry flush and the browser-extension claim — and
  * at most ONE external execution happens (connector call, or a browser lease
  * handed to the extension). The guarantee is the atomic conditional UPDATE
- * approved -> executing (claimCommunityActionForExecution / claimRetryActionRow)
+ * approved -> executing (claimCommunityActionForExecution, the single claim; the RPA flush uses it too)
  * and, for the browser, claim_community_ai_browser_command; the tests count
  * calls on a stub connector.
  *
@@ -34,6 +34,8 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { Client } from 'pg';
 import { db, inRollback, ORG_A, ORG_B } from './setup';
+import { bindingHashOf } from './helpers/c3ClaimFixtures';
+import { randomUUID } from 'crypto';
 
 const mockAls = new AsyncLocalStorage<{ query: (sql: string, params?: unknown[]) => Promise<any> }>();
 (global as any).__w1CommunityClient = () => mockAls.getStore();
@@ -55,9 +57,6 @@ jest.mock('../../services/usageEnforcementService', () => ({
 }));
 jest.mock('../../services/usageLedgerService', () => ({ logUsageEvent: jest.fn(async () => undefined) }));
 jest.mock('../../services/usageMeterService', () => ({ incrementUsageMeter: jest.fn(async () => undefined) }));
-jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ execution_enabled: true, auto_rules_enabled: true, require_human_approval: true })),
-}));
 jest.mock('../../services/platformTokenService', () => ({ getToken: jest.fn(async () => ({ access_token: 'tok' })) }));
 const PLAYBOOK = { id: '00000000-0000-4000-8000-0000000000b1', name: 'Playbook', status: 'active', execution_modes: { api: true, browser: true } };
 jest.mock('../../services/playbooks/playbookService', () => ({
@@ -104,7 +103,7 @@ jest.mock('../../../pages/api/community-ai/utils', () => ({
 const { executeAction, claimCommunityActionForExecution } = require('../../services/communityAiActionExecutor');
 const { evaluateAutoRules } = require('../../services/communityAiAutoRuleService');
 const { runCommunityAiScheduler } = require('../../services/communityAiScheduler');
-const { flushRpaRetryQueueForOrg, claimRetryActionRow } = require('../../services/rpaWorker/rpaRetryQueue');
+const { flushRpaRetryQueueForOrg } = require('../../services/rpaWorker/rpaRetryQueue');
 const executeHandler = require('../../../pages/api/community-ai/actions/execute').default;
 /* eslint-enable @typescript-eslint/no-var-requires */
 
@@ -129,26 +128,92 @@ beforeEach(() => {
 
 type Q = { query: (sql: string, params?: unknown[]) => Promise<any> };
 
+/** The human approver of every seeded approved row (P-A: approved_by is a real user). */
+const APPROVER = '00000000-0000-4000-8000-0000000000e7';
+
 async function seedAction(c: Q, org: string, over: Record<string, unknown> = {}): Promise<{ id: string; target: string }> {
   const target = (over.target_id as string) ?? nextTarget();
+  const { withoutApprovalEvidence, ...rest } = over as Record<string, unknown> & { withoutApprovalEvidence?: boolean };
   const v = {
     status: 'approved', execution_mode: 'api', approved_at: new Date().toISOString(), cancel_requested_at: null,
-    tenant_id: org, ...over,
+    tenant_id: org, ...rest,
   } as Record<string, unknown>;
+  // A row with approved_at carries the approval approve.ts records (P-A +
+  // C3): approved_by, content hash, passkey evidence, and the 'approved'
+  // action log with user_id = approved_by and timestamp = the STORED
+  // approved_at (the server stamps it; ISO, ms, UTC). A row seeded with
+  // approved_at null, or withoutApprovalEvidence (legacy: approved_at only),
+  // carries none of it.
+  const evidence = !!v.approved_at && !withoutApprovalEvidence;
+  if (evidence) {
+    await c.query(`INSERT INTO public.users (id, email, name) VALUES ($1, 'w1-approver@example.invalid', 'w1-approver')
+                   ON CONFLICT (id) DO NOTHING`, [APPROVER]);
+  }
+  const newId = randomUUID();
+  const hash = evidence ? bindingHashOf({ id: newId, tenant_id: v.tenant_id as string, organization_id: org, platform: 'linkedin',
+    action_type: 'reply', target_id: target, suggested_text: TEXT, playbook_id: PLAYBOOK.id }) : null;
   const { rows } = await c.query(
     `INSERT INTO public.community_ai_actions
        (tenant_id, organization_id, platform, action_type, target_id, suggested_text, status, execution_mode,
         requires_human_approval, risk_level, playbook_id, playbook_name, tone_used, approved_at, scheduled_at,
-        cancel_requested_at)
-     VALUES ($1,$2,'linkedin','reply',$3,$4,$5,$6,true,'low',$7,'Playbook','friendly',$8,$10,$9)
-     RETURNING id`,
+        cancel_requested_at, approved_by, approved_content_hash, passkey_credential_id, passkey_verified_at, id)
+     VALUES ($1,$2,'linkedin','reply',$3,$4,$5,$6,true,'low',$7,'Playbook','friendly',$8,$10,$9,
+             $11, $12, $13, CASE WHEN $13::text IS NULL THEN NULL ELSE clock_timestamp() - interval '30 seconds' END, $14)
+     RETURNING id, to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS approved_at_iso`,
     // scheduled_at is a timestamp WITHOUT time zone that the scheduler compares
     // with a UTC ISO cutoff: store the UTC wall clock.
-    [v.tenant_id, org, target, TEXT, v.status, v.execution_mode, PLAYBOOK.id, v.approved_at, v.cancel_requested_at,
-      new Date(Date.now() - 60_000).toISOString()],
+    // 'executing' is reached after the approval log exists (the INSERT backstop
+    // judges the row as written), as a claim would.
+    [v.tenant_id, org, target, TEXT, v.status === 'executing' ? 'approved' : v.status, v.execution_mode, PLAYBOOK.id, v.approved_at, v.cancel_requested_at,
+      new Date(Date.now() - 60_000).toISOString(),
+      evidence ? APPROVER : null, hash, evidence ? 'cred-w1' : null, newId],
   );
+  if (evidence) {
+    await c.query(
+      `INSERT INTO public.community_ai_action_logs (action_id, tenant_id, organization_id, event_type, event_payload)
+       VALUES ($1, $2, $3, 'approved', $4::jsonb)`,
+      [rows[0].id, v.tenant_id, org,
+        JSON.stringify({ approved: true, playbook_id: PLAYBOOK.id, intent: null, user_id: APPROVER, timestamp: rows[0].approved_at_iso })],
+    );
+  }
+  if (v.status === 'executing') {
+    await c.query(`UPDATE public.community_ai_actions SET status = 'executing' WHERE id = $1`, [rows[0].id]);
+  }
   return { id: rows[0].id, target };
 }
+
+/** Open execution (platform + tenant rows) through the two-person path; committed. */
+const W1_REQUESTER = '00000000-0000-4000-8000-0000000000f1';
+const W1_CONFIRMER = '00000000-0000-4000-8000-0000000000f2';
+async function openPolicyRow(org: string | null) {
+  const where = org === null ? 'organization_id IS NULL' : 'organization_id = $1';
+  const p = org === null ? [] : [org];
+  if ((await db.query(`SELECT 1 FROM public.community_ai_platform_policy WHERE ${where}`, p)).rows.length === 0) {
+    await db.query(`INSERT INTO public.community_ai_platform_policy (organization_id, tenant_id, execution_enabled, auto_rules_enabled)
+                    VALUES ($1, $1, false, false)`, [org]);
+  }
+  const n = p.length;
+  await db.query(`UPDATE public.community_ai_platform_policy SET requested_execution_enabled = true, requested_auto_rules_enabled = true,
+                  requested_by = $${n + 1} WHERE ${where}`, [...p, W1_REQUESTER]);
+  await db.query(`UPDATE public.community_ai_platform_policy SET execution_enabled = true, auto_rules_enabled = true,
+                  updated_by = $${n + 1} WHERE ${where}`, [...p, W1_CONFIRMER]);
+}
+let w1HadPlatformRow = false;
+beforeAll(async () => {
+  w1HadPlatformRow = (await db.query(`SELECT 1 FROM public.community_ai_platform_policy WHERE organization_id IS NULL`)).rows.length > 0;
+  for (const org of [null, ORG_A, ORG_B, ORG_C]) await openPolicyRow(org);
+});
+afterAll(async () => {
+  // Own connection: the harness connection may already be closed by setup's afterAll.
+  const c = new Client({ connectionString: process.env.W6_DB_URL as string });
+  await c.connect();
+  try {
+    await c.query(`DELETE FROM public.community_ai_platform_policy WHERE organization_id = ANY($1::uuid[])`, [[ORG_A, ORG_B, ORG_C]]);
+    if (!w1HadPlatformRow) await c.query(`DELETE FROM public.community_ai_platform_policy WHERE organization_id IS NULL`);
+  } finally {
+    await c.end();
+  }
+});
 
 async function seedRetryRow(c: Q, org: string, actionId: string, target: string) {
   await c.query(
@@ -229,13 +294,17 @@ const scheduler = () => runCommunityAiScheduler(new Date(Date.now() + 60_000));
 function retryFlush(org: string) {
   return flushRpaRetryQueueForOrg({
     organization_id: org,
-    runAction: (row: Record<string, any>) => executeAction({
+    runAction: (row: Record<string, any>, ctx?: { correlationId: string }) => executeAction({
       id: row.id, tenant_id: row.tenant_id, organization_id: row.organization_id, platform: row.platform,
       action_type: row.action_type, target_id: row.target_id, suggested_text: row.final_text ?? row.suggested_text ?? null,
       playbook_id: row.playbook_id ?? null, requires_human_approval: row.requires_human_approval ?? null,
       risk_level: row.risk_level ?? null, execution_mode: row.execution_mode ?? null, tone_used: row.tone_used ?? null,
       approved_at: row.approved_at ?? null,
-    }, true, { source: 'scheduler', persist: true, expected_from_statuses: ['executing'], notify: true, webhook: true }),
+    }, true, {
+      source: 'scheduler', persist: true, expected_from_statuses: ['executing'],
+      // As the real runner: the flush's claim id proves the claim is held (F3).
+      correlation_id: ctx?.correlationId, notify: true, webhook: true,
+    }),
   });
 }
 
@@ -318,6 +387,7 @@ async function cleanupCommitted() {
   await db.query('DELETE FROM public.community_ai_execution_metric_events WHERE organization_id = $1', [ORG_C]);
   await db.query('DELETE FROM public.community_ai_auto_rules WHERE organization_id = $1', [ORG_C]);
   await db.query('DELETE FROM public.community_ai_actions WHERE organization_id = $1', [ORG_C]);
+  await db.query('DELETE FROM public.users WHERE id = $1', [APPROVER]);
 }
 
 describe('single-execution claim: every path on its own PostgreSQL session (committed fixtures)', () => {
@@ -353,16 +423,16 @@ describe('single-execution claim: every path on its own PostgreSQL session (comm
     await s1.query('BEGIN');
     try {
       const first = await mockAls.run(s1, () =>
-        claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C }));
-      expect(first).toEqual({ claimed: true });
+        claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C, claimPoint: 'manual' }));
+      expect(first).toMatchObject({ claimed: true });
       let settled = false;
       const second = mockAls.run(autocommit(s2), () =>
-        claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C }))
+        claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C, claimPoint: 'manual' }))
         .then((r: unknown) => { settled = true; return r; });
       await new Promise((r) => setTimeout(r, 300));
       const blocked = !settled; // reported, not asserted (timing)
       await s1.query('COMMIT');
-      expect(await second).toEqual({ claimed: false });
+      expect(await second).toMatchObject({ claimed: false, code: 'CLAIM_CONFLICT' });
       console.log(`w1 claim race: second claimant blocked on the row lock = ${blocked}`);
     } finally {
       await s1.query('ROLLBACK').catch(() => undefined);
@@ -375,13 +445,13 @@ describe('single-execution claim: every path on its own PostgreSQL session (comm
     const [s1, s2] = sessions;
     await s1.query('BEGIN');
     const first = await mockAls.run(s1, () =>
-      claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C }));
-    expect(first).toEqual({ claimed: true });
+      claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C, claimPoint: 'manual' }));
+    expect(first).toMatchObject({ claimed: true });
     const second = mockAls.run(autocommit(s2), () =>
-      claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C }));
+      claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_C, organizationId: ORG_C, claimPoint: 'manual' }));
     await new Promise((r) => setTimeout(r, 200));
     await s1.query('ROLLBACK');
-    expect(await second).toEqual({ claimed: true });
+    expect(await second).toMatchObject({ claimed: true });
   });
 });
 
@@ -434,10 +504,10 @@ describe('an unapproved, legacy, cancelled, foreign or dispatched action cannot 
       await seedRetryRow(db, ORG_A, a.id, a.target);
       const before = await rowOf(a.id);
 
-      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_A, organizationId: ORG_A }))
-        .toEqual({ claimed: false });
-      expect(await claimRetryActionRow({ actionId: a.id, organizationId: ORG_A, tenantId: ORG_A, nowIso: new Date().toISOString() }))
-        .toBe(false);
+      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_A, organizationId: ORG_A, claimPoint: 'manual' }))
+        .toMatchObject({ claimed: false });
+      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_A, organizationId: ORG_A, claimPoint: 'rpa_retry' }))
+        .toMatchObject({ claimed: false });
 
       await Promise.all(ALL_PATHS.map((p) => runPath(p, ORG_A, a)));
       expect(connectorCallsFor(a.id)).toBe(0);
@@ -448,10 +518,10 @@ describe('an unapproved, legacy, cancelled, foreign or dispatched action cannot 
   it('another tenant\'s scope cannot claim the row', async () => {
     await inRollback(async () => {
       const a = await seedAction(db, ORG_A);
-      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_B, organizationId: ORG_B }))
-        .toEqual({ claimed: false });
-      expect(await claimRetryActionRow({ actionId: a.id, organizationId: ORG_B, tenantId: ORG_B, nowIso: new Date().toISOString() }))
-        .toBe(false);
+      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_B, organizationId: ORG_B, claimPoint: 'manual' }))
+        .toMatchObject({ claimed: false, code: 'TENANT_SCOPE_VIOLATION' });
+      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_B, organizationId: ORG_B, claimPoint: 'rpa_retry' }))
+        .toMatchObject({ claimed: false, code: 'TENANT_SCOPE_VIOLATION' });
       const res = await manualExecute(ORG_B, a.id);
       expect(res.statusCode).toBe(403);
       expect(connectorCallsFor(a.id)).toBe(0);
@@ -462,8 +532,8 @@ describe('an unapproved, legacy, cancelled, foreign or dispatched action cannot 
   it('only \'approved\' is claimable: any other from-status is refused before the UPDATE', async () => {
     await inRollback(async () => {
       const a = await seedAction(db, ORG_A, { status: 'pending' });
-      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_A, organizationId: ORG_A, fromStatuses: ['pending'] }))
-        .toEqual({ claimed: false, error: 'CLAIM_STATUS_UNSUPPORTED' });
+      expect(await claimCommunityActionForExecution({ actionId: a.id, tenantId: ORG_A, organizationId: ORG_A, claimPoint: 'manual', fromStatuses: ['pending'] }))
+        .toMatchObject({ claimed: false, code: 'CLAIM_STATUS_UNSUPPORTED' });
       expect((await rowOf(a.id)).status).toBe('pending');
     });
   });
@@ -476,6 +546,8 @@ describe('a claim lost to another worker: no connector call, no action log, row 
     await inRollback(async () => {
       const a = await seedAction(db, ORG_A, { status: 'executing' });
       const before = await rowOf(a.id);
+      const logsBefore = await logsOf(a.id);
+      expect(logsBefore).toEqual(['approved']); // the seeded approval of record only
       const r = await executeAction({
         id: a.id, tenant_id: ORG_A, organization_id: ORG_A, platform: 'linkedin', action_type: 'reply',
         target_id: a.target, suggested_text: TEXT, playbook_id: PLAYBOOK.id, execution_mode: 'api',
@@ -484,7 +556,7 @@ describe('a claim lost to another worker: no connector call, no action log, row 
       expect(r).toMatchObject({ ok: false, status: 'skipped', reason: 'CLAIM_LOST', may_have_acted: false });
       expect(mockConnector).not.toHaveBeenCalled();
       expect(await rowOf(a.id)).toEqual(before);
-      expect(await logsOf(a.id)).toEqual([]);
+      expect(await logsOf(a.id)).toEqual(logsBefore);
       const { rows } = await db.query(
         `SELECT event_type FROM public.community_ai_execution_metric_events WHERE action_id = $1 AND event_type <> 'execution_started'`, [a.id]);
       expect(rows).toEqual([]);
@@ -602,6 +674,18 @@ describe('the browser path is unchanged', () => {
       expect(mockConnector).not.toHaveBeenCalled();
       expect(await browserClaim(db, ORG_A, a.id, 1)).toBe(1);
       expect(await browserClaim(db, ORG_A, a.id, 2)).toBe(0);
+    });
+  });
+
+  it('legacy: a pending browser row with approved_at but no approved_by and no approval log is never claimed by the extension', async () => {
+    await inRollback(async () => {
+      const a = await seedAction(db, ORG_A, { status: 'pending', execution_mode: 'browser', withoutApprovalEvidence: true });
+      const row = await rowOf(a.id);
+      expect(row.approved_at).not.toBeNull();
+      expect(row.approved_by).toBeNull();
+      expect(await logsOf(a.id)).toEqual([]);
+      expect(await browserClaim(db, ORG_A, a.id, 1)).toBe(0);
+      expect((await rowOf(a.id)).dispatch_lease_id).toBeNull();
     });
   });
 

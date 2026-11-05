@@ -1016,6 +1016,7 @@
           "db-write .insert() backend/services/communityAiOmnivyraService.ts",
           "db-write .insert() backend/services/communityAiAutoRuleService.ts",
           "db-write .insert() backend/services/communityAiActionLogService.ts",
+          "db-rpc .rpc(…) backend/services/communityAiPlatformPolicyService.ts",
           "external-call fetch() pages/api/social/comments.ts"
         ]
       }

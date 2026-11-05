@@ -258,9 +258,18 @@ describe('D-02 migration', () => {
       expect(String(def.d)).not.toMatch(/revoked/);
       // and forward again over the rolled-back schema
       await db.query(fs.readFileSync(path.resolve(__dirname, '../../../supabase/migrations/20270120000011_outreach_approval_binding.sql'), 'utf8'));
-      const back = await rows(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public'
-        AND column_name IN ('approved_content_hash', 'tier', 'passkey_credential_id', 'passkey_verified_at', 'approved_recipient', 'self_approval_allowed')`);
-      expect(back).toHaveLength(6);
+      // By table and name: community_ai_actions carries same-named evidence columns (20270126000001).
+      const back = await rows(`SELECT table_name || '.' || column_name AS c FROM information_schema.columns WHERE table_schema = 'public'
+        AND column_name IN ('approved_content_hash', 'tier', 'passkey_credential_id', 'passkey_verified_at', 'approved_recipient', 'self_approval_allowed')
+        AND table_name IN ('outreach_approvals', 'outreach_governance_config') ORDER BY 1`);
+      expect(back.map((r: any) => r.c)).toEqual([
+        'outreach_approvals.approved_content_hash',
+        'outreach_approvals.approved_recipient',
+        'outreach_approvals.passkey_credential_id',
+        'outreach_approvals.passkey_verified_at',
+        'outreach_approvals.tier',
+        'outreach_governance_config.self_approval_allowed',
+      ]);
       expect(await rows(`SELECT 1 FROM pg_trigger WHERE tgname IN ('outreach_approvals_server_decided_at', 'outreach_tasks_claim_requires_approval')`)).toHaveLength(2);
     });
   });

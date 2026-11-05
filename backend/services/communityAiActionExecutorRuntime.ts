@@ -10,60 +10,16 @@ import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
 import { executeRpaTask } from './rpaWorker/rpaWorkerService';
 import { logCommunityAiActionEvent } from './communityAiActionLogService';
-import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from './communityAiPlatformPolicyService';
+import { recordCommunityExecutionRefusal } from './communityExecutionRefusal';
+import { evaluateCommunityApprovalEvidence, COMMUNITY_APPROVAL_EVIDENCE_COLUMNS } from './communityApprovalBinding';
 import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
-import { ownedDbTable } from '../db/writeOwner';
+import { ownedDbTable, ownedDbRpc } from '../db/writeOwner';
 import { recheckCommunityRecipient, isRecipientRecheckRefusal } from './communityRecipientRecheck';
 
 import { type CommunityAiAction, type ExecutionMode, type ResultStatus, type ExecutionResult, type MetricEventType, deriveAutoIdempotencyKey, recordExecutionMetric, TERMINAL_ROW_STATUSES, validateAction, requiresApproval, loadHistoryMetrics, resolveExecutionMode, recordManualSimulation, runApiExecution, runRpaExecution, prepareBrowserDispatch, buildDmCommandChain, dmCommandChainRefusal } from './communityAiActionExecutorContracts';
-
-export async function advanceCommandChain(input: {
-  actionId: string;
-  organizationId: string;
-  correlationId: string;
-}): Promise<{ advanced: boolean; next_index?: number; error?: string }> {
-  try {
-    const { data: row, error: readErr } = await ownedDbTable('community_ai_actions')
-      .select('id, command_chain, command_chain_index, status')
-      .eq('id', input.actionId)
-      .maybeSingle();
-    if (readErr || !row) return { advanced: false, error: 'ACTION_NOT_FOUND' };
-    const chain = (row as any).command_chain as CommandChainStep[] | null;
-    const index = ((row as any).command_chain_index as number | null) ?? 0;
-    if (!Array.isArray(chain) || chain.length === 0) {
-      return { advanced: false, error: 'NO_CHAIN' };
-    }
-    const nextIndex = index + 1;
-    if (nextIndex >= chain.length) {
-      return { advanced: false }; // caller should finalize terminal status
-    }
-    const { error: upErr } = await ownedDbTable('community_ai_actions')
-      .update({
-        status: 'pending',
-        command_chain_index: nextIndex,
-        dispatch_lease_id: null,
-        dispatch_lease_expires_at: null,
-        dispatch_lease_holder_id: null,
-        dispatch_acknowledged_at: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', input.actionId);
-    if (upErr) return { advanced: false, error: upErr.message };
-
-    await recordExecutionMetric({
-      organization_id: input.organizationId,
-      action_id: input.actionId,
-      correlation_id: input.correlationId,
-      event_type: 'execution_started',
-      metadata: { phase: 'chain_advance', next_index: nextIndex },
-    });
-    return { advanced: true, next_index: nextIndex };
-  } catch (err: any) {
-    return { advanced: false, error: err?.message || 'CHAIN_ADVANCE_FAILED' };
-  }
-}
 
 const emitWebhook = async (
   action: CommunityAiAction,
@@ -318,7 +274,7 @@ export const executeAction = async (
   options?: {
     notify?: boolean;
     webhook?: boolean;
-    source?: 'manual' | 'auto' | 'scheduler' | 'bulk';
+    source?: 'manual' | 'auto' | 'scheduler' | 'bulk' | 'orchestration';
     /** If true, executeAction takes full responsibility for writing the
      *  terminal row state; callers must NOT write status/execution_mode/
      *  execution_result themselves. When false (default), the executor
@@ -434,24 +390,86 @@ export const executeAction = async (
   const selfClaim = options?.persist === true && !callerHoldsClaim;
   let selfClaimed = false;
   let claimLost = false;
-  const claim = selfClaim
-    ? async () => {
-        const c = await claimCommunityActionForExecution({
-          actionId: action.id,
-          tenantId: action.tenant_id,
-          organizationId: action.organization_id,
-        });
-        selfClaimed = c.claimed;
-        claimLost = !c.claimed;
-        return c.claimed;
-      }
-    : undefined;
+  let claimCode = null as string | null;
+  // SEC3-F3: no external dispatch (api, rpa, browser) without the atomic
+  // claim. Run by runExecution after every gate, immediately before the
+  // switch:
+  //   - self-claim: the executor takes the claim (persisting callers that do
+  //     not hold one: the auto-rule service);
+  //   - a caller that says it holds the claim (expected_from ['executing']):
+  //     it must pass the claim's correlation id, and a DB read must confirm
+  //     the row is 'executing' for this tenant and organization under exactly
+  //     that id; otherwise nothing is dispatched (CLAIM_NOT_HELD);
+  //   - neither (persist omitted / false): only 'manual' (a recorded
+  //     simulation that contacts no one) may proceed; every external mode is
+  //     refused (CLAIM_REQUIRED).
+  const claim = async (mode?: string): Promise<boolean> => {
+    if (selfClaim) {
+      const c = await claimCommunityActionForExecution({
+        actionId: action.id,
+        tenantId: action.tenant_id,
+        organizationId: action.organization_id,
+        claimPoint: options?.source === 'scheduler' ? 'scheduler' : options?.source === 'auto' ? 'auto'
+          : options?.source === 'orchestration' ? 'orchestration' : 'manual',
+        correlationId,
+      });
+      selfClaimed = c.claimed;
+      claimLost = !c.claimed;
+      claimCode = c.code;
+      return c.claimed;
+    }
+    if (callerHoldsClaim) {
+      const held = await communityActionClaimIsHeld({
+        actionId: action.id,
+        tenantId: action.tenant_id,
+        organizationId: action.organization_id,
+        correlationId: options?.correlation_id ?? null,
+      });
+      if (!held) { claimLost = true; claimCode = 'CLAIM_NOT_HELD'; }
+      return held;
+    }
+    if (mode === 'manual') return true;
+    claimLost = true;
+    claimCode = 'CLAIM_REQUIRED';
+    return false;
+  };
 
   const runResult = await runExecution(action, approved, options, claim);
   runResult.correlation_id = correlationId;
   if (claimLost) {
-    // Another worker holds (or finished) the row, or it is no longer
-    // claimable: nothing was dispatched and the row is not ours to write.
+    // Not claimed: another worker holds (or finished) the row (CLAIM_CONFLICT,
+    // reported as CLAIM_LOST), or the claim refused it (policy, approval
+    // evidence, expiry), which recorded the refusal and left the row
+    // 'approved'. Nothing was dispatched and the row is not ours to write.
+    if (claimCode && claimCode !== 'CLAIM_CONFLICT') {
+      runResult.reason = claimCode;
+      runResult.error = claimCode;
+    }
+    return runResult;
+  }
+  const preDispatchRefusal = (runResult.response as { pre_claim_refusal?: unknown } | undefined)?.pre_claim_refusal === true
+    && runResult.may_have_acted === false;
+  if (selfClaim && !selfClaimed && preDispatchRefusal) {
+    // LD-7: refused by a gate before the claim (policy, approval, expiry). The
+    // gate recorded the refusal; nothing was claimed or dispatched, so the row
+    // keeps its state ('approved' stays re-claimable) and is not written here.
+    return runResult;
+  }
+  if (callerHoldsClaim && preDispatchRefusal) {
+    // SEC3-F1 (LD-7): the caller holds the claim and a gate refused BEFORE any
+    // dispatch (nothing acted). The approval is not burned: the claim is given
+    // back executing -> approved, compare-and-set on 'executing' AND the
+    // claim's correlation id. Without the caller's correlation id, or if the
+    // row moved on, nothing is written (the row stays 'executing' and the
+    // reaper handles it; never 'approved' on a guess, never terminal here).
+    // Anything that may have acted never reaches this branch.
+    const released = await releaseCommunityActionClaim({
+      actionId: action.id,
+      tenantId: action.tenant_id,
+      organizationId: action.organization_id,
+      correlationId: options?.correlation_id ?? null,
+    });
+    runResult.response = { ...(runResult.response || {}), claim_released: released };
     return runResult;
   }
   // Echo automation-entry metadata back on the result. These are pure
@@ -541,82 +559,103 @@ export const executeAction = async (
 const runExecution = async (
   action: CommunityAiAction,
   approved: boolean,
-  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk'; auto?: boolean },
+  options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk' | 'orchestration'; auto?: boolean },
   /** Atomic single-execution claim, run after every gate (see executeAction). */
-  claim?: () => Promise<boolean>
+  claim?: (mode?: string) => Promise<boolean>
 ): Promise<ExecutionResult> => {
-  const policy = await getCommunityAiPlatformPolicy();
-  if (!policy.execution_enabled) {
+  // ── Prompt 3 policy and approval gate (OD-1, OD-3, LD-4, LD-7) ─────────────
+  // Every refusal here is pre-claim and pre-dispatch: nothing acted, and the row
+  // is left as it is (response.pre_claim_refusal), never burned. Each writes
+  // exactly one governance refusal record (community_ai_action_logs, idempotent
+  // by refusal_key; recordCommunityExecutionRefusal). The claim RPC re-applies
+  // all of it atomically and is authoritative; this is defence in depth.
+  const source = options?.source;
+  const claimPoint =
+    source === 'scheduler' ? 'scheduler'
+      : source === 'auto' ? 'auto'
+        : source === 'orchestration' ? 'orchestration'
+          : 'manual';
+  const gateRefusal = async (
+    reason: string,
+    code: string,
+    payload: Record<string, unknown>,
+  ): Promise<ExecutionResult> => {
+    await recordCommunityExecutionRefusal({
+      actionId: action.id,
+      organizationId: action.organization_id,
+      tenantId: action.tenant_id,
+      claimPoint,
+      code,
+      payload: { ...payload, source: source || 'unknown' },
+    });
+    return {
+      ok: false,
+      status: 'skipped',
+      reason,
+      error: code,
+      may_have_acted: false,
+      response: { pre_claim_refusal: true, code },
+    };
+  };
+
+  // Tenant-scoped execution policy: missing, unreadable, malformed, ambiguous or
+  // another tenant's row all refuse; there is no global fallback.
+  const decision = await getCommunityExecutionPolicy({
+    organizationId: action.organization_id,
+    tenantId: action.tenant_id,
+  });
+  if (decision.ok !== true) {
+    // Security audit (LD-6: not a governance record).
     await ownedDbTable('audit_logs').insert({
       actor_user_id: null,
       action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
       metadata: {
-        policy_flag: 'execution_enabled',
+        policy_flag: 'execution_policy',
+        code: decision.code,
         action_id: action.id,
-        source: options?.source || 'unknown',
+        source: source || 'unknown',
       },
       created_at: new Date().toISOString(),
     });
-    await logCommunityAiActionEvent({
-      action_id: action.id,
-      tenant_id: action.tenant_id,
-      organization_id: action.organization_id,
-      event_type: 'skipped_due_to_platform_policy',
-      event_payload: {
-        policy_flag: 'execution_enabled',
-        source: options?.source || 'unknown',
-      },
-    });
-    return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY', may_have_acted: false };
+    return gateRefusal('PLATFORM_POLICY', decision.code, { policy_flag: 'execution_policy' });
   }
 
-  // Final boundary for automation: callers check auto_rules_enabled too, but
-  // the platform call happens here, so an automated invocation is refused
-  // here whenever the policy does not explicitly allow auto rules.
-  if ((options?.source === 'auto' || options?.auto === true) && policy.auto_rules_enabled !== true) {
-    await logCommunityAiActionEvent({
-      action_id: action.id,
-      tenant_id: action.tenant_id,
-      organization_id: action.organization_id,
-      event_type: 'skipped_due_to_platform_policy',
-      event_payload: {
-        policy_flag: 'auto_rules_enabled',
-        source: options?.source || 'unknown',
-      },
-    });
-    return { ok: false, status: 'skipped', reason: 'PLATFORM_POLICY', may_have_acted: false };
+  // LD-4: 'auto' means auto-rule origin, and needs auto_rules_enabled === true.
+  // Orchestration journey execution is never 'auto', whatever its flags.
+  const autoRuleOrigin = source === 'auto' || (options?.auto === true && source !== 'orchestration');
+  if (autoRuleOrigin && decision.policy.auto_rules_enabled !== true) {
+    return gateRefusal('PLATFORM_POLICY', 'POLICY_AUTO_RULES_DISABLED', { policy_flag: 'auto_rules_enabled' });
   }
 
-  // Scheduled dispatch runs with no human present, so it needs an approval of
-  // record. Rows approved by an auto rule carry status 'approved' but no
-  // approved_at; only the approve route stamps it.
-  if (options?.source === 'scheduler' && !action.approved_at) {
-    await logCommunityAiActionEvent({
-      action_id: action.id,
-      tenant_id: action.tenant_id,
-      organization_id: action.organization_id,
-      event_type: 'skipped_due_to_platform_policy',
-      event_payload: { policy_flag: 'approval_of_record', source: 'scheduler' },
-    });
-    return { ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false };
-  }
-
-  // D-01 (W1, retained under CR-X-01): a persisted human approval is required
-  // whatever the platform policy says; require_human_approval=false no longer
-  // waives it. Refused as 'skipped' (never acted), which the
-  // approval-integrity CHECK permits.
+  // Unattended dispatch (scheduler, orchestration) needs a human approval of
+  // record; and so does every other source (D-01: no AI flag waives it).
   if (!action.approved_at) {
-    await logCommunityAiActionEvent({
-      action_id: action.id,
-      tenant_id: action.tenant_id,
-      organization_id: action.organization_id,
-      event_type: 'skipped_due_to_platform_policy',
-      event_payload: {
-        policy_flag: 'require_human_approval',
-        source: options?.source || 'unknown',
-      },
+    return gateRefusal('HUMAN_APPROVAL_REQUIRED', 'HUMAN_APPROVAL_REQUIRED', {
+      policy_flag: source === 'scheduler' || source === 'orchestration' ? 'approval_of_record' : 'require_human_approval',
     });
-    return { ok: false, status: 'skipped', reason: 'HUMAN_APPROVAL_REQUIRED', may_have_acted: false };
+  }
+
+  // The STORED approval evidence, never the caller's copy: approver, content
+  // binding, passkey window and the 7-day lifetime from the server-recorded
+  // approved_at (evaluateCommunityApprovalEvidence; D-02 constants).
+  let stored: Record<string, unknown> | null = null;
+  try {
+    const { data, error } = await ownedDbTable('community_ai_actions')
+      .select(COMMUNITY_APPROVAL_EVIDENCE_COLUMNS)
+      .eq('id', action.id)
+      .eq('organization_id', action.organization_id)
+      .eq('tenant_id', action.tenant_id)
+      .maybeSingle();
+    if (error) {
+      return gateRefusal('APPROVAL_EVIDENCE_REQUIRED', 'APPROVAL_EVIDENCE_UNREADABLE', { policy_flag: 'approval_evidence' });
+    }
+    stored = (data as unknown as Record<string, unknown> | null) ?? null;
+  } catch {
+    return gateRefusal('APPROVAL_EVIDENCE_REQUIRED', 'APPROVAL_EVIDENCE_UNREADABLE', { policy_flag: 'approval_evidence' });
+  }
+  const evidence = evaluateCommunityApprovalEvidence(stored as never);
+  if (evidence.ok !== true) {
+    return gateRefusal(evidence.code, evidence.code, { policy_flag: 'approval_evidence', detail: evidence.detail });
   }
 
   const validation = validateAction(action);
@@ -722,7 +761,7 @@ const runExecution = async (
 
   // Single-execution claim (callers that did not claim before calling the
   // executor): only the winner of the conditional UPDATE reaches the switch.
-  if (claim && !(await claim())) {
+  if (claim && !(await claim(executionMode))) {
     return { ok: false, status: 'skipped', reason: 'CLAIM_LOST', execution_mode: executionMode, may_have_acted: false };
   }
 
@@ -847,50 +886,173 @@ const runExecution = async (
   return result;
 };
 
+/** Executor entry points that claim through the single claim. */
+export type CommunityActionClaimPoint = 'manual' | 'scheduler' | 'auto' | 'orchestration' | 'rpa_retry';
+
+export interface CommunityActionClaimResult {
+  claimed: boolean;
+  /**
+   * NULL when claimed. Otherwise the refusal or conflict code from
+   * claim_community_ai_action_for_execution: a policy code
+   * (PLATFORM_KILL_SWITCH, POLICY_*), APPROVAL_REQUIRED,
+   * APPROVAL_EVIDENCE_REQUIRED, APPROVAL_EXPIRED, CLAIM_CONFLICT (lost race
+   * or not claimable; see currentStatus), ACTION_NOT_FOUND,
+   * TENANT_SCOPE_VIOLATION; or, from this wrapper, CLAIM_SCOPE_MISSING,
+   * CLAIM_STATUS_UNSUPPORTED, IDEMPOTENCY_KEY_CONFLICT, CLAIM_STAMP_FAILED,
+   * CLAIM_RPC_ERROR.
+   */
+  code: string | null;
+  /** The row's status when the claim ran ('executing' when claimed). */
+  currentStatus: string | null;
+  /** Transport / stamp error text, for logs only. */
+  error?: string;
+}
+
 /**
- * Atomic, tenant-scoped claim of an action row for execution:
- * `status IN fromStatuses` -> 'executing'. Exactly one concurrent caller
- * wins; losers get `claimed:false` and must do nothing. The winner must pass
+ * The single approved -> executing claim for every executor path. A thin
+ * wrapper over claim_community_ai_action_for_execution
+ * (20270126000001_community_action_approval_claim.sql), which applies, inside
+ * one locked statement: the tenant execution policy, the auto-rules switch
+ * for claim point 'auto', the approval evidence (approver, the approve
+ * route's 'approved' log, content hash, passkey), the 7-day expiry, and the
+ * CAS with tenant, organization and no cancel request. A refusal writes one
+ * refusal record and leaves the row 'approved'; a conflict writes nothing.
+ * Exactly one concurrent caller gets claimed:true. The winner must pass
  * `expected_from_statuses: ['executing']` to executeAction so its terminal
  * write is itself compare-and-set.
+ *
+ * `stamp.final_text` / `stamp.idempotency_key` are written right after a won
+ * claim (compare-and-set from 'executing'). If that write fails (the
+ * idempotency key is already taken in the organization) the claim is
+ * released (executing -> approved; nothing ran) and IDEMPOTENCY_KEY_CONFLICT
+ * is returned.
  */
 export async function claimCommunityActionForExecution(input: {
   actionId: string;
   tenantId: string;
   organizationId: string;
+  claimPoint: CommunityActionClaimPoint;
+  executionMode?: string | null;
+  correlationId?: string | null;
   /** Only ['approved'] is claimable (D-01); kept for existing callers. */
   fromStatuses?: string[];
-  /** Columns the manual execute route stamps in the same UPDATE as the claim. */
+  /** Columns the manual execute route stamps with the claim. */
   stamp?: { execution_mode?: string; final_text?: string | null; idempotency_key?: string | null };
-}): Promise<{ claimed: boolean; error?: string }> {
+}): Promise<CommunityActionClaimResult> {
   const from = input.fromStatuses && input.fromStatuses.length > 0 ? input.fromStatuses : ['approved'];
   if (!input.actionId || !input.tenantId || !input.organizationId) {
-    return { claimed: false, error: 'CLAIM_SCOPE_MISSING' };
+    return { claimed: false, code: 'CLAIM_SCOPE_MISSING', currentStatus: null };
   }
-  // Single-execution claim: one conditional UPDATE ... RETURNING. Only a
-  // human-approved row (status 'approved' AND approved_at, the D-01 evidence)
-  // that no one has claimed or cancelled is taken; exactly one concurrent
-  // caller gets the row back. A 'pending' row is never claimable here: with
-  // approved_at it is a browser dispatch the extension claims under a lease.
   if (from.length !== 1 || from[0] !== 'approved') {
-    return { claimed: false, error: 'CLAIM_STATUS_UNSUPPORTED' };
+    return { claimed: false, code: 'CLAIM_STATUS_UNSUPPORTED', currentStatus: null };
   }
-  const update: Record<string, unknown> = { status: 'executing', updated_at: new Date().toISOString() };
-  if (input.stamp?.execution_mode) update.execution_mode = input.stamp.execution_mode;
-  if (input.stamp && input.stamp.final_text !== undefined) update.final_text = input.stamp.final_text;
-  if (input.stamp?.idempotency_key) update.idempotency_key = input.stamp.idempotency_key;
-  const { data, error } = await ownedDbTable('community_ai_actions')
-    .update(update)
-    .eq('id', input.actionId)
-    .eq('tenant_id', input.tenantId)
-    .eq('organization_id', input.organizationId)
-    .eq('status', 'approved')
-    .not('approved_at', 'is', null)
-    .is('cancel_requested_at', null)
-    .select('id, status')
-    .maybeSingle();
-  if (error) return { claimed: false, error: error.message };
-  return { claimed: !!data };
+  const { data, error } = await ownedDbRpc('claim_community_ai_action_for_execution', {
+    p_action_id: input.actionId,
+    p_org: input.organizationId,
+    p_tenant: input.tenantId,
+    p_claim_point: input.claimPoint,
+    p_execution_mode: input.executionMode ?? input.stamp?.execution_mode ?? null,
+    p_correlation_id: input.correlationId ?? null,
+  });
+  if (error) {
+    return { claimed: false, code: 'CLAIM_RPC_ERROR', currentStatus: null, error: (error as { message?: string }).message || 'claim failed' };
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { claimed?: boolean; code?: string | null; current_status?: string | null } | null;
+  if (!row || row.claimed !== true) {
+    return { claimed: false, code: row?.code ?? 'CLAIM_CONFLICT', currentStatus: row?.current_status ?? null };
+  }
+
+  const stamp: Record<string, unknown> = {};
+  if (input.stamp && input.stamp.final_text !== undefined) stamp.final_text = input.stamp.final_text;
+  if (input.stamp?.idempotency_key) stamp.idempotency_key = input.stamp.idempotency_key;
+  if (Object.keys(stamp).length > 0) {
+    const { error: stampError } = await ownedDbTable('community_ai_actions')
+      .update(stamp)
+      .eq('id', input.actionId)
+      .eq('tenant_id', input.tenantId)
+      .eq('organization_id', input.organizationId)
+      .eq('status', 'executing');
+    if (stampError) {
+      // Nothing has run yet: give the row back so a later claim can take it.
+      let release = ownedDbTable('community_ai_actions')
+        .update({ status: 'approved', updated_at: new Date().toISOString() })
+        .eq('id', input.actionId)
+        .eq('tenant_id', input.tenantId)
+        .eq('organization_id', input.organizationId)
+        .eq('status', 'executing');
+      if (UUID_RE.test(input.correlationId ?? '')) release = release.eq('execution_correlation_id', input.correlationId);
+      await release;
+      const message = (stampError as { message?: string }).message || 'stamp failed';
+      const code = (stampError as { code?: string }).code === '23505' || /duplicate key|unique/i.test(message)
+        ? 'IDEMPOTENCY_KEY_CONFLICT' : 'CLAIM_STAMP_FAILED';
+      return { claimed: false, code, currentStatus: 'approved', error: message };
+    }
+  }
+  return { claimed: true, code: null, currentStatus: 'executing' };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether the caller's claim is real: the row is 'executing' for this tenant
+ * and organization AND carries the caller's correlation id, which the claim
+ * stamped (SEC3 NEW-1). The id is REQUIRED and must be UUID-shaped: without
+ * it, any 'executing' row (another worker's claim) would look held. A read
+ * failure is "not held".
+ */
+export async function communityActionClaimIsHeld(input: {
+  actionId: string;
+  tenantId: string;
+  organizationId: string;
+  correlationId?: string | null;
+}): Promise<boolean> {
+  if (!input.actionId || !input.tenantId || !input.organizationId) return false;
+  if (!UUID_RE.test(input.correlationId ?? '')) return false;
+  try {
+    const { data, error } = await ownedDbTable('community_ai_actions')
+      .select('id, status, execution_correlation_id')
+      .eq('id', input.actionId)
+      .eq('tenant_id', input.tenantId)
+      .eq('organization_id', input.organizationId)
+      .maybeSingle();
+    if (error || !data) return false;
+    const row = data as { status?: string | null; execution_correlation_id?: string | null };
+    if (row.status !== 'executing') return false;
+    if (row.execution_correlation_id !== input.correlationId) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Give back a claim after a PRE-DISPATCH refusal: executing -> approved,
+ * compare-and-set on status 'executing' and the claim's correlation id, for
+ * this tenant and organization. Without a correlation id nothing is written.
+ * Never call it for an outcome that may have acted (that would allow a second
+ * send). Returns whether the row was released.
+ */
+export async function releaseCommunityActionClaim(input: {
+  actionId: string;
+  tenantId: string;
+  organizationId: string;
+  correlationId: string | null;
+}): Promise<boolean> {
+  if (!input.actionId || !input.tenantId || !input.organizationId || !UUID_RE.test(input.correlationId ?? '')) return false;
+  try {
+    const { data, error } = await ownedDbTable('community_ai_actions')
+      .update({ status: 'approved', updated_at: new Date().toISOString() })
+      .eq('id', input.actionId)
+      .eq('tenant_id', input.tenantId)
+      .eq('organization_id', input.organizationId)
+      .eq('status', 'executing')
+      .eq('execution_correlation_id', input.correlationId)
+      .select('id')
+      .maybeSingle();
+    return !error && !!data;
+  } catch {
+    return false;
+  }
 }
 
 export type { CommunityAiAction, ExecutionResult, ExecutionMode, ResultStatus, MetricEventType };

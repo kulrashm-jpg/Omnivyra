@@ -97,15 +97,16 @@ const CHANNELS: Record<Channel, ChannelDef> = {
       /ad_hoc_action_has_no_human_approval/,                  // D-01 for synthesized action ids
       /recheckCommunityRecipient\(/,                          // L-3
       /claimCommunityActionForExecution\(/,                   // single-execution claim
-      /\.not\(\s*'approved_at'\s*,\s*'is'\s*,\s*null\s*\)/,   // the claim takes only approved rows
+      // Prompt 3: the claim is the RPC that re-applies tenant policy, approval
+      // evidence and the 7-day lifetime before approved -> executing.
+      /ownedDbRpc\(\s*'claim_community_ai_action_for_execution'/,
     ]]],
   },
   browser: {
     seeds: [
       { file: EXT_COMMANDS, name: 'default', gated: true },
-      // Re-arms a DM command chain to 'pending' for the extension to claim. The claim
-      // RPC still requires approval, so it is gated there; it has no caller (DORMANT).
-      { file: RUNTIME, name: 'advanceCommandChain', gated: true },
+      // advanceCommandChain (an unguarded chain re-arm) was deleted under C3; the only
+      // chain advance is the lease compare-and-set in pages/api/extension/action-result.ts.
     ],
     evidence: [[EXT_COMMANDS, [
       /rpc\(\s*'claim_community_ai_browser_command'/,          // P-A: approval-requiring claim
@@ -206,8 +207,6 @@ const DORMANT: Record<string, string> = {
     'Mode 3 (autonomous response) executor hand-off: NO caller. Even if wired, the executor refuses an ad-hoc action (D-01).',
   'backend/services/orchestration/communityJourneyLinkStore.ts#getLinkForTask':
     'over-approximation: references defaultCommunityDeps (which bundles executeAction) for reads; no caller',
-  'backend/services/communityAiActionExecutor.ts#advanceCommandChain':
-    'Orchestration follow-up: Runtime.advanceCommandChain (re-exported here) has no caller; it re-arms a chain to pending with no organization filter on the UPDATE',
   'backend/services/leadOutreachExecution/index.ts#dispatchInternalBatch': 'barrel re-export; no consumer',
 };
 
@@ -216,7 +215,6 @@ const DORMANT: Record<string, string> = {
 export const RECORDED_FOLLOW_UPS = [
   'Orchestration: opt-out-to-claim window — an opt-out recorded after the L-3 recheck and before the claim is not re-read.',
   'Orchestration: claim-loss metric — a lost single-execution claim is not counted.',
-  'Orchestration: advanceCommandChain (DORMANT above).',
   'Orchestration (D-02): inbox reply approval binding + passkey for /api/engagement/reply. Today the route builds an '
     + 'ad-hoc action and calls executeAction, which D-01 refuses unless a persisted approval exists.',
   'Owner/legal: contact governance for account/transactional email (w2c5bEmailGovernanceBoundary.test.ts).',
@@ -443,5 +441,34 @@ describe('auto reply — one switch (automation_config via automationService)', 
     // The response generator reports the rule and imports no executor.
     expect(graph.valueImportersOf(RUNTIME)).not.toContain('backend/services/responseOrchestrator.ts');
     expect(graph.valueImportersOf('backend/services/communityAiActionExecutor.ts')).not.toContain('backend/services/responseOrchestrator.ts');
+  });
+});
+
+describe('browser chain advance — one guarded writer (C3: advanceCommandChain deleted)', () => {
+  it('advanceCommandChain is not exported by the runtime or the barrel, and no source names it', () => {
+    // Static (the runtime module pulls config at import): the barrel only re-exports
+    // the two executor modules, and neither declares the symbol.
+    const BARREL = 'backend/services/communityAiActionExecutor.ts';
+    const barrelStatements = graph.code(BARREL).replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    expect(barrelStatements).toEqual([
+      "export * from './communityAiActionExecutorContracts';",
+      "export * from './communityAiActionExecutorRuntime';",
+    ]);
+    for (const f of [RUNTIME, CONTRACTS]) expect(graph.code(f)).not.toMatch(/\badvanceCommandChain\b/);
+    const named = graph.files.filter((f) => /\badvanceCommandChain\b/.test(graph.code(f)));
+    expect(named).toEqual([]);
+  });
+
+  it('the only production writer of a non-zero command_chain_index is the lease CAS in action-result', () => {
+    const ACTION_RESULT = 'pages/api/extension/action-result.ts';
+    const writers = graph.files.filter((f) => /command_chain_index\s*:(?!\s*0\b)/.test(graph.code(f))).sort();
+    expect(writers).toEqual([ACTION_RESULT]);
+    const c = graph.code(ACTION_RESULT);
+    const at = c.indexOf('command_chain_index: chainIndex + 1');
+    expect(at).toBeGreaterThan(-1);
+    const tail = c.slice(at, at + 900);
+    expect(tail).toMatch(/\.in\('status', IN_FLIGHT_STATUSES\)/);
+    expect(tail).toMatch(/\.eq\('dispatch_lease_id', rowLeaseId\)/);
+    expect(tail).toMatch(/\.eq\('dispatch_lease_holder_id', rowHolderId\)/);
   });
 });

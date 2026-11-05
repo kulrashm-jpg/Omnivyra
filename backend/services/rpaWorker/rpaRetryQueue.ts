@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { RpaTask } from './rpaWorkerService';
 import { ownedDbTable } from '../../db/writeOwner';
+import { claimCommunityActionForExecution } from '../communityAiActionExecutorRuntime';
 
 /**
  * Durable RPA retry buffer with per-organization fairness.
@@ -22,9 +23,11 @@ import { ownedDbTable } from '../../db/writeOwner';
  *   - Rows are only ever created for PROVABLY-NOT-ACTED deferrals (env not
  *     ready, admission refused). A may-have-acted outcome is never queued.
  *   - A flush must win an atomic compare-and-set claim on the retry row
- *     (`claim_token IS NULL` -> token) AND on the action row
- *     (`community_ai_actions.status` 'approved' -> 'executing', tenant-scoped,
- *     not cancel-requested) before anything runs. Losers do nothing.
+ *     (`claim_token IS NULL` -> token) AND the single action claim
+ *     (claimCommunityActionForExecution, claim point 'rpa_retry': tenant
+ *     policy, approval evidence, 7-day expiry, then 'approved' -> 'executing',
+ *     tenant-scoped, not cancel-requested) before anything runs. Losers do
+ *     nothing; a refusal is recorded once by the claim.
  *   - The action is re-run through the executor (kill switch, approval,
  *     playbook + plan limits, URL policy, admission all re-applied). The
  *     executor writes the terminal status; the retry row is then deleted.
@@ -115,7 +118,16 @@ export type RetryActionOutcome = {
  * Production wiring: the community executor with persist:true and
  * expected_from_statuses ['executing'] (see rpaWorkerService).
  */
-export type RetryActionRunner = (actionRow: Record<string, any>) => Promise<RetryActionOutcome>;
+export type RetryActionRunner = (
+  actionRow: Record<string, any>,
+  /**
+   * The correlation id the flush claimed this attempt with (also on
+   * actionRow.execution_correlation_id). The runner MUST pass it to
+   * executeAction as options.correlation_id: it proves the claim is held
+   * (SEC3-F3) and lets a pre-dispatch refusal give the claim back (SEC3-F1).
+   */
+  ctx?: { correlationId: string },
+) => Promise<RetryActionOutcome>;
 
 export type PerOrgFlushOutcome = {
   organization_id: string;
@@ -131,7 +143,34 @@ export type PerOrgFlushOutcome = {
   deferred?: number;
   /** Executor reported may-have-acted; the action is `uncertain`, never re-run. */
   uncertain?: number;
+  /**
+   * The single claim refused the action (tenant policy, approval evidence,
+   * expiry; recorded once by the claim). Nothing ran, the action row stays
+   * 'approved' and the retry row is released (unclaimed, attempts unchanged),
+   * never deleted.
+   */
+  refused?: number;
+  /** orgGate returned false: no retry row of this org was claimed, deleted or attempted. */
+  gated?: boolean;
 };
+
+/**
+ * Optional per-organization gate (e.g. the tenant execution policy, fail
+ * closed). Called once per organization BEFORE any retry row is claimed; false
+ * (or a throw) leaves every retry row of that organization untouched.
+ */
+export type RetryOrgGate = (orgId: string) => Promise<boolean>;
+
+/**
+ * A claim result that means the action itself is finished or no longer this
+ * queue's to run: only then is the retry row deleted. Refusals (policy,
+ * evidence, expiry, transport) keep it.
+ */
+function claimMakesRetryObsolete(c: { code: string | null; currentStatus: string | null }): boolean {
+  if (c.code === 'ACTION_NOT_FOUND' || c.code === 'TENANT_SCOPE_VIOLATION') return true;
+  // Another path holds or finished the row, or it was cancelled ('approved' + cancel request).
+  return c.code === 'CLAIM_CONFLICT';
+}
 
 const RETRY_ROW_COLUMNS =
   'id, action_id, organization_id, platform, action_type, target_url, text, attempts, max_attempts, claim_token, claimed_at';
@@ -156,30 +195,12 @@ export async function claimRpaRetryRow(input: {
   return !error && !!data;
 }
 
-/**
- * Atomic, tenant-scoped CAS claim of the action row: approved -> executing,
- * only while no cancel has been requested. True only for the winner.
- */
-export async function claimRetryActionRow(input: {
-  actionId: string;
-  organizationId: string;
-  tenantId: string;
-  nowIso: string;
-}): Promise<boolean> {
-  const { data, error } = await ownedDbTable('community_ai_actions')
-    .update({ status: 'executing', updated_at: input.nowIso })
-    .eq('id', input.actionId)
-    .eq('organization_id', input.organizationId)
-    .eq('tenant_id', input.tenantId)
-    .eq('status', 'approved')
-    // D-01 evidence, in the same atomic UPDATE as the claim (as in
-    // claimCommunityActionForExecution): a row without approved_at is never
-    // taken, whatever its status.
-    .not('approved_at', 'is', null)
-    .is('cancel_requested_at', null)
-    .select('id, status')
-    .maybeSingle();
-  return !error && !!data;
+/** Give a claimed retry row back untouched (no attempt was made). */
+async function releaseClaimedRow(rowId: string, claimToken: string) {
+  await ownedDbTable('rpa_retry_queue')
+    .update({ claim_token: null, claimed_at: null })
+    .eq('id', rowId)
+    .eq('claim_token', claimToken);
 }
 
 async function deleteClaimedRow(rowId: string, claimToken: string) {
@@ -197,12 +218,25 @@ export async function flushRpaRetryQueueForOrg(input: {
   limit?: number;
   now?: () => Date;
   newClaimToken?: () => string;
+  orgGate?: RetryOrgGate;
 }): Promise<PerOrgFlushOutcome> {
   const { organization_id: orgId, runAction } = input;
   const limit = input.limit ?? DEFAULT_PER_ORG_LIMIT;
   const now = input.now ?? (() => new Date());
   const newToken = input.newClaimToken ?? (() => randomUUID());
-  let claimed = 0, succeeded = 0, failed = 0, errors = 0, lost = 0, obsolete = 0, deferred = 0, uncertain = 0;
+  let claimed = 0, succeeded = 0, failed = 0, errors = 0, lost = 0, obsolete = 0, deferred = 0, uncertain = 0, refused = 0;
+
+  if (input.orgGate) {
+    let permitted = false;
+    try {
+      permitted = (await input.orgGate(orgId)) === true;
+    } catch {
+      permitted = false; // fail closed
+    }
+    if (!permitted) {
+      return { organization_id: orgId, claimed: 0, succeeded: 0, failed: 0, errors: 0, lost: 0, obsolete: 0, deferred: 0, uncertain: 0, refused: 0, gated: true };
+    }
+  }
 
   try {
     const { data: rows } = await ownedDbTable('rpa_retry_queue')
@@ -239,23 +273,38 @@ export async function flushRpaRetryQueueForOrg(input: {
           await deleteClaimedRow(String(row.id), token);
           continue;
         }
-        const actionClaimed = await claimRetryActionRow({
+        // One correlation id per attempt: the claim stamps it, the runner
+        // passes it to executeAction, and only that attempt can release it.
+        const correlationId = randomUUID();
+        const actionClaim = await claimCommunityActionForExecution({
           actionId: String(row.action_id),
           organizationId: orgId,
           tenantId: String((action as any).tenant_id),
-          nowIso: now().toISOString(),
+          claimPoint: 'rpa_retry',
+          correlationId,
         });
-        if (!actionClaimed) {
-          // Another path owns the action, it was cancelled, or it is no
-          // longer approved. Nothing runs; the retry row is obsolete.
-          obsolete += 1;
-          await deleteClaimedRow(String(row.id), token);
+        if (!actionClaim.claimed) {
+          if (claimMakesRetryObsolete(actionClaim)) {
+            // Another path owns or finished the action, or it was cancelled.
+            // Nothing runs; the retry row is obsolete.
+            obsolete += 1;
+            await deleteClaimedRow(String(row.id), token);
+          } else {
+            // The claim refused it (policy, approval evidence, expiry; recorded
+            // once by the claim) or could not run. Nothing ran and the action
+            // is still 'approved': keep the deferred retry, unclaimed.
+            refused += 1;
+            await releaseClaimedRow(String(row.id), token);
+          }
           continue;
         }
 
         let out: RetryActionOutcome;
         try {
-          out = await runAction({ ...(action as Record<string, any>), status: 'executing' });
+          out = await runAction(
+            { ...(action as Record<string, any>), status: 'executing', execution_correlation_id: correlationId },
+            { correlationId },
+          );
         } catch (err: any) {
           // Unclassified: the action may have run. Keep the claim (stale
           // claims surface for review); the action row stays `executing`
@@ -269,6 +318,20 @@ export async function flushRpaRetryQueueForOrg(input: {
           // The terminal ledger write failed — the ledger does not know the
           // outcome. Keep the claim for review; never re-run.
           errors += 1;
+          continue;
+        }
+        if (out?.response?.pre_claim_refusal === true) {
+          if (out.response.claim_released === true) {
+            // Refused before any dispatch and the claim was given back
+            // (executing -> approved): keep the deferred retry, unclaimed.
+            refused += 1;
+            await releaseClaimedRow(String(row.id), token);
+          } else {
+            // Refused before dispatch but the claim could not be given back:
+            // the action stays 'executing' for the reaper. Keep the retry claim
+            // for review; never re-run, never delete.
+            errors += 1;
+          }
           continue;
         }
         const status = String(out?.status ?? '');
@@ -294,7 +357,7 @@ export async function flushRpaRetryQueueForOrg(input: {
     console.warn('[rpaRetryQueue] per-org sweep failed:', err?.message || err, 'org=', orgId);
   }
 
-  return { organization_id: orgId, claimed, succeeded, failed, errors, lost, obsolete, deferred, uncertain };
+  return { organization_id: orgId, claimed, succeeded, failed, errors, lost, obsolete, deferred, uncertain, refused };
 }
 
 /**
@@ -335,6 +398,8 @@ export async function flushRpaRetryQueueRoundRobin(input: {
   runAction: RetryActionRunner;
   limitPerOrg?: number;
   maxOrgs?: number;
+  /** Called once per organization before any of its rows is claimed; see RetryOrgGate. */
+  orgGate?: RetryOrgGate;
 }): Promise<{
   orgs_visited: number;
   claimed: number;
@@ -384,6 +449,7 @@ export async function flushRpaRetryQueueRoundRobin(input: {
       // Round-robin fairness preserved: still <= limitPerOrg per org, just
       // additionally bounded by the remaining global per-tick budget.
       limit: Math.min(limitPerOrg, budget),
+      orgGate: input.orgGate,
     });
     perOrg.push(outcome);
     claimed += outcome.claimed;

@@ -48,13 +48,16 @@ jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: 
 // Policy explicitly allows auto rules, so the only thing that can stop the
 // GET from executing is the GET path itself.
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({
     execution_enabled: true,
     auto_rules_enabled: true,
     require_human_approval: false,
     updated_at: '2026-11-01T00:00:00Z',
     updated_by: null,
-  })),
+  }))),
 }));
 
 const playbook = {
