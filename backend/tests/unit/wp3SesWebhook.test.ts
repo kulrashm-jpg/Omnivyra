@@ -20,6 +20,10 @@ const db = {
   /** The SQLSTATE an injected failure answers with, and which operation it hits. */
   failCode: '08006',
   failOp: null as null | 'insert' | 'select' | 'update',
+  /** D2: a second, independent failure (e.g. the evidence-debt table too). */
+  failAlso: null as null | { table: string; op: 'insert' | 'select' | 'update' },
+  /** Every UPDATE issued, by table — proves no path rewrites a restriction. */
+  updates: [] as Array<{ table: string; payload: Row }>,
 };
 
 jest.mock('../../db/writeOwner', () => ({
@@ -42,9 +46,22 @@ jest.mock('../../db/writeOwner', () => ({
       if (db.failTable === table && (db.failOp === null || db.failOp === st.op)) {
         return { data: null, error: { code: db.failCode, message: 'injected failure' } };
       }
+      if (db.failAlso && db.failAlso.table === table && db.failAlso.op === st.op) {
+        return { data: null, error: { code: '08006', message: 'injected failure' } };
+      }
 
       if (st.op === 'insert') {
         const row = st.payload as Row;
+        // D2: model opevr_provider_event_unique and the column defaults.
+        if (table === 'outreach_provider_evidence_reconciliation') {
+          if (rows().some((r) => r.provider === row.provider && r.provider_event_id === row.provider_event_id)) {
+            return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "opevr_provider_event_unique"' } };
+          }
+          const created = { id: `opevr-${db.nextId++}`, reconcile_attempts: 0, last_reconcile_at: null, last_reconcile_reason: null,
+            resolved_at: null, resolution: null, ...row };
+          rows().push(created);
+          return { data: created, error: null };
+        }
         // Model `uq_contact_governance_identity`, which is where the writer's
         // idempotency actually lives: (org, channel, type, person|target)
         // WHERE revoked_at IS NULL.
@@ -83,6 +100,11 @@ jest.mock('../../db/writeOwner', () => ({
           return { data: null, error: { code: '2F004', message: `${table} is append-only` } };
         }
         const hit = rows().filter(match);
+        // D2: model outreach_provider_evidence_reconciliation_guard (a resolved row is final).
+        if (table === 'outreach_provider_evidence_reconciliation' && hit.some((r) => r.status === 'resolved')) {
+          return { data: null, error: { code: '23514', message: 'a resolved row is final' } };
+        }
+        db.updates.push({ table, payload: { ...(st.payload ?? {}) } });
         hit.forEach((r) => Object.assign(r, st.payload));
         return { data: hit.map((r) => ({ id: r.id })), error: null };
       }
@@ -136,6 +158,7 @@ import {
 import { isSuppressed } from '../../services/execution/suppressionService';
 import { canonicalSnsString, checkSnsTimestamp, isSnsCertificateUrl } from '../../services/providerEvents/snsSignature';
 import handler, { __setSnsCertificateFetcherForTests } from '../../../pages/api/webhooks/ses';
+import { reconcileSesEvidenceDebt } from '../../services/providerEvents/sesEvidenceReconciliation';
 
 const ORG = '00000000-0000-4000-8000-00000000000a';
 const OTHER_ORG = '00000000-0000-4000-8000-00000000000b';
@@ -255,6 +278,8 @@ beforeEach(() => {
   db.failTable = null;
   db.failCode = '08006';
   db.failOp = null;
+  db.failAlso = null;
+  db.updates = [];
   db.calls = 0;
   fakeRedis.store.clear();
   sent.length = 0;
@@ -876,5 +901,202 @@ describe('WP3 hardening — a failed verification stops ALL database access', ()
     const res = await post((build as () => Record<string, unknown>)());
     expect(res.statusCode).toBe(401);
     expect(db.calls).toBe(before);
+  });
+});
+
+// ── D2 — complaint evidence failure: visible, fail-closed, reconcilable ─────
+
+describe('D2 — a failed persistence is exposed, recorded once, and reconciled without weakening a restriction', () => {
+  const debts = () => (db.tables.outreach_provider_evidence_reconciliation ?? []);
+  const reconcile = () => reconcileSesEvidenceDebt({ governanceSource: 'reconcile:ses-evidence' });
+  const noAddress = (v: unknown) => {
+    const s = JSON.stringify(v).toLowerCase();
+    expect(s).not.toContain('jane');
+    expect(s).not.toContain('example.test');
+  };
+
+  it('success: 200 reports evidence recorded and the restriction in force; no debt row', async () => {
+    await sentMessage();
+    const res = await post(envelope(complaint()));
+    expect(res.statusCode).toBe(200);
+    expect(res.body.persistence).toEqual({ evidence: 'recorded', restriction: 'in_force', debt: null });
+    expect(debts()).toHaveLength(0);
+  });
+
+  it('evidence write fails: 503, the restriction is in force, evidence is reported FAILED, and one address-free debt is recorded', async () => {
+    await sentMessage();
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    const res = await post(envelope(complaint()));
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ error: 'write_failed', persistence: { evidence: 'failed', restriction: 'in_force', debt: 'recorded' } });
+    expect((await isSuppressed(ORG, 'email', RECIPIENT)).suppressed).toBe(true);
+    expect(evidenceRows()).toHaveLength(0);
+
+    expect(debts()).toHaveLength(1);
+    const debt = debts()[0];
+    expect(debt).toMatchObject({
+      company_id: ORG, provider: PROVIDER, event_type: 'Complaint', governance_type: 'complaint', channel: 'email',
+      failed_operations: ['delivery_evidence'], failure_reason: 'write_failed', status: 'open',
+    });
+    expect(debt.governance_record_ids).toEqual(governance().map((g) => g.id));
+    noAddress(debt);
+    noAddress(res.body);
+  });
+
+  it('the debt cannot be recorded either: still 503, reported as UNRECORDED (never hidden), restriction still in force, log carries no address', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await sentMessage();
+      db.failTable = 'outreach_delivery_evidence';
+      db.failOp = 'insert';
+      db.failAlso = { table: 'outreach_provider_evidence_reconciliation', op: 'insert' };
+      const res = await post(envelope(complaint()));
+      expect(res.statusCode).toBe(503);
+      expect(res.body.persistence).toEqual({ evidence: 'failed', restriction: 'in_force', debt: 'unrecorded' });
+      expect((await isSuppressed(ORG, 'email', RECIPIENT)).suppressed).toBe(true);
+      const logged = spy.mock.calls.find((c) => c[0] === '[ses-evidence] EVIDENCE_DEBT_UNRECORDED');
+      expect(logged).toBeDefined();
+      noAddress(spy.mock.calls);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('duplicate failing deliveries (SNS retries) keep ONE debt row: first failure time kept, last refreshed', async () => {
+    await sentMessage();
+    const env = envelope(complaint());
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    await post(env);
+    const first = { ...debts()[0] };
+    await post(env);
+    await post(env);
+    expect(debts()).toHaveLength(1);
+    expect(debts()[0].first_failed_at).toBe(first.first_failed_at);
+    expect(governance()).toHaveLength(2);
+  });
+
+  it('recovery by SNS retry: the successful redelivery closes the debt (provider_retry)', async () => {
+    await sentMessage();
+    const env = envelope(complaint());
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    await post(env);
+    db.failTable = null;
+    const retry = await post(env);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.body.persistence).toEqual({ evidence: 'recorded', restriction: 'in_force', debt: null });
+    expect(debts()[0]).toMatchObject({ status: 'resolved', resolution: 'provider_retry' });
+    expect(evidenceRows()).toHaveLength(1);
+  });
+
+  it('recovery after SNS gave up: reconciliation replays the evidence once, resolves the debt, and a second run is a no-op', async () => {
+    await sentMessage();
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    await post(envelope(complaint()));
+    db.failTable = null;
+    const restrictionsBefore = JSON.parse(JSON.stringify(governance()));
+
+    expect(await reconcile()).toEqual({ examined: 1, resolved: 1, stillOpen: 0, errors: 0 });
+    expect(evidenceRows()).toHaveLength(1);
+    expect(evidenceRows()[0].transport_response).toMatchObject({ sesEventType: 'Complaint', deliveryInferredFrom: 'Complaint' });
+    expect(debts()[0]).toMatchObject({ status: 'resolved', resolution: 'replayed', reconcile_attempts: 1 });
+
+    expect(await reconcile()).toEqual({ examined: 0, resolved: 0, stillOpen: 0, errors: 0 });
+    expect(evidenceRows()).toHaveLength(1);
+    // The restriction was never rewritten, revoked or narrowed.
+    expect(governance()).toEqual(restrictionsBefore);
+    expect(db.updates.map((u) => u.table)).not.toContain('contact_governance_records');
+  });
+
+  it('a reconciliation that fails again stays open, auditable (attempts, reason), and is safe to repeat', async () => {
+    await sentMessage();
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    await post(envelope(complaint()));
+    expect(await reconcile()).toEqual({ examined: 1, resolved: 0, stillOpen: 1, errors: 0 });
+    expect(debts()[0]).toMatchObject({ status: 'open', reconcile_attempts: 1, last_reconcile_reason: 'write_failed' });
+    expect(await reconcile()).toMatchObject({ stillOpen: 1 });
+    expect(debts()[0].reconcile_attempts).toBe(2);
+    expect((await isSuppressed(ORG, 'email', RECIPIENT)).suppressed).toBe(true);
+  });
+
+  it('task read failed: the ADDRESS is restricted at once; reconciliation adds the PERSON anchor and resolves', async () => {
+    await sentMessage();
+    db.failTable = 'outreach_tasks';
+    db.failOp = 'select';
+    const res = await post(envelope(complaint()));
+    expect(res.statusCode).toBe(503);
+    expect(res.body.persistence).toEqual({ evidence: 'failed', restriction: 'in_force', debt: 'recorded' });
+    expect(debts()[0].failed_operations).toEqual(['task_read']);
+    expect(governance()).toHaveLength(1);
+
+    db.failTable = null;
+    expect(await reconcile()).toMatchObject({ resolved: 1 });
+    expect(governance().find((g) => g.person_id === PERSON && g.governance_type === 'complaint')).toBeDefined();
+    expect(governance().every((g) => g.revoked_at == null)).toBe(true);
+    expect(debts()[0].governance_record_ids).toHaveLength(2);
+  });
+
+  it('complaint restriction write failed entirely: reconciliation puts the PERSON restriction in force but keeps the debt OPEN for the address', async () => {
+    await sentMessage();
+    const env = envelope(complaint());
+    db.failTable = 'contact_governance_records';
+    db.failOp = 'insert';
+    const res = await post(env);
+    expect(res.statusCode).toBe(503);
+    expect(res.body.persistence).toEqual({ evidence: 'recorded', restriction: 'failed', debt: 'recorded' });
+    expect(governance()).toHaveLength(0);
+
+    db.failTable = null;
+    expect(await reconcile()).toMatchObject({ resolved: 0, stillOpen: 1 });
+    expect(governance()).toHaveLength(1);
+    expect(governance()[0]).toMatchObject({ governance_type: 'complaint', channel: '*', person_id: PERSON });
+    expect(debts()[0]).toMatchObject({ status: 'open', last_reconcile_reason: 'address_anchor_awaiting_redelivery' });
+
+    // The provider's redelivery writes the address anchor and closes the debt.
+    expect((await post(env)).statusCode).toBe(200);
+    expect(debts()[0]).toMatchObject({ status: 'resolved', resolution: 'provider_retry' });
+    expect((await isSuppressed(ORG, 'email', RECIPIENT)).suppressed).toBe(true);
+  });
+
+  it('a permanent bounce whose restriction failed is NOT widened to the person: the debt stays open for the address', async () => {
+    await sentMessage();
+    db.failTable = 'contact_governance_records';
+    db.failOp = 'insert';
+    expect((await post(envelope(bounce('Permanent')))).statusCode).toBe(503);
+    db.failTable = null;
+    expect(await reconcile()).toMatchObject({ stillOpen: 1 });
+    expect(governance()).toHaveLength(0);
+    expect(debts()[0]).toMatchObject({ governance_type: 'bounce_hard', last_reconcile_reason: 'address_anchor_awaiting_redelivery' });
+  });
+
+  it('a terminal (422) failure is recorded too: SNS will never retry it', async () => {
+    await sentMessage();
+    db.failTable = 'contact_governance_records';
+    db.failOp = 'insert';
+    db.failCode = '23514';
+    const res = await post(envelope(complaint()));
+    expect(res.statusCode).toBe(422);
+    expect(res.body.persistence).toMatchObject({ restriction: 'failed', debt: 'recorded' });
+    expect(debts()).toHaveLength(1);
+  });
+
+  it('a resolved debt is final: a later failing duplicate does not reopen it', async () => {
+    await sentMessage();
+    const env = envelope(complaint());
+    db.failTable = 'outreach_delivery_evidence';
+    db.failOp = 'insert';
+    await post(env);
+    db.failTable = null;
+    await post(env);
+    expect(debts()[0].status).toBe('resolved');
+    db.failTable = 'outreach_tasks';
+    db.failOp = 'select';
+    expect((await post(env)).statusCode).toBe(503);
+    expect(debts()).toHaveLength(1);
+    expect(debts()[0]).toMatchObject({ status: 'resolved', resolution: 'provider_retry' });
   });
 });

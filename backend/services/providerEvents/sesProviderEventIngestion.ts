@@ -30,6 +30,14 @@
  * Status precedence when several writes fail: retryable if ANY failure is
  * retryable (a retry can still complete it), otherwise terminal.
  *
+ * D2 — FAILURE IS VISIBLE AND RECOVERABLE. SNS retries are bounded, so any
+ * failure after the tenant resolved is ALSO recorded as an evidence debt
+ * (sesEvidenceReconciliation), one row per provider event, for an idempotent,
+ * audited replay. The outcome reports each write truthfully in `persistence`:
+ * evidence `recorded` only when the evidence row exists, and a debt that could
+ * not be recorded either is reported as `unrecorded`, never hidden. A fully
+ * successful delivery of the same event closes its open debt.
+ *
  * Nothing here logs or returns an address.
  */
 import { normalizeSesEvent, type NormalizedSesEvent } from './sesEventNormalizer';
@@ -38,10 +46,26 @@ import { ingestFeedback } from '../leadOutreachExecution/feedbackIngestion';
 import { getOutreachTaskById } from '../leadOutreachExecution/storage';
 import { recordContactGovernance, GovernanceWriteError } from '../prospectIdentity/contactGovernanceWriter';
 import { isTerminalGovernanceError } from '../leadOutreachExecution/unsubscribeService';
+import {
+  recordEvidenceDebt,
+  resolveEvidenceDebtIfOpen,
+  type EvidenceDebtOperation,
+  type EvidenceDebtWrite,
+} from './sesEvidenceReconciliation';
 
 export const SES_WEBHOOK_GOVERNANCE_SOURCE = 'webhook:ses';
 
 export type SesIngestionStatus = 'processed' | 'dropped' | 'terminal' | 'retryable';
+
+/** What was durably written for this event (D2). Codes only. */
+export interface SesPersistence {
+  /** `recorded` only when the evidence row exists (new or duplicate). */
+  evidence: 'recorded' | 'failed';
+  /** `in_force`: every anchor written; `partial`: some; `failed`: none; `not_applicable`: no restriction. */
+  restriction: 'in_force' | 'partial' | 'failed' | 'not_applicable';
+  /** The evidence debt for a failure; null when nothing failed. */
+  debt: EvidenceDebtWrite | null;
+}
 
 export interface SesIngestionOutcome {
   status: SesIngestionStatus;
@@ -50,10 +74,12 @@ export interface SesIngestionOutcome {
   duplicate: boolean;
   eventType: string | null;
   governance: { created: number; alreadyPresent: number } | null;
+  /** Set once the event resolved to a tenant; null before that. */
+  persistence: SesPersistence | null;
 }
 
 const outcome = (status: SesIngestionStatus, reason: string | null, extra: Partial<SesIngestionOutcome> = {}): SesIngestionOutcome => ({
-  status, reason, duplicate: false, eventType: null, governance: null, ...extra,
+  status, reason, duplicate: false, eventType: null, governance: null, persistence: null, ...extra,
 });
 
 const RETRYABLE_RESOLUTION = new Set(['read_failed']);
@@ -79,10 +105,10 @@ export async function ingestSesEvent(payload: unknown, snsMessageId: string): Pr
   // does not come back is a failed read, not an absent task.
   const task = await getOutreachTaskById(companyId, taskId);
 
-  const failures: Array<{ status: 'terminal' | 'retryable'; reason: string }> = [];
+  const failures: Array<{ status: 'terminal' | 'retryable'; reason: string; op: EvidenceDebtOperation }> = [];
   let duplicate = false;
   if (!task) {
-    failures.push({ status: 'retryable', reason: 'task_read_failed' });
+    failures.push({ status: 'retryable', reason: 'task_read_failed', op: 'task_read' });
   } else {
     const feedback = await ingestFeedback({
       companyId,
@@ -99,22 +125,53 @@ export async function ingestSesEvent(payload: unknown, snsMessageId: string): Pr
       duplicate = feedback.duplicate;
     } else {
       const retryable = feedback.rejection === 'write_failed' || feedback.rejection === 'task_not_found';
-      failures.push({ status: retryable ? 'retryable' : 'terminal', reason: String(feedback.rejection) });
+      failures.push({ status: retryable ? 'retryable' : 'terminal', reason: String(feedback.rejection), op: 'delivery_evidence' });
     }
   }
 
   let governance: SesIngestionOutcome['governance'] = null;
+  let restriction: SesPersistence['restriction'] = 'not_applicable';
+  const governanceRecordIds: string[] = [];
   if (event.governance) {
     const written = await writeGovernance(event, companyId, taskId, attemptId, task?.personId ?? null);
     governance = { created: written.created, alreadyPresent: written.alreadyPresent };
-    if (written.failure) failures.push(written.failure);
+    governanceRecordIds.push(...written.ids);
+    if (written.failure) {
+      failures.push({ ...written.failure, op: 'restriction' });
+      restriction = written.ids.length > 0 ? 'partial' : 'failed';
+    } else {
+      restriction = 'in_force';
+    }
   }
+  const evidence: SesPersistence['evidence'] = failures.some((f) => f.op !== 'restriction') ? 'failed' : 'recorded';
 
   if (failures.length > 0) {
     const status = failures.some((f) => f.status === 'retryable') ? 'retryable' : 'terminal';
-    return outcome(status, failures[0].reason, { eventType: event.eventType, duplicate, governance });
+    const debt = await recordEvidenceDebt({
+      companyId,
+      provider: event.provider,
+      providerEventId: event.providerEventId,
+      providerMessageId: event.providerMessageId,
+      eventType: event.eventType,
+      signal: event.signal,
+      occurredAt: event.occurredAt,
+      channel: 'email',
+      taskId,
+      attemptId,
+      governanceType: event.governance?.type ?? null,
+      governanceRecordIds,
+      failedOperations: failures.map((f) => f.op),
+      failureReason: failures[0].reason,
+      evidence: event.evidence,
+    });
+    return outcome(status, failures[0].reason, {
+      eventType: event.eventType, duplicate, governance, persistence: { evidence, restriction, debt },
+    });
   }
-  return outcome('processed', null, { duplicate, eventType: event.eventType, governance });
+  await resolveEvidenceDebtIfOpen(event.provider, event.providerEventId);
+  return outcome('processed', null, {
+    duplicate, eventType: event.eventType, governance, persistence: { evidence, restriction, debt: null },
+  });
 }
 
 /**
@@ -129,7 +186,7 @@ async function writeGovernance(
   taskId: string,
   attemptId: string,
   personId: string | null,
-): Promise<{ created: number; alreadyPresent: number; failure: { status: 'terminal' | 'retryable'; reason: string } | null }> {
+): Promise<{ created: number; alreadyPresent: number; ids: string[]; failure: { status: 'terminal' | 'retryable'; reason: string } | null }> {
   const action = event.governance as NonNullable<NormalizedSesEvent['governance']>;
   const evidence = {
     snsMessageId: event.providerEventId,
@@ -149,6 +206,9 @@ async function writeGovernance(
 
   let created = 0;
   let alreadyPresent = 0;
+  // In anchor order, ADDRESS first: an evidence debt reads an empty list as
+  // "the address was never restricted" (sesEvidenceReconciliation).
+  const ids: string[] = [];
   for (const anchor of anchors) {
     try {
       const written = await recordContactGovernance({
@@ -161,12 +221,13 @@ async function writeGovernance(
         evidence,
         effectiveFrom,
       });
+      ids.push(written.id);
       if (written.outcome === 'created') created += 1;
       else alreadyPresent += 1;
     } catch (e) {
       const code = e instanceof GovernanceWriteError ? e.code : 'governance_write_failed';
-      return { created, alreadyPresent, failure: { status: isTerminalGovernanceError(e) ? 'terminal' : 'retryable', reason: code } };
+      return { created, alreadyPresent, ids, failure: { status: isTerminalGovernanceError(e) ? 'terminal' : 'retryable', reason: code } };
     }
   }
-  return { created, alreadyPresent, failure: null };
+  return { created, alreadyPresent, ids, failure: null };
 }
