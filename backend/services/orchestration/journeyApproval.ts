@@ -197,13 +197,19 @@ export async function approveTenantJourneyTask(a: Actor & {
  * D-02 — re-review: a journey task whose approval no longer binds its content (stale) goes
  * back to `awaiting_approval`. Approves nothing: the fresh approval then needs `begin`
  * and `approve` again — new binding, self-approval rule, passkey.
+ *
+ * N2 — the requester is the authenticated approver the route resolved (`approverUserId`),
+ * recorded with the accepted transition in `audit_logs` by `requestFreshApproval`.
  */
-export async function resubmitTenantJourneyTask(a: Actor): Promise<TenantApprovalOutcome<{ status: string | null }>> {
+export async function resubmitTenantJourneyTask(a: Actor & { readonly reason?: string | null }):
+Promise<TenantApprovalOutcome<{ status: string | null; auditFailed?: true }>> {
   const task = await journeyTask(a);
   if (refusedTask(task)) return task;
-  const r = await requestFreshApproval(a.organizationId, a.taskId);
+  const r = await requestFreshApproval(a.organizationId, a.taskId, undefined, {
+    userId: a.approverUserId, reason: a.reason ?? null, tier: 'tenant',
+  });
   if (!r.ok) return no('decision_refused', r.reason);
-  return { ok: true, status: r.status };
+  return r.auditFailed ? { ok: true, status: r.status, auditFailed: true } : { ok: true, status: r.status };
 }
 
 /** Withdraw an approval before the task is sent: appends `revoked`, cancels the task. */

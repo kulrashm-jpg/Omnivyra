@@ -49,16 +49,23 @@
  *     EXISTING `expired` status (no second expiry mechanism); a STALE one sends the task back
  *     to `awaiting_approval` for a fresh human approval. Every other refusal leaves it as is;
  *   requestFreshApproval  — the explicit resubmit of a task whose approval is stale.
+ * N2 — the explicit resubmit also appends ONE row to the existing `audit_logs` trail (action
+ * `OUTREACH_APPROVAL_RESUBMITTED`): who asked (the authenticated requester, never a body
+ * field), the task, the approval it supersedes, the verdict that made it resubmittable and
+ * the binding as it is now. Only the caller whose compare-and-set moved the task writes it;
+ * a refusal, a lost race or an already-awaiting task writes nothing.
  * Nothing here approves. A re-reviewed task is approved again only through `approval.ts`,
  * which recomputes and records a NEW binding; the old approval row stays as history.
  */
 
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { getOutreachTaskById, readApprovalHistory, transitionOutreachTaskState } from './storage';
 import { recordLifecycleTransition } from './telemetry';
 import { isTransitionAllowed } from './lifecycle';
 import { BRIDGED_TASK_PLANNER_VERSION, resolveEmailExecutionContext } from '../emailEngine/emailExecutionContext';
 import { APPROVAL_PROOF_MAX_AGE_MS } from './approvalPasskey';
+import { insertAuditLogStrict } from '../auditActorService';
+import { getRequestContext } from '../requestContext';
 import type { ApprovalAuthority, GovernanceEvaluation } from './governance';
 import type { OutreachTask, OutreachTaskStatus } from './types';
 
@@ -345,14 +352,97 @@ async function priorAttemptProblem(companyId: string, task: OutreachTask): Promi
   return redispatchProblem(companyId, task.id, resolveTransport(task.channel)?.external ?? isExternalChannel(task));
 }
 
+/** N2 — the `audit_logs.action` of an accepted explicit resubmission. */
+export const RESUBMISSION_AUDIT_ACTION = 'OUTREACH_APPROVAL_RESUBMITTED';
+export const RESUBMISSION_AUDIT_SCHEMA = 'outreach.approval.resubmission.v1';
+
+/**
+ * N2 — who asked for a fresh approval. `userId` is the AUTHENTICATED principal's id, taken
+ * by the route from the session, never from the request body. `audit_logs.actor_user_id` is
+ * a uuid, so anything else is no attributable requester.
+ */
+export interface FreshApprovalRequester {
+  readonly userId: string;
+  readonly reason?: string | null;
+  readonly correlationId?: string | null;
+  readonly tier?: 'tenant' | 'platform' | null;
+}
+
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const attributableRequester = (r: FreshApprovalRequester | undefined): string | null => {
+  const id = typeof r?.userId === 'string' ? r.userId.trim() : '';
+  return UUID_TEXT.test(id) ? id.toLowerCase() : null;
+};
+const auditText = (v: unknown, max: number): string | null =>
+  (typeof v === 'string' && v.trim() !== '' ? v.trim().slice(0, max) : null);
+
+/**
+ * N2 — the one audit row of an accepted resubmission, in the existing `audit_logs` trail.
+ * Written AFTER the compare-and-set (state first, like `approval.ts`), so only the winner
+ * writes, and a failed write is reported as `auditFailed`, never swallowed. Ids, codes and
+ * hashes only: no address and no message content. Never throws.
+ */
+async function recordResubmission(
+  companyId: string, task: OutreachTask & { id: string }, authority: ApprovalAuthority,
+  requesterId: string, requester: FreshApprovalRequester, at: string,
+): Promise<boolean> {
+  try {
+    let latest: Record<string, unknown> | null = null;
+    const read = await readApprovalHistory(companyId, task.id);
+    if (read.ok) latest = read.approvals.length > 0 ? read.approvals[read.approvals.length - 1] : null;
+    // The binding as it is now, over the same recipient the resubmit's own verdict used.
+    const namesRecipient = isExternalChannel(task) && !(isJourneyTask(task) && task.channel === 'email');
+    const current = await computeApprovalBinding(companyId, task, {
+      recipient: namesRecipient ? normalizeRecipient(latest?.approved_recipient) : null,
+    });
+    const ctx = getRequestContext();
+    const correlationId = auditText(requester.correlationId, 200) ?? auditText(ctx.correlationId, 200)
+      ?? auditText(ctx.requestId, 200) ?? randomUUID();
+    const previousHash = latest?.approved_content_hash;
+    const written = await insertAuditLogStrict({
+      actorUserId: requesterId,
+      action: RESUBMISSION_AUDIT_ACTION,
+      companyId,
+      metadata: {
+        schema: RESUBMISSION_AUDIT_SCHEMA,
+        task_id: task.id,
+        requester_user_id: requesterId,
+        tier: requester.tier ?? null,
+        approval_id: typeof latest?.id === 'string' ? latest.id : null,
+        approval_decision: typeof latest?.decision === 'string' ? latest.decision : null,
+        approval_decided_at: authority.decidedAt,
+        previous_status: task.status,
+        new_status: 'awaiting_approval',
+        previous_verdict: authority.verdict,
+        previous_verdict_reason: authority.reason,
+        previous_content_hash: isWellFormedApprovalHash(previousHash) ? previousHash : null,
+        current_content_hash: current.ok ? current.hash : null,
+        reason: auditText(requester.reason, 2000),
+        correlation_id: correlationId,
+        evaluated_at: at,
+        requested_at: new Date().toISOString(),
+        authorises_execution: false,
+      },
+    });
+    return written.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The explicit resubmit: send a task whose approval is STALE back to `awaiting_approval`
  * so a human can approve it afresh. Refused for any other verdict — a valid approval needs
  * no resubmission, and an expired, revoked or unreadable one is not stale. Approves nothing.
+ *
+ * N2 — `requester` is who asked. Without an attributable one the resubmit is refused and
+ * nothing is written; with one, the accepted transition appends one `audit_logs` row
+ * (`recordResubmission`). A task already awaiting approval returns before either, so a
+ * repeated resubmit records nothing.
  */
 export async function requestFreshApproval(
-  companyId: string, taskId: string, at: string = new Date().toISOString(),
-): Promise<{ ok: boolean; status: OutreachTaskStatus | null; reason: string }> {
+  companyId: string, taskId: string, at: string = new Date().toISOString(), requester?: FreshApprovalRequester,
+): Promise<{ ok: boolean; status: OutreachTaskStatus | null; reason: string; auditFailed?: true }> {
   const task = await getOutreachTaskById(companyId, taskId);
   if (!task || !task.id) return { ok: false, status: null, reason: 'no such task for this tenant' };
   if (task.status === 'awaiting_approval') return { ok: true, status: 'awaiting_approval', reason: 'already awaiting approval' };
@@ -370,6 +460,10 @@ export async function requestFreshApproval(
   if (sentBefore !== null) {
     return { ok: false, status: task.status, reason: `not resubmitted: ${sentBefore}; a fresh approval could never be sent` };
   }
+  const requesterId = attributableRequester(requester);
+  if (requesterId === null) {
+    return { ok: false, status: task.status, reason: 'not resubmitted: no attributable requester; a resubmission is recorded against the authenticated person who asked for it' };
+  }
   const moved = await transitionOutreachTaskState(companyId, task.id, task.status, 'awaiting_approval');
   if (!moved.ok) return { ok: false, status: task.status, reason: moved.error ?? 'transition failed' };
   if (!moved.changed) {
@@ -377,5 +471,7 @@ export async function requestFreshApproval(
     return { ok: false, status: current?.status ?? null, reason: `task is no longer ${task.status}` };
   }
   recordLifecycleTransition(task.status, 'awaiting_approval');
+  const audited = await recordResubmission(companyId, { ...task, id: task.id }, authority, requesterId, requester as FreshApprovalRequester, at);
+  if (!audited) return { ok: true, status: 'awaiting_approval', reason: authority.reason, auditFailed: true };
   return { ok: true, status: 'awaiting_approval', reason: authority.reason };
 }
