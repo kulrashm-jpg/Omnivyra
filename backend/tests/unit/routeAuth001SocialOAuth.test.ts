@@ -310,9 +310,18 @@ describe('/api/social/comments', () => {
     expect(mockIngestComments).toHaveBeenCalledWith('sp-a-teammate');
   });
 
-  it('reply: another tenant\'s accountId → denied, no platform call', async () => {
+  // Step C (owner ruling item 6): the reply action is removed for every caller,
+  // so another tenant's account is refused as 410, never reaching a platform.
+  it('reply: another tenant\'s accountId → 410 REPLY_REMOVED, no platform call', async () => {
     const r = await invoke(handler, { method: 'POST', as: 'A', body: { action: 'reply', platform: 'twitter', postId: 'pp-b', accountId: 'sa-b', replyText: 'hi' } });
-    expect([403, 404]).toContain(r.status);
+    expect(r.status).toBe(410);
+    expect(r.body).toMatchObject({ error: 'REPLY_REMOVED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reply: the caller\'s own account → also 410 REPLY_REMOVED (removed, not tenant-gated), no platform call', async () => {
+    const r = await invoke(handler, { method: 'POST', as: 'A', body: { action: 'reply', platform: 'twitter', postId: 'pp-a', accountId: 'sa-a', replyText: 'hi' } });
+    expect(r.status).toBe(410);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -270,14 +270,18 @@ const seedDiscoveredRecipient = () => {
 
 // ── Path runners: each returns how many sends reached the provider/hand-off ───
 
-/** Row 9: pages/api/social/comments.ts action=reply (LinkedIn) — direct fetch. */
-async function socialCommentReply(): Promise<number> {
+/**
+ * Row 9: pages/api/social/comments.ts action=reply (LinkedIn). Step C
+ * (`086106170`) removed the direct reply: the route answers 410 REPLY_REMOVED
+ * and calls no platform, so the path is gone rather than enforced.
+ */
+async function socialCommentReply(): Promise<{ sends: number; status: number; error: unknown }> {
   db.social_accounts = [{ id: 'acct-1', user_id: 'user-1', company_id: ORG }];
-  await callRoute(commentsRoute, {
+  const res = await callRoute(commentsRoute, {
     method: 'POST',
     body: { action: 'reply', platform: 'linkedin', postId: 'post-1', accountId: 'acct-1', commentId: 'comment-1', replyText: 'Thanks!' },
   });
-  return sends.fetch.filter((u) => u.includes('api.linkedin.com')).length;
+  return { sends: sends.fetch.filter((u) => u.includes('api.linkedin.com')).length, status: res.statusCode, error: res.body?.error };
 }
 
 type Enforced = { sends: number; reason: unknown };
@@ -357,7 +361,6 @@ async function whatsappPersonAnchor(): Promise<number> {
 // ── The table ─────────────────────────────────────────────────────────────────
 
 const PATHS: Array<[string, () => Promise<number>]> = [
-  ['social/comments direct reply (pages/api/social/comments.ts)', socialCommentReply],
   ['WhatsApp broadcast person anchor (whatsappBroadcastService.processBatch)', whatsappPersonAnchor],
   // K-6 is undecided for these; only E4 (domain reminder) is a decided exemption and is not listed.
   ['transactional company_referral email (emailService.sendCompanyAdminReferral)', () => transactionalEmail('company_referral')],
@@ -389,6 +392,20 @@ describe('egress enforced: the suppressed recipient is refused (L-3)', () => {
     gov.records = [];
     const out = await run();
     expect(out.sends).toBe(1);
+  });
+});
+
+// ── Path removed (step C) ─────────────────────────────────────────────────────
+// Neither enforced nor exempt: the send no longer exists, so its CURRENT and
+// PENDING tests are replaced by this one (GD-3 has nothing left to decide here).
+describe('egress removed: social/comments direct reply (pages/api/social/comments.ts)', () => {
+  it('answers 410 REPLY_REMOVED and calls no platform for a suppressed recipient', async () => {
+    expect(await socialCommentReply()).toEqual({ sends: 0, status: 410, error: 'REPLY_REMOVED' });
+  });
+
+  it('control: still 410 and no platform call with the suppression lifted (removed, not gated)', async () => {
+    gov.records = [];
+    expect(await socialCommentReply()).toEqual({ sends: 0, status: 410, error: 'REPLY_REMOVED' });
   });
 });
 
