@@ -13,11 +13,17 @@ import type {
   ChannelContentFinding,
   ChannelProfile,
   FieldRule,
+  FindingSeverity,
   FormatResult,
+  LimitEnforcement,
   ValidationResult,
 } from './types';
 
 const asText = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** D3: only an evidence-backed (`hard`) limit refuses; an advisory one warns. */
+const severityOf = (enforcement: LimitEnforcement): FindingSeverity => (enforcement === 'hard' ? 'error' : 'warning');
+const limitWord = (enforcement: LimitEnforcement): string => (enforcement === 'hard' ? 'limit' : 'recommended maximum');
 
 function checkField(rule: FieldRule, value: string, profile: ChannelProfile): ChannelContentFinding[] {
   const findings: ChannelContentFinding[] = [];
@@ -33,8 +39,8 @@ function checkField(rule: FieldRule, value: string, profile: ChannelProfile): Ch
   if (value.length > rule.length.maxCharacters) {
     findings.push({
       code: 'length_exceeded',
-      severity: 'error',
-      message: `"${f}" is ${value.length} characters; the ${profile.label} limit is ${rule.length.maxCharacters}`,
+      severity: severityOf(rule.length.enforcement),
+      message: `"${f}" is ${value.length} characters; the ${profile.label} ${limitWord(rule.length.enforcement)} is ${rule.length.maxCharacters}`,
       field: f,
     });
   }
@@ -44,16 +50,16 @@ function checkField(rule: FieldRule, value: string, profile: ChannelProfile): Ch
 
   const links = countLinks(value);
   if (links > 0 && !rule.links.allowed) {
-    findings.push({ code: 'links_not_allowed', severity: 'error', message: `"${f}" may not contain links on ${profile.label}`, field: f });
+    findings.push({ code: 'links_not_allowed', severity: severityOf(rule.links.enforcement), message: `"${f}" should not contain links on ${profile.label}`, field: f });
   } else if (rule.links.maxLinks !== null && links > rule.links.maxLinks) {
-    findings.push({ code: 'too_many_links', severity: 'error', message: `"${f}" has ${links} links; at most ${rule.links.maxLinks} allowed`, field: f });
+    findings.push({ code: 'too_many_links', severity: severityOf(rule.links.enforcement), message: `"${f}" has ${links} links; at most ${rule.links.maxLinks} recommended`, field: f });
   }
 
   const emoji = countEmoji(value);
   if (emoji > 0 && !rule.emoji.allowed) {
-    findings.push({ code: 'emoji_not_allowed', severity: 'error', message: `"${f}" may not contain emoji on ${profile.label}`, field: f });
+    findings.push({ code: 'emoji_not_allowed', severity: severityOf(rule.emoji.enforcement), message: `"${f}" should not contain emoji on ${profile.label}`, field: f });
   } else if (rule.emoji.maxEmoji !== null && emoji > rule.emoji.maxEmoji) {
-    findings.push({ code: 'too_many_emoji', severity: 'warning', message: `"${f}" has ${emoji} emoji; at most ${rule.emoji.maxEmoji} recommended`, field: f });
+    findings.push({ code: 'too_many_emoji', severity: severityOf(rule.emoji.enforcement), message: `"${f}" has ${emoji} emoji; at most ${rule.emoji.maxEmoji} recommended`, field: f });
   }
 
   findings.push(...checkPlaceholders(value, f, profile.personalizationPermitted));
@@ -71,8 +77,8 @@ function checkField(rule: FieldRule, value: string, profile: ChannelProfile): Ch
     if (sms.segments > profile.segments.maxSegments) {
       findings.push({
         code: 'sms_segments_exceeded',
-        severity: 'error',
-        message: `body needs ${sms.segments} ${sms.encoding.toUpperCase()} segments; at most ${profile.segments.maxSegments} allowed`,
+        severity: severityOf(profile.segments.enforcement),
+        message: `body needs ${sms.segments} ${sms.encoding.toUpperCase()} segments; at most ${profile.segments.maxSegments} ${profile.segments.enforcement === 'hard' ? 'allowed' : 'recommended'}`,
         field: f,
       });
     }

@@ -1,18 +1,24 @@
 /**
  * Social channel adapter.
  *
- * This does NOT define social platform profiles. It delegates to the two
- * existing sources and adds only outreach-layer checks on top:
+ * This does NOT define social platform profiles. It delegates to the existing
+ * sources and adds only outreach-layer checks on top (D3):
  * - style, emoji policy and natural word range: `getPlatformProfile` from
- *   `lib/content/platformAdaptationProfiles.ts` (the canonical adaptation registry);
- * - hard character cap: `PROMOTION_PLATFORM_CHAR_LIMITS` from
- *   `lib/content/promotionDraft.ts` (the existing per-platform cap map). A
- *   platform absent from that map gets NO hard cap here rather than an invented one.
+ *   `lib/content/platformAdaptationProfiles.ts`, the verified production
+ *   authority for STYLE. It defines no character limit, so everything taken
+ *   from it is advisory (a warning);
+ * - hard character cap: the `scheduled_posts` CHECK constraints
+ *   (`scheduledPostsCharLimit`, limitEvidence.ts), the only social caps the
+ *   database enforces. A platform without one gets NO hard cap here;
+ * - advisory character cap: `PROMOTION_PLATFORM_CHAR_LIMITS` from
+ *   `lib/content/promotionDraft.ts` (client-side, self-described advisory),
+ *   used only where no enforced cap exists.
  *
  * Social posts are public, so personalization placeholders are refused.
  */
 import { getPlatformProfile, type PlatformAdaptationProfile } from '../../content/platformAdaptationProfiles';
 import { PROMOTION_PLATFORM_CHAR_LIMITS } from '../../content/promotionDraft';
+import { scheduledPostsCharLimit } from './limitEvidence';
 import { checkPlaceholders } from './personalization';
 import { countEmoji, normalizeText } from './textRules';
 import type { ChannelContentFinding, FormatResult, ValidationResult } from './types';
@@ -22,22 +28,26 @@ export interface SocialChannelProfile {
   readonly platform: string;
   /** The canonical adaptation profile, exactly as `getPlatformProfile` returned it. */
   readonly adaptation: PlatformAdaptationProfile;
-  /** Hard cap from PROMOTION_PLATFORM_CHAR_LIMITS, or null when that map has none. */
+  /** Hard cap from the scheduled_posts CHECK constraints, or null when none backs one. */
   readonly maxCharacters: number | null;
+  /** Advisory cap from PROMOTION_PLATFORM_CHAR_LIMITS, only when there is no hard cap. */
+  readonly advisoryMaxCharacters: number | null;
   readonly wordRange: readonly [number, number];
-  /** platformAdaptationProfiles encodes "no emojis" as an empty emojiPolicy. */
+  /** platformAdaptationProfiles encodes "no emojis" as an empty emojiPolicy (style: advisory). */
   readonly emojiAllowed: boolean;
   readonly personalizationPermitted: false;
 }
 
 export function getSocialChannelProfile(platform: string | null | undefined): SocialChannelProfile {
   const adaptation = getPlatformProfile(platform);
-  const cap = PROMOTION_PLATFORM_CHAR_LIMITS[adaptation.platform];
+  const hard = scheduledPostsCharLimit(adaptation.platform);
+  const advisory = PROMOTION_PLATFORM_CHAR_LIMITS[adaptation.platform];
   return {
     channel: 'social',
     platform: adaptation.platform,
     adaptation,
-    maxCharacters: typeof cap === 'number' ? cap : null,
+    maxCharacters: hard,
+    advisoryMaxCharacters: hard === null && typeof advisory === 'number' ? advisory : null,
     wordRange: adaptation.wordRange,
     emojiAllowed: adaptation.emojiPolicy.trim() !== '',
     personalizationPermitted: false,
@@ -62,6 +72,13 @@ export function validateSocialPost(platform: string | null | undefined, body: st
       message: `"body" is ${text.length} characters; the ${profile.platform} limit is ${profile.maxCharacters}`,
       field: 'body',
     });
+  } else if (profile.advisoryMaxCharacters !== null && text.length > profile.advisoryMaxCharacters) {
+    findings.push({
+      code: 'length_exceeded',
+      severity: 'warning',
+      message: `"body" is ${text.length} characters; the ${profile.platform} recommended maximum is ${profile.advisoryMaxCharacters}`,
+      field: 'body',
+    });
   }
   const words = wordCount(text);
   const [lo, hi] = profile.wordRange;
@@ -74,7 +91,7 @@ export function validateSocialPost(platform: string | null | undefined, body: st
     });
   }
   if (!profile.emojiAllowed && countEmoji(text) > 0) {
-    findings.push({ code: 'emoji_not_allowed', severity: 'error', message: `the ${profile.platform} adaptation profile allows no emoji`, field: 'body' });
+    findings.push({ code: 'emoji_not_allowed', severity: 'warning', message: `the ${profile.platform} adaptation profile recommends no emoji`, field: 'body' });
   }
   findings.push(...checkPlaceholders(text, 'body', false));
   return { valid: !findings.some((x) => x.severity === 'error'), findings };

@@ -5,6 +5,8 @@
 export * from './types';
 export * from './profiles';
 export * from './channels';
+export { HARD_LIMIT_EVIDENCE, SCHEDULED_POSTS_CHAR_LIMITS, scheduledPostsCharLimit } from './limitEvidence';
+export type { LimitEvidence } from './limitEvidence';
 export { formatChannelContent, validateChannelContent } from './channelRules';
 export {
   PERSONALIZATION_FIELDS,

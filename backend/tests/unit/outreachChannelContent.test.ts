@@ -1,6 +1,8 @@
 /**
  * Outreach channel-content layer: profiles, formatters, validators.
  */
+import fs from 'fs';
+import path from 'path';
 import {
   analyzeSms,
   CHANNEL_PROFILES,
@@ -12,7 +14,9 @@ import {
   formatVoiceScript,
   formatWhatsApp,
   getSocialChannelProfile,
+  HARD_LIMIT_EVIDENCE,
   PERSONALIZATION_FIELDS as LAYER_FIELDS,
+  SCHEDULED_POSTS_CHAR_LIMITS,
   SMS_PROFILE,
   validateCommunityReply,
   validateEmail,
@@ -33,7 +37,7 @@ describe('profiles', () => {
     expect(CHANNEL_PROFILES.email.fields.map((f) => [f.name, f.required])).toEqual([['subject', true], ['body', true]]);
     expect(CHANNEL_PROFILES.sms.status).toBe('formatting_only');
     expect(CHANNEL_PROFILES.voice_script.status).toBe('formatting_only');
-    expect(CHANNEL_PROFILES.sms.segments).toEqual({ maxSegments: 3, encodingPolicy: 'auto' });
+    expect(CHANNEL_PROFILES.sms.segments).toEqual({ maxSegments: 3, encodingPolicy: 'auto', enforcement: 'advisory' });
     expect(CHANNEL_PROFILES.community_reply.personalizationPermitted).toBe(false);
   });
 });
@@ -63,23 +67,37 @@ describe('required fields', () => {
 });
 
 describe('length, link and emoji rules', () => {
-  it('rejects content over the channel limit and accepts content at it', () => {
-    expect(codes(validateWhatsApp({ body: 'a'.repeat(4097) }))).toContain('length_exceeded');
+  // D3: an evidence-backed limit refuses; a policy number only warns.
+  it('refuses content over an evidence-backed limit and accepts content at it', () => {
+    expect(validateWhatsApp({ body: 'a'.repeat(4097) }).findings).toEqual([expect.objectContaining({ code: 'length_exceeded', severity: 'error' })]);
     expect(validateWhatsApp({ body: 'a'.repeat(4096) }).valid).toBe(true);
-    expect(codes(validateEmail({ subject: 's'.repeat(201), body: 'b' }))).toContain('length_exceeded');
-    expect(codes(validateCommunityReply({ body: 'a'.repeat(1501) }))).toContain('length_exceeded');
-    expect(codes(validateVoiceScript({ body: 'a'.repeat(3001) }))).toContain('length_exceeded');
+    const subject = validateEmail({ subject: 's'.repeat(201), body: 'b' });
+    expect(subject.valid).toBe(false);
+    expect(subject.findings).toEqual([expect.objectContaining({ code: 'length_exceeded', severity: 'error', field: 'subject' })]);
   });
 
-  it('email subject must be one line and carry no link', () => {
-    expect(codes(validateEmail({ subject: 'a\nb', body: 'x' }))).toContain('line_break_not_allowed');
-    expect(codes(validateEmail({ subject: 'see https://x.io', body: 'x' }))).toContain('links_not_allowed');
+  it('warns, but does not refuse, over an advisory policy length', () => {
+    for (const r of [
+      validateCommunityReply({ body: 'a'.repeat(1501) }),
+      validateVoiceScript({ body: 'a'.repeat(3001) }),
+      validateEmail({ subject: 'Hi', body: 'b'.repeat(10001) }),
+    ]) {
+      expect(r.valid).toBe(true);
+      expect(r.findings).toEqual([expect.objectContaining({ code: 'length_exceeded', severity: 'warning' })]);
+    }
   });
 
-  it('voice scripts allow no links or emoji; community replies cap links', () => {
-    expect(codes(validateVoiceScript({ body: 'visit www.example.com' }))).toEqual(['links_not_allowed']);
-    expect(codes(validateVoiceScript({ body: 'great \u{1F600}' }))).toEqual(['emoji_not_allowed']);
-    expect(codes(validateCommunityReply({ body: 'https://a.io and https://b.io' }))).toEqual(['too_many_links']);
+  it('email subject must be one line (an error); a link in it is advised against', () => {
+    expect(validateEmail({ subject: 'a\nb', body: 'x' }).findings).toEqual([expect.objectContaining({ code: 'line_break_not_allowed', severity: 'error' })]);
+    const linked = validateEmail({ subject: 'see https://x.io', body: 'x' });
+    expect(linked.valid).toBe(true);
+    expect(linked.findings).toEqual([expect.objectContaining({ code: 'links_not_allowed', severity: 'warning' })]);
+  });
+
+  it('link and emoji counts are advisory on every channel', () => {
+    expect(validateVoiceScript({ body: 'visit www.example.com' }).findings).toEqual([expect.objectContaining({ code: 'links_not_allowed', severity: 'warning' })]);
+    expect(validateVoiceScript({ body: 'great \u{1F600}' }).findings).toEqual([expect.objectContaining({ code: 'emoji_not_allowed', severity: 'warning' })]);
+    expect(validateCommunityReply({ body: 'https://a.io and https://b.io' }).findings).toEqual([expect.objectContaining({ code: 'too_many_links', severity: 'warning' })]);
   });
 });
 
@@ -99,16 +117,22 @@ describe('SMS encoding and segments', () => {
     expect(analyzeSms('\u{1F600}')).toMatchObject({ encoding: 'ucs2', units: 2 });
   });
 
-  it('flags UCS-2 as a warning and too many segments as an error', () => {
+  it('flags UCS-2 and the 3-segment policy as warnings (no SMS provider limit is evidenced)', () => {
     expect(validateSms({ body: 'ça va' }).findings).toEqual([expect.objectContaining({ code: 'sms_ucs2_encoding', severity: 'warning' })]);
     expect(validateSms({ body: 'ça va' }).valid).toBe(true);
     const long = validateSms({ body: 'ç'.repeat(202) });
     expect(codes(long)).toEqual(['sms_ucs2_encoding', 'sms_segments_exceeded']);
-    expect(long.valid).toBe(false);
+    expect(long.findings.every((f) => f.severity === 'warning')).toBe(true);
+    expect(long.valid).toBe(true);
+  });
+
+  it('a hard segment rule (with evidence) is an error', () => {
+    const hard = { ...SMS_PROFILE, segments: { maxSegments: 3, encodingPolicy: 'auto' as const, enforcement: 'hard' as const } };
+    expect(formatChannelContent(hard, { body: 'ç'.repeat(202) }).content).toBeNull();
   });
 
   it('gsm7_only policy turns UCS-2 into an error', () => {
-    const strict = { ...SMS_PROFILE, segments: { maxSegments: 3, encodingPolicy: 'gsm7_only' as const } };
+    const strict = { ...SMS_PROFILE, segments: { maxSegments: 3, encodingPolicy: 'gsm7_only' as const, enforcement: 'advisory' as const } };
     expect(formatChannelContent(strict, { body: 'ça va' }).findings[0]).toMatchObject({ code: 'sms_encoding_not_gsm7', severity: 'error' });
   });
 });
@@ -192,18 +216,80 @@ describe('social adapter delegates to platformAdaptationProfiles', () => {
     expect(getSocialChannelProfile('mastodon').adaptation).toEqual(getPlatformProfile('mastodon'));
   });
 
-  it('takes word range and emoji policy from the adaptation profile and caps from promotionDraft', () => {
+  it('takes style from the adaptation profile, hard caps from scheduled_posts, advisory caps from promotionDraft (D3)', () => {
     const x = getSocialChannelProfile('x');
     expect(x.wordRange).toBe(getPlatformProfile('x').wordRange);
-    expect(x.maxCharacters).toBe(PROMOTION_PLATFORM_CHAR_LIMITS.x);
+    expect(x.maxCharacters).toBe(SCHEDULED_POSTS_CHAR_LIMITS.twitter);
+    expect(x.advisoryMaxCharacters).toBeNull();
     expect(getSocialChannelProfile('reddit').emojiAllowed).toBe(false);
-    expect(getSocialChannelProfile('youtube').maxCharacters).toBeNull();
+    // Enforced by the database, so hard here (it had no cap at all before D3).
+    expect(getSocialChannelProfile('youtube').maxCharacters).toBe(5000);
+    // No enforced cap: the promotionDraft number is advisory only.
+    for (const p of ['threads', 'pinterest', 'reddit']) {
+      expect(getSocialChannelProfile(p).maxCharacters).toBeNull();
+      expect(getSocialChannelProfile(p).advisoryMaxCharacters).toBe(PROMOTION_PLATFORM_CHAR_LIMITS[p]);
+    }
   });
 
   it('validates against those delegated rules', () => {
-    expect(codes(validateSocialPost('x', 'word '.repeat(60)))).toContain('length_exceeded');
-    expect(codes(validateSocialPost('reddit', 'nice \u{1F600}'))).toContain('emoji_not_allowed');
+    expect(validateSocialPost('x', 'word '.repeat(60)).findings).toContainEqual(expect.objectContaining({ code: 'length_exceeded', severity: 'error' }));
+    const threads = validateSocialPost('threads', 'word '.repeat(110));
+    expect(threads.valid).toBe(true);
+    expect(threads.findings).toContainEqual(expect.objectContaining({ code: 'length_exceeded', severity: 'warning' }));
+    expect(validateSocialPost('reddit', 'nice \u{1F600}').findings).toContainEqual(expect.objectContaining({ code: 'emoji_not_allowed', severity: 'warning' }));
     expect(codes(validateSocialPost('x', 'too short'))).toEqual(['word_range_outside_profile']);
     expect(formatSocialPost('ig', ' hello ').content?.fields).toEqual({ body: 'hello', platform: 'instagram' });
+  });
+});
+
+describe('D3: every hard limit is evidence-backed and pinned to its source', () => {
+  const repo = path.resolve(__dirname, '../../..');
+  const read = (rel: string) => fs.readFileSync(path.join(repo, rel), 'utf8');
+
+  it('the hard social caps equal the scheduled_posts CHECK constraints exactly', () => {
+    const baseline = read('supabase/_schema/baseline.sql');
+    const fromDb: Record<string, number> = {};
+    for (const m of baseline.matchAll(/CONSTRAINT chk_(\w+)_content CHECK \(\(\(\(platform\)::text <> '(\w+)'::text\) OR \(length\(content\) <= (\d+)\)\)\)/g)) {
+      expect(m[1]).toBe(m[2]);
+      fromDb[m[2]] = Number(m[3]);
+    }
+    expect(Object.keys(fromDb).length).toBeGreaterThan(0);
+    expect(fromDb).toEqual(SCHEDULED_POSTS_CHAR_LIMITS);
+  });
+
+  it('unifiedContentProcessor PLATFORM_CHAR_LIMITS mirrors them on every enforced platform', () => {
+    const ucp = read('backend/services/unifiedContentProcessor.ts');
+    const block = ucp.slice(ucp.indexOf('PLATFORM_CHAR_LIMITS'), ucp.indexOf('};', ucp.indexOf('PLATFORM_CHAR_LIMITS')));
+    for (const [platform, limit] of Object.entries(SCHEDULED_POSTS_CHAR_LIMITS)) {
+      expect(block).toMatch(new RegExp(`\\b${platform}:\\s*${limit},`));
+    }
+    expect(block).toMatch(/\bx:\s*280,/);
+  });
+
+  it('the email subject limit equals the generator constraint', () => {
+    expect(read('backend/services/emailEngine/emailContentGenerator.ts')).toContain(`const SUBJECT_MAX = ${HARD_LIMIT_EVIDENCE.emailSubjectMax.value};`);
+  });
+
+  it('only the evidenced lengths are hard; every link, emoji and segment rule is advisory', () => {
+    const hard = Object.values(CHANNEL_PROFILES).flatMap((p) => p.fields
+      .filter((f) => f.length.enforcement === 'hard')
+      .map((f) => `${p.channel}.${f.name}=${f.length.maxCharacters}`));
+    expect(hard.sort()).toEqual(['email.subject=200', 'whatsapp.body=4096']);
+    for (const p of Object.values(CHANNEL_PROFILES)) {
+      for (const f of p.fields) {
+        expect(f.links.enforcement).toBe('advisory');
+        expect(f.emoji.enforcement).toBe('advisory');
+      }
+      if (p.segments) expect(p.segments.enforcement).toBe('advisory');
+      expect(p.basis).toMatch(/advisory|hard/);
+    }
+  });
+
+  it('negative controls: required fields, line breaks in a subject and unauthorized personalization still refuse', () => {
+    expect(validateCommunityReply({ body: 'Thanks {{first_name}}' }).valid).toBe(false);
+    expect(validateEmail({ subject: 'a\nb', body: 'x' }).valid).toBe(false);
+    expect(validateWhatsApp({ body: '  ' }).valid).toBe(false);
+    expect(validateWhatsApp({ body: 'Hi {{email}}' }).valid).toBe(false);
+    expect(validateSocialPost('linkedin', 'Hi {{first_name}}').valid).toBe(false);
   });
 });

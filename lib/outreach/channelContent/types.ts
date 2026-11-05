@@ -24,10 +24,20 @@ export interface ChannelContentFinding {
 /** SMS encoding. GSM-7 is the default alphabet; anything outside it forces UCS-2. */
 export type SmsEncoding = 'gsm7' | 'ucs2';
 
+/**
+ * D3 (owner ruling, Checkpoint 1 item 8): only an evidence-backed limit (a
+ * provider-documented limit or a verified existing constraint) is `hard`, and
+ * breaking it is an error. Every other number is `advisory`: a warning, never
+ * a refusal. See docs/outreach/platform/CONTENT-LIMITS-AUTHORITY.md.
+ */
+export type LimitEnforcement = 'hard' | 'advisory';
+
 export interface LengthRule {
-  /** Hard maximum, in characters (UTF-16 code units, as JS counts them). Exceeding it is an error. */
+  /** Maximum, in characters (UTF-16 code units, as JS counts them). */
   readonly maxCharacters: number;
-  /** Minimum non-whitespace length; below it is an error. */
+  /** Whether exceeding `maxCharacters` is an error (`hard`) or a warning. */
+  readonly enforcement: LimitEnforcement;
+  /** Minimum non-whitespace length; below it is an error (an empty message is never valid). */
   readonly minCharacters: number;
 }
 
@@ -35,12 +45,14 @@ export interface LinkRule {
   readonly allowed: boolean;
   /** Maximum number of links; `null` means no cap beyond `allowed`. */
   readonly maxLinks: number | null;
+  readonly enforcement: LimitEnforcement;
 }
 
 export interface EmojiRule {
   readonly allowed: boolean;
   /** Maximum number of emoji; `null` means no cap beyond `allowed`. */
   readonly maxEmoji: number | null;
+  readonly enforcement: LimitEnforcement;
 }
 
 export interface FieldRule {
@@ -54,8 +66,10 @@ export interface FieldRule {
 }
 
 export interface SmsSegmentRule {
-  /** Maximum number of concatenated segments; more is an error. */
+  /** Maximum number of concatenated segments. */
   readonly maxSegments: number;
+  /** Whether exceeding `maxSegments` is an error (`hard`) or a warning. */
+  readonly enforcement: LimitEnforcement;
   /** Encoding policy: `auto` detects; `gsm7_only` makes a UCS-2 body an error. */
   readonly encodingPolicy: 'auto' | 'gsm7_only';
 }
