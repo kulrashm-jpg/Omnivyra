@@ -224,11 +224,14 @@ describe('Q-4 — not wired until SC7-R', () => {
     }
     return out;
   };
-  it('the only runtime importer is the operator resume route (a person-typed date), never a classifier path', () => {
+  it('the only runtime importers are the operator resume route and its reply evaluation (a person-typed date), never a classifier path', () => {
     const importers = [...walk(path.join(ROOT, 'backend')), ...walk(path.join(ROOT, 'pages'))]
       .filter((f) => /journeyRetiming['"]/.test(fs.readFileSync(f, 'utf8')))
-      .map((f) => path.relative(ROOT, f).split(path.sep).join('/'));
-    expect(importers).toEqual(['pages/api/execution-instances/[id].ts']);
+      .map((f) => path.relative(ROOT, f).split(path.sep).join('/')).sort();
+    // Prompt 5: the evaluation module is called only by that route, for a person's `retime`.
+    expect(importers).toEqual(['backend/services/orchestration/journeyReplyEvaluation.ts', 'pages/api/execution-instances/[id].ts']);
+    const evaluation = fs.readFileSync(path.join(ROOT, 'backend/services/orchestration/journeyReplyEvaluation.ts'), 'utf8');
+    expect(evaluation).not.toMatch(/engagementClassification|replyClassification|replyConsequence/);
   });
 
   it('not_before has exactly one writer path: deferStepUntil, called only by the resume', () => {

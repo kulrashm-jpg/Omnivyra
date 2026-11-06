@@ -80,6 +80,25 @@ export async function recordJourneyDecisions(
   return { failed, firstError };
 }
 
+/**
+ * A PERSON's decision on a run or step, with actor provenance: `actor:<user id>` is the
+ * first reason, then the decision's own reason codes. The progression route established
+ * this shape (`[id]/progression.ts`); the reply evaluation on the run route reuses it.
+ * Moved here from progression.ts in Prompt 5 and WIDENED: the old helper kept only the
+ * actor and dropped `d.reasons`; this one keeps them. Progression's calls pass
+ * `reasons: []`, so their records are unchanged.
+ * True means it could not be written: the action stands with no record of it, and the
+ * caller is told. Never throws.
+ */
+export async function recordPersonDecision(
+  organizationId: string,
+  actorUserId: unknown,
+  d: JourneyDecisionInput,
+): Promise<boolean> {
+  const recorded = await recordJourneyDecisions(organizationId, [{ ...d, reasons: [`actor:${String(actorUserId)}`, ...d.reasons] }]);
+  return recorded.failed > 0;
+}
+
 const toDecision = (r: Record<string, unknown>): RecordedJourneyDecision => ({
   id: String(r.id),
   executionInstanceId: String(r.execution_instance_id),

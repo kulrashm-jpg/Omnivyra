@@ -46,7 +46,7 @@
 
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
-import { getExecutionInstance, setExecutionInstanceState, TERMINAL_LIFECYCLE_STATES, type ExecutionInstance } from '../executionInstances/executionInstanceStore';
+import { compareAndSetExecutionInstanceState, getExecutionInstance, TERMINAL_LIFECYCLE_STATES, type ExecutionInstance } from '../executionInstances/executionInstanceStore';
 import { getPlanForInstance } from '../executionPlans/executionPlanStore';
 import { deferStepUntil, listProgressionSteps } from '../workflowExecution/stepProgressionStore';
 import { loadIndividualFacts } from './individualIntelligence';
@@ -329,7 +329,7 @@ export async function loadRetimingInputs(
 
 export type ResumeRefusal =
   | 'run_not_found' | 'not_paused' | 'invalid_return_date' | 'return_date_in_past' | 'return_date_too_far'
-  | 'no_step_to_defer' | 'held_for_review' | 'superseded';
+  | 'no_step_to_defer' | 'held_for_review' | 'superseded' | 'resume_race_lost';
 
 export type ResumeOutcome =
   | { readonly ok: true; readonly instance: ExecutionInstance; readonly notBefore: string; readonly planStepId: string }
@@ -367,8 +367,10 @@ export function validateOperatorReturnDate(raw: unknown, now: string, zone: stri
 /**
  * A person resumes a PAUSED run with a structured return date. The date goes through
  * `decideFollowUpRetiming`; a `retime` persists `not_before` on the run's next step (the
- * ready one, else the lowest pending one) FIRST, and only then is the run made active, so
- * no sweep ever sees it active without the floor. Anything else leaves the run paused.
+ * ready one, else the lowest pending one) FIRST, and only then is the run made active, by a
+ * compare-and-set from `paused` (O2-F1), so no sweep ever sees it active by this resume
+ * without the floor; a concurrent resume that got there first makes this one
+ * `resume_race_lost`. Anything else leaves the run paused.
  * Tenant authorization is the caller's (the route's guards, unchanged).
  *
  * The reply that suspended the run is the thing the person evaluated, so a recorded
@@ -405,7 +407,20 @@ export async function resumeJourneyWithReturnDate(
   }
   const deferred = await deferStepUntil({ organizationId, stepId: step.id, notBefore: decision.nextEligibleAt });
   if (deferred === null) return { ok: false, code: 'no_step_to_defer', reason: 'the step is gone' };
-  const updated = await setExecutionInstanceState({ organizationId, instanceId: executionInstanceId, lifecycleState: 'active' });
-  if (updated === null) return { ok: false, code: 'run_not_found', reason: 'no such execution instance' };
-  return { ok: true, instance: updated, notBefore: deferred.notBefore ?? decision.nextEligibleAt, planStepId: step.id };
+  // O2-F1 — the floor is written; the run moves ONLY from `paused`. A plain resume (or any
+  // other change) that reached the run after the paused check above wins, and this resume
+  // reports that it lost instead of claiming the run. So the run is never made active by
+  // THIS resume without its floor, and a resume that lost never reports success. The floor
+  // it already wrote stays: a floor only ever delays, never brings a send forward.
+  const moved = await compareAndSetExecutionInstanceState({
+    organizationId, instanceId: executionInstanceId, expectedState: 'paused', lifecycleState: 'active',
+  });
+  if (moved.applied !== true) {
+    if (moved.reason === 'not_found') return { ok: false, code: 'run_not_found', reason: 'no such execution instance' };
+    return {
+      ok: false, code: 'resume_race_lost',
+      reason: `the run became ${moved.current?.lifecycleState ?? 'unknown'} while this resume was being applied; it was not moved by this resume (the return date stays as the step's floor and can only delay it)`,
+    };
+  }
+  return { ok: true, instance: moved.instance, notBefore: deferred.notBefore ?? decision.nextEligibleAt, planStepId: step.id };
 }

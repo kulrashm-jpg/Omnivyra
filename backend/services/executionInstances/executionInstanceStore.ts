@@ -400,6 +400,54 @@ export async function setExecutionInstanceState(input: {
   return found.length ? toInstance(found[0]) : null;
 }
 
+export type ConditionalStateResult =
+  | { readonly applied: true; readonly instance: ExecutionInstance }
+  | { readonly applied: false; readonly reason: 'not_found' | 'state_changed'; readonly current: ExecutionInstance | null };
+
+/**
+ * O2-F1 — move an instance's lifecycle state ONLY from `expectedState`: a compare-and-set.
+ *
+ * `setExecutionInstanceState` reads the row and then writes it unconditionally, so a
+ * second writer landing between the two is silently overwritten. A resume is exactly that
+ * hazard: a person's resume with a return date writes the step's floor and only then makes
+ * the run active, and a plain resume landing in between would make the run active before
+ * the floor exists. Every resume therefore moves the run with this, from `paused`; the
+ * loser learns it lost (`state_changed`, with the state it found) instead of believing
+ * its own change applied.
+ *
+ * One conditional UPDATE: the state predicate is in the WHERE clause, so the database
+ * decides the race and at most one writer moves the row. A terminal `expectedState` is
+ * refused before the wire: a terminal run never moves.
+ */
+export async function compareAndSetExecutionInstanceState(input: {
+  organizationId: string;
+  instanceId: string;
+  expectedState: LifecycleState;
+  lifecycleState: LifecycleState;
+}): Promise<ConditionalStateResult> {
+  assertTenant(input.organizationId);
+  const instanceId = assertUuid(input.instanceId, 'instanceId', 'invalid_instance');
+  for (const s of [input.expectedState, input.lifecycleState]) {
+    if (!LIFECYCLE_STATES.includes(s)) fail(`lifecycleState must be one of ${LIFECYCLE_STATES.join(' | ')}`, 'invalid_state');
+  }
+  if (isTerminalState(input.expectedState)) {
+    fail(`a ${input.expectedState} instance is terminal and never moves — create a new instance`, 'terminal_instance');
+  }
+
+  const res = await ownedDbTable(EXECUTION_INSTANCES_TABLE)
+    .update({ lifecycle_state: input.lifecycleState })
+    .eq('organization_id', input.organizationId)
+    .eq('id', instanceId)
+    .eq('lifecycle_state', input.expectedState)
+    .select(INSTANCE_COLUMNS);
+  if (res.error) translate(res.error, 'lifecycle transition failed');
+  const moved = rows(res.data);
+  if (moved.length) return { applied: true, instance: toInstance(moved[0]) };
+
+  const current = await getExecutionInstance(input.organizationId, instanceId);
+  return { applied: false, reason: current === null ? 'not_found' : 'state_changed', current };
+}
+
 /*
  * THERE IS DELIBERATELY NO DELETE, AND NO IDENTITY EDIT.
  *
