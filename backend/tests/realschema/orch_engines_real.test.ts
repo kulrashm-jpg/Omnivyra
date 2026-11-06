@@ -199,7 +199,7 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
     });
   });
 
-  it('a real inbound reply, persisted by the real processor, ends the journey and reaches PI', async () => {
+  it('a real inbound reply, persisted by the real processor, suspends the journey and reaches PI not at all (X-3)', async () => {
     await inRollback(async () => {
       const { instanceId, prospectId } = await scene([wa('intro'), wa('followup')]);
       await sweep(waAdapters());
@@ -213,7 +213,12 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
       expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
       expect(await instanceState(instanceId)).toBe('paused');
       expect(metaCalls).toHaveLength(1);                    // no follow-up
-      expect((await lifecycle(ORG_A, prospectId)).at(-1)).toMatchObject({ state: 'engaged', evidence_kind: 'engagement_thread' });
+      // X-3 (Prompt 5) — CHANGED: was `{ state: 'engaged', evidence_kind: 'engagement_thread' }`.
+      // An unclassified inbound is not engagement: PI's ledger is where the scene left it.
+      const ledger = await lifecycle(ORG_A, prospectId);
+      expect(ledger.at(-1)).toMatchObject({ state: 'identified' });
+      expect(ledger.some((row) => row.state === 'engaged' || row.evidence_kind === 'engagement_thread')).toBe(false);
+      expect(r.counters.lifecycle_transitions_written).toBe(0);
     });
   });
 

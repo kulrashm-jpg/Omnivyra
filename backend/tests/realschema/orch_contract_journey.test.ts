@@ -624,7 +624,13 @@ describe('a WhatsApp reply counts only after this run actually reached out', () 
       expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
       expect(await instanceState(instanceId)).toBe('paused');
       const page = await readJourneyEvents(ORG_A, instanceId);
-      expect(page.events.map((e: { type: string }) => e.type)).toContain('response.replied');
+      // X-3 (contract 0.4.0) — CHANGED: was `toContain('response.replied')`. The inbound nobody
+      // has evaluated is response.received, code unclassified, and never positive engagement.
+      const types = page.events.map((e: { type: string }) => e.type);
+      expect(types).toContain('response.received');
+      expect(types).not.toContain('response.replied');
+      expect(page.events.find((e: { type: string }) => e.type === 'response.received')).toMatchObject({ code: 'unclassified', positiveEngagement: false, channel: 'whatsapp' });
+      expect(page.events.filter((e: { positiveEngagement: boolean }) => e.positiveEngagement)).toEqual([]);
       expect(JSON.stringify(page)).not.toContain('hello');
     });
   });
