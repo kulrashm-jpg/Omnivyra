@@ -95,10 +95,12 @@ jest.mock('../../services/leadOutreachExecution/storage', () => {
       return { ok: true };
     },
     // outreach_outcomes_idempotent (20260910000000:231) + uq_outreach_outcomes_provider_event (20260915000000:58)
+    // + idx_outreach_outcomes_manual_once (20270128000000, N-3: one MANUAL row per company, task, type)
     appendOutcome: async (r: Row) => {
       const dup = rows('outreach_outcomes').some((x) =>
         (x.company_id === r.companyId && x.task_id === r.taskId && x.outcome_type === r.outcomeType && x.occurred_at === r.occurredAt)
-        || (r.providerEventId != null && x.company_id === r.companyId && x.provider === r.provider && x.provider_event_id === r.providerEventId));
+        || (r.providerEventId != null && x.company_id === r.companyId && x.provider === r.provider && x.provider_event_id === r.providerEventId)
+        || (r.source === 'manual' && x.source === 'manual' && x.company_id === r.companyId && x.task_id === r.taskId && x.outcome_type === r.outcomeType));
       if (dup) return { ok: true, duplicate: true };
       n += 1;
       rows('outreach_outcomes').push({
@@ -507,11 +509,14 @@ describe('operator path: POST /api/outreach/outcomes (unchanged by X-3)', () => 
     expect((await events()).filter((e) => e.source.table === 'outreach_outcomes')).toHaveLength(1);
   });
 
-  it('GAP-9: the same reply reported with a different occurredAt is a SECOND row and a second response.replied', async () => {
+  // GAP-9 closed by Outreach N-3 (96c314795): the database holds one MANUAL row per company, task
+  // and type (idx_outreach_outcomes_manual_once), proved on real schema in n4_whatsapp_inbox_retention.
+  // Provider, import and internal rows keep their own keys; only source = 'manual' collapses.
+  it('N-3: the same reply reported with a different occurredAt is a duplicate, one row and one response.replied', async () => {
     await post(replied);
-    await post({ ...replied, occurredAt: '2030-01-03T10:05:00.000Z' });
-    expect(fakeDb.tables.outreach_outcomes).toHaveLength(2);
-    expect((await events()).filter((e) => e.type === 'response.replied')).toHaveLength(2);
+    expect((await post({ ...replied, occurredAt: '2030-01-03T10:05:00.000Z' })).body).toMatchObject({ ok: true, duplicate: true });
+    expect(fakeDb.tables.outreach_outcomes).toHaveLength(1);
+    expect((await events()).filter((e) => e.type === 'response.replied')).toHaveLength(1);
   });
 
   it('PI: the sweep feeds the outcome row by id, and the interpreter keys it `outcome:<id>`', async () => {
