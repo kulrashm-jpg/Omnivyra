@@ -307,11 +307,39 @@ export interface RunDiscoveryResult {
   readonly pagesFetched: number;
   readonly resultsObserved: number;
   readonly resultsIngested: number;
+  /**
+   * Of the records this run ingested, how many reached `lead_intelligence` —
+   * the store the Lead Database reads first — and how many need attention
+   * because their projection failed or is unconfirmed.
+   *
+   * `resultsIngested` is PROJECTION-BLIND by its own definition: the ledger
+   * column counts what the ingestion boundary accepted, and a record whose
+   * projection failed really did ingest — its person, employer, canonical
+   * prospect and evidence are all durable. That is correct, and it is also why
+   * reporting only that number let a run in which NOT ONE row reached the read
+   * model close as `completed`/`discovered` with
+   * `resultsIngested === resultsObserved`. The three ingestion ROUTES were
+   * fixed for exactly this (`projected`/`notProjected` in their 200 bodies);
+   * discovery was still reading only `succeeded`.
+   *
+   * `null` means the ingestion boundary stated nothing about projection. That
+   * is UNKNOWN — not zero, and not success. An unknown must degrade to
+   * unknown, because defaulting it the other way is precisely the defect.
+   */
+  readonly resultsProjected: number | null;
+  readonly resultsNeedingAttention: number | null;
   readonly status: 'completed' | 'failed' | 'refused_pre_call';
   readonly outcome: string | null;
   readonly stopReason:
     | 'provider_exhausted' | 'max_pages' | 'max_results' | 'max_provider_calls'
-    | 'provider_failed' | 'marker_failed' | null;
+    | 'provider_failed' | 'marker_failed'
+    /**
+     * The executor itself raised after claiming the attempt (Prompt 2B). It is
+     * NOT a provider refusal and not a bounds stop: it means this code failed
+     * while holding a lease, and the row was closed by the guard rather than
+     * left open until the lease expired.
+     */
+    | 'executor_failed' | null;
   /**
    * The provider's typed error, when the run failed because the provider (or
    * the transport to it) refused. Passed through from the adapter unchanged,
@@ -368,6 +396,13 @@ export async function runDiscoveryExecution(input: {
     throw new Error(`discovery execution ${executionId} is already closed (${row.executionStatus})`);
   }
 
+  // ── READ-MODEL PROJECTION TRUTH, FOLDED ACROSS PAGES ────────────────────
+  // `reported` goes false and STAYS false the moment a batch result does not
+  // state its projection counters. Pessimistic on purpose, and the same rule
+  // the orchestrator applies to a sink it never reached: a later change that
+  // stops reporting degrades to "unconfirmed", never to "success".
+  const projection = { reported: true, projected: 0, attention: 0 };
+
   const close = async (
     status: 'completed' | 'failed' | 'refused_pre_call',
     callState: 'not_called' | 'called' | 'unknown',
@@ -396,6 +431,11 @@ export async function runDiscoveryExecution(input: {
     return {
       executionId, providerCalls: state.calls, pagesFetched: state.pages,
       resultsObserved: state.observed, resultsIngested: state.ingested,
+      // Reported on EVERY close, failures included: a run that died after
+      // ingesting a page still ingested it, and the operator still needs to
+      // know whether those prospects are visible.
+      resultsProjected: projection.reported ? projection.projected : null,
+      resultsNeedingAttention: projection.reported ? projection.attention : null,
       status, outcome, stopReason,
       providerError: extra.providerError ?? null,
       providerUsage: extra.providerUsage ?? null,
@@ -409,152 +449,276 @@ export async function runDiscoveryExecution(input: {
     calls: row.providerCallsMade,
   };
 
-  // ── PRE-TRANSPORT REFUSALS ──────────────────────────────────────────────
-  const credential = await credentialPort.resolveCredential({
-    organizationId, providerId: row.providerKey,
-  });
-  if (!credential) {
-    return close('refused_pre_call', 'not_called', 'credential_missing',
-      'no tenant credential is stored for this provider', state, null);
-  }
-
-  let adapter: DiscoveryProviderAdapter;
+  // ── THE LEASE MUST NOT OUTLIVE THE RUN (Prompt 2B) ──────────────
+  // Everything below runs while this executor HOLDS A CLAIM on the execution
+  // row. Every outcome it anticipates leaves through `close`, which settles
+  // the row and releases the lease - but nothing guaranteed that an
+  // UNANTICIPATED throw did, and several awaits here can raise:
+  //
+  //   `ingest(...)`   - `ingestLeadBatch` throws on a tenant-less or
+  //                     source-less batch and on an oversize one, and until
+  //                     Prompt 2B it also propagated anything thrown by a
+  //                     single record. This was the one that mattered: it sits
+  //                     AFTER the provider call, so the vendor had already
+  //                     been paid for the page.
+  //   `markPending` / `recordPage` / the cost port - ledger and governance
+  //                     writes, any of which can fail in transport.
+  //
+  // When one of those raised, `runDiscoveryExecution` threw, no `close` ran,
+  // and the row stayed open with `completed_at` NULL holding its lease until
+  // DISCOVERY_LEASE_MS expired. The route's own `catch` answered 500 and
+  // recorded nothing, so the ledger - the only durable account of a billed
+  // search - showed an execution still in flight that nothing was executing.
+  //
+  // The guard is the whole post-claim body rather than each await, because the
+  // obligation belongs to holding the lease, not to any one call: a future
+  // await added in here is covered without anyone remembering to cover it.
+  //
+  // `status: 'failed'` is right here, and is NOT in tension with the
+  // read-model shortfall below deliberately closing `completed`. That one
+  // describes a run that did its job and whose results may not be visible
+  // yet; this one describes a run that did not finish. `last_failure_at` and
+  // retry safety are exactly what an operator needs for the second.
+  //
+  // `callState` is `'unknown'` once any call was made: the request may have
+  // reached the provider and may have been billed, which is the same
+  // reasoning the transport catch above already applies.
   try {
-    adapter = getProvider(row.providerKey);
-  } catch {
-    return close('refused_pre_call', 'not_called', 'provider_not_registered',
-      'no discovery provider is registered', state, null);
-  }
-
-  // Cost governance, before egress. The tenant-funded port reserves nothing of
-  // Omnivyra's and reports `cost: { kind: 'unknown' }` — which is the honest
-  // value here, and the reason no fabricated price appears anywhere in B4-A1.
-  const costDecision = await authorizeCost({
-    organizationId,
-    providerId: row.providerKey,
-    attributes: [],
-    correlationId: row.correlationId,
-  });
-  if (costDecision.authorized !== true) {
-    // Same `strict: false` limitation as the claim above: the denied arm of
-    // `CostDecision` is not inferred from a negated boolean.
-    const denied = costDecision as { readonly reason?: string };
-    return close('refused_pre_call', 'not_called', 'cost_denied',
-      denied.reason ?? 'cost governance declined', state, null);
-  }
-
-  let continuation = row.continuationState;
-  let stopReason: RunDiscoveryResult['stopReason'] = null;
-  // Calls made by THIS invocation, which is a different question from the row's
-  // lifetime total: a reclaimed execution inherits its predecessor's spend, and
-  // "did I contact anyone?" must not be answered with someone else's call.
-  let callsThisRun = 0;
-  // The latest quota statement the provider made, passed through to the caller.
-  let providerUsage: unknown = null;
-
-  // ── THE BOUNDED LOOP ────────────────────────────────────────────────────
-  for (;;) {
-    if (state.pages >= row.bounds.maxPages) { stopReason = 'max_pages'; break; }
-    if (state.observed >= row.bounds.maxResults) { stopReason = 'max_results'; break; }
-    if (state.calls >= row.bounds.maxProviderCalls) { stopReason = 'max_provider_calls'; break; }
-
-    // A4V — the marker FIRST. If it cannot be written, nothing is contacted.
-    const marked = await markPending({ organizationId, id: executionId });
-    if (!marked) {
-      return close('failed', state.calls > 0 ? 'called' : 'not_called', null,
-        'the pre-transport marker could not be persisted, so the provider was not contacted',
-        state, 'marker_failed');
+    // ── PRE-TRANSPORT REFUSALS ──────────────────────────────────────────────
+    const credential = await credentialPort.resolveCredential({
+      organizationId, providerId: row.providerKey,
+    });
+    if (!credential) {
+      return close('refused_pre_call', 'not_called', 'credential_missing',
+        'no tenant credential is stored for this provider', state, null);
     }
 
-    const remaining = row.bounds.maxResults - state.observed;
-    let page;
+    let adapter: DiscoveryProviderAdapter;
     try {
-      page = await adapter.discover({
-        organizationId,
-        filters: row.searchCriteria,
-        continuation,
-        remaining,
-        credential,
-      });
-    } catch (e) {
-      // Transport was entered and did not come back cleanly. `unknown` is the
-      // only defensible call state: the request may have reached the provider
-      // and may have been billed, and claiming `not_called` would invite a
-      // retry to pay for it twice.
-      const message = e instanceof Error ? e.message : String(e);
+      adapter = getProvider(row.providerKey);
+    } catch {
+      return close('refused_pre_call', 'not_called', 'provider_not_registered',
+        'no discovery provider is registered', state, null);
+    }
+
+    // Cost governance, before egress. The tenant-funded port reserves nothing of
+    // Omnivyra's and reports `cost: { kind: 'unknown' }` — which is the honest
+    // value here, and the reason no fabricated price appears anywhere in B4-A1.
+    const costDecision = await authorizeCost({
+      organizationId,
+      providerId: row.providerKey,
+      attributes: [],
+      correlationId: row.correlationId,
+    });
+    if (costDecision.authorized !== true) {
+      // Same `strict: false` limitation as the claim above: the denied arm of
+      // `CostDecision` is not inferred from a negated boolean.
+      const denied = costDecision as { readonly reason?: string };
+      return close('refused_pre_call', 'not_called', 'cost_denied',
+        denied.reason ?? 'cost governance declined', state, null);
+    }
+
+    let continuation = row.continuationState;
+    let stopReason: RunDiscoveryResult['stopReason'] = null;
+    // Calls made by THIS invocation, which is a different question from the row's
+    // lifetime total: a reclaimed execution inherits its predecessor's spend, and
+    // "did I contact anyone?" must not be answered with someone else's call.
+    let callsThisRun = 0;
+    // Likewise for ingestion, and for the same reason: a reclaimed execution
+    // inherits its predecessor's `results_ingested`, and "how many of the records
+    // I ingested are visible?" must not be answered against someone else's total.
+    let ingestedThisRun = 0;
+    // The latest quota statement the provider made, passed through to the caller.
+    let providerUsage: unknown = null;
+
+    // ── THE BOUNDED LOOP ────────────────────────────────────────────────────
+    for (;;) {
+      if (state.pages >= row.bounds.maxPages) { stopReason = 'max_pages'; break; }
+      if (state.observed >= row.bounds.maxResults) { stopReason = 'max_results'; break; }
+      if (state.calls >= row.bounds.maxProviderCalls) { stopReason = 'max_provider_calls'; break; }
+
+      // A4V — the marker FIRST. If it cannot be written, nothing is contacted.
+      const marked = await markPending({ organizationId, id: executionId });
+      if (!marked) {
+        return close('failed', state.calls > 0 ? 'called' : 'not_called', null,
+          'the pre-transport marker could not be persisted, so the provider was not contacted',
+          state, 'marker_failed');
+      }
+
+      const remaining = row.bounds.maxResults - state.observed;
+      let page;
+      try {
+        page = await adapter.discover({
+          organizationId,
+          filters: row.searchCriteria,
+          continuation,
+          remaining,
+          credential,
+        });
+      } catch (e) {
+        // Transport was entered and did not come back cleanly. `unknown` is the
+        // only defensible call state: the request may have reached the provider
+        // and may have been billed, and claiming `not_called` would invite a
+        // retry to pay for it twice.
+        const message = e instanceof Error ? e.message : String(e);
+        state.calls += 1;
+        callsThisRun += 1;
+        // The adapter's typed vendor error, when it attached one. Duck-typed so
+        // the executor stays provider-neutral.
+        const carried = (e as { providerError?: unknown } | null)?.providerError;
+        return close('failed', 'unknown', null, message, state, 'provider_failed', {
+          providerError: isProviderErrorView(carried) ? carried : null,
+          providerUsage,
+        });
+      }
+
       state.calls += 1;
       callsThisRun += 1;
-      // The adapter's typed vendor error, when it attached one. Duck-typed so
-      // the executor stays provider-neutral.
-      const carried = (e as { providerError?: unknown } | null)?.providerError;
-      return close('failed', 'unknown', null, message, state, 'provider_failed', {
-        providerError: isProviderErrorView(carried) ? carried : null,
-        providerUsage,
+      const records = (page.records ?? []).slice(0, remaining);
+      state.pages += 1;
+      state.observed += records.length;
+
+      // ── HANDOFF TO THE EXISTING SPINE ─────────────────────────────────────
+      // One call, to the orchestrator every other source uses. Nothing here
+      // resolves an identity, detects a duplicate, resolves an account or writes a
+      // canonical row: that is the whole point of the seam.
+      let ingestedThisPage = 0;
+      if (records.length) {
+        const result = await ingest({
+          organizationId,
+          source: row.providerKey,
+          records: records as Array<Record<string, unknown>>,
+          // PROVENANCE: the execution id is the run correlation, so each
+          // `source_records.ingestion_run_id` (and each pi_discovery contribution)
+          // names the search that discovered it. Previously null: the search →
+          // prospect link was lost.
+          ingestionRunId: executionId,
+          now: now(),
+        });
+        ingestedThisPage = result.succeeded;
+        // THE READ-MODEL HALF OF THE SAME ANSWER. `succeeded` says the record
+        // ingested; these say whether the Lead Database will list it. Both
+        // already exist on `IngestionBatchResult` and are computed by the one
+        // orchestrator every source calls — nothing is recomputed here.
+        if (typeof result.projected === 'number' && typeof result.notProjected === 'number') {
+          projection.projected += result.projected;
+          projection.attention += result.notProjected;
+        } else {
+          projection.reported = false;
+        }
+      }
+      state.ingested += ingestedThisPage;
+      ingestedThisRun += ingestedThisPage;
+
+      continuation = page.continuation ?? null;
+      if (page.providerUsage !== undefined && page.providerUsage !== null) providerUsage = page.providerUsage;
+
+      await recordPage({
+        organizationId, id: executionId,
+        pagesFetched: state.pages,
+        resultsObserved: state.observed,
+        resultsIngested: state.ingested,
+        providerCallsMade: state.calls,
+        continuationState: continuation,
+        providerRequestId: page.providerRequestId ?? null,
+        // Only written when the provider actually stated something. Passing a
+        // default `unknown` on every page would let a later page DOWNGRADE an
+        // earlier page's `billed` to `unknown` and erase the only evidence that
+        // this execution cost the tenant money.
+        ...(page.cost
+          ? { providerCostState: page.cost.state, providerCostUnits: page.cost.units ?? null }
+          : {}),
       });
+
+      if (continuation === null) { stopReason = 'provider_exhausted'; break; }
     }
 
-    state.calls += 1;
-    callsThisRun += 1;
-    const records = (page.records ?? []).slice(0, remaining);
-    state.pages += 1;
-    state.observed += records.length;
-
-    // ── HANDOFF TO THE EXISTING SPINE ─────────────────────────────────────
-    // One call, to the orchestrator every other source uses. Nothing here
-    // resolves an identity, detects a duplicate, resolves an account or writes a
-    // canonical row: that is the whole point of the seam.
-    let ingestedThisPage = 0;
-    if (records.length) {
-      const result = await ingest({
-        organizationId,
-        source: row.providerKey,
-        records: records as Array<Record<string, unknown>>,
-        // PROVENANCE: the execution id is the run correlation, so each
-        // `source_records.ingestion_run_id` (and each pi_discovery contribution)
-        // names the search that discovered it. Previously null: the search →
-        // prospect link was lost.
-        ingestionRunId: executionId,
-        now: now(),
-      });
-      ingestedThisPage = result.succeeded;
+    // An execution whose bounds were already spent before the first iteration
+    // contacted nobody, and must not close claiming it did. This is reachable on a
+    // reclaimed row whose previous owner had already consumed the ceiling.
+    if (callsThisRun === 0) {
+      return close('refused_pre_call', row.providerCallState, 'bounds_exhausted',
+        `the bounds were already spent (${stopReason ?? 'no budget remained'})`, state, stopReason);
     }
-    state.ingested += ingestedThisPage;
 
-    continuation = page.continuation ?? null;
-    if (page.providerUsage !== undefined && page.providerUsage !== null) providerUsage = page.providerUsage;
+    // `discovered` only when something was actually returned AND the read model
+    // agrees. Reporting a successful nothing as a discovery is the
+    // failure-as-success collapse the enrichment contract refuses, and it would
+    // read downstream as "this search has been answered" — which is exactly what
+    // a run that ingested twenty-five prospects and projected none of them was
+    // saying. The provider call, the canonical prospects and their evidence all
+    // stand: partial durable progress is correct and nothing here rolls it back.
+    // What changes is the CLAIM.
+    //
+    // The threshold is `needsAttention` (projectionResult.ts), reused rather than
+    // restated: a `skipped` projection has no prospect to list, so warning about
+    // it would train operators to ignore the warning that matters. The counters
+    // above are reported either way, so a caller can still see `projected: 0`.
+    //
+    // `execution_status` stays `completed`, deliberately. The ledger's three
+    // columns answer three different questions, and `failed` is the one that
+    // carries `last_failure_at` and retry safety — a read-model shortfall that
+    // marked the execution failed would invite a retry to pay the provider again
+    // for a row that is already durable. The claim belongs in `outcome`.
+    let outcome: string;
+    let detail: string | null = null;
+    if (state.observed === 0) {
+      outcome = 'no_results';
+    } else if (ingestedThisRun === 0) {
+      // RECORDS CAME BACK AND NONE OF THEM INGESTED.
+      //
+      // Distinct from every case below, which are all about the read-model
+      // projection of records that DID ingest. Here the ingestion boundary
+      // rejected the whole page, so there is no prospect, no person and no
+      // evidence - nothing durable at all - and the projection counters are
+      // legitimately 0/0, which `projection.attention === 0` would otherwise
+      // read as "nothing needs attention" and close as `discovered`.
+      //
+      // Reachable, and more reachable since Prompt 2B made a thrown record a
+      // reported failure instead of an aborted batch: before, a batch-wide
+      // throw never reached this line because the executor threw. Now it
+      // does, and `discovered` would be the exact failure-as-success collapse
+      // this line of work exists to remove - a billed search reporting a
+      // discovery that produced nothing.
+      //
+      // `execution_status` stays `completed` for the reason given below: the
+      // provider call happened and `failed` invites a retry that pays again.
+      outcome = 'discovered_not_ingested';
+      detail = `${state.observed} records observed this run, 0 ingested — the ingestion boundary accepted none of them`;
+    } else if (!projection.reported) {
+      outcome = 'discovered_projection_unreported';
+      detail = `read-model projection: unreported by the ingestion boundary, so visibility is unconfirmed for ${ingestedThisRun} ingested records`;
+    } else if (projection.attention === 0) {
+      outcome = 'discovered';
+    } else {
+      outcome = projection.projected === 0 ? 'discovered_not_projected' : 'discovered_partially_projected';
+      detail = `read-model projection: ${projection.projected} persisted, ${projection.attention} needing attention, of ${ingestedThisRun} ingested this run`;
+    }
+    return close('completed', 'called', outcome, detail, state, stopReason, { providerUsage });
 
-    await recordPage({
-      organizationId, id: executionId,
-      pagesFetched: state.pages,
-      resultsObserved: state.observed,
-      resultsIngested: state.ingested,
-      providerCallsMade: state.calls,
-      continuationState: continuation,
-      providerRequestId: page.providerRequestId ?? null,
-      // Only written when the provider actually stated something. Passing a
-      // default `unknown` on every page would let a later page DOWNGRADE an
-      // earlier page's `billed` to `unknown` and erase the only evidence that
-      // this execution cost the tenant money.
-      ...(page.cost
-        ? { providerCostState: page.cost.state, providerCostUnits: page.cost.units ?? null }
-        : {}),
-    });
-
-    if (continuation === null) { stopReason = 'provider_exhausted'; break; }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    // The projection counters cannot be vouched for - the throw may have
+    // landed mid-handoff - so they degrade to unreported rather than to zero.
+    // Zero would read as "nothing was projected", which is a claim; unreported
+    // is the truth, which is that we do not know.
+    projection.reported = false;
+    try {
+      return await close(
+        'failed',
+        state.calls > 0 ? 'unknown' : 'not_called',
+        'executor_failed',
+        message,
+        state,
+        'executor_failed',
+      );
+    } catch {
+      // The guard could not close the row either, so the lease really does
+      // survive this run and only its expiry will release it. Rethrow the
+      // ORIGINAL failure: it is the one that explains what happened, and
+      // replacing it with the close failure would hide the cause behind its
+      // consequence.
+      throw e;
+    }
   }
-
-  // An execution whose bounds were already spent before the first iteration
-  // contacted nobody, and must not close claiming it did. This is reachable on a
-  // reclaimed row whose previous owner had already consumed the ceiling.
-  if (callsThisRun === 0) {
-    return close('refused_pre_call', row.providerCallState, 'bounds_exhausted',
-      `the bounds were already spent (${stopReason ?? 'no budget remained'})`, state, stopReason);
-  }
-
-  // `discovered` only when something was actually returned. Reporting a
-  // successful nothing as a discovery is the failure-as-success collapse the
-  // enrichment contract refuses, and it would read downstream as "this search
-  // has been answered".
-  return close('completed', 'called', state.observed > 0 ? 'discovered' : 'no_results',
-    null, state, stopReason, { providerUsage });
 }

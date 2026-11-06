@@ -162,6 +162,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         total: result.total,
         succeeded: result.succeeded,
         failed: result.failed,
+        // Projection-aware, so a run in which not one row reached
+        // `lead_intelligence` cannot be read off telemetry as a clean success.
+        // Counts only - no record identity reaches telemetry.
+        projected: result.projected,
+        notProjected: result.notProjected,
       },
     });
 
@@ -173,6 +178,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       total: result.total,
       succeeded: result.succeeded,
       failed: result.failed,
+      // `succeeded` is projection-blind by contract (contracts.ts:274-285), so
+      // without these two the only number a non-browser client can read is
+      // `succeeded === total` - the exact false success they were added for.
+      projected: result.projected,
+      notProjected: result.notProjected,
       outcomes: result.outcomes,
     });
   } catch (err) {

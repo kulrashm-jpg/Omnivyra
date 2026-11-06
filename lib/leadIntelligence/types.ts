@@ -90,6 +90,21 @@ export interface CanonicalLeadScores {
   scale?: 'unit';
   /** The source columns these values were derived from, with their declared scales. */
   sourceScores?: SourceScore[];
+  /**
+   * Which MATERIALIZATION MODEL produced these values (Prompt 2B).
+   *
+   * Set only by `materializeScoresFromView`; a source-provided score (System-B
+   * `qualifyLead`) leaves it absent, which is itself information - it says
+   * these numbers did not come from our scorer and must not be replaced by it.
+   *
+   * It exists because the scorer's own EVIDENCE RULE can change, and when it
+   * does the same lead legitimately scores differently. Without a stamp, a
+   * routine re-sync silently rewrote a customer-visible number with no event,
+   * no history row and no notice. With one, a stored score whose model is not
+   * the current model is recognisable as belonging to an earlier model and is
+   * preserved until a transition is authorized.
+   */
+  modelVersion?: string | null;
 }
 
 /**

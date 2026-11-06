@@ -14,7 +14,7 @@
 
 import type { CanonicalLeadView } from './types';
 import type { TimelineEvent } from './timeline';
-import { CANONICAL_LEAD_SOURCE_LABELS } from './sourceTaxonomy';
+import { CANONICAL_LEAD_SOURCE_LABELS, provenanceLabel } from './sourceTaxonomy';
 import { websiteBehaviourProjection } from './profileEnrichment';
 import { sourceDetailProjection } from './profileEnrichment';
 
@@ -115,26 +115,53 @@ const PAGE_RULES: Array<{ match: RegExp; type: string }> = [
   { match: /\/blog/i, type: 'blog_read' },
 ];
 
-/** Sources that represent a submitted/known lead (vs a passive signal). */
-// ── WHY 'import' IS NOT HERE (PI-LDB-4 defect, found by the acquisition audit) ─
-// A member of this set asserts `lead_captured`, which is
-// `{ level: 'high', points: 15, label: 'Submitted a lead form' }`. For a
-// website or blog lead that is a true statement about something the person
-// did. For an IMPORT it is false: nobody submitted anything — an operator
-// pasted a spreadsheet — and the row would carry a high-confidence intent
-// signal on fabricated evidence.
-//
-// This mattered the moment the ingestion orchestrator began projecting into
-// `lead_intelligence` (PI-LDB-4). Before that, no CSV row reached
-// `materializeCanonicalScores` at all, so the membership was latent. The
-// wiring is what made it reachable, so removing it belongs with the wiring.
-//
-// REPORTED, NOT FIXED HERE: 'crm', 'manual' and 'other' carry the same false
-// claim, and 'crm' leads already have persisted scores derived from it. That
-// is a pre-existing defect with stored consequences and an owner decision
-// about back-correction, so it is deliberately left alone rather than
-// silently changed under cover of this one.
-const CAPTURE_SOURCES = new Set(['website', 'blog', 'manual', 'webhook', 'referral', 'partner', 'api', 'crm', 'other']);
+/**
+ * FORM-SUBMISSION EVIDENCE - the ONE test that may assert `lead_captured`.
+ *
+ * `lead_captured` is `{ level: 'high', points: 15, label: 'Submitted a lead
+ * form' }`, and that label reaches an operator VERBATIM in the score
+ * breakdown. Granting it is therefore a factual claim about something a person
+ * did, not a classification of where a row came from.
+ *
+ * It used to be granted by DISPLAY-SOURCE membership of a set named
+ * CAPTURE_SOURCES (website, blog, manual, webhook, referral, partner, api,
+ * crm, other). Every member of that set names a channel of ARRIVAL, and for
+ * three of them the claim was provably false:
+ *
+ *   manual  - an operator typed the row in. Nobody submitted anything.
+ *   crm     - a CRM sent it. Whatever the person did, they did it elsewhere.
+ *   other   - `resolveCanonicalSource`'s explicit "unclassifiable" fallback.
+ *             This is how a PURCHASED Apollo contact arrived carrying
+ *             "Submitted a lead form": `apollo` has no RAW_ALIASES entry, so
+ *             it fell through to `other`, and `other` was a capture source.
+ *
+ * The replacement is deliberately NOT a shorter list. No list of sources can
+ * answer this, because the question is not "where did this arrive from" but
+ * "did a person submit a form" - and the schema already carries the field that
+ * answers it. `source_category` (lib/prospectProvenance/contract.ts) separates
+ * `inbound_form` from `crm` / `csv` / `manual` / `pi_discovery`, and its own
+ * contract states it is "set EXPLICITLY by each ingestion path and never
+ * inferred from the display source". So this reads that, and nothing else. No
+ * second vocabulary is introduced and no existing one is remapped.
+ *
+ * FAIL-CLOSED, on purpose. A view carrying no `origin` gets no capture signal.
+ * An absent category means nobody recorded evidence of a submission, and the
+ * two errors are not symmetric: a false negative costs 15 points, while a
+ * false positive puts "Submitted a lead form" in front of an operator about to
+ * call someone who never asked to be contacted.
+ *
+ * `inbound_webhook` is excluded for the same reason rather than overlooked. A
+ * webhook CAN carry a genuine submission, but nothing on this path inspects
+ * its payload, so admitting it would be inferring the evidence instead of
+ * reading it. Admitting it later needs a payload check, not a longer list.
+ *
+ * Exported because the decision journey below states the SAME claim in words
+ * ("Converted / Lead captured") and must not be able to disagree with the
+ * score it is shown beside.
+ */
+export function hasLeadFormEvidence(view: CanonicalLeadView): boolean {
+  return view.origin?.category === 'inbound_form';
+}
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const numv = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -210,7 +237,7 @@ function buildEvidence(inputs: BuyingIntentInputs): EvidenceItem[] {
   // Lead conversion itself — only for direct-capture sources (a form/website/CRM lead).
   // Signal-only sources (community/engagement/marketpulse/social) are NOT form submits,
   // so they can legitimately sit at the awareness stage on weak signal alone.
-  if (CAPTURE_SOURCES.has(view.source)) add('lead_captured', view.source, at);
+  if (hasLeadFormEvidence(view)) add('lead_captured', view.source, at);
 
   // Key page intent from URLs (events / touchpoints / attribution) — deterministic rules.
   const urls = urlsFrom(inputs);
@@ -330,8 +357,29 @@ function buildDecisionJourney(inputs: BuyingIntentInputs, types: Set<string>): D
     { type: 'demo_intent', label: 'Demo' },
   ];
   for (const o of order) if (types.has(o.type)) push(o.label, 'Page intent', view.occurredAt, 'tracking');
-  // Conversion.
-  push('Converted', 'Lead captured', view.occurredAt, view.source);
+  // Conversion - or, truthfully, acquisition.
+  //
+  // This step pushed "Converted / Lead captured" UNCONDITIONALLY, for every
+  // view, the purchased-contact case included. It is the same claim
+  // `lead_captured` makes - in words rather than points - so it is gated on
+  // the same evidence. Fixing only the score would have left an Apollo
+  // contact scored correctly and still labelled "Converted" on the screen,
+  // which is the half-fix that teaches operators to distrust the other half.
+  if (hasLeadFormEvidence(view)) {
+    push('Converted', 'Lead captured', view.occurredAt, view.source);
+  } else {
+    // Still a step, because the lead DID enter the system and saying so is
+    // accurate. The detail names HOW, from the recorded provenance when there
+    // is one, and falls back to the display-source label when there is not.
+    push(
+      'Added',
+      view.origin?.category
+        ? provenanceLabel(view.origin.category, view.origin.platform)
+        : (CANONICAL_LEAD_SOURCE_LABELS[view.source] ?? String(view.source)),
+      view.occurredAt,
+      view.source,
+    );
+  }
   return steps;
 }
 

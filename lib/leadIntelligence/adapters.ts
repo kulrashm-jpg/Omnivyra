@@ -129,10 +129,62 @@ export type SourceAdapter = (row: Row) => CanonicalLeadInput;
 
 /* ── Distinct-shape adapters ─────────────────────────────────────────────── */
 
-/** `leads` row (form/website capture). Resolves website vs webhook vs manual from `source`. */
+/**
+ * `leads` row (form/website capture). Resolves website vs webhook vs manual
+ * from `source`.
+ *
+ * --- THE `other` -> `website` FALLBACK, AND WHAT WAS ACTUALLY WRONG WITH IT -
+ * A `leads` row whose `source` matches no alias resolves to `other`, and this
+ * adapter answered `website`. Stated plainly that reads as a fabrication: an
+ * unclassifiable lead asserted to be a Website lead.
+ *
+ * In context it is milder. The CALLER already chose this adapter by naming
+ * `website` (`SOURCE_ADAPTERS.website`), so the branch means "the row offered
+ * nothing more specific, so keep the caller's own classification" - a
+ * defensible DISPLAY source.
+ *
+ * What was not defensible is what that display source then bought. `website`
+ * was a member of `buyingIntent.CAPTURE_SOURCES`, so the fallback label
+ * silently became evidence of a form submission worth +15 "Submitted a lead
+ * form". A classification was being read as a fact.
+ *
+ * So the correction goes where the defect is. This adapter now states its
+ * evidence EXPLICITLY as `origin.category`, and `hasLeadFormEvidence` reads
+ * that instead of the label. `inbound_form` is claimed only when the row's own
+ * source says a form produced it; a fallback row carries `null` - "nobody
+ * recorded evidence" - which the fail-closed rule refuses.
+ *
+ * --- WHY THE PERSISTED `source` IS NOT MOVED ------------------------------
+ * Answering `other` here instead of `website` is the more literal fix and it
+ * is deliberately NOT taken. This adapter is live on a WRITE path
+ * (`leadIntelligenceRuntime` -> `ingestFromSource('website', row)` ->
+ * `upsertCanonicalLead`), and `source` is persisted INSIDE
+ * `lead_intelligence.dedupe_key` - the upsert's own conflict target - as well
+ * as in lead keys and `audience_memberships.entity_id`. Relabelling it would
+ * orphan every existing such row from its notes and audience memberships: the
+ * exact hazard `sourceTaxonomy.canonicalProspectSource` documents for the
+ * mirror case. That move is a data migration with a backfill, not an adapter
+ * edit, so it is recorded as an owner decision rather than taken here.
+ */
 export const websiteAdapter: SourceAdapter = (row) => {
   const resolved = resolveCanonicalSource({ rawSource: s(row.source), unifiedSourceOrigin: s(obj(row.unified_source).origin) });
-  return assemble(resolved === 'other' ? 'website' : resolved, row, { table: 'leads' });
+  // EXPLICIT per the provenance contract ("set explicitly by each ingestion
+  // path and never inferred from the display source"), which is why this reads
+  // the RAW signals rather than `resolved`. A form is claimed only by the
+  // alias family that actually denotes one.
+  const rawSource = String(s(row.source) ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const rawOrigin = String(s(obj(row.unified_source).origin) ?? '').trim().toLowerCase();
+  const category =
+    (rawSource === 'form' || rawSource === 'form_embed' || rawOrigin === 'form_embed') ? 'inbound_form' as const
+      : resolved === 'webhook' ? 'inbound_webhook' as const
+        : resolved === 'manual' ? 'manual' as const
+          : resolved === 'website' ? 'website' as const
+            // Includes the `other` fallback: unclassified, explicitly NOT a form.
+            : null;
+  return assemble(resolved === 'other' ? 'website' : resolved, row, {
+    table: 'leads',
+    origin: { category, platform: null, observedAt: s(row.created_at ?? row.detected_at ?? row.occurred_at) },
+  });
 };
 
 /** Blog reader/conversion context. */

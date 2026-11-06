@@ -185,10 +185,14 @@ const INVALID = new Set([
   '22P02', // invalid_text_representation
   '22023', // invalid_parameter_value
   // `23505` was MISSING, so a unique violation on any constraint OTHER than
-  // `lead_intelligence_dedupe_unique` fell through to `write_failed`. The
-  // dedupe constraint itself cannot raise it — the upsert names it in
-  // `on_conflict` with `resolution=merge-duplicates` — so a 23505 here is a
-  // genuinely rejected payload, and the operator needs to be told which.
+  // `lead_intelligence_dedupe_unique` fell through to `write_failed`. By the
+  // time a 23505 reaches this classifier it is a genuinely rejected payload,
+  // and the operator needs to be told which: the ordinary path names the
+  // dedupe constraint in `on_conflict` with `resolution=merge-duplicates`, so
+  // it cannot raise one, and the score-preserving path (Prompt 2C) issues a
+  // plain INSERT that can — but it INTERCEPTS that constraint's violation as
+  // "the row exists" and updates instead, so it never arrives here either.
+  // See `isDedupeKeyTaken` in `leadIntelligenceRepository`.
   '23505', // unique_violation
   '23P01', // exclusion_violation
   '22001', // string_data_right_truncation
@@ -463,6 +467,16 @@ export function isLeadProjectionResult(value: unknown): value is LeadProjectionR
     typeof v.status === 'string'
     && (LEAD_PROJECTION_STATUSES as readonly string[]).includes(v.status)
     && Array.isArray(v.warnings)
+    // A `persisted` verdict MUST name the row it claims. This is the one place
+    // every unwrap passes through, so enforcing it here covers them all —
+    // notably `projectionFailureFrom`, which carries the verdict off a THROWN
+    // `LeadProjectionFailure`. A thrown failure means "not a confirmed row" by
+    // definition, so a carried `persisted` is incoherent; accepting it let the
+    // sink's own defensive throw be unwrapped back into a success claim, with
+    // `isProjected()` answering true over an empty store. Rejecting it sends
+    // `projectionFailureFrom` to null and the caller to its own
+    // `failed('write_failed')` default, which is the safe direction.
+    && (v.status !== 'persisted' || (typeof v.leadId === 'string' && v.leadId.length > 0))
   );
 }
 

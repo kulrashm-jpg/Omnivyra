@@ -330,8 +330,35 @@ $verify$;
 -- The CI harness connects as superuser and carries no ACLs, so no test can catch
 -- either. Hence the assertions above.
 -- ---------------------------------------------------------------------------
-REVOKE ALL ON TABLE public.source_mapping_profiles FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.source_mapping_profile_entries FROM PUBLIC, anon, authenticated;
+-- ── THE GRANTEE LIST (corrected, Prompt 2B) ────────────────────────────────
+-- Five grantees, not three. This migration cited 20270107000000:330-332 as its
+-- pattern and then named two fewer roles than that pattern does, which left the
+-- citation true about the idea and false about the statement.
+--
+-- `service_role` is the one that mattered, and it is the APPLICATION's role.
+-- Supabase's hosted default privileges grant it ALL on every new public table,
+-- and nothing in this repository ever revokes that default - so a three-grantee
+-- REVOKE left the surplus untouched and the GRANT below became a no-op. Measured
+-- in a sandbox reproducing those defaults, `service_role` held UPDATE, DELETE
+-- and TRUNCATE on arrival.
+--
+-- TRUNCATE is why this is not cosmetic. It is a STATEMENT-level operation, so it
+-- does not fire FOR EACH ROW triggers: an append-only table's guard triggers
+-- never run, and the whole table can be emptied in one statement by the role the
+-- application runs as, without dropping a trigger or the table.
+--
+-- `authenticator` holds nothing in any measured state (NOINHERIT, and not a
+-- grantee of the hosted defaults). It is named for completeness and audit
+-- symmetry with the cited pattern, not because it is an exposure.
+--
+-- Safe in every environment: REVOKE of a privilege not held is a no-op, and the
+-- CI bootstrap creates all four roles idempotently, so an absent role cannot be
+-- reached here. The postcondition below now PROVES the result instead of
+-- assuming it.
+REVOKE ALL ON TABLE public.source_mapping_profiles
+  FROM PUBLIC, anon, authenticated, authenticator, service_role;
+REVOKE ALL ON TABLE public.source_mapping_profile_entries
+  FROM PUBLIC, anon, authenticated, authenticator, service_role;
 
 -- The minimum the store actually needs: it reads the active profile, inserts a
 -- new version, and UPDATEs status to supersede the previous one. It never
@@ -352,7 +379,18 @@ BEGIN
   IF has_table_privilege('authenticated', 'public.source_mapping_profiles', 'SELECT') IS NOT FALSE THEN
     RAISE EXCEPTION 'PI-LDB-1 postcondition: authenticated still holds SELECT on source_mapping_profiles';
   END IF;
-  RAISE NOTICE 'PI-LDB-1 privileges: service_role write granted, client roles revoked.';
+  -- THE SURPLUS, asserted rather than assumed (Prompt 2B). The grant above is
+  -- SELECT, INSERT, UPDATE; DELETE and TRUNCATE are not in it, so holding
+  -- either means the hosted default privileges survived the REVOKE. Checked on
+  -- both tables, because the exposure arrives per-table from the defaults and
+  -- not from anything this file does.
+  IF has_table_privilege('service_role', 'public.source_mapping_profiles', 'DELETE') IS NOT FALSE
+     OR has_table_privilege('service_role', 'public.source_mapping_profiles', 'TRUNCATE') IS NOT FALSE
+     OR has_table_privilege('service_role', 'public.source_mapping_profile_entries', 'DELETE') IS NOT FALSE
+     OR has_table_privilege('service_role', 'public.source_mapping_profile_entries', 'TRUNCATE') IS NOT FALSE THEN
+    RAISE EXCEPTION 'PI-LDB-1 postcondition: service_role still holds DELETE or TRUNCATE on a mapping profile table';
+  END IF;
+  RAISE NOTICE 'PI-LDB-1 privileges: service_role write granted, client roles revoked, surplus DELETE/TRUNCATE removed.';
 END
 $privs$;
 

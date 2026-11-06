@@ -226,7 +226,23 @@ export type IngestionRejection =
   /** Operator-asserted evidence contradicted the person it would have been
    *  attached to (see `NormalizedIngestionRecord.operatorAsserted`). Nothing
    *  was written; `identityConflict` says which person and why. */
-  | 'identity_conflict';
+  | 'identity_conflict'
+  /**
+   * A record's ingestion THREW instead of returning an outcome (Prompt 2B).
+   *
+   * Every known failure above is returned, not raised - the comment on
+   * `ingestion_disabled` states the principle - but `ingestNormalizedRecord`
+   * had no catch-all, and its caller had no guard around the call, so one
+   * unexpected throw discarded the outcomes of every record already processed
+   * and aborted the whole batch. On the discovery path it did worse: the
+   * provider had already been PAID for that page.
+   *
+   * This reason exists so the same principle covers the unexpected case too:
+   * the record that threw is reported as failed, by name, and the batch
+   * continues. It is deliberately distinct from the classified reasons - an
+   * operator seeing this is looking at a bug, not at bad input.
+   */
+  | 'unexpected_failure';
 
 /** The outcome of ONE record. A batch is a list of these — never a single verdict. */
 export interface IngestionRecordOutcome {
@@ -330,7 +346,27 @@ export interface IngestionBatchResult {
    * success. These two counts are what make the difference reportable.
    */
   projected: number;
-  /** Ingested records whose projection failed or is unconfirmed. Excludes legitimate skips. */
+  /**
+   * Ingested records whose projection failed or is unconfirmed. Excludes
+   * legitimate skips.
+   *
+   * THE RECONCILIATION IDENTITY, because callers reason with these numbers:
+   *
+   *   total     === succeeded + failed === outcomes.length
+   *   succeeded === projected + notProjected + (skipped projections)
+   *
+   * `skipped` is in NEITHER counter, deliberately. `needsAttention`
+   * (projectionResult.ts) excludes it because a record with no prospect has
+   * nothing to list, and warning about it would train operators to ignore the
+   * warning that matters.
+   *
+   * The second line holds only because of two rules nothing else states: an
+   * outcome with `ok: false` carries NO `leadProjection`, and an outcome with
+   * `ok: true` carries EXACTLY ONE. If a future change attaches a verdict to a
+   * rejected record, the identity breaks and `succeeded === total` becomes the
+   * only available reading again. `piLdbBatchCounters.test.ts` holds both rules
+   * on every batch it produces.
+   */
   notProjected: number;
   /**
    * POSITIONAL, ONE PER RECORD — part of the contract, not an accident.

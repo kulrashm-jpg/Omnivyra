@@ -75,6 +75,7 @@ import {
   type LeadProjectionResult,
 } from '../../../lib/leadIntelligence';
 import type { CanonicalLeadInput, IdentityResolverPort } from '../../../lib/leadIntelligence';
+import { isSourceCategory } from '../../../lib/prospectProvenance/contract';
 import { durableLeadIntelligenceSink } from '../leadIntelligence/durableLeadIntelligenceSink';
 import { evaluateFeatureFlag } from '../featureFlagService';
 
@@ -663,6 +664,37 @@ export async function ingestNormalizedRecord(
           contentText: null,
         },
         sourceRef: { table: 'canonical_leads', id: prospectId },
+        // PROVENANCE ON THE WRITE PATH (Prompt 2B).
+        //
+        // `lead_captured` (+15, "Submitted a lead form") is now decided by
+        // `origin.category` rather than by display-source membership, so the
+        // category has to reach the lead being written or the rule is
+        // fail-closed for everything and right only by accident.
+        //
+        // Nothing new is computed here. This is the SAME
+        // `keys.provenance.sourceCategory` already handed to
+        // `ingestSourceRecord` above, from the explicit `PI_ADAPTER_PROFILES`
+        // table, so the durable row and the contribution cannot disagree
+        // about what originated this prospect. `isSourceCategory` guards the
+        // boundary because that field is typed as the provider vocabulary,
+        // and an unmapped adapter must land on `null` - "nobody recorded
+        // evidence" - never on a guessed category.
+        //
+        // No adapter on this path maps to `inbound_form`, and that is the
+        // correct outcome rather than an omission: `apollo` is `pi_discovery`,
+        // `csv` is `csv`, `crm` is `crm`, `manual` is `manual`. None of them
+        // is a person submitting a form, so none of them earns the claim.
+        ...(keys.provenance
+          ? {
+            origin: {
+              category: isSourceCategory(keys.provenance.sourceCategory)
+                ? keys.provenance.sourceCategory
+                : null,
+              platform: keys.provenance.platform ?? null,
+              observedAt: record.observedAt ?? at,
+            },
+          }
+          : {}),
       };
 
       // PI-LDB P0. The sink's verdict is the ONLY evidence that a row landed,
@@ -825,13 +857,38 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
       continue;
     }
 
-    outcomes.push(withIgnored(await ingestNormalizedRecord(translated, {
-      ingestionRunId: input.ingestionRunId ?? null,
-      now: at,
-      // One decision for the batch. The kill switch is still re-read per
-      // record inside, so a mid-batch flip still stops the next one.
-      gateDecision,
-    }), raw));
+    // ── ONE RECORD MUST NOT BE ABLE TO DISCARD THE BATCH (Prompt 2B) ────
+    // Every classified failure inside is RETURNED, never thrown - which is
+    // why this call had no guard. But `ingestNormalizedRecord` has no
+    // top-level catch-all, so anything unforeseen (a port that rejects
+    // outside the paths it is expected on, a programming error, a throw from
+    // a lazily loaded module) propagated out of here and took the whole
+    // batch with it: `outcomes` was a local, so every record already
+    // processed lost its outcome, and the caller got an exception instead of
+    // a result it could account for.
+    //
+    // On the discovery path that was the expensive shape of the bug. The
+    // provider had already been called and billed for the page; the records
+    // ahead of the throw may have been fully written; and the executor's
+    // ledger row was left open holding its lease, because nothing closed it.
+    //
+    // So the unexpected case now behaves like every classified one: the
+    // record is reported failed BY NAME and the batch continues. The outcome
+    // is pushed before the loop moves on, so the counters below - `succeeded`,
+    // `projected`, `notProjected` - stay arithmetically complete over all
+    // `records.length` records, which is what makes the batch result
+    // trustworthy at all.
+    try {
+      outcomes.push(withIgnored(await ingestNormalizedRecord(translated, {
+        ingestionRunId: input.ingestionRunId ?? null,
+        now: at,
+        // One decision for the batch. The kill switch is still re-read per
+        // record inside, so a mid-batch flip still stops the next one.
+        gateDecision,
+      }), raw));
+    } catch (e) {
+      outcomes.push(withIgnored(fail(translated.normalized.externalId ?? null, 'unexpected_failure', e), raw));
+    }
   }
 
   const succeeded = outcomes.filter((o) => o.ok).length;

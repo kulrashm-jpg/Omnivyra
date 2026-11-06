@@ -317,6 +317,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       pagesFetched: run.pagesFetched,
       resultsObserved: run.resultsObserved,
       resultsIngested: run.resultsIngested,
+      // THE READ-MODEL HALF. `resultsIngested` says the records ingested — the
+      // prospect, person, employer and evidence are durable — and says nothing
+      // about whether the Lead Database will list them. These two do, and they
+      // are the same pair the three `/api/lead-ingestion/*` routes already
+      // return, so a caller reads one accounting across all four entry points.
+      // `null` means the ingestion boundary stated nothing: unknown, not zero.
+      resultsProjected: run.resultsProjected ?? null,
+      resultsNeedingAttention: run.resultsNeedingAttention ?? null,
       // Apollo's request-rate quota left on its minute/hour/day windows, from
       // its own response headers, so the caller can warn before a limit. Null
       // when the provider stated none. It is never a credit balance.
