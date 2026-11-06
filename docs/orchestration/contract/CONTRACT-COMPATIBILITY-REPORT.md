@@ -81,3 +81,7 @@ Suite `backend/tests/realschema/orch_c4_approval_revoked.test.ts`, with `orch_co
 | Cross-tenant revocation | Proven refused (`task_not_found`), with nothing written, through the service and the tenant surface |
 | The complaint marker is read from a stored row | Proven. A real SES Complaint through `ingestSesEvent` stores `transport_response.deliveryInferredFrom = 'Complaint'` on a `delivered` row; the helper reads it from that row; the view gives one `delivery.complained` and no `delivery.confirmed`, and a repeated provider event adds nothing. A stored JSON-string response and a pre-D7 row also read as complaints |
 | Acceptance is not delivery | Proven. The send's own evidence rows never read as `delivery.confirmed`; a later SES Delivery does |
+
+## Contract 0.4.0
+
+0.4.0 adds the event type `response.received` and re-maps one reading: a WhatsApp inbound that is not an opt-out keyword is `response.received`, code `unclassified`, never positive engagement, where 0.3.0 read it as `response.replied` (X-3). A WhatsApp STOP stays `response.unsubscribed`, and an operator-recorded WS-3 `replied` stays `response.replied`. No engine changes, and every engine declaration still passes at 0.4.0, because only the major is compared. The event version stays 1 (EV-1). Details: `API-AND-EVENT-SCHEMAS.md`, "From 0.3.0 to 0.4.0". It is implemented on `orch/c5-b`, uncommitted.

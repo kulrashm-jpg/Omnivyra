@@ -20,14 +20,17 @@ import type { EngineDisposition, EngineName, EngineResult } from './engineAdapte
  * a declaration of another major; an additive change (a new optional field, a new event
  * type) bumps the minor. 0.3.0 adds `approval.revoked`, `journey.suspended`,
  * `record.unmapped` and the optional `actor` on approval events, and re-maps four
- * delivery statuses; a 0.2.0 declaration stays compatible.
+ * delivery statuses; a 0.2.0 declaration stays compatible. 0.4.0 (X-3) adds
+ * `response.received`: an unclassified WhatsApp inbound, which 0.3.0 read as
+ * `response.replied`; a 0.3.0 declaration stays compatible.
  */
-export const EXECUTION_CONTRACT_VERSION = '0.3.0';
+export const EXECUTION_CONTRACT_VERSION = '0.4.0';
 
 /**
  * Bumped when a field's meaning changes, never when an optional field or a new type is
- * added. Still 1 at contract 0.3.0: see docs/orchestration/contract/API-AND-EVENT-SCHEMAS.md
- * ("From 0.2.0 to 0.3.0") for why 0.3.0 keeps it (owner decision EV-1 open).
+ * added. Still 1 at contract 0.3.0 and 0.4.0: see docs/orchestration/contract/API-AND-EVENT-SCHEMAS.md
+ * ("From 0.2.0 to 0.3.0", "From 0.3.0 to 0.4.0") for why both keep it (EV-1: the event
+ * version stays 1, and the meaning change is documented there).
  */
 export const JOURNEY_EVENT_VERSION = 1;
 
@@ -213,6 +216,11 @@ export const JOURNEY_EVENT_TYPES = [
   'execution.requested', 'execution.started', 'execution.accepted', 'execution.failed', 'execution.cancelled',
   'delivery.confirmed', 'delivery.failed', 'delivery.bounced', 'delivery.complained',
   'response.replied', 'response.unsubscribed', 'response.rejected', 'response.other',
+  // 0.4.0 (X-3): an inbound nobody has evaluated (a non-STOP WhatsApp message), code
+  // `unclassified`. Never positive engagement, never a business outcome, never fed to PI.
+  // A WhatsApp STOP stays `response.unsubscribed`, and a WS-3 `replied` outcome recorded
+  // by an operator stays `response.replied`: each channel has one stated meaning.
+  'response.received',
   'outcome.recorded',
   // 0.3.0: a stored delivery status or outcome type with no mapping, kept with its code.
   // Carries no consequence: nothing may end, pause or advance a journey on it.
@@ -223,7 +231,8 @@ export type JourneyEventType = typeof JOURNEY_EVENT_TYPES[number];
 /**
  * A STOP, an unsubscribe, a bounce and a complaint are never positive engagement; nor is
  * any approval event, `approval.revoked` included: a decision by the tenant, not the person;
- * nor `journey.suspended` or `record.unmapped`.
+ * nor `journey.suspended` or `record.unmapped`; nor (0.4.0) `response.received`, an
+ * inbound whose meaning nobody has evaluated.
  */
 export const POSITIVE_ENGAGEMENT_EVENTS: readonly JourneyEventType[] = ['response.replied'];
 

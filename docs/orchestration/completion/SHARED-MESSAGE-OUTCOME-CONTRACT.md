@@ -1,6 +1,8 @@
-# Deliverable D: SHARED-MESSAGE-OUTCOME contract (0.3.0)
+# Deliverable D: SHARED-MESSAGE-OUTCOME contract (0.3.0, amended to 0.4.0)
 
 Orchestration Prompt 4, Agent C, round 2, 2026-11-05.
+
+**Amended for contract 0.4.0 (Orchestration Prompt 5, Agent B, 2026-11-06: X-3).** A WhatsApp inbound that is not an opt-out keyword is `response.received`, code `unclassified`, never positive engagement and never fed to PI. A WhatsApp STOP stays `response.unsubscribed`; an operator-recorded WS-3 `replied` stays `response.replied`. Rows changed: section 3.3, section 8 and X-3 in section 11. Normative text: `docs/orchestration/contract/API-AND-EVENT-SCHEMAS.md`, "From 0.3.0 to 0.4.0". The 4-way mapping test is in `sharedMessageOutcomeMapping.test.ts`.
 
 **Status: FINAL DRAFT for integration. Outreach sign-off: pending.**
 
@@ -102,7 +104,8 @@ The value list is `BUSINESS_OUTCOME_TYPES` (`lifecycle.ts:134-138`, restated at 
 - Unknown values become `record.unmapped` with their code, never the nearest known value.
 - `POSITIVE_ENGAGEMENT_EVENTS = ['response.replied']`. None of these is ever positive:
   - `delivery.complained`, `delivery.bounced`, `response.unsubscribed`;
-  - `journey.suspended`, `record.unmapped`, `approval.*`.
+  - `journey.suspended`, `record.unmapped`, `approval.*`;
+  - `response.received` (0.4.0): a WhatsApp inbound nobody has evaluated.
 - From provider evidence only one code reaches an event, the complaint verdict. No address, provider id or feedback text does.
 
 ## 4. `complained`: semantics and consequences
@@ -204,7 +207,7 @@ Two more rules:
 - **`journey.suspended` is never an end.** A journey ends only with `journey.terminated` or `journey.completed`. No `journey.resumed` event exists, because resuming writes no row.
 - **No outcome-driven branching is added.** A response only ends or pauses a run. It never chooses or adds a step.
 
-## 8. Cross-channel mapping (0.3.0)
+## 8. Cross-channel mapping (0.4.0)
 
 | Channel | Raw (a) | Normalized (b) | Journey event | Consequence (e) |
 |---|---|---|---|---|
@@ -229,7 +232,7 @@ Two more rules:
 | WhatsApp | Meta `sent` | recipient `sent` | `execution.accepted` (via `executed`) | step completed |
 | WhatsApp | Meta `delivered`/`read`/`failed` after settlement | recipient row | none today (DF-7) → P-6 | continue |
 | WhatsApp | inbound opt-out keyword | message + `unsubscribe`/`whatsapp` | `response.unsubscribed` | run ends |
-| WhatsApp | any other inbound | message | `response.replied` (positive; DF-6) | **run suspended** (unclassified reply) |
+| WhatsApp | any other inbound | message, labelled `inbound_unclassified` | `response.received`, code `unclassified` (not positive; 0.4.0, X-3; was `response.replied`, positive, DF-6) | **run suspended** (unclassified reply); nothing fed to PI |
 | SMS, voice | — | — | — | channel unsupported |
 | Social publish | post status | `scheduled_posts` | `execution.accepted` / `decision.recorded` | completed / needs a person |
 | Community | `executed` / `sent_unverified` | `community_ai_actions.status` | `execution.accepted` | step completed |
@@ -275,7 +278,7 @@ Two more rules:
 |---|---|---|---|
 | X-1 | The unsubscribe **link** has no outcome row | §G's agreed mapping reads "operator **or link** `unsubscribed` → `response.unsubscribed` → the run ends". But the link path (`recordOutreachUnsubscribe`) writes governance only and **no** `outreach_outcomes` row (D7 §1.3; SC-4 pending). So a link unsubscribe yields no event and no exit; the gate skips later steps | Reword §G to "operator `unsubscribed`", and list the link under PD-10 |
 | X-2 | Reply consequence is out of step with the frozen base | §E.4 and §G say `response.replied` is not terminal, and that a non-keyword WhatsApp inbound suspends the run. On the frozen base, `JOURNEY_EXIT_OUTCOMES` still includes `replied` (`journeyResponses.ts:30`) and any WhatsApp inbound exits (`workflowProgressionSweeper.ts:416-437`) | Consistent only once Agent B lands. Until then the contract text describes behaviour the integrated code does not have |
-| X-3 | A suspended reply still reads as positive engagement | The view still emits `response.replied` with `positiveEngagement: true` for every non-keyword WhatsApp inbound, including a complaint phrase (DF-6). Under the unclassified-reply rule, the run is suspended pending evaluation while the event asserts positive engagement, and `feedWhatsAppReplyToLifecycle` would move PI to `engaged` | Agent B decides whether the PI feed waits for the evaluation. The event type itself waits for SC7-R |
+| X-3 | A suspended reply still reads as positive engagement (**resolved in 0.4.0**, Prompt 5 Agent B: `response.received`, not positive; the PI feed takes a STOP only) | The view still emits `response.replied` with `positiveEngagement: true` for every non-keyword WhatsApp inbound, including a complaint phrase (DF-6). Under the unclassified-reply rule, the run is suspended pending evaluation while the event asserts positive engagement, and `feedWhatsAppReplyToLifecycle` would move PI to `engaged` | Agent B decides whether the PI feed waits for the evaluation. The event type itself waits for SC7-R |
 | X-4 | An unknown approval decision is not `record.unmapped` | It is read as `approval.rejected` (A's `APPROVAL_EVENTS` fallback). That departs from "nothing unmapped is coerced", but it fails safe (never a grant) | No change proposed; noted for consistency |
 | X-5 | `isComplaintInferredEvidence` fails toward complaint | It matches any delivery status, and any value containing "complaint" under the marker or `sesEventType` key. That matches this contract's intent, because a false positive only narrows contact and ends a run | No change; recorded here so that PD-3 (`Reject` → `failed`) never writes "complaint" into those keys |
 
