@@ -612,3 +612,52 @@ Release remains **NO-GO**. Nothing is pushed, merged, deployed or applied.
 **Closure status: unchanged, no closure is complete.** Owner decisions still open: GD-4 / REL-07, D2-R, SC7-R, BL-A, CN-1..CN-3, C-CP-1, CL-1..CL-6, `PROSPECT_PERSON_ERASE`.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## Gaps list ruled, and Outreach fixes N-1..N-5, M-1..M-5 (2026-11-06)
+
+**Gaps list (Orchestration's Prompt 5 plan, "Not built").** Outreach rulings, checked against `d11f08888`:
+- **Confirmed:** G-1 (no inbound email ingestion), G-2 (no SMS), G-4 (Orchestration), G-5 (owner / SC7-R), G-7 (owner; `20270125000001` held), G-8 (no soft-bounce retry; bounds are an owner parameter).
+- **Corrected:**
+  - G-3: the producer of `engagement_messages` is the engagement inbox, not the Outreach engine.
+  - G-6: `20270125000000` is not specially held; like every migration here it is applied to disposable databases only.
+  - G-9: broadcast recipients already store status. The gaps were the outreach-task path and an event ledger.
+- New from Orchestration's verification: N-1..N-5 and M-1..M-5. Orchestration found no defect in SES idempotency, governance or STOP detection. G-10 (a `sent → completed` settlement that ignores a later `failed`) is Orchestration's, recorded for Prompt 6.
+
+**Owner GO (2026-11-06):** fix N-1, N-2, N-3, N-4, M-5, N-5 and M-1..M-4.
+
+N-4 rule: "run it through admin before deleting, else keep it for 3 live session days". Implemented as: nothing is cleared without an admin's approval, and nothing younger than 3 days. "Day" is read as a calendar day; **the owner to confirm**.
+
+**Commit `96c314795` (local).** Diff from `d11f08888`: sha256 `64ed816ed515c15b…`, 18 files.
+
+| Item | Change |
+|---|---|
+| N-1 | WhatsApp capability text scoped to the outreach task (the webhook does receive statuses and inbound messages) |
+| N-2 | Meta 131026 writes `invalid_contact` on (tenant, `whatsapp`, number) **before** the recipient moves, so a failed write is retried. Other codes are evidence only; widening the list is an owner decision |
+| G-9b | `whatsapp_provider_events`: append-only (trigger, 42501), one row per (message, status, event time), identity only, `service_role` SELECT+INSERT |
+| N-3 | `idx_outreach_outcomes_manual_once`: one manual outcome per (company, task, type). A repeat is `duplicate: true`. The migration stops, naming the count, if existing duplicates exist |
+| N-4 | `message_retention_approvals` (3-day floor as a CHECK; immutable; executed once; never deleted) and `outreach_outcome_notes` (cleared only by a named approval). `/api/super-admin/message-retention`: GET previews; POST approves and clears, with platform authority, rate limiting and an audit record. A cleared STOP keeps its keyword; anything else becomes `[redacted]`; keys survive. Clears WhatsApp inbound messages per tenant, notes per tenant, and `whatsapp-webhook` dead letters platform-wide |
+| N-5 | The (thread_id, platform_message_id) arbiter in the chain; a no-op where any equivalent exists |
+| M-1 | 3 MiB body cap (413) and an 8-day replay window: a stale body is acknowledged and dropped. A body without timestamps is not judged |
+| M-2 / M-3 / M-4 | Insert-or-ignore; receipt time when there is no timestamp; a tenant-index 23505 means "already stored" |
+| M-5 | A malformed outcome body returns 400 `invalid_json` |
+
+Migrations `20270128000000–03`; block `20270128000000–09` reserved, agreed with Orchestration.
+
+**Not covered (owner decisions):**
+- Notes written before this change remain in append-only `outreach_outcomes.evidence`.
+- Redis job data still expires on BullMQ's retention: 24 h completed, 7 days failed. The durable copy is the dead letter, which is covered.
+
+**Evidence (focused T1; a full T2 on `96c314795` is not yet run).**
+- New real-schema suite `n4_whatsapp_inbox_retention`: **18/18**, on a fresh loopback cluster with 129 migrations applied strictly.
+- The 17 existing real-schema suites touching WhatsApp, outcomes and engagement: all pass.
+- Affected unit tests: 179/179. This includes 6 new M-1 tests and 4 new M-5 tests.
+- Two existing tests changed:
+  - fixed October timestamps made relative, since the replay window drops them;
+  - the outcome note is now asserted in the notes table.
+- **7 mutants, each caught; each file restored identical:** no restriction, upsert rewrites, 23505 fails, STOP not kept, no ledger, timestamp throws, no manual-once index.
+- Gates: 9/10 pass; **migration-quality: the same 23, by name** (GD-4). typecheck-ci at baseline; worker clean.
+- backend/tests typecheck: the same 52 diagnostics as `d11f08888`, **0 new**.
+- Orchestration's two clearing conditions are tested: a cleared STOP is still a STOP, and `[redacted]` is not.
+- No production or shared environment, provider, send or network call was involved; fetch was refused and counted 0.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
