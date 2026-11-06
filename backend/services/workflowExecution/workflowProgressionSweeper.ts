@@ -437,8 +437,11 @@ export async function advanceAndDispatchWorkflowExecution(
         // Prompt 4 — an unclassified reply SUSPENDS the journey: the existing pause, which
         // the sweeper never progresses and the D-03 hold keeps any handed-off task from
         // sending. Nothing is withdrawn: a person resumes (PATCH lifecycleState `active`)
-        // or ends it (`cancelled`, which withdraws). PI hears the reply as before.
-        if (exit.whatsappReply !== null && subject.kind === 'prospect') {
+        // or ends it (`cancelled`, which withdraws).
+        // X-3 (Prompt 5) — PI hears a WhatsApp STOP only. An unclassified inbound
+        // (`inbound_unclassified`) is not engagement and feeds PI nothing (PI ruling,
+        // virality-b6, 2026-11-06); a WS-3 `replied` reaches PI through its outcome row.
+        if (exit.whatsappReply !== null && exit.whatsappReply.outcome === 'unsubscribed' && subject.kind === 'prospect') {
           try {
             const fed = await feedWhatsAppReplyToLifecycle({
               organizationId, prospectId: subject.id, now,
@@ -461,7 +464,8 @@ export async function advanceAndDispatchWorkflowExecution(
         continue;
       }
       if (exitReason !== null) {
-        if (exit.whatsappReply !== null && subject.kind === 'prospect') {
+        // X-3 — a STOP only: a PI-closed run can still carry an unclassified inbound.
+        if (exit.whatsappReply !== null && exit.whatsappReply.outcome === 'unsubscribed' && subject.kind === 'prospect') {
           // Best effort: the journey's stop must not depend on PI accepting the event.
           try {
             const fed = await feedWhatsAppReplyToLifecycle({

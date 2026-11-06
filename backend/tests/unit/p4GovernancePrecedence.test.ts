@@ -13,7 +13,8 @@ import {
 import { APPROVAL_REVOKED, createWs3Adapter, defaultWs3Deps } from '../../services/orchestration/engineAdapters';
 
 const ORG = '00000000-0000-4000-8000-00000000000a';
-const reply = { outcome: 'replied' as const, messageId: 'w1', threadId: 't', inboundMessageIds: ['w1'] };
+// X-3: a non-STOP WhatsApp inbound is `inbound_unclassified`, never the business outcome `replied`.
+const reply = { outcome: 'inbound_unclassified' as const, messageId: 'w1', threadId: 't', inboundMessageIds: ['w1'] };
 const port = (over: Partial<JourneyResponsePort> & { order?: string[] } = {}): JourneyResponsePort => {
   const order = over.order ?? [];
   return {

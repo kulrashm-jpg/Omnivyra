@@ -155,7 +155,8 @@ const { buildJourneyReport } = require('../../services/orchestration/journeyRepo
 const { createWs3Adapter, defaultWs3Deps } = require('../../services/orchestration/engineAdapters');
 const { advanceAndDispatchWorkflowExecution } = require('../../services/workflowExecution/workflowProgressionSweeper');
 const { listJourneyDecisions } = require('../../services/orchestration/journeyDecisionLog');
-const { whatsappReplyFingerprint } = require('../../services/orchestration/journeyFeedback');
+const { feedWhatsAppReplyToLifecycle, whatsappReplyFingerprint } = require('../../services/orchestration/journeyFeedback');
+const { readJourneyEvents } = require('../../services/orchestration/journeyEvents');
 const ws3 = require('../../services/leadOutreachExecution');
 const { dispatchWorkflowEmailTask, ensureWorkflowTransports } = require('../../services/emailEngine/workflowEmailDispatch');
 const { ensureProspectLifecycleOpen, recordProspectTransition } = require('../../services/prospectLifecycle');
@@ -434,42 +435,224 @@ describe('Prospect Intelligence decides who is closed', () => {
 });
 
 describe('WhatsApp responses', () => {
-  it('an inbound message after this run reached out ends the journey and reaches PI as engagement-thread evidence', async () => {
-    await inRollback(async () => {
-      await seedTenants();
-      await enableOutreach(ORG_A, ['email']);
-      const actor = await newUser();
-      const { prospectId } = await newProspect(ORG_A, { email: 'w@example.test', phone: '+15551230001' });
-      await openLedger(ORG_A, prospectId);
-      const { instanceId } = await enrol(ORG_A, actor, prospectId, {
-        steps: [human('wa', 'whatsapp', { whatsapp: { template_name: 'hello_1' } }), EMAIL_STEP('next')],
-      });
-
-      // The engine's request exists, as the WhatsApp adapter leaves it once submitted.
-      await sweep();                                     // no whatsapp adapter here: step is ready, visible as unsupported
-      const task = await one('SELECT id FROM public.execution_tasks WHERE execution_instance_id = $1 AND channel = $2', [instanceId, 'whatsapp']);
-      const u = await one(`SELECT id FROM public.users LIMIT 1`);
-      const account = await one(`INSERT INTO public.social_accounts (user_id, platform, platform_user_id, account_name, access_token, company_id)
-        VALUES ($1,'whatsapp',$2,'wa','t',$3) RETURNING id`, [u.id, rnd(), ORG_A]);
-      await db.query(`INSERT INTO public.execution_engine_requests (organization_id, execution_task_id, engine, state, external_ref, created_at)
-        VALUES ($1,$2,'whatsapp','submitted',$3, now() - interval '1 hour')`, [ORG_A, task.id, rnd()]);
-      const thread = await one(`INSERT INTO public.engagement_threads (platform, platform_thread_id, organization_id, social_account_id)
-        VALUES ('whatsapp',$1,$2,$3) RETURNING id`, [`wa:${account.id}:15551230001`, ORG_A, account.id]);
+  /** A prospect on a WhatsApp-then-email run that reached out an hour ago, with these inbound messages. */
+  async function whatsappScene(messages: Array<{ id: string; content: string | null }>, ledger: 'qualified' | 'not_interested' = 'qualified') {
+    await seedTenants();
+    await enableOutreach(ORG_A, ['email']);
+    const actor = await newUser();
+    const { prospectId } = await newProspect(ORG_A, { email: `w-${rnd()}@example.test`, phone: '+15551230001' });
+    await openLedger(ORG_A, prospectId);
+    const { instanceId } = await enrol(ORG_A, actor, prospectId, {
+      steps: [human('wa', 'whatsapp', { whatsapp: { template_name: 'hello_1' } }), EMAIL_STEP('next')],
+    });
+    await sweep();                                     // no whatsapp adapter here: step is ready, visible as unsupported
+    const task = await one('SELECT id FROM public.execution_tasks WHERE execution_instance_id = $1 AND channel = $2', [instanceId, 'whatsapp']);
+    const u = await one(`SELECT id FROM public.users LIMIT 1`);
+    const account = await one(`INSERT INTO public.social_accounts (user_id, platform, platform_user_id, account_name, access_token, company_id)
+      VALUES ($1,'whatsapp',$2,'wa','t',$3) RETURNING id`, [u.id, rnd(), ORG_A]);
+    await db.query(`INSERT INTO public.execution_engine_requests (organization_id, execution_task_id, engine, state, external_ref, created_at)
+      VALUES ($1,$2,'whatsapp','submitted',$3, now() - interval '1 hour')`, [ORG_A, task.id, rnd()]);
+    const thread = await one(`INSERT INTO public.engagement_threads (platform, platform_thread_id, organization_id, social_account_id)
+      VALUES ('whatsapp',$1,$2,$3) RETURNING id`, [`wa:${account.id}:15551230001`, ORG_A, account.id]);
+    for (const m of messages) {
       await db.query(`INSERT INTO public.engagement_messages (thread_id, platform, platform_message_id, content, direction, status, created_at)
-        VALUES ($1,'whatsapp',$2,'yes please','inbound','received', now())`, [thread.id, 'wamid.HBgM+abc=']);
-
-      // A whatsapp adapter that must not be asked: the response is seen first.
-      const execute = jest.fn();
-      const r = await advanceAndDispatchWorkflowExecution(ORG_A, {
-        now: new Date().toISOString(),
-        deps: { adapters: [...adapters(), { engine: 'whatsapp', channels: ['whatsapp'], execute }] },
+        VALUES ($1,'whatsapp',$2,$3,'inbound','received', now())`, [thread.id, m.id, m.content]);
+    }
+    if (ledger === 'not_interested') {
+      // An operator's judgement, after the run reached out: a human-origin transition.
+      await recordProspectTransition({
+        organizationId: ORG_A, prospectId, to: 'not_interested', origin: 'human', actorUserId: actor,
+        evidence: { kind: 'human_action' }, sourceEventKey: `human:seed-${rnd()}`, now: new Date().toISOString(),
       });
+    }
+    return { actor, prospectId, instanceId, threadId: String(thread.id) };
+  }
+  // A whatsapp adapter that must not be asked: the response is seen first.
+  const sweepWithIdleWhatsApp = (execute: jest.Mock) => advanceAndDispatchWorkflowExecution(ORG_A, {
+    now: new Date().toISOString(),
+    deps: { adapters: [...adapters(), { engine: 'whatsapp', channels: ['whatsapp'], execute }] },
+  });
+  const events = async (instanceId: string) => (await readJourneyEvents(ORG_A, instanceId)).events as Array<Row & { type: string; positiveEngagement: boolean }>;
+
+  it('an inbound message after this run reached out suspends the journey and reaches PI not at all (X-3)', async () => {
+    await inRollback(async () => {
+      const { prospectId, instanceId } = await whatsappScene([{ id: 'wamid.HBgM+abc=', content: 'yes please' }]);
+      const before = await lifecycle(ORG_A, prospectId);
+
+      const execute = jest.fn();
+      const r = await sweepWithIdleWhatsApp(execute);
       expect(execute).not.toHaveBeenCalled();
-      // Prompt 4 — CHANGED: suspended for a person, not ended; PI still hears it.
+      // Prompt 4 — CHANGED: suspended for a person, not ended.
       expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
       expect(await instanceState(instanceId)).toBe('paused');
+      // X-3 (Prompt 5) — CHANGED: was an `engaged` row keyed `derivation:<fingerprint>`, evidence
+      // engagement_thread. An unclassified inbound feeds PI nothing.
       const ledger = await lifecycle(ORG_A, prospectId);
-      expect(ledger.at(-1)).toMatchObject({ state: 'engaged', evidence_kind: 'engagement_thread', source_event_key: `derivation:${whatsappReplyFingerprint('wamid.HBgM+abc=')}` });
+      expect(ledger).toEqual(before);
+      expect(ledger.at(-1)).toMatchObject({ state: 'qualified' });
+      expect(ledger.some((row) => row.evidence_kind === 'engagement_thread')).toBe(false);
+      expect(r.counters.lifecycle_transitions_written).toBe(0);
+    });
+  });
+
+  // X-3 regressions: none of these is engagement, and none reaches PI as one.
+  it.each([
+    ['a plain message', 'yes please, tell me more'],
+    ['an empty message', ''],
+    ['a message with no text (media)', null],
+    ['an ambiguous message', 'maybe? stop by next week, not sure'],
+    ['a message in an unsupported language', 'bitte nicht mehr schreiben, danke'],
+  ])('%s: suspended, no engaged transition, response.received and no positive event', async (_label, content) => {
+    await inRollback(async () => {
+      const { prospectId, instanceId } = await whatsappScene([{ id: `wamid.${rnd()}`, content }]);
+      const before = await lifecycle(ORG_A, prospectId);
+      const r = await sweepWithIdleWhatsApp(jest.fn());
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1, lifecycle_transitions_written: 0 });
+      expect(await instanceState(instanceId)).toBe('paused');
+      expect(await lifecycle(ORG_A, prospectId)).toEqual(before);
+      expect((await lifecycle(ORG_A, prospectId)).some((row) => row.state === 'engaged')).toBe(false);
+      const ev = await events(instanceId);
+      expect(ev.filter((e) => e.positiveEngagement)).toEqual([]);
+      expect(ev.map((e) => e.type)).not.toContain('response.replied');
+      expect(ev.filter((e) => e.type === 'response.received').map((e) => e.code)).toEqual(['unclassified']);
+    });
+  });
+
+  it('a STOP still ends the run as unsubscribed and closes the prospect, keyed evidence:<fingerprint>', async () => {
+    await inRollback(async () => {
+      const { prospectId, instanceId } = await whatsappScene([{ id: 'wamid.stop-1', content: 'STOP' }]);
+      const r = await sweepWithIdleWhatsApp(jest.fn());
+      expect(r.counters).toMatchObject({ journeys_exited: 1, journeys_suspended: 0, lifecycle_transitions_written: 1 });
+      expect(await instanceState(instanceId)).toBe('cancelled');
+      expect((await listJourneyDecisions(ORG_A, instanceId)).find((d: Row) => d.decision === 'exited')?.outcome).toBe('unsubscribed');
+      expect((await lifecycle(ORG_A, prospectId)).at(-1)).toMatchObject({
+        state: 'closed_disqualified', evidence_kind: 'engagement_thread', source_event_key: `evidence:${whatsappReplyFingerprint('wamid.stop-1')}`,
+      });
+      const ev = await events(instanceId);
+      expect(ev.filter((e) => e.type === 'response.unsubscribed').map((e) => e.code)).toEqual(['unsubscribed']);
+      expect(ev.map((e) => e.type)).not.toContain('response.received');
+      expect(ev.filter((e) => e.positiveEngagement)).toEqual([]);
+    });
+  });
+
+  it('a duplicate (the same message read again after the run is resumed) writes nothing and is one event', async () => {
+    await inRollback(async () => {
+      const { prospectId, instanceId } = await whatsappScene([{ id: 'wamid.dup-1', content: 'yes please' }]);
+      const before = await lifecycle(ORG_A, prospectId);
+      expect((await sweepWithIdleWhatsApp(jest.fn())).counters.journeys_suspended).toBe(1);
+      await setExecutionInstanceState({ organizationId: ORG_A, instanceId, lifecycleState: 'active' });   // a person resumed it
+      // Evaluated: the run continues to its step, which the engine accepts and waits on.
+      const again = await sweepWithIdleWhatsApp(jest.fn(async () => ({ engine: 'whatsapp', outcome: 'submitted', disposition: 'wait', reason: null, externalRef: null })));
+      expect(again.counters).toMatchObject({ journeys_suspended: 0, lifecycle_transitions_written: 0 });
+      expect(await lifecycle(ORG_A, prospectId)).toEqual(before);
+      const ev = await events(instanceId);
+      expect(ev.filter((e) => e.type === 'response.received')).toHaveLength(1);
+      expect(ev.filter((e) => e.positiveEngagement)).toEqual([]);
+    });
+  });
+
+  it('a not_interested prospect who then messages stays not_interested, and re-enrolment is still refused', async () => {
+    await inRollback(async () => {
+      const { actor, prospectId, instanceId } = await whatsappScene([{ id: 'wamid.ni-1', content: 'ok, what is it?' }], 'not_interested');
+      const r = await sweepWithIdleWhatsApp(jest.fn());
+      // PI's closed state ends the run. Before X-3 the message was fed as `replied`, which
+      // reopened the prospect as engaged and let them be enrolled again.
+      expect(r.counters).toMatchObject({ journeys_exited: 1, lifecycle_transitions_written: 0 });
+      expect(await instanceState(instanceId)).toBe('cancelled');
+      const ledger = await lifecycle(ORG_A, prospectId);
+      expect(ledger.at(-1)).toMatchObject({ state: 'not_interested' });
+      expect(ledger.some((row) => row.state === 'engaged')).toBe(false);
+      expect((await events(instanceId)).filter((e) => e.positiveEngagement)).toEqual([]);
+      const again = await enrol(ORG_A, actor, prospectId, { steps: [EMAIL_STEP('later')] });
+      expect(again.report.enrolled).toBe(0);
+      expect((again.report.exclusionReasons as Record<string, number>).prospect_lifecycle_closed).toBe(1);
+    });
+  });
+
+  it('D-1 sequence: a plain inbound suspends; a later STOP leaves the paused run paused (only a complaint ends one), and the resume exits it', async () => {
+    await inRollback(async () => {
+      const { prospectId, instanceId, threadId } = await whatsappScene([{ id: 'wamid.seq-plain', content: 'sounds interesting' }]);
+      const before = await lifecycle(ORG_A, prospectId);
+      const fp = whatsappReplyFingerprint('wamid.seq-stop');
+
+      // Sweep 1: the plain inbound suspends the run; exactly one response.received.
+      const first = await sweepWithIdleWhatsApp(jest.fn());
+      expect(first.counters).toMatchObject({ journeys_suspended: 1, journeys_exited: 0, lifecycle_transitions_written: 0 });
+      expect(await instanceState(instanceId)).toBe('paused');
+      const ev1 = await events(instanceId);
+      const received = ev1.filter((e) => e.type === 'response.received');
+      expect(received).toHaveLength(1);
+      expect(ev1.map((e) => e.type)).not.toContain('response.unsubscribed');
+      expect(ev1.filter((e) => e.positiveEngagement)).toEqual([]);
+
+      // Later: a STOP (a later created_at), and the sweeper runs again.
+      await db.query(`INSERT INTO public.engagement_messages (thread_id, platform, platform_message_id, content, direction, status, created_at)
+        VALUES ($1,'whatsapp',$2,'STOP','inbound','received', now() + interval '1 minute')`, [threadId, 'wamid.seq-stop']);
+      const second = await sweepWithIdleWhatsApp(jest.fn());
+      // AS BUILT: the main loop takes active runs only, and the paused pass ends a paused run
+      // on a complaint alone (Q-C1). A STOP on a paused run therefore leaves it paused, and PI
+      // hears nothing yet. The STOP is enforced at resume (below) and at dispatch, where the
+      // governance restriction the webhook processor writes refuses the send
+      // (p4_governance_whatsapp.test.ts, G-1).
+      expect(second.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 0, lifecycle_transitions_written: 0 });
+      expect(await instanceState(instanceId)).toBe('paused');
+      expect(await lifecycle(ORG_A, prospectId)).toEqual(before);
+      // The view reads the one message that ends a journey, so the STOP replaces the
+      // response.received (limitation 3), under a new eventId.
+      const ev2 = await events(instanceId);
+      expect(ev2.map((e) => e.type)).not.toContain('response.received');
+      const unsub = ev2.filter((e) => e.type === 'response.unsubscribed');
+      expect(unsub).toHaveLength(1);
+      expect(unsub[0]).toMatchObject({ code: 'unsubscribed', positiveEngagement: false });
+      expect(unsub[0].eventId).not.toBe(received[0].eventId);
+      expect(ev2.filter((e) => e.positiveEngagement)).toEqual([]);
+
+      // A person resumes the run: the next sweep sees the STOP first and ends it.
+      await setExecutionInstanceState({ organizationId: ORG_A, instanceId, lifecycleState: 'active' });
+      const third = await sweepWithIdleWhatsApp(jest.fn());
+      expect(third.counters).toMatchObject({ journeys_exited: 1, journeys_suspended: 0, lifecycle_transitions_written: 1 });
+      expect(await instanceState(instanceId)).toBe('cancelled');
+      expect((await listJourneyDecisions(ORG_A, instanceId)).find((d: Row) => d.decision === 'exited')?.outcome).toBe('unsubscribed');
+      const after = await lifecycle(ORG_A, prospectId);
+      const closed = after.filter((row) => row.state === 'closed_disqualified');
+      expect(closed).toHaveLength(1);
+      expect(closed[0]).toMatchObject({ evidence_kind: 'engagement_thread', source_event_key: `evidence:${fp}` });
+      expect(after.some((row) => row.state === 'engaged')).toBe(false);
+      const ev3 = await events(instanceId);
+      expect(ev3.filter((e) => e.positiveEngagement)).toEqual([]);
+      expect(ev3.map((e) => e.type)).not.toContain('response.received');
+
+      // A further sweep or a re-delivery adds nothing.
+      await sweepWithIdleWhatsApp(jest.fn());
+      expect((await lifecycle(ORG_A, prospectId)).filter((row) => row.state === 'closed_disqualified')).toHaveLength(1);
+    });
+  });
+
+  it('REQUIRED (PI P-2): a STOP recorded under the old derivation: key, then re-delivered, writes no second transition', async () => {
+    await inRollback(async () => {
+      const { prospectId, instanceId, threadId } = await whatsappScene([{ id: 'wamid.old-stop', content: 'STOP' }]);
+      // What the pre-Prompt-5 feed wrote for this STOP: closed_disqualified, keyed derivation:<fingerprint>.
+      await recordProspectTransition({
+        organizationId: ORG_A, prospectId, to: 'closed_disqualified', origin: 'derived', actorUserId: null,
+        evidence: { kind: 'engagement_thread', detail: { threadId, messageId: 'wamid.old-stop' } },
+        sourceEventKey: `derivation:${whatsappReplyFingerprint('wamid.old-stop')}`, now: new Date().toISOString(),
+      });
+      const before = await lifecycle(ORG_A, prospectId);
+      expect(before.at(-1)).toMatchObject({ state: 'closed_disqualified', source_event_key: `derivation:${whatsappReplyFingerprint('wamid.old-stop')}` });
+
+      // Re-delivered: the sweep sees the STOP again and feeds it under the new evidence: key.
+      const r = await sweepWithIdleWhatsApp(jest.fn());
+      expect(r.counters).toMatchObject({ journeys_exited: 1, lifecycle_transitions_written: 0 });
+      expect(await instanceState(instanceId)).toBe('cancelled');
+      // And fed directly, as a later delivery of the same message would be.
+      const fed = await feedWhatsAppReplyToLifecycle({
+        organizationId: ORG_A, prospectId, messageId: 'wamid.old-stop', threadId, outcome: 'unsubscribed', now: new Date().toISOString(),
+      });
+      expect(fed).toEqual({ wrote: false, refusal: 'no-transition' });
+      const after = await lifecycle(ORG_A, prospectId);
+      expect(after).toEqual(before);
+      expect(after.filter((row) => row.state === 'closed_disqualified')).toHaveLength(1);
+      expect(after.some((row) => String(row.source_event_key).startsWith('evidence:'))).toBe(false);
     });
   });
 });

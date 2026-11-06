@@ -1,4 +1,4 @@
-# API and event schemas, contract 0.3.0
+# API and event schemas, contract 0.4.0
 
 The TypeScript in `backend/services/orchestration/executionContract.ts` is the source of truth; this is its readable form. None of these routes is deployed. Every route resolves tenant membership first, then a capability, and passes the verified tenant down. Another tenant's run answers 404, the same as one that does not exist.
 
@@ -108,7 +108,8 @@ interface JourneyEventActor {      // 0.3.0
 | | `execution.cancelled` | Since 0.3.0, from `suppressed` and `expired` evidence only. A cancelled step still surfaces as `decision.recorded` |
 | | `execution.failed` | **Declared, not emitted (G-7).** A failed step surfaces as `decision.recorded` with a code |
 | Delivery | `delivery.confirmed`, `.failed`, `.bounced`, `.complained` | Yes, from recorded evidence. `delivery.confirmed` only for an observed delivery; `delivery.complained` also for a complaint-inferred `delivered` row (`isComplaintInferredEvidence`) |
-| Response | `response.replied`, `.unsubscribed`, `.rejected`, `.other` | Yes, from recorded outcomes |
+| Response | `response.replied`, `.unsubscribed`, `.rejected`, `.other` | Yes, from recorded outcomes. `response.unsubscribed` also from a WhatsApp STOP |
+| | `response.received` (0.4.0) | Yes: a WhatsApp inbound nobody has evaluated, code `unclassified`. Never positive, never a business outcome, never fed to PI |
 | Outcome | `outcome.recorded` | Yes |
 | Unmapped | `record.unmapped` (0.3.0) | Yes: a stored delivery status or outcome type with no mapping, with its original `code`. Never a consequence, never positive |
 
@@ -116,7 +117,7 @@ interface JourneyEventActor {      // 0.3.0
 
 1. **A late row can sort before a cursor.** A provider event with an earlier time sorts before an existing cursor. For completeness, re-read from the start and dedupe on `eventId`.
 2. **Codes reflect the current row.** A ledger event's `code` is the row's state now, under a fixed `eventId` and time. A consumer holding a cursor does not see a later change to `uncertain`. Re-reading does.
-3. **One WhatsApp response is shown.** The view reads the same single message that ends a journey, so a later STOP replaces an earlier `response.replied`.
+3. **One WhatsApp response is shown.** The view reads the same single message that ends a journey, so a later STOP replaces an earlier `response.received`.
 
 ## From 0.2.0 to 0.3.0
 
@@ -159,3 +160,32 @@ From the first deployment of the route on, the rule applies strictly: a change l
 - never act on `record.unmapped`;
 - read `journey.suspended` as "paused for a person", not as an end; there is no `journey.resumed`;
 - if a test database was read under 0.2.0, re-read from the start: every re-mapped row's old event is replaced by one with a new `eventId`.
+
+## From 0.3.0 to 0.4.0
+
+**What changed (X-3, Orchestration Prompt 5).** One event type, `response.received`, and one re-mapping. Under 0.3.0 every non-STOP WhatsApp inbound was read as `response.replied` with `positiveEngagement: true`, and the sweeper fed it to Prospect Intelligence as the business outcome `replied` (PI moved the prospect to `engaged`, a `not_interested` prospect included). Nobody had evaluated those messages, so none of that was known.
+
+| Stored row | 0.3.0 event | 0.4.0 event |
+|---|---|---|
+| WhatsApp inbound, not an opt-out keyword | `response.replied`, code `replied`, positive | `response.received`, code `unclassified`, not positive |
+| WhatsApp inbound, whole-message opt-out keyword (STOP) | `response.unsubscribed`, code `unsubscribed` | unchanged |
+| WS-3 `outreach_outcomes` row `replied` (recorded by an operator, POST /api/outreach/outcomes) | `response.replied`, positive | unchanged |
+| SES email evidence (Delivery, Bounce, Complaint) | `delivery.*`, `execution.*` | unchanged: email has no automated inbound |
+
+Each channel has one stated meaning (Outreach agreement, virality-52, 2026-11-06):
+
+- a WhatsApp STOP stays `response.unsubscribed`; an opt-out keyword is never `response.received`;
+- an operator-recorded WS-3 `replied` stays `response.replied`, and it is the only positive engagement event;
+- any other WhatsApp inbound is `response.received` until a person evaluates it. The run still suspends for that person exactly as before.
+
+`POSITIVE_ENGAGEMENT_EVENTS` stays `['response.replied']`. Nothing was removed or renamed. `EXECUTION_CONTRACT_VERSION` is `0.4.0`; `checkCapabilityDeclaration` compares the major only, so 0.3.0, 0.2.0 and 0.1.0 declarations still pass.
+
+**Why `JOURNEY_EVENT_VERSION` stays 1 (EV-1, user decision 2026-11-06).** The meaning of a WhatsApp inbound changed, and that change is documented here instead of bumping the event version. The re-mapped row changes `type`, and therefore `eventId`, so a re-reading consumer sees a new event rather than a silently changed one; no consumer exists outside a test database.
+
+**On the PI side (PI ruling, virality-b6, 2026-11-06).** The WhatsApp feed (`journeyFeedback.feedWhatsAppReplyToLifecycle`) takes a STOP only. Its provenance source is `provider_webhook` and its key is `evidence:<fingerprint>`. Transitions already written under `derivation:<fingerprint>` stay; a re-delivered STOP finds the prospect already closed and writes no second transition. PI gets no ninth outcome and no store for unclassified inbounds. A human-confirmed WhatsApp engagement reaching PI is a documented gap (P-1 = (a)).
+
+**Consumer note.** A 0.3.0 consumer that ignores unknown types sees fewer `response.replied` events and no positive engagement from WhatsApp. To use 0.4.0:
+
+- read `response.received` as "a message arrived and nobody has said what it means": never engagement, never a reply, never a reason to end a journey;
+- keep reading `response.replied` as positive engagement; under 0.4.0 it comes from an operator-recorded outcome only;
+- if a test database was read under 0.3.0, re-read from the start.

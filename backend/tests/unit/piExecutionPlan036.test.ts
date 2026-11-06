@@ -541,8 +541,8 @@ describe('036 — frozen artefacts are untouched', () => {
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
-      .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('5bf14b6a3889a485'); // RE-PINNED 2026-11-05 (Prompt 4): PATCH resume may carry a returnDate (journeyRetiming)
+      .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('11c789b7c6f1227e'); // RE-PINNED 2026-11-06 (Prompt 5): resumes move a run only from paused (O2-F1); PATCH { evaluation } records a person's reply evaluation
   });
 
   it('034 canonical invocation route is byte-identical at its post-port baseline', () => {

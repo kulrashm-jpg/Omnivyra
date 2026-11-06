@@ -85,9 +85,21 @@ export const replyReferenceKey = (ref: string): string =>
 /** How far a sweep reads inbound messages. An opt-out anywhere in them outranks a reply. */
 const MAX_INBOUND_READ = 50;
 
+/**
+ * X-3 (Prompt 5) — the internal label of a WhatsApp inbound that nobody has evaluated.
+ * It is NOT a business outcome: no one has said what the message means, so it is never
+ * `replied`. It suspends the run exactly as a reply does, feeds nothing to Prospect
+ * Intelligence (PI ruling, virality-b6, 2026-11-06) and reads as `response.received`
+ * (contract 0.4.0), never as positive engagement.
+ */
+export const WHATSAPP_INBOUND_UNCLASSIFIED = 'inbound_unclassified';
+
 export interface WhatsAppReply {
-  /** A STOP is not engagement: PI must close this prospect, not call them engaged. */
-  readonly outcome: 'replied' | 'unsubscribed';
+  /**
+   * A STOP is not engagement: PI must close this prospect, not call them engaged. Any
+   * other inbound is `inbound_unclassified`: its meaning is unknown, so it is not engagement either.
+   */
+  readonly outcome: typeof WHATSAPP_INBOUND_UNCLASSIFIED | 'unsubscribed';
   /** `engagement_messages.platform_message_id`: the reply's stable identity. */
   readonly messageId: string;
   readonly threadId: string;
@@ -241,7 +253,7 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
     const m = stop ?? found[0];
     const inboundMessageIds = found.filter((x) => detectWhatsAppOptOut(x.content) === null).map((x) => String(x.platform_message_id));
     return m
-      ? { outcome: stop ? 'unsubscribed' : 'replied', messageId: String(m.platform_message_id), threadId: String(m.thread_id), inboundMessageIds }
+      ? { outcome: stop ? 'unsubscribed' : WHATSAPP_INBOUND_UNCLASSIFIED, messageId: String(m.platform_message_id), threadId: String(m.thread_id), inboundMessageIds }
       : null;
   },
 };
@@ -333,10 +345,12 @@ export async function assessJourneyResponse(
     refs.push(...(rows.length > 0 ? rows.map((id) => `ws3:${id}`) : [`ws3:${executionInstanceId}`]));
   }
   if (reply !== null) refs.push(...(reply.inboundMessageIds ?? [reply.messageId]).map((id) => `wa:${id}`));
-  const pending = refs.map(replyReferenceKey).find((k) => !evaluated.has(k)) ?? null;
-  return pending === null
-    ? { consequence: 'continue', outcome: null, whatsappReply: null, replyKey: null }
-    : { consequence: 'suspend', outcome: 'replied', whatsappReply: reply, replyKey: pending };
+  const pendingRef = refs.find((r) => !evaluated.has(replyReferenceKey(r))) ?? null;
+  if (pendingRef === null) return { consequence: 'continue', outcome: null, whatsappReply: null, replyKey: null };
+  // X-3 — the outcome names what suspended the run: a recorded WS-3 `replied`, or a WhatsApp
+  // inbound nobody has evaluated (`inbound_unclassified`, never the business outcome `replied`).
+  const outcome = pendingRef.startsWith('wa:') ? WHATSAPP_INBOUND_UNCLASSIFIED : 'replied';
+  return { consequence: 'suspend', outcome, whatsappReply: reply, replyKey: replyReferenceKey(pendingRef) };
 }
 
 /**

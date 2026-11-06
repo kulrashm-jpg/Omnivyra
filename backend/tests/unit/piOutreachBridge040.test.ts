@@ -496,7 +496,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
       .toBe('652e20fb2f6425e2');
     expect(sha('backend/services/workflowExecution/stepProgressionStore.ts'))
       .toBe('e36a36c6439315ab'); // RE-PINNED 2026-11-05 (Prompt 4): reads not_before; deferStepUntil (20270127000000)
-    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('5fe8d426d8b7db66');
+    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('ff81c0cfaff48267'); // RE-PINNED 2026-11-06 (Prompt 5): recordPersonDecision moved to journeyDecisionLog (widened to keep d.reasons; progression passes reasons: [], so its records are unchanged)
   });
 
   it('033 artefacts are byte-identical', () => {
@@ -504,8 +504,8 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
-      .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('5bf14b6a3889a485'); // RE-PINNED 2026-11-05 (Prompt 4): PATCH resume may carry a returnDate (journeyRetiming)
+      .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('11c789b7c6f1227e'); // RE-PINNED 2026-11-06 (Prompt 5): resumes move a run only from paused (O2-F1); PATCH { evaluation } records a person's reply evaluation
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');
   });

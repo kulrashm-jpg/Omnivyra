@@ -452,15 +452,15 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('c2f0c2174cb2ca3c');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
     // RE-PINNED 2026-10-28: 036 re-pinned the instance store (targets_not_installed mapping).
-    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('97f623a9e43a2627'); // RE-PINNED 2026-11-05 (Prompt 4): 036 re-pinned the [id] route (returnDate resume)
+    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('f72bd2a7da410df1'); // RE-PINNED 2026-11-06 (Prompt 5): 036 re-pinned the [id] route and the instance store (O2-F1, reply evaluation)
   });
 
   it('033, 034 and 032 are byte-identical', () => {
     expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
-      .toBe('1319b7d86960f9c3'); // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('5bf14b6a3889a485'); // RE-PINNED 2026-11-05 (Prompt 4): PATCH resume may carry a returnDate (journeyRetiming)
+      .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('11c789b7c6f1227e'); // RE-PINNED 2026-11-06 (Prompt 5): resumes move a run only from paused (O2-F1); PATCH { evaluation } records a person's reply evaluation
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');
     expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))

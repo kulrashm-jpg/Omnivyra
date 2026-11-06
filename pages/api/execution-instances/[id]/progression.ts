@@ -55,7 +55,7 @@ import {
   listProgressionSteps, getReadyStep, StepProgressionError,
   STEP_STATES, type StepState,
 } from '../../../../backend/services/workflowExecution/stepProgressionStore';
-import { listJourneyDecisions, recordJourneyDecisions, type JourneyDecisionInput } from '../../../../backend/services/orchestration/journeyDecisionLog';
+import { listJourneyDecisions, recordPersonDecision, type JourneyDecisionInput } from '../../../../backend/services/orchestration/journeyDecisionLog';
 import { exitJourney, withdrawStepAction } from '../../../../backend/services/orchestration/journeyExit';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -74,12 +74,6 @@ const statusFor = (code: string): number => {
   if (code === 'no_plan' || code === 'plan_not_ready') return 409;
   return 400;
 };
-
-/** Records who settled what. True means the action stands with no record of it, and the caller is told. */
-async function recordPersonDecision(companyId: string, actorUserId: unknown, d: JourneyDecisionInput): Promise<boolean> {
-  const recorded = await recordJourneyDecisions(companyId, [{ ...d, reasons: [`actor:${String(actorUserId)}`] }]);
-  return recorded.failed > 0;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!METHODS.includes(req.method ?? '')) {

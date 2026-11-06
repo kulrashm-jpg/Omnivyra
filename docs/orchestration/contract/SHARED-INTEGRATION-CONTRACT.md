@@ -1,6 +1,6 @@
-# Omnivyra shared integration contract, v0.3.0
+# Omnivyra shared integration contract, v0.4.0
 
-**Status: proposed.** 0.3.0 is implemented on the local branch `orch/c4-a-contract` (Orchestration Prompt 4, on `7f2ca186f`), uncommitted; earlier versions on `feat/orchestration-recovery`. Not merged, not deployed, and `WORKFLOW_ORCHESTRATION_ENABLED` stays off. The PI lead has not reviewed sections A and B. The Outreach lead has agreed the ownership split in section D, and its branch has merged an earlier commit of this contract (0.1.0, at `30a421c2`). It has not yet merged 0.2.0.
+**Status: proposed.** 0.4.0 (X-3: `response.received`, see `API-AND-EVENT-SCHEMAS.md`, "From 0.3.0 to 0.4.0") is implemented on the local branch `orch/c5-b` (Orchestration Prompt 5), uncommitted. 0.3.0 is implemented on the local branch `orch/c4-a-contract` (Orchestration Prompt 4, on `7f2ca186f`), uncommitted; earlier versions on `feat/orchestration-recovery`. Not merged, not deployed, and `WORKFLOW_ORCHESTRATION_ENABLED` stays off. The PI lead has not reviewed sections A and B. The Outreach lead has agreed the ownership split in section D, and its branch has merged an earlier commit of this contract (0.1.0, at `30a421c2`). It has not yet merged 0.2.0.
 
 Code of record: `backend/services/orchestration/executionContract.ts`, `engineCapabilities.ts`, `journeyEvents.ts`, `journeyGovernance.ts`, `journeyExit.ts`.
 

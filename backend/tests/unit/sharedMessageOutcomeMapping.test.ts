@@ -2,7 +2,7 @@
  * Shared message-outcome contract, Deliverable D (Orchestration Prompt 4, Agent C).
  * docs/orchestration/completion/SHARED-MESSAGE-OUTCOME-CONTRACT.md
  *
- * Pins contract 0.3.0 across the layers:
+ * Pins contract 0.3.0 (and the 0.4.0 `response.received`, X-3) across the layers:
  *   raw provider event (a) -> normalized channel outcome (b) -> journey event -> consequence (e).
  * It runs against Agent A's 0.3.0 `journeyEvents.ts` / `executionContract.ts`. On the
  * frozen base (7f2ca186f) alone it fails by design: `isComplaintInferredEvidence`,
@@ -309,7 +309,7 @@ describe('journey events from business outcomes (0.3.0)', () => {
 });
 
 describe('journey events from the WhatsApp inbound reading', () => {
-  const port = (outcome: 'replied' | 'unsubscribed') => ({
+  const port = (outcome: 'inbound_unclassified' | 'unsubscribed') => ({
     ws3Outcomes: async () => [], whatsappReply: async () => ({ outcome, messageId: 'wamid-1', threadId: 'thread-1' }),
   });
 
@@ -318,13 +318,48 @@ describe('journey events from the WhatsApp inbound reading', () => {
     expect(e).toMatchObject({ type: 'response.unsubscribed', positiveEngagement: false, channel: 'whatsapp', code: 'unsubscribed' });
   });
 
-  it('PENDING DF-6: every other inbound WhatsApp message is still response.replied and positive in the view', async () => {
-    const [e] = await eventsFrom('engagement_messages', [{ id: 'msg-2', created_at: '2026-11-04T00:00:00.000Z' }], port('replied'));
-    expect(e).toMatchObject({ type: 'response.replied', positiveEngagement: true });
+  // Contract 0.4.0 (X-3). Was PENDING DF-6: `response.replied`, positiveEngagement true.
+  it('every other inbound WhatsApp message is response.received, code unclassified, never positive', async () => {
+    const [e] = await eventsFrom('engagement_messages', [{ id: 'msg-2', created_at: '2026-11-04T00:00:00.000Z' }], port('inbound_unclassified'));
+    expect(e).toMatchObject({ type: 'response.received', code: 'unclassified', positiveEngagement: false, channel: 'whatsapp' });
+    expect(e!.type).not.toBe('response.replied');
   });
 
   it.todo('After SC7-R (owner): a WhatsApp message the deterministic detector classes complaint is never response.replied or positive engagement');
   it.todo('DF-7 / P-6 (Outreach raw status, Orchestration reader): a WhatsApp failure observed after the step settled yields delivery.failed, and an unmapped Meta status is kept as record.unmapped with no consequence');
+});
+
+// ── Contract 0.4.0: one stated meaning per channel (Outreach condition (c)) ──────
+
+describe('the 4-way reply mapping (contract 0.4.0)', () => {
+  const wa = (outcome: 'inbound_unclassified' | 'unsubscribed') => ({
+    ws3Outcomes: async () => [], whatsappReply: async () => ({ outcome, messageId: `wamid-${outcome}`, threadId: 'thread-1' }),
+  });
+  const MSG = [{ id: 'msg-4', created_at: '2026-11-04T00:00:00.000Z' }];
+
+  it('email, WhatsApp STOP, WhatsApp plain inbound and an operator-recorded reply each map to one event', async () => {
+    // Email: no automated inbound exists; SES delivers delivery facts only.
+    const [email] = await eventsFrom('outreach_delivery_evidence', [storedFromSes(sesPayload('Delivery', { delivery: { timestamp: '2026-11-02T01:00:00.000Z' } }), 'sns-4way')]);
+    const [stop] = await eventsFrom('engagement_messages', MSG, wa('unsubscribed'));
+    const [plain] = await eventsFrom('engagement_messages', MSG, wa('inbound_unclassified'));
+    // Operator-recorded: POST /api/outreach/outcomes writes a WS-3 `replied` outcome row.
+    const [operator] = await eventsFrom('outreach_outcomes', [outcomeRow('replied')]);
+
+    expect([email, stop, plain, operator].map((e) => [e!.type, e!.code, e!.positiveEngagement])).toEqual([
+      ['delivery.confirmed', 'delivered', false],
+      ['response.unsubscribed', 'unsubscribed', false],
+      ['response.received', 'unclassified', false],
+      ['response.replied', 'replied', true],
+    ]);
+    // An opt-out keyword is never classed as received; only the human-recorded reply is positive.
+    expect(stop!.type).not.toBe('response.received');
+    expect([email, stop, plain].some((e) => e!.positiveEngagement)).toBe(false);
+  });
+
+  it('response.received is declared, and only response.replied is positive engagement', () => {
+    expect(JOURNEY_EVENT_TYPES).toContain('response.received');
+    expect([...POSITIVE_ENGAGEMENT_EVENTS]).toEqual(['response.replied']);
+  });
 });
 
 // ── Layer (d) -> (e): consequences ─────────────────────────────────────────

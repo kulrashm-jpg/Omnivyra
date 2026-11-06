@@ -268,11 +268,15 @@ export async function readJourneyEvents(
   }
 
   // WhatsApp's inbound record, through the same reading that ends a journey.
+  // Contract 0.4.0 (X-3): a STOP is `response.unsubscribed`; any other inbound has not been
+  // evaluated, so it is `response.received`, code `unclassified`, never positive engagement.
+  // A WS-3 `replied` outcome row (operator-recorded) stays `response.replied` above.
   const resolved = await resolveSubjectPersonId(organizationId, subject as Parameters<typeof resolveSubjectPersonId>[1]);
   const reply = await (options.responses ?? durableJourneyResponsePort).whatsappReply(organizationId, executionInstanceId, resolved.ok ? resolved.personId : null);
   if (reply !== null) {
     const msg = await readRows(ownedDbTable('engagement_messages').select('id, created_at').eq('thread_id', reply.threadId).eq('platform_message_id', reply.messageId).limit(1), 'messages');
-    push(reply.outcome === 'unsubscribed' ? 'response.unsubscribed' : 'response.replied', { table: 'engagement_messages', id: String(msg[0]?.id ?? reply.messageId) }, msg[0]?.created_at, { engine: 'whatsapp', channel: 'whatsapp', code: reply.outcome });
+    const stop = reply.outcome === 'unsubscribed';
+    push(stop ? 'response.unsubscribed' : 'response.received', { table: 'engagement_messages', id: String(msg[0]?.id ?? reply.messageId) }, msg[0]?.created_at, { engine: 'whatsapp', channel: 'whatsapp', code: stop ? 'unsubscribed' : 'unclassified' });
   }
 
   // PI's verdict, from enrolment on. PI owns these rows; this only reads them.

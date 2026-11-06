@@ -155,6 +155,19 @@ const SAFETY_SUITE_REGISTRY = [
   // the follow-up retiming engine (never wired to classifier output while SC-7 is open).
   'backend/tests/unit/p4GovernancePrecedence.test.ts',
   'backend/tests/unit/q4FollowUpRetiming.test.ts',
+  // Prompt 5: O2-F1 (every resume moves a run only from paused), a person's reply
+  // evaluation on the run route, the reply consequence matrix, and the classifier wiring
+  // that stays switched off until SC7-R.
+  'backend/tests/unit/o2f1ResumeCompareAndSet.test.ts',
+  'backend/tests/unit/journeyReplyEvaluationRoute.test.ts',
+  'backend/tests/unit/replyConsequenceMatrix.test.ts',
+  'backend/tests/unit/replyClassificationGuard.test.ts',
+  // Prompt 5 X-3: an unevaluated WhatsApp inbound is never `replied`, never PI `engaged`,
+  // never positive engagement; the PI feed takes a STOP only.
+  'backend/tests/unit/x3WhatsAppInboundUnclassified.test.ts',
+  // Prompt 5 producer compatibility: real SES, WhatsApp and operator producers into the
+  // Orchestration readers (STOP stays unsubscribed, operator replied stays replied).
+  'backend/tests/unit/orch_c5_producer_compat.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */

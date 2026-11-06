@@ -177,7 +177,7 @@ describe('application callers compose the certified engine', () => {
 });
 
 describe('what ends a journey, and what suspends it (Prompt 4)', () => {
-  type Reply = { outcome: 'replied' | 'unsubscribed'; messageId: string; threadId: string; inboundMessageIds?: string[] };
+  type Reply = { outcome: 'inbound_unclassified' | 'unsubscribed'; messageId: string; threadId: string; inboundMessageIds?: string[] };
   const port = (outcomes: string[], reply: Reply | null = null, refs?: string[]): JourneyResponsePort => ({
     ws3Outcomes: async () => outcomes,
     whatsappReply: async () => reply,
@@ -195,7 +195,7 @@ describe('what ends a journey, and what suspends it (Prompt 4)', () => {
   });
 
   it('a deterministic answer ends it even beside an unevaluated reply', async () => {
-    expect(await assess(port(['replied', 'unsubscribed'], { outcome: 'replied', messageId: 'w1', threadId: 't' }, ['o1'])))
+    expect(await assess(port(['replied', 'unsubscribed'], { outcome: 'inbound_unclassified', messageId: 'w1', threadId: 't' }, ['o1'])))
       .toMatchObject({ consequence: 'exit', outcome: 'unsubscribed' });
   });
 
@@ -209,8 +209,9 @@ describe('what ends a journey, and what suspends it (Prompt 4)', () => {
   });
 
   it('CHANGED: an unclassified WhatsApp reply SUSPENDS it, carrying the message identity for PI', async () => {
-    const reply = { outcome: 'replied' as const, messageId: 'wamid.1', threadId: 'th', inboundMessageIds: ['wamid.1'] };
-    expect(await assess(port([], reply))).toEqual({ consequence: 'suspend', outcome: 'replied', whatsappReply: reply, replyKey: replyReferenceKey('wa:wamid.1') });
+    const reply = { outcome: 'inbound_unclassified' as const, messageId: 'wamid.1', threadId: 'th', inboundMessageIds: ['wamid.1'] };
+    // X-3 (Prompt 5) — CHANGED: the verdict outcome was 'replied'; a WhatsApp inbound nobody evaluated is not a reply.
+    expect(await assess(port([], reply))).toEqual({ consequence: 'suspend', outcome: 'inbound_unclassified', whatsappReply: reply, replyKey: replyReferenceKey('wa:wamid.1') });
   });
 
   it('CHANGED: a recorded WS-3 reply SUSPENDS it, keyed on the outcome row', async () => {
@@ -220,7 +221,7 @@ describe('what ends a journey, and what suspends it (Prompt 4)', () => {
   });
 
   it('an evaluated reply does not suspend again; a later one does', async () => {
-    const reply = { outcome: 'replied' as const, messageId: 'w1', threadId: 'th', inboundMessageIds: ['w1', 'w2'] };
+    const reply = { outcome: 'inbound_unclassified' as const, messageId: 'w1', threadId: 'th', inboundMessageIds: ['w1', 'w2'] };
     const first = await assess(port([], { ...reply, inboundMessageIds: ['w1'] }));
     expect(first.consequence).toBe('suspend');
     const evaluated = evaluatedReplyKeys([{ decision: 'needs_human', outcome: `${REPLY_AWAITING_EVALUATION}:${first.replyKey}` }]);
