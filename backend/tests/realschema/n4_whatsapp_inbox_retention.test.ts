@@ -304,10 +304,16 @@ describe('N-4 clearing only with an approval, never younger than 3 days', () => 
       VALUES ($1, 'dead_letters', now() - interval '5 days', $2)`, [ORG_A, ADMIN])).toBe('23514');
     await expect(retention.approveAndClear({ store: 'engagement_messages', organizationId: null, cutoff: cutoff(5), approvedBy: ADMIN, reason: 'r' }))
       .rejects.toMatchObject({ code: 'tenant_required' });
-    // At the edge the database's clock decides: exactly 3 days by this process's clock is
-    // just under 3 days by the transaction's, and is refused as too recent, not as an error.
-    await expect(retention.approveAndClear({ store: 'engagement_messages', organizationId: ORG_A, cutoff: cutoff(3), approvedBy: ADMIN, reason: 'r' }))
-      .rejects.toMatchObject({ code: 'cutoff_too_recent' });
+    // At the edge the database's clock decides. The cutoff is 1 ms under 3 days by the
+    // transaction's clock, and this process's clock is set a minute ahead so its own check
+    // passes: the CHECK refuses it, and that is reported as too recent, not as an error.
+    // (Both clocks are read, never assumed: Postgres's can lead Node's by a few ms.)
+    const dbNow = Number((await one(`SELECT floor(extract(epoch FROM now()) * 1000) AS t`)).t);
+    await expect(retention.approveAndClear(
+      { store: 'engagement_messages', organizationId: ORG_A, cutoff: new Date(dbNow - 3 * DAY + 1).toISOString(), approvedBy: ADMIN, reason: 'r' },
+      dbNow + 60_000,
+    )).rejects.toMatchObject({ code: 'cutoff_too_recent' });
+    expect(Number((await one(`SELECT count(*) n FROM public.message_retention_approvals`)).n)).toBe(0);
   }));
 
   it('clears approved, old messages of the named tenant only; keys survive; STOP stays STOP; executed once', () => inRollback(async () => {
