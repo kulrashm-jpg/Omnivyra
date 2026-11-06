@@ -554,3 +554,61 @@ Exceptions 1 and 2 clear when GD-4 is decided, and not before.
 - `PROSPECT_PERSON_ERASE` (security owner).
 
 Release remains **NO-GO**. Nothing is pushed, merged, deployed or applied.
+
+## Prompt 4 integrated, O-2 corrected, T2 at `662d824be` (2026-11-06)
+
+**Verdict: PASSES WITH DOCUMENTED EXCEPTIONS.** The merge and the O-2 correction introduce **zero regressions**. Owner GO for the merge and for the O-2 correction, 2026-11-05/06.
+
+**Commits (local, `outreach/foundation-base-20261104`).**
+- `33070705d`: normal merge of Prompt 4 (`orch/c4-integration` `620a438fd`; c7's three commits `0ffc4a403`, `5d46a487d`, `620a438fd` preserved; `refs/preserve/orch-c4-integration-620a438f` kept). Its delta from `3967c7283` equals the reviewed diff `456080cb`, file for file.
+- `662d824be`: O-2 correction (Outreach implementation, Orchestration semantics, coordinated through the integration contract).
+- **Scope of Prompt 4: email and WhatsApp.** Community, Social and Browser are **not** covered by it and are not claimed.
+
+**O-2 defect (proven before any change).** A journey step deferred with a return date (`execution_plan_steps.not_before`) was respected only by the automatic scheduler. A local probe on a disposable database showed manual activation (`/activate`) and the internal recovery sweep each **sent** the held task, with governance `allowed`; the control (no return date) sent as expected; zero real provider calls.
+
+**O-2 correction.** In the existing `resolveJourneyHold` (`emailExecutionContext.ts`); no new hold service, authorization system or scheduling mechanism.
+- The active/paused/cancelled checks are unchanged. For an active run, the hold resolves the task's actual step (read after the run state) and refuses dispatch while `now < not_before`.
+- Fails closed (`journey_state_unreadable` / `journey_step_inconsistent`) when the handoff names no step or plan, the step is missing or unreadable, belongs to another plan or tenant, or `not_before` is not an instant.
+- A missing `not_before` is normal. After the return date, the task proceeds only if every other check passes.
+- `dispatchInternalOutreachTask` already calls the hold before governance, claim, quota and attempt, so the scheduler, `/activate`, recovery and direct dispatch are all covered, and the final boundary re-checks. `dispatch.ts` was not edited.
+- A held task records the existing refusal, consumes no attempt, claim or quota, and stays recoverable.
+
+**O-2 tests.**
+- `backend/tests/realschema/o2_journey_return_date_hold.test.ts`, on the original probe scenario:
+  - email: scheduler, `/activate` and direct dispatch are all refused (`deferred_journey`);
+  - internal: recovery reports `deferred_journey: 1`, `sent: 0`, and the task stays `queued`; the direct boundary refuses;
+  - each refusal asserts zero provider calls, unchanged attempts, decisions and quota, hold evidence, and that the task stays recoverable;
+  - after the return date the task sends **exactly once**, and repeated activation or dispatch sends nothing;
+  - fail-closed: the step read throws, returns null, belongs to another plan, or has a non-instant `not_before`; each is refused on dispatch and activation with an unchanged footprint;
+  - controls: with no return date, both `/activate` and direct dispatch send.
+- `orchJourneyHoldD03.test.ts`: 9 new unit cases. `d02ApprovalBinding` / `d02SecurityRegression` fixtures now carry the plan and step the real NOT NULL columns require; no assertion changed (c7 accepted).
+- T1: focused unit 297 passed / 5 skipped; real-schema 9 suites 91/91 including the original probe and the Prompt 4 suites.
+- Mutant: with the step hold replaced by `return null`, 4 of the 5 new real-schema tests fail and the control passes.
+- c7 (Orchestration) review: PASS.
+
+**Results (T2, frozen at `662d824bea27ebb63f72309781af191157adcf6b`; HEAD and a clean tree verified at start and after A, B, C and end).**
+
+| Category | Result | Against `7f2ca186f` T2 / baselines |
+|---|---|---|
+| A. Real-schema, full project | 102/102 suites; 2010 tests: 2007 passed, 3 skipped, **0 failed** | +8 suites (Prompt 4, O-2) |
+| B. Integration community/WhatsApp | 15/18 suites; 126 tests: 120 passed, **6 failed** | The same 6, by name |
+| B. Whole-repo unit jest | 2393 suites; 42569 tests: 42428 passed, 73 skipped, **62 failed** | All 62 in the previous baselines; none new. The earlier `snapshotReportService` timeout did not recur |
+| C. typecheck-ci | PASS, at baseline (850 s) | |
+| C. Worker tsc | Clean | |
+| C. backend/tests typecheck baseline | 52 net-new against the committed baseline file | See exception below. **0 from the merge or O-2** |
+| D. Gates | 9/10 pass. **migration-quality: 23 violations** | The 23 flagged files are identical, by name. GD-4 / REL-07, not waived |
+
+**Exception: backend/tests typecheck.** First run of this check in a foundation T2. Each of the 52 diagnostics was traced by `git blame` to its line: all come from 37 commits that are ancestors of `3967c7283`, the pre-merge foundation head. None comes from `33070705d` or `662d824be`. It is foundation debt against a stale baseline file (types widened by D-02, D-03, Prompt 3 and Community work while their tests kept the old shapes; two duplicate-declaration test files). Not fixed here: out of scope for this GO.
+
+**Database.** Disposable pg-sandbox cluster on 127.0.0.1; 125 migrations applied above ledgerMax, through `20270127000000_execution_step_not_before.sql`. **No production or shared environment was touched**; no provider, send, publish, browser action or flag was used.
+
+**Open items.**
+- **O-1 (widened):** deploying this code before migration `20270127000000` is applied also halts dispatch of handed-off journey tasks (the step read fails closed). Fail-safe, but the migration must precede the code.
+- **O-2:** resolved by `662d824be`.
+- **O2-F1 (Orchestration, Prompt 5 scope):** `setExecutionInstanceState` is not a compare-and-set, so a plain resume racing a return-date resume can leave the run active before `not_before` is written. Known limitation; Orchestration owns it.
+- O-3, O-4: unchanged.
+- Migration state: `20270127000000` applied to disposable databases only; `20270125000001` still held.
+
+**Closure status: unchanged, no closure is complete.** Owner decisions still open: GD-4 / REL-07, D2-R, SC7-R, BL-A, CN-1..CN-3, C-CP-1, CL-1..CL-6, `PROSPECT_PERSON_ERASE`.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
