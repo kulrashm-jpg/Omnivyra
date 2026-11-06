@@ -161,6 +161,8 @@ import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
 
 const ORG = '00000000-0000-4000-8000-00000000000a';
 const RUN = '00000000-0000-4000-8000-000000000101';
+const PLAN = '00000000-0000-4000-8000-000000000201';
+const STEP = '00000000-0000-4000-8000-000000000301';
 const APPROVER = '00000000-0000-4000-8000-0000000000e2';
 const PUBLISHER = '00000000-0000-4000-8000-0000000000e1';
 const BOUND = 'ada@bigcorp.example';
@@ -186,7 +188,16 @@ async function awaiting(over: Partial<NewOutreachTask> = {}): Promise<string> {
   const id = (await insertOutreachTask(newTask(over))).data!.id as string;
   await setOutreachTaskState(ORG, id, { status: 'awaiting_approval' });
   if (over.plannerVersion === BRIDGED_TASK_PLANNER_VERSION) {
-    (db.tables.outreach_bridge_handoffs ??= []).push({ organization_id: ORG, outreach_task_id: id, execution_instance_id: RUN });
+    // O-2: a real handoff names its plan and step (both NOT NULL); the journey hold reads the step.
+    (db.tables.outreach_bridge_handoffs ??= []).push({
+      organization_id: ORG, outreach_task_id: id, execution_instance_id: RUN, execution_plan_id: PLAN, execution_plan_step_id: STEP,
+    });
+    if (!(db.tables.execution_plan_steps ?? []).some((r) => r.id === STEP)) {
+      (db.tables.execution_plan_steps ??= []).push({
+        id: STEP, organization_id: ORG, plan_id: PLAN, step_key: 'intro', step_order: 1, channel: 'email', delay_after_previous_hours: 0,
+        state: 'ready', ready_at: null, started_at: null, settled_at: null, completed_at: null, not_before: null,
+      });
+    }
     if (!(db.tables.execution_instances ?? []).some((r) => r.id === RUN)) {
       (db.tables.execution_instances ??= []).push({ organization_id: ORG, id: RUN, lifecycle_state: 'active' });
     }

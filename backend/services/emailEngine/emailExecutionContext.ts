@@ -234,7 +234,8 @@ export async function resolveEmailRecipient(
 export const BRIDGED_TASK_PLANNER_VERSION = 'wf-bridge-1.0.0';
 
 export type JourneyHoldCode =
-  | 'handoff_missing' | 'journey_state_unreadable' | 'journey_paused' | 'journey_not_active';
+  | 'handoff_missing' | 'journey_state_unreadable' | 'journey_paused' | 'journey_not_active'
+  | 'journey_step_inconsistent' | 'journey_not_before';
 
 export interface JourneyHold {
   readonly code: JourneyHoldCode;
@@ -253,6 +254,17 @@ export interface JourneyHold {
  * written: a hold leaves no decision, claim, quota or attempt behind, so a resumed
  * journey sends as if it had never been paused. The run is read through its own store,
  * which owns that table, loaded only for a bridged task.
+ *
+ * O-2 — an active run is not enough: the handed-off STEP may carry a person's return date
+ * (`execution_plan_steps.not_before`, 20270127000000; its meaning is Orchestration's). Until
+ * then the task is held on every path that reaches dispatch: the sweeper, an operator's
+ * activation, the recovery sweep and a direct call. The step is the handoff's own
+ * `execution_plan_step_id`, read through its store AFTER the run: a resume writes the floor
+ * before it marks the run active, so a run read as active implies its floor is visible.
+ * Fails closed when the step is missing, unreadable, belongs to another plan, or carries a
+ * floor that is not an instant. The floor is compared with the wall clock, never a
+ * caller-supplied one, so no caller can shorten a hold. No floor (null) is exactly the
+ * earlier behaviour.
  */
 export async function resolveJourneyHold(
   organizationId: string, task: { id: string | null; plannerVersion: string },
@@ -264,7 +276,7 @@ export async function resolveJourneyHold(
   });
   try {
     const handoff = await ownedDbTable(HANDOFFS_TABLE)
-      .select('execution_instance_id')
+      .select('execution_instance_id, execution_plan_id, execution_plan_step_id')
       .eq('organization_id', organizationId)
       .eq('outreach_task_id', task.id)
       .maybeSingle();
@@ -286,7 +298,7 @@ export async function resolveJourneyHold(
     }
     if (run === null) return unreadable('run not found');
     const state = str(run.lifecycleState);
-    if (state === 'active') return null;
+    if (state === 'active') return stepHold(organizationId, handoff.data as Row);
     if (state === 'paused') {
       return { code: 'journey_paused', reason: 'the journey is paused; this task is held until it resumes' };
     }
@@ -296,6 +308,45 @@ export async function resolveJourneyHold(
     };
   } catch {
     return unreadable('read threw');
+  }
+}
+
+/** O-2 — the handed-off step's return-date floor, for a run already read as active. Never throws. */
+async function stepHold(organizationId: string, handoff: Row): Promise<JourneyHold | null> {
+  const unreadable = (detail: string): JourneyHold => ({
+    code: 'journey_state_unreadable',
+    reason: `the journey step behind this task could not be read (${detail}); it is held, not sent`,
+  });
+  try {
+    const stepId = str(handoff.execution_plan_step_id);
+    const planId = str(handoff.execution_plan_id);
+    if (stepId === null || planId === null) return unreadable('the handoff names no step or plan');
+    const { getProgressionStep } = await import('../workflowExecution/stepProgressionStore');
+    let step: Awaited<ReturnType<typeof getProgressionStep>>;
+    try {
+      step = await getProgressionStep(organizationId, stepId);
+    } catch {
+      return unreadable('step read failed');
+    }
+    if (step === null) return unreadable('step not found');
+    if (step.planId !== planId || step.organizationId !== organizationId) {
+      return {
+        code: 'journey_step_inconsistent',
+        reason: 'the step behind this task does not belong to the plan it was handed off from; it is held, not sent',
+      };
+    }
+    if (step.notBefore === null) return null;
+    const floor = Date.parse(step.notBefore);
+    if (!Number.isFinite(floor)) return unreadable('the return date is not an instant');
+    if (Date.now() < floor) {
+      return {
+        code: 'journey_not_before',
+        reason: `a person deferred this journey step until ${new Date(floor).toISOString()}; it is held, not sent`,
+      };
+    }
+    return null;
+  } catch {
+    return unreadable('step check threw');
   }
 }
 

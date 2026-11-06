@@ -113,6 +113,16 @@ const ORG = '00000000-0000-4000-8000-00000000000a';
 const NOW = '2026-11-03T12:00:00.000Z';
 const RECIPIENT = 'cto@bigcorp.example';
 const RUN = '00000000-0000-4000-8000-000000000101';
+// O-2: a real handoff always names its plan and step (both NOT NULL), and the hold reads the step.
+const PLAN = '00000000-0000-4000-8000-000000000201';
+const STEP = '00000000-0000-4000-8000-000000000301';
+const handoffRow = (outreachTaskId: string, org = ORG) =>
+  ({ organization_id: org, outreach_task_id: outreachTaskId, execution_instance_id: RUN, execution_plan_id: PLAN, execution_plan_step_id: STEP });
+const stepRow = (over: Record<string, unknown> = {}) => ({
+  id: STEP, organization_id: ORG, plan_id: PLAN, step_key: 'intro', step_order: 1, channel: 'email',
+  delay_after_previous_hours: 0, state: 'ready', ready_at: NOW, started_at: null, settled_at: null, completed_at: null,
+  not_before: null, ...over,
+});
 
 const calls: string[] = [];
 const provider: EmailProviderPort = {
@@ -154,7 +164,8 @@ async function task(status: string, opts: { state?: string | null; handoff?: boo
     });
   }
   if (opts.handoff !== false) {
-    (db.tables.outreach_bridge_handoffs ??= []).push({ organization_id: ORG, outreach_task_id: id, execution_instance_id: RUN });
+    (db.tables.outreach_bridge_handoffs ??= []).push(handoffRow(id));
+    if (!(db.tables.execution_plan_steps ?? []).some((r) => r.id === STEP)) (db.tables.execution_plan_steps ??= []).push(stepRow());
   }
   if (opts.state !== undefined) {
     (db.tables.execution_instances ??= []).push({ organization_id: ORG, id: RUN, lifecycle_state: opts.state });
@@ -193,7 +204,7 @@ afterEach(() => {
 
 describe('D-03 — resolveJourneyHold fails closed', () => {
   const stamped = { id: 't-1', plannerVersion: BRIDGED_TASK_PLANNER_VERSION };
-  const handoff = () => { db.tables.outreach_bridge_handoffs = [{ organization_id: ORG, outreach_task_id: 't-1', execution_instance_id: RUN }]; };
+  const handoff = () => { db.tables.outreach_bridge_handoffs = [handoffRow('t-1')]; db.tables.execution_plan_steps = [stepRow()]; };
   const run = (state: unknown) => { db.tables.execution_instances = [{ organization_id: ORG, id: RUN, lifecycle_state: state }]; };
 
   it('pins the stamp to the one the bridge writes', () => {
@@ -229,7 +240,7 @@ describe('D-03 — resolveJourneyHold fails closed', () => {
   });
 
   it('another tenant\'s handoff is not this task\'s handoff', async () => {
-    db.tables.outreach_bridge_handoffs = [{ organization_id: 'co-b', outreach_task_id: 't-1', execution_instance_id: RUN }];
+    db.tables.outreach_bridge_handoffs = [handoffRow('t-1', 'co-b')];
     run('active');
     expect(await resolveJourneyHold(ORG, stamped)).toMatchObject({ code: 'handoff_missing' });
   });
@@ -246,6 +257,52 @@ describe('D-03 — resolveJourneyHold fails closed', () => {
     const hold = await resolveJourneyHold(ORG, stamped);
     expect(hold).toMatchObject({ code: 'journey_state_unreadable' });
     expect(hold?.reason).toContain(`(${detail as string})`);
+  });
+
+  // ── O-2: the handed-off step's return date, for a run that is active again ──
+  const inMs = (ms: number) => new Date(Date.now() + ms).toISOString();
+
+  it('O-2: an active run whose handed-off step has a future not_before holds', async () => {
+    handoff(); run('active');
+    db.tables.execution_plan_steps = [stepRow({ not_before: inMs(10 * 86_400_000) })];
+    const hold = await resolveJourneyHold(ORG, stamped);
+    expect(hold).toMatchObject({ code: 'journey_not_before' });
+    expect(hold?.reason).toMatch(/a person deferred this journey step until/);
+  });
+
+  it('O-2: a not_before that has passed, or none, is the earlier behaviour (no hold)', async () => {
+    handoff(); run('active');
+    db.tables.execution_plan_steps = [stepRow({ not_before: inMs(-60_000) })];
+    expect(await resolveJourneyHold(ORG, stamped)).toBeNull();
+    db.tables.execution_plan_steps = [stepRow({ not_before: null })];
+    expect(await resolveJourneyHold(ORG, stamped)).toBeNull();
+  });
+
+  it('O-2: the step is read after the run, and only for an active run', async () => {
+    handoff(); run('active');
+    await resolveJourneyHold(ORG, stamped);
+    expect(db.reads.indexOf('execution_plan_steps')).toBeGreaterThan(db.reads.indexOf('execution_instances'));
+    db.reads = [];
+    run('paused');
+    expect(await resolveJourneyHold(ORG, stamped)).toMatchObject({ code: 'journey_paused' });
+    expect(db.reads).not.toContain('execution_plan_steps');
+  });
+
+  it.each([
+    ['the handoff names no step', 'journey_state_unreadable', 'the handoff names no step or plan', () => { db.tables.outreach_bridge_handoffs = [{ ...handoffRow('t-1'), execution_plan_step_id: null }]; }],
+    ['the handoff names no plan', 'journey_state_unreadable', 'the handoff names no step or plan', () => { db.tables.outreach_bridge_handoffs = [{ ...handoffRow('t-1'), execution_plan_id: null }]; }],
+    ['the step is not found', 'journey_state_unreadable', 'step not found', () => { db.tables.execution_plan_steps = []; }],
+    ['the step read fails', 'journey_state_unreadable', 'step read failed', () => { db.failTable = 'execution_plan_steps'; }],
+    ['the step store throws', 'journey_state_unreadable', 'step read failed', () => { db.throwTable = 'execution_plan_steps'; }],
+    ['the step id is not a uuid', 'journey_state_unreadable', 'step read failed', () => { db.tables.outreach_bridge_handoffs = [{ ...handoffRow('t-1'), execution_plan_step_id: 'not-a-uuid' }]; }],
+    ['the step belongs to another plan', 'journey_step_inconsistent', 'does not belong to the plan', () => { db.tables.execution_plan_steps = [stepRow({ plan_id: '00000000-0000-4000-8000-000000000999' })]; }],
+    ['the return date is not an instant', 'journey_state_unreadable', 'the return date is not an instant', () => { db.tables.execution_plan_steps = [stepRow({ not_before: 'next Monday' })]; }],
+  ])('O-2: %s: an active run still holds, never throws', async (_label, code, detail, arrange) => {
+    handoff(); run('active');
+    (arrange as () => void)();
+    const hold = await resolveJourneyHold(ORG, stamped);
+    expect(hold).toMatchObject({ code });
+    expect(hold?.reason).toContain(detail as string);
   });
 });
 
