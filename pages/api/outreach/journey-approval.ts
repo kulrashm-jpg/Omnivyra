@@ -9,7 +9,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *       → { contentHash, preview, passkeyRequired, passkeyOptions }
  *   { action: 'approve', companyId, taskId, expectedContentHash, passkey, reason?, notes? }
  *   { action: 'revoke',  companyId, taskId, reason?, notes? }
- *   { action: 'resubmit', companyId, taskId }   — a STALE approval back to review (D-02)
+ *   { action: 'resubmit', companyId, taskId, reason? }   — a STALE approval back to review (D-02);
+ *       the authenticated requester is recorded in `audit_logs` (N2)
  *
  * WHO. `requireCapability(OUTREACH_JOURNEY_APPROVE)` in `companyId`: held through
  * COMPANY_ADMIN and CONTENT_REVIEWER only, and decided per organisation (CPG-060), so a
@@ -95,7 +96,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     : action === 'approve'
       ? await approveTenantJourneyTask({ ...actor, expectedContentHash: body.expectedContentHash, passkey: body.passkey, reason: str(body.reason), notes: str(body.notes) })
       : action === 'resubmit'
-        ? await resubmitTenantJourneyTask(actor)
+        ? await resubmitTenantJourneyTask({ ...actor, reason: str(body.reason) })
         : await revokeTenantJourneyApproval({ ...actor, reason: str(body.reason), notes: str(body.notes) });
 
   if (out.ok !== true) return res.status(STATUS[out.code] ?? 409).json({ ok: false, code: out.code, reason: out.reason });

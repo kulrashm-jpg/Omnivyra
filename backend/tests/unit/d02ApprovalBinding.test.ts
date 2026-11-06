@@ -150,8 +150,10 @@ import {
 import { getApprovalState, submitForApproval } from '../../services/leadOutreachExecution/approval';
 import { revokeOutreachApproval } from '../../services/leadOutreachExecution/approvalRevocation';
 import {
-  APPROVAL_LIFETIME_MS, computeApprovalBinding, requestFreshApproval, resolveApprovalAuthority,
+  APPROVAL_LIFETIME_MS, RESUBMISSION_AUDIT_ACTION, computeApprovalBinding, requestFreshApproval, resolveApprovalAuthority,
 } from '../../services/leadOutreachExecution/approvalBinding';
+import * as auditActorService from '../../services/auditActorService';
+import { rejectOutreachTask } from '../../services/leadOutreachExecution';
 import { approvalChallengeBytes, verifyApprovalPasskey } from '../../services/leadOutreachExecution/approvalPasskey';
 import { evaluateEligibility, type GovernanceEvaluationInput } from '../../services/leadOutreachExecution/governance';
 import { BRIDGED_TASK_PLANNER_VERSION } from '../../services/emailEngine/emailExecutionContext';
@@ -863,7 +865,8 @@ describe('D-02 F1 — the explicit resubmit, and no third writer', () => {
     const stale = await awaiting();
     await approveOutreachTask(ORG, stale, { approverUserId: APPROVER });
     taskRow(stale).action = 'changed';
-    expect(await requestFreshApproval(ORG, stale)).toMatchObject({ ok: true, status: 'awaiting_approval' });
+    // N2 — RE-PINNED: an accepted resubmit needs an attributable requester (see the N2 suite).
+    expect(await requestFreshApproval(ORG, stale, undefined, { userId: APPROVER })).toMatchObject({ ok: true, status: 'awaiting_approval' });
     expect(approvalsOf(stale)).toHaveLength(1);
 
     const valid = await awaiting();
@@ -985,5 +988,137 @@ describe('D-02 verification set', () => {
     const n = (db.tables.outreach_decisions ?? []).filter((r) => r.task_id === other).length;
     await dispatch(other);
     expect((db.tables.outreach_decisions ?? []).filter((r) => r.task_id === other).length).toBe(n + 1);
+  });
+});
+
+// ── N2: who resubmitted, in the existing audit_logs trail ────────────────────
+
+describe('N2 — the resubmission requester audit', () => {
+  const OTHER_ORG = '00000000-0000-4000-8000-00000000000b';
+  const audits = (id?: string) => (db.tables.audit_logs ?? [])
+    .filter((r) => r.action === RESUBMISSION_AUDIT_ACTION && (id === undefined || (r.metadata as Row).task_id === id));
+  async function staleJourney(): Promise<string> {
+    const id = await journey();
+    await approveWithPasskey(ORG, id, APPROVER);
+    mockEmail.subject = 'Edited after approval';
+    return id;
+  }
+
+  it('authorised requester: one row with the server-side requester, tenant, task, approval, verdict and both hashes', async () => {
+    const id = await staleJourney();
+    const [approval] = approvalsOf(id);
+    const r = await resubmitTenantJourneyTask({ organizationId: ORG, taskId: id, approverUserId: APPROVER, reason: 'subject corrected' });
+    expect(r).toEqual({ ok: true, status: 'awaiting_approval' });
+    const rows = audits(id);
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect(row).toMatchObject({ actor_user_id: APPROVER, company_id: ORG, action: 'OUTREACH_APPROVAL_RESUBMITTED' });
+    const meta = row.metadata as Row;
+    expect(meta).toMatchObject({
+      schema: 'outreach.approval.resubmission.v1', task_id: id, requester_user_id: APPROVER, tier: 'tenant',
+      approval_id: approval.id, approval_decision: 'approved', previous_status: 'approved', new_status: 'awaiting_approval',
+      previous_verdict: 'stale', reason: 'subject corrected', authorises_execution: false,
+    });
+    expect(meta.previous_verdict_reason).toMatch(/changed after it was approved/);
+    expect(meta.correlation_id).toEqual(expect.any(String));
+    expect(Date.parse(String(meta.requested_at))).not.toBeNaN();
+    // Content revision changed: the recorded current binding is not the approved one.
+    expect(meta.previous_content_hash).toBe(approval.approved_content_hash);
+    expect(meta.current_content_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(meta.current_content_hash).not.toBe(meta.previous_content_hash);
+    const current = await computeApprovalBinding(ORG, (await getOutreachTaskById(ORG, id))!);
+    expect(meta.current_content_hash).toBe(current.hash);
+    // Nothing personal: no address, no subject, no body.
+    expect(JSON.stringify(row)).not.toMatch(/cto@bigcorp|Edited after approval|A short intro/);
+  });
+
+  it('a resubmission authorises nothing: the approval log is unchanged and dispatch still refuses', async () => {
+    const id = await staleJourney();
+    const before = JSON.stringify(approvalsOf(id));
+    await resubmitTenantJourneyTask({ organizationId: ORG, taskId: id, approverUserId: APPROVER });
+    expect(JSON.stringify(approvalsOf(id))).toBe(before);
+    const again = await dispatch(id);
+    expect(again.ok).toBe(false);
+    expect(again.governance?.blockingCondition).toBe('eligibility.not_approved');
+    expect(sent).toHaveLength(0);
+  });
+
+  it.each([
+    ['no requester', undefined],
+    ['an empty id', { userId: '' }],
+    ['a non-uuid id', { userId: 'u-admin' }],
+  ])('missing requester context (%s): refused, the task stays approved, nothing recorded', async (_label, requester) => {
+    const id = await staleJourney();
+    db.statusWrites = [];
+    const r = await requestFreshApproval(ORG, id, undefined, requester as never);
+    expect(r).toMatchObject({ ok: false, status: 'approved', reason: expect.stringMatching(/no attributable requester/) });
+    expect(await status(id)).toBe('approved');
+    expect(db.statusWrites).toHaveLength(0);
+    expect(audits()).toHaveLength(0);
+  });
+
+  it('cross-tenant: another tenant cannot resubmit (or see) the task; nothing recorded', async () => {
+    const id = await staleJourney();
+    expect(await resubmitTenantJourneyTask({ organizationId: OTHER_ORG, taskId: id, approverUserId: APPROVER }))
+      .toMatchObject({ ok: false, code: 'task_not_found' });
+    expect(await requestFreshApproval(OTHER_ORG, id, undefined, { userId: APPROVER }))
+      .toMatchObject({ ok: false, status: null });
+    expect(await status(id)).toBe('approved');
+    expect(audits()).toHaveLength(0);
+  });
+
+  it('duplicate resubmission: the second is the existing already-awaiting no-op and records nothing', async () => {
+    const id = await staleJourney();
+    expect((await resubmitTenantJourneyTask({ organizationId: ORG, taskId: id, approverUserId: APPROVER })).ok).toBe(true);
+    const second = await requestFreshApproval(ORG, id, undefined, { userId: PUBLISHER });
+    expect(second).toEqual({ ok: true, status: 'awaiting_approval', reason: 'already awaiting approval' });
+    expect(audits(id)).toHaveLength(1);
+    expect(audits(id)[0].actor_user_id).toBe(APPROVER);
+  });
+
+  it('interleaved resubmissions: one transition, one row (the loser is told, records nothing)', async () => {
+    const id = await staleJourney();
+    db.statusWrites = [];
+    const results = await Promise.all([
+      requestFreshApproval(ORG, id, undefined, { userId: APPROVER }),
+      requestFreshApproval(ORG, id, undefined, { userId: PUBLISHER }),
+    ]);
+    expect(results.filter((r) => r.ok && r.reason !== 'already awaiting approval')).toHaveLength(1);
+    expect(db.statusWrites.filter((w) => w.to === 'awaiting_approval' && w.changed > 0)).toHaveLength(1);
+    expect(audits(id)).toHaveLength(1);
+  });
+
+  it('after rejection, expiry and revocation the lifecycle refuses a resubmit; nothing recorded', async () => {
+    const rejected = await awaiting();
+    expect((await rejectOutreachTask(ORG, rejected, { approverUserId: APPROVER, reason: 'no' })).ok).toBe(true);
+    expect(await requestFreshApproval(ORG, rejected, undefined, { userId: APPROVER }))
+      .toMatchObject({ ok: false, status: 'rejected', reason: expect.stringMatching(/no approval to resubmit/) });
+
+    const lapsed = await awaiting();
+    await approveOutreachTask(ORG, lapsed, { approverUserId: APPROVER, decidedAt: new Date(Date.now() - 8 * DAY).toISOString() });
+    taskRow(lapsed).action = 'changed too';
+    expect(await requestFreshApproval(ORG, lapsed, undefined, { userId: APPROVER }))
+      .toMatchObject({ ok: false, status: 'approved', reason: expect.stringMatching(/is expired, not stale/) });
+    // ... and once the gate ends it in `expired`, it is terminal.
+    expect(await dispatch(lapsed)).toMatchObject({ status: 'expired' });
+    expect(await requestFreshApproval(ORG, lapsed, undefined, { userId: APPROVER })).toMatchObject({ ok: false, status: 'expired' });
+
+    const revoked = await awaiting();
+    await approveOutreachTask(ORG, revoked, { approverUserId: APPROVER });
+    await revokeOutreachApproval(ORG, revoked, { approverUserId: APPROVER });
+    expect(await requestFreshApproval(ORG, revoked, undefined, { userId: APPROVER })).toMatchObject({ ok: false, status: 'cancelled' });
+    expect(audits()).toHaveLength(0);
+  });
+
+  it('a failed audit write is reported (auditFailed), never swallowed; the transition stands', async () => {
+    const id = await staleJourney();
+    const spy = jest.spyOn(auditActorService, 'insertAuditLogStrict').mockResolvedValueOnce({ ok: false, error: 'down' });
+    try {
+      expect(await resubmitTenantJourneyTask({ organizationId: ORG, taskId: id, approverUserId: APPROVER }))
+        .toEqual({ ok: true, status: 'awaiting_approval', auditFailed: true });
+      expect(await status(id)).toBe('awaiting_approval');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

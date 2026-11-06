@@ -1,6 +1,6 @@
 # Contract compatibility report
 
-Whether each engine, as it stands, honours contract 0.2.0, and what is unresolved between the three domains. Engine facts come from Outreach's inventory on `integration/outreach-engines-20261102` (`docs/outreach/inventory/`, read from code at `dc7f2ae3`) and from this branch's tests. "Outreach reports" marks a fact this work did not re-check.
+Whether each engine, as it stands, honours the contract (0.2.0 below; 0.3.0 at the end), and what is unresolved between the three domains. Engine facts come from Outreach's inventory on `integration/outreach-engines-20261102` (`docs/outreach/inventory/`, read from code at `dc7f2ae3`) and from this branch's tests. "Outreach reports" marks a fact this work did not re-check.
 
 ## Engines against the contract
 
@@ -62,3 +62,22 @@ Outreach reports these. Each needs fixing behind its engine before that engine c
 | Parked: `feat/pi-enrichment-trigger`, `consolidate/pi-prospect-lists` | No | Not integrated. PI should say whether they matter |
 
 The two jest baselines differ: Outreach compared with `fa1a5e58`, and this work with `5025f51d`.
+
+## Contract 0.3.0
+
+0.3.0 adds the event types `approval.revoked`, `journey.suspended` and `record.unmapped`, the optional `actor` on approval events, the complaint marker rule `isComplaintInferredEvidence`, and re-maps four delivery statuses (`SHARED-INTEGRATION-CONTRACT.md` E.3). No engine changes, and every engine declaration still passes at 0.3.0. Their `contractVersion` follows `EXECUTION_CONTRACT_VERSION`, and a 0.2.0 declaration passes too, because only the major is compared. The event version stays 1; the reasoning and the consumer note are in `API-AND-EVENT-SCHEMAS.md`, "From 0.2.0 to 0.3.0". It is implemented on `orch/c4-a-contract`, uncommitted. Outreach has not merged it.
+
+### Revocation consumers (proven on real PostgreSQL)
+
+Suite `backend/tests/realschema/orch_c4_approval_revoked.test.ts`, with `orch_contract_journey` and `d02_approval_binding` re-run green beside it.
+
+| Requirement | State |
+|---|---|
+| A revoked approval authorises nothing at the sweep, the dispatch gate or the database claim | Proven. A `revoked` row alone refuses, even with the task left `approved` |
+| A queued or approved task under a revoked approval cannot execute | Proven. Revocation cancels it by compare-and-set; the claim and the revocation cannot both win, in either order or concurrently |
+| The journey records what became of the step | Proven on the frozen base: the step settles `skipped` and the journey continues. **Superseded by RV-1** (owner, 2026-11-05: pause for review). Agent B implements the pause, and the view reads it as `journey.suspended` |
+| Duplicate and out-of-order reads | Proven. Same `eventId` on re-read; order `(occurredAt, eventId)`; a cursor walks every event once |
+| Revocation after a completed send | Proven. It is refused. A revoked row recorded after a send anyway shows beside the send, and nothing reads as undone |
+| Cross-tenant revocation | Proven refused (`task_not_found`), with nothing written, through the service and the tenant surface |
+| The complaint marker is read from a stored row | Proven. A real SES Complaint through `ingestSesEvent` stores `transport_response.deliveryInferredFrom = 'Complaint'` on a `delivered` row; the helper reads it from that row; the view gives one `delivery.complained` and no `delivery.confirmed`, and a repeated provider event adds nothing. A stored JSON-string response and a pre-D7 row also read as complaints |
+| Acceptance is not delivery | Proven. The send's own evidence rows never read as `delivery.confirmed`; a later SES Delivery does |

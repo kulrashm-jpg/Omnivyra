@@ -7,7 +7,7 @@ jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }), { 
 
 import {
   checkCapabilityDeclaration, EXECUTION_CONTRACT_VERSION, EXECUTION_STATES, executionCorrelationId,
-  executionIdempotencyKey, normalizeEngineResult, POSITIVE_ENGAGEMENT_EVENTS, JOURNEY_EVENT_TYPES,
+  executionIdempotencyKey, normalizeEngineResult, POSITIVE_ENGAGEMENT_EVENTS, JOURNEY_EVENT_TYPES, JOURNEY_EVENT_VERSION,
   type EngineCapabilityDeclaration,
 } from '../../services/orchestration/executionContract';
 import {
@@ -118,9 +118,9 @@ describe('normalized execution result', () => {
     expect(executionCorrelationId('i', null)).toBe('journey:i');
   });
 
-  it('only a reply is positive engagement: STOP, bounce and complaint never are', () => {
+  it('only a reply is positive engagement: STOP, bounce, complaint and a revoked approval never are', () => {
     expect(POSITIVE_ENGAGEMENT_EVENTS).toEqual(['response.replied']);
-    for (const t of ['response.unsubscribed', 'delivery.bounced', 'delivery.complained'] as const) {
+    for (const t of ['response.unsubscribed', 'delivery.bounced', 'delivery.complained', 'approval.revoked', 'journey.suspended', 'record.unmapped'] as const) {
       expect(JOURNEY_EVENT_TYPES).toContain(t);
       expect(POSITIVE_ENGAGEMENT_EVENTS).not.toContain(t);
     }
@@ -215,5 +215,33 @@ describe('a result held for a person reads as what it is', () => {
   });
   it('a channel with no permission source is configuration, not a failure of the person', () => {
     expect(held('no_permission_source')).toMatchObject({ state: 'REJECTED', errorClass: 'not_configured', retryability: 'human_only' });
+  });
+});
+
+describe('contract 0.3.0 (additive)', () => {
+  const CHANNELS = { engine: 'whatsapp' as const, channels: ['whatsapp'] };
+
+  it('is 0.3.0, and the journey event version stays 1', () => {
+    expect(EXECUTION_CONTRACT_VERSION).toBe('0.3.0');
+    expect(JOURNEY_EVENT_VERSION).toBe(1);
+  });
+
+  it('a 0.2.0 or 0.1.0 declaration is still compatible: only the major is compared', () => {
+    for (const v of ['0.2.0', '0.1.0', '0.3.0', '0.9.9']) {
+      expect(checkCapabilityDeclaration({ ...WHATSAPP_CAPABILITIES, contractVersion: v }, CHANNELS)).toEqual([]);
+    }
+    expect(checkCapabilityDeclaration({ ...WHATSAPP_CAPABILITIES, contractVersion: '1.0.0' }, CHANNELS)[0]).toContain('incompatible');
+  });
+
+  it('adds approval.revoked, journey.suspended and record.unmapped, and removes nothing that 0.2.0 declared', () => {
+    const V020 = [
+      'prospect.lifecycle_changed', 'journey.enrolled', 'journey.terminated', 'journey.completed', 'decision.recorded',
+      'approval.requested', 'approval.granted', 'approval.rejected',
+      'execution.requested', 'execution.started', 'execution.accepted', 'execution.failed', 'execution.cancelled',
+      'delivery.confirmed', 'delivery.failed', 'delivery.bounced', 'delivery.complained',
+      'response.replied', 'response.unsubscribed', 'response.rejected', 'response.other', 'outcome.recorded',
+    ];
+    expect([...JOURNEY_EVENT_TYPES].filter((t) => !V020.includes(t))).toEqual(['journey.suspended', 'approval.revoked', 'record.unmapped']);
+    for (const t of V020) expect(JOURNEY_EVENT_TYPES).toContain(t);
   });
 });

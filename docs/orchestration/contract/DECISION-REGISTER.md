@@ -39,6 +39,18 @@
 | WA-2 | WhatsApp columns and usage RPCs outside the chain | Owner, Outreach | Sequence with decision A | Same |
 | WA-3 | Who writes `phone_number_id` and `waba_id` | Owner, Outreach | Sequence with decision A | Same |
 
+## New in contract 0.3.0 (Prompt 4)
+
+| ID | Decision | Owner | Recommendation | Why it is yours |
+|---|---|---|---|---|
+| RV-1 | What a revoked approval does to the journey | Owner | **Decided 2026-11-05 by the owner: the run PAUSES for human review.** Agent B implements it; the view reads it as `journey.suspended` | Product behaviour |
+| EV-1 | Keep `JOURNEY_EVENT_VERSION` at 1 for 0.3.0, although 0.3.0 re-maps delivery statuses | Owner | Accept: no consumer exists outside a test database (route undeployed, orchestration off). From the route's first deployment the rule applies strictly. **Open** | It sets the compatibility rule for event consumers |
+| AC-1 | Expose the approver's user id and tier as the optional `actor` on approval events, but never the free-text reason | Owner, privacy | **Decided 2026-11-05 by the owner: keep `actor.id`** (tenant-scoped API), documented as the deciding or revoking user, internal uuid only | It puts a user identifier into an API payload |
+| Q-C1 | Does a complaint end the run? | Owner | **Decided 2026-11-05: yes, it ENDS the run.** Agent B implements it through `isComplaintInferredEvidence` | Product behaviour |
+| Q-C2 | The normalized outcome of a complaint | Owner | **Decided 2026-11-05: `complained`**, distinct from unsubscribed, bounce and failure. The store and writer are pending with Outreach (`20270125000001`, S-1) | Business vocabulary |
+| SC7-R | Ratify SC-7 (`sc7-draft-1`) | Owner | **Open: stays unratified (2026-11-05).** No classifier output drives a journey | Classification policy |
+| X-3 | An unclassified WhatsApp inbound still reads as `response.replied` with `positiveEngagement: true`, and `feedWhatsAppReplyToLifecycle` still moves PI to `engaged` (DF-6) | Owner, PI | **Open.** Prompt 4 leaves it unchanged; it waits for SC7-R or a PI decision | It decides whether an unread message counts as engagement |
+
 ## Raised by Outreach, recorded here so there is one register
 
 Detail is in `docs/outreach/README.md` on `integration/outreach-engines-20261102`.

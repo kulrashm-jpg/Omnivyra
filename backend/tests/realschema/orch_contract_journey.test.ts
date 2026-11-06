@@ -426,9 +426,12 @@ describe('one whole journey, from PI to outcome reporting', () => {
       expect((await ws3.ingestFeedback({ companyId: ORG_A, taskId: s.firstTask, signal: 'replied', occurredAt: NOW(), source: 'manual' })).ok).toBe(true);
       const swept = await sweep([realWs3()]);
 
-      // Adaptation: the reply ended the journey, and the next message was withdrawn.
-      expect(swept.counters.journeys_exited).toBe(1);
-      expect(await instanceState(s.instanceId)).toBe('cancelled');
+      // Adaptation (Prompt 4 — CHANGED): the reply SUSPENDS the journey for a person to
+      // evaluate; nothing is withdrawn. The person then ends it through the run route.
+      expect(swept.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(s.instanceId)).toBe('paused');
+      expect((await handoffTasks(s.instanceId)).map((t) => t.status)[0]).toBe('delivered');
+      expect((await callRoute(instanceRoute, 'PATCH', s.instanceId, { lifecycleState: 'cancelled' })).status).toBe(200);
       expect((await handoffTasks(s.instanceId)).map((t) => t.status)).toEqual(['delivered', 'cancelled']);
       expect(sent).toHaveLength(1);
 
@@ -439,7 +442,7 @@ describe('one whole journey, from PI to outcome reporting', () => {
       const page = await readJourneyEvents(ORG_A, s.instanceId);
       const types = page.events.map((e: { type: string }) => e.type);
       for (const t of ['journey.enrolled', 'approval.granted', 'execution.started', 'execution.accepted', 'delivery.confirmed',
-        'response.replied', 'journey.terminated', 'prospect.lifecycle_changed']) {
+        'response.replied', 'prospect.lifecycle_changed']) {
         expect(types).toContain(t);
       }
       for (const e of page.events) {
@@ -452,10 +455,11 @@ describe('one whole journey, from PI to outcome reporting', () => {
       expect(JSON.stringify(page)).not.toContain(ADDRESS);
       expect(JSON.stringify(page)).not.toContain('Hello');
 
-      // Reporting: the reply counts as attainment, and the exit reason is visible.
+      // Reporting: the reply counts as attainment. Prompt 4 — CHANGED: a reply is no longer
+      // an exit, and a person's cancel records none.
       const report = await buildJourneyReport({ organizationId: ORG_A, workflowId: s.workflowId });
       expect(report.versions[0].attainment.reached).toBe(1);
-      expect(report.versions[0].exits).toEqual({ replied: 1 });
+      expect(report.versions[0].exits).toEqual({});
       expect(report.versions[0].enrolled).toBe(1);
     });
   });
@@ -606,16 +610,19 @@ describe('a WhatsApp reply counts only after this run actually reached out', () 
     await inRollback(async () => {
       const { instanceId } = await whatsappRun('failed');
       const r = await sweep([spy('whatsapp', ['whatsapp'], [])]);
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(instanceId)).toBe('cancelled');
+      // Prompt 4 — CHANGED: the reply counts, and suspends the run (no longer ends it).
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instanceId)).toBe('paused');
     });
   });
 
-  it('after a submitted request the reply ends the journey and appears in the event view', async () => {
+  it('after a submitted request the reply suspends the journey and appears in the event view', async () => {
     await inRollback(async () => {
       const { instanceId } = await whatsappRun('submitted');
       const r = await sweep([spy('whatsapp', ['whatsapp'], [])]);
-      expect(r.counters.journeys_exited).toBe(1);
+      // Prompt 4 — CHANGED: suspended for a person, not ended.
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instanceId)).toBe('paused');
       const page = await readJourneyEvents(ORG_A, instanceId);
       expect(page.events.map((e: { type: string }) => e.type)).toContain('response.replied');
       expect(JSON.stringify(page)).not.toContain('hello');

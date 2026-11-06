@@ -133,10 +133,12 @@ export interface ProgressionStep {
   readonly settledAt: string | null;
   /** Set ONLY on `completed`. Never set by a skip. */
   readonly completedAt: string | null;
+  /** 20270127000000 — a person-supplied floor on when the step may act; null = none. */
+  readonly notBefore: string | null;
 }
 
 const STEP_COLUMNS = 'id, organization_id, plan_id, step_key, step_order, channel, '
-  + 'delay_after_previous_hours, state, ready_at, started_at, settled_at, completed_at';
+  + 'delay_after_previous_hours, state, ready_at, started_at, settled_at, completed_at, not_before';
 
 const toStep = (r: Row): ProgressionStep => ({
   id: String(r.id),
@@ -151,6 +153,7 @@ const toStep = (r: Row): ProgressionStep => ({
   startedAt: str(r.started_at),
   settledAt: str(r.settled_at),
   completedAt: str(r.completed_at),
+  notBefore: str(r.not_before),
 });
 
 function translate(error: unknown, fallback: string): never {
@@ -353,6 +356,39 @@ export async function getReadyStep(
   if (res.error) translate(res.error, 'step read failed');
   const found = rows(res.data);
   return found.length ? toStep(found[0]) : null;
+}
+
+/**
+ * Prompt 4 — a person's later floor on a pending or ready step (the operator resume with a
+ * return date is the ONLY caller). Only ever LATER: a value at or before the existing one
+ * leaves the step as it is (greatest(), never a replacement). Compare-and-set on the state and
+ * the previous value; the database refuses a lower, cleared, past or settled-step value
+ * independently (20270127000000). Returns the step as it now is, or null if it is gone.
+ */
+export async function deferStepUntil(input: {
+  organizationId: string; stepId: string; notBefore: string;
+}): Promise<ProgressionStep | null> {
+  assertTenant(input.organizationId);
+  const stepId = assertUuid(input.stepId, 'stepId', 'invalid_step');
+  const wanted = Date.parse(input.notBefore);
+  if (!Number.isFinite(wanted)) fail('notBefore must be an instant', 'invalid_not_before');
+  for (let i = 0; i < 3; i += 1) {
+    const step = await getProgressionStep(input.organizationId, stepId);
+    if (step === null) return null;
+    if (step.state !== 'pending' && step.state !== 'ready') fail(`step is ${step.state}; it takes no new not_before`, 'step_settled');
+    if (step.notBefore !== null && Date.parse(step.notBefore) >= wanted) return step;
+    let q = ownedDbTable(STEPS_TABLE)
+      .update({ not_before: new Date(wanted).toISOString() })
+      .eq('organization_id', input.organizationId)
+      .eq('id', stepId)
+      .eq('state', step.state);
+    q = step.notBefore === null ? q.is('not_before', null) : q.eq('not_before', step.notBefore);
+    const res = await q.select(STEP_COLUMNS);
+    if (res.error) translate(res.error, 'not_before write failed');
+    const moved = rows(res.data);
+    if (moved.length) return toStep(moved[0]);
+  }
+  fail('the step kept changing; not_before was not written', 'not_before_conflict');
 }
 
 export const EXECUTION_PLAN_STEPS_TABLE = STEPS_TABLE;

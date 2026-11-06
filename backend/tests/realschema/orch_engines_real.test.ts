@@ -209,8 +209,9 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
       expect(Number((await one(`SELECT count(*) n FROM public.engagement_messages WHERE direction = 'inbound' AND content = 'yes, tell me more'`)).n)).toBe(1);
 
       const r = await sweep(waAdapters());
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(instanceId)).toBe('cancelled');
+      // Prompt 4 — CHANGED: the reply suspends the journey for a person; no follow-up.
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instanceId)).toBe('paused');
       expect(metaCalls).toHaveLength(1);                    // no follow-up
       expect((await lifecycle(ORG_A, prospectId)).at(-1)).toMatchObject({ state: 'engaged', evidence_kind: 'engagement_thread' });
     });
@@ -272,8 +273,9 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
       expect((await recipientStatus(instanceId))?.status).toBe('blocked_send_control');
 
       const r = await sweep(waAdapters());
-      expect(r.counters.journeys_exited).toBe(1);
-      expect(await instanceState(instanceId)).toBe('cancelled');
+      // Prompt 4 — CHANGED: suspended for a person, not ended.
+      expect(r.counters).toMatchObject({ journeys_exited: 0, journeys_suspended: 1 });
+      expect(await instanceState(instanceId)).toBe('paused');
     });
   });
 

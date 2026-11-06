@@ -151,6 +151,10 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/extensionLeaseHandoutPolicyGate.test.ts',
   'backend/tests/unit/rpaRetryFlushGates.test.ts',
   'backend/tests/unit/rpaRetryHeldClaimDispatch.test.ts',
+  // Prompt 4: restrictions before any pause (STOP, complaint, unsubscribe), RV-1, and
+  // the follow-up retiming engine (never wired to classifier output while SC-7 is open).
+  'backend/tests/unit/p4GovernancePrecedence.test.ts',
+  'backend/tests/unit/q4FollowUpRetiming.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */

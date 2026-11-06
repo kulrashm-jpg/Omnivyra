@@ -208,3 +208,33 @@ describe('D-02 — routine approvers', () => {
     expect(effects()).toBe(0);
   });
 });
+
+describe('N2 — the resubmit requester is the authenticated principal', () => {
+  const resubmitBody = { companyId: A, taskId: 't-1', action: 'resubmit' };
+
+  it.each(['admin', 'reviewer'])('%s: the service gets the session user and the reason; a body-supplied id never reaches it', async (who) => {
+    const r = await call(who, { ...resubmitBody, reason: 'copy fixed', approverUserId: 'forged-id', requester: 'forged-id', userId: 'forged-id' });
+    expect(r.statusCode).toBe(200);
+    expect(mockSvc.resubmit).toHaveBeenCalledTimes(1);
+    expect((mockSvc.resubmit.mock.calls[0] as unknown[])[0]).toMatchObject({ organizationId: A, taskId: 't-1', approverUserId: `u-${who}`, reason: 'copy fixed' });
+    expect(JSON.stringify(mockSvc.resubmit.mock.calls[0])).not.toContain('forged-id');
+  });
+
+  it.each(['super', 'superWithTenantRole', 'bridge', 'creator', 'publisher', 'architect', 'viewer', 'adminElsewhere'])(
+    'unauthorised requester %s is refused; the service is never reached, so nothing is recorded', async (who) => {
+      const r = await call(who, resubmitBody);
+      expect(r.statusCode).toBe(403);
+      expect(effects()).toBe(0);
+    });
+
+  it('cross-tenant: an approver of tenant B cannot resubmit in tenant A, and vice versa', async () => {
+    expect((await call('adminElsewhere', resubmitBody)).statusCode).toBe(403);
+    expect((await call('admin', { ...resubmitBody, companyId: B })).statusCode).toBe(403);
+    expect(effects()).toBe(0);
+  });
+
+  it('no session: refused 401, nothing reached', async () => {
+    expect((await call(null, resubmitBody)).statusCode).toBe(401);
+    expect(effects()).toBe(0);
+  });
+});

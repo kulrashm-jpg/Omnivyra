@@ -51,7 +51,8 @@ import {
   getOutreachTaskById,
   submitForApproval,
 } from '../leadOutreachExecution';
-import { readAttemptHistory } from '../leadOutreachExecution/storage';
+import { readApprovalHistory, readAttemptHistory } from '../leadOutreachExecution/storage';
+import { createHash } from 'crypto';
 import { dispatchWorkflowEmailTask, ensureWorkflowTransports } from '../emailEngine/workflowEmailDispatch';
 import { resolveEmailRecipient } from '../emailEngine/emailExecutionContext';
 import { renderEmailContent } from '../emailEngine/emailContentGenerator';
@@ -122,7 +123,12 @@ export interface Ws3AdapterDeps {
   sendEmail: typeof dispatchWorkflowEmailTask;
   /** Absent in a fake that never requeues. */
   readAttempts?: typeof readAttemptHistory;
+  /** RV-1 — the approval log, to tell a revocation from any other cancellation. Absent in an older fake. */
+  readApprovals?: typeof readApprovalHistory;
 }
+
+/** RV-1 — the outcome prefix of a revoked approval: the sweeper suspends the run on it. */
+export const APPROVAL_REVOKED = 'approval_revoked';
 
 export const defaultWs3Deps: Ws3AdapterDeps = {
   bridge: bridgeExecutionTask,
@@ -134,7 +140,22 @@ export const defaultWs3Deps: Ws3AdapterDeps = {
   renderContent: renderEmailContent,
   sendEmail: dispatchWorkflowEmailTask,
   readAttempts: readAttemptHistory,
+  readApprovals: readApprovalHistory,
 };
+
+/**
+ * RV-1 — a `cancelled` task whose LATEST stored approval decision is `revoked` was revoked
+ * (approvalRevocation.ts cancels, then appends the row). Read from the approval log, never
+ * guessed. Null when it was not; `unreadable` when the log could not be read.
+ */
+async function revocationOf(deps: Ws3AdapterDeps, organizationId: string, taskId: string): Promise<string | null | 'unreadable'> {
+  if (deps.readApprovals === undefined) return null;
+  const read = await deps.readApprovals(organizationId, taskId);
+  if (read.ok === false) return 'unreadable';
+  const latest = read.approvals.length > 0 ? read.approvals[read.approvals.length - 1] : null;
+  if (latest === null || String(latest.decision ?? '') !== 'revoked') return null;
+  return createHash('sha256').update(`revoked:${String(latest.id ?? taskId)}`).digest('hex').slice(0, 32);
+}
 
 /**
  * Did a provider already refuse this task? WS-3 returns a refused task to `queued` and
@@ -276,7 +297,16 @@ export function createWs3Adapter(deps: Ws3AdapterDeps = defaultWs3Deps): EngineA
           return result(task.status, 'completed', null, taskId);
         case 'rejected':
           return result('rejected', 'skipped', 'a human declined this action', taskId);
-        case 'cancelled':
+        case 'cancelled': {
+          // RV-1 — a revocation is a person withdrawing consent to THIS action: the run is
+          // paused for review (the sweeper), never quietly moved on to the next step.
+          const revoked = await revocationOf(deps, ctx.organizationId, taskId);
+          if (revoked === 'unreadable') return result('approvals_unreadable', 'wait', 'the approval log could not be read', taskId);
+          if (revoked !== null) {
+            return result(`${APPROVAL_REVOKED}:${revoked}`, 'needs_human', 'the approval was revoked; a person reviews the journey', taskId);
+          }
+          return result(task.status, 'skipped', `the outreach task was ${task.status}`, taskId);
+        }
         case 'expired':
           return result(task.status, 'skipped', `the outreach task was ${task.status}`, taskId);
         default:
