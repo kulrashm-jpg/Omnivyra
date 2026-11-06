@@ -116,7 +116,12 @@ PI re-confirmed **PASS at `725b60c1…`** and accepted the directory boundary.
 **Outreach notes (no change needed):**
 - After an approved N-4 clearing, a STOP keeps its keyword, and anything else reads as `'[redacted]'`, then `inbound_unclassified`, then `response.received`.
 - M-3: `engagement_messages.created_at` is Meta's send time, falling back to receipt time.
-- Outside `backend/queue`, several modules import job processors to run them inline: `socialPublishEngineAdapter`, `publishNowService`, `publishAuthorization`, `plan-v2`, `creatorOrchestrator`, `nonBillableRegistry`, `asyncRefinement`, `scheduledAnalyticsSync` and `structuredPlanScheduler*`. None of them is in the reply-evaluation closure today; the r4 pin fails if one enters.
+- Outside `backend/queue/` and `backend/workers/`, several modules REFERENCE job processors, and **none imports one for execution**. Corrected after commit; PI review, verified by grep at `f2c66117c`.
+  - **Doc comments only:** `socialPublishEngineAdapter`, `publishNowService`, `lib/campaign/publishAuthorization`, `creatorOrchestrator`, `asyncRefinement`, `scheduledAnalyticsSync`.
+  - **A `filePattern` string:** `nonBillableRegistry:74`.
+  - **Type-only imports** of a job payload type, erased at runtime: the four `structuredPlanScheduler*` modules, and `pages/api/campaigns/ai/plan-v2.ts`.
+  - The only value imports of a processor are in worker entry points. This is why the boundary is a directory, not an edge list: an edge list would have to enumerate type-only edges that carry no runtime behaviour.
+  - None of these modules is in the reply-evaluation closure; the r4 pin fails if one enters.
 
 **Recorded hashes:**
 - Reviewed hash: `2a73befdf544558c79a27c5446d348388b86e1e23077e2234f3d66f91857753d`.
