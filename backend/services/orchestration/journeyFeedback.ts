@@ -9,10 +9,12 @@
  *   WS-3 outcomes  every recent `outreach_outcomes` row of the tenant, whether or not
  *                  a journey produced it. Keyed on the row, so a reply that arrives
  *                  after its journey finished still reaches the prospect.
- *   WhatsApp       a reply has no outcome row: outreach_outcomes.task_id is NOT NULL
+ *   WhatsApp       a STOP has no outcome row: outreach_outcomes.task_id is NOT NULL
  *                  and WhatsApp has no outreach task. It is read through the same
  *                  interpreter and written with the writer's `engagement_thread`
- *                  evidence. Only replies to a live journey are seen.
+ *                  evidence. Only STOPs on a live journey are seen. X-3 (Prompt 5): any
+ *                  other inbound is unclassified and reaches PI not at all (PI ruling,
+ *                  virality-b6, 2026-11-06, P-1 = (a)).
  *
  * RE-READING IS SAFE. Replays converge on `uq_prospect_lifecycle_source_event`, so the
  * window only bounds cost. An outage longer than OUTCOME_LOOKBACK_HOURS leaves older
@@ -83,26 +85,35 @@ export async function feedRecentOutcomesToLifecycle(
 }
 
 /**
- * The identity of a WhatsApp reply on PI's event axis: a stable fingerprint of the
+ * The identity of a WhatsApp message on PI's event axis: a stable fingerprint of the
  * message id, because PI's key vocabulary is closed and Meta's ids use characters it
- * refuses. `derivation` is the form it offers for a fingerprint of underlying evidence.
+ * refuses. It is keyed `evidence:<fingerprint>` (PI ruling P-2): the message is observed
+ * evidence, not a derivation. Transitions written before Prompt 5 carry
+ * `derivation:<fingerprint>` and stay as they are; a re-delivered STOP finds the prospect
+ * already closed, so it writes no second transition (`already_in_target_state`).
  */
 export const whatsappReplyFingerprint = (messageId: string): string =>
   `wa-reply-${crypto.createHash('sha256').update(messageId).digest('hex').slice(0, 32)}`;
 
 /**
- * One WhatsApp reply or opt-out on a journey about a prospect. The transition is the
+ * One WhatsApp opt-out (STOP) on a journey about a prospect. The transition is the
  * interpreter's answer to that outcome, nothing of this module's own. No code, thread text or number is
  * stored: the evidence names the thread and message.
+ *
+ * X-3 (Prompt 5) — `unsubscribed` only. An unclassified inbound is not `replied` and is
+ * never fed: a person's judgement of it would be a human-origin transition, which this
+ * derived path cannot record (P-1 = (a), a documented gap).
  */
 export async function feedWhatsAppReplyToLifecycle(input: {
   organizationId: string;
   prospectId: string;
   messageId: string;
   threadId: string;
-  outcome: 'replied' | 'unsubscribed';
+  outcome: 'unsubscribed';
   now: string;
 }): Promise<{ wrote: boolean; refusal: string | null }> {
+  // The type says STOP only; an untyped caller is refused here, before PI is read.
+  if ((input.outcome as string) !== 'unsubscribed') return { wrote: false, refusal: 'not_an_opt_out' };
   const current = await readCurrentProspectState(input.organizationId, input.prospectId);
   const fingerprint = whatsappReplyFingerprint(input.messageId);
   const reading = interpretOutcome({
@@ -111,7 +122,10 @@ export async function feedWhatsAppReplyToLifecycle(input: {
       type: input.outcome,
       provenance: {
         organizationId: input.organizationId,
-        source: 'provider',
+        // `OutcomeProvenance.source` is `FeedbackSource | string | null`: that `string`
+        // escape hatch is why the earlier `'provider'`, which is not a FeedbackSource,
+        // compiled. A Meta webhook is `provider_webhook` (PI ruling P-2).
+        source: 'provider_webhook',
         provider: 'whatsapp',
         providerEventId: input.messageId,
         derived: false,
@@ -130,7 +144,7 @@ export async function feedWhatsAppReplyToLifecycle(input: {
     origin: reading.origin,
     actorUserId: null,
     evidence: { kind: 'engagement_thread', detail: { threadId: input.threadId, messageId: input.messageId } },
-    sourceEventKey: sourceEventKey('derivation', fingerprint),
+    sourceEventKey: sourceEventKey('evidence', fingerprint),
     reasoning: reading.reasoning,
     modelVersion: reading.modelVersion,
     now: input.now,
