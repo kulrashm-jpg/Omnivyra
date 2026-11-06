@@ -1,3 +1,41 @@
+-- DEFERRED by PI-LDB Prompt 2B (owner decision: "withdraw or formally defer the score-history
+-- migration"). NOT part of the PI-LDB release batch. This file deliberately has NO timestamp
+-- prefix: it is not a migration until it is promoted into supabase/migrations with a version
+-- NEWER than every migration applied at that time. It was never applied anywhere - it is absent
+-- from origin/main - so deferral removes a file from a release rather than reversing a change.
+-- Rollback companion: supabase/deferred/rollbacks/pi_ldb_lead_score_history_rollback.sql.
+-- Acceptance suite: supabase/deferred/tests/pildb_score_history_schema.test.ts (32 tests), moved
+-- out of backend/tests/realschema/ with it - a real-schema suite cannot run against a table the
+-- applied migrations do not create, and leaving it in place would have turned a deliberate
+-- deferral into a red gate. Move it back on promotion.
+--
+-- WHY DEFERRED, not shipped:
+--   * NO CONSUMER. Three references exist repo-wide - this file, its rollback and that suite.
+--     Zero production code: no writer, no reader, nothing reads or writes the table.
+--   * IT CANNOT DO THE JOB IT WOULD BE KEPT FOR. Its FK targets `canonical_leads`, NOT
+--     `lead_intelligence`, so it could not record a change to the materialized
+--     `lead_intelligence.scores` values that the score-drift question is actually about.
+--   * TWO LIVE DEFECTS WOULD BECOME REACHABLE on activation: `CHECK (score BETWEEN 0 AND 100)`
+--     on five score kinds whose producers emit 0..1 (a 0..1 value passes a 0..100 CHECK
+--     SILENTLY, so the constraint reads as protection and is none), and `numeric(5,2)`
+--     quantising e.g. 0.735 to 0.74.
+--   * COST OF DEFERRING ONLY RISES. The rollback REFUSES once any row exists - by design, and
+--     its own comment explains why the count guard is necessary, since `DROP TABLE` is not
+--     refused by the append-only triggers. Deferring before any row is written is free;
+--     withdrawing afterwards is not.
+--
+-- PROMOTION PRECONDITIONS (all of them, not any of them):
+--   1. A writer exists and is authorized - the scale question settled first, because a 0..1
+--      value satisfying a 0..100 CHECK is the kind of defect no test here would catch.
+--   2. The FK target is decided: `canonical_leads` as written, or `lead_intelligence` if this
+--      is meant to be the audit trail for materialized scores. They are different tables and
+--      different features.
+--   3. Re-numbered ABOVE every migration applied at promotion time, and the acceptance suite
+--      moved back into backend/tests/realschema/.
+-- The score-model versioning shipped in Prompt 2B (`CanonicalLeadScores.modelVersion`,
+-- `resolveScoreWrite`) protects stored scores from silent recalculation WITHOUT this table, so
+-- nothing in the release depends on it.
+-- ════════════════════════════════════════════════════════════════════════════
 -- PI-LDB-3 — append-only score history per prospect.
 --
 -- ─── THE GAP THIS CLOSES ────────────────────────────────────────────────────
@@ -239,11 +277,48 @@ $verify$;
 -- triggers refuse both. Granting them would state a permission the schema then
 -- contradicts.
 -- ---------------------------------------------------------------------------
-REVOKE ALL ON TABLE public.lead_score_history FROM PUBLIC, anon, authenticated;
+-- ── THE GRANTEE LIST (corrected, Prompt 2B) ────────────────────────────────
+-- Five grantees, not three. This migration cited 20270107000000:330-332 as its
+-- pattern and then named two fewer roles than that pattern does, which left the
+-- citation true about the idea and false about the statement.
+--
+-- `service_role` is the one that mattered, and it is the APPLICATION's role.
+-- Supabase's hosted default privileges grant it ALL on every new public table,
+-- and nothing in this repository ever revokes that default - so a three-grantee
+-- REVOKE left the surplus untouched and the GRANT below became a no-op. Measured
+-- in a sandbox reproducing those defaults, `service_role` held UPDATE, DELETE
+-- and TRUNCATE on arrival.
+--
+-- TRUNCATE is why this is not cosmetic. It is a STATEMENT-level operation, so it
+-- does not fire FOR EACH ROW triggers: an append-only table's guard triggers
+-- never run, and the whole table can be emptied in one statement by the role the
+-- application runs as, without dropping a trigger or the table.
+--
+-- `authenticator` holds nothing in any measured state (NOINHERIT, and not a
+-- grantee of the hosted defaults). It is named for completeness and audit
+-- symmetry with the cited pattern, not because it is an exposure.
+--
+-- Safe in every environment: REVOKE of a privilege not held is a no-op, and the
+-- CI bootstrap creates all four roles idempotently, so an absent role cannot be
+-- reached here. The postcondition below now PROVES the result instead of
+-- assuming it.
+--
+-- For THIS table the surplus is the whole point. Its append-only guarantee is
+-- enforced by two FOR EACH ROW triggers, and `service_role` arriving with
+-- TRUNCATE defeats that guarantee without touching them. The header below
+-- reasons about `pg_trigger_depth()` and concedes the guard is no defence
+-- against a caller "who could in any case drop the trigger" - it did not
+-- notice that no trigger-dropping is required.
+REVOKE ALL ON TABLE public.lead_score_history
+  FROM PUBLIC, anon, authenticated, authenticator, service_role;
 GRANT SELECT, INSERT ON TABLE public.lead_score_history TO service_role;
 
--- The guard runs as the invoking role; nothing outside the trigger should call it.
-REVOKE ALL ON FUNCTION public.trg_lead_score_history_append_only() FROM PUBLIC, anon, authenticated;
+-- The guard runs as the invoking role; nothing outside the trigger should call
+-- it. PostgreSQL checks EXECUTE on a trigger function when the trigger is
+-- CREATED, not when it fires, so revoking it from the application role does not
+-- disarm the triggers created above.
+REVOKE ALL ON FUNCTION public.trg_lead_score_history_append_only()
+  FROM PUBLIC, anon, authenticated, authenticator, service_role;
 
 -- Asserted AFTER the grants, for the reason given in 20270201000000.
 DO $privs$
@@ -254,7 +329,17 @@ BEGIN
   IF has_table_privilege('authenticated', 'public.lead_score_history', 'SELECT') IS NOT FALSE THEN
     RAISE EXCEPTION 'PI-LDB-3 postcondition: authenticated still holds SELECT on lead_score_history';
   END IF;
-  RAISE NOTICE 'PI-LDB-3 privileges: service_role write granted, client roles revoked.';
+  -- THE APPEND-ONLY GUARANTEE, asserted as a PRIVILEGE and not only as a
+  -- trigger (Prompt 2B). This is the assertion the shipped acceptance suite
+  -- already expected - {SELECT: true, INSERT: true, UPDATE: false, DELETE:
+  -- false} - and which the three-grantee REVOKE did not deliver in production.
+  -- TRUNCATE is included because it bypasses the triggers entirely.
+  IF has_table_privilege('service_role', 'public.lead_score_history', 'UPDATE') IS NOT FALSE
+     OR has_table_privilege('service_role', 'public.lead_score_history', 'DELETE') IS NOT FALSE
+     OR has_table_privilege('service_role', 'public.lead_score_history', 'TRUNCATE') IS NOT FALSE THEN
+    RAISE EXCEPTION 'PI-LDB-3 postcondition: service_role still holds UPDATE, DELETE or TRUNCATE on lead_score_history — the append-only guarantee is not enforced';
+  END IF;
+  RAISE NOTICE 'PI-LDB-3 privileges: service_role SELECT+INSERT only; UPDATE/DELETE/TRUNCATE removed.';
 END
 $privs$;
 
