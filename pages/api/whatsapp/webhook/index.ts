@@ -9,7 +9,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   3. Return 200 immediately — processing happens in whatsappWebhookProcessor.
  *      Not queued → 503, so Meta redelivers it.
  *
- * Replay protection: identical payloads produce same jobId — BullMQ ignores duplicates.
+ * Replay protection: identical payloads produce same jobId — BullMQ ignores duplicates
+ * while it keeps the job; a body whose newest event is older than the replay window is
+ * acknowledged and dropped. Bodies over MAX_WEBHOOK_BODY_BYTES are refused with 413.
  * Security: APP_SECRET required in every environment; unset → every POST is 401.
  */
 
@@ -37,13 +39,56 @@ export const config = {
   api: { bodyParser: false },
 };
 
+/**
+ * M-1: the body is capped before it is buffered or hashed. Meta's change notifications are
+ * small (a batch of statuses or messages, media by reference); anything larger is refused
+ * with 413 and never reaches the signature check, the queue or Redis.
+ */
+export const MAX_WEBHOOK_BODY_BYTES = 3 * 1024 * 1024;
+
+/**
+ * M-1: replay window. Meta retries an unacknowledged delivery for up to 7 days, so a body
+ * whose NEWEST event is older than this is not a retry: it is acknowledged and dropped.
+ * The jobId dedupe only lasts while BullMQ keeps the job (24 h completed, 7 days failed),
+ * which left an old signed body replayable after that. A body with no event timestamps
+ * (template status updates) is not judged.
+ */
+export const WEBHOOK_REPLAY_WINDOW_MS = 8 * 24 * 60 * 60 * 1000;
+
+class BodyTooLarge extends Error {}
+
 async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let size = 0;
+    req.on('data', (chunk) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buf.length;
+      if (size > MAX_WEBHOOK_BODY_BYTES) {
+        req.removeAllListeners('data');
+        reject(new BodyTooLarge());
+        return;
+      }
+      chunks.push(buf);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+/** Newest event time in the body (ms), or null when no event carries one. */
+export function newestEventAtMs(payload: any): number | null {
+  let newest: number | null = null;
+  for (const entry of payload?.entry ?? []) {
+    for (const change of entry?.changes ?? []) {
+      const value = change?.value;
+      for (const ev of [...(value?.statuses ?? []), ...(value?.messages ?? [])]) {
+        const seconds = Number(ev?.timestamp);
+        if (Number.isFinite(seconds) && seconds > 0) newest = Math.max(newest ?? 0, seconds * 1000);
+      }
+    }
+  }
+  return newest;
 }
 
 function verifySignature(rawBody: Buffer, signature: string): boolean {
@@ -78,7 +123,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── POST: enqueue and ack immediately ────────────────────────────────────
   if (req.method === 'POST') {
-    const rawBody = await readRawBody(req);
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > MAX_WEBHOOK_BODY_BYTES) {
+      return res.status(413).json({ error: 'Payload too large' });
+    }
+    let rawBody: Buffer;
+    try {
+      rawBody = await readRawBody(req);
+    } catch (err) {
+      if (err instanceof BodyTooLarge) return res.status(413).json({ error: 'Payload too large' });
+      throw err;
+    }
     const sig = (req.headers['x-hub-signature-256'] as string) ?? '';
 
     if (!verifySignature(rawBody, sig)) {
@@ -90,6 +145,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       payload = JSON.parse(rawBody.toString('utf8'));
     } catch {
       return res.status(400).json({ error: 'Invalid JSON' });
+    }
+
+    // Signed but stale: acknowledged so nothing retries it, never processed.
+    const newest = newestEventAtMs(payload);
+    if (newest !== null && Date.now() - newest > WEBHOOK_REPLAY_WINDOW_MS) {
+      console.warn('[whatsapp-webhook] stale body outside the replay window; not queued', { newestEventAt: new Date(newest).toISOString() });
+      return res.status(200).json({ received: true, queued: false, reason: 'outside_replay_window' });
     }
 
     // Dedup key: sha256(rawBody hex) — identical replays from Meta produce same jobId

@@ -26,6 +26,7 @@ import { requireEncryptionKey } from '../auth/credentialEncryption';
 // W0-C — the canonical contact-governance evaluator. `mayContact` is pure; the
 // tenant-scoped read is the only I/O this adds, and it happens once per batch.
 import { mayContact } from './prospectIdentity/contactGovernance';
+import { recordContactGovernance } from './prospectIdentity/contactGovernanceWriter';
 import {
   loadTenantGovernanceRecords,
   normalizeGovernanceTarget,
@@ -647,9 +648,83 @@ const DELIVERY_ADVANCES_FROM: Record<RecipientDeliveryUpdate['status'], readonly
   read:      ['sent', 'failed', 'delivered'],
 };
 
+/**
+ * N-2. Meta error codes that mean the NUMBER cannot receive WhatsApp, not that this one send
+ * failed: 131026 "Message undeliverable" (not a WhatsApp user, or cannot receive). Such a
+ * failure writes an `invalid_contact` restriction on (tenant, whatsapp, number), the same
+ * role a permanent SES bounce plays for an address (`bounce_hard`). Every other code is
+ * evidence only. A deliberately short list: widening it is an owner decision.
+ */
+export const WHATSAPP_PERMANENT_FAILURE_CODES: readonly number[] = [131026];
+export const WHATSAPP_STATUS_SOURCE = 'webhook:whatsapp_status';
+
+/**
+ * G-9b. Append one Meta status event to `whatsapp_provider_events`. Identity and status
+ * only — never the number or text. A replay collapses on (message, status, event time) and
+ * is not an error. Throws on any other failure, so the webhook job is retried.
+ */
+export async function recordWhatsAppProviderEvent(event: {
+  wa_message_id: string;
+  status: RecipientDeliveryUpdate['status'];
+  timestamp?: unknown;
+  error_code?: number;
+  error_message?: string;
+}): Promise<'recorded' | 'duplicate'> {
+  const seconds = typeof event.timestamp === 'string' || typeof event.timestamp === 'number' ? Number(event.timestamp) : NaN;
+  // Meta always stamps a status; a missing stamp is recorded at receipt time.
+  const eventAt = Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : new Date();
+  const { error } = await ownedDbTable('whatsapp_provider_events').insert({
+    wa_message_id: event.wa_message_id,
+    event_status:  event.status,
+    event_at:      eventAt.toISOString(),
+    error_code:    typeof event.error_code === 'number' ? event.error_code : null,
+    error_title:   event.error_message ?? null,
+  });
+  if (!error) return 'recorded';
+  if ((error as { code?: string }).code === '23505') return 'duplicate';
+  throw new Error(`[wa-delivery] provider event not recorded: ${(error as { code?: string }).code ?? 'unknown'}`);
+}
+
+/**
+ * N-2. Before a permanent failure moves the recipient, record the restriction, so a failed
+ * write is retried with the event (once the row has moved to `failed`, a replay would find
+ * nothing to advance and the restriction would never be written).
+ */
+async function restrictPermanentFailure(update: RecipientDeliveryUpdate, advancesFrom: readonly string[]): Promise<void> {
+  if (update.status !== 'failed' || typeof update.error_code !== 'number') return;
+  if (!WHATSAPP_PERMANENT_FAILURE_CODES.includes(update.error_code)) return;
+
+  const { data: rows, error } = await ownedDbTable('whatsapp_broadcast_recipients')
+    .select('id, broadcast_id, encrypted_phone')
+    .eq('wa_message_id', update.wa_message_id)
+    .in('status', [...advancesFrom]);
+  if (error) throw new Error(`[wa-delivery] recipient read failed: ${error.message}`);
+  const recipient = (rows ?? [])[0] as { id: string; broadcast_id: string; encrypted_phone: string } | undefined;
+  if (!recipient) return;
+
+  const { data: broadcast, error: bErr } = await ownedDbTable('whatsapp_broadcasts')
+    .select('company_id')
+    .eq('id', recipient.broadcast_id)
+    .maybeSingle();
+  if (bErr || !broadcast?.company_id) throw new Error('[wa-delivery] broadcast tenant unreadable');
+
+  await recordContactGovernance({
+    organizationId: String(broadcast.company_id),
+    governanceType: 'invalid_contact',
+    channel: 'whatsapp',
+    personId: null,
+    target: decryptPhone(recipient.encrypted_phone),
+    source: WHATSAPP_STATUS_SOURCE,
+    // Summary only: the message id and Meta's code, never the number.
+    evidence: { waMessageId: update.wa_message_id, errorCode: update.error_code, recipientId: recipient.id },
+  });
+}
+
 export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): Promise<void> {
   const advancesFrom = DELIVERY_ADVANCES_FROM[update.status];
   if (advancesFrom.length === 0) return;
+
+  await restrictPermanentFailure(update, advancesFrom);
 
   // No status_at: that column is on engagement_messages. Writing it here failed every
   // delivery update, silently, because the result below read as 'no such recipient'.

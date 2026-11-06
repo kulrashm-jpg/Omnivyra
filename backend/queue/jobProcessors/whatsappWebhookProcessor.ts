@@ -5,14 +5,15 @@
  * Each job = one full Meta webhook POST body (already signature-verified).
  *
  * Routes per event type:
- *   statuses  → updateRecipientDelivery (deliveryTracker)
+ *   statuses  → recordWhatsAppProviderEvent (append-only ledger), then
+ *               updateRecipientDelivery (a permanent failure also restricts the number)
  *   messages  → handleInboundMessage (messageRouter); a whole-message STOP is
  *               first recorded as a WhatsApp unsubscribe (whatsappOptOut.ts)
  *   message_template_status_update → handleTemplateStatusWebhook (templateService)
  */
 
 import type { Job } from 'bullmq';
-import { updateRecipientDelivery } from '../../services/whatsappBroadcastService';
+import { recordWhatsAppProviderEvent, updateRecipientDelivery } from '../../services/whatsappBroadcastService';
 import { handleTemplateStatusWebhook } from '../../services/whatsappTemplateService';
 import { detectWhatsAppOptOut, recordWhatsAppOptOut } from '../../services/whatsappOptOut';
 import { supabase } from '../../db/supabaseClient';
@@ -30,8 +31,9 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
   // The kinds of event that failed. A failure never stops the rest of the payload, and
   // the job fails after the loop so its attempts apply. Replaying the whole payload is
   // safe because each event is idempotent: delivery status only moves forward and counts
-  // only what moved, opt-outs collapse on the governance store's canonical key, inbound
-  // messages upsert on (thread_id, platform_message_id), template events set final state.
+  // only what moved, status events collapse on the ledger key (message, status, event time),
+  // opt-outs collapse on the governance store's canonical key, inbound messages are
+  // insert-or-ignore per tenant, template events set final state.
   const failed: string[] = [];
 
   for (const entry of entries) {
@@ -43,7 +45,15 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
       for (const status of value?.statuses ?? []) {
         try {
           const mapped = mapMetaStatus(status.status);
-          if (mapped) {
+          if (mapped && status.id) {
+            // G-9b: the event is kept first, whether or not it moves a recipient.
+            await recordWhatsAppProviderEvent({
+              wa_message_id: String(status.id),
+              status:        mapped,
+              timestamp:     status.timestamp,
+              error_code:    status.errors?.[0]?.code,
+              error_message: status.errors?.[0]?.title,
+            });
             await updateRecipientDelivery({
               wa_message_id:  status.id,
               status:         mapped,
@@ -172,6 +182,9 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
     ?? message?.interactive?.button_reply?.title
     ?? '[non-text message]';
 
+  // M-2: insert-or-ignore. A re-delivery never rewrites a stored message: not its status (a
+  // reply or read state is not reset to 'received'), not its content (a cleared message is
+  // not refilled, N-4), and not its row id (journey event ids hash it).
   const { error: messageError } = await supabase
     .from('engagement_messages')
     .upsert({
@@ -182,7 +195,7 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
       content:             textBody,
       raw_payload:         message,
       status:              'received',
-      created_at:          new Date(parseInt(message.timestamp, 10) * 1000).toISOString(),
+      created_at:          messageCreatedAt(message.timestamp),
       // Message identity is THREAD-scoped, matching every other caller
       // (engagement/reply.ts, bulkEngagementService.ts). Two reasons it cannot
       // be (platform, platform_message_id):
@@ -194,10 +207,23 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
       //      its thread_id — because thread_id is in the payload. Thread scope
       //      makes that structurally impossible: a different tenant's copy
       //      lives in a different thread, so it never matches.
-    }, { onConflict: 'thread_id,platform_message_id' });
+    }, { onConflict: 'thread_id,platform_message_id', ignoreDuplicates: true });
 
-  if (messageError) throw new Error(`message upsert failed: ${messageError.code ?? 'unknown'}`);
+  // M-4: 23505 here can only come from the tenant index (organization_id, platform,
+  // platform_message_id): this tenant already holds the message, under the thread of the
+  // account that was active when it first arrived. It is stored; a re-delivery after the
+  // active account changed is not a failure.
+  if (messageError && messageError.code !== '23505') throw new Error(`message upsert failed: ${messageError.code ?? 'unknown'}`);
   if (retryOptOut) throw new Error('opt-out not recorded');
+}
+
+/**
+ * M-3: Meta's send time (unix seconds). A message without a usable one is stored at receipt
+ * time instead of failing, and dead-lettering, the whole event.
+ */
+function messageCreatedAt(timestamp: unknown): string {
+  const seconds = typeof timestamp === 'string' || typeof timestamp === 'number' ? Number(timestamp) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : new Date().toISOString();
 }
 
 /**

@@ -77,17 +77,19 @@ const PN = 'pn-1';
 const FROM = '15551234567';
 const WAMID_OUT = 'wamid.out.1';
 
-const stop = { from: FROM, id: 'wamid.in.1', timestamp: '1793000000', text: { body: 'STOP' } };
-const reply = { from: FROM, id: 'wamid.in.2', timestamp: '1793000001', text: { body: 'one more thing' } };
+// Recent, so the bodies sit inside the webhook's replay window (M-1).
+const NOW_S = Math.floor(Date.now() / 1000) - 60;
+const stop = { from: FROM, id: 'wamid.in.1', timestamp: String(NOW_S), text: { body: 'STOP' } };
+const reply = { from: FROM, id: 'wamid.in.2', timestamp: String(NOW_S + 1), text: { body: 'one more thing' } };
 const delivered = { id: WAMID_OUT, status: 'delivered' };
 const bodyOf = (value: Record<string, unknown>) =>
   JSON.stringify({ entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: PN }, ...value } }] }] });
 const ALL = bodyOf({ messages: [stop], statuses: [delivered] });
 
-async function post(body: string): Promise<{ status: number; body: unknown }> {
+async function post(body: string, headers: Record<string, string> = {}): Promise<{ status: number; body: unknown }> {
   const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(body).digest('hex');
   const req = new EventEmitter() as EventEmitter & Record<string, unknown>;
-  Object.assign(req, { method: 'POST', query: {}, headers: { 'x-hub-signature-256': sig }, url: '/api/whatsapp/webhook' });
+  Object.assign(req, { method: 'POST', query: {}, headers: { 'x-hub-signature-256': sig, ...headers }, url: '/api/whatsapp/webhook' });
   const out = { status: 0, body: undefined as unknown };
   const res = {
     status(c: number) { out.status = c; return this; },
@@ -219,5 +221,52 @@ describe('WA-5: a redelivered, partly queued payload is processed once per event
 
     expectEachEventOnce();
     expect((fakeDb.tables.engagement_messages ?? []).map((m: { platform_message_id: string }) => m.platform_message_id).sort()).toEqual([stop.id, reply.id].sort());
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// M-1 — a body-size cap, and a replay window beyond BullMQ's retention.
+describe('M-1: size cap and replay window', () => {
+  const { MAX_WEBHOOK_BODY_BYTES, WEBHOOK_REPLAY_WINDOW_MS } = require('../../../pages/api/whatsapp/webhook/index');
+  const at = (msAgo: number) => String(Math.floor((Date.now() - msAgo) / 1000));
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('refuses a declared oversize body with 413 before reading it; nothing is queued', async () => {
+    const r = await post(ALL, { 'content-length': String(MAX_WEBHOOK_BODY_BYTES + 1) });
+    expect(r.status).toBe(413);
+    expect(mockQueue.jobs.size).toBe(0);
+  });
+
+  it('refuses an oversize body that declares no length, while streaming; nothing is queued', async () => {
+    const big = bodyOf({ messages: [{ ...stop, text: { body: 'x'.repeat(MAX_WEBHOOK_BODY_BYTES) } }] });
+    const r = await post(big);
+    expect(r.status).toBe(413);
+    expect(mockQueue.jobs.size).toBe(0);
+  });
+
+  it('acknowledges and drops a signed body whose newest event is outside the window', async () => {
+    const old = bodyOf({ messages: [{ ...stop, timestamp: at(WEBHOOK_REPLAY_WINDOW_MS + DAY) }] });
+    const r = await post(old);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ queued: false, reason: 'outside_replay_window' });
+    expect(mockQueue.jobs.size).toBe(0);
+  });
+
+  it("still queues a body inside Meta's 7-day retry horizon", async () => {
+    const r = await post(bodyOf({ messages: [{ ...stop, timestamp: at(7 * DAY - 60_000) }] }));
+    expect(r.status).toBe(200);
+    expect(mockQueue.jobs.size).toBe(1);
+  });
+
+  it('judges a mixed body by its NEWEST event', async () => {
+    const r = await post(bodyOf({ messages: [{ ...stop, timestamp: at(30 * DAY) }, { ...reply, timestamp: at(60_000) }] }));
+    expect(r.status).toBe(200);
+    expect(mockQueue.jobs.size).toBe(1);
+  });
+
+  it('does not judge a body with no event timestamps', async () => {
+    const r = await post(bodyOf({ statuses: [delivered] }));
+    expect(r.status).toBe(200);
+    expect(mockQueue.jobs.size).toBe(1);
   });
 });

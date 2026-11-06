@@ -81,7 +81,17 @@
     { "version": "20270127000006", "status": "reserved", "owner": "Orchestration Prompt 4 block 20270127000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
     { "version": "20270127000007", "status": "reserved", "owner": "Orchestration Prompt 4 block 20270127000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
     { "version": "20270127000008", "status": "reserved", "owner": "Orchestration Prompt 4 block 20270127000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
-    { "version": "20270127000009", "status": "reserved", "owner": "Orchestration Prompt 4 block 20270127000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." }
+    { "version": "20270127000009", "status": "reserved", "owner": "Orchestration Prompt 4 block 20270127000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270128000000", "slug": "outreach_manual_outcome_once", "status": "reserved", "owner": "Outreach N-3 (owner GO 2026-11-06)", "evidence": "CODE_VERIFIED", "note": "Partial unique index: one manual outcome per (company, task, type). Unapplied anywhere." },
+    { "version": "20270128000001", "slug": "engagement_message_thread_arbiter", "status": "reserved", "owner": "Outreach N-5 (owner GO 2026-11-06)", "evidence": "CODE_VERIFIED", "note": "Brings the baseline-only (thread_id, platform_message_id) upsert arbiter into the chain; no-op where it exists. Unapplied anywhere." },
+    { "version": "20270128000002", "slug": "whatsapp_provider_event_ledger", "status": "reserved", "owner": "Outreach G-9b / N-2 (owner GO 2026-11-06)", "evidence": "CODE_VERIFIED", "note": "Append-only WhatsApp status-event ledger, identity only. Unapplied anywhere." },
+    { "version": "20270128000003", "slug": "message_content_retention", "status": "reserved", "owner": "Outreach N-4 (owner GO 2026-11-06)", "evidence": "CODE_VERIFIED", "note": "Admin-approved clearing with a 3-day floor; operator notes table. Unapplied anywhere." },
+    { "version": "20270128000004", "status": "reserved", "owner": "Outreach block 20270128000000-09 (agreed with Orchestration 2026-11-06)", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270128000005", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270128000006", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270128000007", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270128000008", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270128000009", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." }
   ],
   "free_versions_note": "20270114000000 is free. 20270119* is free. The integration branch's renumbered block is claimed in the same change as its rename (GD-4); every version above that block is free. Claim one by adding it here in the same change as the migration."
 }
