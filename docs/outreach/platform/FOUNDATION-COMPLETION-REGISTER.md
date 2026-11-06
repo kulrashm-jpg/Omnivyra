@@ -625,7 +625,7 @@ Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applie
 
 **Owner GO (2026-11-06):** fix N-1, N-2, N-3, N-4, M-5, N-5 and M-1..M-4.
 
-N-4 rule: "run it through admin before deleting, else keep it for 3 live session days". Implemented as: nothing is cleared without an admin's approval, and nothing younger than 3 days. "Day" is read as a calendar day; **the owner to confirm**.
+N-4 rule: "run it through admin before deleting, else keep it for 3 live session days". Implemented as: nothing is cleared without an admin's approval, and nothing younger than 3 days. "Day" is read as a calendar day; the owner confirmed it on 2026-11-06 (see the next section).
 
 **Commit `96c314795` (local).** Diff from `d11f08888`: sha256 `64ed816ed515c15b…`, 18 files.
 
@@ -659,5 +659,35 @@ Migrations `20270128000000–03`; block `20270128000000–09` reserved, agreed w
 - backend/tests typecheck: the same 52 diagnostics as `d11f08888`, **0 new**.
 - Orchestration's two clearing conditions are tested: a cleared STOP is still a STOP, and `[redacted]` is not.
 - No production or shared environment, provider, send or network call was involved; fetch was refused and counted 0.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## T2 at `7486e3ffb`, and the N-4 day confirmed (2026-11-07)
+
+**Owner confirmation (2026-11-06):** "yes 3 calendar days when admin has logged in". This is what `96c314795` implements: the floor is measured at the logged-in admin's approval (`CHECK cutoff <= approved_at - interval '3 days'`), and nothing is cleared without that approval. No code change.
+
+**Results (T2, frozen at `7486e3ffbd65f5a90edf0b8e1859105d3c09426b`; HEAD and a clean tree verified at start and after A, B, C and end).**
+
+| Category | Result | Against `662d824be` T2 / baselines |
+|---|---|---|
+| A. Real-schema, full project | 103 suites; 2028 tests: 2023 passed, 3 skipped, **2 failed** (`r3bill_orphan_hold_reaper_schema`) | +1 suite (`n4_whatsapp_inbox_retention`, 18/18). The 2 failures are a timing race already in that test; see below |
+| B. Integration community/WhatsApp | 15/18 suites; 126 tests: 120 passed, **6 failed** | The same 6, by name |
+| B. Whole-repo unit jest | 2393 suites; 42581 tests: 42440 passed, 73 skipped, **62 failed** | The same 62, by name |
+| C. typecheck-ci | PASS, at baseline | |
+| C. Worker tsc | Clean | |
+| C. backend/tests typecheck baseline | 52 net-new against the committed baseline file | The same 52 as `662d824be`; **0 from `96c314795`** |
+| D. Gates | 9/10 pass. **migration-quality: 23 violations** | The 23 flagged files are identical, by name. GD-4 / REL-07, not waived |
+
+**Exception: `r3bill_orphan_hold_reaper_schema` (credit track, test from `19ddc4262`).** Three cases run the reaper with `minAgeSeconds: 0` and assume a HOLD stamped at transaction start (`now()`) is already older than the JS cutoff (`Date.now()`). On this machine the Postgres transaction-start time leads Node's `Date.now()` in 1998 of 2000 measured transactions, by up to 1.8 ms. When the work between BEGIN and the cutoff is shorter than that lead, both scans see 0 holds and the cases fail. Evidence that the race is environmental and not from `96c314795`:
+- the suite passes alone (7/7) and in a fresh worktree at `7486e3ffb`, even after the suites that trigger it (`li4c_person_duplicates`, `a4n_attempt_lease`, `sec_b_x1_pse_two_states`); it fails after them in the long-lived foundation tree, with 1–3 cases failing per run;
+- none of the 19 files in the diff is among the suite's 817 loaded modules, and the base `d11f08888` with the four `20270128*` migrations added passes;
+- shifting `Date.now()` +5 ms makes it pass in the failing tree; shifting it −20 ms makes the base fail the same 3 cases.
+Not fixed here: the test belongs to the credit track. A fix would make the cutoff independent of the two clocks, for example by seeding the HOLD's `created_at` in the past.
+
+**Database.** Disposable pg-sandbox clusters on 127.0.0.1; 129 migrations applied above ledgerMax, through `20270128000003_message_content_retention.sql`. **No production or shared environment was touched**; no provider, send, publish, browser action or flag was used. The scratch worktrees used for the comparison were removed.
+
+**Orchestration Prompt 5.** Outreach review PASS at `2a73befd…`. Committed by Orchestration locally on `orch/c5-int`, merge source `6d83f48be`; no migration, no overlap with `96c314795`. The GAP-9 → N-3 re-pin (`dfa64c62…`) applies at merge. Merge and its timing are the owner's.
+
+**Closure status: unchanged, no closure is complete.** Owner decisions still open: GD-4 / REL-07, D2-R, SC7-R, BL-A, CN-1..CN-3, C-CP-1, CL-1..CL-6, `PROSPECT_PERSON_ERASE`, notes held in append-only evidence, and widening the permanent-failure code list.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
