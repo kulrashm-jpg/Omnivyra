@@ -691,3 +691,58 @@ Not fixed here: the test belongs to the credit track. A fix would make the cutof
 **Closure status: unchanged, no closure is complete.** Owner decisions still open: GD-4 / REL-07, D2-R, SC7-R, BL-A, CN-1..CN-3, C-CP-1, CL-1..CL-6, `PROSPECT_PERSON_ERASE`, notes held in append-only evidence, and widening the permanent-failure code list.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## Prompt 5 merged, T2 at `34cbe9a04` (2026-11-07)
+
+**Owner GO (2026-11-07):** "check and go ahead". Merge of Orchestration Prompt 5.
+
+**Checked before the merge.** `d11f08888..6d83f48be` minus `PROMPT-5-INTEGRATION-VERIFICATION.md` hashes to `4a939d1b…`. That equals the reviewed `2a73befd…` with the same file removed. The file itself gained only the two verdict rows and the reviewers' notes.
+
+**Commits (local).**
+- `ef3866bdc`: merge of `6d83f48be`. It is the exact union of both sides. `1a88b5dd5..ef3866bdc` equals `d11f08888..6d83f48be` (`df1f0e13…`), and `6d83f48be..ef3866bdc` equals `d11f08888..1a88b5dd5` (`d308aec4…`). Orchestration verified the same. No migration in Prompt 5.
+- `34cbe9a04`: the GAP-9 → N-3 re-pin. Orchestration's patch `dfa64c62…` applied unchanged to `orch_c5_producer_compat.test.ts`.
+- `8f1250b4d`: the N-4 edge test reads the database clock (see below).
+
+**Units before T2:** the 15 Prompt 5 unit suites, plus `whatsappWebhookRedelivery`, `piP1W09DManualOutcomeRoute` and `safetyTestSuitesSelector`. 18/18 suites; 696 passed, 6 todo.
+
+**Results (T2, frozen at `34cbe9a04e1f304cd553ef2dbe194e739c2e72f5`; HEAD and a clean tree verified at start and after A, B, C and end).**
+
+| Category | Result | Against `7486e3ffb` T2 / baselines |
+|---|---|---|
+| A. Real-schema, full project | 104 suites; 2045 tests: 2041 passed, 3 skipped, **1 failed** (the N-4 edge case) | +1 suite (Prompt 5). `r3bill` passed this run. The failure was a test defect, fixed in `8f1250b4d` |
+| B. Integration community/WhatsApp | 15/18 suites; 126 tests: 120 passed, **6 failed** | The same 6, by name |
+| B. Whole-repo unit jest | 2399 suites; 42833 tests: 42692 passed, 73 skipped, **62 failed** | The same 62, by name |
+| C. typecheck-ci | PASS, at baseline | |
+| C. Worker tsc | Clean | |
+| C. backend/tests typecheck baseline | 52 net-new against the committed baseline file | The same 52; **0 from Prompt 5 or the re-pin** |
+| D. Gates | 9/10 pass. **migration-quality: 23 violations** | The 23 flagged files are identical, by name. GD-4 / REL-07, not waived |
+
+**Exception: the N-4 edge case (Outreach's test, fixed).** It computed "exactly 3 days" from Node's clock and expected the database CHECK to refuse it. Postgres's `now()` can lead Node's `Date.now()` by up to 1.8 ms (the same race as `r3bill`), so the CHECK sometimes accepted it. The product rule was never at risk: a cutoff is accepted only when it is at least 3 days old by the database's own clock.
+
+The fix in `8f1250b4d`:
+- the cutoff is 1 ms under 3 days by the transaction's clock;
+- the process clock is set a minute ahead, so the CHECK is what refuses;
+- the test asserts that nothing is written.
+
+Evidence:
+- 5/5 runs pass on fresh databases.
+- A full real-schema run in the same long-lived tree: N-4 and `r3bill` pass. The only failures are the 5 `report1DurableHistoryEndToEnd` cases, which refuse a database not stamped by the CI script; that run used the quick runner, not the T2 harness.
+- Mutants:
+  - with no 23514 → `cutoff_too_recent` mapping, the test fails;
+  - with no `three_day_floor` CHECK, the test fails.
+  The service file was restored byte-identical.
+
+**Database.** Disposable pg-sandbox clusters on 127.0.0.1; 129 migrations applied. **No production or shared environment was touched**; no provider, send, publish, browser action or flag was used.
+
+**Owner ruling G-11 (2026-11-07), routed to Orchestration, which builds it.** The ruling: "yes this will be applicable for that given tennant or company....and admin will decide if it has o be contacted or not within 3 days and with what all channel and if there is no response from admin then all medium shall be closed for that contact". The owner's answers to Outreach's two questions:
+- every channel is held from the moment the opt-out is recorded;
+- the company's own admin decides.
+
+Not ruled:
+- whether an admin may reopen a channel after day 3;
+- who else may lift a hold;
+- WhatsApp broadcasts, which are matched by number, so a person-anchored opt-out does not cover them.
+
+**Closure status: unchanged, no closure is complete.** Owner decisions still open: GD-4 / REL-07, D2-R, SC7-R, BL-A, CN-1..CN-3, C-CP-1, CL-1..CL-6, `PROSPECT_PERSON_ERASE`, notes held in append-only evidence, widening the permanent-failure code list, and the three G-11 points above.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
