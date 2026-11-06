@@ -283,9 +283,25 @@ describe('the single-record surface stays closed', () => {
       source: 'gate_test_source',
       records: [{ id: 'E-1' }, { id: 'E-2' }, { id: 'E-3' }],
     });
-    // One evaluation for the whole batch, not one per record.
+    // One evaluation for the whole batch, not one per record. THE ASSERTION IS
+    // UNCHANGED - only the timeout below moved, and the reason is worth
+    // recording rather than hiding behind a bigger number.
     expect(evaluateFeatureFlag).toHaveBeenCalledTimes(1);
-  });
+  },
+  // 90s, because this suite does not double `backend/db/writeOwner`: each
+  // record attempts a REAL client against an unreachable placeholder
+  // SUPABASE_URL and takes ~7s per round trip to give up. Prompt 2B added a
+  // score-protection read before each durable upsert, so a record now makes
+  // TWO such attempts instead of one - roughly 14s per record, measured, and
+  // three records no longer fit in 30s.
+  //
+  // That extra read is deliberate and is the only way to avoid silently
+  // overwriting a stored customer-visible score (see
+  // `leadIntelligenceRepository.scoresToPersist`). Its production cost is one
+  // INDEXED lookup on (company_id, dedupe_key) per record on the
+  // materialization path only - not 7s - so the honest fix here is the
+  // timeout, not a weaker assertion or a quietly removed read.
+  90_000);
 
   it('the KILL SWITCH is still re-read per record, so a mid-batch flip stops the next one', async () => {
     process.env[FLAG] = 'true';

@@ -33,10 +33,19 @@
  *     in `audience_memberships.entity_id` and in operational note entity ids.
  *     Relabelling it `crm` makes the next resync INSERT A DUPLICATE instead of
  *     updating in place.
- *   • `import` is deliberately absent from `buyingIntent.CAPTURE_SOURCES` while
- *     `crm` is present, so the relabel also fabricates a high-confidence
- *     `lead_captured` ("Submitted a lead form") on a row where an operator merely
- *     pasted a spreadsheet. See the dated rationale at `buyingIntent.ts:118`.
+ *   • (HISTORICAL, Prompt 2B) `import` was absent from
+ *     `buyingIntent.CAPTURE_SOURCES` while `crm` was present, so the relabel
+ *     ALSO fabricated a high-confidence `lead_captured` ("Submitted a lead
+ *     form") on a row where an operator merely pasted a spreadsheet. That set
+ *     no longer exists: `lead_captured` is granted only on recorded
+ *     `origin.category === 'inbound_form'` evidence, so no display source
+ *     fabricates it any more and this second reason is RETIRED.
+ *
+ *     The prohibition stands on the key-stability reason above, which was
+ *     always the load-bearing one - a relabel still orphans the row from its
+ *     notes and audience memberships. Recorded rather than deleted, because a
+ *     future reader finding only one reason where the code once gave two
+ *     should be able to tell that the other was answered, not overlooked.
  *
  * ─── WHY THE ASYMMETRY IS SAFE, WHICH IS THE REAL CONTRACT ────────────────
  * The two sides only ever describe THE SAME ROW when that row is a
@@ -239,11 +248,18 @@ describe('the LIVE legacy CRM-CSV adoption row keeps `import`', () => {
     expect(computeLeadDedupeKey(lead)).not.toBe(`src:crm|tbl:canonical_leads|id:${PROSPECT}`);
   });
 
-  it('`import` withholds the `lead_captured` claim that `crm` would fabricate', () => {
-    // The semantic reason the relabel is wrong, not just the key-stability one.
-    // `buyingIntent.CAPTURE_SOURCES` contains `crm` and deliberately omits
-    // `import`: an import is an operator pasting a spreadsheet, so asserting
-    // "Submitted a lead form" on it is fabricated evidence. See buyingIntent.ts:118.
+  it('NEITHER `import` nor `crm` can claim `lead_captured` from its label alone', () => {
+    // RETARGETED (Prompt 2B, owner decision). This test used to assert that
+    // `import` withholds a claim `crm` would fabricate, and used the 15-point
+    // gap between them as the semantic argument against the relabel. The gap
+    // was real and the argument was sound - but the right fix was to stop
+    // `crm` fabricating, not to route around it.
+    //
+    // `lead_captured` now requires recorded `inbound_form` evidence, so the
+    // gap is CLOSED: neither source earns it, and the relabel can no longer
+    // invent 15 points whichever way it goes. Asserting the closure is what
+    // stops the fabrication returning, and asserting it from BOTH sides is
+    // what makes it a rule rather than a patch for one source.
     const viewOf = (source: string) => canonicalLeadToView({
       organizationId: ORG,
       source,
@@ -263,10 +279,21 @@ describe('the LIVE legacy CRM-CSV adoption row keeps `import`', () => {
     expect(asImport.score).toBe(0);
     expect(asImport.evidence.map((e) => e.type)).not.toContain('lead_captured');
 
-    // Measured counter-value: the relabel would have invented 15 points here.
+    // THE MEASURED CLOSURE. Under the old rule this was 15 and carried
+    // `lead_captured`; both sources now answer identically, so the relabel
+    // moves no points in either direction.
     const asCrm = buildBuyingIntentProfile({ view: viewOf('crm') } as never);
-    expect(asCrm.score).toBe(15);
-    expect(asCrm.evidence.map((e) => e.type)).toContain('lead_captured');
+    expect(asCrm.score).toBe(0);
+    expect(asCrm.evidence.map((e) => e.type)).not.toContain('lead_captured');
+    expect(asCrm.score).toBe(asImport.score);
+
+    // The claim follows EVIDENCE, not the label - asserted on the source that
+    // used to get it for free, so this fails if membership-by-source returns.
+    const withForm = buildBuyingIntentProfile({
+      view: { ...viewOf('crm'), origin: { category: 'inbound_form', platform: null, observedAt: null } },
+    } as never);
+    expect(withForm.evidence.map((e) => e.type)).toContain('lead_captured');
+    expect(withForm.score).toBe(15);
   });
 });
 

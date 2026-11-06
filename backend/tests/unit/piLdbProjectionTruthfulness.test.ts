@@ -67,6 +67,8 @@ let timelineError: DbError | null = null;
  * writes to, and counted so a future test can assert it happened.
  */
 const reconcileReads: Array<{ companyId: string; dedupeKey: string }> = [];
+/** The score-protection read (Prompt 2B), kept apart from the one above. */
+const protectiveReads: Array<{ companyId: string; dedupeKey: string }> = [];
 /** Makes the read itself fail, which must leave the verdict unestablished. */
 let reconcileReadError: DbError | null = null;
 
@@ -91,27 +93,106 @@ jest.mock('../../db/writeOwner', () => ({
         }),
       };
     },
-    async insert(row: Record<string, unknown>) {
-      if (table === 'lead_intelligence_events') {
-        timelinePayloads.push(row);
-        return timelineError ? { data: null, error: timelineError } : { data: null, error: null };
-      }
-      return { data: null, error: null };
+    // Thenable AND chainable, exactly as the real builder is: the timeline
+    // append awaits it directly, while the score-preserving path (Prompt 2C)
+    // chains `.select('id').maybeSingle()` off it. A double that modelled only
+    // the first shape turned that path into a TypeError, and the repository's
+    // outer catch reported `failed` — a definitive verdict for a write that
+    // was never issued.
+    insert(row: Record<string, unknown>) {
+      const settle = async (): Promise<{ data: unknown; error: DbError | null }> => {
+        if (table === 'lead_intelligence_events') {
+          timelinePayloads.push(row);
+          return timelineError ? { data: null, error: timelineError } : { data: null, error: null };
+        }
+        upsertPayloads.push(row);
+        if (upsertRejectsWith) throw upsertRejectsWith;
+        if (upsertError) return { data: null, error: upsertError };
+        if (upsertReturnsNoRow) return { data: null, error: null };
+        // Plain INSERT semantics: a taken idempotency key raises 23505 naming
+        // the constraint, which is what the repository reads as "the row
+        // exists, update it instead".
+        const key = `${String(row.company_id)}|${String(row.dedupe_key)}`;
+        if (rows.has(key)) {
+          return {
+            data: null,
+            error: {
+              code: '23505',
+              message: 'duplicate key value violates unique constraint "lead_intelligence_dedupe_unique"',
+            },
+          };
+        }
+        const id = `row-${rows.size + 1}`;
+        rows.set(key, { ...row, id });
+        return { data: { id }, error: null };
+      };
+      return {
+        then: (
+          onFulfilled?: (v: { data: unknown; error: DbError | null }) => unknown,
+          onRejected?: (e: unknown) => unknown,
+        ) => settle().then(onFulfilled, onRejected),
+        select: () => ({ maybeSingle: settle }),
+      };
+    },
+    // The score-preserving UPDATE (Prompt 2C). Assigns exactly the keys in the
+    // patch — the contract that makes omitting `scores` mean "leave it alone".
+    update(patch: Record<string, unknown>) {
+      const filters: Record<string, string> = {};
+      const chain = {
+        eq(column: string, value: string) { filters[column] = value; return chain; },
+        select: () => ({
+          maybeSingle: async () => {
+            const key = `${filters.company_id}|${filters.dedupe_key}`;
+            const existing = rows.get(key);
+            if (!existing) return { data: null, error: null };
+            rows.set(key, { ...existing, ...patch });
+            return { data: { id: existing.id }, error: null };
+          },
+        }),
+      };
+      return chain;
     },
     // The reconciliation read. Keyed EXACTLY as the real unique index is, and
     // served from the same store the upsert writes to — so "the read finds the
     // row" can only be true here if the upsert really put it there under the
     // same (company_id, dedupe_key).
-    select(_columns: string) {
+    select(columns: string) {
       const filters: Record<string, string> = {};
       const chain = {
         eq(column: string, value: string) {
           filters[column] = value;
           return chain;
         },
+        // PROMPT 2C. The real builder exposes `retry` and returns itself; the
+        // repository turns postgrest-js's auto-retry OFF for the
+        // score-protection read. A double without this method makes that call
+        // throw, and the read then reports `unknown` by accident — the exact
+        // class of wrong-route pass this suite was written to refuse.
+        retry(_enabled: boolean) {
+          return chain;
+        },
         maybeSingle: async () => {
-          reconcileReads.push({ companyId: filters.company_id, dedupeKey: filters.dedupe_key });
-          if (reconcileReadError) return { data: null, error: reconcileReadError };
+      // PROMPT 2B. The repository now issues TWO different keyed reads, and a
+      // double that cannot tell them apart would make every count below
+      // ambiguous:
+      //
+      //   select('id')          the RECONCILIATION read, after an unconfirmed
+      //                         write - "did the row land anyway?"
+      //   select('id, scores')  the SCORE-PROTECTION read, before the write -
+      //                         "is there a stored score I must not silently
+      //                         replace?"
+      //
+      // They are discriminated by the column list, which is exactly how they
+      // are discriminated on the real wire.
+          const isProtective = String(columns).includes('scores');
+          (isProtective ? protectiveReads : reconcileReads)
+            .push({ companyId: filters.company_id, dedupeKey: filters.dedupe_key });
+          // Scoped to the read it is NAMED for (Prompt 2C). It used to break
+          // both, so `reconcileReadError` silently also made the score read
+          // unanswerable — and once an unanswerable score read changes WHICH
+          // statement the write issues, a knob that moves two things at once
+          // stops being a knob.
+          if (!isProtective && reconcileReadError) return { data: null, error: reconcileReadError };
           if (table !== 'lead_intelligence') return { data: null, error: null };
           const hit = rows.get(`${filters.company_id}|${filters.dedupe_key}`);
           return { data: hit ? { id: hit.id } : null, error: null };
@@ -156,6 +237,7 @@ beforeEach(() => {
   upsertRejectsWith = null;
   timelineError = null;
   reconcileReads.length = 0;
+  protectiveReads.length = 0;
   reconcileReadError = null;
 });
 
@@ -405,6 +487,10 @@ describe('an unconfirmed write is reported as ambiguous, not guessed', () => {
     // this the four assertions above are satisfied by a TypeError from a fake
     // that has no `select` — which is exactly how they used to pass.
     expect(reconcileReads).toEqual([{ companyId: ORG, dedupeKey: computeLeadDedupeKey(lead()) }]);
+    // And the score-protection read happened exactly once, on the SAME key.
+    // Same key matters: a protective read on a different key would answer
+    // about a different row and "protect" nothing (Prompt 2B).
+    expect(protectiveReads).toEqual([{ companyId: ORG, dedupeKey: computeLeadDedupeKey(lead()) }]);
     // It looked and found nothing, and that did NOT become `failed`: the lost
     // write may still be executing server-side, so an immediate read cannot
     // prove absence. The warning records that we looked.

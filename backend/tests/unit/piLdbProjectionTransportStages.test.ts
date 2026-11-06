@@ -235,7 +235,16 @@ beforeEach(() => {
 });
 
 const posts = () => requests.filter((r) => r.path === '/lead_intelligence' && r.method === 'POST');
-const gets = () => requests.filter((r) => r.path === '/lead_intelligence' && r.method === 'GET');
+// PROMPT 2B. `gets()` means the RECONCILIATION read specifically, because the
+// repository now also issues a score-protection read before each write. They
+// are distinguishable on the wire by their column list - `select=id` versus
+// `select=id,scores` - which is deliberate: this suite's invariant "a
+// definitively failed write sends no reconciliation read" is only observable
+// if the two reads are separable, and an invariant nothing can check is not
+// one. Both helpers are asserted below, so neither read is merely tolerated.
+const allGets = () => requests.filter((r) => r.path === '/lead_intelligence' && r.method === 'GET');
+const gets = () => allGets().filter((r) => !r.query.includes('scores'));
+const protectiveReads = () => allGets().filter((r) => r.query.includes('scores'));
 
 /* ── the seam is real ──────────────────────────────────────────────────────*/
 
@@ -472,10 +481,20 @@ describe('reconciliation detects an existing row', () => {
 
     // Read, NOT retried. "Never retry a possibly-committed write" asserted as
     // a wire transcript, not as a comment: a second POST fails this.
+    //
+    // The leading GET is the score-protection read (Prompt 2B), which precedes
+    // every write. It is listed rather than filtered out so this stays an
+    // EXACT transcript - the strongest form of the assertion - and so the
+    // ordering is pinned too: protection must come BEFORE the write, because
+    // after it the previous score is already gone.
     expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      'GET /lead_intelligence',
       'POST /lead_intelligence',
       'GET /lead_intelligence',
     ]);
+    // The claim this test is named for, pinned independently of how many reads
+    // surround it: exactly ONE write was sent.
+    expect(requests.filter((r) => r.method === 'POST')).toHaveLength(1);
     expect(store.size).toBe(1);
   });
 
@@ -647,6 +666,11 @@ describe('confirmed failure stays distinguishable from uncertain completion', ()
     // A definite failure must NOT send a reconciliation read after a row it
     // has already established cannot be there; an uncertain one MUST.
     expect(gets()).toHaveLength(status === 'pending_reconciliation' ? 1 : 0);
+    // The score-protection read, by contrast, precedes EVERY write and is
+    // unaffected by how the write turned out - it has already happened by
+    // then. Pinned at exactly one so a future change cannot quietly make the
+    // write path read twice per record (Prompt 2B).
+    expect(protectiveReads()).toHaveLength(1);
   });
 
   it('every one of those is still exactly one of the FOUR statuses', async () => {

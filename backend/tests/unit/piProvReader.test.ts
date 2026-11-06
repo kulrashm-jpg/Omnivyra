@@ -445,7 +445,13 @@ describe('stats — per-source breakdowns kept and extended', () => {
       originatingContributions: async () => okResult({ 'cl-1': [contribution()] }),
     }));
     expect(s.bySource).toEqual({ community: 1, crm: 1, website: 1 });
-    expect(s.byOriginCategory).toEqual({ community: 1, pi_discovery: 1, unknown: 1 });
+    // UPDATED (Prompt 2B). The third lead is a `leads` row with
+    // `source: 'form_embed'`, which IS a form submission - and `websiteAdapter`
+    // previously attached no `origin` at all, so the reader could only report
+    // `unknown`. It now states the category explicitly, so the row that really
+    // did come from a form says so. `unknown` here was missing provenance, not
+    // a category.
+    expect(s.byOriginCategory).toEqual({ community: 1, pi_discovery: 1, inbound_form: 1 });
     expect(s.bySourceLabel).toEqual({ Community: 1, 'Prospect discovery · Apollo': 1, Website: 1 });
     expect(s.provenance).toBe('ok');
     expect(s.truncated).toBe(false);

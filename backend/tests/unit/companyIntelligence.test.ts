@@ -104,8 +104,29 @@ describe('Phase 12 — Company Intelligence', () => {
     const lone = contact(view({ identity: {}, scores: {}, sourceRef: { table: 'leads', id: 'L1' } }, {}));
     const ci = buildCompanyIntelligence({ companyKey: 'acme', contacts: [lone], now: NOW });
     expect(ci.account.contactCount).toBe(1);
-    // one captured contact = not multi-threaded (partial, not ready)
-    expect(ci.readiness.find((r) => r.motion === 'multi_thread')!.status).toBe('partial');
+    // UPDATED (Prompt 2B, owner decision) — and this one is worth reading.
+    //
+    // `engaged` is `contacts.filter((c) => c.buyingIntent.score >= 15)`, and 15
+    // is EXACTLY the `lead_captured` weight. So while that claim was granted by
+    // display source, a contact needed no behaviour of any kind to count as an
+    // ENGAGED CONTACT for account readiness: arriving from a capture source
+    // scored precisely 15 and crossed the threshold on its own.
+    //
+    // This contact is as empty as a contact can be - `identity: {}`,
+    // `scores: {}`, no sessions, no events - and it used to read `partial`,
+    // i.e. "one engaged contact". It now reads `not_ready`, which is the
+    // honest answer: nobody has engaged with this account.
+    //
+    // The consequence that mattered was on the OTHER side of the threshold: two
+    // purchased Apollo contacts with no engagement whatsoever would have made
+    // an account read `multi_thread: ready`. So the fabricated +15 was not just
+    // an inflated number on a screen - it was changing an account-level sales
+    // recommendation.
+    expect(ci.readiness.find((r) => r.motion === 'multi_thread')!.status).toBe('not_ready');
+    expect(ci.readiness.find((r) => r.motion === 'multi_thread')!.blockers)
+      .toContain('Only 0 engaged contact(s)');
+    // The recommendation is unchanged and still correct: multi-thread this
+    // account. `engaged.length < 2` covers 0 as well as 1.
     expect(ci.actions.some((a) => a.id === 'multi_thread')).toBe(true);
     expect(summarizeCompanyIntelligence(ci).multiThreaded).toBe(false);
   });

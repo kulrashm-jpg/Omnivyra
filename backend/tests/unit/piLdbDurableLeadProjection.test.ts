@@ -193,6 +193,40 @@ describe('PI-LDB-4 — what the emitted lead carries', () => {
     await ingestNormalizedRecord(csvRecord());
     expect(emitted[0].occurredAt).toBe('2026-11-02T10:00:00.000Z');
   });
+
+  it('carries the PROVENANCE CATEGORY onto the projected lead (Prompt 2B)', async () => {
+    // The write path's half of the evidence rule. `lead_captured` (+15,
+    // "Submitted a lead form") is decided from `origin.category`, so if the
+    // orchestrator does not set it the rule is fail-closed for every lead -
+    // correct by accident, and silently wrong the moment a genuine inbound
+    // form arrives.
+    //
+    // Nothing new is computed for this: it is the SAME
+    // `keys.provenance.sourceCategory` already handed to `ingestSourceRecord`,
+    // from the explicit `PI_ADAPTER_PROFILES` table, so the durable row and
+    // the provenance contribution cannot disagree about what originated the
+    // prospect.
+    await ingestNormalizedRecord(csvRecord());
+    expect(emitted[0].origin).toEqual({
+      category: 'csv',
+      platform: null,
+      observedAt: '2026-11-02T10:00:00.000Z',
+    });
+    // And it agrees with what the provenance boundary was told.
+    expect(ingested[0].sourceCategory).toBe('csv');
+  });
+
+  it('a `csv` category earns no form-submission claim, end to end', async () => {
+    // The whole point, asserted through the REAL orchestrator rather than on a
+    // hand-built view: an operator pasting a spreadsheet produces a lead with
+    // recorded provenance and NO fabricated intent.
+    const { buildBuyingIntentProfile, canonicalLeadToView } =
+      require('../../../lib/leadIntelligence') as typeof import('../../../lib/leadIntelligence');
+    await ingestNormalizedRecord(csvRecord());
+    const profile = buildBuyingIntentProfile({ view: canonicalLeadToView(emitted[0] as never) });
+    expect(profile.evidence.map((e: { type: string }) => e.type)).not.toContain('lead_captured');
+    expect(profile.score).toBe(0);
+  });
 });
 
 describe('PI-LDB-4 — it does not invent intent on the way through', () => {
@@ -225,19 +259,40 @@ describe('PI-LDB-4 — it does not invent intent on the way through', () => {
     expect(profile.score).toBe(0);
   });
 
-  it('still records the capture for a source where someone really did submit', async () => {
-    // The guard above must not be a blanket removal: a website lead DID
-    // submit something, and the evidence is true for it. Asserting this here
-    // is what stops the fix from being over-applied later.
+  it('still records the capture when there IS evidence someone submitted a form', async () => {
+    // The guard above must not be a blanket removal: a lead that DID submit
+    // something earns the evidence, and asserting it here is what stops the
+    // fix from being over-applied later.
+    //
+    // UPDATED (Prompt 2B, owner decision). What makes the claim true changed,
+    // and this test changed with it rather than being deleted. It used to flip
+    // `source` to `'website'`, because membership of
+    // `buyingIntent.CAPTURE_SOURCES` was what granted `lead_captured`. A
+    // display source is a channel of ARRIVAL and never was proof of a
+    // submission - which is how a purchased Apollo contact came to carry
+    // "Submitted a lead form" - so the rule now reads recorded evidence:
+    // `origin.category === 'inbound_form'`.
+    //
+    // So the ONE field changed here is the one that now carries the claim. The
+    // assertion either side of it is identical, which is the point: the
+    // true-positive path still works, it is just no longer purchasable with a
+    // label.
     const { buildBuyingIntentProfile, canonicalLeadToView } =
       require('../../../lib/leadIntelligence') as typeof import('../../../lib/leadIntelligence');
 
     await ingestNormalizedRecord(csvRecord());
-    // Same lead, same conversion the read path performs, ONE field changed.
-    const view = { ...canonicalLeadToView(emitted[0] as never), source: 'website' as const };
+    const base = canonicalLeadToView(emitted[0] as never);
+    const view = { ...base, origin: { category: 'inbound_form', platform: null, observedAt: null } };
     const profile = buildBuyingIntentProfile({ view: view as never });
 
     expect(profile.evidence.map((e: { type: string }) => e.type)).toContain('lead_captured');
+
+    // And the LABEL alone no longer buys it. This is the half the old test
+    // could not state, because under the old rule it was false.
+    const labelOnly = { ...base, source: 'website' as const };
+    const fromLabel = buildBuyingIntentProfile({ view: labelOnly as never });
+    expect(fromLabel.evidence.map((e: { type: string }) => e.type)).not.toContain('lead_captured');
+    expect(fromLabel.score).toBe(0);
   });
 });
 

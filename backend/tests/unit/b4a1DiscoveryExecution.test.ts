@@ -258,9 +258,14 @@ const okPorts = (over: Partial<DiscoveryPorts> = {}): DiscoveryPorts => ({
   hasProvider: () => true,
   credential: { resolveCredential: async () => 'tenant-key' },
   authorizeCost: (async () => ({ authorized: true, holdId: null, cost: { kind: 'unknown' } })) as any,
+  // `projected`/`notProjected` are part of `IngestionBatchResult`, so a double
+  // that omits them is not the orchestrator's answer — and the executor now
+  // reads them. A fully projected batch is the default here; the suites that
+  // probe a projection shortfall override it.
   ingest: (async ({ records }: any) => ({
     organizationId: ORG_A, source: 'synthetic',
-    total: records.length, succeeded: records.length, failed: 0, outcomes: [],
+    total: records.length, succeeded: records.length, failed: 0,
+    projected: records.length, notProjected: 0, outcomes: [],
   })) as any,
   now: () => '2026-10-06T00:00:00.000Z',
   ...over,
@@ -667,7 +672,10 @@ describe('B4-A1 — runDiscoveryExecution: the fetch → ingest seam', () => {
       ports: okPorts({
         ...l.ports,
         getProvider: () => adapter as any,
-        ingest: (async (input: any) => { seen.push(input); return { succeeded: input.records.length }; }) as any,
+        ingest: (async (input: any) => {
+          seen.push(input);
+          return { succeeded: input.records.length, projected: input.records.length, notProjected: 0 };
+        }) as any,
       }),
     });
     expect(out.status).toBe('completed');
@@ -694,7 +702,10 @@ describe('B4-A1 — runDiscoveryExecution: the fetch → ingest seam', () => {
       organizationId: ORG_A, executionId: id,
       ports: okPorts({
         ...l.ports, getProvider: () => adapter as any,
-        ingest: (async (i: any) => { handed = i.records[0]; return { succeeded: 1 }; }) as any,
+        ingest: (async (i: any) => {
+          handed = i.records[0];
+          return { succeeded: 1, projected: 1, notProjected: 0 };
+        }) as any,
       }),
     });
     expect(handed).toEqual(raw);
@@ -900,7 +911,10 @@ describe('B4-A1 — the bounds actually bind', () => {
       organizationId: ORG_A, executionId: id,
       ports: okPorts({
         ...l.ports, getProvider: () => adapter as any,
-        ingest: (async (i: any) => { handedCount = i.records.length; return { succeeded: i.records.length }; }) as any,
+        ingest: (async (i: any) => {
+          handedCount = i.records.length;
+          return { succeeded: i.records.length, projected: i.records.length, notProjected: 0 };
+        }) as any,
       }),
     });
     expect(out.resultsObserved).toBe(3);

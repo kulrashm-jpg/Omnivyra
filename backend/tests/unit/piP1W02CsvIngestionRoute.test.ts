@@ -81,7 +81,16 @@ const call = async (over: Partial<NextApiRequest> = {}) => {
   return res;
 };
 
-const OK = { source: 'csv', total: 1, succeeded: 1, failed: 0, outcomes: [{ externalId: 'csv:abc', status: 'ingested' }] };
+// `projected`/`notProjected` are REQUIRED by `IngestionBatchResult`, and the
+// double is an untyped `jest.fn`, so omitting them type-checks nowhere and
+// made the route serialise `undefined` for both — which `toEqual` ignores and
+// `JSON.stringify` strips, so every assertion below passed without the
+// counters ever carrying a value. Honouring the contract is what makes the
+// delivery assertions mean anything. 1 = 1 + 0 + 0 per the stated identity.
+const OK = {
+  source: 'csv', total: 1, succeeded: 1, failed: 0, projected: 1, notProjected: 0,
+  outcomes: [{ externalId: 'csv:abc', status: 'ingested' }],
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -220,7 +229,9 @@ describe('PI-P1-W02 — the response and telemetry', () => {
     await call();
     expect(trackEvent).toHaveBeenCalledTimes(1);
     const meta = trackEvent.mock.calls[0][0].metadata;
-    expect(meta).toEqual({ source: 'csv', total: 1, succeeded: 1, failed: 0 });
+    expect(meta).toEqual({
+      source: 'csv', total: 1, succeeded: 1, failed: 0, projected: 1, notProjected: 0,
+    });
     expect(JSON.stringify(trackEvent.mock.calls[0][0])).not.toContain('dana@example.com');
   });
 

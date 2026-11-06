@@ -82,8 +82,11 @@ const call = async (over: Partial<NextApiRequest> = {}) => {
   return res;
 };
 
+// Both counters are REQUIRED by `IngestionBatchResult`; omitting them left the
+// route emitting `undefined` for each, which `toEqual` silently ignores.
 const OK_RESULT = {
   organizationId: ORG_A, source: 'manual', total: 1, succeeded: 1, failed: 0,
+  projected: 1, notProjected: 0,
   outcomes: [{ externalId: 'OP-1', ok: true, sourceRecordId: 'sr-1', personId: 'p-1', duplicatesParked: 0 }],
 };
 
@@ -218,6 +221,8 @@ describe('LI-5E.2 — durable batch telemetry', () => {
       total: OK_RESULT.total,
       succeeded: OK_RESULT.succeeded,
       failed: OK_RESULT.failed,
+      projected: OK_RESULT.projected,
+      notProjected: OK_RESULT.notProjected,
     });
   });
 
@@ -241,9 +246,14 @@ describe('LI-5E.2 — durable batch telemetry', () => {
     expect(blob).not.toContain('a@x.test');
     expect(blob).not.toContain('A Person');
     expect(blob).not.toContain('records');
-    // The metadata surface is exactly the four declared keys.
+    // The metadata surface is exactly the six declared keys. `projected` and
+    // `notProjected` are integer COUNTS — the category this test already
+    // permits — and they are here so a batch that projected nothing cannot be
+    // read off telemetry as a clean success. The list stays CLOSED: anything
+    // else appearing in the metadata still fails here, which is the point.
     const e = trackEvent.mock.calls[0][0] as { metadata: Record<string, unknown> };
-    expect(Object.keys(e.metadata).sort()).toEqual(['failed', 'source', 'succeeded', 'total']);
+    expect(Object.keys(e.metadata).sort())
+      .toEqual(['failed', 'notProjected', 'projected', 'source', 'succeeded', 'total']);
   });
 
   it('emits nothing when the global gate refused the request', async () => {
@@ -463,7 +473,8 @@ describe('LI-5E.2 — the existing pipeline is reused, not reimplemented', () =>
 describe('LI-5E.2 — response safety and error handling', () => {
   it('returns identifiers, counts and outcomes only — no PII', async () => {
     const res = await call();
-    expect(Object.keys(res._json).sort()).toEqual(['failed', 'outcomes', 'source', 'succeeded', 'total']);
+    expect(Object.keys(res._json).sort())
+      .toEqual(['failed', 'notProjected', 'outcomes', 'projected', 'source', 'succeeded', 'total']);
     const s = JSON.stringify(res._json);
     expect(s).not.toContain('a@x.test');
     expect(s).not.toContain('@');
