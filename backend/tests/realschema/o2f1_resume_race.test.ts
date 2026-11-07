@@ -293,17 +293,14 @@ describe('Prompt 5 — a person evaluates the reply (real route, real decision l
     expect(d.reasons).toContain(`optout_review:${review.id}`);
     expect(await lifecycleRows(s.prospectId)).toBe(pi);              // P-1: PI is not written
     expect((await dispatchTask(s.task)).outcome).not.toBe('sent');
-    // A NEW journey for the same prospect: whatever it creates, nothing reaches the person.
+    // A NEW journey for the same prospect is REFUSED at enrolment while the review is pending
+    // (G-11 enrolment closure, owner 2026-11-07: "new journey gets closed while prospect is closed").
+    // Before that ruling a run was created and then ended by the hold; now none is created.
     const again = await enrol(ORG_A, s.actor, s.prospectId, { steps: [emailStep('later')] });
-    expect(again.report.enrolled).toBe(1);                         // PI closure is not used: the run exists
-    expect(again.instanceId).toBeTruthy();
-    for (let i = 0; i < 3; i++) {
-      await sweep();
-      for (const t of await handoffTasks(again.instanceId)) await approveWithPasskey(ORG_A, String(t.id), s.actor);
-    }
+    expect(again.report).toMatchObject({ enrolled: 0, excluded: 1, exclusionReasons: { contact_closed_by_admin: 1 } });
+    expect(again.instanceId).toBeFalsy();
     await sweep();
     expect(sent).toHaveLength(0);
-    expect(await instanceState(again.instanceId)).toBe('cancelled');  // the restriction ends it as unsubscribed
   }), 300_000);
 
   it('refusals: invalid action, retime without a date, and a non-paused run record nothing', () => inRollback(async () => {
@@ -314,5 +311,41 @@ describe('Prompt 5 — a person evaluates the reply (real route, real decision l
     expect((await patchRun(s.instanceId, { lifecycleState: 'active' })).status).toBe(200);
     expect(await patchRun(s.instanceId, { evaluation: 'continue' })).toMatchObject({ status: 409, json: { code: 'not_paused' } });
     expect(await evaluations(s.instanceId)).toEqual([]);
+  }), 300_000);
+});
+
+describe('G-11 / PI item 1 — after erasure, NO send path reaches an address (this proves SAFETY, not that enrolment is gated)', () => {
+  it('the review re-anchored onto the address, the person erased: a journey CAN still be created for the prospect (today\'s behaviour), and it fails at every send', () => inRollback(async () => {
+    await seedTenants();
+    await enableOutreach(ORG_A, ['email', 'internal']);
+    const actor = await newUser();
+    mockActor.id = actor;
+    const { prospectId, personId } = await newProspect(ORG_A, { email: ADDRESS });
+    await ensureProspectLifecycleOpen({ organizationId: ORG_A, prospectId, now: NOW() });
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const review = require('../../services/orchestration/optOutReview');
+    const holds = await review.writeOptOutHolds({ organizationId: ORG_A, personId, email: ADDRESS, holdSource: 'optout_review:reply_opt_out', sourceRef: 'run:pi1' });
+    await review.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'person', personId }, trigger: 'reply_opt_out', holdIds: holds, sourceRef: 'run:pi1', holdSource: 'optout_review:reply_opt_out' });
+    // PI's erasure order: re-anchor onto the canonical address, revoke the person's holds, delete the person.
+    const [moved] = await rows(`SELECT disposition FROM public.g11_reanchor_pending_opt_out_reviews($1, $2, $3::jsonb)`, [ORG_A, personId, JSON.stringify([{ channel: 'email', value: ADDRESS }])]);
+    expect(moved.disposition).toBe('re_anchored');
+    await db.query(`UPDATE public.contact_governance_records SET revoked_at = now(), revoked_reason = 'erasure (test)' WHERE person_id = $1 AND revoked_at IS NULL`, [personId]);
+    await db.query('DELETE FROM public.unified_persons WHERE id = $1', [personId]);
+    expect((await one('SELECT unified_person_id FROM public.canonical_leads WHERE id = $1', [prospectId])).unified_person_id).toBeNull();
+
+    // The prospect now has no person, so neither closure arm can link it to the address: enrolment
+    // is NOT refused by the gate (a journey is created) ...
+    const again = await enrol(ORG_A, actor, prospectId, { steps: [emailStep('after-erasure')] });
+    expect(again.report.enrolled).toBe(1);
+    // ... and every send fails: the bridge refuses person_unresolved before writing, so nothing is
+    // bridged, nothing is approved, and nothing is sent.
+    for (let i = 0; i < 3; i++) {
+      await sweep();
+      for (const t of await handoffTasks(again.instanceId)) await approveWithPasskey(ORG_A, String(t.id), actor);
+    }
+    await sweep();
+    expect(await handoffTasks(again.instanceId)).toEqual([]);
+    expect(sent).toHaveLength(0);
+    expect(fetchCalls).toBe(0);
   }), 300_000);
 });

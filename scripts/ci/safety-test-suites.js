@@ -173,6 +173,9 @@ const SAFETY_SUITE_REGISTRY = [
   // working-day due date) and its admin routes (COMPANY_ADMIN of that company, no bypass).
   'backend/tests/unit/optOutReview.test.ts',
   'backend/tests/unit/optOutReviewRoute.test.ts',
+  // G-11 enrolment closure: the review-derived and manual gates at enrolment (fail closed), and
+  // the admin close/reopen route (same admin guard).
+  'backend/tests/unit/contactEnrolmentClosure.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */

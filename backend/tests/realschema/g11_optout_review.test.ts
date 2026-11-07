@@ -15,7 +15,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { db, inRollback, seedTenants, attempt, newPerson, ORG_A, ORG_B } from './setup';
-import { newUser, one, rows } from './helpers/journeyFixtures';
+import { emailStep, enrol, newProspect, newUser, one, rows } from './helpers/journeyFixtures';
 
 type Row = Record<string, unknown>;
 const mockFaults = { failReviewInserts: 0 };
@@ -858,4 +858,212 @@ describe('re-anchor IDEMPOTENCY, explicitly (PI): same inputs → exactly the sa
     expect(Number((await one('SELECT count(*)::int n FROM public.contact_opt_out_review_reanchors')).n)).toBe(0);
     await expect(reanchor(ORG_A, person, [T_EMAIL])).rejects.toMatchObject({ code: '22023' });
   }), 120_000);
+});
+
+describe('enrolment closure (owner 2026-11-07: "new journey gets closed while prospect is closed ... only copany admin can close or reopen the prospect"; "Also a manual close")', () => {
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const closureRoute = require('../../../pages/api/contact-enrolment-closures/index').default;
+  const closureSvc = require('../../services/orchestration/contactEnrolmentClosure');
+  /* eslint-enable @typescript-eslint/no-var-requires */
+  const DEF = { steps: [emailStep('hello')] };
+  const report = async (actor: string, prospectId: string, org = ORG_A) => (await enrol(org, actor, prospectId, DEF)).report as Row;
+  const refusedBy = (r: Row) => Object.keys((r.exclusionReasons as Row) ?? {});
+  const closeVia = (prospectId: string, action: 'close' | 'reopen', reason: unknown = 'asked us by phone') =>
+    call(closureRoute, 'POST', { company_id: ORG_A }, { action, prospectId, reason });
+  const piTransitions = async (prospectId: string) => Number((await one(
+    'SELECT count(*)::int n FROM public.prospect_lifecycle_transitions WHERE organization_id = $1 AND prospect_id = $2', [ORG_A, prospectId])).n);
+  /** A prospect with a person who has the address and the (spaced) number, and that person's opt-out review. */
+  async function optedOut(admin: string) {
+    const { prospectId, personId } = await newProspect(ORG_A, { email: EMAIL, phone: PHONE });
+    const r = await operatorOptOut(personId, `run-cl:${prospectId}`);
+    void admin;
+    return { prospectId, personId, reviewId: r.reviewId as string };
+  }
+  async function erase(person: string) {
+    await db.query(`UPDATE public.contact_governance_records SET revoked_at = now(), revoked_reason = 'erasure (test)' WHERE person_id = $1 AND revoked_at IS NULL`, [person]);
+    await db.query('DELETE FROM public.unified_persons WHERE id = $1', [person]);
+  }
+
+  it('an opt-out review closes the prospect (contact_closed_by_admin); an admin reopen of ANY channel reopens it; PI is untouched', () => inRollback(async () => {
+    const { admin } = await setup();
+    const p = await optedOut(admin);
+    const pi = await piTransitions(p.prospectId);
+    const refused = await report(admin, p.prospectId);
+    expect(refused).toMatchObject({ enrolled: 0, excluded: 1 });
+    expect(refusedBy(refused)).toEqual(['contact_closed_by_admin']);
+    expect((await decide(p.reviewId, ['email'])).status).toBe(200);
+    expect(await report(admin, p.prospectId)).toMatchObject({ enrolled: 1 });
+    expect(await piTransitions(p.prospectId)).toBe(pi);                                     // 0 PI transitions
+  }), 120_000);
+
+  it('keep_closed holds; a later reopen opens', () => inRollback(async () => {
+    const { admin } = await setup();
+    const p = await optedOut(admin);
+    expect((await decide(p.reviewId, [])).status).toBe(200);
+    expect(refusedBy(await report(admin, p.prospectId))).toEqual(['contact_closed_by_admin']);
+    expect((await decide(p.reviewId, ['phone'], 'second look')).status).toBe(200);
+    expect(await report(admin, p.prospectId)).toMatchObject({ enrolled: 1 });
+  }), 120_000);
+
+  it('a target-anchored STOP review on the canonical number closes the prospect whose stored phone is spaced; another tenant is unaffected', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { prospectId } = await newProspect(ORG_A, { email: 'someone@example.test', phone: PHONE });
+    await whatsappStop('wamid.cl');
+    expect(refusedBy(await report(admin, prospectId))).toEqual(['contact_closed_by_admin']);
+    const b = await newProspect(ORG_B, { email: 'someone@example.test', phone: PHONE });
+    expect(await report(admin, b.prospectId, ORG_B)).toMatchObject({ enrolled: 1 });
+  }), 120_000);
+
+  it('MERGED: the person review merged into a pending target review; the target review governs and the prospect stays closed', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { prospectId, personId } = await newProspect(ORG_A, { email: EMAIL, phone: PHONE });
+    const holds = await svc.writeOptOutHolds({ organizationId: ORG_A, email: EMAIL, holdSource: 'optout_review:email_unsubscribe', sourceRef: 'attempt:cl' });
+    const t = await svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'target', channel: 'email', target: EMAIL }, trigger: 'email_unsubscribe', holdIds: holds, sourceRef: 'attempt:cl', holdSource: 'optout_review:email_unsubscribe' });
+    const r = await operatorOptOut(personId, 'run-cl:m');
+    await db.query(`SELECT * FROM public.g11_reanchor_pending_opt_out_reviews($1, $2, $3::jsonb)`, [ORG_A, personId, JSON.stringify([{ channel: 'email', value: EMAIL }])]);
+    expect(await review(r.reviewId)).toMatchObject({ state: 'merged', merged_into: t.reviewId });
+    expect(refusedBy(await report(admin, prospectId))).toEqual(['contact_closed_by_admin']);
+    expect((await decide(t.reviewId, ['phone', 'whatsapp'])).status).toBe(200);           // a reopen decision (email is locked by the unsubscribe)
+    expect(await report(admin, prospectId)).toMatchObject({ enrolled: 1 });
+  }), 120_000);
+
+  it('MANUAL: close refuses, reopen opens; a reopen while a review holds is 409 closed_by_optout_review and enrolment stays refused; audited without the reason', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { prospectId, personId } = await newProspect(ORG_A, { email: EMAIL, phone: PHONE });
+    expect((await closeVia(prospectId, 'close')).status).toBe(201);
+    expect(refusedBy(await report(admin, prospectId))).toEqual(['contact_closed_by_admin']);
+    expect((await closeVia(prospectId, 'reopen', 'confirmed again')).status).toBe(200);
+    expect(await report(admin, prospectId)).toMatchObject({ enrolled: 1 });
+    // A review now, then a manual close and a manual reopen: the review still holds.
+    const r = await operatorOptOut(personId, 'run-cl:man');
+    expect((await closeVia(prospectId, 'close', 'again')).status).toBe(201);
+    expect(await closeVia(prospectId, 'reopen', 'try')).toMatchObject({ status: 409, json: { code: 'closed_by_optout_review', reviewId: r.reviewId } });
+    expect(refusedBy(await report(admin, prospectId))).toEqual(['contact_closed_by_admin']);
+    const audit = await rows(`SELECT decision, reason, actor, evidence FROM public.execution_audit WHERE company_id = $1 AND reason LIKE 'contact_enrolment_%' ORDER BY created_at`, [ORG_A]);
+    // One transaction's now(): created_at ties, so compare the multiset.
+    expect(audit.map((a) => String(a.reason)).sort()).toEqual(['contact_enrolment_closed', 'contact_enrolment_closed', 'contact_enrolment_reopened']);
+    expect(JSON.stringify(audit)).not.toMatch(/asked us by phone|confirmed again|example\.test/);
+    expect(await one('SELECT count(*)::int n FROM public.contact_enrolment_closures WHERE prospect_id = $1 AND reopened_at IS NULL', [prospectId])).toEqual({ n: 1 });
+  }), 120_000);
+
+  it('who: a non-admin member, another tenant\'s admin, a super-admin are refused; a reason is required', () => inRollback(async () => {
+    await setup();
+    const { prospectId } = await newProspect(ORG_A, { email: EMAIL });
+    expect(await closeVia(prospectId, 'close', '  ')).toMatchObject({ status: 400, json: { code: 'reason_required' } });
+    for (const [org, role] of [[ORG_A, 'VIEW_ONLY'], [ORG_B, 'COMPANY_ADMIN'], [ORG_B, 'SUPER_ADMIN']] as const) {
+      mockActor.id = await member(org, role);
+      expect(await closeVia(prospectId, 'close')).toMatchObject({ status: 403, json: { code: 'company_admin_required' } });
+    }
+    expect(await one('SELECT count(*)::int n FROM public.contact_enrolment_closures')).toEqual({ n: 0 });
+  }), 120_000);
+
+  it('FAIL CLOSED: an unreadable closure state refuses enrolment (contact_closure_unreadable)', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { prospectId } = await newProspect(ORG_A, { email: EMAIL });
+    const spy = jest.spyOn(closureSvc, 'readContactEnrolmentClosure').mockResolvedValue({ ok: false, error: 'injected' });
+    const r = await report(admin, prospectId);
+    spy.mockRestore();
+    expect(refusedBy(r)).toEqual(['contact_closure_unreadable']);
+    expect(r).toMatchObject({ enrolled: 0 });
+  }), 120_000);
+
+  it('the store: one active closure, append-only, reopen once, no DELETE for service_role, no client privileges', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { prospectId } = await newProspect(ORG_A, { email: EMAIL });
+    const ins = () => attempt(`INSERT INTO public.contact_enrolment_closures (organization_id, prospect_id, closed_by, close_reason) VALUES ($1, $2, $3, 'r')`, [ORG_A, prospectId, admin]);
+    await db.query(`INSERT INTO public.contact_enrolment_closures (organization_id, prospect_id, closed_by, close_reason) VALUES ($1, $2, $3, 'r')`, [ORG_A, prospectId, admin]);
+    expect(await ins()).toBe('23505');
+    expect(await attempt(`INSERT INTO public.contact_enrolment_closures (organization_id, prospect_id, closed_by, close_reason) VALUES ($1, $2, $3, 'r')`, [ORG_B, prospectId, admin])).toBe('23503');
+    expect(await attempt(`UPDATE public.contact_enrolment_closures SET close_reason = 'changed' WHERE prospect_id = $1`, [prospectId])).toBe('23514');
+    await db.query(`UPDATE public.contact_enrolment_closures SET reopened_by = $2, reopened_at = now(), reopen_reason = 'ok' WHERE prospect_id = $1`, [prospectId, admin]);
+    expect(await attempt(`UPDATE public.contact_enrolment_closures SET reopen_reason = 'again' WHERE prospect_id = $1`, [prospectId])).toBe('23514');
+    for (const [role, p, want] of [['service_role', 'DELETE', false], ['service_role', 'UPDATE', true], ['anon', 'SELECT', false], ['authenticated', 'SELECT', false]] as const) {
+      expect({ role, p, has: (await one(`SELECT has_table_privilege($1, 'public.contact_enrolment_closures', $2) AS h`, [role, p])).h }).toEqual({ role, p, has: want });
+    }
+  }), 120_000);
+});
+
+describe('closure reasons at erasure (PI SPLIT: row KEEP, close_reason/reopen_reason MAPPED → \'[redacted: subject erased]\')', () => {
+  const PLACEHOLDER = '[redacted: subject erased]';
+  async function redact(org: string, ids: unknown): Promise<number> {
+    await db.query('SAVEPOINT rd');
+    try {
+      await db.query('SET LOCAL ROLE service_role');
+      const { rows: out } = await db.query('SELECT public.g11_redact_enrolment_closure_reasons($1, $2::uuid[]) AS n', [org, ids]);
+      await db.query('RESET ROLE');
+      await db.query('RELEASE SAVEPOINT rd');
+      return Number(out[0].n);
+    } catch (e) {
+      await db.query('ROLLBACK TO SAVEPOINT rd');
+      throw e;
+    }
+  }
+  async function closedTwoShapes(admin: string) {
+    const a = await newProspect(ORG_A, { email: 'a@example.test' });
+    const b = await newProspect(ORG_A, { email: 'b@example.test' });
+    // a: closed, never reopened. b: closed, reopened, closed again (two rows).
+    await db.query(`INSERT INTO public.contact_enrolment_closures (organization_id, prospect_id, closed_by, close_reason) VALUES ($1, $2, $3, 'Ana Smith asked by phone')`, [ORG_A, a.prospectId, admin]);
+    await db.query(`INSERT INTO public.contact_enrolment_closures (organization_id, prospect_id, closed_by, close_reason, reopened_by, reopened_at, reopen_reason)
+      VALUES ($1, $2, $3, 'Bob said stop', $3, now(), 'Bob said go')`, [ORG_A, b.prospectId, admin]);
+    await db.query(`INSERT INTO public.contact_enrolment_closures (organization_id, prospect_id, closed_by, close_reason) VALUES ($1, $2, $3, 'Bob again')`, [ORG_A, b.prospectId, admin]);
+    return { a, b };
+  }
+  const shape = (prospectId: string) => rows(`SELECT close_reason, reopen_reason, reopened_by IS NOT NULL AS has_reopened_by, reopened_at IS NOT NULL AS has_reopened_at, closed_by, closed_at
+    FROM public.contact_enrolment_closures WHERE prospect_id = $1 ORDER BY closed_at, reopened_at NULLS LAST`, [prospectId]);
+
+  it('BOTH ROW SHAPES: un-reopened gets the placeholder and stays un-reopened; reopened gets it on both reasons; operators and times survive', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { a, b } = await closedTwoShapes(admin);
+    const [beforeA] = await shape(a.prospectId);
+    expect(await redact(ORG_A, [a.prospectId, b.prospectId])).toBe(3);
+    expect(await shape(a.prospectId)).toEqual([{ ...beforeA, close_reason: PLACEHOLDER, reopen_reason: null, has_reopened_by: false, has_reopened_at: false }]);
+    const sb = await shape(b.prospectId);
+    expect(sb.map((x) => [x.close_reason, x.reopen_reason, x.has_reopened_by])).toEqual([[PLACEHOLDER, PLACEHOLDER, true], [PLACEHOLDER, null, false]]);
+    expect(sb.every((x) => x.closed_by === admin)).toBe(true);
+    expect(await anyClosureHas(['Ana Smith', 'Bob'])).toBe(0);
+  }), 120_000);
+
+  it('idempotent; {} returns 0 and writes nothing; NULL, a NULL element and another tenant\'s prospect RAISE', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { a } = await closedTwoShapes(admin);
+    expect(await redact(ORG_A, [a.prospectId])).toBe(1);
+    expect(await redact(ORG_A, [a.prospectId])).toBe(0);
+    const before = await rows('SELECT row_to_json(c)::text j FROM public.contact_enrolment_closures c ORDER BY id');
+    expect(await redact(ORG_A, [])).toBe(0);
+    expect(await rows('SELECT row_to_json(c)::text j FROM public.contact_enrolment_closures c ORDER BY id')).toEqual(before);
+    await expect(redact(ORG_A, null)).rejects.toMatchObject({ code: '22023' });
+    await expect(redact(ORG_A, [a.prospectId, null])).rejects.toMatchObject({ code: '22023' });
+    const other = await newProspect(ORG_B, { email: 'x@example.test' });
+    await expect(redact(ORG_A, [other.prospectId])).rejects.toMatchObject({ code: '22023' });
+    await expect(redact(ORG_A, ['not-a-uuid'])).rejects.toMatchObject({ code: '22P02' });
+  }), 120_000);
+
+  it('EXECUTE is refused for anon and authenticated; outside the function the guard still refuses any change to close_reason (even to the placeholder)', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { a } = await closedTwoShapes(admin);
+    for (const role of ['anon', 'authenticated']) {
+      expect((await one(`SELECT has_function_privilege($1, 'public.g11_redact_enrolment_closure_reasons(uuid, uuid[])', 'EXECUTE') AS h`, [role])).h).toBe(false);
+    }
+    expect(await attempt(`UPDATE public.contact_enrolment_closures SET close_reason = $2 WHERE prospect_id = $1`, [a.prospectId, PLACEHOLDER])).toBe('23514');
+  }), 120_000);
+
+  it('ERASURE, end to end: redact, delete the person; the prospect stays closed (manual gate) and no reason text or person key remains', () => inRollback(async () => {
+    const { admin } = await setup();
+    const { prospectId, personId } = await newProspect(ORG_A, { email: EMAIL, phone: PHONE });
+    expect((await call(require('../../../pages/api/contact-enrolment-closures/index').default, 'POST', { company_id: ORG_A }, { action: 'close', prospectId, reason: 'Ana asked by phone' })).status).toBe(201);
+    expect(await redact(ORG_A, [prospectId])).toBe(1);
+    await db.query(`UPDATE public.contact_governance_records SET revoked_at = now(), revoked_reason = 'erasure (test)' WHERE person_id = $1 AND revoked_at IS NULL`, [personId]);
+    await db.query('DELETE FROM public.unified_persons WHERE id = $1', [personId]);
+    expect(await anyClosureHas(['Ana asked', personId])).toBe(0);
+    const r = (await enrol(ORG_A, admin, prospectId, { steps: [emailStep('hello')] })).report as Row;
+    expect(Object.keys(r.exclusionReasons as Row)).toEqual(['contact_closed_by_admin']);
+  }), 120_000);
+
+  const anyClosureHas = async (needles: string[]) => {
+    let n = 0;
+    for (const needle of needles) {
+      n += Number((await one(`SELECT count(*)::int n FROM public.contact_enrolment_closures c WHERE position($1 IN row_to_json(c)::text) > 0`, [needle])).n);
+    }
+    return n;
+  };
 });
