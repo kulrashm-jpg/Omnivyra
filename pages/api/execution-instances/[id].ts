@@ -12,7 +12,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   PATCH /api/execution-instances/:id  { evaluation: 'continue' | 'retime' | 'end', returnDate? }
  *       -> { instance, evaluation: { action, notBefore, cancelledSteps }, auditFailed }
  *       Prompt 5: a person evaluates the reply that paused the run (`reply_awaiting_evaluation`):
- *       continue (resume), retime (resume with a return date, `returnDate` required) or end.
+ *       continue (resume), retime (resume with a return date, `returnDate` required), end, or
+ *       opt_out (G-11: an all-channel `unsubscribe` for the person is recorded, then the run
+ *       ends; 409 `person_unknown` / 503 `governance_write_failed` leave the run paused).
  *       Recorded as a journey decision with the actor (`actor:<user id>`). Not given with
  *       `lifecycleState`. Nothing reaches PI (P-1 = a). Same guards.
  *
@@ -58,10 +60,14 @@ const METHODS = ['GET', 'PATCH'];
 
 const statusFor = (code: string): number => (code === 'terminal_instance' ? 409 : 400);
 
-/** A resume's or an evaluation's refusal: missing run 404; the run moved or is not awaiting this 409; a bad request 400. */
-const CONFLICTS = ['not_paused', 'superseded', 'resume_race_lost', 'not_awaiting_evaluation'];
+/**
+ * A resume's or an evaluation's refusal: missing run 404; the run moved, is not awaiting this,
+ * or has no person to restrict 409; the opt-out record could not be written 503 (retryable,
+ * the run is still paused); a bad request 400.
+ */
+const CONFLICTS = ['not_paused', 'superseded', 'resume_race_lost', 'not_awaiting_evaluation', 'person_unknown'];
 const evaluationStatus = (code: string): number =>
-  (code === 'run_not_found' ? 404 : CONFLICTS.includes(code) ? 409 : 400);
+  (code === 'run_not_found' ? 404 : code === 'governance_write_failed' ? 503 : CONFLICTS.includes(code) ? 409 : 400);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!METHODS.includes(req.method ?? '')) {

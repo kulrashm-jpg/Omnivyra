@@ -136,6 +136,7 @@ A person or lead of another tenant ⇒ 42501 before anything is written.
 | `canonical_leads` row, `source`, `qualification_score`, `lead_status` | keep — row existence is PL-DEC-003 |
 | `canonical_users.email`, `.full_name`, `.phone`, `.geo`, `.external_user_key` | null |
 | `canonical_users.user_metadata` | marker |
+| `contact_enrolment_closures.close_reason`, `.reopen_reason` (20270127000004, Orchestration G-11) | `'[redacted: subject erased]'` — operator free text may hold personal data and nothing depends on it. Written by `public.g11_redact_enrolment_closure_reasons(org, prospect_ids)` (SECURITY DEFINER, service_role only), which `personErasure.ts` calls with the erased person's prospect ids. A placeholder, not NULL or empty: `close_reason` is NOT NULL (1–500) and `reopen_reason` is all-or-none with the reopen; a never-reopened row keeps `reopen_reason` NULL. The row and every other column are kept (below). |
 | `unified_persons` | delete — by `personErasure.ts` after the function succeeds |
 
 ### Kept by design, outside this function
@@ -143,6 +144,8 @@ A person or lead of another tenant ⇒ 42501 before anything is written.
 | Table | Justification |
 |---|---|
 | `contact_governance_records` (incl. re-anchored `target_normalized`) | Suppression must stay enforceable after erasure (ADR §16, PG-001). Holding the address is the legal basis for not contacting it again. |
+| `contact_opt_out_reviews` (20270127000001, Orchestration G-11) | Keep the canonical value; no redaction, no hash (PI ruling). A target anchor's `anchor_value` is the canonical address or number, the same data class as the re-anchored `target_normalized` on governance, held so a suppression stays enforceable after erasure (ADR §16, PG-001). A person anchor holds no person key after erasure: the FK clears `person_id` and the table's own guard rewrites `anchor_value` to `erased:<review id>`. |
+| `contact_enrolment_closures` (20270127000004, Orchestration G-11), all columns but the two reasons | A company admin's manual closure of a prospect to new journeys must outlive erasure, or the erased contact's prospect reopens to journeys. It holds only a prospect identifier (`prospect_id`, a `canonical_leads` id, never the person's key; the row survives because `canonical_leads` rows do, PL-DEC-003) and the acting OPERATORS' ids and times. The two free-text reasons are MAPPED above. |
 | outreach history (`outreach_tasks`, `outreach_decisions`, delivery evidence), `canonical_revenue_events`, `unified_touchpoints`, `visitor_sessions`, `expected_event_instances`, legacy `leads` | Owned by other tracks; SET NULL edges by design (`personErasure.ts` header). Not provenance. Residual personal data there is out of scope and recorded as a gap. |
 | `marketpulse_signal_observations` | Tenant market signals, not keyed to a person. |
 | `prospect_aliases` (20270109000001) | Holds no personal data by construction: `evidence` records only the rule versions, the verification result and the platform — never the handle or the person id (enforced in `identityReconciliation.ts` and asserted by `piProvIdentityReconciliation` and `pi_prov_identity_ordering`). The rows are append-only (UPDATE refused), so this is the only way they can never retain erasable data. Lead ids are random and survive as audit of the merge; they cascade away if a lead is deleted. |

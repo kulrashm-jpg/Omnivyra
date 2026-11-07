@@ -11,11 +11,19 @@
  * its partial unique index stays the authority on duplicates), never contacts
  * anyone, and never weakens a gate: an eligible person still meets every
  * engine-side check at each step.
+ *
+ * G-11 — a prospect a company admin has CLOSED to new journeys is not enrolled
+ * (`contact_closed_by_admin`, beside PI's `prospect_lifecycle_closed`): either an opt-out review
+ * that touches it holds (pending, or decided keep_closed) or an admin closed it by hand
+ * (contactEnrolmentClosure.ts). If that state cannot be read, enrolment FAILS CLOSED with
+ * `contact_closure_unreadable`: it never proceeds on an unknown closure. Only NEW journeys are
+ * gated; a run already active is not ended by a close.
  */
 
 import { getCurrentWorkflowVersion } from '../workflows/workflowStore';
 import { evaluateConditions, isProspectClosedToJourneys } from './journeyPolicy';
-import { loadIndividualFacts, PROSPECT_STATE_UNREADABLE_GAP, type IndividualIntelligencePort } from './individualIntelligence';
+import { durableIntelligencePort, loadIndividualFacts, PROSPECT_STATE_UNREADABLE_GAP, type IndividualIntelligencePort } from './individualIntelligence';
+import { CONTACT_CLOSED_BY_ADMIN, CONTACT_CLOSURE_UNREADABLE, readContactEnrolmentClosure } from './contactEnrolmentClosure';
 import type { SubjectRef } from '../executionSubject/subjectRef';
 
 export interface EnrollmentVerdict {
@@ -54,10 +62,36 @@ export async function checkEnrollmentEligibility(input: {
   if (facts.gaps.includes(PROSPECT_STATE_UNREADABLE_GAP)) {
     return { eligible: false, assessedVersionId: version.id, reasons: [`gap: ${PROSPECT_STATE_UNREADABLE_GAP}`] };
   }
+  if (input.subject.kind === 'prospect') {
+    const closure = await closedByAdmin(input.organizationId, input.subject.id, facts.personId, facts.gaps, input.intelligence ?? durableIntelligencePort);
+    if (closure !== null) return { eligible: false, assessedVersionId: version.id, reasons: [closure] };
+  }
   const verdict = evaluateConditions(conditions, facts.facts);
   return {
     eligible: verdict.holds,
     assessedVersionId: version.id,
     reasons: verdict.holds ? [] : [...verdict.unmet, ...facts.gaps.map((g) => `gap: ${g}`)],
   };
+}
+
+/**
+ * G-11: the admin closure gate. Returns the exclusion reason, or null when the prospect is open.
+ * FAIL CLOSED: an unreadable person, address or closure state is `contact_closure_unreadable`,
+ * because a prospect whose closure we cannot see must not be enrolled.
+ */
+async function closedByAdmin(
+  organizationId: string, prospectId: string, personId: string | null, gaps: readonly string[], port: IndividualIntelligencePort,
+): Promise<string | null> {
+  if (gaps.includes('person_unreadable')) return CONTACT_CLOSURE_UNREADABLE;
+  let email: string | null = null;
+  let phone: string | null = null;
+  if (personId !== null) {
+    const contacts = await port.readPersonContacts(organizationId, personId).catch(() => null);
+    if (contacts === null) return CONTACT_CLOSURE_UNREADABLE;
+    email = contacts.email;
+    phone = contacts.phone;
+  }
+  const read = await readContactEnrolmentClosure({ organizationId, prospectId, personId, email, phone });
+  if (read.ok !== true) return CONTACT_CLOSURE_UNREADABLE;
+  return read.state.closed ? CONTACT_CLOSED_BY_ADMIN : null;
 }
