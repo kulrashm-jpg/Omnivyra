@@ -2,13 +2,18 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * G-11 — a company's opt-out reviews.
  *
- *   GET /api/contact-optout-reviews?company_id=<uuid>[&state=pending|decided|all]
- *       -> { reviews: [{ ...review, overdue }] }   pending first, by due date
+ *   GET /api/contact-optout-reviews?company_id=<uuid>[&state=pending|decided|merged|all]
+ *       -> { reviews: [{ ...review, qualifyingDays, overdue, activityUnreadable }] }   pending first
  *
  * Every opt-out (a WhatsApp STOP, an email unsubscribe, an operator `opt_out`) holds ALL
  * channels for that contact in that tenant until the tenant's OWN admin decides
- * (POST /api/contact-optout-reviews/:id). `overdue` is a pending review past its due date
- * (3 working days in the company's timezone); nothing reopens on its own.
+ * (POST /api/contact-optout-reviews/:id). Nothing reopens on its own.
+ *
+ * ADMIN ACTIVITY (owner ruling 2026-11-07, "Admin opened reviews"): an authorised admin GET of
+ * this list (or of one review) records today's local date for the company; refused requests
+ * record nothing. A weekday counts toward the 3-day window only with such a day, once it has
+ * ended; `overdue` = pending with qualifyingDays >= 3. A failure to record is logged and never
+ * fails the request (the window is informational: closed is the default).
  *
  * ─── AUTHORIZATION ────────────────────────────────────────────────────────
  * enforceCompanyAccess, then COMPANY_ADMIN in THIS company from the canonical tenant decision
@@ -19,11 +24,12 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { assertTenantAccess } from '../../../backend/security/TenantGuard';
 import { normalizePermissionRole, Role } from '../../../backend/services/rbacService';
-import { listOptOutReviews } from '../../../backend/services/orchestration/optOutReview';
+import { listOptOutReviews, recordReviewActivity } from '../../../backend/services/orchestration/optOutReview';
+import { logger } from '../../../backend/services/logger';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
-const STATES = ['pending', 'decided', 'all'] as const;
+const STATES = ['pending', 'decided', 'merged', 'all'] as const;
 
 /**
  * COMPANY_ADMIN in THIS company, by active membership only. The super-admin bypass is not
@@ -52,6 +58,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await isCompanyAdmin(access.userId, companyId))) {
     return res.status(403).json({ error: 'only an admin of this company reviews its opt-outs', code: 'company_admin_required' });
   }
+
+  // Authorised admin only (after the check above): today counts as an admin activity day.
+  const seen = await recordReviewActivity(companyId);
+  if (!seen.ok) logger.warn('g11_review_activity_not_recorded', { organizationId: companyId, error: seen.error ?? null });
 
   try {
     const reviews = await listOptOutReviews({ organizationId: companyId, state: state as typeof STATES[number] });

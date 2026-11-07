@@ -31,11 +31,12 @@ const mockGuard = { decision: { ok: true, access: { role: 'COMPANY_ADMIN', bypas
 jest.mock('../../security/TenantGuard', () => ({
   assertTenantAccess: jest.fn(async (i: Row) => { mockGuard.inputs.push(i); return mockGuard.decision; }),
 }));
-const mockService = { outcome: null as Row | null, decideInputs: [] as Row[] };
+const mockService = { outcome: null as Row | null, decideInputs: [] as Row[], activity: [] as string[], activityResult: { ok: true, localDate: '2026-11-09' } as Row };
 jest.mock('../../services/orchestration/optOutReview', () => ({
   listOptOutReviews: jest.fn(async () => [{ id: '00000000-0000-4000-8000-0000000000e1', state: 'pending', overdue: false }]),
   getOptOutReview: jest.fn(async () => ({ id: '00000000-0000-4000-8000-0000000000e1', state: 'pending' })),
   decideOptOutReview: jest.fn(async (i: Row) => { mockService.decideInputs.push(i); return mockService.outcome; }),
+  recordReviewActivity: jest.fn(async (org: string) => { mockService.activity.push(org); return mockService.activityResult; }),
 }));
 const mockAudit: Row[] = [];
 jest.mock('../../services/execution/executionAuditService', () => ({ recordExecutionAudit: jest.fn(async (a: Row) => { mockAudit.push(a); }) }));
@@ -70,6 +71,8 @@ beforeEach(() => {
   mockService.outcome = { ...APPLIED };
   mockService.decideInputs = [];
   mockAudit.length = 0;
+  mockService.activity = [];
+  mockService.activityResult = { ok: true, localDate: '2026-11-09' };
 });
 
 describe('who decides (owner rule 4)', () => {
@@ -136,7 +139,7 @@ describe('who decides (owner rule 4)', () => {
 describe('responses', () => {
   it.each([
     ['channel_locked', 400], ['reason_required', 400], ['unknown_channel', 400], ['invalid_channels', 400],
-    ['review_not_found', 404], ['decision_race_lost', 409], ['governance_write_failed', 503],
+    ['review_not_found', 404], ['review_merged', 409], ['decision_race_lost', 409], ['governance_write_failed', 503],
   ])('%s → %i, and nothing is audited', async (code, status) => {
     mockService.outcome = { ok: false, code, reason: 'r', ...(code === 'channel_locked' ? { channels: ['whatsapp'] } : {}) };
     const r = await decide();
@@ -168,5 +171,37 @@ describe('responses', () => {
   it('the admin lists the company\'s reviews and reads one', async () => {
     expect(await list()).toMatchObject({ status: 200, json: { reviews: [{ id: REVIEW, overdue: false }] } });
     expect(await call(reviewRoute, 'GET', { id: REVIEW, company_id: ORG })).toMatchObject({ status: 200, json: { review: { id: REVIEW } } });
+  });
+});
+
+describe('admin activity days (owner ruling 2026-11-07: "Admin opened reviews")', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { logger } = require('../../services/logger');
+
+  it('an authorised admin GET of the list and of one review records the company\'s day; a decision (POST) does not', async () => {
+    expect((await list()).status).toBe(200);
+    expect((await call(reviewRoute, 'GET', { id: REVIEW, company_id: ORG })).status).toBe(200);
+    expect((await decide()).status).toBe(200);
+    expect(mockService.activity).toEqual([ORG, ORG]);
+  });
+
+  it.each([
+    ['a non-admin member', () => { mockGuard.decision = { ok: true, access: { role: 'VIEW_ONLY', bypass: false } }; }],
+    ['the super-admin bypass', () => { mockGuard.decision = { ok: true, access: { role: null, bypass: true } }; }],
+    ['another tenant\'s admin (no membership here)', () => { mockGuard.decision = { ok: false, reason: 'NOT_A_MEMBER' }; }],
+    ['a refused company check', () => { mockAccess.companyAllowed = false; }],
+  ])('a REFUSED request records nothing: %s', async (_who, arrange) => {
+    (arrange as () => void)();
+    expect((await list()).status).toBe(403);
+    expect((await call(reviewRoute, 'GET', { id: REVIEW, company_id: ORG })).status).toBe(403);
+    expect(mockService.activity).toEqual([]);
+  });
+
+  it('a recording failure never fails the GET; it is logged', async () => {
+    mockService.activityResult = { ok: false, localDate: null, error: '08006' };
+    (logger.warn as jest.Mock).mockClear();
+    expect((await list()).status).toBe(200);
+    expect((await call(reviewRoute, 'GET', { id: REVIEW, company_id: ORG })).status).toBe(200);
+    expect(logger.warn).toHaveBeenCalledWith('g11_review_activity_not_recorded', { organizationId: ORG, error: '08006' });
   });
 });

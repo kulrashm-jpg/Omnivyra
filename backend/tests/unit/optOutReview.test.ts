@@ -17,6 +17,7 @@ type Row = Record<string, unknown>;
 const mockDb = {
   tables: {} as Record<string, Row[]>,
   failInsert: new Map<string, number>(),
+  failSelect: new Set<string>(),
   seq: 0,
   /** Every call, as `table:op:eq-columns`, so a suite can pin the order of reads and writes. */
   log: [] as string[],
@@ -44,6 +45,7 @@ const UNIQUE: Record<string, (a: Row, b: Row) => boolean> = {
     && a.channel === b.channel && a.governance_type === b.governance_type
     && (a.person_id ?? a.target_normalized) === (b.person_id ?? b.target_normalized)
     && (a.purpose_scope ?? 'all') === (b.purpose_scope ?? 'all'),
+  contact_opt_out_review_activity_days: (a, b) => a.organization_id === b.organization_id && a.local_date === b.local_date,
   contact_opt_out_reviews: (a, b) => a.state === 'pending' && b.state === 'pending' && a.organization_id === b.organization_id
     && a.anchor_kind === b.anchor_kind && a.anchor_value === b.anchor_value,
 };
@@ -53,6 +55,7 @@ const mockTable = (table: string) => {
   const exec = async () => {
     await Promise.resolve();                       // let concurrent callers interleave between calls
     mockDb.log.push(`${table}:${st.op}:${st.eqs.join(',')}`);
+    if (st.op === 'select' && mockDb.failSelect.has(table)) return { data: null, error: { code: '08006', message: 'fake outage' } };
     if (st.op === 'insert') {
       const left = mockDb.failInsert.get(table) ?? 0;
       if (left > 0) { mockDb.failInsert.set(table, left - 1); return { data: null, error: { code: '08006', message: 'fake outage' } }; }
@@ -93,7 +96,7 @@ jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => mockTable
 /* eslint-disable import/first */
 import {
   openOptOutReview, decideOptOutReview, listOptOutReviews, writeOptOutHolds, optOutReviewDueAt, isAdoptable,
-  OPT_OUT_REVIEW_SOURCE, findOptOutReviewBySourceRef,
+  OPT_OUT_REVIEW_SOURCE, findOptOutReviewBySourceRef, countQualifyingDays, recordReviewActivity,
 } from '../../services/orchestration/optOutReview';
 import * as governanceWriter from '../../services/prospectIdentity/contactGovernanceWriter';
 import { recordContactGovernance } from '../../services/prospectIdentity/contactGovernanceWriter';
@@ -150,7 +153,7 @@ async function whatsappStop(ref = 'wamid.1') {
 const decide = (reviewId: string, reopenChannels: unknown, reason: unknown = 'customer confirmed by phone') =>
   decideOptOutReview({ organizationId: ORG, reviewId, actorUserId: ADMIN, reopenChannels, reason });
 
-beforeEach(() => { mockDb.tables = {}; mockDb.failInsert = new Map(); mockDb.seq = 100; mockDb.log = []; jest.restoreAllMocks(); });
+beforeEach(() => { mockDb.tables = {}; mockDb.failInsert = new Map(); mockDb.failSelect = new Set(); mockDb.seq = 100; mockDb.log = []; jest.restoreAllMocks(); });
 
 describe('the hold (owner rule 3): immediate, every channel, every medium', () => {
   it('blocks every channel for the person, the address and the number, before anyone decides', async () => {
@@ -191,13 +194,11 @@ describe('the hold (owner rule 3): immediate, every channel, every medium', () =
 });
 
 describe('no decision (rule 5) and another tenant (rule 1)', () => {
-  it('everything stays closed past the due date; the listing calls it overdue; another tenant is unaffected', async () => {
+  it('everything stays closed past the estimated due date; with no admin activity it is never overdue; another tenant is unaffected', async () => {
     const r = await operatorOptOut();
-    const later = new Date(Date.parse(r.dueAt) + 1).toISOString();
-    const [listed] = await listOptOutReviews({ organizationId: ORG, now: later });
-    expect(listed).toMatchObject({ id: r.reviewId, state: 'pending', overdue: true });
-    expect((await listOptOutReviews({ organizationId: ORG, now: r.dueAt }))[0].overdue).toBe(true);
-    expect((await listOptOutReviews({ organizationId: ORG, now: new Date(Date.parse(r.dueAt) - 1).toISOString() }))[0].overdue).toBe(false);
+    const muchLater = new Date(Date.parse(r.dueAt) + 30 * 86_400_000).toISOString();
+    const [listed] = await listOptOutReviews({ organizationId: ORG, now: muchLater });
+    expect(listed).toMatchObject({ id: r.reviewId, state: 'pending', qualifyingDays: 0, overdue: false, activityUnreadable: false });
     expect(await openChannels()).toEqual([]);
     expect(await allowed(ORG_B, 'email', { target: EMAIL })).toBe(true);
     expect(await allowed(ORG_B, 'whatsapp', { target: PHONE })).toBe(true);
@@ -583,5 +584,102 @@ describe('due date (rule 4): 3 working days, Mon–Fri, the company timezone', (
     mockDb.tables.company_scheduler_prefs = [];
     await whatsappStop();
     expect(reviews()[1]).toMatchObject({ due_timezone: 'UTC', due_timezone_fallback: true });
+  });
+});
+
+describe('the window counts only weekdays an admin opened the reviews (owner ruling 2026-11-07: "Admin opened reviews")', () => {
+  // Opened Fri 6 Nov 2026, 10:00 UTC. Weekdays after it: Mon 9, Tue 10, Wed 11, Thu 12, Fri 13.
+  const OPENED = '2026-11-06T10:00:00.000Z';
+  const q = (activity: string[] | null, now: string, zone: string | null = 'UTC', openedAt = OPENED) =>
+    countQualifyingDays({ openedAt, zone, activity: activity === null ? null : new Set(activity), now });
+  const seen = (org: string, day: string) => {
+    (mockDb.tables.contact_opt_out_review_activity_days ??= []).push({ organization_id: org, local_date: day, first_seen_at: `${day}T09:00:00.000Z`, last_seen_at: `${day}T09:00:00.000Z` });
+  };
+
+  it('no admin activity: never overdue, however many weekdays pass', () => {
+    expect(q([], '2026-12-31T00:00:00.000Z')).toBe(0);
+  });
+
+  it('activity on 3 weekdays after opening: the 3rd counts only once it has ENDED', () => {
+    const act = ['2026-11-09', '2026-11-10', '2026-11-11'];
+    expect(q(act, '2026-11-11T23:59:59.000Z')).toBe(2);                    // day 3 still running
+    expect(q(act, '2026-11-12T00:00:00.000Z')).toBe(3);                    // day 3 has ended
+  });
+
+  it('a weekend day and the opening day do not count, even with activity', () => {
+    expect(q(['2026-11-06', '2026-11-07', '2026-11-08'], '2026-11-20T00:00:00.000Z')).toBe(0);
+  });
+
+  it('Kolkata across midnight: Fri 23:30Z opens on Sat locally; local Mon–Wed count, judged by LOCAL dates', () => {
+    const opened = '2026-11-06T23:30:00.000Z';                             // Sat 7 Nov 05:00 IST
+    const act = ['2026-11-09', '2026-11-10', '2026-11-11'];
+    expect(q(act, '2026-11-11T18:29:00.000Z', 'Asia/Kolkata', opened)).toBe(2); // Wed 23:59 IST: Wed not ended
+    expect(q(act, '2026-11-11T18:30:00.000Z', 'Asia/Kolkata', opened)).toBe(3); // Thu 00:00 IST
+    // In UTC the opening day is Fri 6 and Wed ends at 00:00Z Thu: the zone changes the answer.
+    expect(q(act, '2026-11-11T18:30:00.000Z', 'UTC', opened)).toBe(2);
+  });
+
+  it('Los Angeles: Mon 06:00Z is Sun 22:00 locally, so Mon counts once LA\'s Monday has ended', () => {
+    const opened = '2026-11-09T06:00:00.000Z';                             // Sun 8 Nov 22:00 PST
+    expect(q(['2026-11-09'], '2026-11-10T07:59:00.000Z', 'America/Los_Angeles', opened)).toBe(0);
+    expect(q(['2026-11-09'], '2026-11-10T08:00:00.000Z', 'America/Los_Angeles', opened)).toBe(1);
+  });
+
+  it('no timezone: UTC (ruled), and the activity read failing counts every ended weekday (flagged)', () => {
+    expect(q(['2026-11-09'], '2026-11-12T00:00:00.000Z', null)).toBe(1);
+    expect(q(null, '2026-11-12T00:00:00.000Z')).toBe(3);
+  });
+
+  it('the listing: overdue after 3 ended activity days; another company\'s activity has no effect', async () => {
+    const r = await openOptOutReview({ organizationId: ORG, anchor: { kind: 'person', personId: PERSON }, trigger: 'reply_opt_out',
+      holdIds: await writeOptOutHolds({ organizationId: ORG, personId: PERSON, holdSource: 'optout_review:reply_opt_out', sourceRef: 'act:1' }),
+      sourceRef: 'act:1', holdSource: 'optout_review:reply_opt_out', now: OPENED });
+    expect(r.dueAt).toBe('2026-11-11T10:00:00.000Z');                      // the stored estimate: weekdays only
+    for (const d of ['2026-11-09', '2026-11-10', '2026-11-11']) seen(ORG_B, d);
+    expect((await listOptOutReviews({ organizationId: ORG, now: '2026-11-20T00:00:00.000Z' }))[0]).toMatchObject({ qualifyingDays: 0, overdue: false });
+    for (const d of ['2026-11-09', '2026-11-11', '2026-11-13']) seen(ORG, d);
+    expect((await listOptOutReviews({ organizationId: ORG, now: '2026-11-13T12:00:00.000Z' }))[0]).toMatchObject({ qualifyingDays: 2, overdue: false });
+    expect((await listOptOutReviews({ organizationId: ORG, now: '2026-11-14T00:00:00.000Z' }))[0]).toMatchObject({ qualifyingDays: 3, overdue: true });
+  });
+
+  it('the activity read failing never blocks: the listing counts weekdays only and says so', async () => {
+    await operatorOptOut();
+    mockDb.failSelect.add('contact_opt_out_review_activity_days');
+    const [l] = await listOptOutReviews({ organizationId: ORG, now: '2099-01-01T00:00:00.000Z' });
+    expect(l).toMatchObject({ activityUnreadable: true, overdue: true });
+  });
+
+  it('recordReviewActivity: the company\'s LOCAL day, once per day (a second view moves last_seen_at), never throws', async () => {
+    (mockDb.tables.company_scheduler_prefs = [{ company_id: ORG, timezone: 'Asia/Kolkata' }]);
+    expect(await recordReviewActivity(ORG, '2026-11-06T23:30:00.000Z')).toEqual({ ok: true, localDate: '2026-11-07' });
+    expect(await recordReviewActivity(ORG, '2026-11-07T10:00:00.000Z')).toEqual({ ok: true, localDate: '2026-11-07' });
+    const rows = mockDb.tables.contact_opt_out_review_activity_days;
+    expect(rows).toEqual([expect.objectContaining({ organization_id: ORG, local_date: '2026-11-07', first_seen_at: '2026-11-06T23:30:00.000Z', last_seen_at: '2026-11-07T10:00:00.000Z' })]);
+    expect(Object.keys(rows[0]).sort()).toEqual(['first_seen_at', 'id', 'last_seen_at', 'local_date', 'organization_id']);  // `id` is the fake's
+    mockDb.failInsert.set('contact_opt_out_review_activity_days', 1);
+    await expect(recordReviewActivity(ORG, '2026-11-09T10:00:00.000Z')).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe("'merged' (20270127000003): terminal, not pending, never decided", () => {
+  it('decide refuses a merged review with review_merged and changes nothing; the listing never shows it as pending or overdue', async () => {
+    const t = await whatsappStop('wamid.m');
+    const r = await operatorOptOut('run-m:1');
+    // What the re-anchor function leaves behind (it runs in the database; here the row is set directly).
+    Object.assign(reviews().find((x) => x.id === r.reviewId)!, { state: 'merged', merged_into: t.reviewId, merged_at: '2026-11-07T00:00:00.000Z' });
+    const before = JSON.stringify(gov());
+    expect(await decide(r.reviewId, ['email'])).toMatchObject({ ok: false, code: 'review_merged' });
+    expect(JSON.stringify(gov())).toBe(before);
+    expect((await listOptOutReviews({ organizationId: ORG, now: '2099-01-01T00:00:00.000Z' })).map((x) => x.id)).toEqual([t.reviewId]);
+    const [m] = await listOptOutReviews({ organizationId: ORG, state: 'merged', now: '2099-01-01T00:00:00.000Z' });
+    expect(m).toMatchObject({ id: r.reviewId, state: 'merged', mergedInto: t.reviewId, overdue: false });
+  });
+
+  it('findOptOutReviewBySourceRef prefers a pending review over a merged one carrying the same ref', async () => {
+    const t = await whatsappStop('wamid.m2');
+    const r = await operatorOptOut('run-m:2');
+    Object.assign(reviews().find((x) => x.id === r.reviewId)!, { state: 'merged', merged_into: t.reviewId, merged_at: '2026-11-07T00:00:00.000Z' });
+    (reviews().find((x) => x.id === t.reviewId)!.source_refs as string[]).push('run-m:2');   // the join unions the refs
+    expect(await findOptOutReviewBySourceRef({ organizationId: ORG, sourceRef: 'run-m:2' })).toMatchObject({ id: t.reviewId, state: 'pending' });
   });
 });

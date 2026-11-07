@@ -156,9 +156,13 @@ function wallParts(t: number, zone: string) {
 }
 
 /**
- * The review deadline: the same local wall-clock time, `REVIEW_WORKING_DAYS` Mon–Fri days
- * after the opening, in the company's zone. Fri → Wed; Sat or Sun → Wed. With no usable zone
- * the days are counted in UTC and the fallback is flagged. Holidays are not known (OPEN).
+ * The EARLIEST POSSIBLE deadline, stored as due_at at opening: an ESTIMATE. It is the same local
+ * wall-clock time `REVIEW_WORKING_DAYS` Mon–Fri days after the opening, in the company's zone
+ * (Fri → Wed; Sat or Sun → Wed), as if an admin opened the reviews on every one of those days.
+ * Whether a review is actually overdue is decided at listing time by `countQualifyingDays`: a
+ * weekday counts only when an admin opened the reviews that day (owner ruling 2026-11-07). With no
+ * usable zone the days are counted in UTC and the fallback is flagged (RULED: "time zone should be
+ * UTC if not set").
  */
 export function optOutReviewDueAt(openedAt: string, zone: string | null | undefined): { dueAt: string; timezone: string; fallback: boolean } {
   const t = Date.parse(openedAt);
@@ -192,6 +196,86 @@ async function companyZone(organizationId: string): Promise<string | null> {
   }
 }
 
+
+// ── admin activity days: which weekdays count toward the window ─────────────────────
+//
+// Owner ruling (2026-11-07): "5 days a week and in that can't we check through session login if
+// they logged in during those 5 days to meet our condition"; the variant chosen: "Admin opened
+// reviews"; and "No, activity is enough". A weekday counts toward the 3-day window ONLY when a
+// company admin opened the opt-out reviews that day. Login itself is not read: there is no
+// per-day login history, and login code is another track's. The two admin GET routes record the
+// day (`recordReviewActivity`); the listing counts (`countQualifyingDays`).
+
+export const REVIEW_ACTIVITY_TABLE = 'contact_opt_out_review_activity_days';
+
+/** The LOCAL calendar date (YYYY-MM-DD) of instant `t` in `zone`. */
+function localDate(t: number, zone: string): string {
+  const w = wallParts(t, zone);
+  return new Date(Date.UTC(w.y, w.mo, w.day)).toISOString().slice(0, 10);
+}
+
+/**
+ * Record that an admin of this company opened the reviews today (the company's local date; UTC
+ * when no zone is set). Insert, or on the existing row move last_seen_at. NEVER throws: the
+ * window is informational, so the caller logs `ok: false` and serves the request anyway.
+ */
+export async function recordReviewActivity(organizationId: string, now?: string): Promise<{ ok: boolean; localDate: string | null; error?: string }> {
+  try {
+    const at = now ?? new Date().toISOString();
+    const zone = await companyZone(organizationId);
+    const day = localDate(Date.parse(at), isValidZone(zone) ? zone : 'UTC');
+    const ins = await ownedDbTable(REVIEW_ACTIVITY_TABLE)
+      .insert({ organization_id: organizationId, local_date: day, first_seen_at: at, last_seen_at: at })
+      .select('local_date');
+    if (!ins.error) return { ok: true, localDate: day };
+    if (errCode(ins.error) !== '23505') return { ok: false, localDate: day, error: errCode(ins.error) ?? 'insert_failed' };
+    const upd = await ownedDbTable(REVIEW_ACTIVITY_TABLE)
+      .update({ last_seen_at: at })
+      .eq('organization_id', organizationId)               // TENANT FIRST
+      .eq('local_date', day)
+      .select('local_date');
+    return upd.error ? { ok: false, localDate: day, error: errCode(upd.error) ?? 'update_failed' } : { ok: true, localDate: day };
+  } catch (e) {
+    return { ok: false, localDate: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** This company's activity days. Never throws: unreadable is `ok: false` (count weekdays only). */
+export async function loadReviewActivityDays(organizationId: string): Promise<{ ok: boolean; days: Set<string> }> {
+  try {
+    // ::text keeps the calendar date a string end to end (a driver Date would carry a host offset).
+    const res = await ownedDbTable(REVIEW_ACTIVITY_TABLE).select('organization_id, local_date::text')
+      .eq('organization_id', organizationId);               // TENANT FIRST
+    if (res.error) return { ok: false, days: new Set() };
+    const rows = (res.data ?? []) as unknown as Array<Record<string, unknown>>;
+    return {
+      ok: true,
+      days: new Set(rows.filter((r) => String(r.organization_id) === organizationId).map((r) => String(r.local_date).slice(0, 10))),
+    };
+  } catch {
+    return { ok: false, days: new Set() };
+  }
+}
+
+/**
+ * The qualifying days of a review at `now`: weekdays (Mon–Fri) strictly AFTER the opening's local
+ * date, that have ENDED (before `now`'s local date, so an admin is never overdue the moment they
+ * open the list on day 3), and on which an admin opened the reviews. `activity` null means the
+ * record could not be read: every ended weekday counts (weekdays only), and the caller flags it.
+ */
+export function countQualifyingDays(input: { openedAt: string; zone: string | null | undefined; activity: ReadonlySet<string> | null; now: string }): number {
+  const z = isValidZone(input.zone) ? String(input.zone) : 'UTC';
+  const opened = localDate(Date.parse(input.openedAt), z);
+  const today = localDate(Date.parse(input.now), z);
+  let count = 0;
+  for (let d = Date.parse(`${opened}T00:00:00Z`) + DAY_MS; ; d += DAY_MS) {
+    const day = new Date(d).toISOString().slice(0, 10);
+    if (day >= today) break;                                // only ENDED days
+    const weekday = new Date(d).getUTCDay();
+    if (weekday >= 1 && weekday <= 5 && (input.activity === null || input.activity.has(day))) count += 1;
+  }
+  return count;
+}
 // ── holds ───────────────────────────────────────────────────────────────────────────
 
 interface HoldRow {
@@ -299,7 +383,8 @@ export interface OptOutReview {
   dueAt: string;
   dueTimezone: string;
   dueTimezoneFallback: boolean;
-  state: 'pending' | 'decided';
+  /** 'merged' (20270127000003): moved into `mergedInto` at erasure; terminal, never decided. */
+  state: 'pending' | 'decided' | 'merged';
   decision: 'reopen' | 'keep_closed' | null;
   reopenedChannels: string[];
   closedChannels: string[];
@@ -307,11 +392,13 @@ export interface OptOutReview {
   decidedAt: string | null;
   reason: string | null;
   revision: number;
+  mergedInto: string | null;
+  mergedAt: string | null;
 }
 
 const REVIEW_COLUMNS = 'id, organization_id, anchor_kind, anchor_channel, anchor_value, person_id, triggers, locked_channels, '
   + 'adopted_hold_ids, pre_existing_hold_ids, trigger_record_ids, closing_record_ids, source_refs, opened_at, due_at, due_timezone, '
-  + 'due_timezone_fallback, state, decision, reopened_channels, closed_channels, decided_by, decided_at, reason, revision';
+  + 'due_timezone_fallback, state, decision, reopened_channels, closed_channels, decided_by, decided_at, reason, revision, merged_into, merged_at';
 
 const iso = (v: unknown): string => new Date(String(v)).toISOString();
 
@@ -341,6 +428,8 @@ const toReview = (r: Record<string, unknown>): OptOutReview => ({
   decidedAt: r.decided_at == null ? null : iso(r.decided_at),
   reason: r.reason == null ? null : String(r.reason),
   revision: Number(r.revision),
+  mergedInto: r.merged_into == null ? null : String(r.merged_into),
+  mergedAt: r.merged_at == null ? null : iso(r.merged_at),
 });
 
 /** One review in this tenant, or null. Throws when unreadable. */
@@ -396,7 +485,8 @@ const references = (r: OptOutReview, id: string): boolean => r.adoptedHoldIds.in
 
 /**
  * F3 — the review that already carries this trigger's source ref, so a producer can tell a
- * redelivered trigger from a new one. Tenant first. Several: pending first, then the latest.
+ * redelivered trigger from a new one. Tenant first. Several: pending first, then decided, then
+ * merged (a merged review's refs live on in the review it was merged into); then the latest.
  *
  * Read as organization_id + a filter on source_refs in the service (no GIN index): reviews are
  * few per tenant, the (organization_id, state, due_at) index serves the tenant predicate, and
@@ -410,7 +500,8 @@ export async function findOptOutReviewBySourceRef(input: { organizationId: strin
   if (res.error) fail('review_unreadable', 'the reviews could not be read');
   const hits = ((res.data ?? []) as unknown as Array<Record<string, unknown>>).map(toReview)
     .filter((r) => r.organizationId === input.organizationId && r.sourceRefs.includes(ref));
-  hits.sort((a, b) => (a.state === b.state ? Date.parse(b.openedAt) - Date.parse(a.openedAt) : a.state === 'pending' ? -1 : 1));
+  const rank = { pending: 0, decided: 1, merged: 2 } as const;
+  hits.sort((a, b) => (a.state === b.state ? Date.parse(b.openedAt) - Date.parse(a.openedAt) : rank[a.state] - rank[b.state]));
   return hits[0] ?? null;
 }
 
@@ -543,11 +634,22 @@ export async function openOptOutReview(input: OpenOptOutReviewInput): Promise<Op
 
 // ── list ────────────────────────────────────────────────────────────────────────────
 
-export type ListedOptOutReview = OptOutReview & { overdue: boolean };
+export type ListedOptOutReview = OptOutReview & {
+  /** Ended weekdays after the opening on which an admin opened the reviews (`countQualifyingDays`). */
+  qualifyingDays: number;
+  /** Pending with `qualifyingDays >= REVIEW_WORKING_DAYS`. */
+  overdue: boolean;
+  /** True when the activity record could not be read: `qualifyingDays` then counts every ended weekday. */
+  activityUnreadable: boolean;
+};
 
-/** A tenant's reviews, pending first by due date; `overdue` is pending past its due date. */
+/**
+ * A tenant's reviews, pending first by stored (estimated) due date. `qualifyingDays` and
+ * `overdue` are computed NOW, from opened_at, the review's zone and the company's admin activity
+ * days. Nothing is written by a listing; the routes record the activity.
+ */
 export async function listOptOutReviews(input: {
-  organizationId: string; state?: 'pending' | 'decided' | 'all'; now?: string; limit?: number;
+  organizationId: string; state?: 'pending' | 'decided' | 'merged' | 'all'; now?: string; limit?: number;
 }): Promise<ListedOptOutReview[]> {
   const state = input.state ?? 'pending';
   let q = ownedDbTable(OPT_OUT_REVIEWS_TABLE).select(REVIEW_COLUMNS).eq('organization_id', input.organizationId);
@@ -555,16 +657,21 @@ export async function listOptOutReviews(input: {
   const res = await q.order('state', { ascending: false }).order('due_at', { ascending: true })
     .limit(Math.min(Math.max(Math.trunc(input.limit ?? 200), 1), 500));
   if (res.error) fail('review_unreadable', 'the reviews could not be read');
-  const nowMs = Date.parse(input.now ?? new Date().toISOString());
-  return ((res.data ?? []) as unknown as Array<Record<string, unknown>>).map(toReview)
-    .map((r) => ({ ...r, overdue: r.state === 'pending' && Date.parse(r.dueAt) <= nowMs }));
+  const now = input.now ?? new Date().toISOString();
+  const activity = await loadReviewActivityDays(input.organizationId);
+  return ((res.data ?? []) as unknown as Array<Record<string, unknown>>).map(toReview).map((r) => {
+    const qualifyingDays = countQualifyingDays({
+      openedAt: r.openedAt, zone: r.dueTimezoneFallback ? null : r.dueTimezone, activity: activity.ok ? activity.days : null, now,
+    });
+    return { ...r, qualifyingDays, overdue: r.state === 'pending' && qualifyingDays >= REVIEW_WORKING_DAYS, activityUnreadable: !activity.ok };
+  });
 }
 
 // ── decide ──────────────────────────────────────────────────────────────────────────
 
 export type DecideRefusal =
   | 'actor_required' | 'reason_required' | 'invalid_channels' | 'unknown_channel' | 'channel_locked'
-  | 'review_not_found' | 'decision_race_lost' | 'governance_write_failed' | 'reconcile_incomplete';
+  | 'review_not_found' | 'review_merged' | 'decision_race_lost' | 'governance_write_failed' | 'reconcile_incomplete';
 
 export type DecideOptOutReviewOutcome =
   | {
@@ -629,6 +736,11 @@ export async function decideOptOutReview(input: {
     return refuse('governance_write_failed', `the review could not be read (${errCode(e) ?? 'error'})`);
   }
   if (review === null) return refuse('review_not_found', 'no such review in this company');
+  // A merged review (moved at erasure) is terminal: its holds and triggers now belong to the
+  // review it was merged into, which is the one to decide.
+  if (review.state === 'merged') {
+    return refuse('review_merged', `this review was merged into ${review.mergedInto ?? 'another review'} at erasure; decide that review`);
+  }
   const lockedAsked = asked.filter((c) => review!.lockedChannels.includes(c));
   if (lockedAsked.length) {
     return refuse('channel_locked', 'a STOP or an unsubscribe keeps that channel closed; only the person can undo it', lockedAsked);

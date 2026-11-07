@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * G-11 — a company admin decides one opt-out review.
  *
- *   GET  /api/contact-optout-reviews/:id?company_id=<uuid>   -> { review }
+ *   GET  /api/contact-optout-reviews/:id?company_id=<uuid>   -> { review }   (records an admin activity day)
  *   POST /api/contact-optout-reviews/:id?company_id=<uuid>   (or company_id in the body)
  *        { reopenChannels: ('email' | 'phone' | 'whatsapp')[], reason }
  *        -> { decision: { reviewId, decision, reopenedChannels, closedChannels, revokedIds,
@@ -16,7 +16,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * Refusals: 400 bad request / `reason_required` / `unknown_channel` / `channel_locked`;
  * 403 not an admin of this company (a super-admin bypass included); 404 no such review in
- * this company; 409 `decision_race_lost`; 503 `governance_write_failed` (retryable; nothing
+ * this company; 409 `decision_race_lost`, `review_merged` (moved at erasure: decide the review it
+ * was merged into); 503 `governance_write_failed` (retryable; nothing
  * was reopened that was not closed first); 503 `reconcile_incomplete` (retryable: holds were
  * revoked and one owed to another pending review is not yet restored; retry the decision, and
  * its reconcile restores it; audited as `optout_review_reconcile_incomplete`).
@@ -38,7 +39,8 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { assertTenantAccess } from '../../../backend/security/TenantGuard';
 import { normalizePermissionRole, Role } from '../../../backend/services/rbacService';
 import { recordExecutionAudit } from '../../../backend/services/execution/executionAuditService';
-import { decideOptOutReview, getOptOutReview } from '../../../backend/services/orchestration/optOutReview';
+import { decideOptOutReview, getOptOutReview, recordReviewActivity } from '../../../backend/services/orchestration/optOutReview';
+import { logger } from '../../../backend/services/logger';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -53,7 +55,7 @@ async function isCompanyAdmin(userId: string, companyId: string): Promise<boolea
 
 const STATUS: Record<string, number> = {
   actor_required: 401, review_not_found: 404, decision_race_lost: 409, governance_write_failed: 503,
-  reconcile_incomplete: 503,
+  reconcile_incomplete: 503, review_merged: 409,
 };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -75,6 +77,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'GET') {
+    // Authorised admin only: opening one review is admin activity too (never fails the request).
+    const seen = await recordReviewActivity(companyId);
+    if (!seen.ok) logger.warn('g11_review_activity_not_recorded', { organizationId: companyId, error: seen.error ?? null });
     try {
       const review = await getOptOutReview(companyId, reviewId);
       if (!review) return res.status(404).json({ error: 'no such review', code: 'review_not_found' });
