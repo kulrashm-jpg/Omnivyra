@@ -103,7 +103,7 @@ If 2, 3 or 4 fails, the answer is 503 `governance_write_failed` and the run stay
   - A trigger after a decision opens a NEW review.
   - Joins and decisions move the row by compare-and-set on `revision`.
 - **Locked channels.** `whatsapp_stop` locks whatsapp, `email_unsubscribe` locks email, `reply_opt_out` locks none. The STOP or unsubscribe record itself (`trigger_record_ids`) is never revoked.
-- **The decision.** `GET /api/contact-optout-reviews?company_id=` lists the reviews, pending first, with `overdue`. `GET|POST /api/contact-optout-reviews/:id` reads one, or decides it with `{ reopenChannels, reason }`.
+- **The decision.** `GET /api/contact-optout-reviews?company_id=` lists the reviews, pending first, with `qualifyingDays`, `overdue` and `activityUnreadable` (see Due date and overdue); both admin GETs record the day's admin activity. `GET|POST /api/contact-optout-reviews/:id` reads one, or decides it with `{ reopenChannels, reason }`.
   - **Guard:** `enforceCompanyAccess`, then COMPANY_ADMIN in that company from `assertTenantAccess` with `noPlatformBypass` (a bypass grant is refused again). The actor is the authenticated principal.
   - **The order, so there is never a gap:**
     1. CLOSE FIRST. Every known channel that stays closed gets a channel-scoped `unsubscribe` on every anchor of the review: its own, its adopted holds' AND its pre-existing holds' (F2). The source is `manual:optout_review`, which is unprefixed and so never adoptable. A close from an earlier, lost attempt answers `already_present`, is recognised by its `evidence.review_id`, and stays the review's own.
@@ -116,13 +116,44 @@ If 2, 3 or 4 fails, the answer is 503 `governance_write_failed` and the run stay
   - **`reconcile_incomplete` (503, retryable, Outreach m1):** holds were revoked but one owed to another pending review could not yet be reinstated. The admin retries the decision; its reconcile restores the hold from `adoptedHoldIds`. The partly applied decision is audited as `optout_review_reconcile_incomplete`.
   - **Refusals:** 400 `channel_locked` (with the channels), `reason_required`, `unknown_channel`, `invalid_channels`; 403 `company_admin_required`; 404 `review_not_found`; 409 `decision_race_lost`; 503 `governance_write_failed`.
   - A decided review may be decided again (rule 6).
-- **Due date.** `due_at` is the same local time 3 Mon–Fri days later in `company_scheduler_prefs.timezone`: Fri → Wed, Sat/Sun → Wed. With no usable zone, UTC is used and `due_timezone_fallback` is set.
+- **Due date and overdue (RULED, 2026-11-07).**
+  - **The rule.** In the owner's words: "5 days a week and in that can't we check through session login if they logged in during those 5 days to meet our condition". The variant chosen was "Admin opened reviews". Asked whether anything beyond activity is needed: "No, activity is enough".
+  - **What counts.** A weekday (Mon–Fri, in the company's timezone) counts toward the 3-day window ONLY if a COMPANY_ADMIN of that company opened the opt-out reviews that day, the list or one review. A day with no admin activity simply does not count. There is no holiday list.
+  - **Why not login.** Login itself is not read: there is no per-day login history to read, and login code belongs to another track.
+  - **Recording.** Each authorised admin GET of `/api/contact-optout-reviews` or `/api/contact-optout-reviews/:id` records the company's local day in `contact_opt_out_review_activity_days` (migration `20270127000002`). It inserts the day, or moves `last_seen_at` on the existing row.
+    - The record holds organization, local date, first and last seen: no user id, nothing to erase.
+    - A refused request (non-admin, another tenant, bypass) records nothing.
+    - A recording failure is logged and never fails the GET.
+  - **Overdue,** computed at listing time.
+    - A qualifying day is a weekday strictly AFTER the opening's local date, that has an activity row, and that has ENDED; so the admin is not overdue the moment they open the list on day 3.
+    - `overdue` = pending with `qualifyingDays` ≥ 3. The listing returns `qualifyingDays`, `overdue` and `activityUnreadable`.
+    - If the activity record cannot be read, every ended weekday counts (weekdays only) and `activityUnreadable` is set. It never blocks a hold or a decision, since closed is the default.
+  - **The stored `due_at`** is an ESTIMATE: the earliest possible deadline (the same local time 3 Mon–Fri days after the opening, as if an admin opened the reviews every day). Fri → Wed, Sat/Sun → Wed.
+  - **Timezone (RULED, "time zone should be UTC if not set").** `company_scheduler_prefs.timezone`, else UTC, with `due_timezone_fallback` set. The owner's answer covered the first three questions together: "yes to first three and time zone should be UTC if not set".
+  - **Days are counted in the review's stored zone,** while activity days are recorded in the company's zone at the time of viewing. If a company changes its timezone, a day near midnight could be attributed to an adjacent date; this is accepted for an informational window.
 - **OPEN:**
-  - (1) Holidays are not known; the UTC fallback stands until the owner rules on it.
+  - (1) RULED (no longer open): holidays are replaced by admin activity days, and the timezone falls back to UTC; see "Due date and overdue".
   - (2) **Two reviews for one person.** A STOP from an unresolved number gives a target-anchored review, and an operator `opt_out` for the same person gives a person-anchored one, until identity resolution links them. This is safe, because closed wins.
   - (3) **wa_id vs stored phone:** a `+` prefix difference that `normalizePhone` keeps. Pre-existing.
   - (4) **PI closure is not written (P-1).** Enrolment still creates a run, which the hold then refuses.
-  - (5) **Erasure.** A target anchor holds no person (CHECK `contact_opt_out_reviews_target_has_no_person`, PI F-2), so a person delete can never abort on this table. A target anchor's canonical value is KEPT (PI ruling; erasure policy KEEP list). A PERSON anchor is tombstoned by the table's own guard when the foreign key clears `person_id`: `anchor_value` becomes `'erased:' || <the review's own id>`, never the person's. The prefix can never equal a canonical target, and the per-row id keeps the pending unique index collision-free across erasures. The review keeps its state. **OPEN, cross-track (erasure owner):** re-anchor a PENDING person review onto its target(s) at erasure, joining on 23505 as the open path does, so an admin can still decide it.
+  - (5) **Erasure.** A target anchor holds no person (CHECK `contact_opt_out_reviews_target_has_no_person`, PI F-2), so a person delete can never abort on this table. A target anchor's canonical value is KEPT (PI ruling; erasure policy KEEP list). A PERSON anchor is tombstoned by the table's own guard when the foreign key clears `person_id`: `anchor_value` becomes `'erased:' || <the review's own id>`, never the person's. The prefix can never equal a canonical target, and the per-row id keeps the pending unique index collision-free across erasures. The review keeps its state.
+  - (5a) **Re-anchor at erasure: BUILT on our side (owner-approved; interface by PI; PI will call it from personErasure, in its own files).**
+    - **The function.** `public.g11_reanchor_pending_opt_out_reviews(p_organization_id, p_person_id, p_targets jsonb)` RETURNS `(review_id, disposition, onto_review_id)` (migration `20270127000003`).
+      - SECURITY DEFINER with `search_path` pinned; EXECUTE goes only to service_role.
+      - Called BEFORE the person delete, with the person's CANONICAL targets `[{"channel":"email"|"phone"|"whatsapp","value":"…"}]`.
+    - **What it moves.** Each PENDING person review of that person moves onto the FIRST applicable target, in the order email, phone, whatsapp (the first listed within a channel). Decided, tombstoned and merged rows are untouched.
+      - `re_anchored`: the row becomes target-anchored, with person_id NULL.
+      - `merged`: if a pending review already holds that target, the row JOINS it (triggers, locks, adopted and pre-existing holds, trigger records and source refs unioned; its revision bumped) and the person review becomes **`merged`**.
+      - `no_target`: with no targets the row is left for the FK tombstone. A target is never invented.
+    - **Failure.** It RAISES on any failure: a person outside the organization, malformed targets, or a source ref carrying the person.
+    - **Idempotent.** A second call with the same inputs writes nothing and returns the same dispositions. It reads back a ledger, `contact_opt_out_review_reanchors`, keyed by the person with ON DELETE CASCADE from unified_persons, so the ledger goes with the person and no person uuid survives on any row.
+      - **The boundary: idempotency holds until the person delete.** A retried, failed erasure (the person still exists) sees the ledger and gets exactly the same set, each review once. A successful erasure deletes the person and the CASCADE removes the ledger with them, which is also why its person_id is not a residual; a call after that RAISES, because the person is no longer in the organization.
+      - A call that raises part-way leaves nothing (one statement), so its retry starts clean.
+      - One call moves at most one pending person review (one pending review per anchor), so a call returns that review plus what earlier calls for the person recorded. `no_target` (empty targets) and `re_anchored`/`merged` (targets given) therefore never meet in one call.
+    - **`merged`** is a third review state: terminal, reachable only through the function (the guard admits it only under the function's transaction-local flag), carrying `merged_into` (same organization, by FK) and `merged_at`, with NO decision.
+      - Decide refuses it with 409 `review_merged`; the review it was merged into is the one to decide.
+      - The listing never shows it as pending or overdue (`state=merged` lists them).
+      - findOptOutReviewBySourceRef prefers pending, then decided, then merged.
   - (6) **The decide/join race is not one transaction.** A join between a decision's claim and its revoke is repaired by the reconcile step (F1, tested). A revoke between a producer's hold write and its open is caught by the open's post-join/insert `hold_revoked` check, and the producer retries with a fresh hold (tested).
   - (7) **A webhook redelivered after a decision** re-closes the contact and opens a new review. That is safe, and producers can now skip it with `findOptOutReviewBySourceRef` (F3).
   - (7a) **Outreach m2:** `findOptOutReviewBySourceRef` has no row limit and no GIN index on `source_refs`. A miss only re-holds the contact (a new review), which is safe. Pair a row limit with the GIN index later.
