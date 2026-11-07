@@ -63,7 +63,7 @@ Owner rules (2026-11-07):
 5. **No decision:** every medium stays closed. Closed is the default, so no job runs.
 6. **After the window** an admin may still reopen.
 
-Amendment (received via Outreach; flagged to the owner for confirmation): a STOP or an unsubscribe keeps THAT channel closed for good, and only the person undoes it through the existing opt-in paths; after an operator `opt_out` the admin may reopen any channel.
+Amendment (confirmed by the owner 2026-11-07: "after a STOP or unsubscribe, that channel stays closed for good; for given contact............yes, a new email unsubscribe closes email permanently and holds the other channels for admin review."): a STOP or an unsubscribe keeps THAT channel closed for good, and only the person undoes it through the existing opt-in paths; after an operator `opt_out` the admin may reopen any channel.
 
 The evaluation, in this order:
 - **1. The person.** `loadIndividualFacts` resolves the person; with no person the answer is 409 `person_unknown`.
@@ -127,7 +127,7 @@ If 2, 3 or 4 fails, the answer is 503 `governance_write_failed` and the run stay
   - (7) **A webhook redelivered after a decision** re-closes the contact and opens a new review. That is safe, and producers can now skip it with `findOptOutReviewBySourceRef` (F3).
   - (7a) **Outreach m2:** `findOptOutReviewBySourceRef` has no row limit and no GIN index on `source_refs`. A miss only re-holds the contact (a new review), which is safe. Pair a row limit with the GIN index later.
   - (8) **The schema-parity verifier** does not yet list the table, as with `20270127000000`.
-  - (9) **The amendment** (locked channels) awaits owner confirmation.
+  - (9) ~~The amendment awaits owner confirmation~~: CONFIRMED by the owner 2026-11-07, including that a new email unsubscribe closes email permanently and holds the other channels for admin review.
 - **Scope limit, unchanged:** WhatsApp broadcast recipients are matched by number. The number hold covers them now, wherever the number is known.
 
 ## 4. O2-F1: every resume moves a run only from `paused`
