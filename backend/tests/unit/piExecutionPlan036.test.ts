@@ -542,7 +542,7 @@ describe('036 — frozen artefacts are untouched', () => {
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('11c789b7c6f1227e'); // RE-PINNED 2026-11-06 (Prompt 5): resumes move a run only from paused (O2-F1); PATCH { evaluation } records a person's reply evaluation
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('4616088fd7c2a8d2'); // RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
   });
 
   it('034 canonical invocation route is byte-identical at its post-port baseline', () => {

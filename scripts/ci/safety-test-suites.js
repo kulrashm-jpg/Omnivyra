@@ -168,6 +168,11 @@ const SAFETY_SUITE_REGISTRY = [
   // Prompt 5 producer compatibility: real SES, WhatsApp and operator producers into the
   // Orchestration readers (STOP stays unsubscribed, operator replied stays replied).
   'backend/tests/unit/orch_c5_producer_compat.test.ts',
+  // G-11: the opt-out hold and its company-admin review (canonical `*` holds, adoption by
+  // prefixed source, one pending review per anchor, close-first decisions, locked channels,
+  // working-day due date) and its admin routes (COMPANY_ADMIN of that company, no bypass).
+  'backend/tests/unit/optOutReview.test.ts',
+  'backend/tests/unit/optOutReviewRoute.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
