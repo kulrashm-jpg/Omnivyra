@@ -57,6 +57,7 @@ jest.mock('../../security/requireCapability', () => ({
   }),
 }));
 const mockExit = jest.fn(async () => {
+  mockCalls.push('exit');
   mockDb.instances[0].lifecycle_state = 'cancelled';
   return 2;
 });
@@ -70,7 +71,32 @@ jest.mock('../../services/workflowExecution/stepProgressionStore', () => ({
   listProgressionSteps: jest.fn(async () => [{ ...mockStep }]),
   deferStepUntil: jest.fn(async (i: { notBefore: string }) => { mockStep.notBefore = i.notBefore; return { ...mockStep }; }),
 }));
-jest.mock('../../services/orchestration/individualIntelligence', () => ({ loadIndividualFacts: jest.fn(async () => ({ personId: null, personTimezone: null, gaps: [], facts: {} })) }));
+const mockFacts = { personId: null as string | null, contacts: { email: 'Ana@Example.test', phone: '+44 7700 900123' } as { email: string | null; phone: string | null } | null };
+jest.mock('../../services/orchestration/individualIntelligence', () => ({
+  loadIndividualFacts: jest.fn(async () => ({ personId: mockFacts.personId, personTimezone: null, gaps: [], facts: {} })),
+  durableIntelligencePort: { readPersonContacts: jest.fn(async () => mockFacts.contacts) },
+}));
+const mockCalls: string[] = [];
+const mockGovernance = { fail: false, written: [] as Row[] };
+jest.mock('../../services/prospectIdentity/contactGovernanceWriter', () => ({
+  recordContactGovernance: jest.fn(async (i: Row) => {
+    mockCalls.push('governance');
+    if (mockGovernance.fail) throw Object.assign(new Error('write refused'), { code: '57014' });
+    mockGovernance.written.push(i);
+    return { id: `gov-${mockGovernance.written.length}`, outcome: 'created' };
+  }),
+}));
+// G-11: the hold writer is the real one (over the writer double above); the review open is a double.
+const mockReview = { fail: false, inputs: [] as Row[] };
+jest.mock('../../services/orchestration/optOutReview', () => ({
+  ...jest.requireActual('../../services/orchestration/optOutReview'),
+  openOptOutReview: jest.fn(async (i: Row) => {
+    mockCalls.push('review');
+    if (mockReview.fail) throw Object.assign(new Error('review store down'), { code: 'review_write_failed' });
+    mockReview.inputs.push(i);
+    return { reviewId: 'rev-1', outcome: 'opened', dueAt: '2026-11-11T10:00:00.000Z' };
+  }),
+}));
 jest.mock('../../services/orchestration/journeyGovernance', () => ({ channelRefusal: jest.fn(async () => null) }));
 jest.mock('../../services/orchestration/journeyResponses', () => ({
   REPLY_AWAITING_EVALUATION: 'reply_awaiting_evaluation',
@@ -108,6 +134,13 @@ beforeEach(() => {
   mockDb.failInsert = false;
   mockStep.notBefore = null;
   mockExit.mockClear();
+  mockFacts.personId = null;
+  mockFacts.contacts = { email: 'Ana@Example.test', phone: '+44 7700 900123' };
+  mockReview.fail = false;
+  mockReview.inputs = [];
+  mockCalls.length = 0;
+  mockGovernance.fail = false;
+  mockGovernance.written = [];
   mockDb.instances = [{
     id: RUN, organization_id: ORG, campaign_id: 'c', workflow_id: 'w', workflow_version_id: 'v', target_id: null,
     subject_kind: 'prospect', subject_id: 'p', lifecycle_state: 'paused', created_at: 't0', updated_at: 't0',
@@ -235,12 +268,103 @@ describe('awaitingReply: the latest suspension decides', () => {
   });
 });
 
+describe('opt_out (owner decision G-11): a free-text opt-out is never contacted again', () => {
+  const PERSON = '00000000-0000-4000-8000-0000000000f1';
+
+  const HOLD = { organizationId: ORG, governanceType: 'unsubscribe', channel: '*', source: 'optout_review:reply_opt_out' };
+  const REF = `${RUN}:${KEY}`;
+
+  it('writes the all-channel holds on the person, the CANONICAL address and number FIRST, opens the review, then ends the run', async () => {
+    mockFacts.personId = PERSON;
+    const r = await patch({ evaluation: 'opt_out' });
+    expect(r.status).toBe(200);
+    expect(mockCalls).toEqual(['governance', 'governance', 'governance', 'review', 'exit']);
+    expect(mockGovernance.written).toEqual([
+      expect.objectContaining({ ...HOLD, personId: PERSON }),
+      expect.objectContaining({ ...HOLD, target: 'ana@example.test' }),
+      expect.objectContaining({ ...HOLD, target: '+447700900123' }),
+    ]);
+    for (const w of mockGovernance.written) {
+      expect(w).not.toHaveProperty('purposeScope');
+      expect(w).not.toHaveProperty('sourceRecordId');            // an LI-2 foreign key: the ref lives in evidence
+      expect(w.evidence).toEqual({ actor: ACTOR, reason: 'free_text_opt_out', reply: KEY, executionInstanceId: RUN, source_ref: REF });
+    }
+    expect(mockReview.inputs).toEqual([{
+      organizationId: ORG, anchor: { kind: 'person', personId: PERSON }, trigger: 'reply_opt_out',
+      holdIds: ['gov-1', 'gov-2', 'gov-3'], sourceRef: REF, holdSource: 'optout_review:reply_opt_out', now: undefined,
+    }]);
+    expect(state()).toBe('cancelled');
+    const [d] = newDecisions();
+    expect(d).toMatchObject({ decision: 'exited', outcome: 'unsubscribed' });
+    expect(d.reasons).toEqual([`actor:${ACTOR}`, 'evaluation:opt_out', `reply:${KEY}`, 'governance:gov-1', 'governance:gov-2', 'governance:gov-3', 'optout_review:rev-1']);
+  });
+
+  it('a person with no known address or number: the person hold alone, then the review', async () => {
+    mockFacts.personId = PERSON;
+    mockFacts.contacts = { email: null, phone: null };
+    expect((await patch({ evaluation: 'opt_out' })).status).toBe(200);
+    expect(mockGovernance.written).toEqual([expect.objectContaining({ ...HOLD, personId: PERSON })]);
+    expect(mockCalls).toEqual(['governance', 'review', 'exit']);
+  });
+
+  it('no person behind the run: 409 person_unknown, nothing written, the run stays paused', async () => {
+    const r = await patch({ evaluation: 'opt_out' });
+    expect(r).toMatchObject({ status: 409, json: { code: 'person_unknown' } });
+    expect(mockCalls).toEqual([]);
+    expect(state()).toBe('paused');
+    expect(newDecisions()).toEqual([]);
+  });
+
+  it('the hold cannot be written: 503, no review, the run is NOT ended and stays paused', async () => {
+    mockFacts.personId = PERSON;
+    mockGovernance.fail = true;
+    const r = await patch({ evaluation: 'opt_out' });
+    expect(r).toMatchObject({ status: 503, json: { code: 'governance_write_failed' } });
+    expect(mockCalls).toEqual(['governance']);
+    expect(mockExit).not.toHaveBeenCalled();
+    expect(state()).toBe('paused');
+    expect(newDecisions()).toEqual([]);
+  });
+
+  it('the address and number cannot be read: 503 before any write, the run stays paused', async () => {
+    mockFacts.personId = PERSON;
+    mockFacts.contacts = null;
+    expect(await patch({ evaluation: 'opt_out' })).toMatchObject({ status: 503, json: { code: 'governance_write_failed' } });
+    expect(mockCalls).toEqual([]);
+    expect(state()).toBe('paused');
+  });
+
+  it('the review cannot be opened after the holds: 503, the holds stand, the run stays paused; the retry ends it', async () => {
+    mockFacts.personId = PERSON;
+    mockReview.fail = true;
+    const r = await patch({ evaluation: 'opt_out' });
+    expect(r).toMatchObject({ status: 503, json: { code: 'governance_write_failed' } });
+    expect(mockCalls).toEqual(['governance', 'governance', 'governance', 'review']);
+    expect(mockExit).not.toHaveBeenCalled();
+    expect(state()).toBe('paused');
+    expect(newDecisions()).toEqual([]);
+    mockReview.fail = false;
+    expect((await patch({ evaluation: 'opt_out' })).status).toBe(200);
+    expect(mockReview.inputs[0]).toMatchObject({ sourceRef: REF, holdSource: 'optout_review:reply_opt_out' });   // the same ref: the retry adopts
+    expect(state()).toBe('cancelled');
+  });
+
+  it('a returnDate is refused with opt_out, and only a paused, awaiting run is opted out', async () => {
+    mockFacts.personId = PERSON;
+    expect(await patch({ evaluation: 'opt_out', returnDate: { kind: 'date', date: inDays(3) } })).toMatchObject({ status: 400, json: { code: 'return_date_not_allowed' } });
+    mockDb.instances[0].lifecycle_state = 'active';
+    expect(await patch({ evaluation: 'opt_out' })).toMatchObject({ status: 409, json: { code: 'not_paused' } });
+    expect(mockCalls).toEqual([]);
+  });
+});
+
 describe('nothing from an evaluation reaches PI (P-1 = a)', () => {
   it('the evaluation module imports no lifecycle, feedback or event-feeding code', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '../../services/orchestration/journeyReplyEvaluation.ts'), 'utf8');
     const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]).sort();
     expect(imports).toEqual([
-      '../executionInstances/executionInstanceStore', './journeyDecisionLog', './journeyEvents', './journeyExit', './journeyResponses', './journeyRetiming',
+      '../executionInstances/executionInstanceStore',
+      './individualIntelligence', './journeyDecisionLog', './journeyEvents', './journeyExit', './journeyResponses', './journeyRetiming', './optOutReview',
     ]);
     expect(src).not.toMatch(/prospectLifecycle|journeyFeedback|feedWhatsApp|recordProspectTransition|interpretOutcome/);
   });

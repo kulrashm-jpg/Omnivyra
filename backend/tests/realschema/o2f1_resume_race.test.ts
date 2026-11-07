@@ -1,6 +1,6 @@
 /**
- * O2-F1 and the Prompt 5 reply evaluation, on REAL PostgreSQL (needs 20270127000000 in the
- * template).
+ * O2-F1 and the Prompt 5 reply evaluation, on REAL PostgreSQL (needs 20270127000000, and for
+ * opt_out 20270127000001, in the template).
  *
  * O2-F1: a plain PATCH resume that lands between a return-date resume's paused check and its
  * floor (`deferStepUntil`) made the run active before the floor existed, so a dispatch could
@@ -264,6 +264,46 @@ describe('Prompt 5 — a person evaluates the reply (real route, real decision l
     expect((d.reasons as string[])[0]).toBe(`actor:${s.actor}`);
     expect((await dispatchTask(s.task)).outcome).not.toBe('sent');
     expect(sent).toHaveLength(0);
+  }), 300_000);
+
+  it('opt_out (G-11): all-channel holds on the person and the address, an admin review, the run ends, and a NEW journey contacts nobody', () => inRollback(async () => {
+    const s = await pausedByReply();
+    const pi = await lifecycleRows(s.prospectId);
+    const r = await patchRun(s.instanceId, { evaluation: 'opt_out' });
+    expect(r.status).toBe(200);
+    expect(await instanceState(s.instanceId)).toBe('cancelled');
+    const gov = await rows(
+      `SELECT id, governance_type, channel, person_id, target_normalized, source, revoked_at, purpose_scope, evidence->>'source_ref' AS ref
+         FROM public.contact_governance_records
+        WHERE organization_id = $1 AND source = 'optout_review:reply_opt_out' ORDER BY target_normalized NULLS FIRST`, [ORG_A]);
+    expect(gov).toHaveLength(2);                                                 // the person, and the address (no number on file)
+    for (const g of gov) expect(g).toMatchObject({ governance_type: 'unsubscribe', channel: '*', revoked_at: null, purpose_scope: null });
+    expect(gov[0].person_id).not.toBeNull();
+    expect(gov[1]).toMatchObject({ person_id: null, target_normalized: ADDRESS });
+    const [d] = await rows(
+      `SELECT decision, outcome, reasons FROM public.execution_journey_decisions
+        WHERE execution_instance_id = $1 AND outcome = 'unsubscribed' AND decision = 'exited'`, [s.instanceId]);
+    expect((d.reasons as string[]).slice(0, 2)).toEqual([`actor:${s.actor}`, 'evaluation:opt_out']);
+    const [review] = await rows(`SELECT id, anchor_kind, anchor_value, state, triggers, locked_channels, adopted_hold_ids, source_refs
+      FROM public.contact_opt_out_reviews WHERE organization_id = $1`, [ORG_A]);
+    expect(review).toMatchObject({ anchor_kind: 'person', anchor_value: gov[0].person_id, state: 'pending', triggers: ['reply_opt_out'], locked_channels: [] });
+    expect([...(review.adopted_hold_ids as string[])].sort()).toEqual(gov.map((g) => g.id).sort());
+    expect(review.source_refs).toEqual([String(gov[0].ref)]);
+    expect(String(gov[0].ref)).toMatch(new RegExp(`^${s.instanceId}:[0-9a-f]{32}$`));
+    expect(d.reasons).toContain(`optout_review:${review.id}`);
+    expect(await lifecycleRows(s.prospectId)).toBe(pi);              // P-1: PI is not written
+    expect((await dispatchTask(s.task)).outcome).not.toBe('sent');
+    // A NEW journey for the same prospect: whatever it creates, nothing reaches the person.
+    const again = await enrol(ORG_A, s.actor, s.prospectId, { steps: [emailStep('later')] });
+    expect(again.report.enrolled).toBe(1);                         // PI closure is not used: the run exists
+    expect(again.instanceId).toBeTruthy();
+    for (let i = 0; i < 3; i++) {
+      await sweep();
+      for (const t of await handoffTasks(again.instanceId)) await approveWithPasskey(ORG_A, String(t.id), s.actor);
+    }
+    await sweep();
+    expect(sent).toHaveLength(0);
+    expect(await instanceState(again.instanceId)).toBe('cancelled');  // the restriction ends it as unsubscribed
   }), 300_000);
 
   it('refusals: invalid action, retime without a date, and a non-paused run record nothing', () => inRollback(async () => {

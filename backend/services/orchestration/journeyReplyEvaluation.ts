@@ -10,6 +10,21 @@
  *   retime    the journey resumes after a return date the person typed, through the
  *             existing Prompt 4 retiming (`resumeJourneyWithReturnDate`, `not_before`);
  *   end       the run ends (`exitJourney`: unsent tasks withdrawn, the run cancelled).
+ *   opt_out   the reply asked not to be contacted, in words no keyword detector matched
+ *             ("take me off your list"). Owner decision G-11 (2026-11-07): every opt-out puts
+ *             an immediate hold on ALL channels, and the tenant's own admin decides whether
+ *             contact is allowed again (optOutReview.ts). In this order:
+ *               1. the run's person (loadIndividualFacts); none → 409 `person_unknown`;
+ *               2. their address and number (the intelligence port's readPersonContacts);
+ *               3. the `*` holds through the canonical governance writer: an `unsubscribe` on
+ *                  every channel and every purpose, on the person and on the CANONICAL address
+ *                  and number, source `optout_review:reply_opt_out`, source ref `<run>:<reply>`;
+ *               4. the company-admin review (trigger `reply_opt_out`, anchored on the person;
+ *                  it locks no channel, so the admin may reopen any);
+ *               5. then the run ends.
+ *             A failure in 2–4 answers 503 `governance_write_failed` and the run stays paused
+ *             (nothing is sent from a paused run). A hold already written stays: that is
+ *             fail-safe, and the retry adopts it and joins the review.
  *
  * LIVE NOW, because it is not classifier output: a person decided, and the decision is
  * recorded with that person as its actor, through the decision mechanism that already
@@ -18,6 +33,10 @@
  *   continue → `waiting`  outcome `reply_evaluated:continue:<fingerprint>`
  *   retime   → `deferred` outcome `reply_evaluated:retime:<fingerprint>`
  *   end      → `exited`   outcome `cancelled_by_person` (the progression route's own word)
+ *   opt_out  → `exited`   outcome `unsubscribed` (the same word a restriction exit uses)
+ *
+ * The holds and the review are not a PI transition: the prospect's lifecycle is untouched (P-1).
+ * Keeping such a person out of NEW enrolments through PI closure is PI's human-origin path.
  *
  * NOTHING REACHES PI (PI ruling P-1 = a, 2026-11-06). A human-confirmed reply is not fed to
  * the prospect lifecycle this round: routing it as `replied` would record a person's
@@ -39,8 +58,13 @@ import { JOURNEY_SUSPENSION_OUTCOME_PREFIXES } from './journeyEvents';
 import { exitJourney } from './journeyExit';
 import { REPLY_AWAITING_EVALUATION } from './journeyResponses';
 import { resumeJourneyWithReturnDate, type ResumeRefusal } from './journeyRetiming';
+import { durableIntelligencePort, loadIndividualFacts } from './individualIntelligence';
+import { OPT_OUT_HOLD_SOURCES, openOptOutReview, writeOptOutHolds } from './optOutReview';
 
-export const REPLY_EVALUATION_ACTIONS = ['continue', 'retime', 'end'] as const;
+export const REPLY_EVALUATION_ACTIONS = ['continue', 'retime', 'end', 'opt_out'] as const;
+
+/** The hold source of an operator opt-out (G-11: every hold source carries the `optout_review:` prefix). */
+export const REPLY_OPT_OUT_HOLD_SOURCE = OPT_OUT_HOLD_SOURCES.reply_opt_out;
 export type ReplyEvaluationAction = typeof REPLY_EVALUATION_ACTIONS[number];
 
 /** The outcome prefix of a recorded evaluation: `reply_evaluated:<action>:<fingerprint>`. */
@@ -48,7 +72,7 @@ export const REPLY_EVALUATED = 'reply_evaluated';
 
 export type ReplyEvaluationRefusal =
   | 'invalid_action' | 'actor_required' | 'return_date_required' | 'return_date_not_allowed'
-  | 'not_awaiting_evaluation' | ResumeRefusal;
+  | 'not_awaiting_evaluation' | 'person_unknown' | 'governance_write_failed' | ResumeRefusal;
 
 export type ReplyEvaluationOutcome =
   | {
@@ -119,6 +143,7 @@ export async function evaluateSuspendedReply(input: {
   let instance: ExecutionInstance | null = null;
   let notBefore: string | null = null;
   let cancelledSteps: number | null = null;
+  let optOut: { holdIds: string[]; reviewId: string } | null = null;
   if (act === 'continue') {
     const moved = await compareAndSetExecutionInstanceState({
       organizationId: input.organizationId, instanceId: input.executionInstanceId, expectedState: 'paused', lifecycleState: 'active',
@@ -134,13 +159,50 @@ export async function evaluateSuspendedReply(input: {
     instance = resumed.instance;
     notBefore = resumed.notBefore;
   } else {
+    if (act === 'opt_out') {
+      // The record first: a run is never ended on an opt-out that left no restriction behind.
+      const facts = await loadIndividualFacts(input.organizationId, { kind: run.subjectKind, id: run.subjectId }, input.now ?? new Date().toISOString());
+      if (facts.personId === null) return no('person_unknown', 'the run\'s subject resolves to no person, so no restriction can be recorded; the run stays paused');
+      const contacts = await durableIntelligencePort.readPersonContacts(input.organizationId, facts.personId).catch(() => null);
+      if (contacts === null) return no('governance_write_failed', 'the person\'s address and number could not be read, so the hold cannot cover them; the run stays paused');
+      const sourceRef = `${input.executionInstanceId}:${pending.replyKey}`;
+      let holdIds: string[];
+      try {
+        holdIds = await writeOptOutHolds({
+          organizationId: input.organizationId,
+          personId: facts.personId,
+          email: contacts.email,
+          phone: contacts.phone,
+          holdSource: REPLY_OPT_OUT_HOLD_SOURCE,
+          sourceRef,
+          evidence: { actor, reason: 'free_text_opt_out', reply: pending.replyKey, executionInstanceId: input.executionInstanceId },
+        });
+      } catch (e) {
+        return no('governance_write_failed', `the opt-out hold could not be recorded (${(e as { code?: string } | null)?.code ?? 'error'}); the run stays paused and nothing was ended`);
+      }
+      try {
+        const review = await openOptOutReview({
+          organizationId: input.organizationId,
+          anchor: { kind: 'person', personId: facts.personId },
+          trigger: 'reply_opt_out',
+          holdIds,
+          sourceRef,
+          holdSource: REPLY_OPT_OUT_HOLD_SOURCE,
+          now: input.now,
+        });
+        optOut = { holdIds, reviewId: review.reviewId };
+      } catch (e) {
+        return no('governance_write_failed', `the hold is recorded, but the admin review could not be opened (${(e as { code?: string } | null)?.code ?? 'error'}); the run stays paused, and a retry adopts the hold`);
+      }
+    }
     cancelledSteps = await exitJourney(input.organizationId, input.executionInstanceId);
     instance = await getExecutionInstance(input.organizationId, input.executionInstanceId);
   }
 
-  const reasons = [`evaluation:${act}`, `reply:${pending.replyKey}`, ...(notBefore === null ? [] : [`return_floor=${notBefore}`])];
-  const auditFailed = await recordPersonDecision(input.organizationId, actor, act === 'end'
-    ? { executionInstanceId: input.executionInstanceId, planStepId: null, stepKey: null, channel: null, engine: null, decision: 'exited', outcome: 'cancelled_by_person', reasons }
+  const reasons = [`evaluation:${act}`, `reply:${pending.replyKey}`, ...(notBefore === null ? [] : [`return_floor=${notBefore}`]),
+    ...(optOut === null ? [] : [...optOut.holdIds.map((id) => `governance:${id}`), `optout_review:${optOut.reviewId}`])];
+  const auditFailed = await recordPersonDecision(input.organizationId, actor, act === 'end' || act === 'opt_out'
+    ? { executionInstanceId: input.executionInstanceId, planStepId: null, stepKey: null, channel: null, engine: null, decision: 'exited', outcome: act === 'opt_out' ? 'unsubscribed' : 'cancelled_by_person', reasons }
     : {
       executionInstanceId: input.executionInstanceId, planStepId: pending.planStepId, stepKey: pending.stepKey, channel: pending.channel, engine: null,
       decision: act === 'continue' ? 'waiting' : 'deferred', outcome: `${REPLY_EVALUATED}:${act}:${pending.replyKey}`, reasons,
