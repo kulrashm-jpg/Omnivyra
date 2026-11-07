@@ -55,6 +55,16 @@ export interface ContactInput {
   contact_name?: string;
 }
 
+/**
+ * A journey recipient: Orchestration names the canonical person (owner GO 2026-11-08), so the
+ * send-time check applies the person's restrictions as well as the number's. The database
+ * derives the person's tenant from the broadcast and refuses another tenant's person
+ * (20270128000004). Manual broadcasts never use this and stay number-only.
+ */
+export interface PersonContactInput extends ContactInput {
+  person_id: string;
+}
+
 export interface CreateBroadcastInput {
   company_id:        string;
   social_account_id: string;
@@ -199,16 +209,43 @@ export async function expandRecipients(
   broadcastId: string,
   contacts:    ContactInput[],
 ): Promise<{ inserted: number; skipped: number }> {
-  const rows = contacts.map((c) => ({
+  // Fields are mapped one by one: a manual request body cannot attach a person.
+  return insertRecipients(broadcastId, contacts.map((c) => recipientRow(broadcastId, c, null)));
+}
+
+/**
+ * Journey recipients, each with its canonical person (Orchestration's adapter). The same
+ * insert as `expandRecipients`; a missing person is refused rather than written number-only.
+ */
+export async function expandPersonRecipients(
+  broadcastId: string,
+  contacts:    PersonContactInput[],
+): Promise<{ inserted: number; skipped: number }> {
+  for (const c of contacts) {
+    if (typeof c.person_id !== 'string' || c.person_id.trim() === '') {
+      throw new Error('expandPersonRecipients: every recipient needs its person_id');
+    }
+  }
+  return insertRecipients(broadcastId, contacts.map((c) => recipientRow(broadcastId, c, c.person_id)));
+}
+
+function recipientRow(broadcastId: string, c: ContactInput, personId: string | null) {
+  return {
     broadcast_id:    broadcastId,
     hashed_phone:    hashPhone(c.phone_e164),
     encrypted_phone: encryptPhone(c.phone_e164),
     contact_name:    c.contact_name ?? null,
+    ...(personId === null ? {} : { person_id: personId }),
     status:          'pending',
     retry_count:     0,
     created_at:      new Date().toISOString(),
-  }));
+  };
+}
 
+async function insertRecipients(
+  broadcastId: string,
+  rows:        ReturnType<typeof recipientRow>[],
+): Promise<{ inserted: number; skipped: number }> {
   // Batch insert in chunks of 500 to avoid Supabase payload limits
   let inserted = 0;
   let skipped  = 0;
@@ -262,6 +299,10 @@ export async function enqueueBroadcast(
     // Throws if template is missing, not approved, or not active
     await getActiveTemplate(broadcast.company_id, broadcast.template_name);
   }
+
+  // A recipient already restricted is marked before the rate limit counts it, so a held
+  // recipient consumes no quota. processBatch decides again at send time.
+  await screenPendingRecipients(broadcast.company_id, broadcastId);
 
   // Count pending recipients
   const { count } = await ownedDbTable('whatsapp_broadcast_recipients')
@@ -343,6 +384,78 @@ export async function enqueueBroadcast(
   await ownedDbTable('whatsapp_broadcasts')
     .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', broadcastId);
+}
+
+// ── Contact governance for one recipient (W0-C + owner GO 2026-11-08) ─────────
+
+type GovernanceRead = Awaited<ReturnType<typeof loadTenantGovernanceRecords>>;
+
+/**
+ * The canonical verdict for one recipient: the restrictions on its PERSON, when the journey
+ * named one, AND on its number. The person comes only from the recipient row, never from a
+ * phone lookup; a manual recipient has none and is judged on the number alone. null when
+ * the store could not be read: the caller refuses.
+ */
+function recipientVerdict(
+  companyId:  string,
+  personId:   unknown,
+  phone:      string,
+  governance: GovernanceRead,
+  now:        string,
+): ReturnType<typeof mayContact> | null {
+  if (!governance.ok) return null;
+  return mayContact({
+    organizationId:   companyId,
+    personId:         typeof personId === 'string' && personId !== '' ? personId : null,
+    targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
+    channel:          'whatsapp',
+    now,
+    records:          governance.records,
+  });
+}
+
+function governanceRefusalReason(verdict: ReturnType<typeof mayContact> | null, governance: GovernanceRead): string {
+  return verdict
+    ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
+    : `governance unreadable: ${governance.ok ? 'unknown' : governance.error ?? 'unknown'}`;
+}
+
+/**
+ * Before the rate limit is consumed: every pending recipient already refused is moved to
+ * `blocked_governance`. FAIL CLOSED: an unreadable store or recipient page throws, so the
+ * broadcast is not started and no quota is consumed.
+ */
+async function screenPendingRecipients(companyId: string, broadcastId: string): Promise<void> {
+  const governance = await loadTenantGovernanceRecords(companyId, ['whatsapp']);
+  if (!governance.ok) throw new Error(`contact governance unreadable: ${governance.error ?? 'unknown'}`);
+  const now = new Date().toISOString();
+
+  let after: string | null = null;
+  for (;;) {
+    let page = ownedDbTable('whatsapp_broadcast_recipients')
+      .select('id, encrypted_phone, person_id')
+      .eq('broadcast_id', broadcastId)
+      .eq('status', 'pending');
+    if (after !== null) page = page.gt('id', after);
+    const { data, error } = await page.order('id', { ascending: true }).limit(RECIPIENT_ID_PAGE);
+    if (error) throw new Error(`Broadcast recipients unreadable: ${error.message}`);
+    if (!data?.length) break;
+    after = String(data[data.length - 1].id);
+
+    for (const r of data) {
+      // A number that cannot be read is left `pending`: processBatch, which decides at send
+      // time, cannot read it either and sends nothing.
+      let phone: string;
+      try { phone = decryptPhone(r.encrypted_phone); } catch { continue; }
+      const verdict = recipientVerdict(companyId, r.person_id, phone, governance, now);
+      if (verdict && verdict.decision === 'allowed') continue;
+      const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${governanceRefusalReason(verdict, governance)}` })
+        .eq('id', r.id)
+        .eq('status', 'pending');
+      if (blockError) throw new Error(`governance block could not be recorded: ${blockError.message}`);
+    }
+  }
 }
 
 // ── Send-time checks for journey broadcasts (B-17) ───────────────────────────
@@ -447,9 +560,12 @@ export async function processBatch(
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
-  const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
-    .select('id, encrypted_phone, contact_name')
+  // The person is part of the identity the check needs: an unreadable page throws, so the
+  // job retries and nothing in it is sent.
+  const { data: recipients, error: recipientsError } = await ownedDbTable('whatsapp_broadcast_recipients')
+    .select('id, encrypted_phone, contact_name, person_id')
     .in('id', recipientIds);
+  if (recipientsError) throw new Error(`Broadcast recipients unreadable: ${recipientsError.message}`);
 
   if (!recipients?.length) return;
 
@@ -470,22 +586,12 @@ export async function processBatch(
     const phone = decryptPhone(recipient.encrypted_phone);
 
     // Evaluated BEFORE the message body is built and before `fetch`, so a
-    // refusal cannot reach the provider.
-    const verdict = governance.ok
-      ? mayContact({
-        organizationId: broadcast.company_id,
-        personId: null,
-        targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
-        channel: 'whatsapp',
-        now: governanceNow,
-        records: governance.records,
-      })
-      : null;
+    // refusal cannot reach the provider. The person's restrictions and the number's,
+    // on every run of every batch, retries included.
+    const verdict = recipientVerdict(broadcast.company_id, recipient.person_id, phone, governance, governanceNow);
 
     if (!verdict || verdict.decision !== 'allowed') {
-      const reason = verdict
-        ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
-        : `governance unreadable: ${governance.error ?? 'unknown'}`;
+      const reason = governanceRefusalReason(verdict, governance);
       // `error_code` is an INTEGER column (Meta's numeric code); the governance
       // cause is text and goes in `error_message`. Writing the text code into the
       // integer column failed the whole update, leaving the recipient `pending`.

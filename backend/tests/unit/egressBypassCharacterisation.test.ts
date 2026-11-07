@@ -361,7 +361,6 @@ async function whatsappPersonAnchor(): Promise<number> {
 // ── The table ─────────────────────────────────────────────────────────────────
 
 const PATHS: Array<[string, () => Promise<number>]> = [
-  ['WhatsApp broadcast person anchor (whatsappBroadcastService.processBatch)', whatsappPersonAnchor],
   // K-6 is undecided for these; only E4 (domain reminder) is a decided exemption and is not listed.
   ['transactional company_referral email (emailService.sendCompanyAdminReferral)', () => transactionalEmail('company_referral')],
   ['transactional team_invite email (emailService.sendInvite)', () => transactionalEmail('team_invite')],
@@ -392,6 +391,26 @@ describe('egress enforced: the suppressed recipient is refused (L-3)', () => {
     gov.records = [];
     const out = await run();
     expect(out.sends).toBe(1);
+  });
+});
+
+// ── Enforcement landed: WhatsApp broadcast person anchor (owner GO 2026-11-08) ─
+// Per this file's rule: CURRENT deleted, PENDING turned into a normal test. The journey
+// recipient carries its person (20270128000004) and processBatch reads it.
+describe('egress enforced: WhatsApp broadcast person anchor (whatsappBroadcastService.processBatch)', () => {
+  it('refuses a recipient whose PERSON is suppressed, though its number carries no restriction', async () => {
+    expect(await whatsappPersonAnchor()).toBe(0);
+    expect(db.whatsapp_broadcast_recipients[0]).toMatchObject({ status: 'blocked_governance' });
+  });
+
+  it('control: does send once the suppression is lifted (the harness reaches the real send)', async () => {
+    gov.records = [];
+    db.unified_persons = [{ id: PERSON, company_id: ORG, primary_phone: PHONE }];
+    db.social_accounts = [{ id: 'sa1', company_id: ORG, phone_number_id: 'pn1' }];
+    db.whatsapp_broadcasts = [{ id: 'b1', company_id: ORG, social_account_id: 'sa1', message_type: 'text', body: 'hi', name: 'n' }];
+    db.whatsapp_broadcast_recipients = [{ id: 'r1', broadcast_id: 'b1', encrypted_phone: encryptPhone(PHONE), status: 'pending', person_id: PERSON }];
+    await processBatch('b1', ['r1']);
+    expect(sends.fetch.filter((u) => u.includes('graph.facebook.com')).length).toBe(1);
   });
 });
 
