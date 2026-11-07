@@ -116,6 +116,14 @@ jest.mock('../../../lib/auth/rateLimit', () => ({
 // the handler itself.
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 
+// G-11: after the `email` records, the all-channel hold and the admin review are Orchestration's
+// service, called through optOutHold. This suite pins what the producer hands it;
+// g11_outreach_producers (real schema) runs the real thing.
+const holdAndOpenOptOutReview = jest.fn();
+jest.mock('../../services/leadOutreachExecution/optOutHold', () => ({
+  holdAndOpenOptOutReview: (...a: unknown[]) => holdAndOpenOptOutReview(...a),
+}));
+
 import {
   EXECUTION_RUNTIME_VERSION,
   GOVERNANCE_VERSION,
@@ -209,6 +217,8 @@ beforeEach(() => {
   __resetQuotaRedisForTests();
   __clearTransportsForTests();
   registerTransport(spyEmail as never);
+  holdAndOpenOptOutReview.mockReset();
+  holdAndOpenOptOutReview.mockResolvedValue({ status: 'opened', reviewId: 'rv-1', holdIds: ['h-1'], reason: null });
 });
 afterAll(() => { process.env[UNSUBSCRIBE_TOKEN_KEYS_ENV] = priorKeys; });
 
@@ -231,8 +241,8 @@ describe('WP3/L4 — GET confirms and writes nothing', () => {
   });
 });
 
-describe('WP3/L4 — POST records canonical governance, both anchors, scope *', () => {
-  it('one-click: one TARGET record and one PERSON record, both unsubscribe on *', async () => {
+describe('WP3/L4 + G-11 — POST records canonical governance on email, both anchors, then the hold', () => {
+  it('one-click: one TARGET record and one PERSON record, both unsubscribe on email (G-11 replaced `*`)', async () => {
     const { attemptId, taskId } = await sentAttempt();
     const res = await call('POST', tokenFor(attemptId), { 'List-Unsubscribe': 'One-Click' });
 
@@ -241,12 +251,67 @@ describe('WP3/L4 — POST records canonical governance, both anchors, scope *', 
     const rows = governance();
     expect(rows).toHaveLength(2);
     for (const r of rows) {
-      expect(r).toMatchObject({ organization_id: ORG, governance_type: 'unsubscribe', channel: '*', source: 'outreach_unsubscribe_link' });
+      expect(r).toMatchObject({ organization_id: ORG, governance_type: 'unsubscribe', channel: 'email', source: 'outreach_unsubscribe_link' });
       expect(r.evidence).toMatchObject({ attemptId, taskId, method: 'one_click' });
       expect(JSON.stringify(r.evidence)).not.toContain(NORMALISED);
     }
     expect(rows.find((r) => r.person_id == null)).toMatchObject({ target_normalized: NORMALISED });
     expect(rows.find((r) => r.person_id === PERSON)).toBeDefined();
+  });
+
+  it('G-11: then every channel is held and the review opened, anchored to the person, ref attempt:<id>', async () => {
+    const { attemptId, taskId } = await sentAttempt();
+    await call('POST', tokenFor(attemptId), { 'List-Unsubscribe': 'One-Click' });
+    expect(holdAndOpenOptOutReview).toHaveBeenCalledTimes(1);
+    const personRecord = governance().find((r) => r.person_id === PERSON) as Row;
+    expect(holdAndOpenOptOutReview).toHaveBeenCalledWith({
+      organizationId: ORG,
+      trigger: 'email_unsubscribe',
+      anchor: { kind: 'person', personId: PERSON },
+      sourceRef: `attempt:${attemptId}`,
+      triggerRecordId: personRecord.id,
+      personId: PERSON,
+      emails: [expect.any(String), null],
+      phone: null,
+      evidence: expect.objectContaining({ attemptId, taskId, method: 'one_click' }),
+    });
+  });
+
+  it("G-11: the person's known address and number are held too", async () => {
+    const { attemptId } = await sentAttempt();
+    (db.tables.unified_persons ??= []).push({ id: PERSON, company_id: ORG, primary_email: 'other@example.test', primary_phone: '+44 7700 900123', timezone: null });
+    await call('POST', tokenFor(attemptId), { 'List-Unsubscribe': 'One-Click' });
+    expect(holdAndOpenOptOutReview.mock.calls[0][0]).toMatchObject({ emails: [expect.any(String), 'other@example.test'], phone: '+44 7700 900123' });
+  });
+
+  it('G-11: with no person the hold is anchored to the address', async () => {
+    const { attemptId } = await sentAttempt({ personId: null });
+    await call('POST', tokenFor(attemptId), { 'List-Unsubscribe': 'One-Click' });
+    expect(holdAndOpenOptOutReview.mock.calls[0][0]).toMatchObject({
+      anchor: { kind: 'target', channel: 'email' }, personId: null, phone: null,
+    });
+  });
+
+  it("G-11: the person's contacts unreadable → 503, email already closed, no hold attempted", async () => {
+    const { attemptId } = await sentAttempt();
+    db.failTable = 'unified_persons';
+    const res = await call('POST', tokenFor(attemptId), {});
+    expect(res.statusCode).toBe(503);
+    expect(governance().every((r) => r.channel === 'email')).toBe(true);
+    expect(governance()).toHaveLength(2);
+    expect(holdAndOpenOptOutReview).not.toHaveBeenCalled();
+  });
+
+  it('G-11: a hold or review that failed is reported retryable (503), never as success', async () => {
+    const { attemptId } = await sentAttempt();
+    holdAndOpenOptOutReview.mockResolvedValue({ status: 'retryable_failure', reviewId: null, holdIds: [], reason: 'review_write_failed' });
+    expect((await call('POST', tokenFor(attemptId), {})).statusCode).toBe(503);
+  });
+
+  it('G-11: an opt-out the admin already decided is a success with nothing new', async () => {
+    const { attemptId } = await sentAttempt();
+    holdAndOpenOptOutReview.mockResolvedValue({ status: 'already_decided', reviewId: 'rv-1', holdIds: [], reason: null });
+    expect((await call('POST', tokenFor(attemptId), {})).statusCode).toBe(200);
   });
 
   it('the confirmation form is recorded as method=confirmation', async () => {

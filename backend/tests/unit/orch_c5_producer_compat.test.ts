@@ -67,6 +67,12 @@ jest.mock('../../services/prospectIdentity/contactGovernanceRepository', () => (
   }),
 }));
 jest.mock('../../services/leadOutreachExecution/unsubscribeService', () => ({ isTerminalGovernanceError: () => false }));
+// G-11: after the whatsapp record the producer holds every channel and opens the admin review
+// (optOutReview.ts). That needs the review store, which this double does not model; the journey
+// consequence pinned here is unchanged by it. g11_outreach_producers (real schema) runs it.
+jest.mock('../../services/leadOutreachExecution/optOutHold', () => ({
+  holdAndOpenOptOutReview: async () => ({ status: 'opened', reviewId: 'rv-1', holdIds: [], reason: null }),
+}));
 
 // ── WS-3 storage: the two idempotency keys of each table, modelled ─────────
 const OUTREACH_TASK = 'otask-1';

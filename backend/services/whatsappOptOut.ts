@@ -19,12 +19,20 @@
  *   - re-opt-in ("START") is NOT automatic: revoking a restriction is an
  *     operator act (unsubscribeService.ts, decision D).
  *
+ * G-11 (owner, 2026-11-07): the `whatsapp` record above keeps WhatsApp closed for
+ * good. After it, every channel is put on hold for the sender's number and the
+ * company admin's review is opened (leadOutreachExecution/optOutHold.ts); the
+ * admin may reopen phone or email, never WhatsApp. The source ref is the Meta
+ * message id, so a redelivered webhook joins the same review, or does nothing
+ * once that review is decided.
+ *
  * Evidence is a summary only (keyword, ids, detector version) — never the
  * message text, which the writer refuses anyway.
  */
 
 import { GovernanceWriteError, recordContactGovernance } from './prospectIdentity/contactGovernanceWriter';
 import { isTerminalGovernanceError } from './leadOutreachExecution/unsubscribeService';
+import { holdAndOpenOptOutReview, type OptOutHoldOutcome } from './leadOutreachExecution/optOutHold';
 
 export const WHATSAPP_OPT_OUT_SOURCE = 'webhook:whatsapp_inbound';
 export const WHATSAPP_OPT_OUT_DETECTOR_VERSION = 'wa-optout-1';
@@ -83,20 +91,26 @@ export interface WhatsAppOptOutOutcome {
   /** A code, never a number or message text. */
   reason: string | null;
   attempts: number;
+  /** G-11: the all-channel hold and the admin review. Null when the channel record failed. */
+  review: OptOutHoldOutcome['status'] | null;
+  reviewId: string | null;
 }
 
 /** Bounded inline retry: a transient write failure must not lose an opt-out. */
 export const WHATSAPP_OPT_OUT_MAX_ATTEMPTS = 3;
 
 /**
- * Records the opt-out. Never throws. A terminal writer error is not retried; a
- * transient one is retried up to WHATSAPP_OPT_OUT_MAX_ATTEMPTS times. Repeats
- * (webhook redelivery) collapse on the store's canonical key and report
- * `already_present`.
+ * Records the opt-out, then the G-11 hold and review. Never throws. A terminal
+ * writer error is not retried; a transient one is retried up to
+ * WHATSAPP_OPT_OUT_MAX_ATTEMPTS times. Repeats (webhook redelivery) collapse on
+ * the store's canonical key and report `already_present`.
+ *
+ * Success needs BOTH: a failed hold or review is reported as a failure, so the
+ * webhook job retries it (the channel record is then `already_present`).
  */
 export async function recordWhatsAppOptOut(input: WhatsAppOptOutInput): Promise<WhatsAppOptOutOutcome> {
   const target = whatsappSenderTarget(input.waId);
-  if (!target) return { status: 'invalid_sender', reason: 'sender_not_a_phone_number', attempts: 0 };
+  if (!target) return { status: 'invalid_sender', reason: 'sender_not_a_phone_number', attempts: 0, review: null, reviewId: null };
 
   let lastCode = 'governance_write_failed';
   for (let attempt = 1; attempt <= WHATSAPP_OPT_OUT_MAX_ATTEMPTS; attempt++) {
@@ -115,11 +129,26 @@ export async function recordWhatsAppOptOut(input: WhatsAppOptOutInput): Promise<
           socialAccountId: input.socialAccountId,
         },
       });
-      return { status: written.outcome === 'created' ? 'recorded' : 'already_present', reason: null, attempts: attempt };
+      const held = await holdAndOpenOptOutReview({
+        organizationId: input.organizationId,
+        trigger: 'whatsapp_stop',
+        anchor: { kind: 'target', channel: 'whatsapp', target },
+        sourceRef: input.waMessageId,
+        triggerRecordId: written.id,
+        phone: target,
+        evidence: { detectorVersion: WHATSAPP_OPT_OUT_DETECTOR_VERSION, socialAccountId: input.socialAccountId },
+      });
+      if (held.status === 'retryable_failure' || held.status === 'terminal_failure') {
+        return { status: held.status, reason: held.reason, attempts: attempt, review: held.status, reviewId: null };
+      }
+      return {
+        status: written.outcome === 'created' ? 'recorded' : 'already_present', reason: null, attempts: attempt,
+        review: held.status, reviewId: held.reviewId,
+      };
     } catch (e) {
       lastCode = e instanceof GovernanceWriteError ? e.code : 'governance_write_failed';
-      if (isTerminalGovernanceError(e)) return { status: 'terminal_failure', reason: lastCode, attempts: attempt };
+      if (isTerminalGovernanceError(e)) return { status: 'terminal_failure', reason: lastCode, attempts: attempt, review: null, reviewId: null };
     }
   }
-  return { status: 'retryable_failure', reason: lastCode, attempts: WHATSAPP_OPT_OUT_MAX_ATTEMPTS };
+  return { status: 'retryable_failure', reason: lastCode, attempts: WHATSAPP_OPT_OUT_MAX_ATTEMPTS, review: null, reviewId: null };
 }

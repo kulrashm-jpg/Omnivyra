@@ -60,6 +60,14 @@ jest.mock('../../services/prospectIdentity/contactGovernanceWriter', () => {
   return { ...actual, recordContactGovernance: (...a: unknown[]) => recordContactGovernance(...a) };
 });
 
+// G-11: the all-channel hold and the admin review are Orchestration's service, called through
+// optOutHold; this suite pins what the producer hands it. g11_outreach_producers (real schema)
+// runs the real thing.
+const holdAndOpenOptOutReview = jest.fn();
+jest.mock('../../services/leadOutreachExecution/optOutHold', () => ({
+  holdAndOpenOptOutReview: (...a: unknown[]) => holdAndOpenOptOutReview(...a),
+}));
+
 import { GovernanceWriteError } from '../../services/prospectIdentity/contactGovernanceWriter';
 import { normalizeGovernanceTarget } from '../../services/prospectIdentity/contactGovernanceRepository';
 import { processWhatsAppWebhookJob } from '../../queue/jobProcessors/whatsappWebhookProcessor';
@@ -88,6 +96,8 @@ beforeEach(() => {
   db.failThreads = false;
   recordContactGovernance.mockReset();
   recordContactGovernance.mockResolvedValue({ id: 'cg-1', outcome: 'created' });
+  holdAndOpenOptOutReview.mockReset();
+  holdAndOpenOptOutReview.mockResolvedValue({ status: 'opened', reviewId: 'rv-1', holdIds: ['h-1'], reason: null });
   jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 
@@ -132,6 +142,35 @@ describe('inbound STOP through the real webhook processor', () => {
     });
     expect(db.messages).toHaveLength(1);
     expect(db.messages[0]).toMatchObject({ content: 'STOP', direction: 'inbound' });
+  });
+
+  it('G-11: after the whatsapp record, every channel is held on the number and the review is opened', async () => {
+    await processWhatsAppWebhookJob(job([inbound('STOP')]));
+    expect(holdAndOpenOptOutReview).toHaveBeenCalledTimes(1);
+    expect(holdAndOpenOptOutReview).toHaveBeenCalledWith({
+      organizationId: 'co-a',
+      trigger: 'whatsapp_stop',
+      anchor: { kind: 'target', channel: 'whatsapp', target: '+15551234567' },
+      sourceRef: 'wamid.1',
+      triggerRecordId: 'cg-1',
+      phone: '+15551234567',
+      evidence: { detectorVersion: 'wa-optout-1', socialAccountId: 'sa-1' },
+    });
+    // The channel record comes first: the hold never stands without it.
+    expect(recordContactGovernance.mock.invocationCallOrder[0]).toBeLessThan(holdAndOpenOptOutReview.mock.invocationCallOrder[0]);
+  });
+
+  it('G-11: a hold or review that could not be written fails the job, so it is retried', async () => {
+    holdAndOpenOptOutReview.mockResolvedValue({ status: 'retryable_failure', reviewId: null, holdIds: [], reason: 'review_write_failed' });
+    await expect(processWhatsAppWebhookJob(job([inbound('STOP')]))).rejects.toThrow(/1 event\(s\) failed: inbound/);
+    const call = (console.error as jest.Mock).mock.calls.find((c) => c[0] === '[wa-webhook-processor] opt-out NOT recorded');
+    expect(call[1]).toMatchObject({ status: 'retryable_failure', reason: 'review_write_failed' });
+  });
+
+  it('G-11: no hold is written when the whatsapp record itself failed', async () => {
+    recordContactGovernance.mockRejectedValue(new GovernanceWriteError('bad', 'cross_tenant_reference'));
+    await processWhatsAppWebhookJob(job([inbound('STOP')]));
+    expect(holdAndOpenOptOutReview).not.toHaveBeenCalled();
   });
 
   it('evidence never carries the message text or the number', async () => {
@@ -189,7 +228,7 @@ describe('recordWhatsAppOptOut — retry discipline', () => {
 
   it('retries a transient failure and then records', async () => {
     recordContactGovernance.mockRejectedValueOnce(new Error('connection reset')).mockResolvedValueOnce({ id: 'cg-1', outcome: 'created' });
-    expect(await recordWhatsAppOptOut(input)).toEqual({ status: 'recorded', reason: null, attempts: 2 });
+    expect(await recordWhatsAppOptOut(input)).toEqual({ status: 'recorded', reason: null, attempts: 2, review: 'opened', reviewId: 'rv-1' });
   });
 
   it('never retries a terminal writer error', async () => {
