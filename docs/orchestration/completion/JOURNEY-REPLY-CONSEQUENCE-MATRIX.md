@@ -51,19 +51,84 @@ These follow the PI rulings: a negative is never `rejected`; a meeting request i
 - **AI classification design (not built):** it would go through the AI Gateway (`runCompletionWithOperation`, an entry in `NO_CACHE_OPS`, untrusted text delimited), and its output would enter this same matrix as a label. A label can never end a journey. Owner decision Q-3.
 
 ## 3. A person's evaluation (live)
-`PATCH /api/execution-instances/:id` with `{ company_id, evaluation: 'continue' | 'retime' | 'end', returnDate? }`. It is valid only on a run paused for an unevaluated reply (`reply_awaiting_evaluation`).
+`PATCH /api/execution-instances/:id` with `{ company_id, evaluation: 'continue' | 'retime' | 'end' | 'opt_out', returnDate? }`. It is valid only on a run paused for an unevaluated reply (`reply_awaiting_evaluation`).
+
+**`opt_out`** was added after the owner's G-11 decision (2026-11-07, in the owner's words: "g11 no they shouldn't be contacted"). The final design is the opt-out hold and its company-admin review (`backend/services/orchestration/optOutReview.ts`, store `contact_opt_out_reviews`, migration `20270127000001`).
+
+Owner rules (2026-11-07):
+1. **Tenant only.** The hold and the decision belong to that `organization_id`; another tenant is unaffected.
+2. **Every opt-out starts it:** a WhatsApp STOP, an email unsubscribe link, or an operator-recorded free-text `opt_out`.
+3. **Immediate hold.** From that moment ALL channels are held for that contact in that tenant: the person, plus their known address and number.
+4. **The tenant's OWN admin decides** whether contact is allowed again, and on which channels: COMPANY_ADMIN in that company, never the platform super-admin bypass, within 3 WORKING days (Mon–Fri, the company's timezone).
+5. **No decision:** every medium stays closed. Closed is the default, so no job runs.
+6. **After the window** an admin may still reopen.
+
+Amendment (received via Outreach; flagged to the owner for confirmation): a STOP or an unsubscribe keeps THAT channel closed for good, and only the person undoes it through the existing opt-in paths; after an operator `opt_out` the admin may reopen any channel.
+
+The evaluation, in this order:
+- **1. The person.** `loadIndividualFacts` resolves the person; with no person the answer is 409 `person_unknown`.
+- **2. Their address and number** are read through the intelligence port (`readPersonContacts`).
+- **3. The `*` holds.** Each is an `unsubscribe` on every channel and every purpose, written through the canonical writer on the person, the CANONICAL address (`normalizeEmail`) and the CANONICAL number (`normalizePhone`). The source is `optout_review:reply_opt_out`; the source ref is `<run id>:<reply fingerprint>`, stored in `evidence.source_ref`.
+- **4. The review** is opened with trigger `reply_opt_out`, anchored on the person. It locks no channel.
+- **5. The run ends.** The decision is `exited`, outcome `unsubscribed`, with `governance:<id>` for each hold and `optout_review:<id>`.
+
+If 2, 3 or 4 fails, the answer is 503 `governance_write_failed` and the run stays paused. A hold already written stays: that is fail-safe, and the retry adopts it and joins the review.
 
 | Action | Effect | Decision recorded (`recordPersonDecision`) |
 |---|---|---|
 | continue | compare-and-set paused → active | `waiting`, outcome `reply_evaluated:continue:<key>` |
 | retime | `resumeJourneyWithReturnDate` (Prompt 4 floor) | `deferred`, outcome `reply_evaluated:retime:<key>` |
 | end | `exitJourney` | `exited`, outcome `cancelled_by_person` |
+| opt_out | `*` holds on the person, address and number, then the admin review, then `exitJourney` | `exited`, outcome `unsubscribed` |
 
 - The reasons carry `actor:<uuid>` from `guard.principal.userId`, never from the request body, plus `evaluation:<action>` and `reply:<fingerprint>`.
 - **400:** `evaluation_with_lifecycle_state`, `invalid_action`, `return_date_required`, `return_date_not_allowed`, plus the retiming date refusals.
 - **404:** `run_not_found`.
-- **409:** `not_paused`, `not_awaiting_evaluation`, `resume_race_lost`, `superseded`.
+- **409:** `not_paused`, `not_awaiting_evaluation`, `resume_race_lost`, `superseded`, `person_unknown`.
+- **503:** `governance_write_failed` (opt_out only; the run stays paused).
 - Nothing reaches PI (PI ruling P-1 = a). A human-confirmed engagement would need a human-origin transition with `actorUserId` and a `human:<uuid>` key, which is an owner decision.
+
+### 3a. The opt-out review (G-11)
+- **Holds and adoption.** Every hold source starts with `optout_review:` (`reply_opt_out`, `whatsapp_stop` with the Meta message id as ref, `email_unsubscribe` with `attempt:<id>` as ref). `openOptOutReview` throws `invalid_hold_source` for any other source.
+  - `writeOptOutHolds({ organizationId, personId?, email?, phone?, holdSource, sourceRef, evidence? })` writes the `*` holds, normalising `email` and `phone` itself. It takes no `targets` list.
+  - The canonical key `uq_contact_governance_identity` has no source in it, so two opt-outs on one anchor share ONE hold row: the second caller gets the first's id as `already_present` and records it as pre-existing. Hence the F1/F2 rules in the decision below.
+  - `findOptOutReviewBySourceRef({ organizationId, sourceRef })` returns the review carrying a trigger's ref, tenant first; with several, pending first, then the latest. Outreach skips its producer work only when it returns a DECIDED review. It is read as `organization_id` plus an in-service filter on `source_refs` (no GIN index): reviews are few per tenant. Revisit with a GIN index and `.contains` if a tenant reaches thousands.
+  - A review ADOPTS only the named holds whose source and source ref are the caller's, and only an `unsubscribe` on `*` that is live in the same tenant.
+  - Any other named id (a W1-C `*` unsubscribe, another review's hold, a `dnc_permanent`) is recorded as pre-existing and never revoked.
+  - A named hold that is already revoked, or that belongs to another tenant, is refused (`hold_revoked` / `hold_not_found`).
+- **Why `evidence.source_ref` and not `source_record_id`.** `source_record_id` is a uuid with a composite foreign key to `source_records`, so a message id or a run-and-reply key is refused by the database. Adoption accepts either place.
+- **One pending review per anchor.** The anchor is the person, else the canonical target. The unique partial index `(organization_id, anchor_kind, anchor_value) WHERE state = 'pending'` enforces it.
+  - A trigger while a review is pending JOINS it.
+  - The loser of a concurrent insert (23505) re-reads and joins, and never throws.
+  - A trigger after a decision opens a NEW review.
+  - Joins and decisions move the row by compare-and-set on `revision`.
+- **Locked channels.** `whatsapp_stop` locks whatsapp, `email_unsubscribe` locks email, `reply_opt_out` locks none. The STOP or unsubscribe record itself (`trigger_record_ids`) is never revoked.
+- **The decision.** `GET /api/contact-optout-reviews?company_id=` lists the reviews, pending first, with `overdue`. `GET|POST /api/contact-optout-reviews/:id` reads one, or decides it with `{ reopenChannels, reason }`.
+  - **Guard:** `enforceCompanyAccess`, then COMPANY_ADMIN in that company from `assertTenantAccess` with `noPlatformBypass` (a bypass grant is refused again). The actor is the authenticated principal.
+  - **The order, so there is never a gap:**
+    1. CLOSE FIRST. Every known channel that stays closed gets a channel-scoped `unsubscribe` on every anchor of the review: its own, its adopted holds' AND its pre-existing holds' (F2). The source is `manual:optout_review`, which is unprefixed and so never adoptable. A close from an earlier, lost attempt answers `already_present`, is recognised by its `evidence.review_id`, and stays the review's own.
+    2. THEN REVOKE the adopted holds, plus this review's own earlier closes on a channel now reopened.
+       - **F2:** a hold that another PENDING review adopted or found present is NOT revoked; it is reported as `heldByOtherReview`, in the response and the audit.
+       - **Inherited:** a pre-existing hold that a now-DECIDED review adopted (and skipped for this one) is released by this review. A hold no review ever adopted (W1-C, `dnc_permanent`) never is.
+    3. THEN the review is marked decided, with `decided_by`, `decided_at` and the reason.
+    4. THEN RECONCILE (F1). The pending set is read AFRESH, after every revoke has committed; it is never batched with, or reused from, the read before the revokes (Outreach condition, pinned by a call-order test and a mutant). Any pending review that references a revoked hold (this one too, when its decision lost) gets a fresh `*` hold: same anchor, same source, same `evidence.source_ref`, appended to that review's adopted holds. A lost or raced decision therefore leaves nothing reopened (`reinstatedHoldIds`).
+  - **Audit:** an `execution_audit` row (stage `suppression`; `cancelled` for a reopen, `suppressed` for keep-closed), carrying ids and channels but never an address.
+  - **`reconcile_incomplete` (503, retryable, Outreach m1):** holds were revoked but one owed to another pending review could not yet be reinstated. The admin retries the decision; its reconcile restores the hold from `adoptedHoldIds`. The partly applied decision is audited as `optout_review_reconcile_incomplete`.
+  - **Refusals:** 400 `channel_locked` (with the channels), `reason_required`, `unknown_channel`, `invalid_channels`; 403 `company_admin_required`; 404 `review_not_found`; 409 `decision_race_lost`; 503 `governance_write_failed`.
+  - A decided review may be decided again (rule 6).
+- **Due date.** `due_at` is the same local time 3 Mon–Fri days later in `company_scheduler_prefs.timezone`: Fri → Wed, Sat/Sun → Wed. With no usable zone, UTC is used and `due_timezone_fallback` is set.
+- **OPEN:**
+  - (1) Holidays are not known; the UTC fallback stands until the owner rules on it.
+  - (2) **Two reviews for one person.** A STOP from an unresolved number gives a target-anchored review, and an operator `opt_out` for the same person gives a person-anchored one, until identity resolution links them. This is safe, because closed wins.
+  - (3) **wa_id vs stored phone:** a `+` prefix difference that `normalizePhone` keeps. Pre-existing.
+  - (4) **PI closure is not written (P-1).** Enrolment still creates a run, which the hold then refuses.
+  - (5) **Erasure.** A target anchor holds no person (CHECK `contact_opt_out_reviews_target_has_no_person`, PI F-2), so a person delete can never abort on this table. A target anchor's canonical value is KEPT (PI ruling; erasure policy KEEP list). A PERSON anchor is tombstoned by the table's own guard when the foreign key clears `person_id`: `anchor_value` becomes `'erased:' || <the review's own id>`, never the person's. The prefix can never equal a canonical target, and the per-row id keeps the pending unique index collision-free across erasures. The review keeps its state. **OPEN, cross-track (erasure owner):** re-anchor a PENDING person review onto its target(s) at erasure, joining on 23505 as the open path does, so an admin can still decide it.
+  - (6) **The decide/join race is not one transaction.** A join between a decision's claim and its revoke is repaired by the reconcile step (F1, tested). A revoke between a producer's hold write and its open is caught by the open's post-join/insert `hold_revoked` check, and the producer retries with a fresh hold (tested).
+  - (7) **A webhook redelivered after a decision** re-closes the contact and opens a new review. That is safe, and producers can now skip it with `findOptOutReviewBySourceRef` (F3).
+  - (7a) **Outreach m2:** `findOptOutReviewBySourceRef` has no row limit and no GIN index on `source_refs`. A miss only re-holds the contact (a new review), which is safe. Pair a row limit with the GIN index later.
+  - (8) **The schema-parity verifier** does not yet list the table, as with `20270127000000`.
+  - (9) **The amendment** (locked channels) awaits owner confirmation.
+- **Scope limit, unchanged:** WhatsApp broadcast recipients are matched by number. The number hold covers them now, wherever the number is known.
 
 ## 4. O2-F1: every resume moves a run only from `paused`
 - **The defect:** a plain resume landing between the retimed resume's paused check and its floor write made the run active before the floor existed, so a dispatch could send early.
