@@ -637,6 +637,19 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
     return svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'target', channel: 'email', target: EMAIL }, trigger: 'email_unsubscribe',
       holdIds, sourceRef: 'attempt:77', holdSource: 'optout_review:email_unsubscribe' });
   }
+  /**
+   * The SAME governance case seen twice (20270127000005): one email-unsubscribe event, first as a
+   * target review (the person was not yet resolved), then as the person's review: same source_ref.
+   */
+  async function sameEvent(person: string, ref: string) {
+    const th = await svc.writeOptOutHolds({ organizationId: ORG_A, email: EMAIL, holdSource: 'optout_review:email_unsubscribe', sourceRef: ref });
+    const t = await svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'target', channel: 'email', target: EMAIL }, trigger: 'email_unsubscribe',
+      holdIds: th, sourceRef: ref, holdSource: 'optout_review:email_unsubscribe' });
+    const rh = await svc.writeOptOutHolds({ organizationId: ORG_A, personId: person, email: EMAIL, holdSource: 'optout_review:email_unsubscribe', sourceRef: ref });
+    const r = await svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'person', personId: person }, trigger: 'email_unsubscribe',
+      holdIds: rh, sourceRef: ref, holdSource: 'optout_review:email_unsubscribe' });
+    return { t, r };
+  }
 
   it('re_anchored: the first applicable target (email before phone), person_id NULL, revision + 1', () => inRollback(async () => {
     const { person } = await setup();
@@ -646,21 +659,107 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
     expect(await review(r.reviewId)).toMatchObject({ anchor_kind: 'target', anchor_channel: 'email', anchor_value: EMAIL, person_id: null, state: 'pending', revision: Number(before.revision) + 1 });
   }), 120_000);
 
-  it('merged: a pending review already holds the target → JOIN (arrays unioned, its revision + 1); the person review becomes merged', () => inRollback(async () => {
+  it('NOT merged (20270127000005): an address-only unsubscribe review on the address, not linked to the person, is a different case → kept_distinct, both untouched', () => inRollback(async () => {
     const { person } = await setup();
     const t = await emailTargetReview();
     const r = await operatorOptOut(person, 'run-ra:2');
+    const [tBefore, rBefore] = [JSON.stringify(await review(t.reviewId)), await review(r.reviewId)];
+    // They DO share the target-only email hold row (t adopted it, r found it present): not proof.
+    expect(rBefore.pre_existing_hold_ids).toEqual(expect.arrayContaining((await review(t.reviewId)).adopted_hold_ids as string[]));
+    expect(await reanchor(ORG_A, person, [T_EMAIL])).toEqual([{ review_id: r.reviewId, disposition: 'kept_distinct', onto_review_id: null }]);
+    expect(JSON.stringify(await review(t.reviewId))).toBe(tBefore);
+    expect(await review(r.reviewId)).toMatchObject({ anchor_kind: 'person', person_id: person, state: 'pending', revision: rBefore.revision });
+  }), 120_000);
+
+  it('NOT merged, next target: the email is held by a different case, the phone is free → re_anchored onto the phone', () => inRollback(async () => {
+    const { person } = await setup();
+    await emailTargetReview();
+    const r = await operatorOptOut(person, 'run-ra:2b');
+    expect(await reanchor(ORG_A, person, [T_EMAIL, T_PHONE])).toEqual([{ review_id: r.reviewId, disposition: 're_anchored', onto_review_id: null }]);
+    expect(await review(r.reviewId)).toMatchObject({ anchor_kind: 'target', anchor_channel: 'phone', anchor_value: CANON, person_id: null });
+  }), 120_000);
+
+  it('merged: the SAME event (a shared source_ref) → JOIN (arrays unioned, its revision + 1); the person review becomes merged', () => inRollback(async () => {
+    const { person } = await setup();
+    const { t, r } = await sameEvent(person, 'attempt:same');
     const [tBefore, rBefore] = [await review(t.reviewId), await review(r.reviewId)];
     expect(await reanchor(ORG_A, person, [T_EMAIL])).toEqual([{ review_id: r.reviewId, disposition: 'merged', onto_review_id: t.reviewId }]);
     const tAfter = await review(t.reviewId);
     expect(tAfter.revision).toBe(Number(tBefore.revision) + 1);
-    expect([...(tAfter.triggers as string[])].sort()).toEqual(['email_unsubscribe', 'reply_opt_out']);
+    expect(tAfter.triggers).toEqual(['email_unsubscribe']);
     expect(tAfter.locked_channels).toEqual(['email']);
-    expect([...(tAfter.source_refs as string[])].sort()).toEqual(['attempt:77', 'run-ra:2']);
+    expect(tAfter.source_refs).toEqual(['attempt:same']);
     for (const id of rBefore.adopted_hold_ids as string[]) expect(tAfter.adopted_hold_ids).toContain(id);
     for (const id of tBefore.adopted_hold_ids as string[]) expect(tAfter.adopted_hold_ids).toContain(id);
     expect(await review(r.reviewId)).toMatchObject({ state: 'merged', merged_into: t.reviewId, decision: null, decided_by: null, reason: null });
     expect((await review(r.reviewId)).merged_at).not.toBeNull();
+  }), 120_000);
+
+  // RULING (i), 2026-11-07: the SAME person, a DIFFERENT trigger. P's own earlier email-unsubscribe
+  // (opened target-anchored on P's address, before P resolved) and P's own reply opt-out (person-
+  // anchored) share no source_ref and no person-keyed row: two governance cases, the documented
+  // "two reviews per human" limit. Never merged.
+  it.each([
+    ['only the address given → kept_distinct', [{ channel: 'email', value: EMAIL }], 'kept_distinct'],
+    ['the address and the number given → re_anchored onto the free number', [{ channel: 'email', value: EMAIL }, { channel: 'phone', value: CANON }], 're_anchored'],
+  ])('RULING (i): P\'s earlier email-unsubscribe target review and P\'s reply opt-out stay two cases — %s; after erasure both survive distinct and both are decidable', (_what, targets, disposition) => inRollback(async () => {
+    const { person } = await setup();
+    const unsub = await emailTargetReview();                                      // P's own earlier unsubscribe, target-anchored on P's address
+    const reply = await operatorOptOut(person, 'run-ri:1');                       // P's own reply opt-out, person-anchored
+    const tBefore = JSON.stringify(await review(unsub.reviewId));
+    expect(await reanchor(ORG_A, person, targets as unknown[])).toEqual([{ review_id: reply.reviewId, disposition, onto_review_id: null }]);
+    expect(JSON.stringify(await review(unsub.reviewId))).toBe(tBefore);
+    await erase(person);
+    const [t, r] = [await review(unsub.reviewId), await review(reply.reviewId)];
+    expect(t).toMatchObject({ state: 'pending', anchor_kind: 'target', anchor_value: EMAIL });
+    expect(r).toMatchObject(disposition === 'kept_distinct'
+      ? { state: 'pending', anchor_kind: 'person', anchor_value: `erased:${reply.reviewId}`, person_id: null }
+      : { state: 'pending', anchor_kind: 'target', anchor_channel: 'phone', anchor_value: CANON, person_id: null });
+    expect(r.id).not.toBe(t.id);
+    expect(await anyColumnHas(person)).toBe(0);
+    expect((await decide(reply.reviewId, [])).status).toBe(200);
+    expect((await decide(unsub.reviewId, ['phone', 'whatsapp'])).status).toBe(200);         // email locked by the unsubscribe
+    expect(await allowed(ORG_A, 'email', { target: EMAIL })).toBe(false);
+  }), 120_000);
+
+  it('OWNER REGRESSION (20270127000005): two people sharing an address, each with a pending review through writeOptOutHolds + openOptOutReview; re-anchor A, then B, erase both → two DISTINCT reviews, neither merged, each keeps its own history, both decidable', () => inRollback(async () => {
+    const { person: a } = await setup();
+    const b = await newPerson(ORG_A);
+    const SHARED = 'info@acme.test';
+    const open = async (p: string, ref: string) => {
+      const holdIds = await svc.writeOptOutHolds({ organizationId: ORG_A, personId: p, email: SHARED, holdSource: 'optout_review:reply_opt_out', sourceRef: ref });
+      return (await svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'person', personId: p }, trigger: 'reply_opt_out', holdIds, sourceRef: ref, holdSource: 'optout_review:reply_opt_out' })).reviewId as string;
+    };
+    const ra = await open(a, 'run-sh:a');
+    const rb = await open(b, 'run-sh:b');
+    const [ha, hb] = [await review(ra), await review(rb)];
+    // They genuinely reference ONE target-only hold row on the shared address (A adopted it, B found it present).
+    const shared = (await rows(`SELECT id FROM public.contact_governance_records WHERE organization_id = $1 AND target_normalized = $2 AND person_id IS NULL AND revoked_at IS NULL`, [ORG_A, SHARED]))[0].id;
+    expect(ha.adopted_hold_ids).toContain(shared);
+    expect(hb.pre_existing_hold_ids).toContain(shared);
+    expect(await reanchor(ORG_A, a, [{ channel: 'email', value: SHARED }])).toEqual([{ review_id: ra, disposition: 're_anchored', onto_review_id: null }]);
+    expect(await reanchor(ORG_A, b, [{ channel: 'email', value: SHARED }])).toEqual([{ review_id: rb, disposition: 'kept_distinct', onto_review_id: null }]);
+    const settled = await snapshot();
+    expect(await reanchor(ORG_A, b, [{ channel: 'email', value: SHARED }])).toEqual([{ review_id: rb, disposition: 'kept_distinct', onto_review_id: null }]);
+    expect(await snapshot()).toEqual(settled);                                              // kept_distinct is idempotent too
+    await erase(a);
+    await erase(b);
+    const [fa, fb] = [await review(ra), await review(rb)];
+    expect(fa).toMatchObject({ state: 'pending', anchor_kind: 'target', anchor_value: SHARED, merged_into: null });
+    expect(fb).toMatchObject({ state: 'pending', anchor_kind: 'person', anchor_value: `erased:${rb}`, person_id: null, merged_into: null });
+    for (const [h, f] of [[ha, fa], [hb, fb]] as const) {
+      expect(f.triggers).toEqual(h.triggers);
+      expect(f.source_refs).toEqual(h.source_refs);
+      expect(f.adopted_hold_ids).toEqual(h.adopted_hold_ids);
+      expect(f.pre_existing_hold_ids).toEqual(h.pre_existing_hold_ids);
+    }
+    expect(Number((await one(`SELECT count(*)::int n FROM public.contact_opt_out_reviews WHERE organization_id = $1 AND state = 'merged'`, [ORG_A])).n)).toBe(0);
+    expect(await anyColumnHas(a)).toBe(0);
+    expect(await anyColumnHas(b)).toBe(0);
+    // Both decidable by an admin, the tombstoned one included (anchors from its own holds; none invented).
+    expect((await decide(rb, [])).status).toBe(200);
+    expect((await decide(ra, ['phone', 'whatsapp'])).status).toBe(200);
+    expect(await allowed(ORG_A, 'email', { target: SHARED })).toBe(false);
   }), 120_000);
 
   it('no_target: with no targets the row is left for the FK tombstone; nothing is written', () => inRollback(async () => {
@@ -673,8 +772,7 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
 
   it('IDEMPOTENT: a second call with the same inputs writes nothing and returns the same dispositions', () => inRollback(async () => {
     const { person } = await setup();
-    const t = await emailTargetReview();
-    const a = await operatorOptOut(person, 'run-ra:4');
+    const { t, r: a } = await sameEvent(person, 'attempt:ra4');
     const first = await reanchor(ORG_A, person, [T_EMAIL]);
     expect(first).toEqual([{ review_id: a.reviewId, disposition: 'merged', onto_review_id: t.reviewId }]);
     const after = await snapshot();
@@ -705,8 +803,7 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
 
   it('FULL SEQUENCE: function, person delete, NO person uuid anywhere; the target review is decidable and an admin reopen behaves', () => inRollback(async () => {
     const { person } = await setup();
-    const t = await emailTargetReview();                      // merged-into target
-    const a = await operatorOptOut(person, 'run-ra:7');        // merges into t
+    const { t, r: a } = await sameEvent(person, 'attempt:ra7');   // the same event: a merges into t
     // A second pending person review of the same person cannot exist (one pending per anchor), so a
     // re_anchored case runs for another person on the phone target in the same sequence:
     const other = await newPerson(ORG_A);
@@ -722,9 +819,8 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
     expect(await review(a.reviewId)).toMatchObject({ state: 'merged', anchor_value: `erased:${a.reviewId}`, person_id: null });
     expect(await allowed(ORG_A, 'email', { target: EMAIL })).toBe(false);
     // The admin can still decide both: the re-anchored phone review, then the review the person's
-    // one merged into. The number stays held until t (which adopted the person's number hold) is decided.
+    // one merged into (email stays closed: the unsubscribe locked it).
     expect((await decide(o.reviewId, ['email', 'phone', 'whatsapp'])).status).toBe(200);
-    expect(await allowed(ORG_A, 'phone', { target: PHONE })).toBe(false);
     expect((await decide(t.reviewId, ['email', 'phone', 'whatsapp'])).status).toBe(400);                           // email is locked by the unsubscribe
     expect((await decide(t.reviewId, ['phone', 'whatsapp'])).status).toBe(200);
     expect(await allowed(ORG_A, 'phone', { target: PHONE })).toBe(true);
@@ -733,9 +829,8 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
 
   it('a merged review cannot be decided or reopened: 409 review_merged, and the database refuses any move out of merged', () => inRollback(async () => {
     const { person, admin } = await setup();
-    const t = await emailTargetReview();
-    const r = await operatorOptOut(person, 'run-ra:8');
-    await reanchor(ORG_A, person, [T_EMAIL]);
+    const { t, r } = await sameEvent(person, 'attempt:ra8');
+    expect((await reanchor(ORG_A, person, [T_EMAIL]))[0]).toMatchObject({ disposition: 'merged' });
     expect(await decide(r.reviewId, ['email'])).toMatchObject({ status: 409, json: { code: 'review_merged' } });
     expect(await attempt(`UPDATE public.contact_opt_out_reviews SET state = 'pending', merged_into = NULL, merged_at = NULL WHERE id = $1`, [r.reviewId])).toBe('23514');
     expect(await attempt(`UPDATE public.contact_opt_out_reviews SET state = 'decided', merged_into = NULL, merged_at = NULL, decision = 'keep_closed',
@@ -763,8 +858,7 @@ describe('re-anchor at erasure: public.g11_reanchor_pending_opt_out_reviews (202
       expect({ role, code }).toEqual({ role, code: '42501' });
     }
     expect((await one(`SELECT has_function_privilege('service_role', 'public.g11_reanchor_pending_opt_out_reviews(uuid, uuid, jsonb)', 'EXECUTE') AS h`)).h).toBe(true);
-    const t = await emailTargetReview();
-    const r = await operatorOptOut(person, 'run-ra:10');
+    const { t, r } = await sameEvent(person, 'attempt:ra10');
     await reanchor(ORG_A, person, [T_EMAIL]);
     const pending = (await call(listRoute, 'GET', { company_id: ORG_A })).json.reviews as Row[];
     expect(pending.map((x) => x.id)).toEqual([t.reviewId]);
@@ -919,7 +1013,9 @@ describe('enrolment closure (owner 2026-11-07: "new journey gets closed while pr
     const { prospectId, personId } = await newProspect(ORG_A, { email: EMAIL, phone: PHONE });
     const holds = await svc.writeOptOutHolds({ organizationId: ORG_A, email: EMAIL, holdSource: 'optout_review:email_unsubscribe', sourceRef: 'attempt:cl' });
     const t = await svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'target', channel: 'email', target: EMAIL }, trigger: 'email_unsubscribe', holdIds: holds, sourceRef: 'attempt:cl', holdSource: 'optout_review:email_unsubscribe' });
-    const r = await operatorOptOut(personId, 'run-cl:m');
+    // The SAME unsubscribe event, now resolved to the person (a shared source_ref: 20270127000005's same case).
+    const rh = await svc.writeOptOutHolds({ organizationId: ORG_A, personId, email: EMAIL, holdSource: 'optout_review:email_unsubscribe', sourceRef: 'attempt:cl' });
+    const r = await svc.openOptOutReview({ organizationId: ORG_A, anchor: { kind: 'person', personId }, trigger: 'email_unsubscribe', holdIds: rh, sourceRef: 'attempt:cl', holdSource: 'optout_review:email_unsubscribe' });
     await db.query(`SELECT * FROM public.g11_reanchor_pending_opt_out_reviews($1, $2, $3::jsonb)`, [ORG_A, personId, JSON.stringify([{ channel: 'email', value: EMAIL }])]);
     expect(await review(r.reviewId)).toMatchObject({ state: 'merged', merged_into: t.reviewId });
     expect(refusedBy(await report(admin, prospectId))).toEqual(['contact_closed_by_admin']);
