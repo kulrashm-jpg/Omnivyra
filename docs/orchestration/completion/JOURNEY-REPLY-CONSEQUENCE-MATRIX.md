@@ -135,7 +135,7 @@ If 2, 3 or 4 fails, the answer is 503 `governance_write_failed` and the run stay
   - (1) RULED (no longer open): holidays are replaced by admin activity days, and the timezone falls back to UTC; see "Due date and overdue".
   - (2) **Two reviews for one person.** A STOP from an unresolved number gives a target-anchored review, and an operator `opt_out` for the same person gives a person-anchored one, until identity resolution links them. This is safe, because closed wins.
   - (3) **wa_id vs stored phone:** a `+` prefix difference that `normalizePhone` keeps. Pre-existing.
-  - (4) **PI closure is not written (P-1).** Enrolment still creates a run, which the hold then refuses.
+  - (4) **RULED:** P-1's PI closure is withdrawn. A prospect touched by a holding review, or closed by an admin, is refused at enrolment on the Orchestration side (§3b).
   - (5) **Erasure.** A target anchor holds no person (CHECK `contact_opt_out_reviews_target_has_no_person`, PI F-2), so a person delete can never abort on this table. A target anchor's canonical value is KEPT (PI ruling; erasure policy KEEP list). A PERSON anchor is tombstoned by the table's own guard when the foreign key clears `person_id`: `anchor_value` becomes `'erased:' || <the review's own id>`, never the person's. The prefix can never equal a canonical target, and the per-row id keeps the pending unique index collision-free across erasures. The review keeps its state.
   - (5a) **Re-anchor at erasure: BUILT on our side (owner-approved; interface by PI; PI will call it from personErasure, in its own files).**
     - **The function.** `public.g11_reanchor_pending_opt_out_reviews(p_organization_id, p_person_id, p_targets jsonb)` RETURNS `(review_id, disposition, onto_review_id)` (migration `20270127000003`).
@@ -160,6 +160,34 @@ If 2, 3 or 4 fails, the answer is 503 `governance_write_failed` and the run stay
   - (8) **The schema-parity verifier** does not yet list the table, as with `20270127000000`.
   - (9) ~~The amendment awaits owner confirmation~~: CONFIRMED by the owner 2026-11-07, including that a new email unsubscribe closes email permanently and holds the other channels for admin review.
 - **Scope limit, unchanged:** WhatsApp broadcast recipients are matched by number. The number hold covers them now, wherever the number is known.
+
+### 3b. Closed to new journeys (G-11 follow-up, RULED 2026-11-07)
+- **The owner, verbatim:** "new journey gets closed while prospect is closed and once it is opened by admin it will be open for new journeys. only copany admin can close or reopen the prospect". Asked whether an admin can also close without an opt-out: "Also a manual close".
+- **P-1's terminal closure is WITHDRAWN. PI ruled option (A):** the closure lives on the Orchestration side. PI's terminal `closed_disqualified` is NOT used or made reversible, because its terminality underpins the Prompt 5 key-change certification. No PI file changes; `recordHumanOriginClosure` is not called; the P-1 closure guard is unchanged.
+- **TWO GATES at enrolment** (`enrollment.ts` → `contactEnrolmentClosure.ts`), both excluding with `contact_closed_by_admin`, beside PI's `prospect_lifecycle_closed`:
+  - **Review-derived, with no write of its own.** A prospect is closed while an opt-out review in its tenant that TOUCHES it is pending, or decided `keep_closed` (its latest decision).
+    - A review touches the prospect when it is anchored on the prospect's person, or on a target equal to the prospect's canonical email (an email anchor) or canonical phone (a phone or whatsapp anchor). The same normalizers as the anchors are used.
+    - A merged review is followed through `merged_into` to the review that carries the state.
+    - A reopen decision (any channel) opens it.
+    - Reading the review state directly means an opt-out cannot half-land.
+  - **Manual.** An active row in `contact_enrolment_closures` (migration `20270127000004`): append-only, reopened once, one active closure per prospect, with a composite FK to `canonical_leads` ON DELETE CASCADE.
+    - It is written only through `POST /api/contact-enrolment-closures { action: 'close' | 'reopen', prospectId, reason }`, by COMPANY_ADMIN of that company (no bypass; a company SUPER_ADMIN is refused).
+    - The reason is required (1–500 characters). Every close and reopen is audited in `execution_audit` with ids only.
+    - `GET` reports which gate holds.
+  - **A reopen clears the MANUAL gate only.** While a review still holds, the reopen is refused with 409 `closed_by_optout_review` and that review's id, and nothing changes: a review is reopened only by deciding it.
+- **FAIL CLOSED.** An unreadable person, address, review store or closure store excludes with `contact_closure_unreadable`. Enrolment never proceeds on an unknown closure.
+- **Only NEW journeys** are gated. A manual close does not end a run already active; its sends stay governed by the review's holds.
+- **Erasure (PI item 1).** No journey send path reaches an address without a canonical person:
+  - the bridge refuses `person_unresolved` before writing;
+  - email resolves only `unified_persons.primary_email`, and WhatsApp only `primary_phone`;
+  - community and WS-3 refuse `person_unresolved`;
+  - nothing reads `lead_intelligence.identity`, `canonical_users` or contacts for a recipient.
+  
+  This proves SAFETY, not gating. After an erasure the prospect has no person, so a review re-anchored onto its address no longer links to it: a journey CAN still be created for the prospect (today's behaviour) and it fails at every send. This is tested on real schema. A MANUAL closure, which is prospect-level, does survive erasure and keeps refusing.
+- **Erasure (PI ruled a SPLIT on `20270127000004`).** The row and every enforcing column are KEEP. `close_reason` and `reopen_reason` are MAPPED and redacted to `'[redacted: subject erased]'` by `public.g11_redact_enrolment_closure_reasons(org, prospect_ids)`.
+  - The function is SECURITY DEFINER, service_role only, admitted by a transaction-local guard flag for that one change.
+  - `{}` returns 0; NULL, a NULL element and another tenant's prospect raise; it is idempotent.
+  - PI's erasure calls it with the person's prospect ids.
 
 ## 4. O2-F1: every resume moves a run only from `paused`
 - **The defect:** a plain resume landing between the retimed resume's paused check and its floor write made the run active before the floor existed, so a dispatch could send early.
