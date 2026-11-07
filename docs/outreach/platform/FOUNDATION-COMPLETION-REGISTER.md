@@ -746,3 +746,111 @@ Not ruled:
 **Closure status: unchanged, no closure is complete.** Owner decisions still open: GD-4 / REL-07, D2-R, SC7-R, BL-A, CN-1..CN-3, C-CP-1, CL-1..CL-6, `PROSPECT_PERSON_ERASE`, notes held in append-only evidence, widening the permanent-failure code list, and the three G-11 points above.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## G-11 merged, T2 at `73b79929a`, D7 test aligned (2026-11-07)
+
+**Owner rulings confirmed (2026-11-07):**
+- the admin-activity window: a review is overdue after 3 ended weekdays on which a company admin was active; UTC applies when the company has no timezone;
+- the admin-controlled, reversible prospect closure is approved;
+- re-anchoring a pending review after person erasure is approved, subject to these safeguards:
+  - the canonical email or phone identifier only;
+  - the erased person's ID, name and data are not kept;
+  - an address or number alone never merges different people's reviews;
+  - only true duplicates of one governance case are merged;
+  - two people erased in one tenant keep distinct tombstones and audit histories;
+  - a merged review cannot be decided on its own;
+  - only company admins can see reviews;
+  - nothing is recreated from the identifier.
+
+**Owner GO (2026-11-07):** a normal local merge of Orchestration's approved closure implementation and migrations, Outreach's WhatsApp/email producers, and the approved documentation.
+
+**Checked before the merge.** The foundation was at `40741bb12` and the preview at `6b0bc40cb`, as reported. Each reviewed Orchestration range re-hashed to its reviewed value:
+
+| Range | Hash |
+|---|---|
+| `6d83f48be..9a00b9d46` | `53403d63` |
+| `e5a7859a6..7ac0db02c` | `f8c610c1` |
+| `7ac0db02c..afbf33306` | `f0e77b64` |
+| `afbf33306..d16a5e3ac` | `2884ea66` |
+
+Orchestration's later, uncommitted gap work is not included.
+
+**Commits (local, `outreach/foundation-base-20261104`):**
+- `dc9ae0ecb`: merge of Orchestration `d16a5e3ac`.
+  - Every file equals one side's version.
+  - The only file both sides changed is `version-reservations.json`, and both sides' hunks are kept unchanged.
+- `73b79929a`: merge of the Outreach producers `3790a7675`. The merge diff is byte-identical to the reviewed commit (`1770dfd4…`).
+- `5b185a728`: test-only. See the D7 note below.
+
+**Preserve refs:**
+
+| Ref | Commit |
+|---|---|
+| `refs/preserve/outreach-foundation-pre-g11` | `40741bb12` |
+| `refs/preserve/outreach-g11-producers` | `3790a7675` |
+| `refs/preserve/outreach-g11-preview-head` | `6b0bc40cb` |
+| `refs/preserve/outreach-g11-preview-r3-tested` | `f6e45f410` |
+
+**Results (T2, frozen at `73b79929a1569efa94bec5cef7c42495f57e63f8`).** HEAD and a clean tree were verified at the start, after A and after B.
+
+| Category | Result | Against the `34cbe9a04` T2 |
+|---|---|---|
+| A. Real-schema, full project | 106 suites; 2123 tests: 2110 passed, 3 skipped, **10 failed**, all in `pi_email_send_path_041a` | The N-4 failure is gone. The 10 are new; see the Redis exception below |
+| A. G-11 suites | `g11_optout_review` 64/64; `g11_outreach_producers` 12/12; `o2f1_resume_race` 9/9 | New suites, all pass |
+| B. Integration community/WhatsApp | 18 suites; 126 tests: 120 passed, **6 failed** | The same 6, by name |
+| B. Whole-repo unit jest | 2402 suites; 42954 tests: 42801 passed, 73 skipped, **74 failed** | The same 62, plus 10 in `unified_content_generation` (see the Redis exception) and 2 in `d7EmailEvidencePreservation` (fixed in `5b185a728`) |
+| C. Typechecks | **NOT RUN** | See below |
+| D. Gates | **NOT RUN** | See below |
+
+The `g11_optout_review` suite includes:
+- the OWNER REGRESSION: two people share an address, and neither review merges into the other;
+- two people erased in one tenant: both reviews survive with distinct tombstones;
+- both RULING (i) cases;
+- the address-only review that is not merged;
+- the admin-only access tests;
+- the closure fail-closed test.
+
+`g11_outreach_producers` covers WhatsApp STOP and the email unsubscribe holds on real schema.
+
+**C and D were not run.** The typecheck stage needs 6000 MB free; from 20:53 to 22:05 the machine had 2.8–4.3 GB. With owner authorisation, the run was stopped cleanly at 22:05:
+- no process was left behind;
+- the typecheck lock was released;
+- the test database had already been removed after stage A.
+
+C and D are still owed on this line.
+
+**Exception: Redis was not reachable during this run (likely environmental, not yet confirmed).**
+- `ECONNREFUSED 127.0.0.1:6379` appears 23 times in the real-schema log. Redis was up during the `34cbe9a04` T2.
+- In `pi_email_send_path_041a`, every test that reaches a send times out at 60 s. The suite passed in 19.9 s at `34cbe9a04`.
+- No send-path source file changed in either merge.
+- The 10 new `unified_content_generation` failures are queue tests that need the same Redis.
+- Docker was not started to restore Redis, because it also starts a production worker.
+- Confirmation needed: the same suites at `40741bb12` without Redis.
+
+**D7 test aligned (`5b185a728`, test-only, owner-approved).** `d7EmailEvidencePreservation` still asserted the retired WP3 behaviour: channel `*`, with no hold. It now asserts the approved G-11 behaviour:
+- the email-scoped ADDRESS and PERSON records, with unchanged evidence;
+- the person-anchored hand-off to the hold and review, with `sourceRef` `attempt:<id>` and the person's record as the trigger;
+- the returned `reviewId`.
+
+Every preservation assertion is kept: records are byte-identical after later events, and no UPDATE touches an evidence store. The hold service is stubbed, as in `wp3UnsubscribeFlow`.
+
+Evidence:
+- The affected unit suites pass: D7, `wp3UnsubscribeFlow`, `whatsappStopOptOut` and `orch_c5_producer_compat`, 4/4 suites, 125 tests.
+- The G-11 unit suites pass: `contactEnrolmentClosure`, `optOutReview`, `optOutReviewRoute`, `w1cUnsubscribeScopeEndToEnd`, `whatsappStopOptOut`, `wp3OutreachUnsubscribeToken` and `wp3UnsubscribeFlow`, 7/7 suites, 235 tests.
+- Two mutants in `unsubscribeService.ts` are caught:
+  - writing the old `*` channel fails 2 tests;
+  - skipping the hold fails 1.
+  The source file was restored byte-identical.
+- No production code changed.
+
+**Migrations.** The G-11 migrations `20270127000001`–`20270127000005` are in the foundation. They have been applied only to disposable pg-sandbox clusters on 127.0.0.1; this T2 applied 134 migrations. They are **unapplied in every real environment**, and no production or shared environment was touched. No provider, send, publish, browser action or flag was used.
+
+**Open after this merge:**
+- **WhatsApp broadcast person check (not fixed).** `whatsappBroadcastService.processBatch` calls `mayContact` with `personId: null`. A person-anchored hold does not cover a broadcast to that person's number unless the number itself is held. The proposal, awaiting the owner:
+  - a `whatsapp_broadcast_recipients.person_id` column, set by the engine adapter;
+  - manual broadcasts stay target-only.
+- **Orchestration's G-11 gap work (not merged).** This covers channel-scoped operator opt-out, `contact_suppressed` and the reopen matrix. Its diff on `d16a5e3ac` hashes to `1d989ae3…`. It awaits Outreach review and owner authorisation.
+- **Four PI fingerprint updates in that work (not merged).** These are `piOutreachBridge040` plus the matching updates in 034, 036 and 037. They await independent PI review and owner authorisation.
+- The owner decisions listed in the previous section still apply.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
