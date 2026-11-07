@@ -109,6 +109,14 @@ jest.mock('../../db/writeOwner', () => ({
   },
 }));
 
+// G-11: after the `email` records, the all-channel hold and the admin review are Orchestration's
+// service, called through optOutHold. This suite pins the evidence the producer writes and what it
+// hands the hold; g11_outreach_producers (real schema) runs the real hold.
+const holdAndOpenOptOutReview = jest.fn();
+jest.mock('../../services/leadOutreachExecution/optOutHold', () => ({
+  holdAndOpenOptOutReview: (...a: unknown[]) => holdAndOpenOptOutReview(...a),
+}));
+
 import {
   EXECUTION_RUNTIME_VERSION,
   GOVERNANCE_VERSION,
@@ -172,6 +180,8 @@ beforeEach(() => {
   db.nextId = 1;
   db.updates = [];
   db.beforeUpdate = null;
+  holdAndOpenOptOutReview.mockReset();
+  holdAndOpenOptOutReview.mockResolvedValue({ status: 'opened', reviewId: 'rv-1', holdIds: ['h-1'], reason: null });
 });
 
 // ── 1. the mutable delivery summary: compare-and-set ─────────────────────────
@@ -222,20 +232,27 @@ describe('D7 — a concurrently settled delivery status is never overwritten', (
 // ── 2. unsubscribe evidence survives everything that happens after it ────────
 
 describe('D7 — unsubscribe evidence is written and never overwritten by later lifecycle updates', () => {
-  it('the link unsubscribe writes the ADDRESS and PERSON records with their evidence', async () => {
+  it('the link unsubscribe writes the ADDRESS and PERSON records on email (G-11 replaced `*`) with their evidence, then the hold', async () => {
     const { attemptId, taskId } = await sentMessage();
     const out = await recordOutreachUnsubscribe(
       { organizationId: ORG, attemptId, scope: '*', recipient: RECIPIENT, issuedAt: 1, keyId: 'k1' }, 'one_click',
     );
-    expect(out).toMatchObject({ status: 'recorded', created: 2, alreadyPresent: 0 });
+    expect(out).toMatchObject({ status: 'recorded', created: 2, alreadyPresent: 0, reviewId: 'rv-1' });
     const rows = governance();
     expect(rows).toHaveLength(2);
     for (const r of rows) {
       expect(r).toMatchObject({
-        organization_id: ORG, governance_type: 'unsubscribe', channel: '*', revoked_at: null,
+        organization_id: ORG, governance_type: 'unsubscribe', channel: 'email', revoked_at: null,
         source: 'outreach_unsubscribe_link', evidence: { attemptId, taskId, method: 'one_click', tokenKeyId: 'k1' },
       });
     }
+    expect(rows.filter((r) => r.person_id === PERSON)).toHaveLength(1);
+    // G-11: every channel is then held and the admin review opened, anchored to the person.
+    expect(holdAndOpenOptOutReview).toHaveBeenCalledTimes(1);
+    expect(holdAndOpenOptOutReview.mock.calls[0][0]).toMatchObject({
+      organizationId: ORG, trigger: 'email_unsubscribe', anchor: { kind: 'person', personId: PERSON },
+      sourceRef: `attempt:${attemptId}`, triggerRecordId: rows.find((r) => r.person_id === PERSON)!.id, personId: PERSON,
+    });
     // It writes NO outcome row today (see the SC-4 note in ENGINE-READINESS-D7.md).
     expect(db.tables.outreach_outcomes ?? []).toHaveLength(0);
   });
@@ -257,6 +274,7 @@ describe('D7 — unsubscribe evidence is written and never overwritten by later 
       { organizationId: ORG, attemptId, scope: '*', recipient: RECIPIENT, issuedAt: 2, keyId: 'k2' }, 'confirmation',
     );
     expect(again).toMatchObject({ status: 'recorded', created: 0, alreadyPresent: 2 });
+    expect(before.every((r) => r.channel === 'email')).toBe(true);
 
     const unsubscribeNow = governance().filter((r) => r.governance_type === 'unsubscribe');
     expect(unsubscribeNow).toEqual(before);
