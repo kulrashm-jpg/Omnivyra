@@ -243,11 +243,45 @@ jobs:
           PI_CG_ANON_JWT: ${{ env.PI_CG_ANON_JWT }}
           PI_CG_PROBE_JWT: ${{ env.PI_CG_PROBE_JWT }}
           CI: 'true'
+          # Hermetic placeholders for the SHARED jest setup. The repository’s jest
+          # config loads backend/tests/globalTeardown.ts, which reaches
+          # lib/redis/usageProtection and thence config/index.ts, and that calls
+          # validateEnv() at module load. Without these five the suite does not
+          # fail — it never runs, which is a failure of verification and not a
+          # result. Run 42513605139 ended exactly there, AFTER PostgREST had
+          # already served the computed field.
+          #
+          # They reach nothing: a placeholder host, a loopback Redis that is never
+          # contacted by these suites, and a key of zeroes. SUPABASE_URL and
+          # SUPABASE_SECRET_KEY are NOT placeholders and must not be — they are how
+          # the repository client reaches the disposable PostgREST above.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-hermetic-placeholder-publishable-key
+          REDIS_URL: 'redis://localhost:6379'
+          OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+          ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
         run: node node_modules/jest/bin/jest.js --config jest.config.js --runInBand backend/tests/integration/piP0ContactGovernanceReadAt.test.ts
 
       - name: Part 1 temporal suite and the aggregation suite, on the same tree
         env:
           CI: 'true'
+          # Hermetic placeholders for the SHARED jest setup. The repository’s jest
+          # config loads backend/tests/globalTeardown.ts, which reaches
+          # lib/redis/usageProtection and thence config/index.ts, and that calls
+          # validateEnv() at module load. Without these five the suite does not
+          # fail — it never runs, which is a failure of verification and not a
+          # result. Run 42513605139 ended exactly there, AFTER PostgREST had
+          # already served the computed field.
+          #
+          # They reach nothing: a placeholder host, a loopback Redis that is never
+          # contacted by these suites, and a key of zeroes. SUPABASE_URL and
+          # SUPABASE_SECRET_KEY are NOT placeholders and must not be — they are how
+          # the repository client reaches the disposable PostgREST above.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-hermetic-placeholder-publishable-key
+          REDIS_URL: 'redis://localhost:6379'
+          OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+          ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
         run: |
           node node_modules/jest/bin/jest.js --config jest.config.js --runInBand \
             backend/tests/unit/contactGovernanceTemporalPrecision.test.ts \
