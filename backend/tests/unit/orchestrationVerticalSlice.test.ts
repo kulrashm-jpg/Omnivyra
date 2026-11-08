@@ -288,6 +288,8 @@ const intelligence: IndividualIntelligencePort = {
 const wa = {
   broadcasts: [] as Array<{ id: string; org: string; name: string; template: string }>,
   recipients: new Map<string, { phone: string; status: string }>(),
+  expanded: [] as Array<{ id: string; contacts: Array<{ phone_e164: string; person_id: string }> }>,
+  numberOnly: [] as unknown[],
   enqueued: [] as string[],
   failEnqueue: null as string | null,
 };
@@ -306,10 +308,13 @@ const waDeps: WhatsAppAdapterDeps = {
     wa.broadcasts.push({ id, org: input.company_id, name: input.name, template: String(input.template_name) });
     return id;
   }) as never,
-  expandRecipients: (async (id: string, contacts: Array<{ phone_e164: string }>) => {
+  expandPersonRecipients: (async (id: string, contacts: Array<{ phone_e164: string; person_id: string }>) => {
+    wa.expanded.push({ id, contacts });
     wa.recipients.set(id, { phone: contacts[0].phone_e164, status: 'pending' });
     return { inserted: 1, skipped: 0 };
   }) as never,
+  // Not a dep: present only so a regression to the number-only insert is recorded, not crashed.
+  ...({ expandRecipients: async (...args: unknown[]) => { wa.numberOnly.push(args); return { inserted: 1, skipped: 0 }; } } as object),
   enqueueBroadcast: (async (id: string) => {
     if (wa.failEnqueue) throw new Error(wa.failEnqueue);
     wa.enqueued.push(id);
@@ -353,7 +358,7 @@ beforeEach(() => {
   world.clock = '2026-10-28T09:00:00.000Z';
   world.instances = []; world.steps = []; world.tasks = []; world.transitions = [];
   bridgeModule.__handoffs.length = 0;
-  wa.broadcasts = []; wa.recipients = new Map(); wa.enqueued = []; wa.failEnqueue = null;
+  wa.broadcasts = []; wa.recipients = new Map(); wa.expanded = []; wa.numberOnly = []; wa.enqueued = []; wa.failEnqueue = null;
   for (const k of Object.keys(people)) delete people[k];
   people['p-ready'] = { personId: 'person-ready', score: 0.8, phone: '+15551230001', whatsapp: true, email: false };
   people['p-nophone'] = { personId: 'person-nophone', score: 0.8, phone: null, whatsapp: true, email: false };
@@ -440,6 +445,9 @@ describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', ()
     expect(r.decisions).toEqual([expect.objectContaining({ stepKey: 'wa-intro', engine: 'whatsapp', decision: 'waiting', outcome: 'submitted' })]);
     expect(wa.broadcasts).toEqual([{ id: 'bc-1', org: ORG_A, name: broadcastNameFor(`${world.instances[0].plan.id}-task-2`), template: 'discovery_intro_v1' }]);
     expect(wa.recipients.get('bc-1')?.phone).toBe('+15551230001');
+    // The recipient carries the canonical person, so the send path can apply person-level holds.
+    expect(wa.expanded).toEqual([{ id: 'bc-1', contacts: [{ phone_e164: '+15551230001', person_id: 'person-ready' }] }]);
+    expect(wa.numberOnly).toEqual([]);
     expect(wa.enqueued).toEqual(['bc-1']);
 
     // The engine sends; the next sweep records the result and the journey completes.

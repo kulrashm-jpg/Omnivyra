@@ -160,13 +160,19 @@ describe('WhatsApp engine, the controls that stand before any broadcast', () => 
 describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed', () => {
   it('sends once through the real queue path, survives a job retry, and settles on the engine\'s own record', async () => {
     await inRollback(async () => {
-      const { instanceId } = await scene([wa('intro')]);
+      const { instanceId, personId } = await scene([wa('intro')]);
 
       let r = await sweep(waAdapters());
       expect(r.issues).toEqual([]);
       expect(r.counters.tasks_waiting).toBe(1);
       expect(metaCalls).toHaveLength(0);                    // the sweep never sends; only the queue does
       expect(mockJobs).toHaveLength(1);
+      // The journey recipient carries its canonical person, for send-time person-level restrictions.
+      const recipients = await db.query(`SELECT rc.person_id FROM public.execution_engine_requests q
+        JOIN public.execution_tasks t ON t.id = q.execution_task_id
+        JOIN public.whatsapp_broadcast_recipients rc ON rc.broadcast_id = q.external_ref::uuid
+        WHERE t.execution_instance_id = $1`, [instanceId]);
+      expect(recipients.rows).toEqual([{ person_id: personId }]);
       const job = { ...mockJobs[0] };
 
       await runQueuedJobs();
