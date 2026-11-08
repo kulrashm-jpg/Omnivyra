@@ -854,3 +854,144 @@ Evidence:
 - The owner decisions listed in the previous section still apply.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## Redaction and WhatsApp broadcast fix integrated, combined T2 at `f89277e66` (2026-11-08)
+
+**Owner decisions (2026-11-08):**
+- **A. WhatsApp broadcast fix:** GO for local integration of `a37bb85f4` with Orchestration's journey-side change, after review of the exact diff. Canonical person identity, tenant isolation, queue-time checks and per-message/retry checks are preserved. There is no competing recipient identity field or governance store.
+- **B. Erasure reason redaction:**
+  - Approved for person-anchored and address/phone-anchored reviews associated with the erased person.
+  - Decision outcome, permitted audit history, administrator identity and timestamps are kept.
+  - Another person's independent review is never redacted because an address or number is shared.
+  - `e3cc7f877` and `35b241c1f` are integrated.
+- **C. Recipient personal-data erasure:** policy approved. Implementation is a **separate PI/Outreach workstream, not in this integration** (see below).
+- **D. Quota settlement:** the preferred approach is to release unused reservations. **Not implemented**, because the current contract is queue-based (see below).
+- **E. Integration:** integrate A and B locally, verify migrations, run focused tests and the combined T2, and record here separately.
+
+**Commits (local, `outreach/foundation-base-20261104`):**
+- `6e8d763bb`: merge of Orchestration `35b241c1f`. It contains `e3cc7f877` (the redaction migration `20270127000006` with its test) and PI's erasure-policy row.
+  - Every file equals one side's version.
+  - Both sides' `version-reservations.json` hunks are kept unchanged.
+- `5829c6f9d`: merge of the Outreach broadcast fix `a37bb85f4` (6 files, +697/−20). Same proof.
+- `f89277e66`: merge of Orchestration `c36a112df`, the journey adapter that passes the canonical person through `expandPersonRecipients`. The merge diff hash equals the reviewed commit's (`94d27834`).
+
+**Preserve refs:**
+
+| Ref | Commit |
+|---|---|
+| `refs/preserve/outreach-foundation-pre-redaction` | `6a72a2f11` |
+| `refs/preserve/orch-g11-reason-redaction` | `35b241c1f` |
+| `refs/preserve/outreach-broadcast-person-preview` | `a37bb85f4` |
+| `refs/preserve/orch-c5-bcast-person-c36a112d` | `c36a112df` |
+| `refs/preserve/outreach-foundation-int-20261108` | `f89277e66` |
+
+**The broadcast fix (`a37bb85f4`).** Migration `20270128000004_whatsapp_broadcast_recipient_person`:
+- Adds `whatsapp_broadcast_recipients.person_id` and `person_company_id`, with a composite FK to `unified_persons (id, company_id)` `ON DELETE SET NULL (person_id)`.
+- The tenant is derived from the broadcast and never supplied by the writer:
+  - another tenant's person is refused (23503);
+  - a mismatched tenant is refused (42501).
+- `person_id` never changes, except from non-null to NULL when the person no longer exists.
+  - This is a data probe, measured on real schema.
+  - PI rejected a trigger-depth guard as a correlate.
+- No client role can read `person_id`.
+
+Changes in `whatsappBroadcastService`:
+- Journey recipients carry the person (`expandPersonRecipients`); manual broadcasts stay number-only.
+- `enqueueBroadcast` screens pending recipients (person OR number) before counting quota, and fails closed if governance is unreadable.
+- `processBatch` re-checks person and number at every send and retry.
+
+**Redaction (`e3cc7f877`), reviewed against the 8 criteria: PASS.**
+- The guard differs from the `0003` guard by one added block.
+- The rollback restores the `0003` guard verbatim.
+- Known latent issue: the redaction fires on any person-row delete, including `merge_unified_persons` (see open items).
+
+**Focused checks at `f89277e66`:**
+- Real-schema, 7 suites, **141/141**:
+
+  | Suite | Tests |
+  |---|---|
+  | broadcast person restriction | 23 |
+  | redaction | 8 |
+  | `g11_optout_review` | 64 |
+  | `orch_engines_real` | 20 |
+  | `o2f1_resume_race` | 9 |
+  | `p4_governance_whatsapp` | 5 |
+  | `g11_outreach_producers` | 12 |
+
+- Migration `0004` (broadcast):
+  - replay on an applied database, rollback, rollback replay and re-apply all succeed;
+  - after rollback, no column, trigger or function remains.
+- Unit, 20 suites, **479/479**.
+- Mutants on the broadcast fix, all restored byte-identical:
+
+  | Mutant | Result |
+  |---|---|
+  | person check removed | fails 7–8 tests |
+  | queue-time screening removed | fails 8 tests |
+  | trigger-depth guard | fails the negative control |
+  | no guard | fails 2 tests |
+
+**Combined T2, frozen at `f89277e664dab09701792fc0869c80cd3fa244e2`.**
+- HEAD and a clean tree were verified at the start, after A, after B, after C and at the end.
+- 136 migrations were applied to a disposable pg-sandbox cluster on 127.0.0.1.
+
+| Category | Result | Against the `73b79929a` T2 |
+|---|---|---|
+| A. Real-schema, full project | 108 suites; 2154 tests: 2141 passed, 3 skipped, **10 failed**, all in `pi_email_send_path_041a` | The same 10, by name |
+| B. Integration community/WhatsApp | 18 suites; 126 tests: 120 passed, **6 failed** | The same 6, by name |
+| B. Whole-repo unit jest | 2402 suites; 42954 tests: 42808 passed, 73 skipped, **73 failed** | See the note below |
+| C. `typecheck-ci` | 3/3 projects clean | Pass |
+| C. Backend-tests typecheck | 52 net-new | Identical, by diagnostic, to the `6a72a2f11` run |
+| C. Worker typecheck | clean | Pass |
+| D. Gates | 9/10 pass; `migration-quality` fails | The same violations as the `6a72a2f11` run (the known 23, REL-07) |
+
+Whole-repo jest against the `73b79929a` T2:
+- The 2 D7 failures are gone (fixed in `5b185a728`).
+- One is new: `jevFlowProtectedPaths` "B3 check-merge…" timed out at 180 s under full-suite load.
+- Run alone at the same head, that suite passes 36/36 in 39 s.
+
+C and D, owed since the `73b79929a` T2, are now run on this line.
+
+**The `041a` and `unified_content_generation` failures (unexplained).**
+- The Redis explanation recorded in the previous section is **withdrawn**. Run alone at `40741bb12` without Redis, `pi_email_send_path_041a` passes, yet it still fails in the full real-schema run.
+- `unified_content_generation` could not be started in the comparison harness (ZodError), so that comparison is inconclusive.
+- The cause is not established. Neither merge in this section touches the send path.
+
+**Migrations.**
+- The foundation holds `20270127000000`–`20270127000006` and `20270128000000`–`20270128000004`. Numbering is contiguous, with no collision.
+- Dependencies: `20270127000006` depends on `0003`; `20270128000004` depends on `unified_persons (id, company_id)`.
+- Applied only to disposable pg-sandbox clusters on 127.0.0.1. **Unapplied in every real environment.**
+- No provider, send, publish, browser action or flag was used.
+
+**Investigated, not implemented (separate decisions):**
+- **Quota (D).**
+  - `checkAndConsume` is a daily Redis counter per `phone_number_id`, incremented at enqueue by the pending count.
+  - There is no reservation, settlement or billing. The DB fallback RPC `increment_wa_usage` does not exist.
+  - The contract counts queue acceptance, not sends, so a release mechanism is a new design and goes back to the owner.
+  - Since this fix, recipients already restricted at enqueue are not counted.
+- **Recipient erasure (C).**
+  - Only `whatsappBroadcastService` reads `contact_name`, `encrypted_phone` and `hashed_phone`.
+  - `encrypted_phone` is read for sending, screening and the permanent-failure `invalid_contact` record.
+  - `hashed_phone` is read only for the upsert dedupe.
+  - The routes read status counts and aggregates only.
+  - Suppression lives in `contact_governance_records`, not in recipient rows.
+  - Design with PI awaits a go-ahead.
+
+**Pending, not merged:**
+- **Orchestration's `0004` grant fix (two commits):**
+  - `5e4ad5527`: REVOKE DELETE, TRUNCATE, REFERENCES and TRIGGER from `service_role` on `contact_enrolment_closures`.
+  - `069bfd953`: adds MAINTAIN, per Orchestration's owner ruling.
+  - Verified read-only: the pair's diff hash is `85fac3a1…`, and the migration change is one revoke line and its comment.
+  - To be merged as a pair on owner approval, followed by focused checks.
+- **Orchestration's `20270127000008` and `20270127000009`:** guard hardening, and Block re-deciding (held until PI's finalize erasure marker exists). Each awaits review and owner approval.
+- **Still held:** Orchestration's G-11 gap work (`ca5f3082f`) and the four PI fingerprint updates.
+
+**Open owner decisions:**
+- the target-anchored redaction design;
+- `merge_unified_persons`. Orchestration reports a ruling that a merge must refuse while the loser holds live person governance, with PI to implement it; this is not yet confirmed here;
+- `enforced_channels`;
+- quota release;
+- the recipient-erasure design;
+- the decisions listed in earlier sections.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
