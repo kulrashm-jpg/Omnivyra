@@ -17,6 +17,23 @@ name: PI Contact Governance — PostgREST computed field
 #     destroyed with it. The only addresses used are `localhost` (from the job)
 #     and the service-network aliases `postgres` / `postgrest` (between the
 #     containers), neither of which is routable outside this runner.
+# ─── WHY POSTGREST IS NOT A `services:` CONTAINER ──────────────────────
+# It was, for the first two runs of this workflow, and it cannot be. Service
+# containers start BEFORE any job step, so at the moment PostgREST connects the
+# database has none of the Supabase roles — `authenticator` does not exist yet,
+# because a job step creates it. PostgREST 12.2.3 treats the failure of its
+# LISTEN thread as fatal ("Failed listening for notifications ... ExitFailure 1")
+# and exits about a second in. A dead service container is never restarted, so
+# every later step waits on a server that is gone. Run 42512685862 and run
+# 42513099905 both failed exactly that way, and the captured container log is
+# what says so rather than a guess.
+#
+# It therefore starts as a STEP, after the database has been prepared. Every
+# isolation property the owner approved is unchanged: a pinned image, a
+# disposable container on an ephemeral runner, loopback only, no secret, and an
+# unconditional removal at the end of the job. What changed is the ORDER, which
+# is the one thing `services:` does not let this job control.
+#
 #   • No `supabase start`, no `supabase link`, no `supabase db push`, no
 #     `supabase/config.toml`, no `.env.local`, and no replay of the 457
 #     committed migrations. One migration file is applied: the one under test.
@@ -72,28 +89,6 @@ jobs:
           --health-timeout 5s
           --health-retries 20
 
-      postgrest:
-        # PINNED. An unpinned `:latest` would let the behaviour under test change
-        # without a commit here, which would make a pass meaningless.
-        image: postgrest/postgrest:v12.2.3
-        env:
-          # The container reaches the database by its SERVICE ALIAS, not through
-          # localhost: these are two containers on the runner's service network.
-          # `authenticator` is created by scripts/ci/schema-bootstrap.sql with
-          # NOINHERIT and is granted anon/authenticated/service_role, which is
-          # the Supabase arrangement — so a request's privileges come only from
-          # the `SET ROLE` that its JWT asks for.
-          PGRST_DB_URI: postgres://authenticator:pgcg@postgres:5432/pgcg
-          PGRST_DB_SCHEMAS: public
-          # A throwaway signing key for a localhost container (see the header).
-          PGRST_JWT_SECRET: pi-cg-ci-only-not-a-secret-32bytes-min
-          # DELIBERATELY NO PGRST_DB_ANON_ROLE. Without one, an unauthenticated
-          # request is REJECTED rather than served as `anon` — which is what
-          # lets the suite assert that no client role can reach this function.
-          PGRST_DB_CHANNEL_ENABLED: 'true'
-          PGRST_DB_CHANNEL: pgrst
-          PGRST_LOG_LEVEL: info
-        ports: ['3000:3000']
 
     env:
       PGHOST: localhost
@@ -148,6 +143,28 @@ jobs:
         # resulting ACL is not exactly PUBLIC/anon/authenticated revoked and
         # service_role granted, so this step failing IS the privilege assertion.
         run: psql -v ON_ERROR_STOP=1 -f supabase/migrations/20270202000000_pi_contact_governance_read_at.sql
+
+      - name: Start PostgREST against the prepared database
+        # `--network host`: the container shares the runner’s loopback, so it
+        # reaches the postgres service on the port that service already maps and
+        # listens on 127.0.0.1:3000 for the steps below. Nothing is published
+        # beyond the runner.
+        #
+        # No PGRST_DB_ANON_ROLE, deliberately: without one an unauthenticated
+        # request is REJECTED rather than served as `anon`, which is what lets the
+        # suite assert that no client role reaches this function.
+        run: |
+          set -euo pipefail
+          docker run -d --name pi-cg-postgrest --network host \
+            -e PGRST_DB_URI=postgres://authenticator:pgcg@127.0.0.1:5432/pgcg \
+            -e PGRST_DB_SCHEMAS=public \
+            -e PGRST_JWT_SECRET=pi-cg-ci-only-not-a-secret-32bytes-min \
+            -e PGRST_DB_CHANNEL_ENABLED=true \
+            -e PGRST_DB_CHANNEL=pgrst \
+            -e PGRST_SERVER_PORT=3000 \
+            -e PGRST_LOG_LEVEL=info \
+            postgrest/postgrest:v12.2.3
+          docker ps --filter name=pi-cg-postgrest --format {{.Image}}
 
       - name: Mint a service_role JWT locally
         run: |
@@ -239,8 +256,7 @@ jobs:
       - name: PostgREST log
         if: always()
         run: |
-          id=$(docker ps -aq --filter "ancestor=postgrest/postgrest:v12.2.3" | head -1)
-          if [ -n "$id" ]; then docker logs "$id" 2>&1 | tail -80; else echo "(no postgrest container found)"; fi
+          docker logs pi-cg-postgrest 2>&1 | tail -80 || echo "(no pi-cg-postgrest container)"
 
       - name: Tear the fixture down
         if: always()
@@ -248,6 +264,7 @@ jobs:
         # belt and braces — but it runs unconditionally and it proves the job
         # leaves no function, table or row behind even if it failed mid-way.
         run: |
+          docker rm -f pi-cg-postgrest || true
           psql -c "DROP FUNCTION IF EXISTS public.read_at(public.contact_governance_records)" || true
           psql -c "DROP TABLE IF EXISTS public.contact_governance_records" || true
           psql -c "DROP TABLE IF EXISTS public.companies" || true
