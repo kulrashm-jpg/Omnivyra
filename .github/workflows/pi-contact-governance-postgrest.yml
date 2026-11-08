@@ -1,0 +1,243 @@
+name: PI Contact Governance — PostgREST computed field
+
+# Proves, against a REAL PostgreSQL and a REAL PostgREST, the one claim that no
+# mock can establish: that `public.read_at(public.contact_governance_records)`
+# is selectable as a PostgREST computed field through the repository's own
+# `@supabase/supabase-js` client, that it returns ONE transaction timestamp per
+# REQUEST, that two requests return two different ones, and that no client role
+# may call it.
+#
+# ─── IT CANNOT REACH PRODUCTION ─────────────────────────────────────────────
+#   • It references no repository secret at all — deliberately, so that a grep
+#     for a secret expression over this file returns nothing. Nothing it needs
+#     exists as a secret, so nothing can be leaked by it or stolen from it.
+#   • `permissions: contents: read` — the token can read the checkout and
+#     nothing else. No packages, no deployments, no issue or PR writes.
+#   • Both databases are service containers created for the life of this job and
+#     destroyed with it. The only addresses used are `localhost` (from the job)
+#     and the service-network aliases `postgres` / `postgrest` (between the
+#     containers), neither of which is routable outside this runner.
+#   • No `supabase start`, no `supabase link`, no `supabase db push`, no
+#     `supabase/config.toml`, no `.env.local`, and no replay of the 457
+#     committed migrations. One migration file is applied: the one under test.
+#   • The passwords and the JWT signing key below are LITERALS ON PURPOSE,
+#     exactly as `W6_DB_URL` is in real-schema-ci.yml. A throwaway container on
+#     an ephemeral runner has no secret to protect, and making them secrets
+#     would give this job a credential it must never have.
+
+on:
+  # Branch-restricted, and deliberately NOT `workflow_dispatch`: this job exists
+  # to gate one change on one branch. It must not be startable against an
+  # arbitrary ref.
+  push:
+    branches:
+      - fix/pi-contact-governance-clock
+    paths:
+      - 'backend/services/prospectIdentity/contactGovernance.ts'
+      - 'backend/services/prospectIdentity/contactGovernanceRepository.ts'
+      - 'backend/services/prospectIdentity/contactGovernanceAggregation.ts'
+      - 'backend/services/prospectIdentity/contactGovernanceEvaluation.ts'
+      - 'backend/tests/integration/piP0ContactGovernanceReadAt.test.ts'
+      - 'supabase/migrations/20270202000000_pi_contact_governance_read_at.sql'
+      - 'scripts/ci/pi-contact-governance-postgrest-fixture.sql'
+      - 'scripts/ci/schema-bootstrap.sql'
+      - '.github/workflows/pi-contact-governance-postgrest.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-cg-postgrest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgrest-proof:
+    name: Computed field through real PostgREST
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # pgvector, because scripts/ci/schema-bootstrap.sql installs the vector
+        # extension — the same image real-schema-ci.yml uses, so the bootstrap
+        # is known to apply cleanly to it.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: pgcg
+          POSTGRES_DB: pgcg
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pgcg"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      postgrest:
+        # PINNED. An unpinned `:latest` would let the behaviour under test change
+        # without a commit here, which would make a pass meaningless.
+        image: postgrest/postgrest:v12.2.3
+        env:
+          # The container reaches the database by its SERVICE ALIAS, not through
+          # localhost: these are two containers on the runner's service network.
+          # `authenticator` is created by scripts/ci/schema-bootstrap.sql with
+          # NOINHERIT and is granted anon/authenticated/service_role, which is
+          # the Supabase arrangement — so a request's privileges come only from
+          # the `SET ROLE` that its JWT asks for.
+          PGRST_DB_URI: postgres://authenticator:pgcg@postgres:5432/pgcg
+          PGRST_DB_SCHEMAS: public
+          # A throwaway signing key for a localhost container (see the header).
+          PGRST_JWT_SECRET: pi-cg-ci-only-not-a-secret-32bytes-min
+          # DELIBERATELY NO PGRST_DB_ANON_ROLE. Without one, an unauthenticated
+          # request is REJECTED rather than served as `anon` — which is what
+          # lets the suite assert that no client role can reach this function.
+          PGRST_DB_CHANNEL_ENABLED: 'true'
+          PGRST_DB_CHANNEL: pgrst
+          PGRST_LOG_LEVEL: info
+        ports: ['3000:3000']
+
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: pgcg
+      PGPASSWORD: pgcg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Confirm the database is the service container, not anything else
+        run: |
+          set -euo pipefail
+          # Gate on the CLIENT-SIDE address, which is the only thing that says
+          # where this job actually connected. A server-reported address would
+          # not: behind a pooler it is not the client's address at all.
+          test "$PGHOST" = "localhost"
+          psql -v ON_ERROR_STOP=1 -tAc "SELECT current_database(), current_user, version()"
+          # And prove the governed schema is NOT here: this must be an empty
+          # database that this job populates, never a restored snapshot.
+          test "$(psql -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")" = "0"
+
+      - name: Bootstrap the Supabase-compatible role and schema surface
+        run: psql -v ON_ERROR_STOP=1 -f scripts/ci/schema-bootstrap.sql
+
+      - name: Apply the minimal governance fixture
+        run: psql -v ON_ERROR_STOP=1 -f scripts/ci/pi-contact-governance-postgrest-fixture.sql
+
+      - name: Apply the migration under test
+        # The real file, unmodified. Its own postcondition DO block RAISEs if the
+        # resulting ACL is not exactly PUBLIC/anon/authenticated revoked and
+        # service_role granted, so this step failing IS the privilege assertion.
+        run: psql -v ON_ERROR_STOP=1 -f supabase/migrations/20270202000000_pi_contact_governance_read_at.sql
+
+      - name: Mint a service_role JWT locally
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import crypto from "node:crypto";
+            const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+            const now = Math.floor(Date.now() / 1000);
+            const sign = (role) => {
+              const head = b64({ alg: "HS256", typ: "JWT" });
+              const body = b64({ role, iss: "pi-cg-postgrest-ci", iat: now, exp: now + 3600 });
+              const sig = crypto.createHmac("sha256", process.env.PGRST_JWT_SECRET)
+                .update(head + "." + body).digest("base64url");
+              return head + "." + body + "." + sig;
+            };
+            const fs = await import("node:fs");
+            fs.appendFileSync(process.env.GITHUB_ENV,
+              `PI_CG_SERVICE_JWT=${sign("service_role")}\n` +
+              `PI_CG_AUTHENTICATED_JWT=${sign("authenticated")}\n` +
+              `PI_CG_ANON_JWT=${sign("anon")}\n` +
+              `PI_CG_PROBE_JWT=${sign("pi_cg_probe")}\n`);
+          '
+        env:
+          PGRST_JWT_SECRET: pi-cg-ci-only-not-a-secret-32bytes-min
+
+      - name: Reload the PostgREST schema cache and wait for the computed field
+        # PostgREST builds its schema cache when it first connects, which is
+        # before this job created anything. The NOTIFY is the documented way to
+        # make it re-read; the poll then waits for the computed field itself to
+        # become selectable, which is a stronger readiness signal than the root
+        # endpoint answering.
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema'"
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /tmp/pgrst-probe.json -w '%{http_code}' \
+              -H "Authorization: Bearer $PI_CG_SERVICE_JWT" \
+              "http://localhost:3000/contact_governance_records?select=id,read_at&limit=1" || true)
+            if [ "$code" = "200" ]; then echo "PostgREST ready after ${i}s"; cat /tmp/pgrst-probe.json; exit 0; fi
+            if [ "$i" = "30" ]; then psql -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema'"; fi
+            sleep 1
+          done
+          echo "PostgREST never served the computed field (last HTTP $code)" >&2
+          cat /tmp/pgrst-probe.json >&2 || true
+          exit 1
+
+      - name: Index usability for the two anchored reads
+        # NOT a production query-plan claim, and it must not be read as one: a
+        # fixture of a handful of rows is always cheapest to seq-scan. Disabling
+        # the seq scan shows which index each anchor's predicate CAN use, which
+        # is the only part the two-query decision rests on.
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO public.companies (id) VALUES ('00000000-0000-4000-8000-00000000000a')
+            ON CONFLICT DO NOTHING;
+          SET enable_seqscan = off;
+          EXPLAIN (COSTS OFF) SELECT id FROM public.contact_governance_records
+            WHERE organization_id = '00000000-0000-4000-8000-00000000000a'
+              AND revoked_at IS NULL AND person_id = '00000000-0000-4000-8000-00000000000b';
+          EXPLAIN (COSTS OFF) SELECT id FROM public.contact_governance_records
+            WHERE organization_id = '00000000-0000-4000-8000-00000000000a'
+              AND revoked_at IS NULL AND target_normalized = 'probe@example.test';
+          SQL
+
+      - name: Integration suite against the real PostgREST
+        env:
+          PI_CG_POSTGREST: '1'
+          SUPABASE_URL: http://localhost:3000
+          SUPABASE_SECRET_KEY: ${{ env.PI_CG_SERVICE_JWT }}
+          PI_CG_POSTGREST_URL: http://localhost:3000
+          PI_CG_SERVICE_JWT: ${{ env.PI_CG_SERVICE_JWT }}
+          PI_CG_AUTHENTICATED_JWT: ${{ env.PI_CG_AUTHENTICATED_JWT }}
+          PI_CG_ANON_JWT: ${{ env.PI_CG_ANON_JWT }}
+          PI_CG_PROBE_JWT: ${{ env.PI_CG_PROBE_JWT }}
+          CI: 'true'
+        run: node node_modules/jest/bin/jest.js --config jest.config.js --runInBand backend/tests/integration/piP0ContactGovernanceReadAt.test.ts
+
+      - name: Part 1 temporal suite and the aggregation suite, on the same tree
+        env:
+          CI: 'true'
+        run: |
+          node node_modules/jest/bin/jest.js --config jest.config.js --runInBand \
+            backend/tests/unit/contactGovernanceTemporalPrecision.test.ts \
+            backend/tests/unit/contactGovernanceReadAggregation.test.ts
+
+      - name: PostgREST log
+        if: always()
+        run: |
+          id=$(docker ps -aq --filter "ancestor=postgrest/postgrest:v12.2.3" | head -1)
+          if [ -n "$id" ]; then docker logs "$id" 2>&1 | tail -80; else echo "(no postgrest container found)"; fi
+
+      - name: Tear the fixture down
+        if: always()
+        # The containers are destroyed with the job whatever happens, so this is
+        # belt and braces — but it runs unconditionally and it proves the job
+        # leaves no function, table or row behind even if it failed mid-way.
+        run: |
+          psql -c "DROP FUNCTION IF EXISTS public.read_at(public.contact_governance_records)" || true
+          psql -c "DROP TABLE IF EXISTS public.contact_governance_records" || true
+          psql -c "DROP TABLE IF EXISTS public.companies" || true
+          psql -tAc "SELECT count(*) FROM pg_proc WHERE proname = 'read_at'" || true
