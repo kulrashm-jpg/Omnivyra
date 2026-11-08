@@ -1,8 +1,9 @@
 /**
  * The WhatsApp broadcast engine, as an orchestration adapter.
  *
- * The engine is used exactly as its own routes use it — `createBroadcast` →
- * `expandRecipients` → `enqueueBroadcast` — and its send path (`processBatch`)
+ * The engine is used as its own routes use it — `createBroadcast` →
+ * `expandPersonRecipients` (their `expandRecipients`, plus the person) →
+ * `enqueueBroadcast` — and its send path (`processBatch`)
  * stays the only place a message leaves: contact governance is evaluated there,
  * before Meta is called, and a recipient is claimed `pending → sending` so a
  * retry can never message them twice.
@@ -36,7 +37,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { createBroadcast, enqueueBroadcast, expandRecipients } from '../whatsappBroadcastService';
+import { createBroadcast, enqueueBroadcast, expandPersonRecipients } from '../whatsappBroadcastService';
 import { normalizePhone } from '../identityResolutionService';
 import { WHATSAPP_CAPABILITIES } from './engineCapabilities';
 import { channelRefusal } from './journeyGovernance';
@@ -67,7 +68,7 @@ export interface WhatsAppAdapterDeps {
   readPersonPhone(organizationId: string, personId: string): Promise<string | null | undefined>;
   findWhatsAppAccount(organizationId: string): Promise<{ id: string } | 'none' | 'ambiguous'>;
   createBroadcast: typeof createBroadcast;
-  expandRecipients: typeof expandRecipients;
+  expandPersonRecipients: typeof expandPersonRecipients;
   enqueueBroadcast: typeof enqueueBroadcast;
   readRecipientStatus(broadcastId: string): Promise<string | null>;
   /** Is there a human approval on record for this task? See the module header. */
@@ -155,7 +156,7 @@ export const defaultWhatsAppDeps: WhatsAppAdapterDeps = {
   },
 
   createBroadcast,
-  expandRecipients,
+  expandPersonRecipients,
   enqueueBroadcast,
 
   async readRecipientStatus(broadcastId) {
@@ -304,7 +305,8 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           message_type: 'template',
           template_name: template,
         });
-        await deps.expandRecipients(broadcastId, [{ phone_e164: phone }]);
+        // The canonical person rides with the recipient so the send path can apply person-level restrictions.
+        await deps.expandPersonRecipients(broadcastId, [{ phone_e164: phone, person_id: ctx.personId }]);
         // Validates the template and the account's rate limit, then queues the
         // send. Only after it succeeds is the request `submitted`.
         await deps.enqueueBroadcast(broadcastId, WHATSAPP_RATE_PLAN);
