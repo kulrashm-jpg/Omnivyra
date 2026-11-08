@@ -147,3 +147,7 @@ describe('typecheck baseline gate — every project run must complete before the
     expect(src).toContain('typecheck summary: ${PROJECTS.length - failed}/${PROJECTS.length} projects clean');
   });
 });
+
+// Module scope: without an import/export this file shares the global script
+// scope with backendTestsTypecheckBaselineGate.test.ts (TS2451 redeclarations).
+export {};
