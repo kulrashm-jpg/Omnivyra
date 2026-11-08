@@ -52,7 +52,7 @@ import {
   startPersonErasure,
   type ErasureReasonCode,
 } from '../../../../backend/services/prospectIdentity/personErasureRequests';
-import { erasureHttpResponse, requestedByLabel, auditErasureOutcome } from '../../../../backend/apiHandlers/prospects/erasureResponses';
+import { erasureHttpResponse, requestedByLabel, auditErasureOutcome, isErasureSchemaMissingError } from '../../../../backend/apiHandlers/prospects/erasureResponses';
 
 const first = (v: unknown): string | null => {
   const s = Array.isArray(v) ? v[0] : v;
@@ -86,7 +86,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 200)) {
       return res.status(400).json({ error: 'limit must be an integer between 1 and 200' });
     }
-    const list = await listErasureRequests(tenant.organizationId, { limit });
+    let list;
+    try {
+      list = await listErasureRequests(tenant.organizationId, { limit });
+    } catch (err) {
+      if (!isErasureSchemaMissingError(err)) throw err;
+      const { status, body: payload } = erasureHttpResponse({ kind: 'schema_not_ready' });
+      return res.status(status).json(payload);
+    }
     return res.status(200).json(list);
   }
 

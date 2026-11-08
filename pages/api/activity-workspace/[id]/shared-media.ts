@@ -49,7 +49,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const { data: row, error: rErr } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, content, content_type, intent_type, organization_id')
+    // P-SM1: daily_content_plans has no organization_id column (selecting it failed every request);
+    // the tenant is the campaign's company, resolved and authorised below.
+    .select('id, campaign_id, content, content_type, intent_type')
     .eq('id', id)
     .maybeSingle();
   if (rErr) return res.status(500).json({ error: 'load failed' });
@@ -101,7 +103,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         canonical_asset_family: String(body.canonical_asset_family || 'image'),
         content_spec_hash: String(body.content_spec_hash || ''),
         asset_url: typeof body.asset_url === 'string' ? body.asset_url : null,
-        organization_id: (row as any).organization_id ?? null,
+        organization_id: companyId,
       }, { onConflict: 'content_core_id,asset_id', ignoreDuplicates: true });
       await ownedDbTable('content_asset_attachment').upsert({
         content_core_id: contentCoreId, asset_id: assetId,
@@ -141,7 +143,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const url = String(body.external_video_url || '').trim();
       if (!url) return res.status(400).json({ error: 'external_video_url required' });
       const built = buildExternalVideoAttachment({
-        contentCoreId, organizationId: String((row as any).organization_id ?? ''),
+        contentCoreId, organizationId: companyId,
         externalVideoUrl: url,
         thumbnailUrl: typeof body.thumbnail_url === 'string' ? body.thumbnail_url : null,
         durationSeconds: Number.isFinite(body.duration_seconds) ? Number(body.duration_seconds) : null,

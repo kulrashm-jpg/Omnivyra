@@ -246,6 +246,38 @@ describe('audit — one event per attempt, keyed by REQUEST id, no personal data
 });
 
 
+describe('P-ER1: GET reads while the erasure schema is not deployed → fail-closed 503, never 500', () => {
+  it.each(['42P01', 'PGRST205', 'PGRST202', '42883'])('GET list: ledger/RPC missing (%s) → 503 ERASURE_SCHEMA_NOT_READY', async (code) => {
+    list.mockRejectedValue(new Error(`erasure ledger read failed (${code})`));
+    const r = await call(collection, { method: 'GET' });
+    expect(r).toMatchObject({ code: 503, body: { error: 'ERASURE_SCHEMA_NOT_READY', retryable: false } });
+  });
+
+  it('GET single: ledger missing → 503 ERASURE_SCHEMA_NOT_READY', async () => {
+    getOne.mockRejectedValue(new Error('erasure ledger read failed (PGRST205)'));
+    const r = await call(single, { method: 'GET' });
+    expect(r).toMatchObject({ code: 503, body: { error: 'ERASURE_SCHEMA_NOT_READY' } });
+  });
+
+  it('negative control: any OTHER read failure is not masked as "not ready"', async () => {
+    list.mockRejectedValue(new Error('erasure ledger read failed (57014)'));
+    await expect(call(collection, { method: 'GET' })).rejects.toThrow('57014');
+    getOne.mockRejectedValue(new Error('erasure ledger read failed (unknown)'));
+    await expect(call(single, { method: 'GET' })).rejects.toThrow('unknown');
+  });
+
+  it('still never probes readiness on GET, and tenant/capability checks still run first', async () => {
+    list.mockRejectedValue(new Error('erasure ledger read failed (42P01)'));
+    await call(collection, { method: 'GET' });
+    expect(schemaReady).not.toHaveBeenCalled();
+    expect(order.slice(0, 2)).toEqual(['tenant', 'capability']);
+    capabilityOk.mockResolvedValue({ ok: false });
+    list.mockClear();
+    await call(collection, { method: 'GET' });
+    expect(list).not.toHaveBeenCalled();
+  });
+});
+
 describe('deploy-order gate (review M-1): 503 ERASURE_SCHEMA_NOT_READY, erasePerson never reached', () => {
   it('POST start: schema not ready → 503, not retryable, the service never runs, the attempt is audited', async () => {
     schemaReady.mockResolvedValue(false);

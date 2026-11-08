@@ -25,6 +25,18 @@ const HTTP_FOR_STATUS: Record<ErasureStatus, number> = {
 
 const RETRYABLE: ReadonlySet<ErasureStatus> = new Set(['IN_PROGRESS', 'REQUESTED', 'PARTIALLY_COMPLETED', 'RETRY_REQUIRED']);
 
+/**
+ * P-ER1: a GET read that failed only because the erasure schema is not deployed (missing table or RPC)
+ * maps to the same fail-closed 503 as the write gate, instead of a 500. GETs still never probe
+ * readiness (review M-1); this only classifies the read error the service already threw.
+ * The service puts the PostgREST/Postgres code in its message, e.g. "erasure ledger read failed (42P01)".
+ */
+const SCHEMA_MISSING_CODES = ['42P01', 'PGRST205', 'PGRST202', '42883'];
+export function isErasureSchemaMissingError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : '';
+  return SCHEMA_MISSING_CODES.some((c) => msg.endsWith(`(${c})`));
+}
+
 export function erasureHttpResponse(outcome: ErasureOutcome): { status: number; body: Record<string, unknown> } {
   switch (outcome.kind) {
     case 'subject_not_found':

@@ -29,7 +29,7 @@ import {
   isUuid,
   retryErasureRequest,
 } from '../../../../backend/services/prospectIdentity/personErasureRequests';
-import { erasureHttpResponse, requestedByLabel, auditErasureOutcome } from '../../../../backend/apiHandlers/prospects/erasureResponses';
+import { erasureHttpResponse, requestedByLabel, auditErasureOutcome, isErasureSchemaMissingError } from '../../../../backend/apiHandlers/prospects/erasureResponses';
 
 const first = (v: unknown): string | null => {
   const s = Array.isArray(v) ? v[0] : v;
@@ -61,7 +61,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!isUuid(requestId)) return res.status(400).json({ error: 'requestId must be a uuid' });
 
   if (method === 'GET') {
-    const view = await getErasureRequest(tenant.organizationId, requestId);
+    let view;
+    try {
+      view = await getErasureRequest(tenant.organizationId, requestId);
+    } catch (err) {
+      if (!isErasureSchemaMissingError(err)) throw err;
+      const { status, body: payload } = erasureHttpResponse({ kind: 'schema_not_ready' });
+      return res.status(status).json(payload);
+    }
     if (!view) return res.status(404).json({ error: 'request_not_found' });
     return res.status(200).json({ request: view });
   }
