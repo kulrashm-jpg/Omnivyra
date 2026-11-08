@@ -35,6 +35,15 @@ import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from './le
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
+/** L-4: a provider call still open after this is abandoned and recorded `send_uncertain`. */
+export const WHATSAPP_SEND_TIMEOUT_MS = 20_000;
+
+/** L-4: provider answers that do not say the message was refused: it may have been sent. */
+export const isAmbiguousProviderStatus = (status: number): boolean => status >= 500 || status === 408;
+
+/** Recipient states whose send outcome is unknown; a status webhook's marker reconciles them. */
+const UNCONFIRMED_SEND_STATES = ['sending', 'send_uncertain'] as const;
+
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
 const RECIPIENT_ID_PAGE = 1000;
@@ -84,6 +93,10 @@ export interface RecipientDeliveryUpdate {
   status:        'sent' | 'delivered' | 'read' | 'failed';
   error_code?:   number;
   error_message?: string;
+  /** L-4: the status event's biz_opaque_callback_data, our recipient id (processBatch). */
+  callback_data?: string | null;
+  /** L-4: the status event's recipient_id, the number's WhatsApp id (digits). */
+  recipient_wa_id?: string | null;
 }
 
 // ── Phone privacy helpers ─────────────────────────────────────────────────────
@@ -364,19 +377,24 @@ export async function enqueueBroadcast(
   for (let i = 0; i < pendingIds.length; i += batch_size) {
     const recipientIds = pendingIds.slice(i, i + batch_size);
 
-    await enqueueOrThrow(
-      queue,
-      'whatsapp-broadcast',
-      'wa-broadcast-batch',
-      { broadcast_id: broadcastId, recipient_ids: recipientIds },
-      {
-        jobId:    `wa-batch-${broadcastId}-${batchIndex}`,
-        delay:    batchIndex * delay_ms,
-        priority: 6,
-        attempts: 3,
-        backoff:  { type: 'exponential', delay: 5000 },
-      },
-    );
+    try {
+      await enqueueOrThrow(
+        queue,
+        'whatsapp-broadcast',
+        'wa-broadcast-batch',
+        { broadcast_id: broadcastId, recipient_ids: recipientIds },
+        {
+          jobId:    `wa-batch-${broadcastId}-${batchIndex}`,
+          delay:    batchIndex * delay_ms,
+          priority: 6,
+          attempts: 3,
+          backoff:  { type: 'exponential', delay: 5000 },
+        },
+      );
+    } catch (enqueueError) {
+      // L-4: the job may be in the queue even though the add threw.
+      if ((await settleUnconfirmedEnqueue(broadcastId, recipientIds)) === 'withdrawn') throw enqueueError;
+    }
 
     batchIndex += 1;
   }
@@ -384,6 +402,52 @@ export async function enqueueBroadcast(
   await ownedDbTable('whatsapp_broadcasts')
     .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', broadcastId);
+}
+
+// ── L-4: an enqueue whose acknowledgement was lost ───────────────────────────
+
+/** error_message of a recipient withdrawn after an unconfirmed enqueue: never sent, safe to retry. */
+export const ENQUEUE_UNCONFIRMED_MESSAGE = 'enqueue_unconfirmed: withdrawn before any send; safe to retry';
+
+/**
+ * The queue add threw, but the job may still have been stored (a lost acknowledgement): it
+ * would then run and send while the caller reports a failure, and a person re-submitting
+ * would send twice. Instead of guessing, the batch's recipients that are still `pending`
+ * are withdrawn (`pending -> failed`, compare-and-set). Every send needs the
+ * `pending -> sending` claim (processBatch), so a withdrawn recipient can never be sent by
+ * that job, by a retry of it, or by any other: the ambiguity becomes a certain "not sent".
+ *
+ *   'withdrawn' every recipient of the batch was withdrawn: nothing of it can be sent, and
+ *               `retryFailed` may queue it again (it was never sent).
+ *   'queued'    some recipient had already left `pending`: the job exists and is running.
+ *               The rest are withdrawn and visible as failed; nothing is sent twice.
+ * If the withdrawal itself cannot be written, the batch is genuinely uncertain:
+ * WhatsAppEnqueueUncertainError, for a person to review before any resend.
+ */
+export class WhatsAppEnqueueUncertainError extends Error {
+  readonly code = 'whatsapp_enqueue_uncertain';
+  constructor(readonly broadcastId: string, detail: string) {
+    super(`the WhatsApp queue may hold a batch of broadcast ${broadcastId} and its recipients could not be withdrawn (${detail}); review before any resend`);
+    this.name = 'WhatsAppEnqueueUncertainError';
+  }
+}
+
+async function settleUnconfirmedEnqueue(broadcastId: string, recipientIds: string[]): Promise<'withdrawn' | 'queued'> {
+  let withdrawn: unknown[] | null = null;
+  try {
+    const { data, error } = await ownedDbTable('whatsapp_broadcast_recipients')
+      .update({ status: 'failed', error_code: null, error_message: ENQUEUE_UNCONFIRMED_MESSAGE })
+      .eq('broadcast_id', broadcastId)
+      .in('id', recipientIds)
+      .eq('status', 'pending')
+      .select('id');
+    if (error) throw new WhatsAppEnqueueUncertainError(broadcastId, error.message);
+    withdrawn = Array.isArray(data) ? data : [];
+  } catch (err) {
+    if (err instanceof WhatsAppEnqueueUncertainError) throw err;
+    throw new WhatsAppEnqueueUncertainError(broadcastId, err instanceof Error ? err.message : 'withdrawal failed');
+  }
+  return withdrawn.length === recipientIds.length ? 'withdrawn' : 'queued';
 }
 
 // ── Contact governance for one recipient (W0-C + owner GO 2026-11-08) ─────────
@@ -629,48 +693,72 @@ export async function processBatch(
       .select('id');
     if (!Array.isArray(claimed) || claimed.length === 0) continue;
 
+    // L-4: the provider call alone is inside the try. Its outcome decides the state; a
+    // failed write of that state never turns a confirmed send into an uncertain one.
+    let res: Response;
+    let result: any;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), WHATSAPP_SEND_TIMEOUT_MS);
     try {
-      const messageBody = buildMessageBody(broadcast, phone);
+      const messageBody = buildMessageBody(broadcast, phone, recipient.id);
 
-      const res = await fetch(`${META_GRAPH}/${account.phone_number_id}/messages`, {
+      res = await fetch(`${META_GRAPH}/${account.phone_number_id}/messages`, {
         method:  'POST',
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body:    JSON.stringify(messageBody),
+        signal:  controller.signal,
       });
 
-      const result = await res.json().catch(() => ({}));
-
-      if (res.ok && result?.messages?.[0]?.id) {
-        await ownedDbTable('whatsapp_broadcast_recipients')
-          .update({ status: 'sent', wa_message_id: result.messages[0].id, sent_at: new Date().toISOString() })
-          .eq('id', recipient.id);
-        sentCount++;
-      } else if (res.ok) {
-        // Accepted without a message id: Meta may have sent it. Never retried
-        // automatically (`retryFailed` only re-queues `failed`).
-        await ownedDbTable('whatsapp_broadcast_recipients')
-          .update({ status: 'send_uncertain', error_message: 'provider accepted the request without a message id' })
-          .eq('id', recipient.id);
-        failedCount++;
-      } else {
-        const errCode    = result?.error?.code ?? res.status;
-        const errMessage = result?.error?.message ?? 'Unknown error';
-        // Fetch current retry_count then increment (supabase.rpc can't be used inline as a value)
-        const { data: cur } = await ownedDbTable('whatsapp_broadcast_recipients')
-          .select('retry_count')
-          .eq('id', recipient.id)
-          .single();
-        await ownedDbTable('whatsapp_broadcast_recipients')
-          .update({ status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 })
-          .eq('id', recipient.id);
-        failedCount++;
-      }
+      result = await res.json().catch(() => ({}));
     } catch (err) {
       // The request may have reached Meta before the exception (a timeout, a reset
-      // connection): the outcome is UNKNOWN, so it is recorded as uncertain and is
-      // never re-queued by `retryFailed`, which would risk a duplicate message.
+      // connection, a lost response): the outcome is UNKNOWN, so it is recorded as
+      // uncertain and is never re-queued by `retryFailed`, which would risk a duplicate
+      // message. A status webhook carrying this recipient's marker reconciles it.
       await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'send_uncertain', error_message: err instanceof Error ? err.message : 'Exception' })
+        .update({
+          status: 'send_uncertain',
+          error_message: controller.signal.aborted ? `provider call timed out after ${WHATSAPP_SEND_TIMEOUT_MS} ms` : (err instanceof Error ? err.message : 'Exception'),
+        })
+        .eq('id', recipient.id);
+      failedCount++;
+      continue;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const waMessageId = res.ok ? result?.messages?.[0]?.id : null;
+    if (waMessageId) {
+      const { error: sentError } = await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'sent', wa_message_id: waMessageId, sent_at: new Date().toISOString() })
+        .eq('id', recipient.id);
+      // Sent, but not recorded: the row stays `sending` (never re-sent) and the status
+      // webhook's marker records the message id.
+      if (sentError) console.warn('[wa-broadcast] sent but not recorded; left sending for reconciliation', recipient.id);
+      sentCount++;
+    } else if (res.ok) {
+      // Accepted without a message id: Meta may have sent it. Never retried
+      // automatically (`retryFailed` only re-queues `failed`).
+      await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'send_uncertain', error_message: 'provider accepted the request without a message id' })
+        .eq('id', recipient.id);
+      failedCount++;
+    } else if (isAmbiguousProviderStatus(res.status)) {
+      // A 5xx or a 408 does not say the message was refused: it may have been sent.
+      await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` })
+        .eq('id', recipient.id);
+      failedCount++;
+    } else {
+      const errCode    = result?.error?.code ?? res.status;
+      const errMessage = result?.error?.message ?? 'Unknown error';
+      // Fetch current retry_count then increment (supabase.rpc can't be used inline as a value)
+      const { data: cur } = await ownedDbTable('whatsapp_broadcast_recipients')
+        .select('retry_count')
+        .eq('id', recipient.id)
+        .single();
+      await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 })
         .eq('id', recipient.id);
       failedCount++;
     }
@@ -688,11 +776,15 @@ export async function processBatch(
 
 // ── Build message body ────────────────────────────────────────────────────────
 
-function buildMessageBody(broadcast: any, toPhone: string): Record<string, unknown> {
+function buildMessageBody(broadcast: any, toPhone: string, recipientId: string): Record<string, unknown> {
   const base = {
     messaging_product: 'whatsapp',
     recipient_type:    'individual',
     to:                toPhone,
+    // L-4: Meta echoes this in every status webhook for the message, so a send whose
+    // response was lost (send_uncertain, or `sending` after a crash) can be matched to
+    // its recipient and reconciled. Our own recipient id only: no number, no text.
+    biz_opaque_callback_data: recipientId,
   };
 
   if (broadcast.message_type === 'template' && broadcast.template_name) {
@@ -717,23 +809,35 @@ export async function retryFailed(broadcastId: string): Promise<void> {
 
   if (!failed?.length) return;
 
-  // Reset to pending for re-enqueue
-  await ownedDbTable('whatsapp_broadcast_recipients')
+  // Reset to pending for re-enqueue: only rows that are STILL `failed` (compare-and-set).
+  // A status webhook may have moved one to `delivered` since the read above; resetting it
+  // would send that message a second time.
+  const { data: reset, error: resetError } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update({ status: 'pending', next_retry_at: null })
-    .in('id', failed.map((r) => r.id));
+    .in('id', failed.map((r) => r.id))
+    .eq('status', 'failed')
+    .select('id');
+  if (resetError) throw new Error(`retry reset failed: ${resetError.message}`);
+  const retryIds = (reset ?? []).map((r: { id: string }) => r.id);
+  if (retryIds.length === 0) return;
 
   // Re-enqueue as a single batch
   const { getContentQueue } = await import('../queue/contentGenerationQueues');
   const queue = getContentQueue('whatsapp-broadcast');
-  await enqueueOrThrow(queue, 'whatsapp-broadcast', 'wa-broadcast-batch', {
-    broadcast_id:  broadcastId,
-    recipient_ids: failed.map((r) => r.id),
-  }, {
-    jobId:    `wa-retry-${broadcastId}-${Date.now()}`,
-    priority: 7,
-    attempts: 2,
-    backoff:  { type: 'exponential', delay: 10000 },
-  });
+  try {
+    await enqueueOrThrow(queue, 'whatsapp-broadcast', 'wa-broadcast-batch', {
+      broadcast_id:  broadcastId,
+      recipient_ids: retryIds,
+    }, {
+      jobId:    `wa-retry-${broadcastId}-${Date.now()}`,
+      priority: 7,
+      attempts: 2,
+      backoff:  { type: 'exponential', delay: 10000 },
+    });
+  } catch (enqueueError) {
+    // L-4: as in enqueueBroadcast, the retry job may exist; withdraw what it has not claimed.
+    if ((await settleUnconfirmedEnqueue(broadcastId, retryIds)) === 'withdrawn') throw enqueueError;
+  }
 }
 
 // ── Update delivery status (called by deliveryTracker) ───────────────────────
@@ -826,7 +930,58 @@ async function restrictPermanentFailure(update: RecipientDeliveryUpdate, advance
   });
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * L-4. A send whose response was lost is `send_uncertain` (or `sending`, if the process died
+ * after the claim) with no message id, so a status event, keyed by message id, cannot find
+ * it. Every message carries its recipient id as biz_opaque_callback_data, which Meta echoes
+ * in its status events. When such an event names an unconfirmed recipient with no message
+ * id AND the event's recipient number is that recipient's number, the provider has the
+ * message: the id is attached and the row becomes `sent` (compare-and-set), then the event
+ * is applied as usual (delivered, read, failed, the N-2 restriction). Nothing is ever sent
+ * here; an event that does not match exactly changes nothing. Returns whether it attached.
+ */
+async function reconcileUnconfirmedSend(update: RecipientDeliveryUpdate): Promise<boolean> {
+  const recipientId = typeof update.callback_data === 'string' ? update.callback_data.trim() : '';
+  if (!UUID_RE.test(recipientId)) return false;
+  const waId = typeof update.recipient_wa_id === 'string' ? update.recipient_wa_id.replace(/\D/g, '') : '';
+  if (!waId) return false;
+
+  const { data: rows, error } = await ownedDbTable('whatsapp_broadcast_recipients')
+    .select('id, encrypted_phone')
+    .eq('id', recipientId)
+    .in('status', [...UNCONFIRMED_SEND_STATES])
+    .is('wa_message_id', null);
+  if (error) throw new Error(`[wa-delivery] unconfirmed recipient read failed: ${error.message}`);
+  const row = (rows ?? [])[0] as { id: string; encrypted_phone: string } | undefined;
+  if (!row) return false;
+
+  let number = '';
+  try {
+    number = decryptPhone(row.encrypted_phone).replace(/\D/g, '');
+  } catch {
+    return false;
+  }
+  if (number !== waId) {
+    console.warn('[wa-delivery] status marker names a recipient whose number differs; not reconciled', recipientId);
+    return false;
+  }
+
+  const { data: attached, error: attachError } = await ownedDbTable('whatsapp_broadcast_recipients')
+    .update({ status: 'sent', wa_message_id: update.wa_message_id, sent_at: new Date().toISOString() })
+    .eq('id', recipientId)
+    .in('status', [...UNCONFIRMED_SEND_STATES])
+    .is('wa_message_id', null)
+    .select('id');
+  if (attachError) throw new Error(`[wa-delivery] unconfirmed recipient reconcile failed: ${attachError.message}`);
+  return Array.isArray(attached) && attached.length > 0;
+}
+
 export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): Promise<void> {
+  // L-4 first: an unconfirmed send gets its message id, then the event applies as usual.
+  await reconcileUnconfirmedSend(update);
+
   const advancesFrom = DELIVERY_ADVANCES_FROM[update.status];
   if (advancesFrom.length === 0) return;
 

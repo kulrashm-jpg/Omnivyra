@@ -59,6 +59,10 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
               status:         mapped,
               error_code:     status.errors?.[0]?.code,
               error_message:  status.errors?.[0]?.title,
+              // L-4: our recipient id echoed back, and the number it went to, so a send
+              // whose response was lost can be matched (updateRecipientDelivery).
+              callback_data:   typeof status.biz_opaque_callback_data === 'string' ? status.biz_opaque_callback_data : null,
+              recipient_wa_id: typeof status.recipient_id === 'string' ? status.recipient_id : null,
             });
           }
         } catch (err) {
