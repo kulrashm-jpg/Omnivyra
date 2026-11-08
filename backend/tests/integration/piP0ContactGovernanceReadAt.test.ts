@@ -75,7 +75,7 @@ beforeAll(async () => {
   const db = seeder();
 
   const companies = await db.from('companies').insert(Object.values(ORG).map((id) => ({ id })));
-  if (companies.error) throw new Error(`seed companies: ${companies.error.message}`);
+  if (companies.error) throw new Error(`seed companies: ${JSON.stringify(companies.error)}`);
 
   // `effective_from` is computed BY THE DATABASE in SQL terms where it matters,
   // but PostgREST takes literals — so the two clock cases use offsets wide
@@ -104,7 +104,7 @@ beforeAll(async () => {
   ];
 
   const seeded = await db.from('contact_governance_records').insert(rows);
-  if (seeded.error) throw new Error(`seed governance: ${seeded.error.message}`);
+  if (seeded.error) throw new Error(`seed governance: ${JSON.stringify(seeded.error)}`);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
