@@ -91,7 +91,17 @@
     { "version": "20270128000006", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
     { "version": "20270128000007", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
     { "version": "20270128000008", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
-    { "version": "20270128000009", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." }
+    { "version": "20270128000009", "status": "reserved", "owner": "Outreach block 20270128000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000000", "slug": "opt_out_review_enforced_channels", "status": "reserved", "owner": "Orchestration block 20270129000000-09 - G-11 enforced_channels on contact_opt_out_reviews", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Additive enforced_channels (CHECK subset of closed_channels): the channels a decision actually wrote a governance row for. Proposal under Outreach owner review; Orchestration implements. No migration file yet. Unapplied anywhere." },
+    { "version": "20270129000001", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000002", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000003", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000004", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000005", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000006", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000007", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000008", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270129000009", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." }
   ],
   "free_versions_note": "20270114000000 is free. 20270119* is free. The integration branch's renumbered block is claimed in the same change as its rename (GD-4); every version above that block is free. Claim one by adding it here in the same change as the migration."
 }
