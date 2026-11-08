@@ -131,6 +131,15 @@ jobs:
       - name: Bootstrap the Supabase-compatible role and schema surface
         run: psql -v ON_ERROR_STOP=1 -f scripts/ci/schema-bootstrap.sql
 
+      - name: Set the PostgREST login role password
+        # scripts/ci/schema-bootstrap.sql creates `authenticator` with a password
+        # literal of its own, chosen for the real-schema-ci job. This job must not
+        # depend on that literal: when the two disagree, PostgREST fails with an
+        # authentication error that looks nothing like its cause, which is exactly
+        # how the first run of this workflow failed. The password this job needs is
+        # therefore set BY this job, next to the URI that uses it.
+        run: psql -v ON_ERROR_STOP=1 -c "ALTER ROLE authenticator LOGIN PASSWORD 'pgcg'"
+
       - name: Apply the minimal governance fixture
         run: psql -v ON_ERROR_STOP=1 -f scripts/ci/pi-contact-governance-postgrest-fixture.sql
 
@@ -173,12 +182,14 @@ jobs:
         run: |
           set -euo pipefail
           psql -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema'"
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             code=$(curl -s -o /tmp/pgrst-probe.json -w '%{http_code}' \
               -H "Authorization: Bearer $PI_CG_SERVICE_JWT" \
               "http://localhost:3000/contact_governance_records?select=id,read_at&limit=1" || true)
             if [ "$code" = "200" ]; then echo "PostgREST ready after ${i}s"; cat /tmp/pgrst-probe.json; exit 0; fi
-            if [ "$i" = "30" ]; then psql -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema'"; fi
+            # PostgREST reloads on NOTIFY, but it can only hear one once it holds a
+            # connection — so this is re-sent as its backoff expires, not once.
+            case "$i" in 15|30|60|90) psql -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema'" || true;; esac
             sleep 1
           done
           echo "PostgREST never served the computed field (last HTTP $code)" >&2
