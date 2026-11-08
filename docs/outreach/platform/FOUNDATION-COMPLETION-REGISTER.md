@@ -995,3 +995,56 @@ C and D, owed since the `73b79929a` T2, are now run on this line.
 - the decisions listed in earlier sections.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## Dashboard and follow-up register; `0004` grant fix and the `20270129` reservation (2026-11-08)
+
+**Owner ruling, 2026-11-08 (A–G):**
+- **A:** a docs-only dashboard and follow-up register.
+- **B:** integrate the `0004` grant-fix pair.
+- **C:** PI's restriction-time loader fix is authorised for PI.
+- **D:** no change to `whatsappBroadcastService.ts:431`/`:580` until PI delivers and the owner authorises separately.
+- **E:** an `enforced_channels` proposal only.
+- **F:** address/phone redaction, `merge_unified_persons`, quota release and recipient-data erasure stay design-only.
+- **G:** `0007` and `0008` are not in this integration.
+
+A later owner instruction the same day:
+- integrate the reservation `7a34fa6ba`;
+- treat PI's package as pending review;
+- `0008` stays untouched.
+
+**From now on, status lives in two companion documents.** This register keeps the dated history.
+- `PROGRAMME-DASHBOARD.md`: the original five-checkpoint sequence.
+- `FOLLOW-UP-REGISTER.md`: work discovered later, which never substitutes for an original item.
+
+**Commits (local, `outreach/foundation-base-20261104`):**
+- `bdc45d8d2`: merge of Orchestration `069bfd953` (with `5e4ad5527`), the `0004` hosted-grant fix.
+  - Parent `aed1953c9`.
+  - Merge diff sha256 `85fac3a1…` equals the reviewed pair; both files are blob-identical to `069bfd953`.
+  - Focused verification: 133/133 real-schema; `0004` replay, rollback and re-apply; 2 mutants killed. Details in FU-G1.
+- `aa703406c`: merge of Orchestration `7a34fa6ba`, which reserves `20270129000000`–`09`.
+  - Parent `bdc45d8d2`.
+  - Merge diff sha256 `bb2fc8ea…` equals the reviewed commit; `version-reservations.json` is blob-identical to `7a34fa6ba`.
+  - JSON valid: 56 reservations, 0 duplicates.
+  - migration-quality: the same violations as the baseline.
+  - `govHMigrationControls`: 78/79. The 1 failure is RULE 6, the known GD-4 exception 2, failing by the same name in the T2 at `f89277e66`.
+
+**Preserve refs:**
+
+| Ref | Commit |
+|---|---|
+| `refs/preserve/outreach-foundation-pre-0004grant` | `aed1953c9` |
+| `refs/preserve/outreach-foundation-0004grant` | `bdc45d8d2` |
+| `refs/preserve/outreach-foundation-reserve-20270129` | `aa703406c` |
+| `refs/preserve/orch-c5-0004-grant-5e4ad552` | — |
+| `refs/preserve/orch-c5-0004-grant-069bfd95` | — |
+| `refs/preserve/orch-reserve-20270129-7a34fa6b` | — |
+
+**Not integrated:**
+- `0007` and `0008`;
+- `ca5f3082f`;
+- the four PI fingerprint updates;
+- `0009`;
+- PI's loader fix (pending review);
+- any change to the Outreach call sites.
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
