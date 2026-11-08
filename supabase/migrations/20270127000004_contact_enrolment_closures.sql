@@ -125,6 +125,8 @@ CREATE POLICY contact_enrolment_closures_service_role ON public.contact_enrolmen
 REVOKE ALL ON public.contact_enrolment_closures FROM PUBLIC;
 REVOKE ALL ON public.contact_enrolment_closures FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.contact_enrolment_closures TO service_role;
+-- Hosted Supabase may give service_role default privileges on a new table; the postcondition below forbids DELETE.
+REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON public.contact_enrolment_closures FROM service_role;
 
 -- ── redaction at erasure (PI: close_reason / reopen_reason are MAPPED) ────────────
 
