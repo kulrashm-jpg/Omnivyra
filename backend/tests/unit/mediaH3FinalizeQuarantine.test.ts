@@ -6,6 +6,9 @@
  * about exposure: which bytes ever exist in `media-uploads`, and what the row
  * records.
  */
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 import { createMemoryStorage, MP4, TIFF_LE, RANDOM, HTML } from '../helpers/memoryStorage';
 
 const mockMem = createMemoryStorage(['media-uploads']);

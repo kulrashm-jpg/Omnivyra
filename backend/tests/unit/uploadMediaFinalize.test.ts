@@ -13,6 +13,9 @@
  * a second bad finalize cannot remove the source under an honest in-flight one.
  */
 
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 function createRes() {
   return {
     statusCode: 200,
@@ -231,4 +234,25 @@ describe('upload-media-finalize API', () => {
 // declarations in sibling suites (TS2451/TS2393). Jest already loads every test
 // file as its own CommonJS module, so this is a type-visibility fix only and
 // changes no runtime behaviour.
+describe('PC5-4 upload gate (CREATOR_MEDIA_UPLOADS_ENABLED)', () => {
+  afterEach(() => { process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true'; });
+
+  test('disabled → 503 UPLOADS_UNAVAILABLE; no storage read, move, upload or delete; no row write', async () => {
+    delete process.env.CREATOR_MEDIA_UPLOADS_ENABLED;
+    storageCalls.upload.length = 0;
+    storageCalls.remove.length = 0;
+    storageCalls.download.length = 0;
+    storageCalls.move.length = 0;
+    const res = await callHandler({
+      storage_path: 'company-1/plan-1/video/abc.mp4',
+      mime_type: 'video/mp4',
+      size_bytes: 1000,
+    });
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.body as any).code).toBe('UPLOADS_UNAVAILABLE');
+    expect((res.body as any).retryable).toBe(false);
+    expect(storageCalls).toEqual({ upload: [], remove: [], download: [], move: [] });
+  });
+});
+
 export {};

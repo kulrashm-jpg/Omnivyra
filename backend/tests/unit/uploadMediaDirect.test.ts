@@ -12,6 +12,9 @@
  *   - row-not-found
  */
 
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 function createRes() {
   return {
     statusCode: 200,
@@ -420,4 +423,75 @@ describe('upload-media-direct API', () => {
 // declarations in sibling suites (TS2451/TS2393). Jest already loads every test
 // file as its own CommonJS module, so this is a type-visibility fix only and
 // changes no runtime behaviour.
+describe('PC5-4 upload gate and no bucket auto-creation', () => {
+  const mockedSupabase = () => jest.requireMock('../../db/supabaseClient').supabase;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    ownedUpdates.length = 0;
+    storageCalls.upload.length = 0;
+    storageCalls.remove.length = 0;
+    storageCalls.listBuckets = 0;
+    mockFileFixture = { mime: 'video/mp4', size: 1_000_000, filepath: '/tmp/fake.mp4' };
+    mockFormFields = { source: ['direct_upload'] };
+    setReadBuffer(Buffer.from([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]));
+    setRow({ id: 'plan-1', content_type: 'reel' });
+  });
+  afterEach(() => { process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true'; });
+
+  test('disabled → 503 UPLOADS_UNAVAILABLE before any row lookup, bucket check or storage write', async () => {
+    delete process.env.CREATOR_MEDIA_UPLOADS_ENABLED;
+    const res = await callHandler();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.body as any).code).toBe('UPLOADS_UNAVAILABLE');
+    expect((res.body as any).retryable).toBe(false);
+    expect(mockedSupabase().from).not.toHaveBeenCalled();
+    expect(storageCalls.listBuckets).toBe(0);
+    expect(mockedSupabase().storage.createBucket).not.toHaveBeenCalled();
+    expect(storageCalls.upload).toHaveLength(0);
+    expect(ownedUpdates).toHaveLength(0);
+  });
+
+  test('enabled but bucket absent → 503 UPLOAD_BUCKET_NOT_PROVISIONED; bucket is NOT created', async () => {
+    mockedSupabase().storage.listBuckets.mockImplementationOnce(async () => { storageCalls.listBuckets++; return { data: [{ name: 'other' }], error: null }; });
+    const res = await callHandler();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.body as any).code).toBe('UPLOAD_BUCKET_NOT_PROVISIONED');
+    expect(storageCalls.listBuckets).toBe(1);
+    expect(mockedSupabase().storage.createBucket).not.toHaveBeenCalled();
+    expect(storageCalls.upload).toHaveLength(0);
+    expect(ownedUpdates).toHaveLength(0);
+  });
+
+  test('enabled, bucket listing errors → fails closed (503), no create, no write', async () => {
+    mockedSupabase().storage.listBuckets.mockImplementationOnce(async () => ({ data: null, error: { message: 'denied' } }));
+    const res = await callHandler();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.body as any).code).toBe('UPLOAD_BUCKET_NOT_PROVISIONED');
+    expect(mockedSupabase().storage.createBucket).not.toHaveBeenCalled();
+    expect(storageCalls.upload).toHaveLength(0);
+  });
+
+  test('enabled, bucket listing throws → fails closed (503)', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockedSupabase().storage.listBuckets.mockImplementationOnce(async () => { throw new Error('network'); });
+    const res = await callHandler();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(storageCalls.upload).toHaveLength(0);
+  });
+
+  test('source guard: no creator upload route creates or reconfigures a bucket', () => {
+    const fs = jest.requireActual('fs');
+    const path = jest.requireActual('path');
+    const dir = path.join(__dirname, '../../../pages/api/activity-workspace/[id]');
+    const routes = ['upload-media-direct.ts', 'upload-media-authorize.ts', 'upload-media-finalize.ts'];
+    for (const f of routes) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8');
+      expect(src).not.toMatch(/createBucket|updateBucket/);
+      // Non-empty match set: each route really carries the gate.
+      expect(src).toMatch(/refuseIfCreatorMediaUploadsDisabled\(res\)/);
+    }
+  });
+});
+
 export {};

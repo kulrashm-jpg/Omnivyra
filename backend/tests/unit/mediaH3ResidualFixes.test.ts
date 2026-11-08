@@ -14,6 +14,9 @@
  * Harness copied from mediaH3FinalizeQuarantine.test.ts (in-memory storage that
  * separates the private quarantine bucket from the public delivery bucket).
  */
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 import { createMemoryStorage, MP4 } from '../helpers/memoryStorage';
 
 const mockMem = createMemoryStorage(['media-uploads']);

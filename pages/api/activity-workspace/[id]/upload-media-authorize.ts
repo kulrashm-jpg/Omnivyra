@@ -28,6 +28,7 @@ import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { normalizeCreatorFormat, isAttachmentRequiredFormat } from '@/lib/shared/creatorGovernanceRegistry';
 import { resolveExpectedCategory } from '@/backend/services/mediaUploadValidationService';
 import { checkUploadAttemptAllowed } from '@/backend/services/creatorUploadAbuseGuardService';
+import { refuseIfCreatorMediaUploadsDisabled } from '@/backend/services/activityWorkspace/creatorMediaUploadGate';
 import {
   QUARANTINE_BUCKET,
   QUARANTINE_ALLOWED_MIME_TYPES,
@@ -51,6 +52,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const { user } = await getSupabaseUserFromRequest(req);
   if (!user?.id) return res.status(401).json({ error: 'UNAUTHORIZED' });
+  // PC5-4: uploads stay off until the bucket and policies are provisioned.
+  if (refuseIfCreatorMediaUploadsDisabled(res)) return;
 
   const body = (req.body || {}) as { mime_type?: unknown; size_bytes?: unknown };
   const mime = normalizeMime(body.mime_type);

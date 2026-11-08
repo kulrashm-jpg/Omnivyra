@@ -69,6 +69,7 @@ import {
   appendConsumedObjectPath,
   authorizedMimeForObjectPath,
 } from '@/backend/services/activityWorkspace/quarantinedMediaUpload';
+import { refuseIfCreatorMediaUploadsDisabled } from '@/backend/services/activityWorkspace/creatorMediaUploadGate';
 
 /** Delivery bucket (public). Only the server writes here, after validation. */
 const UPLOAD_BUCKET = DELIVERY_BUCKET;
@@ -200,6 +201,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // caller is known and authorized for the activity that owns it.
   const { user } = await getSupabaseUserFromRequest(req);
   if (!user?.id) return res.status(401).json({ error: 'UNAUTHORIZED' });
+  // PC5-4: uploads stay off until the bucket and policies are provisioned.
+  if (refuseIfCreatorMediaUploadsDisabled(res)) return;
 
   const body = (req.body || {}) as FinalizeBody;
   const storagePath = typeof body.storage_path === 'string' ? body.storage_path.trim() : '';

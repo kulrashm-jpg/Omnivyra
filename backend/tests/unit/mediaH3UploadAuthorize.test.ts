@@ -4,6 +4,9 @@
  * server-minted key in the PRIVATE quarantine bucket, after authentication and
  * tenant authorization.
  */
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 import { createMemoryStorage } from '../helpers/memoryStorage';
 
 const mockMem = createMemoryStorage(['media-uploads']);
@@ -142,6 +145,32 @@ it('rate-limited → 429; token minting failure → 503', async () => {
   const r = await authorize({ mime_type: 'video/mp4', size_bytes: 1 });
   expect(r.statusCode).toBe(503);
   expect(r.body.token).toBeUndefined();
+});
+
+describe('PC5-4 upload gate (CREATOR_MEDIA_UPLOADS_ENABLED)', () => {
+  afterEach(() => { process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true'; });
+
+  it('disabled → 503 UPLOADS_UNAVAILABLE, non-retryable, before any DB read or token', async () => {
+    delete process.env.CREATOR_MEDIA_UPLOADS_ENABLED;
+    const r = await authorize({ mime_type: 'video/mp4', size_bytes: 1234 });
+    expect(r.statusCode).toBe(503);
+    expect(r.body).toEqual(expect.objectContaining({ code: 'UPLOADS_UNAVAILABLE', retryable: false }));
+    expect(r.body.token).toBeUndefined();
+    expect(mockDbReads).toEqual([]);
+    expect(mockMem.events).toEqual([]);
+  });
+
+  it('disabled + unauthenticated → still 401 first', async () => {
+    delete process.env.CREATOR_MEDIA_UPLOADS_ENABLED;
+    mockUser = null;
+    expect((await authorize({ mime_type: 'video/mp4', size_bytes: 1 })).statusCode).toBe(401);
+  });
+
+  it.each(['false', '1', 'TRUE', 'yes', ''])('only the exact value "true" enables (%p → 503)', async (v) => {
+    process.env.CREATOR_MEDIA_UPLOADS_ENABLED = v;
+    expect((await authorize({ mime_type: 'video/mp4', size_bytes: 1 })).statusCode).toBe(503);
+    expect(mockMem.events).toEqual([]);
+  });
 });
 
 export {};

@@ -122,3 +122,13 @@ it('source guard: no browser code writes to media-uploads or uses the unsigned r
   // Non-empty match set: the guard is looking at the real uploader.
   expect(fs.readFileSync(path.join(ROOT, 'components/activity-workspace/creatorMediaUploadHandlers.ts'), 'utf8')).toMatch(/x-signature/);
 });
+
+it('uploads disabled (503 UPLOADS_UNAVAILABLE) → ok:false with the server message; no TUS, no finalize', async () => {
+  const message = 'Media file uploads are currently unavailable. Nothing was uploaded.';
+  mockFetch({ status: 503, body: { error: message, code: 'UPLOADS_UNAVAILABLE', retryable: false } });
+  const r = await postUploadFileResumable({ dailyPlanId: 'plan-a', file });
+  expect(r.ok).toBe(false);
+  expect(r.message).toBe(message);
+  expect(mockTus.options).toHaveLength(0);
+  expect(calls.some((c) => c.url.endsWith('/upload-media-finalize'))).toBe(false);
+});

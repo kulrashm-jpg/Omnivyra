@@ -13,6 +13,9 @@
  * database, identity provider and storage are fake. Every storage call and the
  * authorization verdict land in ONE ordered event log.
  */
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 import {
   seed, invoke, failTable, CO_A, CO_B, CAMPAIGN_A, CAMPAIGN_B, USER_A,
 } from '../helpers/routeAuthHarness';
