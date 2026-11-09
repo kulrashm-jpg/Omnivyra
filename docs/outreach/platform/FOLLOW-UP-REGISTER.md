@@ -25,9 +25,12 @@ Work discovered after the five-checkpoint sequence (`PROGRAMME-DASHBOARD.md`). T
 | FU-W1 | Community acting-account proof (Work Item 1) + closure A | Outreach; Orchestration (closure B) | **Held, not merged** until closure B is done and reviewed | `8e4d9edb0`, `a5ea2d95b` on `outreach/community-acting-account` |
 | FU-W1B | Closure B: the acting account inside the passkey-signed approval binding | Orchestration's owner | **Blocked** on Orchestration's owner; raised again 2026-11-08 | `communityApprovalBinding.ts` |
 | FU-W2 | WhatsApp send-once (Work Item 2, L-4) | Outreach | **Integrated locally**, combined T2 with 0 new failures | `d37ebefed` merged at `ae88fe6bc` |
-| FU-W2A | Adapter: represent `WhatsAppEnqueueUncertainError` as uncertain | Orchestration | **Request sent** (owner-approved); not started, needs Orchestration's owner | `whatsappEngineAdapter` |
+| FU-W2A | Adapter: represent `WhatsAppEnqueueUncertainError` as uncertain | Orchestration | **Request sent** 2026-11-08 (owner-approved); not started, needs Orchestration's owner. The 2026-11-09 restatement (Follow-up C) is **not delivered**: virality-c7 unreachable | `whatsappEngineAdapter` |
 | FU-RA | Reply-assistance enablement prerequisites RA-1..RA-7 | Several (see the decision record) | **Recorded, none implemented** | `OWNER-DECISIONS-20261108-REPLY-ASSISTANCE.md` |
 | FU-OWN | Owners of `outreach_decisions` and `engagement_authors` | Programme owner | **Unassigned**; not to be assumed | same |
+| FU-W2S | Follow-up A: unconfirmed-send reconciliation sweep | Outreach | **Committed on an isolated branch, not integrated**; no scheduler | `6a69f4700` on `outreach/whatsapp-uncertain-sweep`; migration `20270128000007` |
+| FU-W2C | Follow-up B: WhatsApp counters and billing | Outreach (counters); Billing (any charge) | **Proposal only**; decisions CB-1..CB-5 | `WHATSAPP-COUNTERS-BILLING-PROPOSAL.md` |
+| FU-GD4 | The 23 migration-quality violations (numbering) | PI, Orchestration, Privacy, Outreach | **Plan only**; decisions GD4-1..GD4-5 | `GD4-MIGRATION-RENUMBERING-PLAN.md` |
 
 ## FU-G1: `0004` hosted-grant fix
 
