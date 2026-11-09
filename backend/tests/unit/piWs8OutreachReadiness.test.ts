@@ -26,10 +26,11 @@ const db = {
  * separated, microsecond precision, and an EXPLICIT `+00:00` offset — Postgres
  * never renders a `timestamptz` as `Z`.
  *
- * It is deliberately 1.25 s AFTER `NOW`, the caller's instant, and inside
- * `GOVERNANCE_LIVE_TOLERANCE_MS`. Two different values is the whole point: a
- * test can then seed a restriction that starts BETWEEN them and prove which
- * clock decided.
+ * It is deliberately 1.25 s AFTER `NOW`, the caller's instant. Two different
+ * values is the whole point: a test can then seed a restriction that starts
+ * BETWEEN them and prove which clock decided. Since Part 3A nothing compares
+ * the two, so the gap can be any size — these tests use a small one only to
+ * show that even a small one is decisive.
  */
 const DB_READ_AT = '2026-09-04T00:00:01.250000+00:00';
 
@@ -80,7 +81,6 @@ jest.mock('../../db/writeOwner', () => ({
 
 import {
   OUTREACH_READINESS_VERSION,
-  GOVERNANCE_LIVE_TOLERANCE_MS,
   HISTORICAL_GOVERNANCE_REASON,
   assessOutreachReadiness,
   toNextBestAction,
@@ -182,9 +182,16 @@ const seedEngaged = (org = ORG_A) => {
   }
 };
 
-const assess = async (over: { target?: string | null; now?: string } = {}, icp: RatifiedIcp | null = ratified()) => {
+const assess = async (
+  // `historicalAsOf` is REQUIRED on the input, so the default is stated here
+  // once and overridden per test rather than being implicit anywhere.
+  over: { target?: string | null; now?: string; historicalAsOf?: boolean } = {},
+  icp: RatifiedIcp | null = ratified(),
+) => {
   const built = await buildCtx({}, icp);
-  return assessOutreachReadiness({ built: built as ProspectContextResult, now: NOW, ...over });
+  return assessOutreachReadiness({
+    built: built as ProspectContextResult, now: NOW, historicalAsOf: false, ...over,
+  });
 };
 
 beforeEach(() => { db.tables = {}; db.errors = {}; db.filters = []; db.writeOps = []; });
@@ -332,7 +339,8 @@ describe('WS-8 — the channel is read, never chosen', () => {
         } as typeof u;
       },
     };
-    const out = await assessOutreachReadiness({ built: built as ProspectContextResult, now: NOW }, ports);
+    const out = await assessOutreachReadiness(
+      { built: built as ProspectContextResult, now: NOW, historicalAsOf: false }, ports);
     expect(out.readiness).toBe('not_ready');
     expect(out.requiredMissingFields).toContain('governable_channel');
     expect(out.suppression).toBeNull();
@@ -465,7 +473,7 @@ describe('WS-8 — suppression is authoritative and overrides', () => {
     };
 
     const out = await assessOutreachReadiness(
-      { built: built as ProspectContextResult, now: NOW, target: '+1 (555) 010-0000' },
+      { built: built as ProspectContextResult, now: NOW, historicalAsOf: false, target: '+1 (555) 010-0000' },
       ports,
     );
 
@@ -500,7 +508,7 @@ describe('WS-8 — suppression is authoritative and overrides', () => {
     };
 
     const out = await assessOutreachReadiness(
-      { built: built as ProspectContextResult, now: NOW, target: '   ' },
+      { built: built as ProspectContextResult, now: NOW, historicalAsOf: false, target: '   ' },
       ports,
     );
 
@@ -540,7 +548,8 @@ describe('WS-8 — suppression is authoritative and overrides', () => {
         } as typeof u;
       },
     };
-    const out = await assessOutreachReadiness({ built: built as ProspectContextResult, now: NOW }, ports);
+    const out = await assessOutreachReadiness(
+      { built: built as ProspectContextResult, now: NOW, historicalAsOf: false }, ports);
     expect(out.readiness).toBe('not_ready');
     expect(out.requiredMissingFields).toContain('contact_anchor');
     expect(out.suppression).toBeNull();
@@ -712,9 +721,9 @@ describe('WS-8 — tenant isolation across the whole decision path', () => {
     seedEngaged();
     const built = (await buildCtx())!;
     const tenantless = { ...built, context: { ...built.context, key: { ...built.context.key, companyId: '  ' } } };
-    await expect(assessOutreachReadiness({ built: tenantless, now: NOW }))
+    await expect(assessOutreachReadiness({ built: tenantless, now: NOW, historicalAsOf: false }))
       .rejects.toThrow(/organizationId is required/);
-    await expect(assessOutreachReadiness({ built, now: '' }))
+    await expect(assessOutreachReadiness({ built, now: '', historicalAsOf: false }))
       .rejects.toThrow(/now is required/);
   });
 });
@@ -782,26 +791,39 @@ describe('P0 — suppression is judged at the database read instant', () => {
     expect(out.suppression!.decision).toBe('allowed');
   });
 
-  it('a 1970 caller instant yields NO clearance against a live restriction', async () => {
+  it('a 1970 caller instant cannot override a current restriction — it is BLOCKED', async () => {
+    // Since Part 3A the caller's instant is not compared to anything, so a
+    // nonsensical one is simply irrelevant: the restriction is judged at the
+    // database instant and blocks. Stronger than the earlier refusal, because a
+    // real verdict with a real record id is produced.
     seedEngaged();
     seedGovernance(ORG_A, 'g-1');
     const out = await assess({ now: '1970-01-01T00:00:00.000Z' });
-
-    // 1970 is far outside the live tolerance, so this is a replay: governance is
-    // refused rather than answered. What matters is what it is NOT.
-    expect(out.readiness).not.toBe('ready');
-    expect(out.readiness).toBe('not_ready');
-    expect(out.suppression).toBeNull();
-    expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
+    expect(out.readiness).toBe('blocked');
+    expect(out.suppression!.recordId).toBe('g-1');
   });
 
-  it('a FUTURE caller instant cannot bypass a live restriction either', async () => {
+  it('a FUTURE caller instant cannot override a current restriction either', async () => {
     seedEngaged();
     seedGovernance(ORG_A, 'g-1');
     const out = await assess({ now: '2030-01-01T00:00:00.000Z' });
-    expect(out.readiness).not.toBe('ready');
-    expect(out.suppression).toBeNull();
-    expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
+    expect(out.readiness).toBe('blocked');
+    expect(out.suppression!.recordId).toBe('g-1');
+  });
+
+  it('clock skew far beyond two minutes does NOT reclassify a live request', async () => {
+    // The specific regression Part 3A removes. A host clock ten minutes out
+    // would have tripped the old 120 s tolerance and refused a live request.
+    seedEngaged();
+    const skewed = await assess({ now: '2026-09-04T00:10:00.000Z' });
+    expect(skewed.readiness).toBe('ready');
+    expect(skewed.suppression!.decision).toBe('allowed');
+    expect(skewed.requiredMissingFields).toEqual([]);
+
+    seedGovernance(ORG_A, 'g-skew');
+    const blocked = await assess({ now: '2026-09-04T00:10:00.000Z' });
+    expect(blocked.readiness).toBe('blocked');
+    expect(blocked.suppression!.recordId).toBe('g-skew');
   });
 
   it('an unrelated producer is unaffected: another person\u2019s restriction does not block this one', async () => {
@@ -832,106 +854,131 @@ describe('P0 — suppression is judged at the database read instant', () => {
       ...defaultOutreachReadinessPorts,
       async loadGovernance() { return { ok: true, records: [] }; },
     };
-    const out = await assessOutreachReadiness({ built: built as ProspectContextResult, now: NOW }, ports);
+    const out = await assessOutreachReadiness(
+      { built: built as ProspectContextResult, now: NOW, historicalAsOf: false }, ports);
     expect(out.readiness).toBe('not_ready');
     expect(out.suppression).toBeNull();
     expect(out.requiredMissingFields).toContain('readable_suppression_state');
   });
 });
 
-describe('P0 — historical scoring is answered; historical governance is refused', () => {
-  const HISTORICAL = '2026-07-01T00:00:00.000Z';       // well outside the tolerance
+describe('P0/3A — an explicit historical request is refused, unconditionally', () => {
+  const HISTORICAL = '2026-07-01T00:00:00.000Z';
+  /** 30 s before the database instant — deliberately NEAR, to prove nearness is irrelevant. */
+  const NEARLY_NOW = '2026-09-04T00:00:31.250000+00:00';
+  const historical = (now: string = HISTORICAL) => assess({ now, historicalAsOf: true });
 
-  /**
-   * A governance record MUST exist for the request to be instant-dependent.
-   *
-   * With no record at all the verdict is "nothing applies" at every instant —
-   * the caller's and the database's alike — so answering is not a substitution
-   * and the refusal does not apply. That case is pinned on its own below; these
-   * cases are about a request whose answer genuinely depends on WHEN it is asked.
-   */
-  const seedInstantDependent = () => seedGovernance(ORG_A, 'g-hist');
-
-  it('a historical asOf still returns the full recommendation and score context', async () => {
+  it('1. asOf with a NON-EMPTY governance result is refused, naming the limitation exactly', async () => {
     seedEngaged();
-    seedInstantDependent();
-    const out = await assess({ now: HISTORICAL });
-
-    // The scoring half of the request is answered as before: the NBA is complete
-    // and the engine's own fields are untouched. Only PERMISSION is withheld.
-    expect(out.nextBestAction.abstained).toBe(false);
-    expect(out.nextBestAction.action).toBeTruthy();
-    expect(out.recommendedChannel).toBeTruthy();
-    expect(out.confidence).not.toBeNull();
-    expect(out.messageContext.evidenceIds).toBeDefined();
-  });
-
-  it('the same request reports governance not_ready, naming the limitation exactly', async () => {
-    seedEngaged();
-    seedInstantDependent();
-    const out = await assess({ now: HISTORICAL });
+    seedGovernance(ORG_A, 'g-hist');
+    const out = await historical();
     expect(out.readiness).toBe('not_ready');
     expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
     expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
-    // The instant actually read is recorded, so the gap is inspectable rather
-    // than merely asserted.
-    expect(out.constraints.some((c) => c.startsWith('governance_read_at:'))).toBe(true);
+    expect(out.suppression).toBeNull();
+    expect(out.constraints).toContain(`historical_as_of:${HISTORICAL}`);
   });
 
-  it('a historical answer cannot be read as permission to contact', async () => {
-    // THE ADVERSARIAL CASE. This record is returned by the read — same tenant,
-    // same channel, not revoked — but it has not come into force by the database
-    // instant, so the verdict FOR NOW is `allowed`. Returning that beside a
-    // historical score would read as "contact was permitted at the instant you
-    // asked about", which is the one thing this store cannot establish.
-    seedEngaged();
-    seedGovernance(ORG_A, 'g-not-yet', { effective_from: '2026-09-05T00:00:00+00:00' });
-    const out = await assess({ now: HISTORICAL });
+  it('2. asOf with an EMPTY successful governance result is refused too', async () => {
+    // THE PART 3A CORRECTION. This case used to be answered, on the argument
+    // that with no record the verdict is the same at every instant. It is not
+    // sound evidence about the past: an empty result is exactly the shape a
+    // since-revoked or since-deleted restriction leaves behind.
+    seedEngaged();                                   // no governance rows at all
+    const out = await historical();
+    expect(out.readiness).toBe('not_ready');
+    expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+    expect(out.suppression).toBeNull();
+  });
 
+  it('3. asOf with a since-REVOKED record is refused, with no claim of reconstruction', async () => {
+    // The loader filters `revoked_at IS NULL`, so this row never comes back —
+    // the read is empty although a restriction demonstrably existed. Precisely
+    // the state that must not be reported as "nothing applied".
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-revoked', { revoked_at: '2026-08-01T00:00:00+00:00' });
+    const out = await historical();
+    expect(out.readiness).toBe('not_ready');
+    expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+    expect(out.suppression).toBeNull();
+    // No verdict is asserted about the past, in either direction.
+    expect(JSON.stringify(out)).not.toContain('allowed');
+  });
+
+  it('4. asOf with an UNAVAILABLE governance store yields no contact clearance', async () => {
+    seedEngaged();
+    db.errors.contact_governance_records = { message: 'connection reset' };
+    const out = await historical();
     expect(out.readiness).not.toBe('ready');
     expect(out.readiness).toBe('not_ready');
     expect(out.suppression).toBeNull();
+    // The HISTORICAL reason, not the unreadable-store one: the refusal precedes
+    // the read, so an outage cannot change which answer a replay gets. Asserting
+    // the specific reason is what makes a mutation that defers the refusal until
+    // after a successful read detectable at all.
     expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+    expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
+    expect(out.requiredMissingFields).not.toContain('readable_suppression_state');
   });
 
-  it('with NO governance record the answer is instant-invariant, so a historical request is answered', async () => {
-    // Deliberate, and the reasoning is in `readiness.ts`: a decision instant is
-    // only ever compared against `effective_from` / `effective_until`, so with no
-    // record there is nothing for it to change. "Nothing applies" is the same
-    // answer at the caller's instant and at the database's, so returning it
-    // substitutes nothing.
-    //
-    // THE RESIDUAL GAP, pinned so it is visible rather than discovered: a
-    // restriction that was in force at the requested instant and has since been
-    // revoked or deleted leaves no row, and this path will not report it. No
-    // parameter on the read could — the loader filters `revoked_at IS NULL`.
+  it('5. asOf only 30 SECONDS from the database instant is still refused', async () => {
+    // Under the removed tolerance this was classed as live and answered. The
+    // signal is the parameter, not the distance.
     seedEngaged();
-    const out = await assess({ now: HISTORICAL });
-    expect(out.readiness).toBe('ready');
-    expect(out.suppression!.decision).toBe('allowed');
-  });
-
-  it('a request INSIDE the tolerance is live and is answered normally', async () => {
-    seedEngaged();
-    const out = await assess();                      // NOW, 1.25 s before DB_READ_AT
-    expect(out.readiness).toBe('ready');
-    expect(out.suppression!.decision).toBe('allowed');
-    expect(out.requiredMissingFields).toEqual([]);
-  });
-
-  it('an asOf that the evaluator\u2019s parser cannot read is refused, not guessed', async () => {
-    // The route validates `asOf` with `Date.parse`, which accepts forms the
-    // governance parser rejects. A timestamp we cannot compare is not
-    // corroboration, so it takes the historical branch.
-    seedEngaged();
-    seedInstantDependent();
-    const out = await assess({ now: '2026-09-04' });
+    seedGovernance(ORG_A, 'g-hist');
+    const out = await historical(NEARLY_NOW);
     expect(out.readiness).toBe('not_ready');
     expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+    expect(out.suppression).toBeNull();
   });
 
-  it('the live tolerance is a named, bounded constant — not an open window', async () => {
-    expect(GOVERNANCE_LIVE_TOLERANCE_MS).toBe(120_000);
-    expect(GOVERNANCE_LIVE_TOLERANCE_MS).toBeLessThan(60 * 60 * 1000);
+  it('6. asOf YEARS from the database instant is refused the same way, with the same reason', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-hist');
+    const far = await historical('2019-01-01T00:00:00.000Z');
+    const near = await historical(NEARLY_NOW);
+    expect(far.readiness).toBe('not_ready');
+    expect(far.reason).toBe(near.reason);
+    expect(far.requiredMissingFields).toEqual(near.requiredMissingFields);
+  });
+
+  it('7. historical SCORING is still answered at the requested instant', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-hist');
+    const out = await historical();
+
+    // Only PERMISSION is withheld. The recommendation, its confidence, its
+    // evidence and the whole NBA are returned exactly as for a live request.
+    expect(out.nextBestAction.abstained).toBe(false);
+    expect(out.nextBestAction.action).toBeTruthy();
+    expect(out.recommendedChannel).toBeTruthy();
+    expect(out.recommendedTiming).toBeTruthy();
+    expect(out.confidence).not.toBeNull();
+    expect(out.messageContext.evidenceIds).toBeDefined();
+    expect(out.nextBestAction.priority).toHaveProperty('value');
+  });
+
+  it('the refusal does not read the store at all, so nothing it returns can influence it', async () => {
+    // The strongest form of "unconditional": the query is never issued, so the
+    // four cases above cannot diverge however the store behaves.
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-hist');
+    db.filters = [];
+    await historical();
+    expect(db.filters.filter((f) => f.table === 'contact_governance_records')).toEqual([]);
+  });
+
+  it('THE FLAG is what differs: the same instant without it is answered normally', async () => {
+    // The control. Same `now`, same records, flag off — and a verdict appears.
+    // So the refusal is caused by the explicit signal and by nothing else.
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-hist');
+    const refused = await assess({ now: HISTORICAL, historicalAsOf: true });
+    const answered = await assess({ now: HISTORICAL, historicalAsOf: false });
+
+    expect(refused.readiness).toBe('not_ready');
+    expect(refused.suppression).toBeNull();
+    expect(answered.readiness).toBe('blocked');
+    expect(answered.suppression!.recordId).toBe('g-hist');
   });
 });
