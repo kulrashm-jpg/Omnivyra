@@ -163,7 +163,7 @@ const ENV_BASE = {
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'placeholder-publishable',
   REDIS_URL: 'redis://127.0.0.1:6399',
   OPENAI_API_KEY: 'placeholder-openai',
-  ENCRYPTION_KEY: '0123456789abcdef'.repeat(4),
+  ENCRYPTION_KEY: '0'.repeat(64), // valid 64-hex, zero entropy: never secret-shaped (GITLEAKS-61 review)
 };
 
 function decisionInput(over: Record<string, unknown> = {}) {
