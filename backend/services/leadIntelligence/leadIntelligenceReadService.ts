@@ -124,10 +124,16 @@ import { readAccountsForSourceRecords, type AccountReadResult } from '../prospec
 import { readProspectAliases, type ProspectAliasReadResult } from '../prospectProvenance/prospectAliasStore';
 import { aliasIndexOf, terminalSurvivorOf, type ProspectAlias } from '../../../lib/prospectProvenance/prospectAliases';
 import type { ProvenanceContribution } from '../../../lib/prospectProvenance/contract';
-// W0-B — the canonical contact-governance evaluator and a tenant-scoped read of
-// its records. `mayContact` is pure; the read is the only I/O this adds.
-import { mayContact } from '../prospectIdentity/contactGovernance';
+// W0-B — a tenant-scoped read of the canonical contact-governance records.
+//
+// P0 — `mayContact` is deliberately NOT imported here any more. It requires a
+// decision instant, the only honest one is the `read_at` that travelled with the
+// rows, and `evaluateGovernanceReads` is the one place that pairs them. Without
+// the import there is no longer a way for this module to form a governance
+// question around a clock of its own.
+import type { GovernanceChannel } from '../prospectIdentity/contactGovernance';
 import { loadTenantGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
+import { evaluateGovernanceReads } from '../prospectIdentity/contactGovernanceAggregation';
 
 type Row = Record<string, unknown>;
 /** A bulk read's rows; `truncated` is set when the read hit its cap. */
@@ -922,7 +928,7 @@ export async function exportLeads(
   // downloaded the file. The dispatch gate never sees this path, so the same
   // canonical rules are applied here.
   //
-  // ONE tenant-scoped read, then the PURE `mayContact` per row — anchoring the
+  // ONE tenant-scoped read, then the PURE evaluator per row — anchoring the
   // existing loader per row would be two queries per lead, up to 10,000.
   //
   // FAIL CLOSED, twice over: an unreadable governance store redacts every
@@ -930,7 +936,44 @@ export async function exportLeads(
   // or a target is redacted too, because an unanchorable subject is one no
   // restriction could ever have matched.
   const governance = await loadTenantGovernanceRecords(query.companyId, ['email', 'phone']);
-  const now = new Date().toISOString();
+
+  /**
+   * P0 — ONE governed question, judged at the instant ITS OWN read came back.
+   *
+   * THE DEFECT THIS CLOSES. This seam took `new Date().toISOString()` once per
+   * export and compared every database-stamped `effective_from` /
+   * `effective_until` against it. Those are two different clocks: measured on the
+   * development host, Node ran BEHIND Postgres in 1458 of 1485 samples, and a
+   * `w32time` step moved it 3.135 s mid-run. A host clock behind the database
+   * reads a restriction that has just come into force as "not yet started" and
+   * EXPORTS the endpoint — on this path that means handing the email address and
+   * phone number of somebody who asked not to be contacted to whoever downloaded
+   * the file.
+   *
+   * No instant is taken here and none is passed in. `evaluateGovernanceReads`
+   * hands each read's rows to the pure `mayContact` with the `read_at` that read
+   * arrived with, and combines the per-read verdicts in the restrictive direction
+   * only. The rows are the same rows as before — `loadTenantGovernanceRecords`
+   * makes ONE request, so its single read carries exactly the set this used to
+   * pass as `governance.records`.
+   *
+   * FAIL CLOSED, same direction and wider coverage: `ok === false` now also
+   * covers rows that arrived with no usable read instant and rows whose instants
+   * disagree with each other. Every one of those redacts.
+   */
+  const permitted = (
+    personId: string | null,
+    targetNormalized: string | null,
+    channel: GovernanceChannel,
+  ): boolean => {
+    const decision = evaluateGovernanceReads(governance.reads, {
+      organizationId: query.companyId, personId, targetNormalized, channel,
+    });
+    // `=== true`, not a truthiness test: `strict` is off in this repository, so a
+    // bare `decision.ok` does not narrow the discriminated union and
+    // `decision.verdict` would not type-check on the indeterminate branch.
+    return decision.ok === true && decision.verdict.decision === 'allowed';
+  };
 
   const discloseFor = (view: CanonicalLeadView): ExportDisclosure => {
     if (!governance.ok) return DISCLOSE_NOTHING;
@@ -952,14 +995,7 @@ export async function exportLeads(
       // disclosing on that basis would be exactly the fail-open this guard exists
       // to prevent.
       if (!targetNormalized && !personId) return false;
-      return mayContact({
-        organizationId: query.companyId,
-        personId,
-        targetNormalized,
-        channel,
-        now,
-        records: governance.records,
-      }).decision === 'allowed';
+      return permitted(personId, targetNormalized, channel);
     };
     const email = view.identity.email ? permits('email', view.identity.email) : false;
     const phone = view.identity.phone ? permits('phone', view.identity.phone) : false;
@@ -969,14 +1005,7 @@ export async function exportLeads(
     // real channel, so only `*` records can match it ("every channel, including
     // channels that do not exist yet").
     const everyEndpointPermitted = (!view.identity.email || email) && (!view.identity.phone || phone);
-    const blockedEverywhere = !!personId && mayContact({
-      organizationId: query.companyId,
-      personId,
-      targetNormalized: null,
-      channel: 'provenance_export',
-      now,
-      records: governance.records,
-    }).decision !== 'allowed';
+    const blockedEverywhere = !!personId && !permitted(personId, null, 'provenance_export');
     // An actionable recommendation is an instruction to contact. It is withheld
     // unless at least one channel actually permits contact.
     return { email, phone, action: email || phone, sourceUrl: everyEndpointPermitted && !blockedEverywhere };

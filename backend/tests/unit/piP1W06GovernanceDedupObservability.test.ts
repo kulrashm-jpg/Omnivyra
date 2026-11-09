@@ -112,6 +112,29 @@ import {
 
 const mLoad = loadGovernanceRecords as jest.Mock;
 
+/**
+ * A loader result shaped as the real repository now returns one: the flat
+ * `records` list PLUS the per-read report, each read carrying the database
+ * instant its own rows came back with (the `read_at` computed field, migration
+ * 20270202000000). Governance evaluation judges each read at that instant, so a
+ * result with no `reads` is INDETERMINATE rather than a verdict — which is why
+ * the double has to report them.
+ *
+ * The instant is in the database's own rendering (`+00:00`, never `Z`), because
+ * that is what PostgREST actually returns.
+ */
+const DB_READ_AT = '2026-06-01T00:00:00+00:00';
+const loadedTargetRead = (records: unknown[]) => ({
+  ok: true,
+  records,
+  reads: [{
+    anchor: 'target',
+    ok: true,
+    records,
+    readAt: records.length ? DB_READ_AT : null,
+  }],
+});
+
 const ORG = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const PERSON = 'person-a';
@@ -132,7 +155,7 @@ beforeEach(() => {
   db.failures = {};
   db.insertError = {};
   mLoad.mockReset();
-  mLoad.mockResolvedValue({ ok: true, records: [] });
+  mLoad.mockResolvedValue(loadedTargetRead([]));
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -145,20 +168,17 @@ describe('W06 governance — a refusal and an outage are no longer the same even
   });
 
   it('a REAL canonical suppression counts as a decision and NOT as a failure', async () => {
-    mLoad.mockResolvedValue({
-      ok: true,
-      records: [{
-        id: 'gov-1',
-        organizationId: ORG,
-        personId: null,
-        targetNormalized: EMAIL,
-        channel: 'email',
-        governanceType: 'unsubscribe',
-        effectiveFrom: '2020-01-01T00:00:00.000Z',
-        effectiveUntil: null,
-        revokedAt: null,
-      }],
-    });
+    mLoad.mockResolvedValue(loadedTargetRead([{
+      id: 'gov-1',
+      organizationId: ORG,
+      personId: null,
+      targetNormalized: EMAIL,
+      channel: 'email',
+      governanceType: 'unsubscribe',
+      effectiveFrom: '2020-01-01T00:00:00.000Z',
+      effectiveUntil: null,
+      revokedAt: null,
+    }]));
 
     const r = await isSuppressed(ORG, 'email', EMAIL);
     expect(r.suppressed).toBe(true);
@@ -216,20 +236,17 @@ describe('W06 governance — a refusal and an outage are no longer the same even
   });
 
   it('a REAL suppression emits no fault log — an outage alert must not fire on compliance', async () => {
-    mLoad.mockResolvedValue({
-      ok: true,
-      records: [{
-        id: 'gov-1',
-        organizationId: ORG,
-        personId: null,
-        targetNormalized: EMAIL,
-        channel: 'email',
-        governanceType: 'unsubscribe',
-        effectiveFrom: '2020-01-01T00:00:00.000Z',
-        effectiveUntil: null,
-        revokedAt: null,
-      }],
-    });
+    mLoad.mockResolvedValue(loadedTargetRead([{
+      id: 'gov-1',
+      organizationId: ORG,
+      personId: null,
+      targetNormalized: EMAIL,
+      channel: 'email',
+      governanceType: 'unsubscribe',
+      effectiveFrom: '2020-01-01T00:00:00.000Z',
+      effectiveUntil: null,
+      revokedAt: null,
+    }]));
     await isSuppressed(ORG, 'email', EMAIL);
     expect(logs.filter((l) => l.event === 'contact_governance_failclosed')).toHaveLength(0);
   });
