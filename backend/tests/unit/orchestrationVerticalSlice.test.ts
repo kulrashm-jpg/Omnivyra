@@ -240,6 +240,7 @@ import { validateWorkflowDefinition, type WorkflowVersion } from '../../services
 import { advanceAndDispatchWorkflowExecution, type TenantSweepResult } from '../../services/workflowExecution/workflowProgressionSweeper';
 import { createWs3Adapter, type EngineAdapter } from '../../services/orchestration/engineAdapters';
 import { broadcastNameFor, createWhatsAppAdapter, defaultWhatsAppDeps, STALE_SUBMISSION_MS, type WhatsAppAdapterDeps } from '../../services/orchestration/whatsappEngineAdapter';
+import { WhatsAppEnqueueUncertainError } from '../../services/whatsappBroadcastService';
 import { checkEnrollmentEligibility } from '../../services/orchestration/enrollment';
 import { buildJourneyReport } from '../../services/orchestration/journeyReport';
 import type { IndividualIntelligencePort } from '../../services/orchestration/individualIntelligence';
@@ -556,6 +557,23 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
     expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'submit_failed' });
     wa.failEnqueue = null;
     await sweep();
+    expect(wa.broadcasts).toHaveLength(1);
+    expect(wa.enqueued).toHaveLength(0);
+  });
+
+  it('RUL-C: an enqueue that may have queued the batch is uncertain for a human, never failed, and never resubmitted', async () => {
+    const run = enrol(ORG_A, 'p-ready', waOnly());
+    const uncertain = createWhatsAppAdapter({
+      ...waDeps,
+      enqueueBroadcast: (async (id: string) => { throw new WhatsAppEnqueueUncertainError(id, 'withdrawal not written'); }) as never,
+    });
+    const r = await advanceAndDispatchWorkflowExecution(ORG_A, { now: world.clock, deps: { adapters: [createWs3Adapter(), uncertain], intelligence } });
+    expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+    expect((db.tables.execution_engine_requests as Array<{ state: string; external_ref: string }>)[0]).toMatchObject({ state: 'uncertain', external_ref: 'bc-1' });
+    expect(stepOf(run, 'wa-intro').state).toBe('ready');
+    // The queue recovers; later sweeps, past the stale window too, still leave it with a person.
+    world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
+    expect((await sweep()).decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
     expect(wa.broadcasts).toHaveLength(1);
     expect(wa.enqueued).toHaveLength(0);
   });
