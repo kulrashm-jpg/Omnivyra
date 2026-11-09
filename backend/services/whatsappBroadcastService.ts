@@ -686,8 +686,9 @@ export async function processBatch(
     // batches, while this loop never looked at the status it was given. Only the
     // invocation that moves the row `pending → sending` may send it; every other
     // one skips, so a retry can never message a recipient twice.
+    // send_started_at dates the claim, so the unconfirmed-send sweep measures age from it.
     const { data: claimed } = await ownedDbTable('whatsapp_broadcast_recipients')
-      .update({ status: 'sending' })
+      .update({ status: 'sending', send_started_at: new Date().toISOString() })
       .eq('id', recipient.id)
       .eq('status', 'pending')
       .select('id');
@@ -858,6 +859,57 @@ const DELIVERY_ADVANCES_FROM: Record<RecipientDeliveryUpdate['status'], readonly
   read:      ['sent', 'failed', 'delivered'],
 };
 
+export interface DeliveryEvidenceEvent {
+  status:       RecipientDeliveryUpdate['status'];
+  event_at:     string;
+  error_code?:  number | null;
+  error_title?: string | null;
+}
+
+/** Forward order: the tie-break for events Meta stamped with the same second. */
+const DELIVERY_RANK: Record<RecipientDeliveryUpdate['status'], number> = { sent: 0, failed: 1, delivered: 2, read: 3 };
+
+/**
+ * Follow-up A. Where a message ends after these provider events, applied in event order
+ * through DELIVERY_ADVANCES_FROM (the rule the status webhook applies one event at a time),
+ * starting from `sent`: an attached message id means Meta accepted the message. Pure.
+ * `permanentFailureCode` is set when an applied `failed` carried a permanent code, where the
+ * webhook path would have written the N-2 restriction.
+ */
+export function foldDeliveryEvidence(events: readonly DeliveryEvidenceEvent[]): {
+  status:               RecipientDeliveryUpdate['status'];
+  sent_at:              string | null;
+  delivered_at:         string | null;
+  read_at:              string | null;
+  error_code:           number | null;
+  error_message:        string | null;
+  permanentFailureCode: number | null;
+} {
+  const ordered = [...events].sort((a, b) =>
+    a.event_at < b.event_at ? -1 : a.event_at > b.event_at ? 1 : DELIVERY_RANK[a.status] - DELIVERY_RANK[b.status]);
+  const out = {
+    status:               'sent' as RecipientDeliveryUpdate['status'],
+    sent_at:              ordered[0]?.event_at ?? null,
+    delivered_at:         null as string | null,
+    read_at:              null as string | null,
+    error_code:           null as number | null,
+    error_message:        null as string | null,
+    permanentFailureCode: null as number | null,
+  };
+  for (const e of ordered) {
+    if (!DELIVERY_ADVANCES_FROM[e.status].includes(out.status)) continue;
+    out.status = e.status;
+    if (e.status === 'delivered') out.delivered_at = e.event_at;
+    if (e.status === 'read') out.read_at = e.event_at;
+    if (typeof e.error_code === 'number') out.error_code = e.error_code;
+    if (e.error_title) out.error_message = e.error_title;
+    if (e.status === 'failed' && typeof e.error_code === 'number' && WHATSAPP_PERMANENT_FAILURE_CODES.includes(e.error_code)) {
+      out.permanentFailureCode = e.error_code;
+    }
+  }
+  return out;
+}
+
 /**
  * N-2. Meta error codes that mean the NUMBER cannot receive WhatsApp, not that this one send
  * failed: 131026 "Message undeliverable" (not a WhatsApp user, or cannot receive). Such a
@@ -879,6 +931,8 @@ export async function recordWhatsAppProviderEvent(event: {
   timestamp?: unknown;
   error_code?: number;
   error_message?: string;
+  /** Follow-up A: the recipient its marker named, ONLY once verifyCallbackRecipient matched the number. */
+  verified_recipient_id?: string | null;
 }): Promise<'recorded' | 'duplicate'> {
   const seconds = typeof event.timestamp === 'string' || typeof event.timestamp === 'number' ? Number(event.timestamp) : NaN;
   // Meta always stamps a status; a missing stamp is recorded at receipt time.
@@ -889,6 +943,8 @@ export async function recordWhatsAppProviderEvent(event: {
     event_at:      eventAt.toISOString(),
     error_code:    typeof event.error_code === 'number' ? event.error_code : null,
     error_title:   event.error_message ?? null,
+    // Only when present, so an event without a marker is written exactly as before.
+    ...(event.verified_recipient_id ? { verified_recipient_id: event.verified_recipient_id } : {}),
   });
   if (!error) return 'recorded';
   if ((error as { code?: string }).code === '23505') return 'duplicate';
@@ -918,15 +974,26 @@ async function restrictPermanentFailure(update: RecipientDeliveryUpdate, advance
     .maybeSingle();
   if (bErr || !broadcast?.company_id) throw new Error('[wa-delivery] broadcast tenant unreadable');
 
+  await recordInvalidContact(String(broadcast.company_id), recipient.encrypted_phone, update.wa_message_id, update.error_code, recipient.id);
+}
+
+/** N-2: the `invalid_contact` restriction on (tenant, whatsapp, number). Collapses on the store's canonical key. */
+export async function recordInvalidContact(
+  companyId: string,
+  encryptedPhone: string,
+  waMessageId: string,
+  errorCode: number,
+  recipientId: string,
+): Promise<void> {
   await recordContactGovernance({
-    organizationId: String(broadcast.company_id),
+    organizationId: companyId,
     governanceType: 'invalid_contact',
     channel: 'whatsapp',
     personId: null,
-    target: decryptPhone(recipient.encrypted_phone),
+    target: decryptPhone(encryptedPhone),
     source: WHATSAPP_STATUS_SOURCE,
     // Summary only: the message id and Meta's code, never the number.
-    evidence: { waMessageId: update.wa_message_id, errorCode: update.error_code, recipientId: recipient.id },
+    evidence: { waMessageId, errorCode, recipientId },
   });
 }
 
@@ -942,31 +1009,41 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * is applied as usual (delivered, read, failed, the N-2 restriction). Nothing is ever sent
  * here; an event that does not match exactly changes nothing. Returns whether it attached.
  */
-async function reconcileUnconfirmedSend(update: RecipientDeliveryUpdate): Promise<boolean> {
-  const recipientId = typeof update.callback_data === 'string' ? update.callback_data.trim() : '';
-  if (!UUID_RE.test(recipientId)) return false;
-  const waId = typeof update.recipient_wa_id === 'string' ? update.recipient_wa_id.replace(/\D/g, '') : '';
-  if (!waId) return false;
+/**
+ * The recipient a status event's marker names, when the event's number is that recipient's
+ * number; otherwise null. A read failure throws, so the webhook job is retried. The webhook
+ * job records the answer in the provider event ledger (Follow-up A), so the evidence
+ * outlives a job that later runs out of attempts.
+ */
+export async function verifyCallbackRecipient(callbackData: unknown, recipientWaId: unknown): Promise<string | null> {
+  const recipientId = typeof callbackData === 'string' ? callbackData.trim() : '';
+  if (!UUID_RE.test(recipientId)) return null;
+  const waId = typeof recipientWaId === 'string' ? recipientWaId.replace(/\D/g, '') : '';
+  if (!waId) return null;
 
   const { data: rows, error } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id, encrypted_phone')
-    .eq('id', recipientId)
-    .in('status', [...UNCONFIRMED_SEND_STATES])
-    .is('wa_message_id', null);
-  if (error) throw new Error(`[wa-delivery] unconfirmed recipient read failed: ${error.message}`);
+    .eq('id', recipientId);
+  if (error) throw new Error(`[wa-delivery] marked recipient read failed: ${error.message}`);
   const row = (rows ?? [])[0] as { id: string; encrypted_phone: string } | undefined;
-  if (!row) return false;
+  if (!row) return null;
 
   let number = '';
   try {
     number = decryptPhone(row.encrypted_phone).replace(/\D/g, '');
   } catch {
-    return false;
+    return null;
   }
   if (number !== waId) {
     console.warn('[wa-delivery] status marker names a recipient whose number differs; not reconciled', recipientId);
-    return false;
+    return null;
   }
+  return row.id;
+}
+
+async function reconcileUnconfirmedSend(update: RecipientDeliveryUpdate): Promise<boolean> {
+  const recipientId = await verifyCallbackRecipient(update.callback_data, update.recipient_wa_id);
+  if (!recipientId) return false;
 
   const { data: attached, error: attachError } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update({ status: 'sent', wa_message_id: update.wa_message_id, sent_at: new Date().toISOString() })
