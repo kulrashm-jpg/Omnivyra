@@ -101,6 +101,32 @@ export interface ManualLeadInput {
   companyCity?: string | null;
 }
 
+/**
+ * Every key `ManualLeadInput` declares, at runtime. `satisfies` makes the
+ * compiler refuse this object the moment the interface gains or loses a field,
+ * so the list cannot drift from the type it describes. Used to REPORT the keys
+ * of a submitted row that no field reads (`ignoredColumns`); it never filters
+ * what is stored as the raw payload.
+ */
+const MANUAL_INPUT_FIELD_SET = {
+  organizationId: true, referenceId: true, firstName: true, lastName: true, fullName: true,
+  email: true, phone: true, jobTitle: true, department: true, companyName: true,
+  companyDomain: true, companyExternalId: true, countryCode: true, region: true, city: true,
+  observedAt: true, metadata: true, industry: true, employeeCount: true, employeeBand: true,
+  annualRevenue: true, revenueBand: true, foundedYear: true, technologies: true,
+  fundingStage: true, lastFundingAt: true, companyCountryCode: true, companyRegion: true,
+  companyCity: true,
+} as const satisfies Record<keyof ManualLeadInput, true>;
+
+export const MANUAL_INPUT_FIELDS: readonly (keyof ManualLeadInput)[] =
+  Object.freeze(Object.keys(MANUAL_INPUT_FIELD_SET) as (keyof ManualLeadInput)[]);
+
+/** The keys of `raw` that no `ManualLeadInput` field reads, in input order. */
+export function unmappedManualFields(raw: Record<string, unknown> | null | undefined): string[] {
+  if (!raw || typeof raw !== 'object') return [];
+  return Object.keys(raw).filter((k) => !Object.prototype.hasOwnProperty.call(MANUAL_INPUT_FIELD_SET, k));
+}
+
 export class ManualInputError extends Error {
   constructor(message: string, readonly field: string) {
     super(message);
@@ -280,6 +306,9 @@ export function toNormalizedManualRecord(input: ManualLeadInput): NormalizedInge
       }
       : null,
     observedAt: trimmed(input.observedAt),
+    // A human typed this. Its reference is operator free text, so a conflict
+    // with an existing person is refused rather than attached (contracts.ts).
+    operatorAsserted: true,
   };
 }
 

@@ -1,4 +1,5 @@
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
+import { isEncryptedCredential } from '../security/credentialSafety';
 import { config } from '@/config';
 import { supabase } from '../db/supabaseClient';
 import { ownedDbTable } from '../db/writeOwner';
@@ -44,12 +45,21 @@ const DEFAULT_GA_SCOPES = [
   'https://www.googleapis.com/auth/webmasters.readonly',
 ];
 
-function decryptIfNeeded(value: string | null | undefined): string | null {
+/**
+ * Legacy rows may hold a plaintext value; those are returned as they are. A
+ * value in the encrypted format that cannot be decrypted (wrong or rotated key,
+ * corrupted row) is treated as NOT CONFIGURED — returning it would hand the
+ * ciphertext to Google as a client id/secret and show part of it in the admin
+ * summary. Callers already refuse a missing credential.
+ */
+export function decryptIfNeeded(value: string | null | undefined): string | null {
   if (!value) return null;
+  if (!isEncryptedCredential(value)) return value;
   try {
     return decryptCredential(value);
   } catch {
-    return value;
+    console.warn('[analyticsProviderConfig] a stored credential could not be decrypted; treated as not configured');
+    return null;
   }
 }
 

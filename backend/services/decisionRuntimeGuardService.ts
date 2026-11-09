@@ -3,11 +3,11 @@ import type { PersistedDecisionObject } from './decisionObjectService';
 import type { DecisionReportView } from './decisionReportService';
 
 const PersistedDecisionObjectSchema = z.object({
-  company_id: z.string().uuid(),
+  company_id: z.guid(),
   report_tier: z.enum(['snapshot', 'growth', 'deep']),
   source_service: z.string(),
   entity_type: z.enum(['page', 'session', 'campaign', 'lead', 'revenue_event', 'keyword', 'content_cluster', 'global']),
-  entity_id: z.string().uuid().nullable().optional(),
+  entity_id: z.guid().nullable().optional(),
   issue_type: z.string(),
   title: z.string(),
   description: z.string(),
@@ -23,7 +23,7 @@ const PersistedDecisionObjectSchema = z.object({
   action_payload: z.record(z.string(), z.unknown()),
   status: z.enum(['open', 'resolved', 'ignored']),
   last_changed_by: z.enum(['system', 'user']).optional(),
-  id: z.string().uuid(),
+  id: z.guid(),
   execution_score: z.number(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -32,7 +32,7 @@ const PersistedDecisionObjectSchema = z.object({
 });
 
 const DecisionReportViewSchema = z.object({
-  company_id: z.string().uuid(),
+  company_id: z.guid(),
   report_tier: z.enum(['snapshot', 'growth', 'deep']),
   entity_scope: z.object({
     entity_type: z.string(),

@@ -170,6 +170,8 @@ describe('Community-AI RPA Execution', () => {
       playbook_id: 'playbook-1',
       execution_mode: 'rpa',
       status: 'approved',
+      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
+      approved_at: '2026-01-01T00:00:00.000Z',
       scheduled_at: past,
       requires_human_approval: false,
     });

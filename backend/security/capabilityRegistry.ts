@@ -60,6 +60,7 @@ import {
   PROSPECT_INGEST,
   PROSPECT_ICP_MANAGE,
   PROSPECT_ENRICH_EXECUTE,
+  PROSPECT_PERSON_ERASE,
   // Phase: Platform Authority Isolation — platform-tier billing
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
@@ -142,6 +143,9 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     // spending on a vendor is not implied by importing a person or by defining
     // an ICP, and does not imply either.
     PROSPECT_ENRICH_EXECUTE,
+    // Prospect person erasure (irreversible; step-up required). No hierarchy
+    // entry: erasing a person is not implied by importing one, nor the reverse.
+    PROSPECT_PERSON_ERASE,
   ],
   COMPANY_ADMIN: [
     ORGANIZATION_MANAGE,        // org settings, member management (NOT delete)
@@ -169,6 +173,10 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     // bills the tenant per call, which is a different kind of act from writing
     // a row. Bounded by the REQUIRED daily ceiling (PI-ADR-007 §4).
     PROSPECT_ENRICH_EXECUTE,
+    // A tenant admin may erase a person from their own tenant's spine (e.g. to
+    // answer a data-subject request). Irreversible, so step-up gated; no
+    // content-tier or VIEW_ONLY role may.
+    PROSPECT_PERSON_ERASE,
   ],
   CONTENT_ARCHITECT: [
     // Platform-level role: read+author across all companies.

@@ -22,8 +22,25 @@ import { publishNow } from '../../../backend/services/publishNowService';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { runJob } from '../../../backend/services/jobRunner';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 
 const BATCH_SIZE = 20; // Max posts to process per invocation
+// A refused post stays 'scheduled' and due, so it comes back on every run. The
+// read must look past refused rows or the oldest 20 would hold the batch forever.
+const DUE_SCAN_LIMIT = 500;
+
+type DuePost = {
+  id: string;
+  user_id: string;
+  social_account_id: string | null;
+  platform: string;
+  campaign_id: string | null;
+  status: string;
+  content: string | null;
+  // Supabase JS types FK joins as arrays even when the FK is single-valued.
+  // Use the [0] element if present.
+  social_accounts: Array<{ company_id: string | null }> | { company_id: string | null } | null;
+};
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -48,6 +65,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     failed: 0,
     skipped: 0,
     skipped_tenant_invalid: 0,
+    skipped_unauthorized: 0,
     errors: [] as string[],
   };
 
@@ -58,30 +76,71 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // social_account fall through to the per-post lookup below.
     const { data: duePosts, error: fetchErr } = await supabase
       .from('scheduled_posts')
-      .select('id, user_id, social_account_id, platform, campaign_id, status, social_accounts(company_id)')
+      .select('id, user_id, social_account_id, platform, campaign_id, status, content, social_accounts(company_id)')
       .eq('status', 'scheduled')
       .lte('scheduled_for', now)
       .order('scheduled_for', { ascending: true })
-      .limit(BATCH_SIZE);
+      .limit(DUE_SCAN_LIMIT);
 
     if (fetchErr) throw new Error(`DB fetch error: ${fetchErr.message}`);
     if (!duePosts?.length) {
       return res.status(200).json({ ...results, message: 'No due posts' });
     }
 
-    results.processed = duePosts.length;
+    // ONE authorization predicate, shared with the publish worker and the
+    // scheduler. publishNow deliberately does not evaluate it (authorization
+    // stays at the route/worker layer), so without this a post on a paused
+    // campaign reaches the platform from here alone.
+    //
+    // Same refusal as the scheduler: log and skip, and write nothing. The row
+    // stays 'scheduled' with no queue job and no error, so it is neither failed
+    // nor retried; each run only re-reads it, and it publishes once the campaign
+    // is active again. A failed lookup fails the run before anything is written,
+    // also as the scheduler does: the posts are still due next run.
+    const campaignIds = [...new Set(
+      (duePosts as unknown as DuePost[]).map((p) => p.campaign_id).filter((id): id is string => Boolean(id)),
+    )];
+    const campaignStatusById = new Map<string, string>();
+    if (campaignIds.length > 0) {
+      const { data: campaignRows, error: campaignsError } = await supabase
+        .from('campaigns')
+        .select('id, status')
+        .in('id', campaignIds);
+      if (campaignsError) throw new Error(`Failed to query campaigns: ${campaignsError.message}`);
+      for (const row of (campaignRows ?? []) as Array<{ id: string; status: string | null }>) {
+        campaignStatusById.set(row.id, String(row.status ?? ''));
+      }
+    }
 
-    for (const post of duePosts as unknown as Array<{
-      id: string;
-      user_id: string;
-      social_account_id: string | null;
-      platform: string;
-      campaign_id: string | null;
-      status: string;
-      // Supabase JS types FK joins as arrays even when the FK is single-valued.
-      // Use the [0] element if present.
-      social_accounts: Array<{ company_id: string | null }> | { company_id: string | null } | null;
-    }>) {
+    const eligiblePosts: DuePost[] = [];
+    for (const post of duePosts as unknown as DuePost[]) {
+      const authorization = authorizePostPublish({
+        campaign_id: post.campaign_id,
+        campaign_status: post.campaign_id ? (campaignStatusById.get(post.campaign_id) ?? null) : null,
+        post_status: post.status,
+        // publishNow's own short-circuit handles this; not selected here.
+        platform_post_id: null,
+        has_content: Boolean(post.content && String(post.content).trim().length > 0),
+      });
+      if (!authorization.authorized) {
+        console.warn({
+          campaign_id: post.campaign_id,
+          scheduled_post_id: post.id,
+          reason: authorization.code,
+        });
+        results.skipped_unauthorized++;
+        continue;
+      }
+      eligiblePosts.push(post);
+    }
+    if (duePosts.length === DUE_SCAN_LIMIT && eligiblePosts.length < BATCH_SIZE) {
+      console.warn(`[cron/process-scheduled-posts] read the ${DUE_SCAN_LIMIT}-row limit and found only ${eligiblePosts.length} authorized; later due posts were not considered this run`);
+    }
+
+    const batch = eligiblePosts.slice(0, BATCH_SIZE);
+    results.processed = batch.length;
+
+    for (const post of batch) {
       const joinedAccts = Array.isArray(post.social_accounts)
         ? post.social_accounts
         : post.social_accounts ? [post.social_accounts] : [];

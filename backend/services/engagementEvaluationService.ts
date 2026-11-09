@@ -5,7 +5,8 @@ import { ownedDbTable } from '../db/writeOwner';
  * Triggers Community AI evaluation when engagement (comments) exists for a post.
  * Builds input from scheduled_post + post_comments, calls evaluateEngagement,
  * persists suggested_actions into community_ai_actions (pending only).
- * No auto-execution, no approval, no scoring — wiring only.
+ * Matching auto rules may execute inside evaluateEngagement (autoExecute:
+ * true), subject to the platform policy; this file adds no approval or scoring.
  *
  * @see docs/CANONICAL-SOCIAL-PLATFORM-OPERATIONS-DESIGN.md
  */
@@ -201,7 +202,8 @@ export async function evaluatePostEngagement(
 
   let output;
   try {
-    output = await evaluateEngagement(input);
+    // The ingestion worker is the trigger for auto rules (GET routes are not).
+    output = await evaluateEngagement(input, { autoExecute: true });
   } catch (e: any) {
     console.warn('[EngagementEvaluation] evaluateEngagement failed', e?.message);
     return {

@@ -5,6 +5,8 @@ import { rpaEnvReady, assertRpaEnvReady, isProbeFailure } from './rpaEnv';
 import { admitRpaTask, observeAllActiveOrgs } from './rpaQueueState';
 import { enqueueRpaRetry, flushRpaRetryQueueRoundRobin } from './rpaRetryQueue';
 import { withHeavyJobSlot } from '../../queue/bullmqClient';
+import { getCommunityAiPlatformPolicy } from '../communityAiPlatformPolicyService';
+import { ownedDbTable } from '../../db/writeOwner';
 
 export type RpaTask = {
   tenant_id: string;
@@ -60,11 +62,26 @@ export const rpaSchedulerHooks = {
       console.warn(`[rpaRetryQueueFlush] skipped — RPA env not ready: ${ready.reason}`);
       return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
     }
+    // Platform kill switch: when execution is disabled nothing is run and
+    // no retry row is touched (mirrors the community scheduler). An
+    // unreadable policy is fail-closed (execution_enabled=false).
+    const policy = await getCommunityAiPlatformPolicy();
+    if (!policy?.execution_enabled) {
+      console.warn('[rpaRetryQueueFlush] skipped — community execution disabled by platform policy');
+      return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
+    }
     return flushRpaRetryQueueRoundRobin({
       handler: async (task) => {
         // Retry path bypasses the admission gate to avoid infinite
         // deferral during partial outages. Env readiness is still
-        // enforced downstream by the playwright runner.
+        // enforced downstream by the playwright runner. It does NOT
+        // bypass the kill switch or approval: both are re-checked against
+        // the action of record before anything is re-executed.
+        const gate = await checkRpaRetryAuthorised(task);
+        if (gate.ok === false) {
+          console.warn(`[rpaRetryQueueFlush] refused action=${task.action_id} reason=${gate.reason}`);
+          return { success: false, error: gate.reason };
+        }
         const h = handlers[normalizePlatform(task.platform)];
         if (!h) return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED' };
         return h(task);
@@ -74,6 +91,61 @@ export const rpaSchedulerHooks = {
     });
   },
 };
+
+/**
+ * Action statuses from which a deferred RPA retry may re-execute. On this
+ * code line a deferred RPA run is persisted as `failed`; `approved` covers a
+ * row that was approved but never ran. Anything else (executed,
+ * sent_unverified, skipped, blocked, pending, rejected, deleted, executing)
+ * is not re-run.
+ */
+const RPA_RETRY_REEXECUTABLE_STATUSES = new Set(['approved', 'failed']);
+
+export type RpaRetryGate = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Gate for re-executing a retry-queue row (port of the eec0117d intent:
+ * the retry flush must honour the platform kill switch and approval of
+ * record instead of calling the Playwright handler blindly).
+ *
+ *   1. platform policy execution_enabled (kill switch; fail-closed on
+ *      unreadable policy);
+ *   2. the community_ai_actions row of record exists in the SAME
+ *      organization as the retry row;
+ *   3. its status is re-executable;
+ *   4. it carries a recorded approval (`approved_at`). This also satisfies
+ *      the executor's require_human_approval / high-risk gates, which both
+ *      key on approved_at.
+ *
+ * Any read error refuses.
+ */
+export async function checkRpaRetryAuthorised(task: RpaTask): Promise<RpaRetryGate> {
+  const policy = await getCommunityAiPlatformPolicy();
+  if (!policy?.execution_enabled) return { ok: false, reason: 'RPA_RETRY_EXECUTION_DISABLED' };
+  if (!task?.action_id || !task?.organization_id) {
+    return { ok: false, reason: 'RPA_RETRY_ACTION_UNKNOWN' };
+  }
+  let row: Record<string, any> | null = null;
+  try {
+    const { data, error } = await ownedDbTable('community_ai_actions')
+      .select('id, organization_id, status, approved_at')
+      .eq('id', task.action_id)
+      .eq('organization_id', task.organization_id)
+      .maybeSingle();
+    if (error) return { ok: false, reason: 'RPA_RETRY_ACTION_UNREADABLE' };
+    row = (data as Record<string, any> | null) ?? null;
+  } catch {
+    return { ok: false, reason: 'RPA_RETRY_ACTION_UNREADABLE' };
+  }
+  if (!row || row.organization_id !== task.organization_id) {
+    return { ok: false, reason: 'RPA_RETRY_ACTION_NOT_FOUND' };
+  }
+  if (!RPA_RETRY_REEXECUTABLE_STATUSES.has(String(row.status ?? ''))) {
+    return { ok: false, reason: 'RPA_RETRY_ACTION_NOT_RETRYABLE' };
+  }
+  if (!row.approved_at) return { ok: false, reason: 'RPA_RETRY_NOT_APPROVED' };
+  return { ok: true };
+}
 
 /**
  * Unified Playwright-backed handler for every platform. Script selection

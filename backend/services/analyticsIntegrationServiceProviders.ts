@@ -1,6 +1,7 @@
 /** Analytics integration — provider contracts, auth, fetchers — split from analyticsIntegrationService.ts (barrel preserved; importers unchanged). */
 import { decodeOAuthState, encodeOAuthState } from '../auth/oauthState';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
+import { KEYED_CIPHERTEXT_VERSION } from '../auth/encryptionKeyRing';
 import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
 import { ownedDbTable } from '../db/writeOwner';
 import { redactSecretsInText, redactUrl } from '../../lib/security/redactUrl';
@@ -241,16 +242,27 @@ function resolveGoogleRedirectUri(
   );
 }
 
-function maybeDecrypt(value: string | null | undefined): string | null {
+/**
+ * Stored GA4/GSC tokens. A plaintext (legacy) token is returned as stored. A value in an
+ * encrypted shape — legacy iv:tag:data, or the keyed k1:<keyId>:iv:tag:data the key ring
+ * reads — is decrypted (current key, or a key listed in ENCRYPTION_KEY_PREVIOUS); one that
+ * cannot be decrypted (wrong, rotated or unknown key, corrupted row) is treated as NOT
+ * CONNECTED — returning it would send the ciphertext to Google as a bearer / refresh
+ * token. Same rule as analyticsProviderConfigService.decryptIfNeeded.
+ */
+export function maybeDecrypt(value: string | null | undefined): string | null {
   if (!value || !value.trim()) return null;
+  const keyed = value.trim().startsWith(`${KEYED_CIPHERTEXT_VERSION}:`);
+  const parts = value.split(':');
+  const legacyShape = parts.length === 3 && /^[0-9a-f]+$/i.test(parts[0]) && /^[0-9a-f]+$/i.test(parts[1]);
+  if (!keyed && !legacyShape) {
+    return value;
+  }
   try {
-    const parts = value.split(':');
-    if (parts.length === 3 && /^[0-9a-f]+$/i.test(parts[0]) && /^[0-9a-f]+$/i.test(parts[1])) {
-      return decryptCredential(value);
-    }
-    return value;
+    return decryptCredential(keyed ? value.trim() : value);
   } catch {
-    return value;
+    console.warn('[analyticsIntegration] a stored token could not be decrypted; treated as not connected');
+    return null;
   }
 }
 

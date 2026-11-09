@@ -1,0 +1,138 @@
+{
+  "$comment": [
+    "DECLARATIVE REGISTER OF IMMUTABLE ACTOR-ATTRIBUTION COLUMNS (GOV-H).",
+    "",
+    "An actor column records WHO did something. That fact does not stop being true",
+    "when the actor's user row is deleted. So such a column must NOT carry a foreign",
+    "key into public.users: ON DELETE SET NULL erases the attribution, ON DELETE",
+    "CASCADE erases the evidence. Referential integrity is instead the WRITER's job —",
+    "it validates that the user exists at write time, which is the only moment the",
+    "claim is being made.",
+    "",
+    "This file is CHECKED, not documentation. scripts/ci/check-actor-fk-compatibility.js",
+    "fails when the catalog and this register disagree in EITHER direction: a declared",
+    "column that does not exist, a declared-absent FK that is present, a declared",
+    "nullability that does not match, or an immutable actor column carrying a SET NULL",
+    "or CASCADE FK into public.users.",
+    "",
+    "FIELDS",
+    "  table, column        the column being governed (schema public).",
+    "  immutable_actor      true  = attribution that must survive actor deletion.",
+    "                       false = ordinary ownership; an FK is fine. Recorded so the",
+    "                               advisory `undeclared_actor_fk` finding stays quiet",
+    "                               for a column that was considered and accepted.",
+    "  fk_into_users        'absent'   = there must be NO FK into public.users.",
+    "                       'required' = an FK is expected (ownership columns only).",
+    "  nullable             the column's required nullability. An immutable actor",
+    "                       column is nullable: a writer with no human actor (a system",
+    "                       action) legitimately leaves it unset, and a NOT NULL column",
+    "                       with no FK cannot express that.",
+    "  check_constraint     the CHECK that binds the column, when one exists. The",
+    "                       detector reads the catalog for this; the name is recorded so",
+    "                       a rename is visible in review.",
+    "  writer_validation    REQUIRED when fk_into_users is 'absent'. The module:symbol",
+    "                       that validates the referent exists before the write. Without",
+    "                       it, dropping the FK trades an erasure defect for a dangling",
+    "                       reference defect.",
+    "  evidence             the evidence class behind the entry, in the programme's",
+    "                       vocabulary. PRODUCTION_CATALOG_VERIFIED entries were",
+    "                       observed in the 2026-11-01 production inventory.",
+    "  status               'enforced'  = the schema is already in the required shape.",
+    "                       'remediating' = a track in flight owns the change; the",
+    "                                       detector still reports, and the entry",
+    "                                       records the intent, not a claim of fact.",
+    "",
+    "OWNERSHIP: adding an entry here does NOT authorise a migration. The remediation",
+    "tracks (B, C, D, E) own their own migrations; this register is the control that",
+    "keeps the shape from regressing afterwards."
+  ],
+  "schema_version": 1,
+  "columns": [
+    {
+      "table": "prospect_problem_observations",
+      "column": "recorded_by_user_id",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "ppo_origin_actor",
+      "writer_validation": "backend/services/prospectProblemObservations:recordObservation",
+      "evidence": "PRODUCTION_CATALOG_VERIFIED",
+      "status": "enforced",
+      "note": "DEFECT-008. Fixed in production and E2E by supabase/migrations/20270110000000_pi_prospect_problem_actor_fk_removal.sql. The canonical pattern: FK dropped, column left a nullable uuid, ppo_origin_actor CHECK retained binding both legs, COMMENT ON COLUMN records the semantics. Do not reintroduce the FK."
+    },
+    {
+      "table": "source_assertions",
+      "column": "asserted_by_user_id",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "source_assertions_origin_actor",
+      "writer_validation": "TRACK_B_TO_SUPPLY",
+      "evidence": "PRODUCTION_CATALOG_VERIFIED",
+      "status": "remediating",
+      "note": "Agent B owns the remediation. CHECK source_assertions_origin_actor is PRODUCTION_CATALOG_VERIFIED. The column name is CODE_VERIFIED: supabase/migrations/20261122000000_pi_person_account_relationships.sql adds asserted_by_user_id and the CHECK binding it. The column is NOT in supabase/_schema/baseline.sql (boundary 20260916000000), so only the --db path covers it."
+    },
+    {
+      "table": "prospect_lifecycle_transitions",
+      "column": "actor_user_id",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "prospect_lifecycle_origin_actor",
+      "writer_validation": "TRACK_C_TO_SUPPLY",
+      "evidence": "PRODUCTION_CATALOG_VERIFIED",
+      "status": "remediating",
+      "note": "Agent C owns the remediation. CHECK name is PRODUCTION_CATALOG_VERIFIED; the column name actor_user_id is CODE_VERIFIED in supabase/migrations/20261028000000_pi_prospect_lifecycle_state.sql (prospect_lifecycle_origin_actor binds both legs). Not in baseline.sql."
+    },
+    {
+      "table": "prospect_archive_recommendations",
+      "column": "reviewed_by_user_id",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "prospect_archive_rec_review_coherent",
+      "writer_validation": "TRACK_D_TO_SUPPLY",
+      "evidence": "PRODUCTION_CATALOG_VERIFIED",
+      "status": "remediating",
+      "note": "Agent D track 1 owns the remediation. CHECK name is PRODUCTION_CATALOG_VERIFIED; the column name reviewed_by_user_id is CODE_VERIFIED at supabase/migrations/20261030000000_pi_prospect_archive_recommendations.sql:63, which declares it REFERENCES public.users (id) ON DELETE SET NULL while :90 requires it IS NOT NULL for status in (confirmed, rejected) — the DEFECT-008 shape visible in the migration source itself. Not in baseline.sql."
+    }
+  ],
+  "pending_owner_decision": [
+    {
+      "table": "reports",
+      "column": "user_id",
+      "issue": "reports.user_id is NOT NULL and reports_user_id_fkey is ON DELETE SET NULL — a mechanical contradiction (PRODUCTION_CATALOG_VERIFIED; also CODE_VERIFIED in supabase/_schema/baseline.sql, CREATE TABLE public.reports and the ADD CONSTRAINT reports_user_id_fkey line).",
+      "why_not_registered": "Whether reports.user_id is immutable actor attribution or ordinary ownership is a PRODUCT decision, not a schema one, and Agent E owns it with four options open. Registering it either way here would pre-empt that decision and make this file assert something nobody has decided. The detector reports it from the catalog regardless — it needs no registry entry to fire.",
+      "owner": "Agent E / product owner",
+      "evidence": "DESIGN_DECISION_REQUIRED"
+    },
+    {
+      "table": "capability_assignments",
+      "column": "granted_by",
+      "issue": "Agent D track 2. Not registered until that track establishes the column's actual catalog shape and whether a migration is justified at all.",
+      "owner": "Agent D",
+      "evidence": "DESIGN_DECISION_REQUIRED"
+    },
+    {
+      "table": "block_templates",
+      "column": "created_by",
+      "issue": "One of the three NO ACTION FKs into public.users (PRODUCTION_CATALOG_VERIFIED). NO ACTION neither erases nor cascades, so it is not the DEFECT-008 class; it instead makes the user row undeletable. Whether that is the intended semantics is an owner question.",
+      "owner": "product owner",
+      "evidence": "DESIGN_DECISION_REQUIRED"
+    },
+    {
+      "table": "campaign_cost_breakdown",
+      "column": "user_id",
+      "issue": "NO ACTION FK into public.users (PRODUCTION_CATALOG_VERIFIED). Same reasoning as block_templates.created_by.",
+      "owner": "product owner",
+      "evidence": "DESIGN_DECISION_REQUIRED"
+    },
+    {
+      "table": "company_join_requests",
+      "column": "reviewed_by",
+      "issue": "NO ACTION FK into public.users (PRODUCTION_CATALOG_VERIFIED). Reads as actor attribution by name, but NO ACTION is a deliberate third choice; the owner decides.",
+      "owner": "product owner",
+      "evidence": "DESIGN_DECISION_REQUIRED"
+    }
+  ]
+}

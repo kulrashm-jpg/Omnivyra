@@ -36,10 +36,15 @@ for (const project of PROJECTS) {
     // (it exits 134 at the default heap on this codebase). No manual env needed.
     { stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim() } },
   );
-  const code = result.status === null ? 1 : result.status;
-  if (code !== 0) {
+  // A compiler killed by a signal (e.g. the OOM killer) has no status; name the
+  // signal so the baseline guard can tell a crash from ordinary type errors.
+  if (result.status === null || result.error) {
     failed += 1;
-    process.stdout.write(`--- ${project}: FAILED (exit ${code}) ---\n`);
+    const why = result.error ? `error ${result.error.code || result.error.name}` : `signal ${result.signal}`;
+    process.stdout.write(`--- ${project}: FAILED (${why}) ---\n`);
+  } else if (result.status !== 0) {
+    failed += 1;
+    process.stdout.write(`--- ${project}: FAILED (exit ${result.status}) ---\n`);
   } else {
     process.stdout.write(`--- ${project}: OK ---\n`);
   }

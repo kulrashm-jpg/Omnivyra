@@ -141,4 +141,25 @@ describe('creatorUploadAbuseGuardService', () => {
     // A short obviously-bogus session should return false
     expect(g.verifyUploadSession({ sessionId: 'short', dailyPlanId: 'plan-1', companyId: 'company-1' })).toBe(false);
   });
+
+  test('verifyUploadSession fails closed without CREATOR_UPLOAD_SESSION_SECRET (no public fallback secret)', async () => {
+    const g = await import('../../services/creatorUploadAbuseGuardService');
+    const saved = process.env.CREATOR_UPLOAD_SESSION_SECRET;
+    // A session that the old literal fallback would have accepted.
+    let h = 2166136261 >>> 0;
+    for (const ch of 'plan-1:company-1:creator-upload-secret') { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
+    const forged = `${h.toString(16).padStart(8, '0')}-forged-session-id`;
+    try {
+      delete process.env.CREATOR_UPLOAD_SESSION_SECRET;
+      expect(g.verifyUploadSession({ sessionId: forged, dailyPlanId: 'plan-1', companyId: 'company-1' })).toBe(false);
+      process.env.CREATOR_UPLOAD_SESSION_SECRET = '   ';
+      expect(g.verifyUploadSession({ sessionId: forged, dailyPlanId: 'plan-1', companyId: 'company-1' })).toBe(false);
+      process.env.CREATOR_UPLOAD_SESSION_SECRET = 'test-only-secret';
+      let k = 2166136261 >>> 0;
+      for (const ch of 'plan-1:company-1:test-only-secret') { k ^= ch.charCodeAt(0); k = Math.imul(k, 16777619) >>> 0; }
+      expect(g.verifyUploadSession({ sessionId: `${k.toString(16).padStart(8, '0')}-valid-session-id`, dailyPlanId: 'plan-1', companyId: 'company-1' })).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.CREATOR_UPLOAD_SESSION_SECRET; else process.env.CREATOR_UPLOAD_SESSION_SECRET = saved;
+    }
+  });
 });

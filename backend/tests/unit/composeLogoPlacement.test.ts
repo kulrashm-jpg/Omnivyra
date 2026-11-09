@@ -26,8 +26,9 @@ const downloadCalls: Array<{ bucket: string; path: string }> = [];
 const publicUrlCalls: string[] = [];
 const signedUrlCalls: string[] = [];
 const SOURCE_PNG = Buffer.from(
-  // 1x1 transparent PNG — real bytes so sharp actually decodes them.
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  // 1x1 transparent PNG — real, well-formed bytes so sharp actually decodes them
+  // (the previous fixture had a corrupt IDAT that only failOn:'none' accepted).
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==',
   'base64',
 );
 

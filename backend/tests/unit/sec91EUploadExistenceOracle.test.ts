@@ -12,6 +12,9 @@
  * every id, no DB read), and the format checks run only after company access
  * is proven.
  */
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 const mockDbReads: string[] = [];
 let mockRows: Record<string, unknown> = {};
 jest.mock('../../db/supabaseClient', () => ({

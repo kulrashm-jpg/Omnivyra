@@ -65,6 +65,11 @@ import {
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 import { unguessableObjectStem } from '@/lib/security/objectNames';
 import { isActivityObjectPath } from '@/backend/services/activityWorkspace/activityObjectPath';
+import { nonImageBytesMatchDeclaredType } from '@/lib/security/mediaByteSignature';
+import {
+  refuseIfCreatorMediaUploadsDisabled,
+  refuseUploadBucketNotProvisioned,
+} from '@/backend/services/activityWorkspace/creatorMediaUploadGate';
 
 // Disable Next.js body parser so formidable can stream the upload.
 export const config = {
@@ -112,24 +117,17 @@ export function deriveObjectPath(input: { companyId: string; dailyPlanId: string
   return `${input.companyId}/${input.dailyPlanId}/${subdir}/${stem}.${ext}`;
 }
 
-async function ensureUploadBucket(): Promise<void> {
+// PC5-4: the bucket is provisioned deliberately (with the MEDIA-H3 policies),
+// never created here. This route used to create a PUBLIC `media-uploads`
+// bucket on first use. Fails closed: a listing error counts as "absent".
+async function uploadBucketProvisioned(): Promise<boolean> {
   try {
-    const { data: buckets } = await supabase.storage.listBuckets();
-    const exists = Array.isArray(buckets) && buckets.some((b) => b.name === UPLOAD_BUCKET);
-    if (exists) return;
-    await supabase.storage.createBucket(UPLOAD_BUCKET, {
-      public: true,
-      fileSizeLimit: MAX_FILE_BYTES,
-      allowedMimeTypes: [
-        'video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo',
-        'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/x-m4a',
-        'image/png', 'image/jpeg', 'image/webp', 'image/gif',
-      ],
-    });
+    const { data: buckets, error } = await supabase.storage.listBuckets();
+    if (error) return false;
+    return Array.isArray(buckets) && buckets.some((b) => b.name === UPLOAD_BUCKET);
   } catch (error) {
-    // Bucket creation may fail on permissions; uploads will report the
-    // underlying error if the bucket genuinely doesn't exist.
-    console.warn('[upload-media-direct] ensureUploadBucket failed:', (error as Error)?.message);
+    console.warn('[upload-media-direct] bucket check failed:', (error as Error)?.message);
+    return false;
   }
 }
 
@@ -171,6 +169,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // unknown ids (404) from existing ones (409, echoing content_type).
   const caller = await resolveUserContext(req);
   if (caller.authenticated === false || !caller.userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+  // PC5-4: before any row lookup, multipart parse or storage call.
+  if (refuseIfCreatorMediaUploadsDisabled(res)) return;
 
   // ── Server-aware cancellation tracking ─────────────────────────────────
   // Flip a flag as soon as the client disconnects mid-flight. Every code
@@ -368,7 +368,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ── Stream file into Supabase Storage ──────────────────────────────────
-  await ensureUploadBucket();
+  if (!(await uploadBucketProvisioned())) {
+    try { fs.unlinkSync(uploaded.filepath); } catch { /* ignore */ }
+    detachClientCloseListener();
+    refuseUploadBucketNotProvisioned(res);
+    return;
+  }
   const objectPath = deriveObjectPath({ companyId, dailyPlanId: id, mime: mimeBase });
   let fileBuffer: Buffer;
   try {
@@ -384,8 +389,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // anything to storage, so a spoofed upload never leaves an orphan.
   const sniffedMime = sniffMimeFromBytes(fileBuffer.slice(0, 32));
   const sniffResult = compareSniffedToClientMime({ sniffed: sniffedMime, claimed: mimeBase });
-  if (!sniffResult.ok) {
-    const failure = sniffResult as { ok: false; sniffed: string; claimed: string; reason: string };
+  // MEDIA-H3: the lenient comparison above accepts bytes the sniffer does not
+  // recognise. This route stores into the PUBLIC bucket, so bytes must
+  // POSITIVELY match the declared video/audio type (shared strict check).
+  const strictOk = nonImageBytesMatchDeclaredType(fileBuffer.subarray(0, 32), mimeBase);
+  if (!sniffResult.ok || !strictOk) {
+    const failure = sniffResult.ok
+      ? {
+        ok: false as const,
+        sniffed: sniffedMime ?? 'unknown',
+        claimed: mimeBase,
+        reason: `File bytes do not match the declared type "${mimeBase}".`,
+      }
+      : sniffResult as { ok: false; sniffed: string; claimed: string; reason: string };
     void recordUploadSpoofAttempt({ userId: access.userId, companyId, dailyPlanId: id });
     emitCreatorEvent({
       event: CREATOR_EVENTS.UPLOAD_MIME_SPOOF,

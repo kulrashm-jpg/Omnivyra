@@ -32,7 +32,9 @@
 
 // `Request`/`Response` are not exported as named types from 'playwright' — the
 // event callbacks are typed by the Page overloads, so let them infer.
-import { chromium, type Browser, type Page } from 'playwright';
+// Types only: playwright itself loads in run(), after the credential check, so a
+// run without credentials fails fast instead of loading a browser driver first.
+import type { Browser, Page } from 'playwright';
 import { writeFileSync } from 'fs';
 
 const BASE_URL = (process.env.E2E_BASE_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
@@ -119,6 +121,7 @@ function waitForApi(page: Page, fragment: string, timeout = 60_000) {
 }
 
 async function run() {
+  const { chromium } = await import('playwright');
   const browser: Browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();

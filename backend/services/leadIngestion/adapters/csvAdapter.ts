@@ -46,7 +46,9 @@
 import { createHash } from 'node:crypto';
 import { normalizeEmail, normalizePhone } from '../../identityResolutionService';
 import {
+  ManualInputError,
   toNormalizedManualRecord,
+  unmappedManualFields,
   type ManualLeadInput,
 } from './manualAdapter';
 import type { AdapterResult, LeadSourceAdapter, NormalizedIngestionRecord } from '../contracts';
@@ -106,8 +108,21 @@ export function csvExternalId(input: CsvLeadInput): string {
  * email, phone or reference. Only the namespace is decided here.
  */
 export function toNormalizedCsvRecord(input: CsvLeadInput): NormalizedIngestionRecord {
-  const base = toNormalizedManualRecord(input);
   const reference = trimmed(input?.referenceId);
+  // ── THE `csv:` NAMESPACE IS THE PLATFORM'S, NOT THE OPERATOR'S ──────────
+  // `csvExternalId` mints `csv:<digest>` for id-less rows, and the prospect key
+  // is `toNamespacedRef('csv', ref)`, which does NOT re-prefix a value already
+  // starting with `csv:`. So a supplied reference `csv:<digest>` lands on an
+  // id-less row's prospect, and `csv:42` collides with reference `42`. Such a
+  // reference is refused with a reason; nothing is escaped or re-keyed, so no
+  // key already stored changes.
+  if (reference && reference.startsWith(`${CSV_SOURCE}:`)) {
+    throw new ManualInputError(
+      `referenceId may not begin with '${CSV_SOURCE}:' — that namespace is reserved for identities the platform generates`,
+      'referenceId',
+    );
+  }
+  const base = toNormalizedManualRecord(input);
 
   return {
     ...base,
@@ -142,5 +157,11 @@ export const csvAdapter: LeadSourceAdapter = {
     const input = { ...(raw as unknown as CsvLeadInput), organizationId };
     const normalized = toNormalizedCsvRecord(input);
     return { raw, normalized };
+  },
+
+  // A spreadsheet column whose header is not in the `ManualLeadInput`
+  // vocabulary is reported back per row, never silently dropped.
+  unmappedFields(raw: Record<string, unknown>): string[] {
+    return unmappedManualFields(raw);
   },
 };

@@ -6,7 +6,7 @@ import {
   isAttachmentRequiredFormat,
   normalizeCreatorFormat,
 } from '@/lib/shared/creatorGovernanceRegistry';
-import { bearerAuthorization } from '@/lib/httpAuthHeaders';
+import { postUploadFileResumable as sharedPostUploadFileResumable } from '@/components/activity-workspace/creatorMediaUploadHandlers';
 import { getSupabasePublishableKey } from '@/lib/supabase/publishableKey';
 
 function extractAttachmentRowState(input: {
@@ -349,14 +349,10 @@ async function postUnschedule(input: { dailyPlanId: string; reason?: string; exp
 }
 
 /**
- * Resumable upload via tus-js-client → Supabase TUS endpoint, then
- * finalize via our Next.js API. Persists the TUS upload URL +
- * session ID to localStorage so a page refresh / reconnect can
- * detect an in-flight upload and offer "Resume upload" UX.
- *
- * Falls back to the multipart `postUploadFileDirect` path automatically
- * when the Supabase URL / anon key aren't configured for the browser
- * (i.e. when this is being run in a test or restricted environment).
+ * MEDIA-H3: this orphaned page used to carry its own copy of the resumable
+ * upload, writing with the publishable key into the PUBLIC media-uploads
+ * bucket. It now delegates to the ONE shared implementation (server-issued
+ * authorization → private quarantine → validated promotion).
  */
 async function postUploadFileResumable(input: {
   dailyPlanId: string;
@@ -366,155 +362,7 @@ async function postUploadFileResumable(input: {
   signal?: AbortSignal;
   expectedRevision?: number;
 }): Promise<UploadMediaResult> {
-  // Read Supabase config from the public environment. If not set, fall
-  // back to multipart so dev/test environments still work.
-  const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-  const supabasePublishableKey = getSupabasePublishableKey();
-  if (!supabaseUrl || !supabasePublishableKey) {
-    return postUploadFileDirect(input);
-  }
-
-  let tusModule: typeof import('tus-js-client');
-  try {
-    tusModule = await import('tus-js-client');
-  } catch {
-    return postUploadFileDirect(input);
-  }
-
-  // Derive a stable object path so re-uploads from the same row land in
-  // a predictable namespace, mirroring the server's path scheme.
-  const subdir = input.file.type.startsWith('video/')
-    ? 'video'
-    : input.file.type.startsWith('audio/')
-      ? 'audio'
-      : input.file.type.startsWith('image/')
-        ? 'image'
-        : 'misc';
-  const sessionId = `${input.dailyPlanId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const ext = (input.file.type.split('/')[1] || 'bin').replace(/[^a-z0-9]+/gi, '');
-  const objectPath = `${input.dailyPlanId}/${subdir}/${sessionId}.${ext}`;
-
-  const PERSIST_KEY = `creator-upload-resume:${input.dailyPlanId}`;
-
-  return new Promise<UploadMediaResult>((resolve) => {
-    let resolved = false;
-    let upload: import('tus-js-client').Upload | null = null;
-
-    const finalize = async (uploadUrl: string) => {
-      try {
-        const finalizeRes = await fetch(`/api/activity-workspace/${encodeURIComponent(input.dailyPlanId)}/upload-media-finalize`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            storage_path: objectPath,
-            mime_type: input.file.type || 'application/octet-stream',
-            size_bytes: input.file.size,
-            source: input.source ?? 'tus_upload',
-            tus_upload_url: uploadUrl,
-            upload_session_id: sessionId,
-            ...(typeof input.expectedRevision === 'number' ? { expected_revision: input.expectedRevision } : {}),
-          }),
-        });
-        const data = await finalizeRes.json().catch(() => ({} as any));
-        try { window.localStorage.removeItem(PERSIST_KEY); } catch { /* ignore */ }
-        if (finalizeRes.status === 409 && data?.code === 'CONCURRENT_UPLOAD_CONFLICT') {
-          resolve({ ok: false, conflict: true, message: typeof data?.error === 'string' ? data.error : 'Concurrent edit detected' });
-          return;
-        }
-        if (!finalizeRes.ok) {
-          resolve({ ok: false, message: typeof data?.error === 'string' ? data.error : `HTTP ${finalizeRes.status}` });
-          return;
-        }
-        if (data?.success === false) {
-          resolve({
-            ok: false,
-            lifecycle: data?.to,
-            validation: data?.validation,
-            message: typeof data?.message === 'string' ? data.message : 'Validation failed.',
-          });
-          return;
-        }
-        resolve({
-          ok: true,
-          lifecycle: data?.to,
-          validation: data?.validation,
-          uploadedMediaUrl: typeof data?.uploaded_media_url === 'string' ? data.uploaded_media_url : undefined,
-          uploadedMimeType: typeof data?.uploaded_mime_type === 'string' ? data.uploaded_mime_type : undefined,
-        });
-      } catch (e) {
-        resolve({ ok: false, message: e instanceof Error ? e.message : 'Finalize request failed.' });
-      }
-    };
-
-    const safeResolve = (value: UploadMediaResult) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(value);
-    };
-
-    // Wire AbortSignal: tus-js-client supports `abort()` which terminates
-    // the upload without lifecycle mutation server-side. We resolve with
-    // `aborted: true` so the UI can clear state cleanly.
-    if (input.signal) {
-      if (input.signal.aborted) {
-        safeResolve({ ok: false, aborted: true, message: 'Upload aborted before send.' });
-        return;
-      }
-      input.signal.addEventListener('abort', () => {
-        try { upload?.abort(true).catch(() => { /* swallow */ }); } catch { /* ignore */ }
-        safeResolve({ ok: false, aborted: true, message: 'Upload aborted.' });
-      }, { once: true });
-    }
-
-    upload = new tusModule.Upload(input.file, {
-      endpoint: `${supabaseUrl}/storage/v1/upload/resumable`,
-      retryDelays: [0, 1000, 3000, 5000, 10000],
-      chunkSize: 6 * 1024 * 1024, // 6 MB — matches Supabase recommended chunk
-      removeFingerprintOnSuccess: true,
-      headers: {
-        authorization: bearerAuthorization(supabasePublishableKey),
-        'x-upsert': 'true',
-      },
-      uploadDataDuringCreation: true,
-      metadata: {
-        bucketName: 'media-uploads',
-        objectName: objectPath,
-        contentType: input.file.type || 'application/octet-stream',
-        cacheControl: '3600',
-      },
-      onError: (err) => {
-        safeResolve({ ok: false, message: err?.message || 'Upload error' });
-      },
-      onProgress: (bytesUploaded, bytesTotal) => {
-        if (typeof input.onProgress === 'function' && bytesTotal > 0) {
-          input.onProgress((bytesUploaded / bytesTotal) * 100);
-        }
-      },
-      onSuccess: () => {
-        const url = upload?.url ?? '';
-        void finalize(url);
-      },
-      // Persist the TUS upload URL so a refresh can detect an in-progress
-      // upload. tus-js-client also writes to localStorage by default via
-      // its fingerprint mechanism; this is a parallel mark for our own UX.
-      onAfterResponse: (httpReq, httpRes) => {
-        try {
-          const location = httpRes.getHeader('Location');
-          if (location) {
-            window.localStorage.setItem(PERSIST_KEY, JSON.stringify({
-              tus_upload_url: location,
-              upload_session_id: sessionId,
-              object_path: objectPath,
-              created_at: new Date().toISOString(),
-            }));
-          }
-        } catch { /* ignore */ }
-      },
-    });
-
-    void upload.start();
-  });
+  return sharedPostUploadFileResumable(input);
 }
 
 function postUploadFileDirect(input: {

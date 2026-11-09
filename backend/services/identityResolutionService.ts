@@ -11,12 +11,31 @@ export type IdentityResolutionInput = {
   email?: string | null;
   phone?: string | null;
   externalKeys?: IdentityExternalKeys | null;
+  /**
+   * OPT-IN conflict refusal for OPERATOR-ASSERTED evidence (CSV rows, manual
+   * entry). Absent means exactly the behaviour every existing caller already
+   * has. Present means: when the match this resolver found is contradicted by
+   * the incoming evidence, refuse with `IdentityConflictError` BEFORE anything
+   * is written, instead of attaching the evidence to that person. See
+   * `findIdentityConflict` for the two contradictions recognised.
+   */
+  conflictGuard?: {
+    /** The incoming row's person name, used only by the role-address check. */
+    fullName?: string | null;
+  } | null;
 };
 
 export type IdentityResolutionResult = {
   unifiedPersonId: string;
   matchedBy: 'email' | 'phone' | 'external_keys' | 'created';
   created: boolean;
+  /**
+   * Guarded (operator-asserted) matches only: the evidence ATTACHED, but the
+   * incoming name differs from the matched person's. Advisory — nothing is
+   * refused, because a name correction and a different human look alike
+   * (founder decision D-4); the operator is told so a human can review.
+   */
+  review?: { reason: 'name_mismatch' };
 };
 
 type UnifiedPersonRow = {
@@ -25,7 +44,116 @@ type UnifiedPersonRow = {
   primary_email: string | null;
   primary_phone: string | null;
   external_keys: IdentityExternalKeys | null;
+  full_name?: string | null;
 };
+
+/** Why an operator-asserted record was refused instead of attached. Stable strings. */
+export type IdentityConflictReason =
+  /** Matched only by an operator reference, but the matched person already
+   *  holds a DIFFERENT email or phone than the incoming row. */
+  | 'external_key_contact_mismatch'
+  /** Matched by phone (the row's email matched no one), but the matched person
+   *  already holds a DIFFERENT email than the incoming row. */
+  | 'phone_match_email_mismatch'
+  /** Matched by a shared role-like mailbox (info@, sales@ ...), and the incoming
+   *  row names a different person than the one already on that mailbox. */
+  | 'role_address_name_mismatch';
+
+/**
+ * The resolver refused to attach operator-asserted evidence to an existing
+ * person because the evidence contradicts that person. Nothing was written.
+ *
+ * The message carries ids and the reason only — never the email, phone or name
+ * that conflicted, because it is echoed to the operator and to logs.
+ */
+export class IdentityConflictError extends Error {
+  constructor(
+    readonly reason: IdentityConflictReason,
+    readonly conflictingPersonId: string,
+    readonly matchedBy: 'email' | 'phone' | 'external_keys',
+  ) {
+    super(`identity conflict (${reason}): the record matched existing person ${conflictingPersonId} by ${matchedBy}, `
+      + 'but its evidence contradicts that person; refused rather than attached — review and resubmit');
+    this.name = 'IdentityConflictError';
+  }
+}
+
+/**
+ * Local parts that name a shared mailbox rather than one human. DETECTION ONLY:
+ * this list decides nothing about how a role address is stored (founder
+ * decision D-3 is open); it is consulted solely to refuse folding a SECOND,
+ * differently-named person into whoever first arrived on the mailbox.
+ */
+const ROLE_LOCAL_PARTS = new Set([
+  'info', 'sales', 'support', 'contact', 'contactus', 'hello', 'hi', 'admin', 'office',
+  'team', 'marketing', 'enquiries', 'enquiry', 'inquiries', 'inquiry', 'help', 'billing',
+  'accounts', 'accounting', 'finance', 'hr', 'careers', 'jobs', 'press', 'media', 'mail',
+  'noreply', 'no-reply', 'webmaster', 'postmaster', 'hostmaster', 'abuse', 'security',
+]);
+
+/** True when the normalized email's local part names a shared mailbox. */
+export function isRoleLikeEmail(email?: string | null): boolean {
+  const e = normalizeEmail(email);
+  if (!e) return false;
+  const at = e.lastIndexOf('@');
+  if (at <= 0) return false;
+  const local = e.slice(0, at).split('+')[0];
+  return ROLE_LOCAL_PARTS.has(local);
+}
+
+const comparableName = (v?: string | null): string | null => {
+  const t = String(v ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return t || null;
+};
+
+/**
+ * Does the incoming evidence CONTRADICT the person the resolver matched?
+ *
+ * Only three contradictions are recognised, all strict and deterministic:
+ *  1. matched by `external_keys` alone, while the incoming email (or phone)
+ *     differs from the email (or phone) the person already holds. The
+ *     reference says "same person", the contact point says "different person",
+ *     and the resolver used to keep the reference and silently drop the email.
+ *  2. matched by phone, while the incoming email differs from the email the
+ *     person already holds (a shared office line or reused number). Same
+ *     shape as 1: the email matched no one, so the resolver fell through to
+ *     the phone and attached a second human's row to the first.
+ *  3. matched by a role-like email, while the incoming name and the person's
+ *     current name are both present and differ.
+ * Absent evidence is never a contradiction: a row without an email cannot
+ * conflict on email, and a person with no name cannot conflict on name.
+ */
+function findIdentityConflict(
+  person: UnifiedPersonRow,
+  matchedBy: IdentityResolutionResult['matchedBy'],
+  incoming: { email: string | null; phone: string | null; fullName: string | null },
+): IdentityConflictError | null {
+  if (matchedBy === 'external_keys') {
+    const emailDiffers = Boolean(incoming.email && person.primary_email && incoming.email !== person.primary_email);
+    const phoneDiffers = Boolean(incoming.phone && person.primary_phone && incoming.phone !== person.primary_phone);
+    if (emailDiffers || phoneDiffers) {
+      return new IdentityConflictError('external_key_contact_mismatch', person.id, 'external_keys');
+    }
+  }
+  if (matchedBy === 'phone' && incoming.email && person.primary_email && incoming.email !== person.primary_email) {
+    return new IdentityConflictError('phone_match_email_mismatch', person.id, 'phone');
+  }
+  if (matchedBy === 'email' && isRoleLikeEmail(incoming.email)) {
+    const a = comparableName(incoming.fullName);
+    const b = comparableName(person.full_name);
+    if (a && b && a !== b) {
+      return new IdentityConflictError('role_address_name_mismatch', person.id, 'email');
+    }
+  }
+  return null;
+}
+
+/** Advisory only: an attached guarded match whose names both exist and differ. */
+function nameReview(person: UnifiedPersonRow, fullName: string | null): IdentityResolutionResult['review'] {
+  const a = comparableName(fullName);
+  const b = comparableName(person.full_name);
+  return a && b && a !== b ? { reason: 'name_mismatch' } : undefined;
+}
 
 /**
  * Exported for reuse by the W1 prospect-identity foundation
@@ -92,9 +220,12 @@ function mergeExternalKeys(existing: IdentityExternalKeys | null | undefined, in
   return output;
 }
 
+/** `full_name` is read only for the opt-in conflict guard; nothing here writes it. */
+const PERSON_COLUMNS = 'id, company_id, primary_email, primary_phone, external_keys, full_name';
+
 async function findPersonByEmail(companyId: string, email: string): Promise<UnifiedPersonRow | null> {
   const { data, error } = await ownedDbTable('unified_persons')
-    .select('id, company_id, primary_email, primary_phone, external_keys')
+    .select(PERSON_COLUMNS)
     .eq('company_id', companyId)
     .eq('primary_email', email)
     .order('created_at', { ascending: true })
@@ -110,7 +241,7 @@ async function findPersonByEmail(companyId: string, email: string): Promise<Unif
 
 async function findPersonByPhone(companyId: string, phone: string): Promise<UnifiedPersonRow | null> {
   const { data, error } = await ownedDbTable('unified_persons')
-    .select('id, company_id, primary_email, primary_phone, external_keys')
+    .select(PERSON_COLUMNS)
     .eq('company_id', companyId)
     .eq('primary_phone', phone)
     .order('created_at', { ascending: true })
@@ -130,7 +261,7 @@ async function findPersonByExternalKeys(companyId: string, externalKeys: Identit
   }
 
   const { data, error } = await ownedDbTable('unified_persons')
-    .select('id, company_id, primary_email, primary_phone, external_keys')
+    .select(PERSON_COLUMNS)
     .eq('company_id', companyId)
     .contains('external_keys', externalKeys)
     .order('created_at', { ascending: true })
@@ -338,11 +469,18 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
   const phone = normalizePhone(input.phone);
   const externalKeys = cleanExternalKeys(input.externalKeys);
 
+  const guard = input.conflictGuard
+    ? { email, phone, fullName: input.conflictGuard.fullName ?? null }
+    : null;
+
   const found = await findExistingPerson(input.companyId, email, phone, externalKeys);
   let person: UnifiedPersonRow | null = found.person;
   const matchedBy: IdentityResolutionResult['matchedBy'] = found.matchedBy;
 
   if (person) {
+    // Refused BEFORE the update below, so a conflicting record writes nothing.
+    const conflict = guard ? findIdentityConflict(person, matchedBy, guard) : null;
+    if (conflict) throw conflict;
     await updatePersonIfNeeded(person, { email, phone, externalKeys });
     logger.info('unified_person_matched', {
       companyId: input.companyId,
@@ -352,10 +490,12 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
 
     await dualWriteExternalIdentity(input.companyId, person.id, externalKeys);
 
+    const review = guard ? nameReview(person, guard.fullName) : undefined;
     return {
       unifiedPersonId: person.id,
       matchedBy,
       created: false,
+      ...(review ? { review } : {}),
     };
   }
 
@@ -385,6 +525,8 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
     if (isIdentityUniquenessConflict(error)) {
       const raced = await findExistingPerson(input.companyId, email, phone, externalKeys);
       if (raced.person) {
+        const conflict = guard ? findIdentityConflict(raced.person, raced.matchedBy, guard) : null;
+        if (conflict) throw conflict;
         // Same tenant throughout: the recovery re-resolves with the ORIGINAL
         // companyId, so a conflict in one tenant can never resolve into another.
         await updatePersonIfNeeded(raced.person, { email, phone, externalKeys });
@@ -394,7 +536,8 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
           matchedBy: raced.matchedBy,
         });
         await dualWriteExternalIdentity(input.companyId, raced.person.id, externalKeys);
-        return { unifiedPersonId: raced.person.id, matchedBy: raced.matchedBy, created: false };
+        const review = guard ? nameReview(raced.person, guard.fullName) : undefined;
+        return { unifiedPersonId: raced.person.id, matchedBy: raced.matchedBy, created: false, ...(review ? { review } : {}) };
       }
       // The conflicting row exists but we cannot see it — a different tenant's
       // row could not have collided, so this means the winner was removed, or

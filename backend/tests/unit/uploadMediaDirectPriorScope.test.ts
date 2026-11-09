@@ -18,6 +18,9 @@
  * Anything else is left untouched, and the new upload still succeeds.
  */
 
+// PC5-4: creator uploads are off by default; these suites test the enabled path.
+process.env.CREATOR_MEDIA_UPLOADS_ENABLED = 'true';
+
 function createRes() {
   return {
     statusCode: 200,

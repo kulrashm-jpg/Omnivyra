@@ -1,0 +1,9 @@
+date,contributor,milestone_ids,activity,start_utc,end_utc,minutes,method,notes
+2026-11-02,Claude Code session a410c8dc,SEC-05,Recipient-owned release refusal + tests,,,75,inferred (no timer before this register existed),commit ce1d6e15
+2026-11-02,Claude Code session a410c8dc,SEC-06,Creator upload secret fail-closed + test,,,15,inferred (no timer before this register existed),commit a0c67c55
+2026-11-02,Claude Code session a410c8dc,FND;SF,Register + shared contracts,,,45,inferred (no timer before this register existed),programme/execution-register
+2026-11-02,Claude Code session a410c8dc,REL-06,Backport d8d79b74 + tests,,,10,inferred (no timer),commit c51bfda9
+2026-11-02,Claude Code session a410c8dc,PI-01;PI-02;PI-03;PI-04,Real-schema T2 run at main,2026-11-02T14:30:58Z,2026-11-02T14:41:22Z,10,recorded (driver timestamps; wall-clock of an automated run),t2-main-5025 summary.txt
+2026-11-02,Claude Code agent,PI-08;OUT-03,Single store block + egress gate + send-time re-check,,,38,inferred (agent duration 2267s reported by harness; not human time),commits 013b4e8a e6338166
+2026-11-02,Claude Code agent,PI-01;PI-05;VS-01,AS-1/AS-2 real-schema tests,,,27,inferred (agent duration 1620s reported by harness; not human time),commit a0854cf5
+2026-11-02,Claude Code session a410c8dc,PI-01;PI-05,Independent T2 re-run of AS-1/AS-2,2026-11-02T15:10:10Z,2026-11-02T15:11:57Z,2,recorded (driver timestamps),as12-verify summary.txt

@@ -23,9 +23,12 @@
 
 jest.mock('@/config', () => ({ config: {}, getValidatedConfig: () => ({}) }));
 
+import type SharpModule from 'sharp';
 import { buildBackgroundLayerSvg, BACKGROUND_IMAGE_MIN_OPACITY, BACKGROUND_IMAGE_MAX_OPACITY } from '../../services/creator/infographicDataCards';
 
-const sharp = require('sharp') as typeof import('sharp');
+// sharp 0.35 ships separate ESM/CJS type entries; a type-only default import names the
+// factory under both (tsconfig.worker.json is CommonJS; same annotation as creatorAssetRendererContracts.ts).
+const sharp = require('sharp') as typeof SharpModule;
 
 const W = 240;
 const H = 300;

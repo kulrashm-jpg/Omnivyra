@@ -43,8 +43,37 @@ jobs:
       # cover views/materialized views, grants to client roles, default
       # privileges, RLS disable, ALTER FUNCTION/POLICY, `TO authenticated USING
       # (true)`, and tables created inside DO blocks / EXECUTE strings.
+      # GOV-H (2026-11-01) adds four rules to the same gate:
+      #   5. cross-branch version reservations — the single-tree uniqueness rule
+      #      cannot see a version claimed by a sibling branch, and is completely
+      #      blind to one that exists only as an uncommitted file in another
+      #      worktree. Three branches each claimed 20270110000000 and this gate
+      #      passed on every one of them.
+      #   6. applied-migration immutability — any edit, deletion or rename at or
+      #      below the attested production ledger boundary fails.
+      #   7. rollback companion naming — rollbacks carry no version, so two
+      #      migrations sharing a slug would share one rollback path.
+      #   8. FK / NOT NULL / CHECK contradiction (the DEFECT-008 class) written
+      #      into a single migration. This rule flags
+      #      20270105000000_pi_prospect_problem_observations.sql — the migration
+      #      that introduced DEFECT-008 — from its text alone.
       - name: Migration quality gate
         run: node scripts/check-migration-quality.js
+
+      # GOV-H: FK / NOT NULL / CHECK compatibility against the committed
+      # schema-only dump (supabase/_schema/baseline.sql). Deterministic,
+      # read-only, NO database, NO network, NO secrets — so it belongs in this
+      # job, which is the one required status check on main, and it can never
+      # skip silently. It catches the accumulated end state, including a
+      # contradiction assembled across several migrations: reports.user_id is
+      # NOT NULL while reports_user_id_fkey is ON DELETE SET NULL.
+      #
+      # COVERAGE LIMIT, stated in the script's own output on every run: the
+      # baseline is a point-in-time dump (ledgerMax 20260916000000), so tables
+      # created by later migrations are NOT covered here. The --db step in
+      # real-schema-ci.yml covers those, against the replayed catalog.
+      - name: Actor-FK / CHECK compatibility (committed baseline)
+        run: node scripts/ci/check-actor-fk-compatibility.js
 
       # F-D1 (2026-10-31): generated/schema-column-manifest.json is committed and
       # shipped verbatim (bootFingerprint reads it; /api/health/version reports its

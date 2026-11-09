@@ -7,98 +7,43 @@ import { ownedDbTable } from '../db/writeOwner';
  * Uses AES-256-GCM encryption to store tokens in social_accounts table.
  * 
  * Environment Variables:
- * - ENCRYPTION_KEY (required, 32-byte hex string or base64)
+ * - ENCRYPTION_KEY (required, 64 hex characters = 32 bytes; hex only)
+ * - ENCRYPTION_KEY_PREVIOUS (optional, comma-separated 64-hex keys accepted for decryption
+ *   only — set during a key rotation, removed once re-encryption is complete)
  * - SUPABASE_URL (required)
  * - SUPABASE_SECRET_KEY (required)
  * 
  * Security Notes:
  * - Never commit ENCRYPTION_KEY to version control
  * - Use secrets manager (AWS Secrets Manager, HashiCorp Vault) in production
- * - Rotate encryption key periodically
+ * - Rotate encryption key periodically (see backend/auth/encryptionKeyRing.ts and
+ *   scripts/ops/reencryptWithCurrentKey.ts)
  * - Enable Supabase RLS for social_accounts table (backend uses service role)
  */
 
-import crypto from 'crypto';
 import { supabase } from '../db/supabaseClient';
-import { config } from '@/config';
-
-const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 12; // GCM requires 12 bytes IV (not 16)
-const TAG_LENGTH = 16; // GCM tag is always 16 bytes
-const KEY_LENGTH = 32; // AES-256 requires 32 bytes key
+import { decryptWithKeyRing, encryptWithKeyRing } from './encryptionKeyRing';
 
 /**
- * Get encryption key from config module — strict hex-only.
- *
- * The previous accept-either-format heuristic ("looks like 64 hex chars? hex.
- * otherwise base64.") was a silent foot-gun: rotating between hex and base64
- * representations of the same 32 bytes produced different key buffers and
- * silently broke decryption of all existing tokens. The Zod schema already
- * enforces `/^[a-f0-9]{64}$/` at boot; this function aligns with that
- * single canonical format and refuses anything else with a clear migration
- * hint instead of attempting a guess.
+ * Encryption key handling is shared with credentialEncryption via ./encryptionKeyRing:
+ * strict hex only (the old hex-or-base64 heuristic silently broke decryption when a key
+ * was re-expressed in the other encoding), the Zod schema enforces `/^[a-f0-9]{64}$/` at
+ * boot, and rotation is ENCRYPTION_KEY (current, encrypts) + ENCRYPTION_KEY_PREVIOUS
+ * (comma-separated, decrypt-only).
  */
-function getEncryptionKey(): Buffer {
-  const keyEnv = config.ENCRYPTION_KEY;
-  if (!keyEnv) {
-    throw new Error('ENCRYPTION_KEY environment variable is required');
-  }
-
-  if (!/^[0-9a-fA-F]{64}$/.test(keyEnv)) {
-    throw new Error(
-      'ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ' +
-      'Base64 keys are no longer accepted — if rotating from base64, convert via ' +
-      '`node -e "process.stdout.write(Buffer.from(process.argv[1], \\\'base64\\\').toString(\\\'hex\\\'))" "<base64-key>"` ' +
-      'and re-encrypt existing tokens, since the two formats are NOT byte-identical interpretations.'
-    );
-  }
-
-  const keyBuffer = Buffer.from(keyEnv, 'hex');
-  if (keyBuffer.length !== KEY_LENGTH) {
-    throw new Error(`ENCRYPTION_KEY must be ${KEY_LENGTH} bytes (got ${keyBuffer.length})`);
-  }
-  return keyBuffer;
-}
 
 /**
- * Encrypt a string value
+ * Encrypt a string value (AES-256-GCM, current key, legacy `iv:tag:data` — readers first).
  */
 function encrypt(text: string): string {
-  const key = getEncryptionKey();
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-
-  const tag = cipher.getAuthTag();
-
-  // Combine iv + tag + encrypted data
-  return iv.toString('hex') + ':' + tag.toString('hex') + ':' + encrypted;
+  return encryptWithKeyRing(text);
 }
 
 /**
- * Decrypt an encrypted string
+ * Decrypt an encrypted string — keyed or legacy `iv:tag:data`, current or previous key.
  */
 function decrypt(encryptedData: string): string {
-  const key = getEncryptionKey();
-  const parts = encryptedData.split(':');
-  
-  if (parts.length !== 3) {
-    throw new Error('Invalid encrypted data format');
-  }
-
-  const iv = Buffer.from(parts[0], 'hex');
-  const tag = Buffer.from(parts[1], 'hex');
-  const encrypted = parts[2];
-
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(tag);
-
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-
-  return decrypted;
+  return decryptWithKeyRing(encryptedData);
 }
 
 export interface TokenObject {
