@@ -36,7 +36,7 @@ import { isEncryptedCredential } from '../../security/credentialSafety';
 import { maybeDecrypt } from '../../services/analyticsIntegrationServiceProviders';
 import { envSchema } from '../../../config/env.schema';
 
-const LEGACY_KEY = 'd4086904dd4125e84990451c0626b7bfe94b28523bda09c34db8ce9548eebaea';
+const LEGACY_KEY = 'd4086904dd4125e84990451c0626b7bfe94b28523bda09c34db8ce9548eebaea'; // gitleaks:allow (synthetic fixture; reviewed GITLEAKS-61, 2026-11-09)
 const LEGACY_CREDENTIAL =
   '3f4c67033ba114743dafddd4:034b993064d5c5a8eac808d92bd3ed3d:487df5a08594bfc9cd0f831444e043df7f0826ee2e1e1a083c98ea';
 const LEGACY_ACCESS = 'd4f7ef8bd24144b674e24fec:8db498cded662ce21f5e1f7a7d00b7a1:6a8b028bde442d215eb2ba89c1f2ff64b894a3';
@@ -145,7 +145,7 @@ describe('keyed k1 ciphertext is READ', () => {
 
   it('k1 under a key listed in ENCRYPTION_KEY_PREVIOUS decrypts (second entry too)', () => {
     const underA = keyedUnder(KEY_A, 'k1-previous');
-    const underC = keyedUnder(KEY_C, 'k1-previous-2');
+    const underC = keyedUnder(KEY_C, 'k1-previous-2'); // gitleaks:allow (synthetic fixture; reviewed GITLEAKS-61, 2026-11-09)
     setKeys(KEY_B, `${KEY_A}, ${KEY_C}`);
     expect(decryptCredential(underA)).toBe('k1-previous');
     expect(decryptCredential(underC)).toBe('k1-previous-2');
