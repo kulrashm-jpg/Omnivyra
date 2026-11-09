@@ -1048,3 +1048,60 @@ A later owner instruction the same day:
 - any change to the Outreach call sites.
 
 Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied.
+
+## Work Item 2 (L-4) integrated, combined T2 at `ae88fe6bc` (2026-11-09)
+
+**Owner decision, 2026-11-08, section 3.** The owner gave a conditional GO for integration review of `d37ebefed`. The local merge is authorised only if a combined T2 against the current foundation shows no new regressions. The owner's other decisions that day (K-1, OD-K1b, the reply-assistance prerequisites, ownership, the queuing-uncertain request) are in `OWNER-DECISIONS-20261108-REPLY-ASSISTANCE.md`.
+
+**Commits (local, `outreach/foundation-base-20261104`):**
+- `ae88fe6bc`: merge of `d37ebefed` (parents `8867df662`, `d37ebefed`).
+  - Built in a separate detached worktree (`C:/tmp/omp-t2-wi2`) and tested there.
+  - The foundation was then fast-forwarded to exactly that commit.
+- Merge diff sha256 `44c4d2db…` equals the reviewed commit's diff; 4 files, +718/−58.
+- `d37ebefed` is preserved unchanged and is an ancestor of the head.
+
+**Preserve refs:**
+
+| Ref | Commit |
+|---|---|
+| `refs/preserve/outreach-foundation-pre-wi2` | `8867df662` |
+| `refs/preserve/outreach-foundation-wi2-candidate` | `ae88fe6bc` |
+| `refs/preserve/outreach-foundation-wi2` | `ae88fe6bc` |
+| `refs/preserve/outreach-whatsapp-send-once-wi2` | `d37ebefed` |
+
+**Combined T2, frozen at `ae88fe6bc217579646a0b00d790c9779e8812f70`.**
+- HEAD and a clean tree were verified at the start, after A, after B, after C and at the end.
+- 136 migrations were applied to a disposable pg-sandbox cluster on 127.0.0.1.
+- The C wait came from memory (other applications), not from the run itself.
+- The baseline is the T2 at `f89277e66`. Every comparison is by failure name.
+
+| Category | Result | Against the `f89277e66` T2 |
+|---|---|---|
+| A. Real-schema, full project | 110 suites; 2164 tests: 2151 passed, 3 skipped, **10 failed** (`pi_email_send_path_041a`) | The same 10; 0 new |
+| B. Integration community/WhatsApp | 18 suites; 126 tests: 120 passed, **6 failed** | The same 6; 0 new |
+| B. Whole-repo unit jest | 2403 suites; 42980 tests: 42829 passed, 73 skipped, **72 failed** | 0 new. One gone: the `jevFlowProtectedPaths` timeout under load |
+| C. `typecheck-ci` | 3/3 clean | Pass |
+| C. Backend-tests typecheck | 52 net-new | The same diagnostic set |
+| C. Worker typecheck | clean | Pass |
+| D. Gates | 9/10 pass; `migration-quality` fails | The same 23 violations. `reserved_versions` 46→56 is the `7a34fa6ba` reservation |
+
+**The owner's verification list, mapped to tests (all green in this T2):**
+
+| Requirement | Tests |
+|---|---|
+| Duplicate invocation and concurrent execution | `whatsappSendOnce` "duplicate invocation…", "concurrent invocations…" (one provider call each) |
+| Timeout and lost acknowledgement | "timeout…", "lost response…"; the four lost-queue-acknowledgement cases; `retryFailed`'s own lost acknowledgement |
+| Distinct confirmed, failed and uncertain outcomes | "a confirmed refusal (4xx)…", "accepted without a message id…", the `send_uncertain` cases, real-schema "a 5xx is send_uncertain…" |
+| Safe recovery without blind resend | "retryFailed resets only rows still failed…", "recovery: sent but not recorded…", the reconciliation cases, real-schema "a lost response… reconciles… one Meta call" |
+| PI restrictions and suppression | Real-schema `whatsapp_broadcast_person_restriction` **23/23**, `p4_governance_whatsapp` **5/5**, plus the G-11 suites in A |
+| Billing/quota semantics | None of the 273 changed lines in `whatsappBroadcastService` touches `checkAndConsume`, screening or governance. WhatsApp has no billing reservation (FU-D2) |
+| Suite totals | Unit `whatsappSendOnce` **26/26**; real-schema `whatsapp_send_once_real` **4/4** |
+
+**Open after this merge:**
+- **Orchestration's adapter** maps `WhatsAppEnqueueUncertainError` to failed. The owner approved the request to change this (FU-W2). Orchestration has not started; it needs its own owner's go.
+- **Meta echo unverified:** that Meta echoes `biz_opaque_callback_data` in status webhooks is unverified. That needs T3, which is not authorised.
+- **No sweep:** nothing re-examines rows left in `sending` or `send_uncertain`.
+- **Counters:** broadcast counters are not corrected after reconciliation.
+- **Quota:** no quota release (FU-D2).
+
+Release remains **NO-GO**. Nothing is pushed, merged to main, deployed or applied. No provider was called.

@@ -1,6 +1,6 @@
 # Outreach foundation: follow-up register
 
-Work discovered after the five-checkpoint sequence (`PROGRAMME-DASHBOARD.md`). These items do not rewrite or substitute for that sequence. As of 2026-11-08, foundation head `aa703406c` before this docs commit (local, unpushed). **Release: NO-GO.**
+Work discovered after the five-checkpoint sequence (`PROGRAMME-DASHBOARD.md`). These items do not rewrite or substitute for that sequence. As of 2026-11-09, foundation head `ae88fe6bc` before this docs commit (earlier: `aa703406c`) (local, unpushed). **Release: NO-GO.**
 
 ## Summary
 
@@ -22,6 +22,12 @@ Work discovered after the five-checkpoint sequence (`PROGRAMME-DASHBOARD.md`). T
 | FU-D1 | `merge_unified_persons` while the loser holds live person governance | PI | **Design queue**; Orchestration reports its owner ruled "refuse with a named error", not confirmed by this owner | — |
 | FU-D2 | Quota release for restricted recipients | Outreach | **Design queue**; contract is queue-based | — |
 | FU-D3 | Recipient personal-data erasure | PI + Outreach | **Design queue**; policy approved | — |
+| FU-W1 | Community acting-account proof (Work Item 1) + closure A | Outreach; Orchestration (closure B) | **Held, not merged** until closure B is done and reviewed | `8e4d9edb0`, `a5ea2d95b` on `outreach/community-acting-account` |
+| FU-W1B | Closure B: the acting account inside the passkey-signed approval binding | Orchestration's owner | **Blocked** on Orchestration's owner; raised again 2026-11-08 | `communityApprovalBinding.ts` |
+| FU-W2 | WhatsApp send-once (Work Item 2, L-4) | Outreach | **Integrated locally**, combined T2 with 0 new failures | `d37ebefed` merged at `ae88fe6bc` |
+| FU-W2A | Adapter: represent `WhatsAppEnqueueUncertainError` as uncertain | Orchestration | **Request sent** (owner-approved); not started, needs Orchestration's owner | `whatsappEngineAdapter` |
+| FU-RA | Reply-assistance enablement prerequisites RA-1..RA-7 | Several (see the decision record) | **Recorded, none implemented** | `OWNER-DECISIONS-20261108-REPLY-ASSISTANCE.md` |
+| FU-OWN | Owners of `outreach_decisions` and `engagement_authors` | Programme owner | **Unassigned**; not to be assumed | same |
 
 ## FU-G1: `0004` hosted-grant fix
 
