@@ -128,7 +128,7 @@ const CHANNELS: Record<Channel, ChannelDef> = {
       [WA, [
         /loadTenantGovernanceRecords\(/,
         /mayContact\(/,
-        /\.update\(\{\s*status:\s*'sending'\s*\}\)\s*\.eq\('id',\s*recipient\.id\)\s*\.eq\('status',\s*'pending'\)/,
+        /\.update\(\{\s*status:\s*'sending'[^}]*\}\)\s*\.eq\('id',\s*recipient\.id\)\s*\.eq\('status',\s*'pending'\)/,
       ]],
       // The queue consumer of every enqueued batch is processBatch.
       [WA_PROCESSOR, [/await\s+processBatch\(/]],

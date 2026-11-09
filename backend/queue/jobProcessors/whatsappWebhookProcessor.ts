@@ -5,7 +5,8 @@
  * Each job = one full Meta webhook POST body (already signature-verified).
  *
  * Routes per event type:
- *   statuses  → recordWhatsAppProviderEvent (append-only ledger), then
+ *   statuses  → verifyCallbackRecipient (marker + number), recordWhatsAppProviderEvent
+ *               (append-only ledger, with the verified recipient), then
  *               updateRecipientDelivery (a permanent failure also restricts the number)
  *   messages  → handleInboundMessage (messageRouter); a whole-message STOP is
  *               first recorded as a WhatsApp unsubscribe (whatsappOptOut.ts)
@@ -13,7 +14,7 @@
  */
 
 import type { Job } from 'bullmq';
-import { recordWhatsAppProviderEvent, updateRecipientDelivery } from '../../services/whatsappBroadcastService';
+import { recordWhatsAppProviderEvent, updateRecipientDelivery, verifyCallbackRecipient } from '../../services/whatsappBroadcastService';
 import { handleTemplateStatusWebhook } from '../../services/whatsappTemplateService';
 import { detectWhatsAppOptOut, recordWhatsAppOptOut } from '../../services/whatsappOptOut';
 import { supabase } from '../../db/supabaseClient';
@@ -46,6 +47,10 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
         try {
           const mapped = mapMetaStatus(status.status);
           if (mapped && status.id) {
+            // Follow-up A: the marker is checked against the number BEFORE the event is kept,
+            // so the ledger names the recipient only when it is verified. A failed read throws
+            // here, before anything is written, and the job retries.
+            const verifiedRecipientId = await verifyCallbackRecipient(status.biz_opaque_callback_data, status.recipient_id);
             // G-9b: the event is kept first, whether or not it moves a recipient.
             await recordWhatsAppProviderEvent({
               wa_message_id: String(status.id),
@@ -53,6 +58,7 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
               timestamp:     status.timestamp,
               error_code:    status.errors?.[0]?.code,
               error_message: status.errors?.[0]?.title,
+              verified_recipient_id: verifiedRecipientId,
             });
             await updateRecipientDelivery({
               wa_message_id:  status.id,
