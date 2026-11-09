@@ -146,6 +146,8 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/orchestrationJourneyExit.test.ts',
   // Follow-up D: an uncertain communication counts toward the frequency policy across journeys.
   'backend/tests/unit/journeyFrequencyUncertainContact.test.ts',
+  // D-2: the atomic per-person frequency claim (orch_claim_engine_request) and the adapters' claim route.
+  'backend/tests/unit/engineRequestClaim.test.ts',
   // Prompt 3 community execution safety (OD-1): L-3 enforcement, the execute route
   // mapping and pre-claim gates, tenant-policy scheduler, the skip CAS, the UI
   // response reader, and journey steps (LD-4: not auto, approval of record).

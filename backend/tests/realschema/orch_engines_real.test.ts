@@ -418,6 +418,49 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
     });
   });
 
+  it('D-2: two journeys due in the same sweep for one person: one is queued, the other waits the gap; counted once after the send, on the real schema', async () => {
+    await inRollback(async () => {
+      const gap = { policy: { min_hours_between_actions: 24 } };
+      // Run A only sets the tenant up (an internal step: not contact, no policy). B and C are
+      // two WhatsApp journeys for the same person, each with a 24h gap.
+      const a = await scene([humanStep('prep', 'internal')]);
+      const b = await enrol(ORG_A, a.actor, a.prospectId, { ...gap, steps: [wa('second')] });
+      const c = await enrol(ORG_A, a.actor, a.prospectId, { ...gap, steps: [wa('third')] });
+      const t0 = Date.now();
+      const sweepAt = (ms: number) => advanceAndDispatchWorkflowExecution(ORG_A, { now: new Date(t0 + ms).toISOString(), deps: { adapters: waAdapters() } });
+      const of = (r: { decisions: Array<{ executionInstanceId: string; decision: string; reasons: string[] }> }, id: string) => r.decisions.find((d) => d.executionInstanceId === id);
+
+      // One sweep: three runs due for the same person. Exactly one is queued; the others wait.
+      const r1 = await sweepAt(1000);
+      const decided = [b.instanceId, c.instanceId].map((id) => of(r1, id)?.decision).sort();
+      expect(decided).toEqual(['deferred', 'waiting']);
+      expect(mockJobs).toHaveLength(1);
+      const held = [b.instanceId, c.instanceId].map((id) => of(r1, id)).find((d) => d?.decision === 'deferred')!;
+      expect(held.reasons.join(' ')).toMatch(/queued and not yet confirmed: it may be sent/);
+      const queued = await one(`SELECT t.execution_instance_id AS run, q.state FROM public.execution_engine_requests q
+        JOIN public.execution_tasks t ON t.id = q.execution_task_id
+        WHERE q.organization_id = $1 AND q.state = 'submitted'`, [ORG_A]);
+      expect(queued).toMatchObject({ state: 'submitted' });
+
+      // The queue sends it; the owning run records it. It now counts once, as a completed step.
+      await runQueuedJobs();
+      expect(metaCalls).toHaveLength(1);
+      await sweepAt(2000);
+      const states = await db.query(`SELECT q.state FROM public.execution_engine_requests q WHERE q.organization_id = $1`, [ORG_A]);
+      expect(states.rows.map((x: { state: string }) => x.state)).toEqual(['completed']);
+      const r3 = await sweepAt(3 * 3600_000);
+      const other = [b.instanceId, c.instanceId].find((id) => id !== String(queued!.run))!;
+      expect(of(r3, other)).toMatchObject({ decision: 'deferred' });
+      expect(of(r3, other)!.reasons.join(' ')).not.toMatch(/not yet confirmed|unconfirmed/);   // now a confirmed contact, counted once
+      expect(mockJobs).toHaveLength(0);
+
+      // After the gap, the next run proceeds (one at a time: each new queue entry holds the rest).
+      const r4 = await sweepAt(25 * 3600_000);
+      expect(of(r4, other)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+      expect(mockJobs).toHaveLength(1);
+    });
+  });
+
   it('an unapproved template, or a person with no number, is settled honestly without a send', async () => {
     await inRollback(async () => {
       const a = await scene([wa('intro', 'not_approved')]);

@@ -42,6 +42,7 @@ import { normalizePhone } from '../identityResolutionService';
 import { WHATSAPP_CAPABILITIES } from './engineCapabilities';
 import { channelRefusal } from './journeyGovernance';
 import type { EngineAdapter, EngineDisposition, EngineResult, EngineStepContext } from './engineAdapters';
+import { claimEngineRequest, claimRefusal, type ClaimOptions } from './engineRequestClaim';
 
 export const ENGINE_REQUESTS_TABLE = 'execution_engine_requests';
 export const WHATSAPP_RATE_PLAN = 'free';
@@ -62,8 +63,13 @@ export const STALE_SUBMISSION_MS = 15 * 60 * 1000;
 export interface WhatsAppAdapterDeps {
   /** Insert-or-read the one request row for this task. */
   getOrCreateRequest(organizationId: string, executionTaskId: string): Promise<RequestRow>;
-  /** Compare-and-set; returns true when this call moved the row. */
-  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }): Promise<boolean>;
+  /**
+   * Compare-and-set; returns true when this call moved the row. The claim (`requested ->
+   * submitting`) is D-2's atomic claim: the default makes it through orch_claim_engine_request
+   * (per-person lock + frequency gap + claim, one transaction) and reports why nothing was
+   * claimed through `claim.verdict`.
+   */
+  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }, claim?: ClaimOptions): Promise<boolean>;
   findBroadcastByName(organizationId: string, name: string): Promise<string | null>;
   readPersonPhone(organizationId: string, personId: string): Promise<string | null | undefined>;
   findWhatsAppAccount(organizationId: string): Promise<{ id: string } | 'none' | 'ambiguous'>;
@@ -109,7 +115,12 @@ export const defaultWhatsAppDeps: WhatsAppAdapterDeps = {
     throw Object.assign(new Error('engine request could not be created'), { code: 'request_create_failed' });
   },
 
-  async transitionRequest(organizationId, executionTaskId, from, patch) {
+  async transitionRequest(organizationId, executionTaskId, from, patch, claim) {
+    if (from === 'requested' && patch.state === 'submitting') {
+      const options = claim ?? {};
+      options.externalRef = patch.external_ref ?? options.externalRef ?? null;
+      return claimEngineRequest(organizationId, executionTaskId, options);
+    }
     const res = await ownedDbTable(ENGINE_REQUESTS_TABLE)
       .update(patch)
       .eq('organization_id', organizationId)
@@ -311,8 +322,15 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
       }
 
       // ── Claim creation: exactly one invocation proceeds ────────────────────
-      const claimed = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'submitting' });
-      if (!claimed) return result('submitting', 'wait', 'another sweep claimed this request', null);
+      // D-2: atomically with the person's frequency gap, under the person's lock.
+      const claim: ClaimOptions = { gapHours: ctx.frequencyGapHours ?? null, now: ctx.now };
+      const claimed = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'submitting' }, claim);
+      if (!claimed) {
+        const refused = claimRefusal(claim.verdict, claim.gapHours, claim.now);
+        return refused === null
+          ? result('submitting', 'wait', 'another sweep claimed this request', null)
+          : result(refused.outcome, 'wait', refused.reason, null);
+      }
 
       const name = broadcastNameFor(ctx.executionTaskId);
       let broadcastId: string | null = null;
