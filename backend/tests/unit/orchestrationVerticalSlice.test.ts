@@ -185,6 +185,32 @@ jest.mock('../../services/executionPlans/executionPlanStore', () => ({
   },
 }));
 
+jest.mock('../../services/orchestration/journeyFrequency', () => ({
+  // Follow-up D. Mirrors the real read on both halves (unit-tested on the fake database in
+  // journeyFrequencyUncertainContact, and on the real schema in orch_engines_real): this
+  // tenant, this subject, contact channels only (the REAL NON_CONTACT_CHANNELS), completed
+  // steps at `completed_at` and `uncertain` request rows at `updated_at`, the task being
+  // decided excluded from the latter; the later one wins, a tie reads as confirmed.
+  // Review D-F2 (2026-11-09): the earlier double counted INTERNAL steps too, which production
+  // has not done since 9daf1cc5e; it is now faithful.
+  lastContactActionAtForSubject: async (org: string, kind: string, id: string, options: { excludeTaskId?: string } = {}) => {
+    const { NON_CONTACT_CHANNELS } = jest.requireActual('../../services/orchestration/journeyPolicy') as { NON_CONTACT_CHANNELS: readonly string[] };
+    const tasks = world.tasks.filter((t) => t.organizationId === org && t.subjectKind === kind && t.subjectId === id && !NON_CONTACT_CHANNELS.includes(t.channel));
+    const stepIds = new Set(tasks.map((t) => t.planStepId));
+    const done = world.steps.filter((s) => stepIds.has(s.id) && s.completedAt !== null).map((s) => s.completedAt as string).sort();
+    const completed = done.length ? done[done.length - 1] : null;
+    const taskIds = new Set(tasks.map((t) => t.id).filter((t) => t !== options.excludeTaskId));
+    const unsure = (db.tables.execution_engine_requests ?? [])
+      .filter((r) => r.organization_id === org && taskIds.has(String(r.execution_task_id)) && r.state === 'uncertain')
+      .map((r) => String(r.updated_at)).sort();
+    const uncertain = unsure.length ? unsure[unsure.length - 1] : null;
+    if (completed === null && uncertain === null) return null;
+    if (uncertain === null) return { at: completed, unconfirmed: false };
+    if (completed === null) return { at: uncertain, unconfirmed: true };
+    return Date.parse(uncertain) > Date.parse(completed) ? { at: uncertain, unconfirmed: true } : { at: completed, unconfirmed: false };
+  },
+}));
+
 jest.mock('../../services/executionInstances/executionInstanceStore', () => ({
   listExecutionInstanceIdsInStates: async (org: string, states: readonly string[]) =>
     world.instances.filter((i) => i.organizationId === org && states.includes(i.lifecycleState)).map((i) => i.id),
@@ -416,7 +442,7 @@ describe('enrollment — the version decides who may enter, from the person\'s f
 });
 
 describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', () => {
-  it('assign-sdr (WS-3, human-approved) → frequency gap → wa-intro (WhatsApp) → journey completed', async () => {
+  it('assign-sdr (WS-3, human-approved) → wa-intro (WhatsApp) → journey completed; an internal step is not contact', async () => {
     const run = enrol(ORG_A, 'p-ready');
 
     // Sweep 1: the first step is due; WS-3 materializes it and it awaits a human.
@@ -435,13 +461,11 @@ describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', ()
     expect(stepOf(run, 'assign-sdr').state).toBe('completed');
     expect(await listInternalWorkItems(ORG_A, ws3Task)).toHaveLength(1);
 
-    // Sweep 3, same instant: wa-intro is due, but the person was just contacted.
-    r = await sweep();
-    expect(r.decisions).toEqual([expect.objectContaining({ stepKey: 'wa-intro', engine: 'whatsapp', decision: 'deferred' })]);
-    expect(wa.broadcasts).toHaveLength(0);
-
-    // 25 hours later: the WhatsApp engine is asked, once, with the authored template.
-    world.clock = hoursAfter(world.clock, 25);
+    // Sweep 3, same instant: wa-intro is due. The internal assignment did not contact the
+    // person, so the 24h frequency policy does not hold it (NON_CONTACT_CHANNELS, as in
+    // production since 9daf1cc5e; review D-F2). The WhatsApp engine is asked, once, with the
+    // authored template. A contact step that holds a later one is proven in the Follow-up D
+    // block below.
     r = await sweep();
     expect(r.decisions).toEqual([expect.objectContaining({ stepKey: 'wa-intro', engine: 'whatsapp', decision: 'waiting', outcome: 'submitted' })]);
     expect(wa.broadcasts).toEqual([{ id: 'bc-1', org: ORG_A, name: broadcastNameFor(`${world.instances[0].plan.id}-task-2`), template: 'discovery_intro_v1' }]);
@@ -509,6 +533,97 @@ describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', ()
     expect(r.unsupported).toEqual(['linkedin']);
     expect(r.decisions[0]).toMatchObject({ decision: 'unsupported' });
     expect(stepOf(run, 'li').state).toBe('ready');
+  });
+});
+
+describe('Follow-up D: an uncertain communication counts toward the frequency policy, across journeys', () => {
+  // A WhatsApp-only journey with a 24h gap between actions.
+  const waGap = () => validateWorkflowDefinition({ policy: { min_hours_between_actions: 24 }, steps: [DEFINITION.steps[1]] });
+  const hoursLater = (h: number) => { world.clock = new Date(Date.parse(world.clock) + h * 3600_000).toISOString(); };
+  const decisionOf = (r: TenantSweepResult, run: string) => r.decisions.find((d) => d.executionInstanceId === run);
+  const requestOf = (run: string) => {
+    const task = world.tasks.find((t) => t.executionInstanceId === run)!;
+    return (db.tables.execution_engine_requests as Row[]).find((q) => q.execution_task_id === task.id)!;
+  };
+  /** Journey A reaches the person, and the provider's answer is lost: its request is `uncertain`. */
+  const uncertainJourneyA = async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    engineSends('send_uncertain');
+    const r = await sweep();
+    expect(decisionOf(r, a)).toMatchObject({ decision: 'needs_human', outcome: 'send_uncertain' });
+    expect(requestOf(a).state).toBe('uncertain');
+    return a;
+  };
+
+  it('a concurrent journey waits out the gap after an uncertain send; the uncertain journey itself still goes to a person', async () => {
+    const a = await uncertainJourneyA();
+    hoursLater(1);
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, b)).toMatchObject({ decision: 'deferred' });
+    expect(decisionOf(r, b)!.reasons.join(' ')).toMatch(/unconfirmed: it may have been sent/);
+    // Its own uncertain request never defers journey A: it is still reported for a person.
+    expect(decisionOf(r, a)).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+    expect(wa.broadcasts).toHaveLength(1);
+    // The uncertain state is preserved; nothing is read as sent.
+    expect(requestOf(a).state).toBe('uncertain');
+  });
+
+  it('the window boundary: deferred just inside the gap, acts once it has passed', async () => {
+    await uncertainJourneyA();
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    hoursLater(23.9);
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'deferred' });
+    hoursLater(0.2);
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+    expect(wa.broadcasts).toHaveLength(2);
+  });
+
+  it('re-enrollment after the uncertain run ended is held by the gap', async () => {
+    const a = await uncertainJourneyA();
+    world.instances.find((i) => i.id === a)!.lifecycleState = 'cancelled';   // a person ended run A
+    hoursLater(2);
+    const again = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, again)).toMatchObject({ decision: 'deferred' });
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('a confirmed failure stays distinct: it does not count as contact', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    engineSends('failed');
+    await sweep();
+    expect(requestOf(a).state).toBe('failed');
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+  });
+
+  it("another tenant's uncertain send for the same subject id does not hold this tenant", async () => {
+    // Tenant B's run for the same subject id, with an uncertain request on its own ledger row.
+    const other = enrol(ORG_B, 'p-ready', waGap());
+    const otherTask = world.tasks.find((t) => t.executionInstanceId === other)!;
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-org-b', organization_id: ORG_B, execution_task_id: otherTask.id, engine: 'whatsapp', state: 'uncertain', external_ref: 'bc-org-b', detail: null, updated_at: world.clock });
+    world.instances.find((i) => i.id === other)!.lifecycleState = 'cancelled';   // keep tenant A's sweep about tenant A
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+  });
+
+  it('suppression still decides first: an opted-out person is skipped, not merely deferred', async () => {
+    await uncertainJourneyA();
+    people['p-ready'].whatsapp = false;
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, b)).toMatchObject({ decision: 'skipped' });
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('a non-contact step is never deferred by an uncertain send', async () => {
+    await uncertainJourneyA();
+    const internalOnly = validateWorkflowDefinition({ policy: { min_hours_between_actions: 24 }, steps: [DEFINITION.steps[0]] });
+    const c = enrol(ORG_A, 'p-ready', internalOnly);
+    expect(decisionOf(await sweep(), c)?.decision).not.toBe('deferred');
   });
 });
 

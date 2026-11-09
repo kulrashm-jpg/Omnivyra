@@ -50,8 +50,9 @@ import {
   advanceExecutionRun, BLOCKING_STEP_STATES, getReadyStep, listProgressionSteps, transitionPlanStep,
 } from './stepProgressionStore';
 import {
-  getPlanForInstance, lastCompletedActionAtForSubject, listInstanceTasks,
+  getPlanForInstance, listInstanceTasks,
 } from '../executionPlans/executionPlanStore';
+import { lastContactActionAtForSubject } from '../orchestration/journeyFrequency';
 import { getExecutionInstance, listExecutionInstanceIdsInStates, setExecutionInstanceState } from '../executionInstances/executionInstanceStore';
 import { ownedDbTable } from '../../db/writeOwner';
 import { recordProgressionSweep } from '../leadOutreachExecution/telemetry';
@@ -588,11 +589,15 @@ export async function advanceAndDispatchWorkflowExecution(
       // ── 7. Frequency policy and execution window. Neither delays reading an engine's record. ──
       const gap = definition?.policy?.min_hours_between_actions;
       if (!engineHolds && typeof gap === 'number' && gap > 0 && !NON_CONTACT_CHANNELS.includes(channel)) {
-        const last = await lastCompletedActionAtForSubject(organizationId, subject.kind, subject.id);
-        const since = last === null ? null : hoursBetween(last, now);
+        // Follow-up D: an uncertain communication (it may have been sent) counts as contact,
+        // from any of this person's journeys; this step's own request never defers it.
+        const last = await lastContactActionAtForSubject(organizationId, subject.kind, subject.id, { excludeTaskId: task.id });
+        const since = last === null ? null : hoursBetween(last.at, now);
         if (since !== null && since < gap) {
           counters.tasks_deferred_frequency += 1;
-          decide({ engine: adapter.engine, decision: 'deferred', outcome: null, reasons: [`last action ${since.toFixed(1)}h ago; policy requires ${gap}h`] });
+          const reasons = [`last action ${since.toFixed(1)}h ago; policy requires ${gap}h`];
+          if (last!.unconfirmed) reasons.push('the last action is unconfirmed: it may have been sent, so it counts as contact (it is not treated as sent or delivered)');
+          decide({ engine: adapter.engine, decision: 'deferred', outcome: null, reasons });
           continue;
         }
       }
