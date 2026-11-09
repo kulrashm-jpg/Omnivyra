@@ -36,6 +36,14 @@ const HANDLE = 'https://www.linkedin.com/in/opted-out';
 
 const gov = { records: [] as Row[] };
 
+/**
+ * The instant these reads came back at, as PostgreSQL renders a `timestamptz`:
+ * `T`-separated, six fractional digits, explicit `+00:00` — never `Z`. Every
+ * record here is effective from 2020, so any present instant is in force; what
+ * matters is that an instant is REPORTED at all.
+ */
+const GOV_READ_AT = '2026-10-05T00:00:00.000000+00:00';
+
 const record = (over: Row): Row => ({
   id: `g-${gov.records.length + 1}`, organizationId: ORG, personId: null, targetNormalized: null,
   channel: '*', governanceType: 'unsubscribe', effectiveFrom: '2020-01-01T00:00:00.000Z',
@@ -54,8 +62,19 @@ jest.mock('../../services/prospectIdentity/contactGovernanceRepository', () => {
   const actual = jest.requireActual('../../services/prospectIdentity/contactGovernanceRepository');
   return {
     ...actual,
-    loadTenantGovernanceRecords: async (org: string) => ({ ok: true, records: gov.records.filter((r) => r.organizationId === org) }),
-    loadGovernanceRecords: async (l: { organizationId: string }) => ({ ok: true, records: gov.records.filter((r) => r.organizationId === l.organizationId) }),
+    // P0 — a loader REPORTS ITS READS, each with the database instant the rows
+    // came back at. `contactGovernanceAggregation` treats an absent `reads` as
+    // INDETERMINATE on purpose — a producer that did not say what it read has not
+    // said it read nothing — so a double that omits it makes every path refuse
+    // and every control fail, whatever the records say.
+    loadTenantGovernanceRecords: async (org: string) => {
+      const own = gov.records.filter((r) => r.organizationId === org);
+      return { ok: true, records: own, reads: [{ anchor: 'tenant', ok: true, records: own, readAt: own.length > 0 ? GOV_READ_AT : null }] };
+    },
+    loadGovernanceRecords: async (l: { organizationId: string }) => {
+      const own = gov.records.filter((r) => r.organizationId === l.organizationId);
+      return { ok: true, records: own, reads: [{ anchor: 'target', ok: true, records: own, readAt: own.length > 0 ? GOV_READ_AT : null }] };
+    },
   };
 });
 

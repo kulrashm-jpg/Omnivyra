@@ -23,13 +23,28 @@ import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimite
 import { getValidAccessToken } from '../auth/metaAuthService';
 import { requireEncryptionKey } from '../auth/credentialEncryption';
 
-// W0-C — the canonical contact-governance evaluator. `mayContact` is pure; the
-// tenant-scoped read is the only I/O this adds, and it happens once per batch.
-import { mayContact } from './prospectIdentity/contactGovernance';
+// W0-C / P0 — the canonical contact-governance records.
+//
+// `mayContact` is deliberately NOT imported. It takes a decision instant, and the
+// only honest one is the `read_at` that travelled with the rows;
+// `evaluateGovernanceReads` is the one seam that pairs them and combines per-read
+// verdicts restrictively. Without the import there is no way for this module to
+// form a governance question around a clock, and no timestamp parsing or
+// comparison is recreated here.
+//
+// TWO loaders, for two different jobs:
+//   • `loadGovernanceRecords` — ANCHORED, one call per recipient immediately
+//     before that recipient's send. Person anchor and target anchor are separate
+//     requests, so each carries its own instant.
+//   • `loadTenantGovernanceRecords` — one unanchored read for the enqueue-time
+//     screen, which only ever BLOCKS and never permits a send.
+import { evaluateGovernanceReads } from './prospectIdentity/contactGovernanceAggregation';
 import { recordContactGovernance } from './prospectIdentity/contactGovernanceWriter';
 import {
+  loadGovernanceRecords,
   loadTenantGovernanceRecords,
   normalizeGovernanceTarget,
+  type GovernanceLoadResult,
 } from './prospectIdentity/contactGovernanceRepository';
 import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from './leadOutreachExecution/governanceService';
 
@@ -452,36 +467,80 @@ async function settleUnconfirmedEnqueue(broadcastId: string, recipientIds: strin
 
 // ── Contact governance for one recipient (W0-C + owner GO 2026-11-08) ─────────
 
-type GovernanceRead = Awaited<ReturnType<typeof loadTenantGovernanceRecords>>;
+/** A recipient whose stored number cannot be decrypted: terminal, never sent, auditable. */
+export const RECIPIENT_UNDECRYPTABLE_MESSAGE =
+  'recipient_undecryptable: the stored number could not be read; no send was attempted';
 
 /**
- * The canonical verdict for one recipient: the restrictions on its PERSON, when the journey
- * named one, AND on its number. The person comes only from the recipient row, never from a
- * phone lookup; a manual recipient has none and is judged on the number alone. null when
- * the store could not be read: the caller refuses.
+ * The person anchor of one recipient row, or a refusal.
+ *
+ * THREE STATES, AND THE DIFFERENCE MATTERS. `null`/`undefined` is a DELIBERATELY
+ * person-free recipient — `expandRecipients` omits the column for manual
+ * broadcasts and a manual request body cannot attach a person — so the number
+ * alone is the whole identity and target-only evaluation is complete.
+ *
+ * Anything else that is not a usable id is an identity we FAILED to establish,
+ * and it is refused rather than coerced to `null`. Coercing would silently
+ * downgrade a person-linked recipient to number-only and skip the person's
+ * restrictions, which is the one outcome the owner invariant forbids.
  */
-function recipientVerdict(
-  companyId:  string,
-  personId:   unknown,
-  phone:      string,
-  governance: GovernanceRead,
-  now:        string,
-): ReturnType<typeof mayContact> | null {
-  if (!governance.ok) return null;
-  return mayContact({
-    organizationId:   companyId,
-    personId:         typeof personId === 'string' && personId !== '' ? personId : null,
-    targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
-    channel:          'whatsapp',
-    now,
-    records:          governance.records,
-  });
+type PersonAnchor =
+  | { ok: true; personId: string | null }
+  | { ok: false; reason: string };
+
+function personAnchorOf(raw: unknown): PersonAnchor {
+  if (raw === null || raw === undefined) return { ok: true, personId: null };
+  if (typeof raw === 'string' && raw.trim() !== '') return { ok: true, personId: raw };
+  return {
+    ok: false,
+    reason: 'invalid person identity: the person anchor could not be established, so the person\u2019s restrictions were not checked',
+  };
 }
 
-function governanceRefusalReason(verdict: ReturnType<typeof mayContact> | null, governance: GovernanceRead): string {
-  return verdict
-    ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
-    : `governance unreadable: ${governance.ok ? 'unknown' : governance.error ?? 'unknown'}`;
+/** Allowed, or refused with the reason that goes into `error_message`. */
+type GovernanceOutcome = { allowed: true } | { allowed: false; reason: string };
+
+/**
+ * ONE place where a loaded governance result becomes a verdict for one recipient.
+ *
+ * Both call sites use it — the enqueue screen with its single unanchored read,
+ * the send loop with that recipient's own anchored reads — so there is exactly
+ * one implementation of "may we contact this recipient", and it is
+ * `evaluateGovernanceReads` in both cases. No clock, no record merging, and no
+ * shared substitute timestamp: each read is judged at the `read_at` it arrived
+ * with, and the per-read verdicts combine in the restrictive direction only.
+ */
+function recipientGovernanceOutcome(
+  companyId:        string,
+  personId:         string | null,
+  targetNormalized: string | null,
+  loaded:           GovernanceLoadResult,
+): GovernanceOutcome {
+  if (!loaded.ok) {
+    return { allowed: false, reason: `governance unreadable: ${loaded.error ?? 'unknown'}` };
+  }
+  const decided = evaluateGovernanceReads(loaded.reads, {
+    organizationId: companyId,
+    personId,
+    targetNormalized,
+    channel: 'whatsapp',
+  });
+  // `=== false`, not a truthiness test: `strict` is off in this repository, so a
+  // bare `decided.ok` does not narrow the discriminated union.
+  if (decided.ok === false) {
+    // Rows arrived with no usable database instant, their instants disagreed, or
+    // the producer did not report its reads. Named distinctly from an outage: an
+    // operator asking why a send stopped should not be told the store was down
+    // when it answered.
+    return { allowed: false, reason: `governance indeterminate: ${decided.error}` };
+  }
+  if (decided.verdict.decision !== 'allowed') {
+    return {
+      allowed: false,
+      reason: `${decided.verdict.governanceType ?? decided.verdict.decision}: ${decided.verdict.reason}`,
+    };
+  }
+  return { allowed: true };
 }
 
 /**
@@ -490,9 +549,13 @@ function governanceRefusalReason(verdict: ReturnType<typeof mayContact> | null, 
  * broadcast is not started and no quota is consumed.
  */
 async function screenPendingRecipients(companyId: string, broadcastId: string): Promise<void> {
+  // ONE unanchored read for the whole screen, judged at ITS OWN `read_at` rather
+  // than at a host clock. This pass only ever BLOCKS — a recipient it leaves
+  // alone is still judged again, per recipient and at a fresh database instant,
+  // in `processBatch` — so one read is enough here and a second request per
+  // pending recipient would buy nothing.
   const governance = await loadTenantGovernanceRecords(companyId, ['whatsapp']);
   if (!governance.ok) throw new Error(`contact governance unreadable: ${governance.error ?? 'unknown'}`);
-  const now = new Date().toISOString();
 
   let after: string | null = null;
   for (;;) {
@@ -511,10 +574,15 @@ async function screenPendingRecipients(companyId: string, broadcastId: string): 
       // time, cannot read it either and sends nothing.
       let phone: string;
       try { phone = decryptPhone(r.encrypted_phone); } catch { continue; }
-      const verdict = recipientVerdict(companyId, r.person_id, phone, governance, now);
-      if (verdict && verdict.decision === 'allowed') continue;
+      const anchor = personAnchorOf(r.person_id);
+      const outcome: GovernanceOutcome = anchor.ok === false
+        ? { allowed: false, reason: anchor.reason }
+        : recipientGovernanceOutcome(
+          companyId, anchor.personId, normalizeGovernanceTarget('whatsapp', phone), governance,
+        );
+      if (outcome.allowed === true) continue;
       const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${governanceRefusalReason(verdict, governance)}` })
+        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${outcome.reason}` })
         .eq('id', r.id)
         .eq('status', 'pending');
       if (blockError) throw new Error(`governance block could not be recorded: ${blockError.message}`);
@@ -638,32 +706,104 @@ export async function processBatch(
   // gate, so the same canonical rules are applied here. `whatsapp` is already a
   // KNOWN_CHANNEL, so restrictions for it can exist and were simply not read.
   //
-  // One tenant-scoped read per batch, then the PURE evaluator per recipient.
-  // FAIL CLOSED: if the store cannot be read, NOTHING in this batch is sent.
-  const governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
-  const governanceNow = new Date().toISOString();
-
+  // ─── ONE READ PER RECIPIENT, AT THE DATABASE'S OWN INSTANT ─────────────
+  // This used to take ONE tenant-wide snapshot before the loop and judge every
+  // recipient against it at an application timestamp. Two defects in one:
+  //
+  //   1. THE CLOCK. `effective_from` / `effective_until` are database-stamped and
+  //      `new Date()` is a different clock. Measured on the development host,
+  //      Node ran BEHIND Postgres in 1458 of 1485 samples, and a `w32time` step
+  //      moved it 3.135 s mid-run. A host clock behind the database reads a
+  //      restriction that has just come into force as "not yet started" and SENDS.
+  //   2. THE SNAPSHOT. A batch is up to 100 recipients (500 on the unlimited
+  //      tier), each costing a Meta Graph round trip, so the last recipient was
+  //      judged against a reading taken a long way back and an opt-out recorded
+  //      during the batch could not be seen by it at all.
+  //
+  // Both are closed per recipient, below.
+  //
+  // NOT AN ATOMIC GUARANTEE, and not claimed as one. A small interval remains
+  // between a read's transaction and the outbound request — the claim, the body,
+  // the dispatch — and a restriction committed inside it is still missed. That is
+  // the ordinary bound of any read-then-act gate; what is removed is the far
+  // larger batch-wide window, and the wrong clock entirely.
   let sentCount = 0;
   let failedCount = 0;
 
+  /** Record a governance refusal. `error_code` stays NULL — it is an INTEGER column. */
+  const blockForGovernance = async (recipientId: string, reason: string): Promise<void> => {
+    const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
+      .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${reason}` })
+      .eq('id', recipientId)
+      .eq('status', 'pending');
+    // CHECKED, not ignored: an unrecorded block would leave the recipient
+    // `pending` and indistinguishable from one never considered. Throwing retries
+    // the job; the `pending -> sending` claim below means nothing was sent.
+    if (blockError) throw new Error(`governance block could not be recorded: ${blockError.message}`);
+    failedCount++;
+  };
+
   for (const recipient of recipients) {
-    const phone = decryptPhone(recipient.encrypted_phone);
-
-    // Evaluated BEFORE the message body is built and before `fetch`, so a
-    // refusal cannot reach the provider. The person's restrictions and the number's,
-    // on every run of every batch, retries included.
-    const verdict = recipientVerdict(broadcast.company_id, recipient.person_id, phone, governance, governanceNow);
-
-    if (!verdict || verdict.decision !== 'allowed') {
-      const reason = governanceRefusalReason(verdict, governance);
-      // `error_code` is an INTEGER column (Meta's numeric code); the governance
-      // cause is text and goes in `error_message`. Writing the text code into the
-      // integer column failed the whole update, leaving the recipient `pending`.
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${reason}` })
+    // P1-B. The decrypt is per recipient and ISOLATED: one unreadable row used to
+    // throw out of the loop, failing the whole batch and — with the job's
+    // `attempts: 3` — re-running it. The claim below prevents a re-send, but the
+    // rest of the batch was still denied its sends. A terminal, visible `failed`
+    // ends it here instead of leaving the row `pending` and unexplained.
+    let phone: string;
+    try {
+      phone = decryptPhone(recipient.encrypted_phone);
+    } catch {
+      const { error: failError } = await ownedDbTable('whatsapp_broadcast_recipients')
+        .update({ status: 'failed', error_code: null, error_message: RECIPIENT_UNDECRYPTABLE_MESSAGE })
         .eq('id', recipient.id)
         .eq('status', 'pending');
+      if (failError) throw new Error(`undecryptable recipient could not be recorded: ${failError.message}`);
       failedCount++;
+      continue;
+    }
+
+    // IDENTITY FIRST, and a failure to establish it is a refusal, not a downgrade.
+    const anchor = personAnchorOf(recipient.person_id);
+    if (anchor.ok === false) {
+      await blockForGovernance(recipient.id, anchor.reason);
+      continue;
+    }
+
+    // R1 — normalise at the comparison boundary, with the rule for this channel.
+    // The loader normalises its own query from the RAW value; this normalised one
+    // is what the evaluator compares against `record.targetNormalized`.
+    const targetNormalized = normalizeGovernanceTarget('whatsapp', phone);
+
+    // UNANCHORABLE: no person AND no usable number means no record could ever
+    // match, so "no match" is the absence of a question rather than evidence of
+    // permission. Refused before any query and before any outbound request. A
+    // person-linked recipient whose number will not normalise is NOT unanchorable
+    // — the person anchor still answers — so it goes on to be judged.
+    if (anchor.personId === null && targetNormalized === null) {
+      await blockForGovernance(recipient.id, 'unanchorable recipient: governance cannot be evaluated');
+      continue;
+    }
+
+    // ONE anchored read for THIS recipient, immediately before THIS send. When the
+    // journey named a person this issues TWO PostgREST requests — person anchor
+    // and target anchor — and they are two transactions with two instants, which
+    // is exactly why the records are never merged under one timestamp.
+    const loaded = await loadGovernanceRecords({
+      organizationId: broadcast.company_id,
+      personId:       anchor.personId,
+      target:         phone,
+      channel:        'whatsapp',
+    });
+
+    // Evaluated BEFORE the message body is built and before `fetch`, so a
+    // refusal cannot reach the provider. The person's restrictions and the
+    // number's, on every run of every batch, retries included.
+    const outcome = recipientGovernanceOutcome(
+      broadcast.company_id, anchor.personId, targetNormalized, loaded,
+    );
+
+    if (outcome.allowed === false) {
+      await blockForGovernance(recipient.id, outcome.reason);
       continue;
     }
 
