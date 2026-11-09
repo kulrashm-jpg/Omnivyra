@@ -575,11 +575,18 @@ async function screenPendingRecipients(companyId: string, broadcastId: string): 
       let phone: string;
       try { phone = decryptPhone(r.encrypted_phone); } catch { continue; }
       const anchor = personAnchorOf(r.person_id);
+      const screenTarget = normalizeGovernanceTarget('whatsapp', phone);
+      // The same two refusals the send loop makes, applied here so the recipient
+      // is settled before the rate limit is consumed. This pass only ever BLOCKS,
+      // so it can be stricter than the send loop but never more permissive.
       const outcome: GovernanceOutcome = anchor.ok === false
         ? { allowed: false, reason: anchor.reason }
-        : recipientGovernanceOutcome(
-          companyId, anchor.personId, normalizeGovernanceTarget('whatsapp', phone), governance,
-        );
+        : screenTarget === null
+          ? {
+            allowed: false,
+            reason: 'unanchorable recipient: the destination number could not be normalised, so phone-level governance could not be evaluated',
+          }
+          : recipientGovernanceOutcome(companyId, anchor.personId, screenTarget, governance);
       if (outcome.allowed === true) continue;
       const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
         .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${outcome.reason}` })
@@ -774,13 +781,29 @@ export async function processBatch(
     // is what the evaluator compares against `record.targetNormalized`.
     const targetNormalized = normalizeGovernanceTarget('whatsapp', phone);
 
-    // UNANCHORABLE: no person AND no usable number means no record could ever
-    // match, so "no match" is the absence of a question rather than evidence of
-    // permission. Refused before any query and before any outbound request. A
-    // person-linked recipient whose number will not normalise is NOT unanchorable
-    // — the person anchor still answers — so it goes on to be judged.
-    if (anchor.personId === null && targetNormalized === null) {
-      await blockForGovernance(recipient.id, 'unanchorable recipient: governance cannot be evaluated');
+    // UNNORMALISABLE DESTINATION: blocked, whether or not a person is linked.
+    //
+    // OWNER RULING. An earlier version refused only when there was NO person
+    // either, on the reasoning that a person anchor could still answer. That is
+    // rejected, and rightly: a person-level verdict does not substitute for a
+    // phone-level dimension that could not be evaluated at all. A `dnc_channel`
+    // or `unsubscribe` recorded against THIS NUMBER is matched by
+    // `target_normalized`, and if the number will not normalise that record can
+    // never be compared — so a person-only "allowed" is a verdict on a strictly
+    // smaller question being read as permission on the whole one.
+    //
+    // So this is not a partial evaluation presented as complete; no evaluation is
+    // issued. Refused before any governance query and before any outbound
+    // request, through the same checked, INTEGER-safe write as every other
+    // refusal.
+    //
+    // Nothing is lost operationally: a number that normalises to nothing is not a
+    // number Meta could deliver to either.
+    if (targetNormalized === null) {
+      await blockForGovernance(
+        recipient.id,
+        'unanchorable recipient: the destination number could not be normalised, so phone-level governance could not be evaluated',
+      );
       continue;
     }
 

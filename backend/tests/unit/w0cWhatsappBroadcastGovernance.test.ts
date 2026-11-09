@@ -573,16 +573,64 @@ describe('P0 — per-recipient freshness and fail-closed reads', () => {
     expect(db.governanceReads).toBe(0);
   });
 
-  it('15b. a PERSON-LINKED recipient whose number will not normalise is still judged, not called unanchorable', async () => {
-    // The person anchor can still answer, so this is not an absence of question.
+  it('15b. a PERSON-LINKED recipient whose number will not normalise is BLOCKED (owner ruling)', async () => {
+    // SUPERSEDES the earlier behaviour, which let the person anchor answer alone
+    // and sent on its verdict. The owner rejected that: a person-level verdict
+    // does not substitute for a phone-level dimension that could not be
+    // evaluated. A `dnc_channel` or `unsubscribe` recorded against THIS NUMBER is
+    // matched by `target_normalized`, and a number that will not normalise can
+    // never be compared against such a record.
     seedPersonLinked();
     Object.assign(recipient(), { encrypted_phone: encrypt('n/a') });
     restrictPerson();
     await processBatch('b1', ['r1']);
 
-    expect(db.governanceReads).toBe(1);                     // person anchor only
+    expect(recipient().status).toBe('blocked_governance');
+    expect(String(recipient().error_message)).toContain('could not be normalised');
     expect(fetchCalls).toHaveLength(0);
-    expect(String(recipient().error_message)).toContain('dnc_permanent');
+    // No PARTIAL evaluation was issued at all — not one read, then a verdict on
+    // the smaller question.
+    expect(db.governanceReads).toBe(0);
+  });
+
+  it('15c. person-only PERMISSION is not read as complete coverage: still blocked', async () => {
+    // THE ADVERSARIAL CASE, and the one that separates "refuse" from "evaluate
+    // what we can and call it complete". This person has NO restriction, so a
+    // person-only evaluation would return `allowed` — and the recipient is
+    // blocked regardless, because the phone dimension was never evaluable.
+    seedPersonLinked();                                     // valid person, unrestricted
+    Object.assign(recipient(), { encrypted_phone: encrypt('n/a') });
+    await processBatch('b1', ['r1']);
+
+    expect(recipient().status).toBe('blocked_governance');
+    expect(recipient().error_code).toBeNull();
+    expect(String(recipient().error_message)).toMatch(/^contact_governance: /);
+    expect(String(recipient().error_message)).toContain('could not be normalised');
+    expect(fetchCalls).toHaveLength(0);
+    expect(db.governanceReads).toBe(0);
+  });
+
+  it('15d. the unnormalisable refusal reaches neither message construction nor Meta Graph', async () => {
+    // The body getter fires only inside `buildMessageBody`, so zero proves the
+    // message was never built — stronger than "no provider call".
+    seedWithBodyProbe({ person_id: PERSON, encrypted_phone: encrypt('n/a') });
+    await processBatch('b1', ['r1']);
+
+    expect(db.bodyReads).toBe(0);
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('blocked_governance');
+    expect(recipient().error_code).toBeNull();
+  });
+
+  it('15e. a VALID number is unaffected by the new guard — both anchors still evaluated', async () => {
+    // The control. The guard must refuse only what it cannot evaluate; a
+    // person-linked recipient with a usable number still gets its two reads.
+    seedPersonLinked();
+    await processBatch('b1', ['r1']);
+
+    expect(db.governanceReads).toBe(2);
+    expect(fetchCalls).toHaveLength(1);
+    expect(recipient().status).toBe('sent');
   });
 
   it('16. a blocked recipient reaches neither buildMessageBody nor Meta Graph', async () => {

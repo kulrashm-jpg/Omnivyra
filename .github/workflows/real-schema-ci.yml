@@ -61,10 +61,30 @@ on:
       - 'pages/api/prospect-lists/**'
       - 'pages/api/prospect-campaigns/**'
       - 'pages/api/execution-instances/**'
+      # ─── WhatsApp governance integration ──────────────────────────────
+      # `whatsapp_broadcast_person_restriction.test.ts` drives the REAL
+      # `processBatch` against the real schema, so the service it exercises must
+      # be a trigger path. It was not: the filter carried
+      # `whatsappWebhookProcessor.ts` but never the broadcast service, so a change
+      # touching only that file skipped the one suite that covers it. The suite
+      # and both migrations it depends on are listed explicitly as well — the
+      # broader `backend/tests/realschema/**` and `supabase/migrations/**` entries
+      # already match them, and naming them means a later narrowing of either
+      # cannot silently drop this gate.
+      - 'backend/services/whatsappBroadcastService.ts'
+      - 'backend/tests/realschema/whatsapp_broadcast_person_restriction.test.ts'
+      - 'backend/tests/realschema/whatsapp_send_once_real.test.ts'
+      - 'supabase/migrations/20270128000004_whatsapp_broadcast_recipient_person.sql'
+      - 'supabase/migrations/20270202000000_pi_contact_governance_read_at.sql'
       - 'jest.realschema.config.js'
       - '.github/workflows/real-schema-ci.yml'
   push:
-    branches: [main]
+    # `main` is unchanged. The integration branch is added as an EXACT name, not
+    # a pattern: this gate is being enabled for one candidate, and a wildcard
+    # would arm a destructive replay for branches nobody reviewed.
+    branches:
+      - main
+      - outreach/whatsapp-governance-integration
     paths:
       - 'supabase/migrations/**'
       - 'supabase/_schema/**'
@@ -85,7 +105,33 @@ on:
       - 'pages/api/prospect-lists/**'
       - 'pages/api/prospect-campaigns/**'
       - 'pages/api/execution-instances/**'
+      # Present in the pull_request filter above but missing here, so a push that
+      # changed only the canonical governance spine — or this workflow — replayed
+      # nothing.
+      - 'backend/services/prospectIdentity/**'
+      - '.github/workflows/real-schema-ci.yml'
+      # ─── WhatsApp governance integration ──────────────────────────────
+      # `whatsapp_broadcast_person_restriction.test.ts` drives the REAL
+      # `processBatch` against the real schema, so the service it exercises must
+      # be a trigger path. It was not: the filter carried
+      # `whatsappWebhookProcessor.ts` but never the broadcast service, so a change
+      # touching only that file skipped the one suite that covers it. The suite
+      # and both migrations it depends on are listed explicitly as well — the
+      # broader `backend/tests/realschema/**` and `supabase/migrations/**` entries
+      # already match them, and naming them means a later narrowing of either
+      # cannot silently drop this gate.
+      - 'backend/services/whatsappBroadcastService.ts'
+      - 'backend/tests/realschema/whatsapp_broadcast_person_restriction.test.ts'
+      - 'backend/tests/realschema/whatsapp_send_once_real.test.ts'
+      - 'supabase/migrations/20270128000004_whatsapp_broadcast_recipient_person.sql'
+      - 'supabase/migrations/20270202000000_pi_contact_governance_read_at.sql'
   workflow_dispatch:
+
+# The job reads the checkout and nothing else. Declared explicitly rather than
+# inherited: without this block the token carries whatever the repository's
+# default is, and a replay gate has no business being able to write anything.
+permissions:
+  contents: read
 
 concurrency:
   group: real-schema-${{ github.ref }}

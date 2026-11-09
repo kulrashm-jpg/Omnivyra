@@ -13,10 +13,14 @@ name: PI Contact Governance — PostgREST computed field
 #     exists as a secret, so nothing can be leaked by it or stolen from it.
 #   • `permissions: contents: read` — the token can read the checkout and
 #     nothing else. No packages, no deployments, no issue or PR writes.
-#   • Both databases are service containers created for the life of this job and
-#     destroyed with it. The only addresses used are `localhost` (from the job)
-#     and the service-network aliases `postgres` / `postgrest` (between the
-#     containers), neither of which is routable outside this runner.
+#   • ONE database, as a service container created for the life of this job and
+#     destroyed with it. PostgREST is NOT a service container — it is started by
+#     a job step, for the reason set out immediately below — and the path gateway
+#     is a backgrounded node process. The only addresses used are `localhost` and
+#     `127.0.0.1` from the job, plus the `postgres` service-network alias that the
+#     step-started PostgREST container dials; none is routable outside this
+#     runner. There is no `postgrest` service alias, because there is no
+#     PostgREST service container.
 # ─── WHY POSTGREST IS NOT A `services:` CONTAINER ──────────────────────
 # It was, for the first two runs of this workflow, and it cannot be. Service
 # containers start BEFORE any job step, so at the moment PostgREST connects the
@@ -48,7 +52,13 @@ on:
   # arbitrary ref.
   push:
     branches:
+      # The PI feature branch, unchanged.
       - fix/pi-contact-governance-clock
+      # The WhatsApp governance integration candidate, which carries this same
+      # migration and computed field. Both are EXACT names: still no pattern,
+      # still no `workflow_dispatch`, so this job cannot be started against an
+      # arbitrary ref.
+      - outreach/whatsapp-governance-integration
     paths:
       - 'backend/services/prospectIdentity/contactGovernance.ts'
       - 'backend/services/prospectIdentity/contactGovernanceRepository.ts'
