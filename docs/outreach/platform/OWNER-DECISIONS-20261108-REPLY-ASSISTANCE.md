@@ -90,3 +90,23 @@ The adapter is Orchestration's file. Outreach reviews the change when Orchestrat
 - **The F/RC erasure route** (Orchestration register 07, gate G-0 in 09): it has no feature flag, so merging it is itself an activation event. Noted for any future integration of that route.
 
 **Until then:** the adapter maps this rare case to failed, a known residual of Work Item 2. In the ordinary lost-acknowledgement case nothing is uncertain: the recipients are withdrawn before any send, and failed is accurate.
+
+## D-QU-SEL (2026-11-09): ownership exception recorded; RUL-C SELECTED
+
+**The one-off ownership exception (B).** On 2026-11-09 the programme owner authorized Outreach to implement the queuing-uncertain change in Orchestration's `whatsappEngineAdapter.ts` while Orchestration was unreachable. The result was commit `8ae4af212` (parent `e28be7ce5`). The owner's ruling on it: "The one-off ownership exception permitted implementation, not ownership bypass. Obtain Orchestration owner review before integration. Do not expand this change." No approval of `8ae4af212` was given by its author.
+
+**Two implementations.** Orchestration (virality-55) had independently prepared RUL-C, an uncommitted patch on base `a746ad268`, sha256 `c9a82a1f322098aa85496dbb6dba3681c516475058eb83dc59d2e0a529ef0308`, preserved as `refs/preserve/orch-rulc-patch-c9a82a1f`.
+
+**Outreach's integration review of RUL-C: PASS** (sent to Orchestration 2026-11-09). Findings:
+- **F-1 (HIGH, against `8ae4af212`).** Its outcome word `enqueue_uncertain` is not in `MAY_HAVE_ACTED` (`executionContract.ts:81`), so the contract normalizes it to FAILED / definite. RUL-C's `uncertain` normalizes to EXECUTING / may_have_acted / human_only. Confirmed by execution by Orchestration.
+- **F-2 (LOW, RUL-C).** `instanceof` on the imported class would throw in a jest suite that mocks the service module without the class. No production effect; no current suite reaches it.
+- **F-3 (INFO).** Both add the same test file name and registry line; only one can integrate.
+- **Compatibility.** RUL-C applies cleanly on `e28be7ce5` and on the Follow-up A merge (`330c891c1`). Orchestration's executed cross-check: both candidates are safe against resends with Follow-up A. The matching-policy difference (RUL-C requires class AND code) is by design.
+
+**Programme Owner Decision (2026-11-09):**
+- **SELECT A, Orchestration's RUL-C.** `8ae4af212` is not selected: preserved unchanged (`refs/preserve/outreach-wa-adapter-enqueue-uncertain`), never integrated.
+- **Orchestration must:** commit RUL-C under its own ownership; preserve the error-class and error-code matching; retain the distinct `uncertain` and `needs_human` semantics; preserve the withdrawn-recipient `failed` path; provide the exact commit, diff and T1 evidence.
+- **Outreach must:** review compatibility against Follow-up A (`6a69f4700`) and the governance branch; then rebuild the candidate from the approved integration head plus Follow-up A and RUL-C, run the combined T2 against the exact resulting commit, and compare failures against the established baseline.
+- **Ownership:** Orchestration retains implementation and maintenance ownership of the adapter. Outreach performs integration compatibility review. The programme owner retains final approval authority.
+
+**Status:** awaiting Orchestration's RUL-C commit. The candidate branch `outreach/int-candidate-20261109`, which still contains `8ae4af212`, is held and will be rebuilt without it. No T2 has run.
