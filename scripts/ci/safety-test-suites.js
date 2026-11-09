@@ -179,6 +179,13 @@ const SAFETY_SUITE_REGISTRY = [
   // G-11 enrolment closure: the review-derived and manual gates at enrolment (fail closed), and
   // the admin close/reopen route (same admin guard).
   'backend/tests/unit/contactEnrolmentClosure.test.ts',
+  // L-4 Work Item 2: one provider call per recipient across duplicate, concurrent and retried
+  // runs; confirmed, failed and uncertain kept apart; a lost queue acknowledgement settled
+  // without guessing; reconciliation only from a matching status webhook.
+  'backend/tests/unit/whatsappSendOnce.test.ts',
+  // L-4 Follow-up A: the unconfirmed-send sweep never resends and never writes failed without
+  // a provider event; the webhook names a recipient in the ledger only once verified.
+  'backend/tests/unit/whatsappUnconfirmedSendSweep.test.ts',
 ];
 
 /** Narrow naming convention; see header. Applied to basenames in UNIT_DIR only. */
