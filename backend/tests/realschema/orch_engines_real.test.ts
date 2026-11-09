@@ -15,7 +15,7 @@
  * Browser: claims no channel, and a channel with no engine stays visibly unsupported.
  */
 
-import { db, inRollback, seedTenants, ORG_A, ORG_B } from './setup';
+import { attempt, db, inRollback, seedTenants, ORG_A, ORG_B } from './setup';
 import {
   decisions, enableOutreach, enrol, humanStep, instanceState, lifecycle, newProspect, newUser, one, rnd,
 } from './helpers/journeyFixtures';
@@ -44,8 +44,13 @@ const mockRedis = {
 jest.mock('../../queue/bullmqClient', () => ({ getSharedRedisClient: () => mockRedis }));
 jest.mock('../../auth/metaAuthService', () => ({ getValidAccessToken: async () => 'test-token' }));
 const mockJobs: Array<{ broadcast_id: string; recipient_ids: string[] }> = [];
+/** RUL-C: the queue keeps the job but its acknowledgement is lost (the add throws). */
+const mockQueueAck = { lost: false };
 jest.mock('../../middleware/queueBackpressure', () => ({
-  enqueueOrThrow: async (_q: unknown, _n: unknown, _j: unknown, data: { broadcast_id: string; recipient_ids: string[] }) => { mockJobs.push(data); },
+  enqueueOrThrow: async (_q: unknown, _n: unknown, _j: unknown, data: { broadcast_id: string; recipient_ids: string[] }) => {
+    mockJobs.push(data);
+    if (mockQueueAck.lost) throw new Error('Connection is closed.');
+  },
 }));
 jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
 
@@ -76,7 +81,7 @@ beforeAll(() => {
   }) as unknown as typeof fetch;
 });
 afterAll(() => { global.fetch = realFetch; });
-beforeEach(() => { metaCalls.length = 0; mockJobs.length = 0; mockRedis.store.clear(); metaBehaviour = 'ok'; });
+beforeEach(() => { metaCalls.length = 0; mockJobs.length = 0; mockRedis.store.clear(); metaBehaviour = 'ok'; mockQueueAck.lost = false; });
 
 async function whatsappAccount(org: string): Promise<string> {
   const user = await newUser();
@@ -306,6 +311,70 @@ describe('WhatsApp engine, real service and webhook processor; Meta HTTP stubbed
       const r = await sweep(waAdapters());
       expect(r.counters.tasks_needing_human).toBe(1);
       expect(await instanceState(instanceId)).toBe('active');
+    });
+  });
+
+  it('RUL-C: a lost queue acknowledgement the engine cannot withdraw is uncertain on the real ledger, never failed; it sends once at most', async () => {
+    await inRollback(async () => {
+      const { instanceId } = await scene([wa('intro')]);
+      // Inside this transaction only: the engine's withdrawal write is refused, so it cannot
+      // tell whether the queue kept the batch (WhatsAppEnqueueUncertainError).
+      await db.query(`CREATE FUNCTION public.rulc_refuse_withdrawal() RETURNS trigger LANGUAGE plpgsql AS $f$
+        BEGIN
+          IF NEW.error_message LIKE 'enqueue_unconfirmed:%' THEN RAISE EXCEPTION 'withdrawal refused (test)'; END IF;
+          RETURN NEW;
+        END $f$`);
+      await db.query(`CREATE TRIGGER rulc_refuse_withdrawal BEFORE UPDATE ON public.whatsapp_broadcast_recipients
+        FOR EACH ROW EXECUTE FUNCTION public.rulc_refuse_withdrawal()`);
+      mockQueueAck.lost = true;
+
+      const r = await sweep(waAdapters());
+      expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+      const req = await one(`SELECT q.id, q.state, q.external_ref, q.detail FROM public.execution_engine_requests q
+        JOIN public.execution_tasks t ON t.id = q.execution_task_id WHERE t.execution_instance_id = $1`, [instanceId]);
+      expect(req).toMatchObject({ state: 'uncertain', detail: expect.stringMatching(/^whatsapp_enqueue_uncertain: /) });
+      expect(req!.external_ref).toEqual(expect.any(String));
+      expect((await recipientStatus(instanceId))?.status).toBe('pending');      // not withdrawn: the kept job may send it
+      const job = { ...mockJobs[0] };
+
+      // The real guard: a settled request never moves, so nothing can put it back in play.
+      expect(await attempt(`UPDATE public.execution_engine_requests SET state = 'requested' WHERE id = $1`, [req!.id])).toBe('23514');
+      expect(await attempt(`UPDATE public.execution_engine_requests SET state = 'failed' WHERE id = $1`, [req!.id])).toBe('23514');
+
+      // The queue recovers. Sweeps never create or enqueue a second batch.
+      mockQueueAck.lost = false;
+      mockJobs.length = 0;
+      for (let i = 0; i < 2; i += 1) {
+        const again = await sweep(waAdapters());
+        expect(again.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+      }
+      expect(mockJobs).toHaveLength(0);
+      const broadcasts = await one(`SELECT count(*)::int AS n FROM public.whatsapp_broadcasts WHERE company_id = $1`, [ORG_A]);
+      expect(broadcasts!.n).toBe(1);
+
+      // The job the queue did keep sends exactly once, through a BullMQ retry too.
+      await processBatch(job.broadcast_id, job.recipient_ids);
+      await processBatch(job.broadcast_id, job.recipient_ids);
+      expect(metaCalls).toHaveLength(1);
+      expect((await recipientStatus(instanceId))?.status).toBe('sent');
+      // No request-level reconciler exists: the step stays with a person (C-5/C-6 are not built).
+      expect((await sweep(waAdapters())).decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+      expect(await instanceState(instanceId)).toBe('active');
+    });
+  });
+
+  it('RUL-C: a lost acknowledgement whose recipients are withdrawn stays failed on the real ledger; the kept job sends nothing', async () => {
+    await inRollback(async () => {
+      const { instanceId } = await scene([wa('intro')]);
+      mockQueueAck.lost = true;
+      const r = await sweep(waAdapters());
+      expect(r.decisions[0]).toMatchObject({ decision: 'needs_human', outcome: 'submit_failed' });
+      const req = await one(`SELECT q.state FROM public.execution_engine_requests q
+        JOIN public.execution_tasks t ON t.id = q.execution_task_id WHERE t.execution_instance_id = $1`, [instanceId]);
+      expect(req).toMatchObject({ state: 'failed' });
+      expect((await recipientStatus(instanceId))?.status).toBe('failed');
+      await runQueuedJobs();
+      expect(metaCalls).toHaveLength(0);
     });
   });
 

@@ -37,7 +37,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { createBroadcast, enqueueBroadcast, expandPersonRecipients } from '../whatsappBroadcastService';
+import { createBroadcast, enqueueBroadcast, expandPersonRecipients, WhatsAppEnqueueUncertainError } from '../whatsappBroadcastService';
 import { normalizePhone } from '../identityResolutionService';
 import { WHATSAPP_CAPABILITIES } from './engineCapabilities';
 import { channelRefusal } from './journeyGovernance';
@@ -178,6 +178,25 @@ const E164 = /^\+\d{8,15}$/;
 /** The broadcast name is the idempotency anchor for crash recovery. */
 export const broadcastNameFor = (executionTaskId: string): string => `wf:${executionTaskId}`;
 
+/** The engine's code for a batch that may be queued and could not be withdrawn (L-4). */
+export const WHATSAPP_ENQUEUE_UNCERTAIN_CODE = 'whatsapp_enqueue_uncertain';
+
+/**
+ * The request's `detail` for that case. A fixed, code-level summary: the column must never
+ * hold personal data, and the engine's message carries a raw database error. The batch is
+ * identified by `external_ref` (the broadcast id) and its recipient rows.
+ */
+export const ENQUEUE_UNCERTAIN_DETAIL =
+  `${WHATSAPP_ENQUEUE_UNCERTAIN_CODE}: the queue may hold this batch and its recipients could not be withdrawn; never resent automatically, a person reviews it`;
+
+/**
+ * RUL-C (owner ruling 2026-11-09). Matched by class AND code, never by message text: a
+ * message can be reworded or imitated, and an error that is not the engine's own signal
+ * must not stop being a failure.
+ */
+const isEnqueueUncertain = (e: unknown): boolean =>
+  e instanceof WhatsAppEnqueueUncertainError && (e as { code?: unknown }).code === WHATSAPP_ENQUEUE_UNCERTAIN_CODE;
+
 export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAppDeps): EngineAdapter {
   const result = (outcome: string, disposition: EngineDisposition, reason: string | null, externalRef: string | null): EngineResult =>
     ({ engine: 'whatsapp', outcome, disposition, reason, externalRef });
@@ -311,10 +330,20 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
         // send. Only after it succeeds is the request `submitted`.
         await deps.enqueueBroadcast(broadcastId, WHATSAPP_RATE_PLAN);
       } catch (e) {
-        // A refusal here (unapproved template, rate limit, unreadable account) is
-        // for a person to resolve. Only the queue sends, so a failure before or
-        // inside enqueue cannot have delivered anything twice; the request is
-        // settled `failed` so no sweep re-submits it on its own.
+        // RUL-C. The queue add's acknowledgement was lost AND the engine could not withdraw
+        // the batch's recipients: the batch may be queued and may send. That is not a
+        // refusal, so it is never `failed` (which reads as "the provider refused; nothing
+        // went out") and never `submitted`. It is `uncertain`, which is settled for good: no
+        // sweep, re-run or stale-claim release re-submits it, and the broadcast it names
+        // stays the one record of the attempt. A person reviews it before any resend.
+        if (isEnqueueUncertain(e)) {
+          const ref = broadcastId ?? (e as WhatsAppEnqueueUncertainError).broadcastId;
+          return settle(ctx, 'submitting', 'uncertain', result('uncertain', 'needs_human', ENQUEUE_UNCERTAIN_DETAIL, ref));
+        }
+        // A refusal here (unapproved template, rate limit, unreadable account), or a lost
+        // acknowledgement whose recipients the engine withdrew, is for a person to resolve:
+        // nothing of it can be sent. The request is settled `failed` so no sweep re-submits
+        // it on its own.
         const reason = (e as Error).message.slice(0, 200);
         return settle(ctx, 'submitting', 'failed', result('submit_failed', 'needs_human', reason, broadcastId));
       }
