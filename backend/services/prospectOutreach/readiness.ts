@@ -31,6 +31,28 @@
  * The legacy `suppression_entries` / `outreach_suppressions` stores are never
  * read; a test asserts it.
  *
+ * ─── THE SUPPRESSION CLOCK IS THE DATABASE'S, NOT THE CALLER'S ────────────
+ * `input.now` is SUPPLIED BY THE CALLER. `/api/prospects/[id]` derives it from
+ * an optional `asOf` query parameter, validated for parseability and bounded in
+ * neither direction, so an authenticated tenant member could choose the instant
+ * a suppression check was judged at — and an `asOf` before a restriction's
+ * `effective_from` makes that restriction read as "not yet started".
+ *
+ * So governance is no longer judged at `input.now` at ALL. `evaluateGovernanceReads`
+ * judges each read's rows at the `read_at` that read arrived with. `input.now`
+ * keeps its other job — the deterministic instant the WS-6 context and the score
+ * describe — and loses its temporal authority over permission.
+ *
+ * ─── HISTORICAL SCORING IS SUPPORTED; HISTORICAL GOVERNANCE IS NOT ────────
+ * A replay cannot be answered from this store. The loader filters
+ * `revoked_at IS NULL`, so a restriction that was in force at the requested
+ * instant and has since been revoked is NOT RETURNED AT ALL, and a deleted row
+ * leaves nothing behind; no parameter on the read could reconstruct either. When
+ * the caller's instant and the database's disagree beyond
+ * `GOVERNANCE_LIVE_TOLERANCE_MS`, this reports governance as `not_ready` with
+ * that limitation named, rather than answering at the database instant and
+ * letting the answer be read as historical.
+ *
  * ─── NOTHING IS INVENTED FOR AN UNAVAILABLE FIELD ─────────────────────────
  * The frozen NBA field set includes `objective` and `expiry`. Neither exists
  * anywhere: the engine emits a MESSAGE STRATEGY (`lead_with_trigger_event`),
@@ -54,12 +76,19 @@
  * assumed permitted.
  */
 
+// P0 — `mayContact` is deliberately NOT imported. It takes a decision instant,
+// and the only one this module could supply is `input.now`, which the caller
+// controls. `evaluateGovernanceReads` is the one seam that pairs each read's rows
+// with the `read_at` they arrived with, so permission is asked for only through
+// it. `parseGovernanceInstantUs` is the evaluator's OWN parser, reused rather
+// than mirrored — a mirrored timestamp comparison drifts, a delegated one cannot.
 import {
-  mayContact,
   KNOWN_CHANNELS,
+  parseGovernanceInstantUs,
   type GovernanceChannel,
   type MayContactResult,
 } from '../prospectIdentity/contactGovernance';
+import { evaluateGovernanceReads } from '../prospectIdentity/contactGovernanceAggregation';
 import {
   loadGovernanceRecords,
   normalizeGovernanceTarget,
@@ -74,6 +103,61 @@ export const OUTREACH_READINESS_VERSION = 'ws8.1';
 
 /** The engine's composite channel vocabulary is ordered; this is the separator. */
 const CHANNEL_STEP_SEPARATOR = '_then_';
+
+/**
+ * How far the caller's `now` may sit from the database read instant and still be
+ * read as "this caller means the present".
+ *
+ * It is a TOLERANCE rather than an equality because a live caller's `now` is a
+ * host clock reading taken before the request and the database instant is taken
+ * inside the read: they differ by network latency plus host clock skew, always,
+ * and an equality test would class every live request as historical. The measured
+ * bound on this platform is seconds — a `w32time` step moved the development host
+ * 3.135 s mid-run — so two minutes sits far outside normal skew and far inside
+ * any real replay, which is hours or days back.
+ *
+ * MISDETECTION IS SAFE IN BOTH DIRECTIONS, which is the only reason a tolerance
+ * is acceptable here at all:
+ *   - a live request wrongly classed as historical yields `not_ready`, so no
+ *     clearance is issued and the failure is a false refusal;
+ *   - a replay INSIDE the tolerance is judged at the DATABASE instant, like every
+ *     other request, so its verdict is correct for the present and cannot clear
+ *     contact with somebody who is restricted now. What such a request loses is
+ *     only the LABEL, and only when the two instants agree to within two minutes.
+ * Neither direction can produce permission to contact a restricted person.
+ */
+export const GOVERNANCE_LIVE_TOLERANCE_MS = 120_000;
+
+/**
+ * Said once, so the API, the UI and the tests all quote the same sentence.
+ *
+ * It names the LIMIT rather than faulting the caller: the request was legitimate
+ * and its scoring half was answered. What cannot be produced is the governance
+ * state as it stood, because revoked rows are filtered out of the read and
+ * deleted rows are gone.
+ */
+export const HISTORICAL_GOVERNANCE_REASON =
+  'Historical governance state cannot be reconstructed from the available record history';
+
+/**
+ * Does a database read instant corroborate the caller's claim to mean "now"?
+ *
+ * `parseGovernanceInstantUs` is the evaluator's own parser, in epoch MICROSECONDS,
+ * and it accepts both shapes that reach here: PostgreSQL's `T`-separated `±HH:MM`
+ * rendering of `read_at`, and a JS caller's `toISOString()`.
+ *
+ * An UNPARSEABLE value on either side is not corroboration and returns false, so
+ * it takes the historical branch and refuses rather than clearing. That matters
+ * for `asOf` in particular: the route validates it with `Date.parse`, which
+ * accepts forms this parser rejects — `'2026-01-01'`, for one — and the safe
+ * reading of a timestamp we cannot compare is that we cannot answer.
+ */
+function corroboratesNow(callerNow: string, databaseInstant: string): boolean {
+  const callerUs = parseGovernanceInstantUs(callerNow);
+  const databaseUs = parseGovernanceInstantUs(databaseInstant);
+  if (callerUs === null || databaseUs === null) return false;
+  return Math.abs(databaseUs - callerUs) <= GOVERNANCE_LIVE_TOLERANCE_MS * 1000;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FR-24 — Next Best Action
@@ -172,7 +256,14 @@ export type RequiredMissingField =
   | 'recommended_action'
   | 'governable_channel'
   | 'contact_anchor'
-  | 'readable_suppression_state';
+  | 'readable_suppression_state'
+  /**
+   * The store was READABLE and the request was HISTORICAL. Distinct from
+   * `readable_suppression_state` on purpose: that one means we could not ask,
+   * this one means we asked and the answer does not describe the instant the
+   * caller asked about. Collapsing them would make a replay look like an outage.
+   */
+  | 'reproducible_suppression_state';
 
 export interface OutreachReadiness {
   readonly version: string;
@@ -225,7 +316,17 @@ export interface OutreachReadinessInput {
   readonly built: ProspectContextResult;
   /** Recipient address for target-anchored governance, when the caller has one. */
   readonly target?: string | null;
-  /** Injected. The deterministic decision instant. */
+  /**
+   * Injected. The deterministic instant the SCORE and the context describe, and
+   * the one a caller replays through `asOf`.
+   *
+   * It is NOT the suppression clock. Governance is judged at the database
+   * `read_at` that travelled with the rows — see the header — because this value
+   * comes from the caller, and an unbounded one would let a tenant member choose
+   * the instant a restriction was tested at. When it does not corroborate the
+   * database instant, governance is reported as irreproducible rather than
+   * answered.
+   */
   readonly now: string;
 }
 
@@ -257,8 +358,9 @@ export function resolveGovernanceChannel(recommended: string | null): {
  * performs the send: nothing here creates a campaign, composes a message,
  * schedules, retries or dispatches anything.
  *
- * Deterministic for identical evidence and `now`: it reads, evaluates and
- * returns. No clock, no random value, no write.
+ * Deterministic for identical evidence, `now` and governance rows: it reads,
+ * evaluates and returns. No clock, no random value, no write — and the one
+ * instant that decides permission comes back from the database with the rows.
  */
 export async function assessOutreachReadiness(
   input: OutreachReadinessInput,
@@ -392,9 +494,77 @@ export async function assessOutreachReadiness(
     };
   }
 
-  const suppression = mayContact({
-    organizationId, personId, targetNormalized, channel, now: input.now, records: loaded.records,
+  // -- THE DECISION INSTANT IS THE DATABASE'S ------------------------------
+  // Each read's rows, judged at that read's own `read_at`, combined in the
+  // restrictive direction only. `input.now` is not passed in, and `loaded.records`
+  // — the flat cross-read list — is deliberately not used: it cannot say which
+  // instant any of its rows was read at.
+  const decided = evaluateGovernanceReads(loaded.reads, {
+    organizationId, personId, targetNormalized, channel,
   });
+
+  if (decided.ok === false) {
+    // Rows arrived with no usable read instant, instants disagreed, or the
+    // producer did not report its reads at all. The same failure class as an
+    // unreadable store, in the same vocabulary, because the caller's obligation
+    // is identical: do not act.
+    missing.push('readable_suppression_state');
+    return {
+      ...base,
+      readiness: 'not_ready',
+      reason: `suppression state is indeterminate (${decided.error}); failing closed`,
+      governanceChannel: channel,
+      requiredMissingFields: missing,
+      constraints,
+      suppression: null,
+    };
+  }
+
+  // -- HISTORICAL REQUEST -------------------------------------------------
+  // Only reads that actually carried ROWS are checked, and the exclusion is
+  // principled rather than a shortcut around a missing instant.
+  //
+  // A read that returned no rows has no instant — `read_at` is a computed field
+  // on a row, so zero rows carry none — but it also has no instant-DEPENDENCE.
+  // `effective_from` and `effective_until` are the only things a decision instant
+  // is compared against, and with no record there is nothing to compare: the
+  // verdict is "nothing applies" at EVERY instant, the caller's `asOf` included.
+  // `contactGovernanceAggregation` formalises the same fact with
+  // `NO_RECORDS_INSTANT`. So answering such a request is not the forbidden
+  // substitution of database time for the requested time — the two answers are
+  // identical, and the one returned is correct for both.
+  //
+  // WHAT THAT DOES NOT COVER, stated rather than glossed: a restriction that was
+  // in force at the requested instant and has since been REVOKED or DELETED
+  // leaves no row, so this path reports "nothing applies" for a past instant at
+  // which something did. That gap is not closable from this store at all — the
+  // loader filters `revoked_at IS NULL` and a deleted row is gone — and it is
+  // the same gap the header records for every historical question. Detecting it
+  // would need a host clock here, which would put a second clock back into the
+  // module whose entire purpose is to hold none.
+  const uncorroborated = decided.reads.filter(
+    (r) => r.readAt !== null && !corroboratesNow(input.now, r.readAt),
+  );
+  if (uncorroborated.length > 0) {
+    // `decided.verdict` is sound FOR NOW, and it is deliberately not returned:
+    // presenting it beside a historical score would read as the governance state
+    // at the requested instant, which is the one thing this store cannot
+    // establish. `not_ready` with `suppression: null` leaves no room to read the
+    // answer as clearance.
+    missing.push('reproducible_suppression_state');
+    for (const r of uncorroborated) constraints.push(`governance_read_at:${r.anchor}:${r.readAt}`);
+    return {
+      ...base,
+      readiness: 'not_ready',
+      reason: HISTORICAL_GOVERNANCE_REASON,
+      governanceChannel: channel,
+      requiredMissingFields: missing,
+      constraints,
+      suppression: null,
+    };
+  }
+
+  const suppression = decided.verdict;
 
   if (suppression.decision !== 'allowed') {
     // OVERRIDES the recommendation, whatever it scored. The NBA is still

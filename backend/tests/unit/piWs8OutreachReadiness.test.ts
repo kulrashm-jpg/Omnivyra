@@ -16,6 +16,23 @@ const db = {
   writeOps: [] as string[],
 };
 
+/**
+ * P0 — the database's own read instant, as PostgREST would serve it.
+ *
+ * `read_at` is the computed field `public.read_at(public.contact_governance_records)`,
+ * which returns `transaction_timestamp()`. PostgREST runs one transaction per
+ * request, so every row of one response carries the IDENTICAL value, and that is
+ * what the stand-in below reproduces. The shape is PostgreSQL's, not JS's: `T`
+ * separated, microsecond precision, and an EXPLICIT `+00:00` offset — Postgres
+ * never renders a `timestamptz` as `Z`.
+ *
+ * It is deliberately 1.25 s AFTER `NOW`, the caller's instant, and inside
+ * `GOVERNANCE_LIVE_TOLERANCE_MS`. Two different values is the whole point: a
+ * test can then seed a restriction that starts BETWEEN them and prove which
+ * clock decided.
+ */
+const DB_READ_AT = '2026-09-04T00:00:01.250000+00:00';
+
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const eqs: Array<[string, unknown]> = [];
@@ -30,7 +47,16 @@ jest.mock('../../db/writeOwner', () => ({
         eqs.every(([c, v]) => r[c] === v)
         && ins.every(([c, vs]) => vs.includes(r[c] as never))
         && iss.every(([c, v]) => (r[c] ?? null) === v));
-      return { data: matched, error: null };
+      // The governance table is read through the computed field in production,
+      // so the double serves it. Omitting it is INDETERMINATE, not permissive —
+      // `contactGovernanceAggregation` fails closed on rows with no instant —
+      // which is why every seeded row carries one here.
+      return {
+        data: table === 'contact_governance_records'
+          ? matched.map((r) => ({ read_at: DB_READ_AT, ...r }))
+          : matched,
+        error: null,
+      };
     };
     const api: Record<string, unknown> = {
       select: () => api,
@@ -54,6 +80,8 @@ jest.mock('../../db/writeOwner', () => ({
 
 import {
   OUTREACH_READINESS_VERSION,
+  GOVERNANCE_LIVE_TOLERANCE_MS,
+  HISTORICAL_GOVERNANCE_REASON,
   assessOutreachReadiness,
   toNextBestAction,
   resolveGovernanceChannel,
@@ -521,7 +549,17 @@ describe('WS-8 — suppression is authoritative and overrides', () => {
   it('adds no second suppression evaluator and never reads a legacy store', () => {
     const code = readFile('../../services/prospectOutreach/readiness.ts')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect(code).toContain('mayContact');
+    // P0 — the canonical authority is still the only one consulted, and it is
+    // now reached THROUGH `evaluateGovernanceReads`, the one seam that pairs each
+    // read's rows with the `read_at` they arrived with. A direct `mayContact`
+    // call from here would need a decision instant, and the only instant this
+    // module holds is the caller's `input.now` — which is exactly the P0 this
+    // change removes. So the ABSENCE of that call is the property worth pinning,
+    // alongside the absence of any clock of its own.
+    expect(code).toContain('evaluateGovernanceReads');
+    expect(code).not.toContain('mayContact(');
+    expect(code).not.toContain('new Date(');
+    expect(code).not.toContain('now: input.now');
     for (const legacy of ['suppression_entries', 'outreach_suppressions', 'ownedDbTable']) {
       expect(code).not.toContain(legacy);
     }
@@ -697,5 +735,203 @@ describe('WS-8 — the runtime stays dark', () => {
     const code = readFile('../../services/prospectOutreach/readiness.ts');
     expect(code).not.toContain('assessAuthoritativeReadiness');
     expect(code).not.toContain('authoritativeReadiness');
+  });
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// P0 — the suppression clock is the database's, and a replay cannot borrow it
+//
+// `input.now` reaches this service from `/api/prospects/[id]`, which derives it
+// from an optional `asOf` query parameter validated for parseability and bounded
+// in neither direction. An authenticated tenant member could therefore choose
+// the instant a suppression check was judged at, and an `asOf` before a
+// restriction's `effective_from` made that restriction read as "not yet started".
+//
+// Two separable properties are pinned below:
+//   1. WHICH CLOCK DECIDES — proved with a restriction that starts BETWEEN the
+//      caller's instant (`NOW`) and the database's (`DB_READ_AT`, 1.25 s later,
+//      inside the live tolerance). At `NOW` it has not started; at `DB_READ_AT`
+//      it is in force. The verdict names the clock.
+//   2. A REPLAY IS REFUSED, NOT ANSWERED — an instant outside the tolerance
+//      cannot be reconstructed from this store, so governance is reported as
+//      irreproducible with no verdict attached.
+// ════════════════════════════════════════════════════════════════════════════
+describe('P0 — suppression is judged at the database read instant', () => {
+  /** In force at DB_READ_AT (00:00:01.250) and NOT at the caller's NOW (00:00:00.000). */
+  const STARTS_BETWEEN = '2026-09-04T00:00:00.500000+00:00';
+
+  it('a restriction that starts between the caller instant and the database instant BLOCKS', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-between', { effective_from: STARTS_BETWEEN });
+    const out = await assess();
+
+    // Judged at `input.now` this record has not started and the prospect is
+    // READY. Judged at `read_at` it is in force. This asserts the latter, so
+    // reinstating `now: input.now` here fails exactly this test.
+    expect(out.readiness).toBe('blocked');
+    expect(out.suppression!.recordId).toBe('g-between');
+    expect(out.requiredMissingFields).toEqual([]);
+  });
+
+  it('a restriction that starts AFTER the database instant does not block — the database clock is read, not merely something later', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-later', { effective_from: '2026-09-04T00:00:05.000000+00:00' });
+    const out = await assess();
+    expect(out.readiness).toBe('ready');
+    expect(out.suppression!.decision).toBe('allowed');
+  });
+
+  it('a 1970 caller instant yields NO clearance against a live restriction', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-1');
+    const out = await assess({ now: '1970-01-01T00:00:00.000Z' });
+
+    // 1970 is far outside the live tolerance, so this is a replay: governance is
+    // refused rather than answered. What matters is what it is NOT.
+    expect(out.readiness).not.toBe('ready');
+    expect(out.readiness).toBe('not_ready');
+    expect(out.suppression).toBeNull();
+    expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
+  });
+
+  it('a FUTURE caller instant cannot bypass a live restriction either', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-1');
+    const out = await assess({ now: '2030-01-01T00:00:00.000Z' });
+    expect(out.readiness).not.toBe('ready');
+    expect(out.suppression).toBeNull();
+    expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
+  });
+
+  it('an unrelated producer is unaffected: another person\u2019s restriction does not block this one', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-other-person', { person_id: 'person-99', target_normalized: null });
+    const out = await assess();
+    expect(out.readiness).toBe('ready');
+    expect(out.suppression!.decision).toBe('allowed');
+  });
+
+  it('rows with NO read instant cannot yield clearance', async () => {
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-no-instant', { read_at: undefined });
+    const out = await assess();
+    expect(out.readiness).toBe('not_ready');
+    expect(out.suppression).toBeNull();
+    expect(out.requiredMissingFields).toContain('readable_suppression_state');
+    expect(out.reason).toMatch(/indeterminate/);
+  });
+
+  it('a producer that reports NO reads at all cannot yield clearance', async () => {
+    // `GovernanceLoadResult.reads` is optional so that hand-built port doubles
+    // keep compiling. A producer that did not say what it read has not said it
+    // read nothing, and the one thing that must not follow is permission.
+    seedEngaged();
+    const built = await buildCtx();
+    const ports: OutreachReadinessPorts = {
+      ...defaultOutreachReadinessPorts,
+      async loadGovernance() { return { ok: true, records: [] }; },
+    };
+    const out = await assessOutreachReadiness({ built: built as ProspectContextResult, now: NOW }, ports);
+    expect(out.readiness).toBe('not_ready');
+    expect(out.suppression).toBeNull();
+    expect(out.requiredMissingFields).toContain('readable_suppression_state');
+  });
+});
+
+describe('P0 — historical scoring is answered; historical governance is refused', () => {
+  const HISTORICAL = '2026-07-01T00:00:00.000Z';       // well outside the tolerance
+
+  /**
+   * A governance record MUST exist for the request to be instant-dependent.
+   *
+   * With no record at all the verdict is "nothing applies" at every instant —
+   * the caller's and the database's alike — so answering is not a substitution
+   * and the refusal does not apply. That case is pinned on its own below; these
+   * cases are about a request whose answer genuinely depends on WHEN it is asked.
+   */
+  const seedInstantDependent = () => seedGovernance(ORG_A, 'g-hist');
+
+  it('a historical asOf still returns the full recommendation and score context', async () => {
+    seedEngaged();
+    seedInstantDependent();
+    const out = await assess({ now: HISTORICAL });
+
+    // The scoring half of the request is answered as before: the NBA is complete
+    // and the engine's own fields are untouched. Only PERMISSION is withheld.
+    expect(out.nextBestAction.abstained).toBe(false);
+    expect(out.nextBestAction.action).toBeTruthy();
+    expect(out.recommendedChannel).toBeTruthy();
+    expect(out.confidence).not.toBeNull();
+    expect(out.messageContext.evidenceIds).toBeDefined();
+  });
+
+  it('the same request reports governance not_ready, naming the limitation exactly', async () => {
+    seedEngaged();
+    seedInstantDependent();
+    const out = await assess({ now: HISTORICAL });
+    expect(out.readiness).toBe('not_ready');
+    expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+    expect(out.requiredMissingFields).toContain('reproducible_suppression_state');
+    // The instant actually read is recorded, so the gap is inspectable rather
+    // than merely asserted.
+    expect(out.constraints.some((c) => c.startsWith('governance_read_at:'))).toBe(true);
+  });
+
+  it('a historical answer cannot be read as permission to contact', async () => {
+    // THE ADVERSARIAL CASE. This record is returned by the read — same tenant,
+    // same channel, not revoked — but it has not come into force by the database
+    // instant, so the verdict FOR NOW is `allowed`. Returning that beside a
+    // historical score would read as "contact was permitted at the instant you
+    // asked about", which is the one thing this store cannot establish.
+    seedEngaged();
+    seedGovernance(ORG_A, 'g-not-yet', { effective_from: '2026-09-05T00:00:00+00:00' });
+    const out = await assess({ now: HISTORICAL });
+
+    expect(out.readiness).not.toBe('ready');
+    expect(out.readiness).toBe('not_ready');
+    expect(out.suppression).toBeNull();
+    expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+  });
+
+  it('with NO governance record the answer is instant-invariant, so a historical request is answered', async () => {
+    // Deliberate, and the reasoning is in `readiness.ts`: a decision instant is
+    // only ever compared against `effective_from` / `effective_until`, so with no
+    // record there is nothing for it to change. "Nothing applies" is the same
+    // answer at the caller's instant and at the database's, so returning it
+    // substitutes nothing.
+    //
+    // THE RESIDUAL GAP, pinned so it is visible rather than discovered: a
+    // restriction that was in force at the requested instant and has since been
+    // revoked or deleted leaves no row, and this path will not report it. No
+    // parameter on the read could — the loader filters `revoked_at IS NULL`.
+    seedEngaged();
+    const out = await assess({ now: HISTORICAL });
+    expect(out.readiness).toBe('ready');
+    expect(out.suppression!.decision).toBe('allowed');
+  });
+
+  it('a request INSIDE the tolerance is live and is answered normally', async () => {
+    seedEngaged();
+    const out = await assess();                      // NOW, 1.25 s before DB_READ_AT
+    expect(out.readiness).toBe('ready');
+    expect(out.suppression!.decision).toBe('allowed');
+    expect(out.requiredMissingFields).toEqual([]);
+  });
+
+  it('an asOf that the evaluator\u2019s parser cannot read is refused, not guessed', async () => {
+    // The route validates `asOf` with `Date.parse`, which accepts forms the
+    // governance parser rejects. A timestamp we cannot compare is not
+    // corroboration, so it takes the historical branch.
+    seedEngaged();
+    seedInstantDependent();
+    const out = await assess({ now: '2026-09-04' });
+    expect(out.readiness).toBe('not_ready');
+    expect(out.reason).toBe(HISTORICAL_GOVERNANCE_REASON);
+  });
+
+  it('the live tolerance is a named, bounded constant — not an open window', async () => {
+    expect(GOVERNANCE_LIVE_TOLERANCE_MS).toBe(120_000);
+    expect(GOVERNANCE_LIVE_TOLERANCE_MS).toBeLessThan(60 * 60 * 1000);
   });
 });
