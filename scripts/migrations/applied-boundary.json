@@ -518,5 +518,18 @@
       "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r15-d1-pack-20261110/D1-EXECUTION-RECORD.json (q05/q07/q10/q12/q14/q15/q19; verified by virality-05)",
       "evidence_class": "PRODUCTION_CATALOG_VERIFIED (2026-11-10 D1 catalogue read: every effect present) + CODE_VERIFIED digest (LF bytes at release/attest-20261127000000 base 67d729818). Distinct from the top-level evidence_class, which covers the 2026-11-01 ledger read only."
     }
+  },
+  "applied_above_boundary": {
+    "20270204000000_rpa_tables_client_privileges_revoked.sql": {
+      "sha256": "1f75df798a1f6161c5a740e1647fa667beccc99e7252e79fafbaaf20a45621e8",
+      "applied_at": "2026-11-10T08:15Z",
+      "operator": "virality-83 on the owner's direct instruction (session virality-83, 2026-11-10)",
+      "method": "management_api_database_query_read_only_false",
+      "project_ref": "klkiseupptzbecbxwrky",
+      "cluster_system_identifier": "7550817586112808987",
+      "ledger_row": false,
+      "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r19-r1-apply-20261110/R1-EXECUTION-RECORD.json (SHA256SUMS 9f4c26ca)",
+      "evidence_class": "PRODUCTION_APPLIED_AND_VERIFIED: exact bytes of commit 67d729818 applied in one call; postconditions verified by catalogue read (has_table_privilege + has_any_column_privilege false for anon/authenticated) and anon REST probe 42501. The sha256 is over the applied bytes (LF)."
+    }
   }
 }
