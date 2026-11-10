@@ -9,7 +9,10 @@
 --   MAINTAIN). Both tables have RLS ENABLED but not FORCED, with one policy each
 --   ("service_role_all", 20260527 / 20260528 / 20260529). RLS masks only row
 --   access: REFERENCES, TRIGGER and MAINTAIN are NOT governed by RLS at all, so
---   this is a real exposure on rpa_sessions (encrypted browser session state).
+--   this is a real exposure on rpa_sessions. On live code its storage_state was
+--   PLAINTEXT browser session state (cookies), not encrypted; it was scrubbed to
+--   invalidation markers in production under #17A (2026-11-10). Do not under-rate
+--   this table: any row written by unsealed code holds live session material.
 --   These are direct role grants (Supabase default privileges at CREATE TABLE),
 --   so REVOKE ... FROM PUBLIC would NOT remove them.
 --
