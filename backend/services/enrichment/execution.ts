@@ -45,6 +45,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { classifyLinkedinProfile } from '../../../lib/linkedin/profileUrl';
 import type { EnrichmentPlan, PlannedField } from './planner';
 import type { ProspectSnapshot } from './service';
 import {
@@ -127,12 +128,29 @@ export interface PlanFieldExecution {
   readonly providerError?: unknown;
   /** The vendor's request-rate quota from its own headers, when stated. */
   readonly providerUsage?: unknown;
+  /**
+   * The full attribute set sent in ONE provider request, when companion fields
+   * were supplied (`alsoFields`). Absent for a single-field execution.
+   */
+  readonly attributes?: readonly string[];
 }
 
 export interface ExecutePlannedFieldInput {
   /** The plan the field came from — the ONLY source of tenant and prospect. */
   readonly plan: EnrichmentPlan;
   readonly field: PlannedField;
+  /**
+   * OPTIONAL companion fields answered by the SAME provider request.
+   *
+   * A provider such as Apollo answers every attribute of one person or one
+   * organization in a single paid call. Executing field by field would pay once
+   * per attribute for the same answer. Each companion must itself be planned
+   * `enrich`, for the same subject, from the same source as `field`; one that
+   * is not refuses the WHOLE set before anything is called. The attempt ledger
+   * already keys work on the canonical attribute SET (A4Y), so the set is one
+   * work item, not several.
+   */
+  readonly alsoFields?: readonly PlannedField[];
   /** The snapshot the plan was built from, so identity is not re-derived. */
   readonly snapshot: ProspectSnapshot;
   /**
@@ -213,6 +231,8 @@ const text = (v: unknown): string | null => {
 export function canonicalSelectors(
   subject: EnrichmentSubject,
   row: Readonly<Record<string, unknown>> | null,
+  /** D7(i): non-merging locators from the person's own evidence. Person only. */
+  locators?: Readonly<{ linkedinProfileUrl: string | null }> | null,
 ): Record<string, string> {
   if (!row) return {};
   const out: Record<string, string> = {};
@@ -227,6 +247,24 @@ export function canonicalSelectors(
   } else {
     put('email', row.primary_email);
     put('name', row.full_name);
+    // Apollo's id for THIS person, verbatim from the person's own canonical
+    // `external_keys` (W1 wrote it from an Apollo record). It is the person's
+    // identity, not a related row's, so the rule above holds.
+    const keys = row.external_keys;
+    if (keys !== null && typeof keys === 'object' && !Array.isArray(keys)) {
+      const apollo = (keys as Record<string, unknown>).apollo;
+      if (apollo !== null && typeof apollo === 'object' && !Array.isArray(apollo)) {
+        put('apollo_id', (apollo as Record<string, unknown>).external_id);
+      }
+    }
+    // D7(i): the profile URL, normalised and CLASSIFIED here, at read time. The
+    // form travels with the key so "the provider had nothing" can be told apart
+    // from "we sent an opaque id it cannot match". A locator, never identity.
+    const located = classifyLinkedinProfile(locators?.linkedinProfileUrl ?? null);
+    if (located.key) {
+      put('linkedin_url', located.key);
+      put('linkedin_url_form', located.form);
+    }
   }
   return out;
 }
@@ -301,6 +339,17 @@ export async function executePlannedField(
     return no('not_executable', 'the planned field names no source');
   }
 
+  // ── companion fields: one request, one subject, one source ──────────────
+  const companions = input.alsoFields ?? [];
+  for (const c of companions) {
+    if (c.action !== 'enrich' || c.subject !== field.subject || text(c.source) !== planSource) {
+      return no('not_executable',
+        `companion field ${c.subject}.${c.attribute} is not an '${planSource}' ${field.subject} enrichment `
+        + `(${c.action}); a set is executed whole or not at all`);
+    }
+  }
+  const attributes = [...new Set([field.attribute, ...companions.map((c) => c.attribute)])];
+
   // ── internal seams are not providers ─────────────────────────────────────
   // `internal` and `market_pulse` mean "we can answer this without an external
   // call". There is no adapter to reach and nothing to record an attempt
@@ -331,7 +380,7 @@ export async function executePlannedField(
   // an explicit source is never substituted. When it is ineligible the answer
   // is why, under A3's own vocabulary, and no other source is tried.
   const selection: SelectionOutcome = selectAcquisitionSource(
-    { subject: field.subject, attributes: [field.attribute], mode: input.mode ?? planSource },
+    { subject: field.subject, attributes, mode: input.mode ?? planSource },
     input.statuses,
   );
   // `'ineligibility' in selection`, not `!selection.selected`: the root
@@ -343,7 +392,8 @@ export async function executePlannedField(
   const providerId = selection.sourceId;
 
   // ── something to search on ───────────────────────────────────────────────
-  const selectors = canonicalSelectors(field.subject, row);
+  const selectors = canonicalSelectors(field.subject, row,
+    field.subject === 'person' ? snapshot.personLocators ?? null : null);
   if (Object.keys(selectors).length === 0) {
     return no('selector_missing',
       `no canonical identity is held for ${field.subject} ${entityId} that a provider could search on`,
@@ -355,7 +405,7 @@ export async function executePlannedField(
     organizationId: plan.organizationId,
     subject: field.subject,
     entityId: entityId as string,
-    attributes: [field.attribute],
+    attributes,
     selectors,
     purpose: text(input.purpose)
       ?? `enrichment plan ${plan.version}: ${field.state} ${field.subject}.${field.attribute}`,
@@ -404,5 +454,6 @@ export async function executePlannedField(
     version: PLAN_EXECUTION_VERSION,
     providerError: result.providerError ?? null,
     providerUsage: result.providerUsage ?? null,
+    ...(companions.length ? { attributes } : {}),
   };
 }

@@ -149,6 +149,7 @@ const ports = (over: Partial<ExecuteEnrichmentPorts> = {}): ExecuteEnrichmentPor
 const recorder = (s: ReturnType<typeof store>) => ({
   now: () => NOW,
   nextNumber: s.nextNumber,
+  latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
   record: s.record,
   complete: s.complete,
   // A4Q added the pre-transport call-state marker to the recorder port set.
@@ -353,7 +354,7 @@ describe('A4N — A4E and A4J semantics are unchanged', () => {
   it('12. A4J: fail-closed recording is unchanged on the UNLEASED path', async () => {
     const calls: unknown[] = [];
     const rec = {
-      now: () => NOW, nextNumber: async () => 1,
+      now: () => NOW, nextNumber: async () => 1, latest: async () => null,
       record: async () => { throw new Error('insert failed'); },
       complete: async () => { /* unreachable */ },
     };
@@ -366,7 +367,7 @@ describe('A4N — A4E and A4J semantics are unchanged', () => {
   it('14. A4A: the default unleased path still fails OPEN and does the work', async () => {
     const calls: unknown[] = [];
     const rec = {
-      now: () => NOW, nextNumber: async () => 1,
+      now: () => NOW, nextNumber: async () => 1, latest: async () => null,
       record: async () => { throw new Error('insert failed'); },
       complete: async () => { /* nothing opened */ },
     };

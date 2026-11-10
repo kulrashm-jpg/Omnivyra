@@ -233,8 +233,10 @@ describe('Phase 1 — Enrichment reuses the existing tenant gate and panel', () 
     selected(TENANT_A);
     apiFetchMock.mockResolvedValue(ok(ALL_PROVIDERS));
     await act(async () => { render(<EnrichmentProvidersPage />); });
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
-    const url = String(apiFetchMock.mock.calls[0][0]);
+    // The page also mounts the R1 Apollo field-groups panel (its own endpoint),
+    // so the credential request is found by URL, not by call position.
+    await waitFor(() => expect(apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/api/prospect-sources/credentials'))).toHaveLength(1));
+    const url = apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/api/prospect-sources/credentials'))[0];
     expect(url).toContain('/api/prospect-sources/credentials');
     expect(url).toContain(TENANT_A.company_id);
     expect(url).not.toContain(TENANT_B.company_id);
@@ -321,11 +323,12 @@ describe('Phase 1 — Enrichment reuses the existing tenant gate and panel', () 
     selected(TENANT_OWNER);
     apiFetchMock.mockResolvedValue(ok(ALL_PROVIDERS));
     await act(async () => { render(<EnrichmentProvidersPage />); });
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
-    const url = String(apiFetchMock.mock.calls[0][0]);
-    // Exactly one tenant-scoped request, carrying its own id like any other.
+    await waitFor(() => expect(apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/api/prospect-sources/credentials'))).toHaveLength(1));
+    const url = apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/api/prospect-sources/credentials'))[0];
+    // Exactly one credential request, carrying its own id like any other, and
+    // EVERY request on the page (incl. the R1 field-groups panel) is this tenant's.
     expect(url).toContain(TENANT_OWNER.company_id);
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    for (const u of apiFetchMock.mock.calls.map((c) => String(c[0]))) expect(u).toContain(TENANT_OWNER.company_id);
     // And the owner company sees the same narrowed credential panel.
     await waitFor(() => expect(screen.getByTestId('lead-source-apollo')).toBeInTheDocument());
     expect(screen.queryByTestId('lead-source-zoominfo')).toBeNull();

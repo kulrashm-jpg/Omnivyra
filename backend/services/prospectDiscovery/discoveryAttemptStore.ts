@@ -517,3 +517,52 @@ export async function completeDiscoveryExecution(input: {
     );
   }
 }
+
+/**
+ * Mode B usage ("Data sources & usage", migration 20270209000000): who funded a
+ * discovery execution, the Omnivyra credits charged, and R3's screening counts.
+ *
+ * Reporting, not control state, so it is a SEPARATE best-effort write after the
+ * close and never throws: before the migration the columns do not exist, and
+ * that must not fail or reopen an execution.
+ *
+ * Screening counts are CUMULATIVE across resumed runs, like `results_ingested`,
+ * so the stored values are read and this run's delta added (the lease means no
+ * one else is advancing the row). A failed read writes nothing rather than
+ * replacing a cumulative count with one run's figure.
+ */
+export async function recordDiscoveryUsage(input: {
+  readonly organizationId: string;
+  readonly id: string;
+  readonly funding: 'tenant' | 'platform' | null;
+  readonly creditsCharged: number | null;
+  readonly screeningDelta: { skippedDuplicates: number; heldForReview: number; probeUnknown: number };
+}): Promise<void> {
+  try {
+    requireScope(input.organizationId);
+    const read = await ownedDbTable('prospect_discovery_attempts')
+      .select('results_skipped_duplicate, results_held_for_review, results_probe_unknown')
+      .eq('organization_id', input.organizationId)
+      .eq('id', input.id)
+      .maybeSingle();
+    if (read.error || !read.data) {
+      console.warn('[discovery] usage read failed; usage not written', { code: read.error?.code ?? 'no_row' });
+      return;
+    }
+    const cur = read.data as Record<string, number | null>;
+    const add = (v: number | null | undefined, d: number) => (v ?? 0) + Math.max(0, d | 0);
+    const res = await ownedDbTable('prospect_discovery_attempts')
+      .update({
+        funding: input.funding,
+        credits_charged: input.funding === 'tenant' ? 0 : input.creditsCharged,
+        results_skipped_duplicate: add(cur.results_skipped_duplicate, input.screeningDelta.skippedDuplicates),
+        results_held_for_review: add(cur.results_held_for_review, input.screeningDelta.heldForReview),
+        results_probe_unknown: add(cur.results_probe_unknown, input.screeningDelta.probeUnknown),
+      })
+      .eq('organization_id', input.organizationId)
+      .eq('id', input.id);
+    if (res.error) console.warn('[discovery] usage write failed', { code: res.error.code ?? null });
+  } catch {
+    console.warn('[discovery] usage write threw');
+  }
+}

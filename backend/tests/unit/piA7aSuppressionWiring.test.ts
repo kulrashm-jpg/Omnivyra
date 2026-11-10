@@ -54,6 +54,9 @@ import {
   tenantCredentialPort, makeTenantCredentialPort,
 } from '../../services/enrichment/providers/credentials';
 import { defaultPersistObservation } from '../../services/enrichment/providers/persistence';
+import {
+  fundedCostPort, fundedCredentialPort, makeFundedCostPort, makeFundedCredentialPort,
+} from '../../services/enrichment/providers/funding';
 import { defaultExecuteEnrichmentPorts } from '../../apiHandlers/prospects/prospectIntelligenceRead';
 import { defaultFindRecentObservation, pickRecentObservation } from '../../services/enrichment/providers/observations';
 import { executeEnrichmentRecorded } from '../../services/enrichment/recordedExecution';
@@ -80,6 +83,7 @@ function store() {
   const row = { outcome: null as string | null, executionStatus: 'in_flight' as string };
   return {
     nextNumber: async () => 1,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     record: async () => ({ attemptId: 'attempt-1' }),
     claim: async () => ({ claimed: true as const, attemptId: 'attempt-1', attemptNumber: 1, reclaimed: false }),
     markPending: async () => { /* proven in A4Q */ },
@@ -147,9 +151,12 @@ describe('A7A — the production default set carries the real finder', () => {
     // production paths, and no test would notice. So identity is asserted for
     // every member that has a production instance.
     const ports = makeProductionEnrichmentPorts();
-    expect(ports.authorizeCost).toBe(tenantFundedExecutionPort.authorizeCost);
-    expect(ports.releaseCost).toBe(tenantFundedExecutionPort.releaseCost);
-    expect(ports.resolveCredential).toBe(tenantCredentialPort.resolveCredential);
+    // MODE B: the FUNDED singletons (they delegate tenant funding to the
+    // tenant-funded singletons below).
+    expect(ports.authorizeCost).toBe(fundedCostPort.authorizeCost);
+    expect(ports.releaseCost).toBe(fundedCostPort.releaseCost);
+    expect(ports.settleCost).toBe(fundedCostPort.settleCost);
+    expect(ports.resolveCredential).toBe(fundedCredentialPort.resolveCredential);
     expect(ports.findRecentObservation).toBe(defaultFindRecentObservation);
     expect(ports.persistObservation).toBe(defaultPersistObservation);
   });
@@ -162,6 +169,8 @@ describe('A7A — the production default set carries the real finder', () => {
       .not.toBe(tenantFundedExecutionPort.authorizeCost);
     expect(makeTenantCredentialPort().resolveCredential)
       .not.toBe(tenantCredentialPort.resolveCredential);
+    expect(makeFundedCostPort().authorizeCost).not.toBe(fundedCostPort.authorizeCost);
+    expect(makeFundedCredentialPort().resolveCredential).not.toBe(fundedCredentialPort.resolveCredential);
   });
 
   it('A7K — there is ONE composition: A6\'s boundary name IS this function', () => {

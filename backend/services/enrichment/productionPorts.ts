@@ -77,8 +77,13 @@
 // the barrel re-exports the whole provider surface, and a narrow import keeps
 // this seam from depending on things it does not use. It is the same binding
 // either way — the barrel re-exports these exports — so identity is unaffected.
-import { tenantFundedExecutionPort } from './providers/cost';
-import { tenantCredentialPort } from './providers/credentials';
+// MODE B (2026-11-10): the FUNDED singletons. Own key first (tenant-funded,
+// delegating to the unchanged tenantFundedExecutionPort and
+// tenantCredentialPort); otherwise, only for a tenant that opted in and only
+// with a Super Admin-managed key, the platform key, charged in credits behind
+// the platform daily ceiling. A tenant that did not opt in sees exactly the
+// previous behaviour.
+import { fundedCostPort, fundedCredentialPort } from './providers/funding';
 import { defaultFindRecentObservation } from './providers/observations';
 import { defaultPersistObservation } from './providers/persistence';
 import type { ExecuteEnrichmentPorts } from './providers/execute';
@@ -95,16 +100,17 @@ export function makeProductionEnrichmentPorts(
   overrides: Partial<ExecuteEnrichmentPorts> = {},
 ): ExecuteEnrichmentPorts {
   return {
-    // Tenant-funded: authorises without reserving, releases nothing. SPREAD, so
-    // `authorizeCost` and `releaseCost` remain the SAME function objects the
-    // singleton holds — see the identity note above.
-    ...tenantFundedExecutionPort,
+    // Funding-aware: tenant funding delegates to the tenant-funded port
+    // (authorises without reserving); platform funding reserves credits and is
+    // SETTLED. SPREAD, so `authorizeCost`, `releaseCost` and `settleCost` remain
+    // the SAME function objects the singleton holds (identity note above).
+    ...fundedCostPort,
 
     // The singleton's method, referenced. NOT `(i) => port.resolveCredential(i)`:
     // a delegating arrow is a different function object and would defeat the
     // identity check while behaving identically, which is exactly the kind of
     // difference that is invisible in review.
-    resolveCredential: tenantCredentialPort.resolveCredential,
+    resolveCredential: fundedCredentialPort.resolveCredential,
 
     // A7A — THE WIRING. The A4J implementation, unchanged: tenant-scoped,
     // provider-scoped, attribute-scoped, superseded-excluding, requiring TOTAL

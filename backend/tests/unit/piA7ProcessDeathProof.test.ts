@@ -179,6 +179,7 @@ const ports = {
 // is the production one — this only redirects storage.
 const recorder = {
   nextNumber: async () => 1,
+  latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
   record: async () => ({ attemptId: 'attempt-1' }),
   markPending: async () => {
     const r = readRow();

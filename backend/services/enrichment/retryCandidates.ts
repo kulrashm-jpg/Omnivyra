@@ -141,6 +141,11 @@ export function isRetryCandidate(row: {
 }, now: string): boolean {
   if (retryClassOf(row.outcome) !== 'retryable') return false;
   if (!RETRYABLE_EXECUTION_STATUSES.includes(row.execution_status as ExecutionStatus)) return false;
+  // PAID, NOT STORED (PI review, mode B): the vendor was called and our own
+  // persistence failed. It is never retried, WHATEVER its outcome: the vendor
+  // already billed it. Stated explicitly rather than relying on that state's
+  // outcome being NULL, so the guarantee survives a later change to the outcome.
+  if (row.execution_status === 'platform_failed' && row.provider_call_state === 'called') return false;
   // Uncertain transport is withheld for policy, never scheduled.
   if (row.provider_call_state === 'unknown') return false;
   // Only a finished attempt can be retried; a live one is still someone's work.

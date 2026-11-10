@@ -48,6 +48,7 @@ function store() {
   return {
     row, closes,
     nextNumber: async () => 1,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     record: async () => ({ attemptId: 'attempt-1' }),
     markPending: async () => { row.callState = 'unknown'; },
     complete: async (i: Record<string, unknown>) => {

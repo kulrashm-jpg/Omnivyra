@@ -97,6 +97,7 @@ function harness(opts: {
   const recorder = {
     now: () => NOW,
     nextNumber: async () => 1,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     record: async (i: unknown) => {
       if (opts.recordThrows) throw new Error('attempt insert exploded');
       opened.push(i as Record<string, unknown>);

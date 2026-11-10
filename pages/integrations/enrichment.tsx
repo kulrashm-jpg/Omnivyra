@@ -2,6 +2,8 @@ import React from 'react';
 import Link from 'next/link';
 import IntegrationHubNav from '../../components/integrations/IntegrationHubNav';
 import LeadSourcesSection from '../../components/prospects/LeadSourcesSection';
+import ApolloFieldGroupsPanel from '../../components/prospects/ApolloFieldGroupsPanel';
+import CentralVendorAccessPanel from '../../components/billing/CentralVendorAccessPanel';
 import {
   buildCapabilityCards,
   credentialFormProviderIds,
@@ -175,6 +177,9 @@ export default function EnrichmentProvidersPage() {
             <LeadSourcesSection providerIds={ENRICHMENT_PROVIDER_IDS} />
           </section>
         )}
+
+        <ApolloFieldGroupsPanel />
+        <CentralVendorAccessPanel />
 
         {PLANNED_CARDS.length > 0 && (
           <section className="mb-8">

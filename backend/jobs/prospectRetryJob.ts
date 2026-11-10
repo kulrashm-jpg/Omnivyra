@@ -40,6 +40,7 @@ import {
 import { listDueRetryCandidates } from '../services/enrichment/retryCandidates';
 import { consumeEnrichmentWork } from '../services/enrichment/consumeEnrichmentWork';
 import { makeProductionEnrichmentPorts } from '../services/enrichment/productionPorts';
+import { tenantCredentialPort } from '../services/enrichment/providers/credentials';
 import { defaultFindRecentObservation } from '../services/enrichment/providers/observations';
 import { DEFAULT_FRESHNESS_DAYS } from '../services/enrichment/providers/execute';
 import { tenantSourceStatuses } from '../apiHandlers/prospects/prospectIntelligenceRead';
@@ -152,7 +153,13 @@ export function productionRetryPorts(): RetryConsumerPorts {
       };
     },
 
-    enrichmentPorts: () => makeProductionEnrichmentPorts(),
+    // MODE B: an AUTOMATED retry never spends Omnivyra credits. Nobody saw or
+    // confirmed a price for it, so it may use only the tenant's own key (the
+    // funded cost port then delegates to the tenant-funded port). Central
+    // access is a user-confirmed action only.
+    enrichmentPorts: () => makeProductionEnrichmentPorts({
+      resolveCredential: tenantCredentialPort.resolveCredential,
+    }),
 
     consume: (input) => consumeEnrichmentWork(input),
 

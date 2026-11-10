@@ -159,7 +159,7 @@ import { ICP_CRITERION_KINDS } from '../prospectIcp/types';
 import type { IcpCriterion, IcpSubject, RatifiedIcp } from '../prospectIcp/types';
 
 /** The neutral filter keys this translator is allowed to produce. */
-export const TRANSLATABLE_FILTER_KEYS = ['titles', 'seniorities'] as const;
+export const TRANSLATABLE_FILTER_KEYS = ['titles', 'seniorities', 'industryKeywords'] as const;
 export type TranslatableFilterKey = typeof TRANSLATABLE_FILTER_KEYS[number];
 
 /**
@@ -201,8 +201,25 @@ export const ICP_TO_DISCOVERY_FILTER: Readonly<Record<string, {
   readonly filterKey: TranslatableFilterKey;
   readonly predicate: 'one_of';
   readonly allowedValues?: readonly string[];
+  /**
+   * Present ONLY on an APPROXIMATE mapping: the provider filter is not the
+   * same thing as the criterion, so the search may find companies the ICP
+   * would exclude and miss some it would include. The note is tenant-facing
+   * verbatim (no example values), and an approximate translation needs its
+   * own strict-true acknowledgement.
+   */
+  readonly approximate?: string;
 }>> = Object.freeze({
   'person.job_title': { filterKey: 'titles', predicate: 'one_of' },
+  // OWNER DECISION R2-a (2026-11-10): industry is searched through the
+  // provider's organization keyword tags, labelled APPROXIMATE. The provider's
+  // industry taxonomy is not this ICP's, so a keyword tag is a nearby signal,
+  // never the same classification.
+  'account.industry': {
+    filterKey: 'industryKeywords',
+    predicate: 'one_of',
+    approximate: 'industry is searched through the provider’s company keyword tags, which are not the same classification as this criterion’s industry; the search may include companies outside the industry and miss some inside it',
+  },
   'person.seniority': {
     filterKey: 'seniorities', predicate: 'one_of', allowedValues: SHARED_SENIORITY_VALUES,
   },
@@ -263,6 +280,8 @@ export type IcpTranslationRefusal =
   | 'no_translatable_criteria'
   /** Criteria were left out of the filters and the caller did not acknowledge it. */
   | 'omissions_unacknowledged'
+  /** A criterion was translated only APPROXIMATELY and the caller did not acknowledge it. */
+  | 'approximations_unacknowledged'
   /**
    * A mapped attribute carried a value outside the provider's documented
    * vocabulary. Distinct from `unsupported_mandatory_criterion`, which is about
@@ -297,6 +316,11 @@ export interface IcpTranslationSuccess {
   readonly omitted: readonly OmittedCriterion[];
   /** True when the caller acknowledged `omitted`. False only when it is empty. */
   readonly omissionsAcknowledged: boolean;
+  /**
+   * Criteria that WERE applied, but only approximately, each with the
+   * tenant-facing reason. Non-empty only alongside an explicit acknowledgement.
+   */
+  readonly approximations: readonly { readonly criterionId: string; readonly filterKey: string; readonly note: string }[];
   /** The ICP this search represents, so the ledger can cite it. */
   readonly icp: { readonly icpId: string; readonly version: number };
 }
@@ -380,6 +404,11 @@ export function translateRatifiedIcpToDiscoveryFilters(input: {
    * produced by accident is not an acknowledgement.
    */
   readonly acknowledgeOmissions?: boolean;
+  /**
+   * The caller states, explicitly, that it accepts APPROXIMATE translations
+   * (e.g. industry via keyword tags). STRICTLY `true`, for the same reason.
+   */
+  readonly acknowledgeApproximations?: boolean;
 }): IcpTranslationResult {
   const requestedOrg = String(input.organizationId ?? '').trim();
   const icp = input.ratifiedIcp;
@@ -407,6 +436,7 @@ export function translateRatifiedIcpToDiscoveryFilters(input: {
   const filters: Record<string, unknown> = {};
   const translated: Array<{ criterionId: string; filterKey: string }> = [];
   const omitted: OmittedCriterion[] = [];
+  const approximations: Array<{ criterionId: string; filterKey: string; note: string }> = [];
   const blocking: OmittedCriterion[] = [];
   /** Kept apart from `blocking` only so the refusal CODE can be precise. */
   const valueBlocked: OmittedCriterion[] = [];
@@ -508,6 +538,9 @@ export function translateRatifiedIcpToDiscoveryFilters(input: {
       : [];
     filters[mapping.filterKey] = [...new Set([...existing, ...values])];
     translated.push({ criterionId: String(c.id), filterKey: mapping.filterKey });
+    if (mapping.approximate) {
+      approximations.push({ criterionId: String(c.id), filterKey: mapping.filterKey, note: mapping.approximate });
+    }
   }
 
   if (valueBlocked.length > 0) {
@@ -559,12 +592,27 @@ export function translateRatifiedIcpToDiscoveryFilters(input: {
     };
   }
 
+  // THE APPROXIMATION GATE. Same strict-true rule: a search that only
+  // approximates the ICP is run only with informed consent.
+  if (approximations.length > 0 && input.acknowledgeApproximations !== true) {
+    return {
+      ok: false,
+      refusal: 'approximations_unacknowledged',
+      detail: `${approximations.length} criterion(s) can only be searched approximately; the caller must acknowledge that`,
+      blocking: approximations.map((a) => {
+        const c = criteria.find((x) => String(x?.id) === a.criterionId);
+        return omission(c, a.note);
+      }),
+    };
+  }
+
   return {
     ok: true,
     filters: Object.freeze({ ...filters }),
     translated,
     omitted,
     omissionsAcknowledged: omitted.length > 0,
+    approximations,
     icp: { icpId: String(icp.icpId), version: Number(icp.version) },
   };
 }

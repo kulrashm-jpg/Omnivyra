@@ -11,6 +11,7 @@ import {
 import { DEFAULT_FX, type FxConfig } from '@/lib/billing/currency';
 import { apiFetch } from '@/lib/apiFetch';
 import { FoundingMemberBadge } from '@/components/billing/FoundingMemberBadge';
+import CentralVendorAccessLine from '@/components/billing/CentralVendorAccessLine';
 
 const BLUE_GRADIENT = 'linear-gradient(150deg, #0A1F44 0%, #0A3A7A 45%, #0A66C2 100%)';
 const PLAN_IDS: PlanId[] = ['free', 'starter', 'growth', 'business'];
@@ -209,6 +210,7 @@ export default function PricingPage() {
                 </div>
               ))}
             </div>
+            <CentralVendorAccessLine />
           </div>
         </section>
 

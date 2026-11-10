@@ -204,7 +204,7 @@ describe('A7 — the scheduler forwards the REAL production port composition', (
     // returned a stub type-checked, passed every selector test, and would have
     // paid a provider for evidence the tenant already holds.
     const { productionRetryPorts } = await import('../../jobs/prospectRetryJob');
-    const { tenantFundedExecutionPort } = await import('../../services/enrichment/providers/cost');
+    const { fundedCostPort } = await import('../../services/enrichment/providers/funding');
     const { tenantCredentialPort } = await import('../../services/enrichment/providers/credentials');
     const { defaultFindRecentObservation } = await import('../../services/enrichment/providers/observations');
     const { defaultPersistObservation } = await import('../../services/enrichment/providers/persistence');
@@ -213,9 +213,14 @@ describe('A7 — the scheduler forwards the REAL production port composition', (
 
     expect(ports.findRecentObservation).toBe(defaultFindRecentObservation);
     expect(ports.persistObservation).toBe(defaultPersistObservation);
+    // MODE B: an AUTOMATED retry never spends Omnivyra credits, so it gets
+    // the TENANT credential only (never the platform key). The cost port is
+    // the funded singleton, which delegates tenant funding to the
+    // tenant-funded port.
     expect(ports.resolveCredential).toBe(tenantCredentialPort.resolveCredential);
-    expect(ports.authorizeCost).toBe(tenantFundedExecutionPort.authorizeCost);
-    expect(ports.releaseCost).toBe(tenantFundedExecutionPort.releaseCost);
+    expect(ports.authorizeCost).toBe(fundedCostPort.authorizeCost);
+    expect(ports.releaseCost).toBe(fundedCostPort.releaseCost);
+    expect(ports.settleCost).toBe(fundedCostPort.settleCost);
     // The clock is the one member legitimately fresh per call.
     expect(typeof ports.now).toBe('function');
   });

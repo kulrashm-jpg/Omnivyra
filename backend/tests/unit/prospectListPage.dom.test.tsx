@@ -57,7 +57,13 @@ const result = (rows: unknown[]) => ({
   page: { limit: 50, offset: 0, returned: rows.length },
 });
 
-const respond = (body: unknown) => mockApiFetch.mockResolvedValue({ json: async () => body });
+// URL-aware: the page also mounts the R3 import review panel, which reads its
+// own endpoint. It gets an empty review list unless a test says otherwise.
+const respond = (body: unknown) => mockApiFetch.mockImplementation(async (u: string) => (
+  String(u).startsWith('/api/prospect-sources/review-items')
+    ? { ok: true, json: async () => ({ items: [], queue: { pendingRows: 0, oldestCreatedAt: null } }) }
+    : { json: async () => body }
+));
 
 beforeEach(() => {
   mockApiFetch.mockReset();
@@ -76,7 +82,7 @@ describe('A — prospects render from the API response', () => {
     respond(result([row()]));
     render(withSwr(<ProspectListPage />));
     await waitFor(() => expect(mockApiFetch).toHaveBeenCalled());
-    expect(mockApiFetch.mock.calls[0][0]).toBe('/api/prospects?companyId=company-1');
+    expect(mockApiFetch.mock.calls.map((c) => c[0])).toContain('/api/prospects?companyId=company-1');
   });
 
   it('renders only fields the API actually returns', async () => {

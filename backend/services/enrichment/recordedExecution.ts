@@ -38,7 +38,11 @@ import {
   type ExecuteEnrichmentPorts,
   type ExecuteEnrichmentResult,
   ENRICHMENT_EXECUTOR_VERSION,
+  BILLABLE_OUTCOMES,
+  type CredentialFunding,
 } from './providers/execute';
+// Pure (no imports): the vendor's own billing unit per call.
+import { unitsForCall } from './providers/vendorUnits';
 // A7A — the assembled production set, so a caller that supplies no ports gets
 // duplicate suppression rather than silently getting none.
 import { makeProductionEnrichmentPorts } from './productionPorts';
@@ -58,6 +62,8 @@ import {
 } from './attempts';
 import type { ExecutionStatus, ProviderCallState } from './attempts';
 import { recordExecutionClose } from './telemetry';
+import { listAttempts, type EnrichmentAttemptRow } from './attempts';
+import { decideEnrichmentAction } from './decideEnrichmentAction';
 
 /**
  * A4N — raised when the work item is already claimed by another worker.
@@ -70,6 +76,30 @@ export class EnrichmentWorkClaimedError extends Error {
   constructor(detail: string) {
     super(`enrichment work is already claimed: ${detail}`);
     this.name = 'EnrichmentWorkClaimedError';
+  }
+}
+
+/**
+ * Raised on the USER-initiated (unleased) path when the work item's latest
+ * attempt is one the existing rule `decideEnrichmentAction` sends to OPERATOR
+ * REVIEW (a provider call whose answer was not persisted, or an unknown call
+ * state) or tells to WAIT (someone else's live lease). Thrown BEFORE any
+ * attempt write, credential, cost or egress, so nothing is spent.
+ *
+ * Why: a paid answer that was lost must not be paid for again by a user
+ * clicking "enrich" again. The queue path already honours this rule
+ * (consumeEnrichmentWork); this makes the user path read the SAME rule
+ * rather than a second one. A stop-gap with a known end: once a vendor answer
+ * is durable before anything derived can fail, this state stops arising.
+ *
+ * Deliberately an error, not an EnrichmentOutcome (that vocabulary is
+ * provider-facing and frozen) and NOT `duplicate_suppressed`: nothing was
+ * stored, so there is no duplicate.
+ */
+export class EnrichmentOperatorReviewRequired extends Error {
+  constructor(readonly reason: string, readonly decision: 'OPERATOR_REVIEW' | 'WAIT') {
+    super(`enrichment requires operator review: ${reason}`);
+    this.name = 'EnrichmentOperatorReviewRequired';
   }
 }
 
@@ -102,6 +132,15 @@ export interface AttemptRecorder {
   readonly claim?: typeof claimEnrichmentWork;
   /** A4Q — persists "transport is about to be entered". */
   readonly markPending?: typeof markProviderCallPending;
+  /**
+   * The latest attempt for THIS work item (unleased path only). Defaults to the
+   * real ledger read. A read failure propagates: nothing is spent on a history
+   * we could not read.
+   */
+  readonly latest?: (input: {
+    organizationId: string; subject: EnrichmentRequest['subject']; entityId: string;
+    providerId: string; requestedAttributes: readonly string[];
+  }) => Promise<EnrichmentAttemptRow | null>;
   readonly now?: () => string;
 }
 
@@ -191,6 +230,56 @@ export async function executeEnrichmentRecorded(
   const claim = rec.claim ?? claimEnrichmentWork;
   const markPending = rec.markPending ?? markProviderCallPending;
   const now = rec.now ?? (() => new Date().toISOString());
+
+  // ── the existing rule, on the user path too (mode B stop-gap) ─────────────
+  // Leased (queue) execution is already governed by consumeEnrichmentWork,
+  // which consults decideEnrichmentAction and may legitimately reclaim; it is
+  // left exactly as it was.
+  if (!options.lease) {
+    const latestRead = rec.latest
+      ?? (async (i) => (await listAttempts({ ...i, limit: 1 }))[0] ?? null);
+    const latest = await latestRead({
+      organizationId: request.organizationId, subject: request.subject, entityId: request.entityId,
+      providerId, requestedAttributes: request.attributes,
+    });
+    if (latest) {
+      // THE THREE LITERALS BELOW ARE DELIBERATE NEUTRALISATIONS (PI review).
+      // They make the rule answer ONLY about the attempt's own state. Fresh
+      // evidence, credentials and source availability are judged later by the
+      // executor itself. Passing the real values would unlock decisions (e.g.
+      // NO_ACTION for fresh evidence) that this caller would then have to
+      // handle; widening them requires handling every decision they unlock.
+      const verdict = decideEnrichmentAction({
+        attempt: latest, now: now(), freshEvidenceCoversRequest: false,
+        credentialAvailable: true, sourceOperational: true,
+      });
+      // EXHAUSTIVE on purpose: a decision added to the rule later is a COMPILE
+      // ERROR here (the `never` below), never a silent "proceed and spend".
+      switch (verdict.decision) {
+        case 'OPERATOR_REVIEW':
+        case 'WAIT':
+          throw new EnrichmentOperatorReviewRequired(verdict.reason, verdict.decision);
+        case 'NO_ACTION':
+          // Unreachable with the neutralised inputs above. If it is ever
+          // reached, the rule is declining: never spend on a declined item.
+          // NOTE for the day the inputs are widened: NO_ACTION for FRESH
+          // EVIDENCE must become "return the fresh data", not this refusal.
+          throw new EnrichmentOperatorReviewRequired(verdict.reason, 'OPERATOR_REVIEW');
+        case 'RETRY_PROVIDER':
+        case 'TERMINAL':
+          // The user path proceeds, exactly as before this check existed.
+          break;
+        default: {
+          // NOT dead code. The `never` makes a new decision a compile error in
+          // the typechecked backend project, but backend/tests and *.test.ts are
+          // excluded from typecheck and ts-jest is transpile-only, so a path
+          // that type checking never sees can still reach here at runtime.
+          const unhandled: never = verdict.decision;
+          throw new EnrichmentOperatorReviewRequired(`unhandled enrichment decision: ${String(unhandled)}`, 'OPERATOR_REVIEW');
+        }
+      }
+    }
+  }
 
   const startedAt = now();
   let attemptId: string | null = null;
@@ -376,6 +465,10 @@ export async function executeEnrichmentRecorded(
     sourceRecordId?: string | null;
     attributesReturned?: readonly string[];
     detail: string | null;
+    // Mode B usage. Undefined = not known on this path; the column stays NULL.
+    funding?: CredentialFunding | null;
+    providerCostUnits?: number | null;
+    creditsCharged?: number | null;
   }): Promise<void> => {
     // Every exit passes through here exactly once, which makes this the only
     // place the four attempt dimensions are known together — so it is the only
@@ -447,9 +540,19 @@ export async function executeEnrichmentRecorded(
     // ENRICHMENT_OUTCOMES describes either what a provider said or a refusal we
     // made before reaching one. Borrowing `provider_unavailable` would blame
     // the vendor for our own persistence failure. See `CompleteAttemptInput`.
+    // Mode B usage on the throw path. The executor catches the vendor's own
+    // errors, so a throw with `providerCalled` set means the vendor ANSWERED and
+    // something after it failed (paid, not stored): the vendor billed its units.
+    // `funding` rides on the error only once the hold was released, so its
+    // presence also proves 0 credits were charged; without it, credits are unknown.
+    const thrownFunding = err && typeof err === 'object'
+      ? (err as { funding?: CredentialFunding }).funding : undefined;
+    const thrownUnits = providerCalled ? unitsForCall(providerId, request.subject) : null;
     await close({
       outcome: null,
       providerCalled,
+      ...(thrownFunding ? { funding: thrownFunding, creditsCharged: 0 } : {}),
+      ...(thrownUnits ? { providerCostUnits: thrownUnits.units } : {}),
       // A4Q: the process SURVIVED to run this, so the observed flag is proof
       // either way. `unknown` is never written here — it belongs solely to the
       // case where nothing gets to run at all.
@@ -466,8 +569,14 @@ export async function executeEnrichmentRecorded(
 
   await rethrowMarkFailure();
 
+  // Mode B usage on the answered path: units only when the vendor answered with
+  // a billable verdict (the same list that decides whether credits are kept).
+  const answeredUnits = result.providerCalled && BILLABLE_OUTCOMES.includes(result.outcome)
+    ? unitsForCall(providerId, request.subject) : null;
   await close({
     outcome: result.outcome,
+    ...(result.funding ? { funding: result.funding, creditsCharged: result.creditsCharged ?? 0 } : {}),
+    ...(result.providerCalled ? { providerCostUnits: answeredUnits ? answeredUnits.units : 0 } : {}),
     // The executor's own answer when it has one; it is the only thing that
     // knows whether a duplicate was suppressed before egress.
     providerCalled: result.providerCalled,

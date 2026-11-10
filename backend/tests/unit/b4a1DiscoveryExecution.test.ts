@@ -43,6 +43,8 @@ import {
   UnregisteredDiscoveryProviderError,
 } from '../../services/prospectDiscovery/providerRegistry';
 import { makeTenantCredentialPort } from '../../services/enrichment/providers/credentials';
+import * as screenModule from '../../services/prospectImportReview/screen';
+import { passThroughScreen } from '../../services/prospectImportReview/screen';
 
 const ORG_A = '11111111-1111-4111-8111-111111111111';
 const ORG_B = '22222222-2222-4222-8222-222222222222';
@@ -262,6 +264,8 @@ const okPorts = (over: Partial<DiscoveryPorts> = {}): DiscoveryPorts => ({
     organizationId: ORG_A, source: 'synthetic',
     total: records.length, succeeded: records.length, failed: 0, outcomes: [],
   })) as any,
+  // Explicit, greppable bypass: these suites test the executor, not R3 screening.
+  screen: passThroughScreen,
   now: () => '2026-10-06T00:00:00.000Z',
   ...over,
 });
@@ -682,6 +686,72 @@ describe('B4-A1 — runDiscoveryExecution: the fetch → ingest seam', () => {
     expect(seen[0].organizationId).toBe(ORG_A);
     expect(seen[0].source).toBe('synthetic');
     expect(seen[0].records).toEqual([{ id: 'p1' }, { id: 'p2' }]);
+  });
+
+  it('R3: only the records the screen lets through are ingested; screening is reported', async () => {
+    const l = makeLedger();
+    const id = await create(l);
+    const adapter = syntheticProvider([{ records: [{ id: 'p1' }, { id: 'dup' }, { id: 'held' }], continuation: null }]);
+    const seen: any[] = [];
+    const out = await runDiscoveryExecution({
+      organizationId: ORG_A, executionId: id,
+      ports: okPorts({
+        ...l.ports,
+        getProvider: () => adapter as any,
+        ingest: (async (input: any) => { seen.push(input); return { succeeded: input.records.length }; }) as any,
+        screen: async ({ records }) => ({
+          toIngest: records.filter((r: any) => r.id === 'p1'),
+          skippedDuplicates: 1, heldForReview: 1, probeUnknown: 0, verdicts: [],
+        }),
+      }),
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].records).toEqual([{ id: 'p1' }]);
+    expect(out.resultsObserved).toBe(3);
+    expect(out.resultsIngested).toBe(1);
+    expect(out.screening).toEqual({ skippedDuplicates: 1, heldForReview: 1, probeUnknown: 0 });
+  });
+
+  it('R3: the PRODUCTION screen is the default even when a caller injects its own ingest', async () => {
+    // PI review, package 3: the control must not vanish because an unrelated port changed.
+    const spy = jest.spyOn(screenModule, 'screenDiscoveredRecords').mockResolvedValue({
+      toIngest: [], skippedDuplicates: 0, heldForReview: 1, probeUnknown: 0, verdicts: [],
+    });
+    try {
+      const l = makeLedger();
+      const id = await create(l);
+      const adapter = syntheticProvider([{ records: [{ id: 'p1' }], continuation: null }]);
+      let ingested = false;
+      const out = await runDiscoveryExecution({
+        organizationId: ORG_A, executionId: id,
+        ports: okPorts({
+          ...l.ports, getProvider: () => adapter as any,
+          ingest: (async () => { ingested = true; return { succeeded: 1 }; }) as any,
+          screen: undefined,
+        }),
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(ingested).toBe(false);
+      expect(out.screening).toEqual({ skippedDuplicates: 0, heldForReview: 1, probeUnknown: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('R3: a page the screen fully withholds makes no ingestion call at all', async () => {
+    const l = makeLedger();
+    const id = await create(l);
+    const adapter = syntheticProvider([{ records: [{ id: 'dup' }], continuation: null }]);
+    let called = false;
+    await runDiscoveryExecution({
+      organizationId: ORG_A, executionId: id,
+      ports: okPorts({
+        ...l.ports, getProvider: () => adapter as any,
+        ingest: (async () => { called = true; return { succeeded: 0 }; }) as any,
+        screen: async () => ({ toIngest: [], skippedDuplicates: 1, heldForReview: 0, probeUnknown: 0, verdicts: [] }),
+      }),
+    });
+    expect(called).toBe(false);
   });
 
   it('records are passed VERBATIM — the executor normalises nothing', async () => {

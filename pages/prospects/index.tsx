@@ -32,6 +32,8 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { apiFetch } from '@/lib/apiFetch';
+import ImportReviewPanel from '@/components/prospects/ImportReviewPanel';
+import ApolloEnrichBar from '@/components/prospects/ApolloEnrichBar';
 
 /** Mirrors `ProspectListRow` from backend/apiHandlers/prospects/prospectIntelligenceRead.ts. */
 interface ProspectListRow {
@@ -76,6 +78,10 @@ const formatDate = (iso: string | null): React.ReactNode => {
 
 export default function ProspectListPage() {
   const { selectedCompanyId } = useCompanyContext();
+  // R1: prospects selected for Apollo enrichment. Cleared when the company changes.
+  const [selected, setSelected] = React.useState<string[]>([]);
+  React.useEffect(() => { setSelected([]); }, [selectedCompanyId]);
+  const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
   const key = selectedCompanyId
     ? `/api/prospects?companyId=${encodeURIComponent(selectedCompanyId)}`
@@ -109,6 +115,8 @@ export default function ProspectListPage() {
             </Link>
           </header>
 
+          {selectedCompanyId ? <ImportReviewPanel companyId={selectedCompanyId} /> : null}
+
           <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             {!selectedCompanyId ? (
               <p className="text-sm text-gray-500">Select a company to view its prospects.</p>
@@ -129,10 +137,14 @@ export default function ProspectListPage() {
               </div>
             ) : (
               <>
+                {selected.length > 0 && selectedCompanyId ? (
+                  <ApolloEnrichBar companyId={selectedCompanyId} prospectIds={selected} onDone={() => setSelected([])} />
+                ) : null}
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
                       <tr className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-500">
+                        <th scope="col" className="py-2 pr-2 font-medium"><span className="sr-only">Select</span></th>
                         <th scope="col" className="py-2 pr-4 font-medium">Prospect</th>
                         <th scope="col" className="py-2 pr-4 font-medium">Source</th>
                         <th scope="col" className="py-2 pr-4 font-medium">Created</th>
@@ -142,6 +154,14 @@ export default function ProspectListPage() {
                     <tbody>
                       {rows.map((row) => (
                         <tr key={row.prospectId} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                          <td className="py-3 pr-2">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${row.externalLeadKey ?? row.prospectId}`}
+                              checked={selected.includes(row.prospectId)}
+                              onChange={() => toggle(row.prospectId)}
+                            />
+                          </td>
                           <td className="py-3 pr-4">
                             <Link
                               href={`/prospects/${encodeURIComponent(row.prospectId)}`}

@@ -169,6 +169,7 @@ describe('A6 F-1 — the production boundary must not execute fail-open', () => 
     const failingRecorder = () => ({
       record: async () => { throw new Error('duplicate key value violates unique constraint'); },
       nextNumber: async () => 1,
+      latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
       markPending: async () => { /* unreached */ },
       complete: async () => { /* unreached */ },
     });

@@ -34,6 +34,9 @@ import {
   defaultPersistObservation,
 } from '../../services/enrichment/providers';
 import { executeEnrichment } from '../../services/enrichment/providers/execute';
+// MODE B: production composes the FUNDED singletons (own key first; central
+// access only when opted in). They delegate to the tenant-funded ports.
+import { fundedCostPort, fundedCredentialPort } from '../../services/enrichment/providers/funding';
 import { executeEnrichmentRecorded } from '../../services/enrichment/recordedExecution';
 import type { ExecuteEnrichmentPorts } from '../../services/enrichment/providers';
 import type { EnrichmentProviderAdapter } from '../../services/enrichment/providers';
@@ -49,9 +52,14 @@ describe('A6 — production executor boundary', () => {
 
     it('uses the real persistence, credential and cost ports', () => {
       expect(ports.persistObservation).toBe(defaultPersistObservation);
-      expect(ports.resolveCredential).toBe(tenantCredentialPort.resolveCredential);
-      expect(ports.authorizeCost).toBe(defaultCostPort.authorizeCost);
-      expect(ports.releaseCost).toBe(defaultCostPort.releaseCost);
+      expect(ports.resolveCredential).toBe(fundedCredentialPort.resolveCredential);
+      expect(ports.authorizeCost).toBe(fundedCostPort.authorizeCost);
+      expect(ports.releaseCost).toBe(fundedCostPort.releaseCost);
+      expect(ports.settleCost).toBe(fundedCostPort.settleCost);
+      // The pre-mode-B singletons are still exported and still what a
+      // tenant-funded call ends up in (the funded ports delegate to them).
+      expect(typeof tenantCredentialPort.resolveCredential).toBe('function');
+      expect(typeof defaultCostPort.authorizeCost).toBe('function');
     });
 
     it('is not satisfied by a null-returning stub — the accident this guards', async () => {
@@ -190,6 +198,7 @@ describe('A6 — production executor boundary', () => {
         recorder: {
           record: async () => ({ attemptId: 'a-1' }),
           nextNumber: async () => 1,
+          latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
           markPending: async () => { order.push('mark_pending'); },
           complete: async () => { order.push('complete'); },
         } as never,
@@ -216,6 +225,7 @@ describe('A6 — production executor boundary', () => {
         recorder: {
           record: async () => ({ attemptId: 'a-1' }),
           nextNumber: async () => 1,
+          latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
           markPending: async () => { throw new Error('mark failed'); },
           complete: async () => { /* terminal write */ },
         } as never,
