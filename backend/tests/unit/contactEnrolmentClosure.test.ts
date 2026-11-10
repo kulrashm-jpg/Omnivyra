@@ -31,7 +31,16 @@ jest.mock('../../db/writeOwner', () => ({
         return { data: { ...row }, error: null };
       }
       const hit = rows().filter((r) => st.tests.every((t) => t(r)));
-      if (st.op === 'update') for (const r of hit) Object.assign(r, st.payload);
+      if (st.op === 'update') {
+        // The service never sends reopened_at; the guard trigger (20270129000003) stamps it.
+        if (table === 'contact_enrolment_closures' && st.payload && 'reopened_at' in st.payload) {
+          return { data: null, error: { code: 'TEST', message: 'reopened_at is stamped by the database, never sent' } };
+        }
+        for (const r of hit) {
+          const opening = table === 'contact_enrolment_closures' && r.reopened_at == null && st.payload?.reopened_by != null;
+          Object.assign(r, st.payload, opening ? { reopened_at: new Date().toISOString() } : {});
+        }
+      }
       const out = hit.map((r) => ({ ...r }));
       if (st.mode === 'single') return out.length === 1 ? { data: out[0], error: null } : { data: null, error: { code: 'PGRST116', message: 'not one' } };
       return { data: out, error: null };
