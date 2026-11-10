@@ -13,7 +13,7 @@ import type {
   PublishResult,
   ConnectionTestResult,
 } from './baseAdapter';
-import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer, COMMENT_FETCH_TIMEOUT_MS } from './baseAdapter';
 import { providerErrorFromResponse } from '../engagement/providerRequestError';
 
 const LINKEDIN_API = 'https://api.linkedin.com/v2';
@@ -130,6 +130,8 @@ export const linkedinAdapter: IPlatformAdapter = {
           Accept: 'application/json',
           'X-Restli-Protocol-Version': '2.0.0',
         },
+        // Also covers reading the body.
+        signal: AbortSignal.timeout(params.timeoutMs ?? COMMENT_FETCH_TIMEOUT_MS),
       }
     );
     if (!response.ok) {

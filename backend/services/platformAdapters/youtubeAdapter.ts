@@ -13,7 +13,7 @@ import type {
   PublishResult,
   ConnectionTestResult,
 } from './baseAdapter';
-import { withRateLimit, fetchJsonWithBearer } from './baseAdapter';
+import { withRateLimit, fetchJsonWithBearer, COMMENT_FETCH_TIMEOUT_MS } from './baseAdapter';
 
 const YOUTUBE_API = 'https://www.googleapis.com/youtube/v3';
 
@@ -112,6 +112,8 @@ export const youtubeAdapter: IPlatformAdapter = {
           Authorization: `Bearer ${params.accessToken}`,
           Accept: 'application/json',
         },
+        // Also covers reading the body.
+        signal: AbortSignal.timeout(params.timeoutMs ?? COMMENT_FETCH_TIMEOUT_MS),
       }
     );
     if (!response.ok) {

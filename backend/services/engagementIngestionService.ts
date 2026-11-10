@@ -18,6 +18,7 @@ import { refreshPlatformToken } from '../auth/tokenRefresh';
 import { resolveCampaignCompanyId } from './campaignAccessService';
 import { syncFromPostComments } from './engagementNormalizationService';
 import { getPlatformAdapter } from './platformAdapters';
+import { COMMENT_FETCH_TIMEOUT_MS } from './platformAdapters/baseAdapter';
 import { getPlatformCategory } from './platformRegistryService';
 import {
   providerErrorFromResponse,
@@ -66,6 +67,8 @@ async function fetchLinkedInComments(accessToken: string, platformPostId: string
         // Required by LinkedIn's v2 Rest.li endpoints; was missing here too.
         'X-Restli-Protocol-Version': '2.0.0',
       },
+      // Also covers reading the body; see COMMENT_FETCH_TIMEOUT_MS.
+      signal: AbortSignal.timeout(COMMENT_FETCH_TIMEOUT_MS),
     }
   );
   if (!response.ok) {
@@ -87,6 +90,8 @@ async function fetchTwitterComments(accessToken: string, platformPostId: string)
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
     },
+    // Also covers reading the body; see COMMENT_FETCH_TIMEOUT_MS.
+    signal: AbortSignal.timeout(COMMENT_FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw await providerErrorFromResponse(response, { provider: 'x', endpointCategory: 'replies' });
@@ -102,6 +107,8 @@ async function fetchFacebookComments(accessToken: string, platformPostId: string
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
       },
+      // Also covers reading the body; see COMMENT_FETCH_TIMEOUT_MS.
+      signal: AbortSignal.timeout(COMMENT_FETCH_TIMEOUT_MS),
     }
   );
   if (!response.ok) {
@@ -118,6 +125,8 @@ async function fetchInstagramComments(accessToken: string, platformPostId: strin
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
       },
+      // Also covers reading the body; see COMMENT_FETCH_TIMEOUT_MS.
+      signal: AbortSignal.timeout(COMMENT_FETCH_TIMEOUT_MS),
     }
   );
   if (!response.ok) {
