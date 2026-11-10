@@ -1,38 +1,46 @@
 -- ============================================================================
--- SECURITY (#23 Part 1): new public tables are born WITHOUT anon/authenticated grants.
--- Owner decision #23 (2026-11-10). Drafted by Release-controls (virality-83);
--- reviewer virality-05. LOCAL ONLY: NOT APPLIED.
+-- SECURITY (#23 Part 1): tables that POSTGRES creates in public are born WITHOUT
+-- anon/authenticated grants. Owner decision #23 (2026-11-10).
+-- Drafted by Release-controls (virality-83); reviewer virality-05. LOCAL ONLY: NOT APPLIED.
 -- ============================================================================
 --
--- WHY THIS EXISTS
---   Production's default privileges (D1 q18, 2026-11-10) grant every table
---   that `postgres` creates in `public` to authenticated (arwdxtm) at CREATE
---   TABLE time. anon was already removed from that default; authenticated was
---   not. Every client-role REVOKE migration so far named its targets, so each
---   table created afterwards was born exposed again and the migration-quality
---   gate cannot catch it. This changes the source, so the class-wide REVOKE
---   (#23 Part 3, 20270205000001) does not start decaying the day it lands.
+-- WHAT IS ACTUALLY FIXED, AND WHAT IS NOT (D1 q18, 2026-11-10)
+--   public has TWO creator-role table defaults:
+--     postgres       -> {postgres=arwdDxtm, authenticated=arwdxtm, service_role=arwdDxtm}  (no anon)
+--     supabase_admin -> {postgres, anon=arwdDxtm, authenticated=arwdDxtm, service_role}     (anon incl. TRUNCATE)
+--   This migration changes the POSTGRES default only: every table our migrations
+--   create (they run as postgres) is born with no authenticated grant. For anon
+--   the postgres default already granted nothing, so the anon gap is NOT closed
+--   by this file.
 --
--- SCOPE
---   FOR ROLE postgres, IN SCHEMA public, ON TABLES only: postgres is the role
---   that runs our migrations (Management API and SQL editor). supabase_admin's
---   defaults (platform-owned) are untouched: we cannot and should not alter
---   them. Sequences and functions keep their defaults (separate decision).
+-- RESIDUAL 1 (OPEN, owner/Supabase): supabase_admin's default still grants anon
+--   and authenticated on tables it creates in public. ALTER DEFAULT PRIVILEGES
+--   FOR ROLE supabase_admin needs membership in that role or superuser; postgres
+--   on Supabase is neither (sandbox-verified: a non-member gets 42501 "permission
+--   denied to change default privileges"). It cannot be fixed from a migration.
+--   Postcondition 3 REPORTS it on every apply, so the record never overstates
+--   the fix.
+-- RESIDUAL 2 (OPEN, named): sequence (S) and function (f) defaults are unchanged.
+--   Both creator roles grant authenticated (and supabase_admin anon) USAGE/
+--   EXECUTE; vanilla PostgreSQL also grants EXECUTE to PUBLIC on new functions,
+--   so a new SECURITY DEFINER function is born client-executable unless its
+--   migration revokes it (enforced today only by the migration-quality gate's
+--   SECURITY DEFINER rule). A separate decision.
 --
--- KNOWN LIMIT
---   Supabase manages these defaults and may re-assert them during a platform
---   upgrade. The postcondition below, and a periodic re-run of the privilege
---   sweep (virality-05 s01), are how a re-assertion becomes visible.
+-- PROBE LIMIT: postcondition 2's probe table is created by postgres, so it
+-- proves the postgres default only. It says nothing about supabase_admin.
 --
--- Must run as postgres (ALTER DEFAULT PRIVILEGES FOR ROLE postgres).
--- Re-runnable: revoking an absent default privilege is a no-op.
+-- KNOWN LIMIT: Supabase manages these defaults and may re-assert them during a
+-- platform upgrade; re-run the privilege sweep (virality-05 s01) to detect it.
+--
+-- Must run as postgres. Re-runnable (revoking an absent default is a no-op).
 -- Rollback: rollbacks/public_default_privileges_no_client_roles_rollback.sql
 
 BEGIN;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
 
--- POSTCONDITION 1: the default ACL for (postgres, public, tables) names neither role.
+-- POSTCONDITION 1: the postgres default for public tables names neither client role.
 DO $$
 DECLARE
   bad text;
@@ -53,8 +61,7 @@ BEGIN
 END
 $$;
 
--- POSTCONDITION 2 (functional): a table created now by postgres is born closed.
--- The probe table lives only inside this transaction and is dropped before COMMIT.
+-- POSTCONDITION 2 (functional, postgres path only): a table created now by postgres is born closed.
 DO $$
 DECLARE
   r text;
@@ -82,7 +89,31 @@ BEGIN
   END LOOP;
   DROP TABLE public.__default_acl_probe_20270205000000;
   IF array_length(held, 1) IS NOT NULL THEN
-    RAISE EXCEPTION 'default privileges postcondition: a new table is still born with: %', array_to_string(held, '; ');
+    RAISE EXCEPTION 'default privileges postcondition: a table created by postgres is still born with: %', array_to_string(held, '; ');
+  END IF;
+END
+$$;
+
+-- POSTCONDITION 3 (reporting, every creator role): state what is actually true.
+-- Not an error: residual 1 cannot be fixed here. Recorded in the apply record.
+DO $$
+DECLARE
+  residual text;
+BEGIN
+  SELECT string_agg(DISTINCT format('%s -> %s', d.defaclrole::regrole, g.rolname), '; ')
+    INTO residual
+    FROM pg_default_acl d
+    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    CROSS JOIN LATERAL aclexplode(d.defaclacl) x
+    JOIN pg_roles g ON g.oid = x.grantee
+   WHERE n.nspname = 'public'
+     AND d.defaclobjtype = 'r'
+     AND g.rolname IN ('anon', 'authenticated')
+   GROUP BY ();
+  IF residual IS NOT NULL THEN
+    RAISE NOTICE 'RESIDUAL (not fixed by this migration): public table defaults still granting client roles: %', residual;
+  ELSE
+    RAISE NOTICE 'No creator role''s public table default grants a client role.';
   END IF;
 END
 $$;

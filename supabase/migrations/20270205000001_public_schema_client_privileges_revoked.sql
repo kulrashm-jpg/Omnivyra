@@ -1,6 +1,6 @@
 -- ============================================================================
 -- SECURITY (#23 Part 3, TARGETED form): revoke client-role privileges on every
--- public relation that has NO client-admitting policy.
+-- public TABLE (relkind r, p) that has NO client-admitting policy.
 -- Owner decision #23 (2026-11-10). Drafted by Release-controls (virality-83);
 -- reviewer virality-05. LOCAL ONLY: NOT APPLIED.
 -- ============================================================================
@@ -17,9 +17,7 @@
 --   Every other public table has RLS enabled (sweep s01: 0 without RLS) and no
 --   policy that admits a client, so RLS already denies anon/authenticated every
 --   row; their table grants carry no working path. They do carry REFERENCES,
---   TRIGGER and MAINTAIN, which RLS does not govern. Views and materialized
---   views have no RLS of their own; an owner-rights view granted to anon reads
---   its base tables as the owner. No client code selects any view (code sweep).
+--   TRIGGER and MAINTAIN, which RLS does not govern.
 --
 -- DRIFT GUARD
 --   The exclusion set is COMPUTED here with the same rule Part 2 used, and must
@@ -31,7 +29,7 @@
 --   1. Snapshots every table- and column-level privilege held by anon,
 --      authenticated or PUBLIC on each target relation into
 --      public.client_privilege_revoke_snapshot (exact rollback).
---   2. REVOKE ALL ... FROM PUBLIC, anon, authenticated on each target relation.
+--   2. REVOKE ALL ... FROM PUBLIC, anon, authenticated on each target table.
 --      (A table-level REVOKE also revokes the matching column privileges; the
 --      postcondition still measures columns.)
 --   3. POSTCONDITION: on every target relation, for anon and authenticated,
@@ -39,11 +37,22 @@
 --      over SELECT/INSERT/UPDATE/REFERENCES are false; and no excluded relation's
 --      ACL changed. Any failure RAISEs and the transaction rolls back.
 --
+-- VIEWS, MATERIALIZED VIEWS AND FOREIGN TABLES ARE OUT OF SCOPE (virality-05 review).
+--   They have no policies, so the exclusion rule cannot measure them; revoking
+--   them here would rest on an assumption, not evidence. Owner-rights views
+--   granted to anon are RLS bypasses (high value), and for a view the grant is
+--   the only control (high risk). Separate change, after measuring client grants
+--   and security_invoker per view and sweeping code for .from(<view>).
+--
 -- NOT touched: the 53 client-admitting tables, service_role, postgres, RLS
 -- settings, policies, sequences, functions, other schemas.
 -- Rollback: rollbacks/public_schema_client_privileges_revoked_rollback.sql
 
 BEGIN;
+
+-- pg_get_expr schema-qualifies auth.role() only when auth is NOT on the search_path.
+-- Pin it so the policy text deparses exactly as it did when measured (p2b).
+SET LOCAL search_path = public, pg_catalog;
 
 CREATE TABLE IF NOT EXISTS public.client_privilege_revoke_snapshot (
   migration_version text        NOT NULL,
@@ -109,6 +118,23 @@ BEGIN
    WHERE to_regclass(format('public.%I', e)) IS NOT NULL;
   SELECT coalesce(array_agg(relname ORDER BY relname), ARRAY[]::text[]) INTO computed FROM _client_admitting;
   IF computed IS DISTINCT FROM expected_present THEN
+    -- Diagnosis first: if service_role-mentioning policies stopped matching the literal,
+    -- this is a deparse/search_path difference, not a policy change.
+    IF EXISTS (
+      SELECT 1 FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND (0 = ANY (pol.polroles)
+           OR to_regrole('anon')::oid = ANY (pol.polroles)
+           OR to_regrole('authenticated')::oid = ANY (pol.polroles))
+         AND (coalesce(pg_get_expr(pol.polqual, pol.polrelid), '') || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')) LIKE '%service_role%'
+         AND NOT (
+               coalesce(pg_get_expr(pol.polqual, pol.polrelid), '(auth.role() = ''service_role''::text)')
+                 = '(auth.role() = ''service_role''::text)'
+           AND coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '(auth.role() = ''service_role''::text)')
+                 = '(auth.role() = ''service_role''::text)'
+           AND (pol.polqual IS NOT NULL OR pol.polwithcheck IS NOT NULL))) THEN
+      RAISE EXCEPTION 'client revoke drift guard: DEPARSE MISMATCH suspected: policies mentioning service_role no longer match the measured literal (auth.role() = ''service_role''::text). Re-measure (p2b) under the apply role; do not edit the literal.';
+    END IF;
     RAISE EXCEPTION 'client revoke drift guard: client-admitting tables differ from the measured list. only computed: %; only measured: %',
       (SELECT coalesce(array_agg(x), ARRAY[]::text[]) FROM unnest(computed) x WHERE x <> ALL (expected_present)),
       (SELECT coalesce(array_agg(x), ARRAY[]::text[]) FROM unnest(expected_present) x WHERE x <> ALL (computed));
@@ -124,7 +150,7 @@ BEGIN
     JOIN pg_namespace n ON n.oid = c.relnamespace
     CROSS JOIN LATERAL aclexplode(c.relacl) x
     LEFT JOIN pg_roles g ON g.oid = x.grantee
-   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
      AND c.relname <> 'client_privilege_revoke_snapshot'
      AND c.relname NOT IN (SELECT relname FROM _client_admitting)
      AND (x.grantee = 0 OR g.rolname IN ('anon', 'authenticated'))
@@ -140,7 +166,7 @@ BEGIN
     JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
     CROSS JOIN LATERAL aclexplode(a.attacl) x
     LEFT JOIN pg_roles g ON g.oid = x.grantee
-   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
      AND c.relname NOT IN (SELECT relname FROM _client_admitting)
      AND (x.grantee = 0 OR g.rolname IN ('anon', 'authenticated'))
   ON CONFLICT DO NOTHING;
@@ -175,7 +201,7 @@ BEGIN
   FOR t IN
     SELECT c.oid, c.relname
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
        AND c.relname NOT IN (SELECT relname FROM _client_admitting)
   LOOP
     n_checked := n_checked + 1;
