@@ -225,9 +225,20 @@ function isAuthSchemeCredential(scheme: string, token: string): boolean {
     const reencoded = Buffer.from(decoded, 'utf8').toString('base64').replace(/=+$/, '');
     return reencoded === token.replace(/=+$/, '') && /^[^:\s]+:\S+$/.test(decoded);
   }
-  return token.length >= 16 && /[0-9._~+/=-]/.test(token);
+  // Bearer needs STRUCTURE, like Basic (virality-05): a wrong redaction in stored evidence is permanent, and
+  // provider error strings such as "Bearer token.expired.at.1699" must survive. Redact only:
+  //   - a JWT: base64url header starting "eyJ" (base64 of '{"') + payload + signature segments; or
+  //   - an opaque token: 20+ chars, no dots, mixing upper case, lower case AND digits.
+  // Known residual: a short or single-case opaque token in FREE TEXT is kept (it is still redacted when it
+  // sits under a secret-shaped key such as Authorization).
+  if (/^eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*$/.test(token)) return true;
+  return token.length >= 20 && !token.includes('.') && /[a-z]/.test(token) && /[A-Z]/.test(token) && /[0-9]/.test(token);
 }
-// `scheme://user:password@` — userinfo WITH a password. `user@host` alone is kept.
+// `scheme://user:password@` — userinfo WITH a password. `user@host` alone is kept. DELIBERATE: the whole
+// userinfo (the USERNAME too) is replaced, because a username is sometimes itself a key; the loss is permanent.
+// Recorded asymmetry: query-parameter redaction below is http(s)-only, so a postgres URL carrying both userinfo
+// and a secret-named query parameter loses the userinfo but keeps that parameter (non-http schemes rarely carry
+// secrets in a query; widen if one appears).
 const USERINFO_IN_VALUE = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:]+:[^\s/?#@]+@/gi;
 // Query parameters inside an http(s) URL; the NAME is judged by isSecretKey, so the
 // value pass and the key pass share one vocabulary.

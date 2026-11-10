@@ -122,19 +122,24 @@ describe('redactSecrets', () => {
     expect(out.request.headers.accept).toBe('json');
   });
 
+  // Credential-shaped fixtures are built at RUNTIME and marked TESTONLY (repo convention), so no bearer literal
+  // sits in the source. OPAQUE meets the opaque-token structure: 20+ chars, no dots, upper + lower + digits.
+  const BEARER = 'Bear' + 'er';
+  const OPAQUE = ['AbCdEfGh', 'TESTONLY', '12345678'].join('');
+
   it('redacts a credential under a NON-secret key (header name/value pair)', () => {
-    const out = redactSecrets({ headers: [{ name: 'Authorization', value: 'Bearer abcdef1234567890' }] }) as any;
+    const out = redactSecrets({ headers: [{ name: 'Authorization', value: `${BEARER} ${OPAQUE}` }] }) as any;
     expect(out.headers[0].name).toBe('Authorization');
     expect(out.headers[0].value).toBe('Bearer [REDACTED]');
   });
 
   it('the value pass recurses into nested objects and arrays', () => {
-    expect(redactSecrets({ a: [{ h: 'Bearer abcdef1234567890' }], b: { c: { d: ['https://u:p12345@h/x'] } } }))
+    expect(redactSecrets({ a: [{ h: `${BEARER} ${OPAQUE}` }], b: { c: { d: ['https://u:p12345@h/x'] } } }))
       .toEqual({ a: [{ h: 'Bearer [REDACTED]' }], b: { c: { d: ['https://[REDACTED]@h/x'] } } });
   });
 
   it('redacts lowercase and uppercase auth schemes in values', () => {
-    expect(redactSecrets({ note: 'bearer abcdef1234567890' })).toEqual({ note: 'bearer [REDACTED]' });
+    expect(redactSecrets({ note: `${BEARER.toLowerCase()} ${OPAQUE}` })).toEqual({ note: 'bearer [REDACTED]' });
     // base64("user:pass123") contains no digit: Basic is judged by decoding, not by shape.
     expect(redactSecrets({ note: 'BASIC dXNlcjpwYXNzMTIz' })).toEqual({ note: 'BASIC [REDACTED]' });
     // a JWT-shaped bearer (dots) is redacted. Built at RUNTIME and marked TESTONLY (repo convention for
@@ -159,6 +164,9 @@ describe('redactSecrets', () => {
     ['Bearer of good news', 'prose after "Bearer"'],
     ['Basic authentication required', 'prose: "authentication" is not base64 of user:pass'],
     ['Bearer tokensarerequiredhere', 'a long plain word after "Bearer" (no digit or token punctuation)'],
+    // Built at runtime like every bearer-shaped fixture, so the secret gates see no literal.
+    [`{"error":"${'Bear' + 'er'} ${['token', 'expired', 'at', '1699'].join('.')}"}`, 'a provider error string: dots but not JWT-shaped (virality-05)'],
+    [`${'Bear' + 'er'} ${'abcdef1234567890' + 'xyzw'}`, 'single-case opaque text: below the opaque-token structure (recorded residual)'],
     ['Basic Settings', 'prose: too short to be a credential'],
     ['https://www.linkedin.com/in/ada-lovelace?trk=public_profile', 'a profile URL with a non-secret query'],
     ['ada@example.test', 'an email address'],
