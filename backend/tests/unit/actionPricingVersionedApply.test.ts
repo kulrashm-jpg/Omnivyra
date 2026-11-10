@@ -64,7 +64,7 @@ describe('applyActionPricingChange (B-1)', () => {
     await expect(applyActionPricingChange({ actionKey: 'x', costMultiplier: 1 })).rejects.not.toBeInstanceOf(ActionPricingInputError);
   });
 
-  it.each([
+  it.each<[{ data: unknown; error: unknown }, string]>([
     [{ data: null, error: null }, 'null data'],
     [{ data: '', error: null }, 'empty string'],
     [{ data: { id: 'x' }, error: null }, 'an object instead of the uuid'],
