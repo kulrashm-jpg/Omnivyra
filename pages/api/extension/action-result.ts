@@ -194,7 +194,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { data: existing, error: fetchError } = await supabase
       .from('community_ai_actions')
-      .select('id, organization_id, status, platform, action_type, target_id, suggested_text, final_text, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at, idempotency_key, execution_result, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, organization_id, status, platform, action_type, target_id, suggested_text, final_text, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at, idempotency_key, execution_result, execution_correlation_id, command_chain, command_chain_index, submit_attempted_at')
       .eq('id', commandId)
       .maybeSingle();
 
@@ -249,8 +249,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // have performed it; refusing its result would only lose the evidence.
 
     const isConfirmed = status === 'success' && result?.confirmed === true;
-    const finalStatus: 'executed' | 'sent_unverified' | 'failed' =
-      status === 'success' ? (isConfirmed ? 'executed' : 'sent_unverified') : 'failed';
+    // Extension 1.5 (EXTENSION-1.5.0-CONTRACT.md §5.4, agreed with Orchestration):
+    // once authorize-submit wrote submit_attempted_at, the click may have happened,
+    // so a reported failure is 'uncertain' (a human reconciles; never retried),
+    // never 'failed'. Without submit_attempted_at (every 1.4 row) nothing changes.
+    const postSubmitFailure = status === 'failed' && Boolean((existing as { submit_attempted_at?: string | null }).submit_attempted_at);
+    const finalStatus: 'executed' | 'sent_unverified' | 'failed' | 'uncertain' =
+      status === 'success' ? (isConfirmed ? 'executed' : 'sent_unverified') : (postSubmitFailure ? 'uncertain' : 'failed');
 
     // Surface the row's existing correlation id if one was stamped earlier
     // in the lifecycle (at /execute or at extension dispatch). If not,
@@ -364,6 +369,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       correlationId,
       idempotencyKey: idempotencyKey ?? existing.idempotency_key ?? null,
       leaseGuard: { expectedLeaseId: rowLeaseId, expectedHolderId: rowHolderId },
+      // Post-submit uncertain keeps the lease so a later report is recorded as evidence.
+      retainLeaseOnUncertain: postSubmitFailure,
       // Compare-and-set from the in-flight states: if the reaper moved the row
       // to 'uncertain' between our read and this write, the write matches zero
       // rows and the result is recorded as reconciliation evidence instead.
@@ -374,8 +381,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         target_id: (existing as any).target_id ?? null,
       },
       result: {
-        ok: finalStatus !== 'failed',
+        ok: finalStatus !== 'failed' && finalStatus !== 'uncertain',
         status: finalStatus,
+        // N1 (Orchestration): top-level error_code, the shape the reap guard writes and
+        // communityEngineAdapter reads (execution_result.error_code).
+        ...(postSubmitFailure ? { error_code: 'post_submit_failure' } : {}),
         platform_id: result?.platform_id ?? null,
         execution_mode: 'browser',
         response: {
@@ -384,12 +394,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           platform_id: result?.platform_id ?? null,
           verified_at: result?.verified_at ?? null,
           mode: result?.mode ?? null,
-          error_code: result?.error_code ?? null,
+          error_code: postSubmitFailure ? 'post_submit_failure' : (result?.error_code ?? null),
+          ...(postSubmitFailure ? { reported_error_code: result?.error_code ?? null } : {}),
           error_message: result?.error_message ?? null,
         },
-        error: finalStatus === 'failed'
-          ? (result?.error_code || result?.error_message || 'EXTENSION_REPORTED_FAILURE')
-          : undefined,
+        error: finalStatus === 'uncertain'
+          ? 'post_submit_failure'
+          : finalStatus === 'failed'
+            ? (result?.error_code || result?.error_message || 'EXTENSION_REPORTED_FAILURE')
+            : undefined,
       },
     });
 
@@ -430,7 +443,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       recordOutcome(
         String(existing.platform || ''),
         String(existing.action_type || ''),
-        isConfirmed ? 'confirmed' : status === 'success' ? 'unconfirmed' : 'failed',
+        // A post-submit failure may have acted: recorded as unconfirmed, not a clean failure.
+        // (Both lower the confirmation rate equally, so auto-disable behaves the same.)
+        isConfirmed ? 'confirmed' : status === 'success' || postSubmitFailure ? 'unconfirmed' : 'failed',
       );
     } catch (telemetryErr) {
       console.warn('[extension/action-result] reliability record failed:', (telemetryErr as Error)?.message);
