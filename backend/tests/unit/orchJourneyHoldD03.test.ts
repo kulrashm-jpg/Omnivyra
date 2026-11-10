@@ -101,7 +101,7 @@ import {
   EMAIL_ENABLED_ENV, EXECUTION_RUNTIME_VERSION, GOVERNANCE_VERSION, INTERNAL_CHANNEL, TRANSLATION_VERSION,
   __clearTransportsForTests, __resetQuotaRedisForTests, dispatchInternalOutreachTask, getOutreachTaskById,
   insertOutreachTask, listAttempts, registerDefaultTransports, setOutreachTaskState,
-  type EmailProviderPort, type NewOutreachTask,
+  type EmailProviderPort, type NewOutreachTask, type OutreachTaskStatus,
 } from '../../services/leadOutreachExecution';
 import { BRIDGED_TASK_PLANNER_VERSION, resolveJourneyHold } from '../../services/emailEngine/emailExecutionContext';
 import { BRIDGE_PLANNER_VERSION } from '../../services/outreachBridge/outreachBridgeStore';
@@ -148,7 +148,7 @@ const configureTenant = () => {
 };
 
 /** A task in `status`, optionally with a handoff to a run in `state`. */
-async function task(status: string, opts: { state?: string | null; handoff?: boolean; over?: Partial<NewOutreachTask> } = {}): Promise<string> {
+async function task(status: OutreachTaskStatus, opts: { state?: string | null; handoff?: boolean; over?: Partial<NewOutreachTask> } = {}): Promise<string> {
   const id = (await insertOutreachTask(newTask(opts.over))).data!.id as string;
   await setOutreachTaskState(ORG, id, { status });
   if (status === 'approved') {

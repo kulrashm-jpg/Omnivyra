@@ -25,10 +25,10 @@ jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jes
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../auth/requestClientIp', () => ({ authRequestIpOrNull: () => null }));
 const mockSvc = {
-  begin: jest.fn(async () => ({ ok: true, contentHash: 'h', preview: null, passkeyRequired: true, passkeyOptions: { challenge: 'c' } })),
-  approve: jest.fn(async () => ({ ok: true, status: 'approved' })),
-  revoke: jest.fn(async () => ({ ok: true, status: 'cancelled' })),
-  resubmit: jest.fn(async () => ({ ok: true, status: 'awaiting_approval' })),
+  begin: jest.fn(async (_a: unknown) => ({ ok: true, contentHash: 'h', preview: null, passkeyRequired: true, passkeyOptions: { challenge: 'c' } })),
+  approve: jest.fn(async (_a: unknown) => ({ ok: true, status: 'approved' })),
+  revoke: jest.fn(async (_a: unknown) => ({ ok: true, status: 'cancelled' })),
+  resubmit: jest.fn(async (_a: unknown) => ({ ok: true, status: 'awaiting_approval' })),
 };
 jest.mock('../../services/orchestration/journeyApproval', () => ({
   beginTenantJourneyApproval: (a: unknown) => mockSvc.begin(a),
