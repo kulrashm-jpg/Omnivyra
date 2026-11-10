@@ -238,3 +238,29 @@ describe('RULE 6c — below-boundary provenance (virality-05 follow-up c)', () =
     expect(digestProvenanceViolations(b([]))[0]).toContain('must be an object');
   });
 });
+
+describe('the committed attestation itself (integration guard, virality-05 residual)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const gate = require('../../../scripts/check-migration-quality.js');
+  const real = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, '../../../scripts/migrations/applied-boundary.json'), 'utf8'),
+  );
+  const migDir = path.resolve(__dirname, '../../../supabase/migrations');
+  const topLevel: string[] = fs.readdirSync(migDir).filter((f: string) => f.endsWith('.sql'));
+
+  it('rule 6b reports nothing on the real applied-boundary.json and the real migrations', () => {
+    const r = gate.aboveBoundaryViolations(topLevel, real, (f: string) => fs.readFileSync(path.join(migDir, f)));
+    expect(r.violations).toEqual([]);
+  });
+
+  it('rule 6c reports nothing on the real applied-boundary.json', () => {
+    expect(gate.digestProvenanceViolations(real)).toEqual([]);
+  });
+
+  it('every digests_provenance entry in the real file agrees with its pinned digest and its file on disk', () => {
+    for (const [f, e] of Object.entries(real.digests_provenance || {}) as [string, { sha256: string }][]) {
+      expect(real.digests[f]).toBe(e.sha256);
+      expect(gate.lfSha256(fs.readFileSync(path.join(migDir, f)))).toBe(e.sha256);
+    }
+  });
+});
