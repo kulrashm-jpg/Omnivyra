@@ -70,7 +70,7 @@ function fakePlaywright() {
     goto: jest.fn(async (u: string) => { calls.gotos.push(u); }),
     url: jest.fn(() => calls.gotos[calls.gotos.length - 1]),
     waitForTimeout: jest.fn(async () => undefined),
-    screenshot: jest.fn(async () => { throw new Error('no screenshots in tests'); }),
+    screenshot: jest.fn(async (): Promise<Buffer> => { throw new Error('no screenshots in tests'); }),
     keyboard: { insertText: jest.fn(async () => undefined) },
     close: jest.fn(async () => undefined),
   };
@@ -242,7 +242,7 @@ describe('RPA runner — screenshot evidence', () => {
     object_path: 'o1/2026-11-02/a1.png', public_url: ACCESS_URL, bytes: 1, kind: 'screenshot' as const, durable: true, ...over,
   });
   const withShot = (fake: ReturnType<typeof fakePlaywright>) => {
-    fake.page.screenshot.mockImplementation(async () => Buffer.from('png') as any);
+    fake.page.screenshot.mockImplementation(async () => Buffer.from('png'));
   };
   const throwingClick = () => handle(async () => { throw new Error('Target closed'); });
   const spies: jest.SpyInstance[] = [];
