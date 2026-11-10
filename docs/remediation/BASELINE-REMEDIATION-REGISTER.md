@@ -63,15 +63,19 @@ Production typecheck (`typecheck-ci`) and worker typecheck **pass** on `001f79a3
 
 ## 3. Migration-quality violations (23): GD-4
 
-The plan is `docs/outreach/platform/GD4-MIGRATION-RENUMBERING-PLAN.md` §9 on `outreach/foundation-base-20261104` (heads `4adc89839`, `e670d2073`, `d3f9b146f`).
+Owner GO 2026-11-10. D1 (read-only production pack, by virality-83, verified by virality-05) found the 17 files unapplied and LISTS-001 applied and complete.
 
-| Item | Files | Owner (by introducing commit) | Production | Proposed action | Status |
-|---|---|---|---|---|---|
-| MQ-1 | `20261127000000_pi_prospect_lists` | PI (`6a6c3d9b8`) | **Applied out-of-band** (objects, columns and the migration's own COMMENT present; no ledger row). Completeness and **privileges unmeasured** | Keep in place; record as production-applied in the registry **and the attestation** | **BLOCKED:** PI owner not named; programme decision on how history records it; authorization for a read-only privilege check |
-| MQ-2 | 17 files #2–#18 | Orchestration by commit (12 feat(orchestration) + 5 on its integration line) | Not applied | Atomic rename to `20270111100000`… (band stays below `20270112000000`) | **BLOCKED:** the programme owner's ruling on `pi_*` ownership (virality-55 deferred to it) |
-| MQ-3 | `20261231000010_rpa_legacy_session_invalidation` | Orchestration integration line (`1b96251f6`) | Unverifiable (marker-row count would settle it) | Not filename-only: it embeds its version as data. RPA-owner decision (slug literal) | BLOCKED: owner |
-| MQ-4 | `20270120000000`, `…0001`, `…0002` | Orchestration (`9daf1cc5e`, `a25abddce`, `f7ff85d04`) | Not applied | Registry `occupied_elsewhere` → `reserved` (same blob carried forward) | BLOCKED: Orchestration sign-off (GD4-2 approved in principle) |
-| MQ-5 | `20270113000000` | PI/privacy A6-10 (`1cea7cf2f`); two different blobs | Not applied | GD4-3 held | HELD by the programme owner |
+| Item | Files | Action | Status |
+|---|---|---|---|
+| MQ-1 | `20261127000000_pi_prospect_lists` | Not moved; attestation digest plus an `out_of_band_applied` note (PI-owned, immutable) | **RESOLVED** `ed7448c4e` |
+| MQ-2 | 17 files → `20270111100000`–`…16` | Byte-identical moves; band below `20270112000000`; filename refs updated; 1 cascading PI pin | **RESOLVED** `ed7448c4e`. Replay 112/112. **Verification by virality-05 pending** |
+| MQ-3 | `20261231000010_rpa_legacy_session_invalidation` | Excluded: it embeds its version as data, so the change needs the RPA owner | **OPEN** (the gate's last violation) |
+| MQ-4 | `20270120000000`/`…01`/`…02` | Registry `occupied_elsewhere` → `reserved` (R-2) | **RESOLVED** `ed7448c4e` |
+| MQ-5 | `20270113000000` | Keep blob `67d3b85b1`; retire `ae1f87206` (owner #5) | **RESOLVED** `c1b29bc26` |
+| — | `20270202000000` | Registry fields `production_applied` / `applied_sha256` / `applied_slug` / `applied_evidence`; **no ledger row** | Recorded in `ed7448c4e` |
+| — | Ordering postcondition | Final bodies of `advance_execution_plan` and `claim_community_ai_browser_command` | `a2d4af0ce` + `f6b7444bc` |
+
+**Gate: 23 → 1.**
 
 ## 4. Application issues found during diagnosis (no failing test)
 
@@ -83,6 +87,8 @@ The plan is `docs/outreach/platform/GD4-MIGRATION-RENUMBERING-PLAN.md` §9 on `o
 | A-4 | `whatsappRateLimiter` used the same shared-client pattern as quota and hung the same way | `whatsappRateLimiter.ts:53` | Outreach | **RESOLVED** in the commit after `c021217e8` (see §5) |
 | A-7 | The WhatsApp limiter's database fallback is best-effort: usage is linked by `account_name`, and `increment_wa_usage` failures are ignored silently | `whatsappRateLimiter.ts` `dbGetDailyUsage`/`dbIncrUsage` | Outreach | OPEN: needs a design decision |
 | A-5 | `prospect_lists` / `prospect_list_members` in production: anon/authenticated privileges unmeasured; no table REVOKE; policies without TO | MIG-2R finding 2 | PI | **Needs authorization** for a read-only `has_table_privilege` check |
+| A-8 | `rpa_sessions` / `rpa_retry_queue`: anon/authenticated hold 7 table privileges in production (D1); REFERENCES/TRIGGER/MAINTAIN are not governed by RLS | D1 q16 | Outreach (owner-assigned) | **FIX DRAFTED** `ecd9c0859` + `67d729818` (`20270204000000`; PASS from virality-83 and virality-05; not applied) |
+| A-9 | Probably class-wide: every `public` table whose migration never revoked keeps Supabase's default anon/authenticated grants | virality-05 sweep proposal | Programme | **Needs owner authorization** for 2 read-only count queries |
 | A-6 | Test suites historically passed against **production** through `.env.local` (before `49717e80a`) | RC-P | Test infrastructure. UNASSIGNED | Recommend a jest-wide non-loopback egress guard |
 
 ## 5. Implementation commits on this branch
