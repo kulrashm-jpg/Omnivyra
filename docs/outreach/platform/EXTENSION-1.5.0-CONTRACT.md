@@ -62,6 +62,16 @@ Every command is a row in the existing `extension_commands` table: `status` pend
 - The extension acknowledges with `POST /api/extension/v15/commands/ack`, signed body `{ command_id, extension_version }`, immediately before acting. This moves the command from `pending` to `dispatched`; it may be acknowledged only once.
 - The path is separate because the request signature covers METHOD and PATH but not the query string.
 
+**Write commands and the 1.4 route (known limitation, open item U1):**
+- Approved LinkedIn replies and likes (`community_ai_actions`, org-scoped) are offered on the v15 route only after the own-content check, and claimed through the unchanged claim RPC.
+- The 1.4 route (`GET /api/extension/commands`) skips them for any session whose user has an active 1.5 binding. That closes the race for that user (Orchestration review, 2026-11-10).
+- It does NOT close it across users: an unbound 1.4.x session of ANOTHER user in the same organization can still claim such an action and click it from a different LinkedIn account. That is pre-existing 1.4 behaviour, but it means v15's own-content guarantee holds only while v15 is the sole route issuing those rows.
+- **Durable fix (planned, not built):**
+  1. mark the action v15-only at creation (e.g. the acting member URN, or a delivery-path column set when the action comes from a v15-ingested thread);
+  2. have the 1.4 route skip marked rows for EVERY session;
+  3. have authorize-submit require the mark.
+- Until then, the passkey-bound human approval remains the control.
+
 **The signed command envelope** is HMAC-SHA256 with the session's derived secret, over the canonical JSON of the fields below. The extension verifies it before acting and refuses on any mismatch.
 
 ```

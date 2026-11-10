@@ -30,6 +30,8 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { resolveEngagementCapability, CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
 import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityService';
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
+import { getActiveBinding } from '@/backend/services/extension15';
+import { normalizePlatform } from '@/backend/constants/platforms';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
 import { getCommunityExecutionPolicy } from '@/backend/services/communityAiPlatformPolicyService';
@@ -215,7 +217,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // written. The claim RPC re-applies all of it atomically and is authoritative.
     const decision = await getCommunityExecutionPolicy({ organizationId: session.orgId, tenantId: session.orgId });
 
+    // Extension 1.5 (EXTENSION-1.5.0-CONTRACT.md §4): a session whose user has an active
+    // 1.5 account binding receives LinkedIn reply/like ONLY through
+    // /api/extension/v15/commands, where the own-content check applies before the claim.
+    // Offering them here too would race that claim, and a 1.5 extension refuses a write
+    // arriving on this route, so the approved action would end failed. A session with no
+    // binding (1.4.x) is unaffected. Only a POSITIVELY found binding skips them: an
+    // unreadable binding (e.g. code deployed before migration 20270207000000) must not
+    // take LinkedIn writes away from 1.4.x sessions; at worst the race returns, and its
+    // cost is a failed action with no click.
+    const v15Binding = await getActiveBinding(session.orgId, session.userId);
+    const skipLinkedInWrites = v15Binding.ok === true && v15Binding.urn !== null;
+
     for (const row of data || []) {
+      if (skipLinkedInWrites && normalizePlatform(row.platform) === 'linkedin') {
+        const type = String(row.action_type ?? '').trim().toLowerCase();
+        if (type === 'reply' || type === 'like') continue;
+      }
       // ── Chain-aware step selection ────────────────────────────────────────
       // When the row carries a command_chain, dispatch the step at
       // command_chain_index instead of the row's top-level action_type.
