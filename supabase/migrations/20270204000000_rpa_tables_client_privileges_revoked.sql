@@ -17,15 +17,23 @@
 --   so REVOKE ... FROM PUBLIC would NOT remove them.
 --
 -- CHANGE
---   REVOKE ALL on the two tables FROM anon AND authenticated, named explicitly.
---   REVOKE ALL covers MAINTAIN on PostgreSQL 17.
+--   REVOKE ALL on the two tables FROM PUBLIC, anon AND authenticated. The two
+--   client roles are named explicitly because their grants are direct role grants
+--   (FROM PUBLIC alone removes nothing); PUBLIC is included for consistency with
+--   the *_client_privileges_revoked family. REVOKE ALL covers MAINTAIN on PG17.
 --   NOT touched: service_role, postgres, the existing policies, RLS settings,
 --   any other table. No application path uses a client role on these tables:
 --   the RPA worker and its APIs use the service role.
 --
 -- POSTCONDITION
 --   has_table_privilege() for anon and authenticated over all seven privileges
---   on both tables; any true RAISEs and the migration rolls back. Measured with
+--   on both tables, AND has_any_column_privilege(SELECT, INSERT, UPDATE,
+--   REFERENCES), because has_table_privilege cannot see a column grant such as
+--   SELECT (storage_state). (PostgreSQL's REVOKE on a table also revokes the
+--   matching column privileges, measured on PG17, so the REVOKE above removes
+--   them; the column check makes that guarantee self-verifying, as the
+--   *_client_privileges_revoked family does.) Any true RAISEs and the migration
+--   rolls back. Measured with
 --   has_table_privilege, never inferred from relacl (for a table, NULL relacl
 --   means owner-only, and role grants are what matter here).
 --
@@ -43,7 +51,7 @@ BEGIN
 END
 $$;
 
-REVOKE ALL ON TABLE public.rpa_sessions, public.rpa_retry_queue FROM anon, authenticated;
+REVOKE ALL ON TABLE public.rpa_sessions, public.rpa_retry_queue FROM PUBLIC, anon, authenticated;
 
 DO $$
 DECLARE
@@ -66,6 +74,9 @@ BEGIN
           held := held || format('%s %s %s', r, p, t);
         END IF;
       END LOOP;
+      IF has_any_column_privilege(r, t, 'SELECT,INSERT,UPDATE,REFERENCES') THEN
+        held := held || format('%s column-privilege %s', r, t);
+      END IF;
     END LOOP;
   END LOOP;
   IF array_length(held, 1) IS NOT NULL THEN
