@@ -389,10 +389,17 @@ describe('AI assistance is never claimed falsely', () => {
 });
 
 describe('saved mappings are described honestly', () => {
-  it('says no saved mapping was used when the server consulted none', async () => {
+  it('says there is no saved mapping for this layout yet when the server found none', async () => {
     await uploadAndMap();
-    expect(screen.getByText(/No saved mapping was used/i)).toBeInTheDocument();
-    expect(screen.getByText(/not available yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No saved mapping for this file layout yet/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('saved-mapping-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('a profile READ FAILURE is never described as "no saved mapping"', async () => {
+    requestMappingProposal.mockResolvedValue(proposal({ profileRead: 'unavailable' }));
+    await uploadAndMap();
+    expect(screen.getByTestId('saved-mapping-unavailable')).toHaveTextContent(/could not be checked/i);
+    expect(screen.queryByText(/No saved mapping for this file layout yet/i)).not.toBeInTheDocument();
   });
 });
 

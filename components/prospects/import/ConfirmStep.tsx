@@ -150,8 +150,8 @@ export default function ConfirmStep({
             <span>
               Remember this mapping for files with the same columns
               <span className="mt-0.5 block text-xs text-gray-500">
-                Saving a mapping for reuse is not available yet — if it fails, your import still
-                goes ahead exactly as shown above.
+                The next file with the same columns will reuse it. If saving fails, your import
+                still goes ahead exactly as shown above.
               </span>
             </span>
           </label>

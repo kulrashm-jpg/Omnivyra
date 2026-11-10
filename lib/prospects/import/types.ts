@@ -113,6 +113,12 @@ export interface MappingProposalResponse {
   proposals: FieldMappingProposalView[];
   requiresReview: boolean;
   profile: ProfileOutcomeView | null;
+  /**
+   * PI-LDB D: whether the tenant's saved mapping was LOADED, there was NONE
+   * for this file layout, or the read was UNAVAILABLE. Optional for older
+   * servers; a missing value is read as 'none'.
+   */
+  profileRead?: 'loaded' | 'none' | 'unavailable';
   degraded: DegradedFieldView[];
   /**
    * The closed destination list, served so the browser never has to hold its

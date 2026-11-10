@@ -7,6 +7,29 @@ import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { isCanonicalFieldKey } from '../../../backend/services/leadMapping/canonicalFieldRegistry';
 import { isSubmittableTarget } from '../../../lib/prospects/import/submittableTargets';
+import { ownedDbTable } from '../../../backend/db/writeOwner';
+import {
+  saveProfileVersion,
+  MappingProfileStoreError,
+  type SaveProfileEntry,
+} from '../../../backend/services/leadMapping/mappingProfileStore';
+
+/**
+ * GOV-H writer validation for `approved_by`: the approver must hold an ACTIVE
+ * membership in THIS tenant. A platform-level bypass that passes the
+ * capability check is not a member and cannot approve a tenant's mapping.
+ * An unreadable membership refuses (a null error is not an answer).
+ */
+async function isActiveMember(userId: string, companyId: string): Promise<boolean | null> {
+  try {
+    const res = await ownedDbTable('user_company_roles').select('company_id')
+      .eq('user_id', userId).eq('company_id', companyId).eq('status', 'active').limit(1);
+    if (res.error || (res.status !== 200 && res.status !== 206) || !Array.isArray(res.data)) return null;
+    return res.data.length > 0;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * PI-LDB — the mapping APPROVAL endpoint.
@@ -14,32 +37,24 @@ import { isSubmittableTarget } from '../../../lib/prospects/import/submittableTa
  *   POST /api/lead-ingestion/mapping-approval?company_id=<uuid>
  *   headers: Idempotency-Key
  *   body: { source, schemaFingerprint, headers[], entries[] }
- *   →  501 MAPPING_PROFILE_STORE_UNAVAILABLE  (until write ownership is settled)
+ *   →  201 { profileId, version }   (the store is the single writer: e9 ruling, 2026-11-11)
+ *      400 invalid / 403 NOT_A_MEMBER / 409 MAPPING_CONFLICT / 503 MAPPING_SAVE_FAILED | MEMBERSHIP_UNKNOWN
  *
- * ─── WHY THIS EXISTS BEFORE IT CAN SUCCEED ────────────────────────────────
- * The versioned profile store DOES ship in this deliverable —
- * `backend/services/leadMapping/mappingProfileStore.ts`, its migration
- * `20270201000000_pi_ldb_source_mapping_profiles.sql`, a 39-test unit suite and
- * `backend/tests/realschema/ldb1_mapping_profiles.test.ts`. What is NOT settled
- * is which track may WRITE `source_mapping_profiles`: the store declares itself
- * that table's only writer, so calling it from here would make this route a
- * second writer of a table the ingestion track owns. That ownership question is
- * an OWNER DECISION and is unresolved. There were two options: leave the
- * endpoint out, or ship the validation boundary now and fail closed on the
- * unresolved ownership question rather than on a missing store.
+ * ─── WHO WRITES ───────────────────────────────────────────────────────────
+ * Coordinator ruling (virality-e9 under owner delegation, 2026-11-11):
+ * `backend/services/leadMapping/mappingProfileStore.ts` is the SINGLE writer of
+ * `source_mapping_profiles`. This route is a CALLER: it validates, verifies the
+ * approver, and calls `saveProfileVersion`. (Until that ruling this route
+ * answered 501, rather than become a second writer.)
  *
- * Shipping it is the safer of the two, and only because it FAILS CLOSED. The
- * value of this file today is that it is the place where a browser-supplied
- * destination is checked against the canonical registry — the check that stops
- * a client naming an arbitrary field. That boundary is worth having under test
- * before anything can write through it. What it must never do is answer 200 to
- * a tenant whose approval was not actually stored: a tenant told "mapping
- * saved" who then finds it was not is worse off than one told plainly that
- * saving is not available yet.
+ * The approver is the verified principal - never a body field - and must hold
+ * an ACTIVE membership in this tenant (GOV-H writer validation for
+ * `approved_by`); a platform-level bypass that passes the capability check is
+ * not a member and is refused.
  *
- * So every request that passes validation ends in 501 with a machine-readable
- * code. The import flow is unaffected: approving a mapping for THIS import is
- * client-side state, and reuse across imports is the feature that waits.
+ * It must never answer 2xx for an approval that was not stored: every store
+ * failure maps to 409/400/503 with a machine-readable code, and the copy says
+ * the mapping still applies to THIS import (which is client-side state).
  *
  * ─── EVERY DESTINATION IS CHECKED TWICE ───────────────────────────────────
  * `isCanonicalFieldKey` — is this a destination the registry knows at all?
@@ -274,32 +289,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // ── FAIL CLOSED ─────────────────────────────────────────────────────────
-  // Everything above validated. The one thing missing is the store, and there
-  // is no safe stand-in for it: writing to `source_mapping_profiles` from this
-  // route would duplicate ownership of a table the ingestion track owns, and
-  // answering 200 without writing would tell a tenant their approval was
-  // saved when it was not.
-  //
-  // TODO(PI-LDB, ingestion track): replace this refusal with
-  //   const saved = await saveProfileVersion({
-  //     organizationId: companyId,
-  //     source,
-  //     schemaFingerprint,
-  //     headers,
-  //     approvedBy: guard.principal.userId,
-  //     entries,
-  //   });
-  //   return res.status(201).json({ profileId: saved.profileId, version: saved.version });
-  // against `backend/services/leadMapping/mappingProfileStore.ts`.
-  return res.status(501).json({
-    error:
-      'Saving a mapping for reuse is not available yet. Your mapping still applies to this import.',
-    code: 'MAPPING_PROFILE_STORE_UNAVAILABLE',
-    // Echoed so a client can show WHAT would have been saved, and so the
-    // contract is observable under test before the store exists.
-    validated: { source, schemaFingerprint, entryCount: entries.length },
-  });
+  // ── SAVE (PI-LDB D, 2026-11-11) ─────────────────────────────────────────
+  // Coordinator ruling (e9, under owner delegation): `mappingProfileStore` is
+  // the SINGLE writer of `source_mapping_profiles`; this route is a caller.
+  // The approver is the VERIFIED principal, never a body field, and must be an
+  // active member of this tenant.
+  const approvedBy = guard.principal.userId;
+  const member = await isActiveMember(approvedBy, companyId);
+  if (member === null) {
+    return res.status(503).json({ error: 'Membership could not be verified; nothing was saved.', code: 'MEMBERSHIP_UNKNOWN' });
+  }
+  if (!member) {
+    return res.status(403).json({ error: 'Only a member of this company can approve its mapping.', code: 'NOT_A_MEMBER' });
+  }
+
+  try {
+    const saved = await saveProfileVersion({
+      organizationId: companyId,
+      source,
+      schemaFingerprint,
+      headers,
+      approvedBy,
+      entries: entries as unknown as SaveProfileEntry[],
+    });
+    return res.status(201).json({ profileId: saved.profileId, version: saved.version });
+  } catch (err) {
+    if (err instanceof MappingProfileStoreError) {
+      if (err.kind === 'invalid_argument') return res.status(400).json({ error: err.message, code: 'INVALID_MAPPING' });
+      if (err.kind === 'conflict') {
+        return res.status(409).json({ error: 'Another approval for this file shape landed first. Reload and try again.', code: 'MAPPING_CONFLICT' });
+      }
+    }
+    // Never 200 for an approval that was not stored.
+    console.error('[mapping-approval] save failed', { kind: err instanceof MappingProfileStoreError ? err.kind : 'error' });
+    return res.status(503).json({ error: 'Your mapping could not be saved for reuse. It still applies to this import.', code: 'MAPPING_SAVE_FAILED' });
+  }
 }
 
 export default __createApiRoute(

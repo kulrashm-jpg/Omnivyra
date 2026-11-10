@@ -54,6 +54,12 @@ jest.mock('../../services/leadMapping/mappingEngine', () => ({
   proposeFieldMappings: (...a: unknown[]) => proposeFieldMappings(...a),
 }));
 
+// PI-LDB D: the stored profile is READ through the store (single writer).
+const loadProfileContext = jest.fn();
+jest.mock('../../services/leadMapping/mappingProfileStore', () => ({
+  loadProfileContext: (...a: unknown[]) => loadProfileContext(...a),
+}));
+
 jest.mock('../../services/leadMapping/gatewayProposer', () => ({
   createGatewayMappingProposer: (...a: unknown[]) => createGatewayMappingProposer(...a),
 }));
@@ -142,6 +148,42 @@ beforeEach(() => {
   checkRateLimit.mockResolvedValue({ allowed: true, remaining: 29, resetAt: 0, bypassed: false });
   createGatewayMappingProposer.mockReturnValue(async () => []);
   proposeFieldMappings.mockResolvedValue(engineResult());
+  loadProfileContext.mockReset();
+  loadProfileContext.mockResolvedValue({ profile: null, rejectedTargets: {} });
+});
+
+describe('PI-LDB D - the approved profile is LOADED and applied', () => {
+  const PROFILE = {
+    profileId: 'p-1', version: 2, sourceSchemaFingerprint: 'x'.repeat(64), headers: ['Email'],
+    entries: [{ sourceField: 'Email', target: 'email', transformation: 'lowercase_email', approvedBy: USER, approvedAt: '2026-11-11T00:00:00Z' }],
+  };
+
+  it('reads the profile for THIS tenant, source and file shape, and hands it plus refusals to the engine', async () => {
+    loadProfileContext.mockResolvedValue({ profile: PROFILE, rejectedTargets: { Email: ['phone'] } });
+    const res = await call();
+    expect(res._status).toBe(200);
+    const [key, headers] = loadProfileContext.mock.calls[0];
+    expect(key).toEqual({ organizationId: ORG_A, source: 'csv', schemaFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(headers).toEqual(['Email']);
+    const engineInput = proposeFieldMappings.mock.calls[0][0];
+    expect(engineInput.storedProfile).toBe(PROFILE);
+    expect(engineInput.rejectedTargets).toEqual({ Email: ['phone'] });
+    expect(res._json.profileRead).toBe('loaded');
+  });
+
+  it('no approved profile for this shape -> profileRead none, engine gets null', async () => {
+    const res = await call();
+    expect(proposeFieldMappings.mock.calls[0][0].storedProfile).toBeNull();
+    expect(res._json.profileRead).toBe('none');
+  });
+
+  it('a profile READ FAILURE is reported as unavailable, never as "no saved mapping", and the proposal still runs', async () => {
+    loadProfileContext.mockRejectedValue(new Error('read_failed'));
+    const res = await call();
+    expect(res._status).toBe(200);
+    expect(res._json.profileRead).toBe('unavailable');
+    expect(proposeFieldMappings.mock.calls[0][0].storedProfile).toBeNull();
+  });
 });
 
 describe('method', () => {

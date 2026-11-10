@@ -7,6 +7,7 @@ import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import { fingerprintSchema, proposeFieldMappings } from '../../../backend/services/leadMapping/mappingEngine';
 import { allowedTargets } from '../../../backend/services/leadMapping/canonicalFieldRegistry';
 import { createGatewayMappingProposer } from '../../../backend/services/leadMapping/gatewayProposer';
+import { loadProfileContext, type MappingProfileContext } from '../../../backend/services/leadMapping/mappingProfileStore';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import {
   isSubmittableTarget,
@@ -217,22 +218,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const schemaFingerprint = fingerprintSchema(headers);
 
-  // ── STORED PROFILE ──────────────────────────────────────────────────────
-  // `mappingProfileStore.ts` ships in this deliverable and `loadActiveProfile`
-  // is a READ, so nothing here is blocked by the write-ownership question that
-  // holds `mapping-approval` at 501. This stays `null` as a CONSEQUENCE of that
-  // question rather than a cause: approvals cannot be stored, so no tenant can
-  // ever hold an active profile, and reading would be a guaranteed-empty query
-  // on every import. The engine then reports `profile: null`, and the review UI
-  // renders its honest "no saved mapping yet" state. A fabricated profile here
-  // would be worse than none: it would claim a tenant had approved something
-  // they had not.
+  // ── STORED PROFILE (PI-LDB D, 2026-11-11) ─────────────────────────────
+  // Approvals are now stored (mapping-approval -> mappingProfileStore, the
+  // single writer), so the READ is enabled with them, as planned. The profile
+  // and the tenant's past refusals come from ONE pair of reads, so they cannot
+  // straddle two versions. The lookup is keyed by the exact schema
+  // fingerprint: a file whose header set changed finds no profile and gets a
+  // fresh proposal that needs approval, so drift is never auto-applied.
   //
-  // TODO(PI-LDB): once approvals can be stored, replace with
-  //   loadActiveProfile({ organizationId: companyId, source, schemaFingerprint })
-  // Enable this READ together with the write, never before it: a read alone is a
-  // guaranteed-empty query, and a write alone stores decisions nothing reads.
-  const storedProfile = null;
+  // A READ FAILURE IS NOT "NO SAVED MAPPING". The proposal still runs (the
+  // import is not blocked by a reuse feature), but the response says
+  // `profileRead: 'unavailable'` so the UI never tells a tenant they have no
+  // saved mapping when it simply could not look.
+  let context: MappingProfileContext = { profile: null, rejectedTargets: {} };
+  let profileRead: 'loaded' | 'none' | 'unavailable' = 'none';
+  try {
+    context = await loadProfileContext({ organizationId: companyId, source, schemaFingerprint }, headers);
+    profileRead = context.profile ? 'loaded' : 'none';
+  } catch {
+    profileRead = 'unavailable';
+  }
+  const storedProfile = context.profile;
 
   const proposer = createGatewayMappingProposer({
     tenantId: companyId,
@@ -250,6 +256,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         samples,
         fieldDescriptions: Object.keys(fieldDescriptions).length ? fieldDescriptions : undefined,
         storedProfile,
+        rejectedTargets: context.rejectedTargets,
       },
       proposer,
     );
@@ -273,6 +280,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       proposals: result.proposals,
       requiresReview: result.requiresReview,
       profile: result.profile,
+      profileRead,
       degraded: result.degraded,
       allowedTargets: allowedTargets().map((t) => {
         const submittable = isSubmittableTarget(t.key);

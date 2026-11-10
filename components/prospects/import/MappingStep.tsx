@@ -135,13 +135,17 @@ export default function MappingStep({
           )}
         </div>
 
-        {/* Saved-mapping state. `null` is the honest answer today: the profile
-            store is not delivered, so nothing was consulted and nothing is
-            claimed. */}
-        {proposal.profile === null ? (
+        {/* Saved-mapping state. A read FAILURE is never shown as "none saved":
+            `profileRead` says which one happened (PI-LDB D). */}
+        {proposal.profile === null && proposal.profileRead === 'unavailable' ? (
+          <p className="mt-4 rounded-lg bg-amber-50 px-4 py-2 text-xs text-amber-800" data-testid="saved-mapping-unavailable">
+            Your saved mappings could not be checked just now, so none was applied. Please confirm
+            these destinations; you can save them again for reuse.
+          </p>
+        ) : proposal.profile === null ? (
           <p className="mt-4 rounded-lg bg-gray-50 px-4 py-2 text-xs text-gray-600">
-            No saved mapping was used. Saving a mapping for reuse is not available yet, so you will
-            be asked to confirm these destinations each time for now.
+            No saved mapping for this file layout yet. Once you confirm these destinations you can
+            save them, and the next file with the same columns will reuse them.
           </p>
         ) : proposal.profile.state === 'drifted' ? (
           <p className="mt-4 rounded-lg bg-amber-50 px-4 py-2 text-xs text-amber-800">

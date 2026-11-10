@@ -1,18 +1,14 @@
 /**
  * PI-LDB — the mapping APPROVAL endpoint.
  *
- * This route cannot succeed yet: the versioned profile store is owned by the
- * ingestion track and is not delivered. Its value today is that it is the
- * boundary where a browser-supplied destination is checked against the
- * canonical registry, and that boundary is worth having under test before
- * anything can write through it.
- *
- * So the suite asserts two things above all:
- *   1. a destination the browser invented is REFUSED — the check that stops a
+ * PI-LDB D (2026-11-11): the route now SAVES through `mappingProfileStore`, the
+ * single writer of `source_mapping_profiles` (coordinator ruling). The suite
+ * asserts, above all:
+ *   1. a destination the browser invented is REFUSED - the check that stops a
  *      client naming an arbitrary field;
- *   2. the missing store FAILS CLOSED with a machine-readable 501, and never
- *      answers 200. A tenant told "mapping saved" who then finds it was not is
- *      worse off than one told plainly that saving is unavailable.
+ *   2. the approver is the VERIFIED principal and an ACTIVE MEMBER of the
+ *      tenant (GOV-H writer validation for `approved_by`);
+ *   3. an approval that was not stored NEVER answers 2xx.
  */
 
 const enforceCompanyAccess = jest.fn();
@@ -44,6 +40,29 @@ jest.mock('../../middleware/withIdempotency', () => ({
 
 jest.mock('../../../lib/platform/routeFactory', () => ({
   createApiRoute: (h: unknown) => h,
+}));
+
+// The store is the single writer; the route only calls it.
+const saveProfileVersion = jest.fn();
+jest.mock('../../services/leadMapping/mappingProfileStore', () => {
+  class MappingProfileStoreError extends Error {
+    constructor(message: string, readonly kind: string) { super(message); this.name = 'MappingProfileStoreError'; }
+  }
+  return { saveProfileVersion: (...a: unknown[]) => saveProfileVersion(...a), MappingProfileStoreError };
+});
+
+// Membership read (GOV-H writer validation).
+let membership: { data: unknown; error: unknown; status: number } = { data: [{ company_id: 'x' }], error: null, status: 200 };
+const membershipFilters: Array<[string, unknown]> = [];
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbTable: (table: string) => {
+    if (table !== 'user_company_roles') throw new Error(`unexpected table ${table}`);
+    const chain: Record<string, unknown> = {};
+    chain.select = () => chain;
+    chain.eq = (k: string, v: unknown) => { membershipFilters.push([k, v]); return chain; };
+    chain.limit = async () => membership;
+    return chain;
+  },
 }));
 
 import handler from '../../../pages/api/lead-ingestion/mapping-approval';
@@ -122,6 +141,10 @@ beforeEach(() => {
   tenantGateAllowed = true;
   enforceCompanyAccess.mockResolvedValue({ userId: USER });
   requireCapability.mockResolvedValue({ ok: true, principal: { userId: USER } });
+  saveProfileVersion.mockReset();
+  saveProfileVersion.mockResolvedValue({ profileId: 'p-1', version: 3 });
+  membership = { data: [{ company_id: ORG_A }], error: null, status: 200 };
+  membershipFilters.length = 0;
 });
 
 describe('method and gates', () => {
@@ -198,11 +221,10 @@ describe('THE BOUNDARY — a browser cannot name an arbitrary destination', () =
     // (manualAdapter.ts:289) and the orchestrator persists it to
     // `prospect_accounts.description` (orchestrator.ts:207, permitted by
     // ACCOUNT_ATTRIBUTE_COLUMNS). Refusing it would record the opposite of
-    // what the pipeline does. Reaching the fail-closed 501 is what proves
-    // BOTH destination checks passed — the same proxy the two tests below use.
+    // what the pipeline does. Reaching the save (201) is what proves BOTH
+    // destination checks passed - the same proxy the two tests below use.
     const res = await call(withEntry({ target: 'description', transformation: 'none' }));
-    expect(res._status).toBe(501);
-    expect(res._json.code).toBe('MAPPING_PROFILE_STORE_UNAVAILABLE');
+    expect(res._status).toBe(201);
   });
 
   it('refuses a non-string target', async () => {
@@ -213,13 +235,13 @@ describe('THE BOUNDARY — a browser cannot name an arbitrary destination', () =
 
   it('accepts a real, submittable registry key', async () => {
     const res = await call(withEntry({ target: 'companyDomain', transformation: 'url_to_domain' }));
-    // Reaches the fail-closed refusal, which means validation passed.
-    expect(res._status).toBe(501);
+    // Reaches the save, which means validation passed.
+    expect(res._status).toBe(201);
   });
 
   it('accepts a null target as a first-class IGNORE decision', async () => {
     const res = await call(withEntry({ target: null, decision: 'ignored', transformation: 'none' }));
-    expect(res._status).toBe(501);
+    expect(res._status).toBe(201);
   });
 });
 
@@ -339,38 +361,75 @@ describe('shape validation', () => {
   });
 });
 
-describe('FAIL CLOSED — the missing store never answers success', () => {
-  it('refuses with 501 and a machine-readable code', async () => {
+describe('SAVE - through the single writer, by a verified member', () => {
+  it('saves the validated decisions and answers 201 with the new version', async () => {
     const res = await call();
-    expect(res._status).toBe(501);
-    expect(res._json.code).toBe('MAPPING_PROFILE_STORE_UNAVAILABLE');
+    expect(res._status).toBe(201);
+    expect(res._json).toEqual({ profileId: 'p-1', version: 3 });
+    expect(saveProfileVersion).toHaveBeenCalledTimes(1);
+    expect(saveProfileVersion.mock.calls[0][0]).toEqual({
+      organizationId: ORG_A, source: 'csv', schemaFingerprint: FINGERPRINT, headers: ['Email'],
+      approvedBy: USER,
+      entries: [{ sourceField: 'Email', target: 'email', transformation: 'lowercase_email', decision: 'approved', mappingMethod: 'tenant_confirmed' }],
+    });
   });
 
-  it('never answers 2xx for any valid request', async () => {
-    const valid = [
-      withEntry({ target: 'email', transformation: 'lowercase_email' }),
-      withEntry({ target: null, decision: 'ignored', transformation: 'none' }),
-      withEntry({ target: 'companyName', transformation: 'trim', mappingMethod: 'tenant_override' }),
-    ];
-    for (const r of valid) {
-      const res = await call(r);
-      expect(res._status).toBeGreaterThanOrEqual(400);
+  it('the approver is the VERIFIED principal, never a body field', async () => {
+    const r = req();
+    (r.body as Record<string, unknown>).approvedBy = '00000000-0000-4000-8000-0000000000ff';
+    await call(r);
+    expect(saveProfileVersion.mock.calls[0][0].approvedBy).toBe(USER);
+  });
+
+  it('membership is checked for THIS user in THIS tenant, active only', async () => {
+    await call();
+    expect(membershipFilters).toEqual([['user_id', USER], ['company_id', ORG_A], ['status', 'active']]);
+  });
+
+  it('a non-member (e.g. a platform bypass) cannot approve: 403, nothing saved', async () => {
+    membership = { data: [], error: null, status: 200 };
+    const res = await call();
+    expect(res._status).toBe(403);
+    expect(res._json.code).toBe('NOT_A_MEMBER');
+    expect(saveProfileVersion).not.toHaveBeenCalled();
+  });
+
+  it('an unreadable membership refuses (a null error is not an answer): 503, nothing saved', async () => {
+    for (const m of [{ data: null, error: { code: 'x' }, status: 500 }, { data: null, error: null, status: 204 }]) {
+      saveProfileVersion.mockClear();
+      membership = m;
+      const res = await call();
+      expect(res._status).toBe(503);
+      expect(res._json.code).toBe('MEMBERSHIP_UNKNOWN');
+      expect(saveProfileVersion).not.toHaveBeenCalled();
     }
   });
+});
 
-  it('tells the tenant their import is unaffected', async () => {
+describe('an approval that was not stored NEVER answers 2xx', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { MappingProfileStoreError } = require('../../services/leadMapping/mappingProfileStore');
+
+  it('store conflict -> 409', async () => {
+    saveProfileVersion.mockRejectedValue(new MappingProfileStoreError('race', 'conflict'));
     const res = await call();
-    // The copy matters: this is a missing feature, not a failed import.
-    expect(String(res._json.error)).toMatch(/still applies to this import/i);
+    expect(res._status).toBe(409);
+    expect(res._json.code).toBe('MAPPING_CONFLICT');
   });
 
-  it('echoes what WOULD have been saved, so the contract is observable', async () => {
-    const res = await call();
-    expect(res._json.validated).toEqual({
-      source: 'csv',
-      schemaFingerprint: FINGERPRINT,
-      entryCount: 1,
-    });
+  it('store invalid_argument -> 400', async () => {
+    saveProfileVersion.mockRejectedValue(new MappingProfileStoreError('bad', 'invalid_argument'));
+    expect((await call())._status).toBe(400);
+  });
+
+  it('store write/read failure or any throw -> 503, and the import is unaffected', async () => {
+    for (const e of [new MappingProfileStoreError('w', 'write_failed'), new MappingProfileStoreError('r', 'read_failed'), new Error('boom')]) {
+      saveProfileVersion.mockRejectedValue(e);
+      const res = await call();
+      expect(res._status).toBe(503);
+      expect(res._json.code).toBe('MAPPING_SAVE_FAILED');
+      expect(String(res._json.error)).toMatch(/still applies to this import/i);
+    }
   });
 });
 
