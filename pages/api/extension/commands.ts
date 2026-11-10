@@ -30,7 +30,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { resolveEngagementCapability, CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
 import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityService';
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
-import { getActiveBinding } from '@/backend/services/extension15';
+import { getActiveBinding, isUndefinedColumnError } from '@/backend/services/extension15';
 import { normalizePlatform } from '@/backend/constants/platforms';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
@@ -182,18 +182,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   recorded by /api/extension/action-result. Cancelled rows are skipped
     //   here as an optimisation; the claim RPC below is the authority for
     //   cancellation, the platform kill switch and approval.
-    const query = supabase
+    const pendingCommands = (columns: string) => supabase
       .from('community_ai_actions')
-      .select('id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
+      .select(columns)
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
       .eq('execution_mode', 'browser')
       .is('dispatch_lease_id', null)
-      .is('cancel_requested_at', null);
-
-    const { data, error } = await query
+      .is('cancel_requested_at', null)
       .order('created_at', { ascending: false })
       .limit(10);
+    const COMMAND_COLUMNS = 'id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at';
+
+    // U1: delivery_path is the v15-only mark (migration 20270207000002). Code deployed
+    // ahead of that migration gets "undefined column" and re-reads without it: no row
+    // can carry the mark then, so 1.4 behaviour is unchanged.
+    let { data, error } = (await pendingCommands(`${COMMAND_COLUMNS}, delivery_path`)) as { data: any[] | null; error: any };
+    if (error && isUndefinedColumnError(error)) {
+      ({ data, error } = (await pendingCommands(COMMAND_COLUMNS)) as { data: any[] | null; error: any });
+    }
 
     if (error) {
       console.error('[extension/commands] supabase error:', error.message);
@@ -230,9 +237,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const skipLinkedInWrites = v15Binding.ok === true && v15Binding.urn !== null;
 
     for (const row of data || []) {
-      if (skipLinkedInWrites && normalizePlatform(row.platform) === 'linkedin') {
+      // U1: a row marked v15-only by the database at creation (it targets a thread
+      // collected by extension 1.5) is never offered here, to ANY session, so a 1.4.x
+      // extension of another user cannot claim it.
+      if (normalizePlatform(row.platform) === 'linkedin') {
         const type = String(row.action_type ?? '').trim().toLowerCase();
-        if (type === 'reply' || type === 'like') continue;
+        if ((type === 'reply' || type === 'like') && (skipLinkedInWrites || row.delivery_path === 'extension_v15')) continue;
       }
       // ── Chain-aware step selection ────────────────────────────────────────
       // When the row carries a command_chain, dispatch the step at

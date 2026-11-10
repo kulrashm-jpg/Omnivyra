@@ -39,11 +39,12 @@ const ME = 'urn:li:fsd_profile:ACoAAme0001';
 const OTHER = 'urn:li:fsd_profile:ACoAAother1';
 const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
-function seed(o: { author?: string; via?: string; actionType?: string; text?: string | null } = {}) {
+function seed(o: { author?: string; via?: string; actionType?: string; text?: string | null; unmarked?: boolean } = {}) {
   tables.community_ai_actions = [{
     id: 'act-1', organization_id: ORG, platform: 'linkedin', execution_mode: 'browser', status: 'pending',
     action_type: o.actionType ?? 'reply', target_id: 'urn:li:comment:(activity:1,2)', dispatch_lease_id: null,
     suggested_text: o.text === undefined ? 'Thanks for sharing' : o.text, execution_correlation_id: 'corr-1', created_at: '2026-11-10',
+    delivery_path: o.unmarked ? null : 'extension_v15',
   }];
   tables.engagement_messages = [{ organization_id: ORG, platform: 'linkedin', platform_message_id: 'urn:li:comment:(activity:1,2)', thread_id: 'th-1' }];
   tables.engagement_threads = [{ id: 'th-1', organization_id: ORG, platform: 'linkedin', platform_thread_id: 'urn:li:activity:1',
@@ -86,6 +87,7 @@ describe('offerWriteCommands', () => {
     ['another member post', { author: OTHER }],
     ['a thread not collected by 1.5', { via: 'extension_comments' }],
     ['a reply with blank text', { text: '  ' }],
+    ['a row the database did not mark v15-only (U1: 1.4 owns it)', { unmarked: true }],
   ])('%s is never claimed', async (_n, o) => {
     seed(o);
     expect(await offerWriteCommands(S, ME)).toEqual([]);

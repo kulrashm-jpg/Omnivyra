@@ -57,6 +57,15 @@ export async function getActiveBinding(orgId: string, userId: string): Promise<{
   }
 }
 
+/**
+ * "This column does not exist" from PostgREST / Postgres: code deployed before the
+ * migration that adds it (U1: community_ai_actions.delivery_path, 20270207000002).
+ */
+export function isUndefinedColumnError(error: unknown): boolean {
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  return code === '42703' || code === 'PGRST204';
+}
+
 async function readActiveBinding(orgId: string, userId: string): Promise<{ ok: true; urn: string | null } | Refusal> {
   const { data, error } = await ownedDbTable('extension_account_bindings')
     .select('acting_member_urn')

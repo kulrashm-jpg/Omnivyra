@@ -62,15 +62,12 @@ Every command is a row in the existing `extension_commands` table: `status` pend
 - The extension acknowledges with `POST /api/extension/v15/commands/ack`, signed body `{ command_id, extension_version }`, immediately before acting. This moves the command from `pending` to `dispatched`; it may be acknowledged only once.
 - The path is separate because the request signature covers METHOD and PATH but not the query string.
 
-**Write commands and the 1.4 route (known limitation, open item U1):**
+**Write commands and the 1.4 route (U1, closed by migration 20270207000002):**
 - Approved LinkedIn replies and likes (`community_ai_actions`, org-scoped) are offered on the v15 route only after the own-content check, and claimed through the unchanged claim RPC.
-- The 1.4 route (`GET /api/extension/commands`) skips them for any session whose user has an active 1.5 binding. That closes the race for that user (Orchestration review, 2026-11-10).
-- It does NOT close it across users: an unbound 1.4.x session of ANOTHER user in the same organization can still claim such an action and click it from a different LinkedIn account. That is pre-existing 1.4 behaviour, but it means v15's own-content guarantee holds only while v15 is the sole route issuing those rows.
-- **Durable fix (planned, not built):**
-  1. mark the action v15-only at creation (e.g. the acting member URN, or a delivery-path column set when the action comes from a v15-ingested thread);
-  2. have the 1.4 route skip marked rows for EVERY session;
-  3. have authorize-submit require the mark.
-- Until then, the passkey-bound human approval remains the control.
+- **The v15-only mark.** `community_ai_actions.delivery_path = 'extension_v15'` is set by the DATABASE at creation (a BEFORE INSERT trigger, so every insert path is covered) when a LinkedIn reply/like targets a message in a thread collected by 1.5 (`raw_payload.ingested_via = 'extension_v15'`, the same target-to-thread match as `authorize_extension_submit`). It is sticky: an UPDATE can neither set nor clear it, so a later 1.4 re-ingestion of the thread cannot unmark the action.
+- **Disjoint routes.** The 1.4 route (`GET /api/extension/commands`) never offers a marked row, to ANY session, so a 1.4.x extension of another user in the same organization cannot claim it. The v15 route offers ONLY marked rows. The 1.4 route still also skips every LinkedIn reply/like for a session whose user has an active 1.5 binding (Orchestration review, 2026-11-10).
+- **Deployment order.** Code deployed ahead of the migration gets "undefined column" on the 1.4 read and re-reads without the mark (1.4 unchanged); the v15 offer filter errors and offers nothing (fails closed).
+- **Residual.** An action created BEFORE its thread was collected by 1.5 stays unmarked and belongs to 1.4. `authorize_extension_submit` does not itself require the mark (its own-content check is unchanged); requiring it is a later hardening if wanted.
 
 **The signed command envelope** is HMAC-SHA256 with the session's derived secret, over the canonical JSON of the fields below. The extension verifies it before acting and refuses on any mismatch.
 

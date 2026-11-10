@@ -69,6 +69,10 @@ export async function offerWriteCommands(session: ExtSession, memberUrn: string,
     .eq('execution_mode', 'browser')
     .eq('status', 'pending')
     .in('action_type', ['reply', 'like'])
+    // U1: only rows the database marked v15-only at creation (20270207000002); the
+    // 1.4 route skips exactly these, so the two routes offer disjoint sets. Before
+    // the migration this filter errors and nothing is offered (fails closed).
+    .eq('delivery_path', 'extension_v15')
     .is('dispatch_lease_id', null)
     .order('created_at', { ascending: true })
     .limit(20);

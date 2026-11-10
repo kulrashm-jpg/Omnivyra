@@ -9,7 +9,13 @@ import { createHash } from 'crypto';
 import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
 
 const binding: { r: any } = { r: { ok: true, urn: null } };
-jest.mock('@/backend/services/extension15', () => ({ getActiveBinding: async () => binding.r }));
+/** U1: when set, a read naming delivery_path fails as if the column did not exist (code ahead of the migration). */
+let missingDeliveryPath = false;
+const selects: string[] = [];
+jest.mock('@/backend/services/extension15', () => ({
+  getActiveBinding: async () => binding.r,
+  isUndefinedColumnError: jest.requireActual('../../services/extension15').isUndefinedColumnError,
+}));
 
 let mockDb: FakeDb = createFakeDb();
 const policy = { execution_enabled: true, require_human_approval: false };
@@ -80,7 +86,22 @@ jest.mock('@/backend/services/communityRecipientRecheck', () => ({
 }));
 jest.mock('@/backend/db/supabaseClient', () => ({
   supabase: {
-    from: (t: string) => mockDb.from(t),
+    from: (t: string) => {
+      const q = mockDb.from(t);
+      if (t !== 'community_ai_actions') return q;
+      const origSelect = q.select;
+      q.select = (cols?: string, ...rest: any[]) => {
+        if (typeof cols === 'string') selects.push(cols);
+        if (missingDeliveryPath && typeof cols === 'string' && cols.includes('delivery_path')) {
+          const err: any = {};
+          for (const m of ['eq', 'is', 'in', 'or', 'order', 'limit']) err[m] = () => err;
+          err.then = (ok: any, ko: any) => Promise.resolve({ data: null, error: { code: '42703', message: 'column community_ai_actions.delivery_path does not exist' } }).then(ok, ko);
+          return err;
+        }
+        return origSelect(cols, ...rest);
+      };
+      return q;
+    },
     rpc: async (name: string, args: any) => {
       rpcCalls.push(name);
       if (name === 'claim_community_ai_browser_command') return rpcClaim(args);
@@ -170,6 +191,8 @@ beforeEach(() => {
   mockDb.statusCheck.community_ai_actions = COMMUNITY_STATUS_VOCABULARY;
   policy.execution_enabled = true;
   rpcCalls.length = 0;
+  missingDeliveryPath = false;
+  selects.length = 0;
 });
 
 it('a 1.5-bound session is not offered LinkedIn reply/like here (not even claimed); other platforms are unaffected', async () => {
@@ -192,4 +215,31 @@ it.each([
   const res = await poll();
   expect(res.statusCode).toBe(200);
   expect(offeredIds(res)).toEqual(expect.arrayContaining(['00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000a2']));
+});
+
+describe('U1: actions marked v15-only at creation (20270207000002)', () => {
+  const A1 = '00000000-0000-0000-0000-0000000000a1';
+  const A2 = '00000000-0000-0000-0000-0000000000a2';
+  const A3 = '00000000-0000-0000-0000-0000000000a3';
+  const A4 = '00000000-0000-0000-0000-0000000000a4';
+  const mark = (id: string) => { mockDb.tables.community_ai_actions.find((r) => r.id === id)!.delivery_path = 'extension_v15'; };
+
+  it('an unbound 1.4.x session of another user is never offered (or leased) a marked row; unmarked rows are offered as before', async () => {
+    binding.r = { ok: true, urn: null };
+    mark(A1);
+    const res = await poll();
+    expect(res.statusCode).toBe(200);
+    expect(offeredIds(res)).not.toContain(A1);
+    expect(offeredIds(res)).toEqual(expect.arrayContaining([A2, A3]));
+    expect(mockDb.tables.community_ai_actions.find((r) => r.id === A1)!.dispatch_lease_id).toBeNull();
+  });
+
+  it('code ahead of the migration (column missing) re-reads without the mark: 1.4 unchanged', async () => {
+    binding.r = { ok: true, urn: null };
+    missingDeliveryPath = true;
+    const res = await poll();
+    expect(res.statusCode).toBe(200);
+    expect(offeredIds(res)).toEqual(expect.arrayContaining([A1, A2]));
+    expect(selects.filter((c) => c.includes('approved_at'))).toEqual([expect.stringContaining('delivery_path'), expect.not.stringContaining('delivery_path')]);
+  });
 });
