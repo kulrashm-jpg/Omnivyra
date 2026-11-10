@@ -42,8 +42,7 @@
   "attested_from": "origin/main 5025f51d7bb1420e3d3c5ef4ed626c64b953b3b0",
   "evidence_class": "PRODUCTION_CATALOG_VERIFIED for ledger_max (2026-11-01 production inventory: 93 rows, 93 distinct versions, no duplicates, max 20270111000003); CODE_VERIFIED for every digest (hashed from the origin/main worktree at 5025f51d).",
   "ledger_rows_at_attestation": 93,
-  "files_pinned": 458,
-  "out_of_band_applied": { "20261127000000_pi_prospect_lists.sql": "PI-owned, immutable (owner #4, 2026-11-10). Live in production with NO ledger row; D1 2026-11-10 (read-only, verified by virality-05): all 19 columns, both policies, 7 index-like objects, 14 constraints with the expected referential actions, trigger enabled, both PI LISTS-001 comments present. Applied and complete." },
+  "files_pinned": 457,
   "files_above_boundary": 0,
   "digests": {
     "20260319_core_bootstrap_dependencies.sql": "102eaf189f37430ba0e08e2eb7923dbb91c55797006bb2b9e1dd5b13508611e8",
@@ -474,7 +473,6 @@
     "20261124000000_pi_relationship_canonical_decisions.sql": "10f934f1e9eadad6b1d10e66b1b273237a21ca58ab8342730b240e646cfb2a9a",
     "20261125000000_pi_relationship_evidence_detachment.sql": "83ff1b0d24da8741704cee7e8bdce239c88ecaebfcdb8e706b042e71efacaebc",
     "20261126000000_pg001_contact_purpose_scope.sql": "793529b061f5c1121f1be57e6471fa712a65c11c0449b7bdbf5b34d8de855b2e",
-    "20261127000000_pi_prospect_lists.sql": "01315600d26291f7cc366982faef21e9bf0ba34505e2fb8ee0576fdf1462c734",
     "20261128000000_pi_canonical_write_atomicity.sql": "3ce166ae2cb894d5f65e9f58ee59bb83ceba1aed1d964f13294baa3942124002",
     "20261201000000_recommendation_lifecycle_no_longer_surfaced.sql": "991cbe5b8e18c420ae7e77f396a714d34625d1d81eb1743cb155a1bde8f91d3a",
     "20261202000000_queue_jobs_retry_state.sql": "608d2a0270e2737f7f3c9c8b45ea1ffc819994371f87b48817b1829d1ad4fce8",
