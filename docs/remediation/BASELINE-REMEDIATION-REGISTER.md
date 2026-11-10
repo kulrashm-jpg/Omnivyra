@@ -67,7 +67,7 @@ Owner GO 2026-11-10. D1 (read-only production pack, by virality-83, verified by 
 
 | Item | Files | Action | Status |
 |---|---|---|---|
-| MQ-1 | `20261127000000_pi_prospect_lists` | Not moved; attestation digest plus an `out_of_band_applied` note (PI-owned, immutable) | **RESOLVED** `ed7448c4e` |
+| MQ-1 | `20261127000000_pi_prospect_lists` | Not moved. The attestation is supplied by **Release-controls `708f0ac43`** (#19 owns `applied-boundary.json`; #18 shape, schema 2). This branch's own attestation edit was removed in `fd028affa` | **PENDING** `708f0ac43` |
 | MQ-2 | 17 files → `20270111100000`–`…16` | Byte-identical moves; band below `20270112000000`; filename refs updated; 1 cascading PI pin | **RESOLVED** `ed7448c4e`. Replay 112/112. **Verification by virality-05 pending** |
 | MQ-3 | `20261231000010_rpa_legacy_session_invalidation` | Excluded: it embeds its version as data, so the change needs the RPA owner | **OPEN** (the gate's last violation) |
 | MQ-4 | `20270120000000`/`…01`/`…02` | Registry `occupied_elsewhere` → `reserved` (R-2) | **RESOLVED** `ed7448c4e` |
@@ -75,7 +75,11 @@ Owner GO 2026-11-10. D1 (read-only production pack, by virality-83, verified by 
 | — | `20270202000000` | Registry fields `production_applied` / `applied_sha256` / `applied_slug` / `applied_evidence`; **no ledger row** | Recorded in `ed7448c4e` |
 | — | Ordering postcondition | Final bodies of `advance_execution_plan` and `claim_community_ai_browser_command` | `a2d4af0ce` + `f6b7444bc` |
 
-**Gate: 23 → 1.**
+**Gate: 23 → 2 on this branch.** The two remaining are `20261231000010` (excluded) and `20261127000000` (clears when `708f0ac43` lands). Verified by virality-05: 17/17 R100, byte-identical, order preserved, rollbacks untouched.
+
+**Integration rule (conflict 2):** `piExecutionPlan036.test.ts` is re-pinned by both this branch (`a8a09b7c5bef2966`) and Orchestration `e177b1e76` (`2ac132c11a6e8d34`) from the same base. **Whichever branch integrates SECOND recomputes 036 and its meta-pin in `piWorkflowExecution037` from the merged bytes, and sends them to virality-05 for PI review.**
+
+**Registry:** `version-reservations.json` edits stay with the renames until the owner rules who owns merging that file.
 
 ## 4. Application issues found during diagnosis (no failing test)
 
