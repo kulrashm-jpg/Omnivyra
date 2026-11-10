@@ -160,4 +160,21 @@ describe('RULE 6b — applied-above-boundary immutability', () => {
     const b = { schema_version: 2, ledger_max: LEDGER_MAX, digests: { [APPLIED]: sha(BODY) } };
     expect(immutabilityViolations([APPLIED], b, () => sha(BODY)).violations[0]).toContain('DELETED OR RENAMED');
   });
+  it('counter: an entry whose sha256 is malformed is NOT counted as verified (A1 never ran)', () => {
+    const r = aboveBoundaryViolations([APPLIED], boundary({ [APPLIED]: entry({ sha256: 'not-a-hash' }) }), reader(files));
+    expect(r.checked).toBe(0);
+    expect(r.violations.join('\n')).toContain('APPLIED-OUT-OF-BAND ENTRY INCOMPLETE');
+  });
+
+  it('LF basis is byte-level: non-UTF-8 bytes survive and CRLF still folds to LF', () => {
+    const latin1 = Buffer.from([0xe9, 0xff]);
+    const lf = Buffer.concat([Buffer.from('SELECT 1;\n-- latin1: '), latin1, Buffer.from('\n')]);
+    const crlf = Buffer.concat([Buffer.from('SELECT 1;\r\n-- latin1: '), latin1, Buffer.from('\r\n')]);
+    const b = boundary({ [APPLIED]: entry({ sha256: sha(lf) }) });
+    expect(aboveBoundaryViolations([APPLIED], b, () => crlf).violations).toEqual([]);
+    expect(aboveBoundaryViolations([APPLIED], b, () => lf).violations).toEqual([]);
+    // A lone CR is real content: it is NOT folded away (fail-safe direction).
+    const loneCr = Buffer.concat([Buffer.from('SELECT 1;\r-- latin1: '), latin1, Buffer.from('\n')]);
+    expect(aboveBoundaryViolations([APPLIED], b, () => loneCr).violations[0]).toContain('APPLIED MIGRATION MODIFIED (above boundary)');
+  });
 });

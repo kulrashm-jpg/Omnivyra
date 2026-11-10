@@ -590,7 +590,17 @@ const ABOVE_BOUNDARY_FIELDS = [
   'cluster_system_identifier', 'ledger_row', 'record', 'evidence_class',
 ];
 const KNOWN_BOUNDARY_SCHEMAS = new Set([1, 2]);
-const lfSha256 = (buf) => sha256(Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8'));
+// CRLF pairs only are folded to LF, at the byte level: no UTF-8 round trip, so a
+// non-UTF-8 byte cannot be rewritten to U+FFFD, and a lone CR is preserved (fail-safe).
+const lfSha256 = (buf) => {
+  const out = Buffer.allocUnsafe(buf.length);
+  let n = 0;
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] === 0x0d && buf[i + 1] === 0x0a) continue;
+    out[n++] = buf[i];
+  }
+  return sha256(out.subarray(0, n));
+};
 
 function aboveBoundaryViolations(topLevelFiles, boundary, readBytes) {
   const out = [];
@@ -638,9 +648,9 @@ function aboveBoundaryViolations(topLevelFiles, boundary, readBytes) {
         'but is no longer at that path. Applied history is immutable; restore the file.');
       continue;
     }
-    // A1 — content, over LF bytes.
-    checked++;
+    // A1 — content, over LF bytes. Counted as verified only when A1 actually ran.
     if (typeof e.sha256 === 'string' && /^[0-9a-f]{64}$/.test(e.sha256)) {
+      checked++;
       const actual = lfSha256(readBytes(f));
       if (actual !== e.sha256) {
         out.push(`${f}\n    ✗ APPLIED MIGRATION MODIFIED (above boundary). Recorded ${e.sha256.slice(0, 12)}… (LF bytes), ` +
