@@ -14,10 +14,22 @@ const OTHER = 'urn:li:fsd_profile:ACoAAgateOther001';
 const USER = '00000000-0000-4000-8000-0000000000e7';
 const TEXT_SHA = createHash('sha256').update('Thanks for sharing', 'utf8').digest('hex');
 
-async function fixture(o: { ingestedVia?: string; postAuthor?: string; ageMs?: number; bind?: boolean } = {}) {
+async function fixture(o: { ingestedVia?: string; postAuthor?: string; ageMs?: number; bind?: boolean; threadAfterAction?: boolean } = {}) {
   await openTenant(db, ORG_A);
   const target = `urn:li:comment:(activity:7${Date.now() % 1e9},${Math.floor(Math.random() * 1e9)})`;
+  // U1 (20270207000002): the thread is collected BEFORE the action is created, so the
+  // database marks the action v15-only at INSERT; threadAfterAction leaves it unmarked.
+  const collect = async () => {
+    const thread = randomUUID();
+    await db.query(`INSERT INTO public.engagement_threads (id, organization_id, platform, platform_thread_id, raw_payload)
+                    VALUES ($1, $2, 'linkedin', $3, $4::jsonb)`,
+      [thread, ORG_A, `urn:li:activity:${thread}`, JSON.stringify({ ingested_via: o.ingestedVia ?? 'extension_v15', post_author_urn: o.postAuthor ?? ME })]);
+    await db.query(`INSERT INTO public.engagement_messages (thread_id, organization_id, platform, platform_message_id, content)
+                    VALUES ($1, $2, 'linkedin', $3, 'a comment')`, [thread, ORG_A, target]);
+  };
+  if (!o.threadAfterAction) await collect();
   const { id } = await approvedAction(db, { org: ORG_A, status: 'pending', executionMode: 'browser', targetId: target, ...(o.ageMs !== undefined ? { ageMs: o.ageMs } : {}) });
+  if (o.threadAfterAction) await collect();
   const claimed = await browserClaimRpc(db, id, ORG_A, 'lease-1');
   if (claimed !== 1) {
     // Only for the expired-approval case: the claim refuses, so the lease is placed
@@ -31,12 +43,6 @@ async function fixture(o: { ingestedVia?: string; postAuthor?: string; ageMs?: n
     await db.query(`INSERT INTO public.extension_account_bindings (org_id, user_id, platform, acting_member_urn) VALUES ($1, $2, 'linkedin', $3)`,
       [ORG_A, USER, ME]);
   }
-  const thread = randomUUID();
-  await db.query(`INSERT INTO public.engagement_threads (id, organization_id, platform, platform_thread_id, raw_payload)
-                  VALUES ($1, $2, 'linkedin', $3, $4::jsonb)`,
-    [thread, ORG_A, `urn:li:activity:${thread}`, JSON.stringify({ ingested_via: o.ingestedVia ?? 'extension_v15', post_author_urn: o.postAuthor ?? ME })]);
-  await db.query(`INSERT INTO public.engagement_messages (thread_id, organization_id, platform, platform_message_id, content)
-                  VALUES ($1, $2, 'linkedin', $3, 'a comment')`, [thread, ORG_A, target]);
   return id;
 }
 
@@ -83,7 +89,15 @@ describe('authorize_extension_submit', () => {
   }));
 
   it.each([
-    ['a thread not collected by 1.5', { ingestedVia: 'extension_comments' }],
+    ['a thread not collected by 1.5 (unmarked: 1.4 owns it)', { ingestedVia: 'extension_comments' }],
+    ['an action created before its thread was collected by 1.5 (unmarked)', { threadAfterAction: true }],
+  ])('NOT_V15_DELIVERY for %s', (_n, o) => inRollback(async () => {
+    const id = await fixture(o);
+    expect(await gate(id)).toBe('NOT_V15_DELIVERY');
+    expect((await row(id)).submit_attempted_at).toBeNull();
+  }));
+
+  it.each([
     ['a post authored by someone else', { postAuthor: OTHER }],
   ])('NOT_OWN_CONTENT for %s', (_n, o) => inRollback(async () => {
     const id = await fixture(o);

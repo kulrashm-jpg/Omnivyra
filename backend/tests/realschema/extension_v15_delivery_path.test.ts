@@ -5,6 +5,8 @@
  * or by a re-ingestion of the thread) can set or clear the mark.
  */
 import { randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { db, inRollback, ORG_A, seedTenants } from './setup';
 import { openTenant, approvedAction } from './helpers/c3ClaimFixtures';
 
@@ -77,4 +79,14 @@ describe('community_ai_actions.delivery_path (U1)', () => {
       expect(r).toMatchObject({ prosecdef: true, proconfig: ['search_path=public, pg_temp'], anon_x: false, auth_x: false });
     }
   });
+
+  it('the rollback (BEGIN/COMMIT stripped, run inside a rolled-back transaction) removes every object and restores the 000001 submit gate; its postcondition passes', () => inRollback(async () => {
+    const sql = readFileSync(join(__dirname, '../../../supabase/migrations/rollbacks/extension_v15_delivery_path_rollback.sql'), 'utf8')
+      .split('\n').filter((l) => !/^(BEGIN|COMMIT);\s*$/.test(l)).join('\n');
+    await db.query(sql);
+    const { rows } = await db.query(`SELECT
+        EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.community_ai_actions'::regclass AND attname = 'delivery_path' AND NOT attisdropped) AS col,
+        position('NOT_V15_DELIVERY' IN (SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.authorize_extension_submit(uuid,uuid,text,text,uuid,text,text)'))) AS mark_check`);
+    expect(rows[0]).toEqual({ col: false, mark_check: 0 });
+  }));
 });
