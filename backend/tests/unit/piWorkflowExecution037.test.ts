@@ -452,7 +452,7 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('c2f0c2174cb2ca3c');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
     // RE-PINNED 2026-10-28: 036 re-pinned the instance store (targets_not_installed mapping).
-    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('a8a09b7c5bef2966'); // RE-PINNED 2026-11-07 (G-11): 036 re-pinned the [id] route again (evaluation opt_out); 2026-11-06 (Prompt 5) the [id] route and the instance store
+    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('ec222f17f9a82b0e'); // RE-PINNED 2026-11-10 (Follow-up E PI F1/F2 on the GD-4 base: 036 re-pinned the [id] route and the invocation route again; computed from the merged bytes); before that RE-PINNED 2026-11-10 (CONFLICT 2 merge, computed from the merged bytes: GD-4 ed7448c4e pinned a8a09b7c5bef2966 for the renamed migration stems, Follow-up E pinned 11b87e0909df8281 for the [id] and invocation route pins; 036 now carries both edit sets); before that 2026-11-07 (G-11): 036 re-pinned the [id] route again (evaluation opt_out); 2026-11-06 (Prompt 5) the [id] route and the instance store
   });
 
   it('033, 034 and 032 are byte-identical', () => {
@@ -460,9 +460,9 @@ describe('037 — frozen artefacts are untouched', () => {
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('4616088fd7c2a8d2'); // RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('3fd60562d9c42018'); // RE-PINNED 2026-11-10 (Follow-up E, PI review F1/F2/F3: one acknowledgement shape per route (400 acknowledgement_shape_invalid), the acknowledgement reported on both [id] gated paths, record semantics documented); before that RE-PINNED 2026-11-10 (Follow-up E: a person ending the run (lifecycle end, evaluation end) acknowledges an unresolved uncertain communication first; opt_out never held); before that RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
-      .toBe('6c303af15da7a4bf');
+      .toBe('29a0f9fc30836b98'); // RE-PINNED 2026-11-10 (Follow-up E, PI review F1/F2/F3: one acknowledgement shape per route (400 acknowledgement_shape_invalid), the acknowledgement reported on both [id] gated paths, record semantics documented); before that RE-PINNED 2026-11-10 (Follow-up E: enrolling a person with an unresolved uncertain communication from an earlier run acknowledges it first)
     expect(sha('supabase/migrations/20270111100001_pi_workflow_definitions.sql'))
       .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
     expect(sha('backend/services/workflows/workflowStore.ts')).toBe('8b5096c788dc142d'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)

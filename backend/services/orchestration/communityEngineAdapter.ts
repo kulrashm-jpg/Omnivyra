@@ -87,6 +87,7 @@ import {
   type CommunityIdentityPort,
   type PersonProof,
 } from './communityIdentityProof';
+import { claimEngineRequest, claimRefusal, type ClaimOptions } from './engineRequestClaim';
 
 /** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
 const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
@@ -486,8 +487,12 @@ export interface RequestRow {
 
 export interface CommunityAdapterDeps {
   getOrCreateRequest(organizationId: string, executionTaskId: string): Promise<RequestRow>;
-  /** Compare-and-set; true when this call moved the row. */
-  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }): Promise<boolean>;
+  /**
+   * Compare-and-set; true when this call moved the row. The claim (`requested -> submitting`)
+   * is D-2's atomic claim (orch_claim_engine_request: per-person lock + frequency gap + claim);
+   * why nothing was claimed is reported through `claim.verdict`.
+   */
+  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }, claim?: ClaimOptions): Promise<boolean>;
   binding: CommunityActionBinding;
   /** Tenant-filtered read. null = no such action FOR THIS TENANT; undefined = unreadable. */
   readAction(organizationId: string, actionId: string): Promise<CommunityActionRow | null | undefined>;
@@ -531,7 +536,12 @@ export const defaultCommunityDeps: CommunityAdapterDeps = {
     throw Object.assign(new Error('engine request could not be created'), { code: 'request_create_failed' });
   },
 
-  async transitionRequest(organizationId, executionTaskId, from, patch) {
+  async transitionRequest(organizationId, executionTaskId, from, patch, claim) {
+    if (from === 'requested' && patch.state === 'submitting') {
+      const options = claim ?? {};
+      options.externalRef = patch.external_ref ?? options.externalRef ?? null;
+      return claimEngineRequest(organizationId, executionTaskId, options);
+    }
     const res = await ownedDbTable(ENGINE_REQUESTS_TABLE)
       .update(patch)
       .eq('organization_id', organizationId)
@@ -843,8 +853,15 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
       }
 
       // ── Claim: exactly one invocation proceeds ─────────────────────────────
-      const claimed = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'submitting', external_ref: row.id });
-      if (!claimed) return result('submitting', 'wait', 'another sweep claimed this request', row.id);
+      // D-2: atomically with the person's frequency gap, under the person's lock.
+      const claim: ClaimOptions = { gapHours: ctx.frequencyGapHours ?? null, now: ctx.now };
+      const claimed = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'requested', { state: 'submitting', external_ref: row.id }, claim);
+      if (!claimed) {
+        const refused = claimRefusal(claim.verdict, claim.gapHours, claim.now);
+        return refused === null
+          ? result('submitting', 'wait', 'another sweep claimed this request', row.id)
+          : result(refused.outcome, 'wait', refused.reason, row.id);
+      }
       let engineClaimed = false;
       try {
         engineClaimed = await deps.claimAction(ctx.organizationId, row.id, nowIso, ctx.executionTaskId);

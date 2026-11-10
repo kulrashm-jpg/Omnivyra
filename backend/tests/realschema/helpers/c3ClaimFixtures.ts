@@ -25,7 +25,7 @@ export const C3_HASH = 'ab'.repeat(32);
 export function bindingHashOf(row: { id: string; tenant_id: string; organization_id: string; platform: string; action_type: string;
   target_id: string; suggested_text: string | null; playbook_id?: string | null; discovered_user_id?: string | null }): string {
   const r = communityApprovalBindingHash(row);
-  if (!r.ok) throw new Error(`fixture cannot be bound: ${r.reason}`);
+  if (!r.ok) throw new Error(`fixture cannot be bound: ${(r as { reason: string }).reason}`);
   return r.hash;
 }
 

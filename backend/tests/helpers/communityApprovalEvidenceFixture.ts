@@ -32,7 +32,7 @@ export function withApprovalEvidence<T extends Record<string, any>>(
 } {
   const approvedAt = opts.approvedAt ?? (typeof row.approved_at === 'string' && row.approved_at ? row.approved_at : approvedAgo());
   const binding = communityApprovalBindingHash(row as never);
-  if (!binding.ok) throw new Error(`fixture row cannot be bound: ${binding.reason}`);
+  if (!binding.ok) throw new Error(`fixture row cannot be bound: ${(binding as { reason: string }).reason}`);
   return {
     ...row,
     approved_at: approvedAt,

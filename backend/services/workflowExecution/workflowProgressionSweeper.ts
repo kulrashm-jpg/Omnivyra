@@ -50,8 +50,9 @@ import {
   advanceExecutionRun, BLOCKING_STEP_STATES, getReadyStep, listProgressionSteps, transitionPlanStep,
 } from './stepProgressionStore';
 import {
-  getPlanForInstance, lastCompletedActionAtForSubject, listInstanceTasks,
+  getPlanForInstance, listInstanceTasks,
 } from '../executionPlans/executionPlanStore';
+import { lastContactActionAtForSubject } from '../orchestration/journeyFrequency';
 import { getExecutionInstance, listExecutionInstanceIdsInStates, setExecutionInstanceState } from '../executionInstances/executionInstanceStore';
 import { ownedDbTable } from '../../db/writeOwner';
 import { recordProgressionSweep } from '../leadOutreachExecution/telemetry';
@@ -588,11 +589,23 @@ export async function advanceAndDispatchWorkflowExecution(
       // ── 7. Frequency policy and execution window. Neither delays reading an engine's record. ──
       const gap = definition?.policy?.min_hours_between_actions;
       if (!engineHolds && typeof gap === 'number' && gap > 0 && !NON_CONTACT_CHANNELS.includes(channel)) {
-        const last = await lastCompletedActionAtForSubject(organizationId, subject.kind, subject.id);
-        const since = last === null ? null : hoursBetween(last, now);
+        // Follow-up D / D-2: an uncertain communication (it may have been sent) and one in
+        // flight (queued, not yet confirmed) count as contact, from any of this person's
+        // journeys; this step's own request never defers it.
+        const last = await lastContactActionAtForSubject(organizationId, subject.kind, subject.id, { excludeTaskId: task.id });
+        // Fail closed: a contact history with an unreadable time defers external contact.
+        if (last !== null && (last.invalid === true || last.at === null || hoursBetween(last.at, now) === null)) {
+          counters.tasks_deferred_frequency += 1;
+          decide({ engine: adapter.engine, decision: 'deferred', outcome: 'frequency_history_invalid', reasons: ['a contact record of this person has no readable time; external contact is deferred until it is resolved (fail closed)'] });
+          continue;
+        }
+        const since = last === null || last.at === null ? null : hoursBetween(last.at, now);
         if (since !== null && since < gap) {
           counters.tasks_deferred_frequency += 1;
-          decide({ engine: adapter.engine, decision: 'deferred', outcome: null, reasons: [`last action ${since.toFixed(1)}h ago; policy requires ${gap}h`] });
+          const reasons = [`last action ${since.toFixed(1)}h ago; policy requires ${gap}h`];
+          if (last!.basis === 'uncertain') reasons.push('the last action is unconfirmed: it may have been sent, so it counts as contact (it is not treated as sent or delivered)');
+          if (last!.basis === 'in_flight') reasons.push('the last action is queued and not yet confirmed: it may be sent, so it counts as contact (it is not treated as sent or delivered)');
+          decide({ engine: adapter.engine, decision: 'deferred', outcome: null, reasons });
           continue;
         }
       }
@@ -607,10 +620,14 @@ export async function advanceAndDispatchWorkflowExecution(
       // ── 8. The engine acts; its disposition settles the step. ─────────────
       let r: EngineResult;
       try {
+        // D-2: the gap travels with the step, so an engine that claims through the request
+        // ledger re-checks it atomically with its claim (orch_claim_engine_request).
+        const frequencyGap = definition?.policy?.min_hours_between_actions;
         r = await adapter.execute({
           organizationId, executionInstanceId, executionTaskId: task.id, planStepId: ready.id,
           channel, subject, step, personId: facts.personId, now,
           ...(engineHolds ? { holdOnly: true } : {}),
+          ...(typeof frequencyGap === 'number' && frequencyGap > 0 && !NON_CONTACT_CHANNELS.includes(channel) ? { frequencyGapHours: frequencyGap } : {}),
         });
       } catch (e) {
         counters.errors += 1;

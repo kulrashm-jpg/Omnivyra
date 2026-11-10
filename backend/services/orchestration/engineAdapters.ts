@@ -86,6 +86,12 @@ export interface EngineStepContext {
    * may already hold the action. The engine reports what it holds and begins nothing new.
    */
   readonly holdOnly?: boolean;
+  /**
+   * D-2: the step policy's minimum gap between actions (hours), on a channel that contacts the
+   * person. An engine that claims through the request ledger re-checks it atomically with its
+   * claim (orch_claim_engine_request). Absent when no gap applies.
+   */
+  readonly frequencyGapHours?: number;
 }
 
 export interface EngineResult {

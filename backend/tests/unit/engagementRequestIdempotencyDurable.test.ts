@@ -706,7 +706,7 @@ describe('DM recipient safety — DMs are refused on every path (no authoritativ
   // stored, with its approval of record (approver, content binding, passkey, < 7 days).
   const storeApproved = (r: Record<string, any>) => {
     const { approved_at: _legacy, ...rest } = r;
-    const stored = withApprovalEvidence({ ...rest, status: 'approved' });
+    const stored = withApprovalEvidence({ ...rest, status: 'approved' } as Record<string, any>);
     mockDb.tables.community_ai_actions = [...(mockDb.tables.community_ai_actions || []).filter((x: any) => x.id !== stored.id), stored];
     return stored as any;
   };

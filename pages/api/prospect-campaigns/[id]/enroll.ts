@@ -1,7 +1,14 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/prospect-campaigns/:id/enroll?company_id=<uuid>
- * Body: { workflowId, selectionEventKey?, dryRun? }
+ * Body: { workflowId, selectionEventKey?, dryRun?, acknowledgeUncertainByProspect? }
+ *
+ * Follow-up E: a person with an unresolved uncertain communication from an earlier run is
+ * reported `needs_acknowledgement` with its warning and is not enrolled, until the request
+ * carries `acknowledgeUncertainByProspect: { [prospectId]: warning.acknowledgementKey }`. The
+ * acknowledgement is recorded per person; it authorizes no send. A wrong field or shape
+ * (including the single-enrolment `acknowledgeUncertain`) is 400 acknowledgement_shape_invalid
+ * before anyone is enrolled (PI review F1).
  *
  * Enrolls the campaign's selected targets into ONE workflow, under its current
  * published version: one journey per distinct prospect, the version's
@@ -22,6 +29,7 @@ import { PROSPECT_ICP_MANAGE } from '../../../../shared/contracts/security';
 import { enrollCampaignTargets, CampaignEnrollmentError } from '../../../../backend/services/orchestration/campaignEnrollment';
 import { CampaignTargetError } from '../../../../backend/services/prospectCampaigns/campaignTargetStore';
 import { ExecutionInstanceError } from '../../../../backend/services/executionInstances/executionInstanceStore';
+import { acknowledgementShapeError } from '../../../../backend/services/orchestration/uncertainCommunicationAcknowledgement';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -57,6 +65,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const workflowId = str(body.workflowId);
   if (!workflowId || !UUID.test(workflowId)) return res.status(400).json({ error: 'workflowId must be a uuid' });
   const selectionEventKey = str(body.selectionEventKey) ?? undefined;
+  const shapeError = acknowledgementShapeError(body, 'by_prospect');
+  if (shapeError) return res.status(400).json(shapeError);
 
   try {
     const report = await enrollCampaignTargets({
@@ -65,6 +75,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       workflowId,
       ...(selectionEventKey ? { selectionEventKey } : {}),
       dryRun: body.dryRun === true,
+      actorUserId: guard.principal.userId,           // the authenticated person, never the body's
+      acknowledgements: body.acknowledgeUncertainByProspect,
     });
     return res.status(200).json({ report });
   } catch (e) {

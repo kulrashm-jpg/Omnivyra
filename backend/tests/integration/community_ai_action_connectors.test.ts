@@ -119,9 +119,10 @@ const approveStored = (id: string) => {
   return r;
 };
 const approveInline = (row: Record<string, any>) => {
-  const r = withApprovalEvidence({ status: 'approved', ...row });
+  const r = withApprovalEvidence({ status: 'approved', ...row } as Record<string, any>);
   actionStore.set(r.id, r);
-  return r;
+  // The executor's own row type: the evidence fields are added to an untyped fixture row.
+  return r as unknown as Parameters<typeof realExecuteCommunityAction>[0];
 };
 const installPrompt3 = () => {
   (supabase.rpc as jest.Mock).mockImplementation(communityRpc);

@@ -134,7 +134,7 @@ describe('what each response does', () => {
       expect((await lifecycle(ORG_A, s.prospectId)).at(-1)).toMatchObject({ state: 'not_interested', origin: 'human' });
       const again = await enrol(ORG_A, s.actor, s.prospectId, { steps: [emailStep('later')] });
       expect(again.report.enrolled).toBe(0);
-      expect(again.report.exclusionReasons.prospect_lifecycle_closed).toBe(1);
+      expect((again.report.exclusionReasons as Record<string, number>).prospect_lifecycle_closed).toBe(1);
     });
   });
 

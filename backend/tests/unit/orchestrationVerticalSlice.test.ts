@@ -59,6 +59,8 @@ jest.mock('../../db/writeOwner', () => ({
           row.updated_at = world.clock;
           row.external_ref = row.external_ref ?? null;
           row.detail = row.detail ?? null;
+          // D-2 trigger: queued_at is set the first time a request is a possible contact.
+          if ((row.queued_at ?? null) === null && ['submitting', 'submitted', 'uncertain'].includes(String(row.state))) row.queued_at = world.clock;
         }
         const created = { ...row, id: `${table}-${db.nextId++}`, created_at: '2026-10-28T00:00:00.000Z' };
         rows().push(created);
@@ -77,8 +79,15 @@ jest.mock('../../db/writeOwner', () => ({
             if (['completed', 'skipped', 'failed', 'uncertain'].includes(String(r.state)) && p.state !== undefined && p.state !== r.state) {
               return { data: null, error: { code: '23514', message: 'a settled request does not move' } };
             }
+            // D-2 trigger: queued_at is set once.
+            if ((r.queued_at ?? null) !== null && p.queued_at !== undefined && p.queued_at !== r.queued_at) {
+              return { data: null, error: { code: '23514', message: 'queued_at is set once' } };
+            }
           }
-          for (const r of affected) Object.assign(r, st.payload, { updated_at: world.clock });
+          for (const r of affected) {
+            Object.assign(r, st.payload, { updated_at: world.clock });
+            if ((r.queued_at ?? null) === null && ['submitting', 'submitted', 'uncertain'].includes(String(r.state))) r.queued_at = world.clock;
+          }
           return { data: affected.map((r) => ({ id: r.id })), error: null };
         }
         for (const r of affected) Object.assign(r, st.payload);
@@ -102,6 +111,40 @@ jest.mock('../../db/writeOwner', () => ({
       then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => exec('many').then(res, rej),
     };
     return b;
+  },
+  // D-2: public.orch_claim_engine_request, emulated step for step (single-threaded, so the
+  // per-person lock is implicit): history -> gap -> claim. Proven on PostgreSQL in
+  // d2_frequency_claim_concurrency_real.test.ts and orch_engines_real.test.ts.
+  ownedDbRpc: async (fn: string, a: Row) => {
+    await Promise.resolve();
+    if (fn !== 'orch_claim_engine_request') return { data: null, error: { code: '42883', message: `function ${fn} does not exist` } };
+    const org = String(a.p_organization_id);
+    const taskId = String(a.p_execution_task_id);
+    const task = world.tasks.find((t) => t.organizationId === org && t.id === taskId);
+    if (!task) return { data: [{ outcome: 'task_not_found', last_contact_at: null, basis: null }], error: null };
+    const nonContact = (a.p_non_contact_channels as string[]) ?? [];
+    const mine = world.tasks.filter((t) => t.organizationId === org && t.subjectKind === task.subjectKind && t.subjectId === task.subjectId && !nonContact.includes(t.channel));
+    const ledger = (db.tables.execution_engine_requests ?? []) as Row[];
+    let last: string | null = null;
+    let basis: string | null = null;
+    const gap = typeof a.p_min_gap_hours === 'number' ? a.p_min_gap_hours : null;
+    if (gap !== null && gap > 0) {
+      const counted = ledger.filter((q) => q.organization_id === org && q.execution_task_id !== taskId && mine.some((t) => t.id === q.execution_task_id) && ['submitting', 'submitted', 'uncertain'].includes(String(q.state)));
+      if (counted.some((q) => (q.queued_at ?? null) === null)) return { data: [{ outcome: 'invalid_history', last_contact_at: null, basis: null }], error: null };
+      const possible = counted.map((q) => String(q.queued_at)).sort().pop() ?? null;
+      const stepIds = new Set(mine.map((t) => t.planStepId));
+      const completed = world.steps.filter((x) => stepIds.has(x.id) && x.completedAt !== null).map((x) => String(x.completedAt)).sort().pop() ?? null;
+      if (possible !== null && (completed === null || Date.parse(possible) > Date.parse(completed))) { last = possible; basis = 'possible_contact'; }
+      else if (completed !== null) { last = completed; basis = 'completed'; }
+      if (last !== null && (Date.parse(String(a.p_now)) - Date.parse(last)) / 3_600_000 < gap) {
+        return { data: [{ outcome: 'deferred', last_contact_at: last, basis }], error: null };
+      }
+    }
+    const row = ledger.find((q) => q.organization_id === org && q.execution_task_id === taskId && q.state === 'requested');
+    if (!row) return { data: [{ outcome: 'not_claimed', last_contact_at: last, basis }], error: null };
+    Object.assign(row, { state: 'submitting', updated_at: world.clock }, a.p_external_ref == null ? {} : { external_ref: a.p_external_ref });
+    if ((row.queued_at ?? null) === null) row.queued_at = world.clock;
+    return { data: [{ outcome: 'claimed', last_contact_at: last, basis }], error: null };
   },
 }));
 
@@ -182,6 +225,40 @@ jest.mock('../../services/executionPlans/executionPlanStore', () => ({
     const stepIds = new Set(world.tasks.filter((t) => t.organizationId === org && t.subjectKind === kind && t.subjectId === id).map((t) => t.planStepId));
     const done = world.steps.filter((s) => stepIds.has(s.id) && s.completedAt !== null).map((s) => s.completedAt as string).sort();
     return done.length ? done[done.length - 1] : null;
+  },
+}));
+
+jest.mock('../../services/orchestration/journeyFrequency', () => ({
+  // Follow-up D. Mirrors the real read on both halves (unit-tested on the fake database in
+  // journeyFrequencyUncertainContact, and on the real schema in orch_engines_real): this
+  // tenant, this subject, contact channels only (the REAL NON_CONTACT_CHANNELS), completed
+  // steps at `completed_at` and `uncertain` request rows at `updated_at`, the task being
+  // decided excluded from the latter; the later one wins, a tie reads as confirmed.
+  // Review D-F2 (2026-11-09): the earlier double counted INTERNAL steps too, which production
+  // has not done since 9daf1cc5e; it is now faithful.
+  lastContactActionAtForSubject: async (org: string, kind: string, id: string, options: { excludeTaskId?: string } = {}) => {
+    const { NON_CONTACT_CHANNELS } = jest.requireActual('../../services/orchestration/journeyPolicy') as { NON_CONTACT_CHANNELS: readonly string[] };
+    const tasks = world.tasks.filter((t) => t.organizationId === org && t.subjectKind === kind && t.subjectId === id && !NON_CONTACT_CHANNELS.includes(t.channel));
+    const stepIds = new Set(tasks.map((t) => t.planStepId));
+    const done = world.steps.filter((s) => stepIds.has(s.id) && s.completedAt !== null).map((s) => s.completedAt as string).sort();
+    const completed = done.length ? done[done.length - 1] : null;
+    const taskIds = new Set(tasks.map((t) => t.id).filter((t) => t !== options.excludeTaskId));
+    // D-2: `uncertain` and in-flight (`submitting`, `submitted`) requests, latest first.
+    const BASIS: Record<string, 'uncertain' | 'in_flight'> = { uncertain: 'uncertain', submitting: 'in_flight', submitted: 'in_flight' };
+    const possibleRows = (db.tables.execution_engine_requests ?? [])
+      .filter((r) => r.organization_id === org && taskIds.has(String(r.execution_task_id)) && BASIS[String(r.state)] !== undefined);
+    // D-2: the immutable queued_at; a counted row without one fails closed.
+    const unreadableRow = possibleRows.find((r) => typeof r.queued_at !== 'string' || Number.isNaN(Date.parse(String(r.queued_at))));
+    if (unreadableRow) return { at: null, unconfirmed: true, basis: BASIS[String(unreadableRow.state)], invalid: true };
+    possibleRows.sort((x, y) => String(x.queued_at).localeCompare(String(y.queued_at)));
+    const top = possibleRows.length ? possibleRows[possibleRows.length - 1] : null;
+    const possible = top === null ? null : { at: String(top.queued_at), basis: BASIS[String(top.state)] };
+    if (completed === null && possible === null) return null;
+    if (possible === null) return { at: completed, unconfirmed: false, basis: 'completed' };
+    if (completed === null) return { at: possible.at, unconfirmed: true, basis: possible.basis };
+    return Date.parse(possible.at) > Date.parse(completed)
+      ? { at: possible.at, unconfirmed: true, basis: possible.basis }
+      : { at: completed, unconfirmed: false, basis: 'completed' };
   },
 }));
 
@@ -416,7 +493,7 @@ describe('enrollment — the version decides who may enter, from the person\'s f
 });
 
 describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', () => {
-  it('assign-sdr (WS-3, human-approved) → frequency gap → wa-intro (WhatsApp) → journey completed', async () => {
+  it('assign-sdr (WS-3, human-approved) → wa-intro (WhatsApp) → journey completed; an internal step is not contact', async () => {
     const run = enrol(ORG_A, 'p-ready');
 
     // Sweep 1: the first step is due; WS-3 materializes it and it awaits a human.
@@ -435,13 +512,11 @@ describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', ()
     expect(stepOf(run, 'assign-sdr').state).toBe('completed');
     expect(await listInternalWorkItems(ORG_A, ws3Task)).toHaveLength(1);
 
-    // Sweep 3, same instant: wa-intro is due, but the person was just contacted.
-    r = await sweep();
-    expect(r.decisions).toEqual([expect.objectContaining({ stepKey: 'wa-intro', engine: 'whatsapp', decision: 'deferred' })]);
-    expect(wa.broadcasts).toHaveLength(0);
-
-    // 25 hours later: the WhatsApp engine is asked, once, with the authored template.
-    world.clock = hoursAfter(world.clock, 25);
+    // Sweep 3, same instant: wa-intro is due. The internal assignment did not contact the
+    // person, so the 24h frequency policy does not hold it (NON_CONTACT_CHANNELS, as in
+    // production since 9daf1cc5e; review D-F2). The WhatsApp engine is asked, once, with the
+    // authored template. A contact step that holds a later one is proven in the Follow-up D
+    // block below.
     r = await sweep();
     expect(r.decisions).toEqual([expect.objectContaining({ stepKey: 'wa-intro', engine: 'whatsapp', decision: 'waiting', outcome: 'submitted' })]);
     expect(wa.broadcasts).toEqual([{ id: 'bc-1', org: ORG_A, name: broadcastNameFor(`${world.instances[0].plan.id}-task-2`), template: 'discovery_intro_v1' }]);
@@ -509,6 +584,289 @@ describe('THE VERTICAL SLICE — two engines, multiple actions, one journey', ()
     expect(r.unsupported).toEqual(['linkedin']);
     expect(r.decisions[0]).toMatchObject({ decision: 'unsupported' });
     expect(stepOf(run, 'li').state).toBe('ready');
+  });
+});
+
+describe('Follow-up D: an uncertain communication counts toward the frequency policy, across journeys', () => {
+  // A WhatsApp-only journey with a 24h gap between actions.
+  const waGap = () => validateWorkflowDefinition({ policy: { min_hours_between_actions: 24 }, steps: [DEFINITION.steps[1]] });
+  const hoursLater = (h: number) => { world.clock = new Date(Date.parse(world.clock) + h * 3600_000).toISOString(); };
+  const decisionOf = (r: TenantSweepResult, run: string) => r.decisions.find((d) => d.executionInstanceId === run);
+  const requestOf = (run: string) => {
+    const task = world.tasks.find((t) => t.executionInstanceId === run)!;
+    return (db.tables.execution_engine_requests as Row[]).find((q) => q.execution_task_id === task.id)!;
+  };
+  /** Journey A reaches the person, and the provider's answer is lost: its request is `uncertain`. */
+  const uncertainJourneyA = async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    engineSends('send_uncertain');
+    const r = await sweep();
+    expect(decisionOf(r, a)).toMatchObject({ decision: 'needs_human', outcome: 'send_uncertain' });
+    expect(requestOf(a).state).toBe('uncertain');
+    return a;
+  };
+
+  it('a concurrent journey waits out the gap after an uncertain send; the uncertain journey itself still goes to a person', async () => {
+    const a = await uncertainJourneyA();
+    hoursLater(1);
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, b)).toMatchObject({ decision: 'deferred' });
+    expect(decisionOf(r, b)!.reasons.join(' ')).toMatch(/unconfirmed: it may have been sent/);
+    // Its own uncertain request never defers journey A: it is still reported for a person.
+    expect(decisionOf(r, a)).toMatchObject({ decision: 'needs_human', outcome: 'uncertain' });
+    expect(wa.broadcasts).toHaveLength(1);
+    // The uncertain state is preserved; nothing is read as sent.
+    expect(requestOf(a).state).toBe('uncertain');
+  });
+
+  it('the window boundary: deferred just inside the gap, acts once it has passed', async () => {
+    await uncertainJourneyA();
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    hoursLater(23.9);
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'deferred' });
+    hoursLater(0.2);
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+    expect(wa.broadcasts).toHaveLength(2);
+  });
+
+  it('re-enrollment after the uncertain run ended is held by the gap', async () => {
+    const a = await uncertainJourneyA();
+    world.instances.find((i) => i.id === a)!.lifecycleState = 'cancelled';   // a person ended run A
+    hoursLater(2);
+    const again = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, again)).toMatchObject({ decision: 'deferred' });
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('a confirmed failure stays distinct: it does not count as contact', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    engineSends('failed');
+    await sweep();
+    expect(requestOf(a).state).toBe('failed');
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+  });
+
+  it("another tenant's uncertain send for the same subject id does not hold this tenant", async () => {
+    // Tenant B's run for the same subject id, with an uncertain request on its own ledger row.
+    const other = enrol(ORG_B, 'p-ready', waGap());
+    const otherTask = world.tasks.find((t) => t.executionInstanceId === other)!;
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-org-b', organization_id: ORG_B, execution_task_id: otherTask.id, engine: 'whatsapp', state: 'uncertain', external_ref: 'bc-org-b', detail: null, updated_at: world.clock, queued_at: world.clock });
+    world.instances.find((i) => i.id === other)!.lifecycleState = 'cancelled';   // keep tenant A's sweep about tenant A
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+  });
+
+  it('suppression still decides first: an opted-out person is skipped, not merely deferred', async () => {
+    await uncertainJourneyA();
+    people['p-ready'].whatsapp = false;
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, b)).toMatchObject({ decision: 'skipped' });
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('a non-contact step is never deferred by an uncertain send', async () => {
+    await uncertainJourneyA();
+    const internalOnly = validateWorkflowDefinition({ policy: { min_hours_between_actions: 24 }, steps: [DEFINITION.steps[0]] });
+    const c = enrol(ORG_A, 'p-ready', internalOnly);
+    expect(decisionOf(await sweep(), c)?.decision).not.toBe('deferred');
+  });
+});
+
+describe('D-2: a request in flight (queued, not yet confirmed) counts as possible contact', () => {
+  const waGap = () => validateWorkflowDefinition({ policy: { min_hours_between_actions: 24 }, steps: [DEFINITION.steps[1]] });
+  const minutesLater = (m: number) => { world.clock = new Date(Date.parse(world.clock) + m * 60_000).toISOString(); };
+  const decisionOf = (r: TenantSweepResult, run: string) => r.decisions.find((d) => d.executionInstanceId === run);
+  const broadcastsFor = (run: string) => {
+    const task = world.tasks.find((t) => t.executionInstanceId === run)!;
+    return wa.broadcasts.filter((b) => b.name === broadcastNameFor(task.id)).length;
+  };
+  const requestOf = (run: string) => {
+    const task = world.tasks.find((t) => t.executionInstanceId === run)!;
+    return (db.tables.execution_engine_requests as Row[]).find((q) => q.execution_task_id === task.id);
+  };
+
+  it('two journeys due in the same sweep: one is queued, the other waits; one broadcast', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    const outcomes = [decisionOf(r, a), decisionOf(r, b)].map((d) => d?.decision).sort();
+    expect(outcomes).toEqual(['deferred', 'waiting']);
+    const deferred = [decisionOf(r, a), decisionOf(r, b)].find((d) => d?.decision === 'deferred')!;
+    expect(deferred.reasons.join(' ')).toMatch(/queued and not yet confirmed: it may be sent/);
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('a later journey while the first is still queued waits; nothing is read as sent', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    expect(requestOf(a)?.state).toBe('submitted');
+    minutesLater(6);
+    const c = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, c)).toMatchObject({ decision: 'deferred' });
+    expect(wa.broadcasts).toHaveLength(1);
+    expect(requestOf(a)?.state).toBe('submitted');
+  });
+
+  it('a run is never held by its own queued request: it completes when the engine sends', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    engineSends('sent');
+    const r = await sweep();
+    expect(decisionOf(r, a)).toMatchObject({ decision: 'executed', outcome: 'sent' });
+    expect(requestOf(a)?.state).toBe('completed');
+  });
+
+  it.each([
+    ['blocked by governance', 'blocked_governance', 'skipped'],
+    ['blocked by a send control', 'blocked_send_control', 'failed'],
+    ['refused by the provider', 'failed', 'failed'],
+  ])('a queued message %s stops counting once recorded; the waiting journey then proceeds', async (_label, recipientStatus, requestState) => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'deferred' });
+    engineSends(recipientStatus);
+    await sweep();                                   // run A records the engine's outcome
+    expect(requestOf(a)?.state).toBe(requestState);
+    // B proceeds in that sweep or the next (whichever order the runs are handled in), once.
+    await sweep();
+    expect(requestOf(b)?.state).toBe('submitted');
+    expect(broadcastsFor(b)).toBe(1);
+  });
+
+  it('a retry: a stale claim released (nothing created) stops counting; the re-submission counts from its own time', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    const taskA = world.tasks.find((t) => t.executionInstanceId === a)!;
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-stale', organization_id: ORG_A, execution_task_id: taskA.id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock, queued_at: world.clock });
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    // While the claim is fresh it counts (it may be creating the broadcast right now).
+    world.instances.find((i) => i.id === a)!.lifecycleState = 'paused';      // keep A out of this sweep
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'deferred' });
+    world.instances.find((i) => i.id === a)!.lifecycleState = 'active';
+    // After the stale window, A releases the claim and submits again, in the same sweep.
+    minutesLater(16);
+    const r = await sweep();
+    expect(decisionOf(r, a)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+    expect(requestOf(a)?.updated_at).toBe(world.clock);
+    expect(decisionOf(r, b)).toMatchObject({ decision: 'deferred' });
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('re-enrollment after a run that was ended with its message still queued: held until the gap passes', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    world.instances.find((i) => i.id === a)!.lifecycleState = 'cancelled';
+    minutesLater(30);
+    const again = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), again)).toMatchObject({ decision: 'deferred' });
+    minutesLater(24 * 60);
+    expect(decisionOf(await sweep(), again)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+  });
+
+  it('suppression still decides first: an opted-out person is skipped, not merely deferred', async () => {
+    enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    people['p-ready'].whatsapp = false;
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'skipped' });
+  });
+
+  it('two sweep workers at once: the claim lets one run through (EMULATED here; proven with independent PostgreSQL connections in d2_frequency_claim_concurrency_real)', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    await Promise.all([sweep(), sweep()]);
+    expect(broadcastsFor(a) + broadcastsFor(b)).toBe(1);
+    expect(wa.broadcasts).toHaveLength(1);
+  });
+
+  it('exactly at the gap the next journey proceeds; just inside it waits (early check and claim agree)', async () => {
+    enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    const queuedAt = world.clock;
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    world.clock = new Date(Date.parse(queuedAt) + 24 * 3600_000 - 1).toISOString();
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'deferred' });
+    world.clock = new Date(Date.parse(queuedAt) + 24 * 3600_000).toISOString();
+    expect(decisionOf(await sweep(), b)).toMatchObject({ decision: 'waiting', outcome: 'submitted' });
+  });
+
+  it('a counted record with no queue time fails closed: deferred with an operator-visible reason, nothing claimed', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    const taskA = world.tasks.find((t) => t.executionInstanceId === a)!;
+    world.instances.find((i) => i.id === a)!.lifecycleState = 'paused';
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-legacy', organization_id: ORG_A, execution_task_id: taskA.id, engine: 'whatsapp', state: 'submitted', external_ref: 'bc-legacy', detail: null, updated_at: world.clock, queued_at: null });
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const r = await sweep();
+    expect(decisionOf(r, b)).toMatchObject({ decision: 'deferred', outcome: 'frequency_history_invalid' });
+    expect(decisionOf(r, b)!.reasons.join(' ')).toMatch(/no readable time; .*fail closed/);
+    expect(wa.broadcasts).toHaveLength(0);
+  });
+
+  it('the sweeper hands the gap to the engine with the step, so the claim can re-check it atomically', async () => {
+    const seen = new Map<string, Array<number | undefined>>();
+    const recording = createWhatsAppAdapter(waDeps);
+    const spy = { ...recording, execute: (ctx: Parameters<typeof recording.execute>[0]) => {
+      seen.set(ctx.executionInstanceId, [...(seen.get(ctx.executionInstanceId) ?? []), ctx.frequencyGapHours]);
+      return recording.execute(ctx);
+    } };
+    const sweepWith = () => advanceAndDispatchWorkflowExecution(ORG_A, { now: world.clock, deps: { adapters: [createWs3Adapter(), spy], intelligence } });
+    const gated = enrol(ORG_A, 'p-ready', waGap());                     // a 24h policy, WhatsApp
+    people['p-other'] = { personId: 'person-other', score: 0.8, phone: '+15551230009', whatsapp: true, email: false };
+    const ungated = enrol(ORG_A, 'p-other', validateWorkflowDefinition({ steps: [DEFINITION.steps[1]] }));   // no policy
+    await sweepWith();
+    expect(seen.get(gated)).toEqual([24]);
+    expect(seen.get(ungated)).toEqual([undefined]);
+  });
+
+  it('the claim itself defers when the early check missed a contact (the atomic gate), and says so', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    await sweep();
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const taskB = world.tasks.find((t) => t.executionInstanceId === b)!;
+    // Ask the engine directly, as a worker that read the history before A's claim would.
+    const r = await createWhatsAppAdapter(waDeps).execute({
+      organizationId: ORG_A, executionInstanceId: b, executionTaskId: taskB.id, planStepId: taskB.planStepId,
+      channel: 'whatsapp', subject: { kind: 'prospect', id: 'p-ready' } as never, step: waGap().steps[0] as never,
+      personId: 'person-ready', now: world.clock, frequencyGapHours: 24,
+    });
+    expect(r).toMatchObject({ outcome: 'frequency_deferred', disposition: 'wait' });
+    expect(r.reason).toMatch(/queued or unconfirmed \(possible contact, not a confirmed send\)/);
+    expect(requestOf(b)?.state).toBe('requested');
+    expect(wa.broadcasts).toHaveLength(1);
+    expect(requestOf(a)?.state).toBe('submitted');
+  });
+
+  it('the claim refuses a contradictory history too (frequency_history_invalid), claiming nothing', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    const taskA = world.tasks.find((t) => t.executionInstanceId === a)!;
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-legacy', organization_id: ORG_A, execution_task_id: taskA.id, engine: 'whatsapp', state: 'uncertain', external_ref: 'bc-legacy', detail: null, updated_at: world.clock, queued_at: null });
+    const b = enrol(ORG_A, 'p-ready', waGap());
+    const taskB = world.tasks.find((t) => t.executionInstanceId === b)!;
+    const r = await createWhatsAppAdapter(waDeps).execute({
+      organizationId: ORG_A, executionInstanceId: b, executionTaskId: taskB.id, planStepId: taskB.planStepId,
+      channel: 'whatsapp', subject: { kind: 'prospect', id: 'p-ready' } as never, step: waGap().steps[0] as never,
+      personId: 'person-ready', now: world.clock, frequencyGapHours: 24,
+    });
+    expect(r).toMatchObject({ outcome: 'frequency_history_invalid', disposition: 'wait' });
+    expect(wa.broadcasts).toHaveLength(0);
+  });
+
+  it('a retry keeps the first queue time: a released stale claim re-claimed later does not move queued_at', async () => {
+    const a = enrol(ORG_A, 'p-ready', waGap());
+    const taskA = world.tasks.find((t) => t.executionInstanceId === a)!;
+    const first = world.clock;
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-stale2', organization_id: ORG_A, execution_task_id: taskA.id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: first, queued_at: first });
+    minutesLater(16);
+    await sweep();                                       // stale claim released, then re-claimed and submitted
+    expect(requestOf(a)).toMatchObject({ state: 'submitted', queued_at: first });
+    expect(requestOf(a)?.updated_at).not.toBe(first);
   });
 });
 
@@ -581,7 +939,7 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
   it('a stale claim with NO broadcast is released and retried (nothing could have been sent)', async () => {
     enrol(ORG_A, 'p-ready', waOnly());
     const task = world.tasks[0].id;
-    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: task, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: task, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock, queued_at: world.clock });
     world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
     const r = await sweep();
     expect(r.decisions[0]).toMatchObject({ outcome: 'submitted' });
@@ -590,7 +948,7 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
 
   it('a stale claim is not begun again once the conditions no longer hold', async () => {
     enrol(ORG_A, 'p-ready', waOnly());
-    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock, queued_at: world.clock });
     world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
     people['p-ready'].whatsapp = false;
     const r = await sweep();
@@ -601,7 +959,7 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
 
   it('a broadcast that cannot be read is not taken for no broadcast', async () => {
     enrol(ORG_A, 'p-ready', waOnly());
-    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock, queued_at: world.clock });
     world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
     const down = createWhatsAppAdapter({ ...waDeps, findBroadcastByName: async () => { throw new Error('down'); } });
     const r = await advanceAndDispatchWorkflowExecution(ORG_A, { now: world.clock, deps: { adapters: [createWs3Adapter(), down], intelligence } });
@@ -628,7 +986,7 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
   it('a stale claim WITH a broadcast goes to a human — a second send is never risked', async () => {
     enrol(ORG_A, 'p-ready', waOnly());
     const task = world.tasks[0].id;
-    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: task, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: task, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock, queued_at: world.clock });
     wa.broadcasts.push({ id: 'bc-orphan', org: ORG_A, name: broadcastNameFor(task), template: 'discovery_intro_v1' });
     world.clock = new Date(Date.parse(world.clock) + STALE_SUBMISSION_MS + 1000).toISOString();
     const r = await sweep();
@@ -642,7 +1000,7 @@ describe('WhatsApp engine adapter — idempotency, recovery and failure handling
 
   it('a fresh claim held by another sweep waits', async () => {
     enrol(ORG_A, 'p-ready', waOnly());
-    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock });
+    (db.tables.execution_engine_requests ??= []).push({ id: 'req-seeded', organization_id: ORG_A, execution_task_id: world.tasks[0].id, engine: 'whatsapp', state: 'submitting', external_ref: null, detail: null, updated_at: world.clock, queued_at: world.clock });
     const r = await sweep();
     expect(r.decisions[0]).toMatchObject({ decision: 'waiting', outcome: 'submitting' });
     expect(wa.broadcasts).toHaveLength(0);

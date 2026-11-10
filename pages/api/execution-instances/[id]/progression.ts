@@ -6,6 +6,12 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *         -> { instance, plan, steps, readyStep }
  *   POST  /api/execution-instances/:id/progression
  *         { action: 'advance' | 'cancel' }        -> { advanced | cancelledSteps, ... }
+ *         Follow-up E: `cancel` of a run holding an unresolved uncertain communication answers
+ *         409 { code: 'uncertain_communication_unacknowledged', warning } until the person sends
+ *         `acknowledgeUncertain: warning.acknowledgementKey`; the acknowledgement is recorded
+ *         (uncertainCommunicationAcknowledgement.ts). It is not an approval and resolves nothing.
+ *         The record means "warned and acknowledged", not "cancelled": if the cancel then fails,
+ *         it stays. A wrong acknowledgement shape is 400 acknowledgement_shape_invalid.
  *   PATCH /api/execution-instances/:id/progression
  *         { stepId, state }                       -> { step }
  *
@@ -57,6 +63,7 @@ import {
 } from '../../../../backend/services/workflowExecution/stepProgressionStore';
 import { listJourneyDecisions, recordPersonDecision, type JourneyDecisionInput } from '../../../../backend/services/orchestration/journeyDecisionLog';
 import { exitJourney, withdrawStepAction } from '../../../../backend/services/orchestration/journeyExit';
+import { checkUncertainAcknowledgement, acknowledgementRefusalBody, acknowledgementShapeError } from '../../../../backend/services/orchestration/uncertainCommunicationAcknowledgement';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -164,6 +171,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (action === 'cancel') {
       // The BOUND run, from the path. Also withdraws what has not started sending: a run
       // a person cancelled must not leave a task someone can still approve and send.
+      // Follow-up E: a possible earlier send in this run is acknowledged (and recorded) first.
+      const shapeError = acknowledgementShapeError(body, 'scalar');
+      if (shapeError) return res.status(400).json(shapeError);
+      const acknowledgement = await checkUncertainAcknowledgement({
+        organizationId: companyId, operation: 'end_run', scope: { kind: 'run', executionInstanceId: instanceId },
+        actorUserId: guard.principal.userId, acknowledgementKey: body.acknowledgeUncertain, onUnreadable: 'warn',
+      });
+      if (acknowledgement.ok !== true) return res.status(acknowledgement.status).json(acknowledgementRefusalBody(acknowledgement));
       const cancelledSteps = await exitJourney(companyId, instanceId);
       const auditFailed = await recordPersonDecision(companyId, guard.principal.userId, {
         executionInstanceId: instanceId, planStepId: null, stepKey: null, channel: null, engine: null,
@@ -172,6 +187,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({
         cancelledSteps,
         auditFailed,
+        acknowledgement: acknowledgement.acknowledged,
         instance: await getExecutionInstance(companyId, instanceId),
       });
     }

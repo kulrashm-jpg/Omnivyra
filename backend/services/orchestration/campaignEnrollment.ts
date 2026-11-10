@@ -15,6 +15,13 @@
  *      (`create_execution_instance`), and its plan is materialized — both
  *      idempotent, so a repeated or concurrent run converges.
  *
+ * Follow-up E: an eligible person with an unresolved uncertain communication from an earlier
+ * run (uncertainCommunicationAcknowledgement.ts) is `needs_acknowledgement`, with the warning,
+ * and is not enrolled until the call carries `acknowledgements[prospectId]` = that warning's
+ * key from the same acting person; the acknowledgement is recorded first. A history that
+ * cannot be read holds the person too (fail closed). A preview warns and records nothing.
+ * The acknowledgement authorizes no send: every engine gate still applies to the new run.
+ *
  * A prospect selected from two lists is one person: the earliest target is used.
  * No journey is ever created other than through the instance store, whose partial
  * unique index stays the final authority on duplicates.
@@ -33,6 +40,7 @@ import {
 } from '../executionInstances/executionInstanceStore';
 import { createExecutionPlan, getPlanForInstance } from '../executionPlans/executionPlanStore';
 import { checkEnrollmentEligibility } from './enrollment';
+import { checkUncertainAcknowledgement, type UncertainCommunicationWarning } from './uncertainCommunicationAcknowledgement';
 import type { IndividualIntelligencePort } from './individualIntelligence';
 
 export class CampaignEnrollmentError extends Error {
@@ -60,11 +68,19 @@ export interface CampaignEnrollmentReport {
   readonly wouldEnroll: number;
   readonly alreadyEnrolled: number;
   readonly excluded: number;
+  /** Eligible people held until a possible earlier send is acknowledged (Follow-up E). */
+  readonly needsAcknowledgement: number;
   /** Exclusion reason → count (descriptions only; never a value about a person). */
   readonly exclusionReasons: Record<string, number>;
   /** Journeys created this run that pinned a different version than assessed (published mid-run). */
   readonly versionChangedDuringRun: number;
-  readonly outcomes: ReadonlyArray<{ prospectId: string; targetId: string; outcome: 'enrolled' | 'would_enroll' | 'already_enrolled' | 'excluded'; instanceId: string | null; reasons: readonly string[] }>;
+  readonly outcomes: ReadonlyArray<{
+    prospectId: string; targetId: string;
+    outcome: 'enrolled' | 'would_enroll' | 'already_enrolled' | 'excluded' | 'needs_acknowledgement';
+    instanceId: string | null; reasons: readonly string[];
+    /** needs_acknowledgement only: what the person must acknowledge (absent when the history was unreadable). */
+    warning?: UncertainCommunicationWarning;
+  }>;
 }
 
 const MAX_OUTCOMES = 500;
@@ -78,6 +94,10 @@ export async function enrollCampaignTargets(input: {
   dryRun?: boolean;
   now?: string;
   intelligence?: IndividualIntelligencePort;
+  /** The authenticated person enrolling (Follow-up E binds an acknowledgement to them). */
+  actorUserId?: unknown;
+  /** prospectId -> the acknowledgement key of that person's warning (Follow-up E). */
+  acknowledgements?: unknown;
 }): Promise<CampaignEnrollmentReport> {
   const dryRun = input.dryRun === true;
   const campaign = await getProspectCampaign(input.organizationId, input.campaignId);
@@ -96,7 +116,17 @@ export async function enrollCampaignTargets(input: {
   let wouldEnroll = 0;
   let alreadyEnrolled = 0;
   let excluded = 0;
+  let needsAcknowledgement = 0;
   let versionChangedDuringRun = 0;
+  // PI review F1: a malformed map is refused, never silently read as "no acknowledgements".
+  const given = input.acknowledgements;
+  const validMap = given !== null && typeof given === 'object' && !Array.isArray(given)
+    && Object.getPrototypeOf(given) === Object.prototype
+    && Object.values(given as Record<string, unknown>).every((k) => typeof k === 'string');
+  if (given !== undefined && !validMap) {
+    fail('acknowledgements must map each prospectId to its warning\'s acknowledgementKey (a string)', 'acknowledgement_shape_invalid');
+  }
+  const acknowledgements = (given ?? {}) as Record<string, unknown>;
   const exclusionReasons: Record<string, number> = {};
   const outcomes: Array<CampaignEnrollmentReport['outcomes'][number]> = [];
   const record = (o: CampaignEnrollmentReport['outcomes'][number]) => { if (outcomes.length < MAX_OUTCOMES) outcomes.push(o); };
@@ -123,6 +153,25 @@ export async function enrollCampaignTargets(input: {
         exclusionReasons[reason] = (exclusionReasons[reason] ?? 0) + 1;
       }
       record({ prospectId, targetId: target.id, outcome: 'excluded', instanceId: null, reasons: verdict.reasons });
+      continue;
+    }
+
+    // Follow-up E: a possible earlier send to this person is acknowledged (and recorded) first.
+    const acknowledged = await checkUncertainAcknowledgement({
+      organizationId: input.organizationId,
+      operation: 'reenrol',
+      scope: { kind: 'subject', subjectKind: 'prospect', subjectId: prospectId, campaignId: input.campaignId, workflowId: input.workflowId },
+      actorUserId: input.actorUserId,
+      acknowledgementKey: Object.prototype.hasOwnProperty.call(acknowledgements, prospectId) ? acknowledgements[prospectId] : undefined,
+      onUnreadable: 'refuse',
+      record: !dryRun,
+    });
+    if (acknowledged.ok !== true) {
+      needsAcknowledgement += 1;
+      record({
+        prospectId, targetId: target.id, outcome: 'needs_acknowledgement', instanceId: null, reasons: [acknowledged.code],
+        ...('warning' in acknowledged ? { warning: acknowledged.warning } : {}),
+      });
       continue;
     }
 
@@ -179,6 +228,7 @@ export async function enrollCampaignTargets(input: {
     wouldEnroll,
     alreadyEnrolled,
     excluded,
+    needsAcknowledgement,
     exclusionReasons,
     versionChangedDuringRun,
     outcomes,

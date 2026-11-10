@@ -159,7 +159,8 @@ jest.mock('../../services/userContextService', () => ({
 jest.mock('../../security/requireCapability', () => ({
   requireCapability: async (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
     if (!gate.capability) { res.status(403).json({ error: 'missing capability' }); return { ok: false }; }
-    return { ok: true };
+    // The real guard answers with the authenticated principal (Follow-up E's batch enrolment binds an acknowledgement to it).
+    return { ok: true, principal: { userId: (gate.access as { userId?: string } | null)?.userId } };
   },
 }));
 

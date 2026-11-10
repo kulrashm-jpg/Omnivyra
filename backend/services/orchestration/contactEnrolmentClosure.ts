@@ -223,8 +223,11 @@ export async function reopenProspectToJourneys(input: {
     return no('closed_by_optout_review', 'an opt-out review still holds this prospect; decide the review to reopen it', state.reviewHold);
   }
   if (state.manualHold === null) return no('not_closed', 'this prospect has no active manual closure');
+  // reopened_at is NOT sent: the guard trigger (20270129000003) stamps it from the database clock,
+  // the clock closed_at came from. An app-clock stamp lost to the CHECK reopened_at >= closed_at
+  // whenever the app clock ran behind the database (a refused reopen, 503).
   const res = await ownedDbTable(CLOSURES_TABLE)
-    .update({ reopened_by: v.value.actor, reopened_at: new Date().toISOString(), reopen_reason: v.value.reason })
+    .update({ reopened_by: v.value.actor, reopen_reason: v.value.reason })
     .eq('organization_id', input.organizationId).eq('id', state.manualHold).is('reopened_at', null)
     .select(CLOSURE_COLUMNS);
   if (res.error) return no('closure_unavailable', `the reopen could not be recorded (${errCode(res.error) ?? 'error'})`);

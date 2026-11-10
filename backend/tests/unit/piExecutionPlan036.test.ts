@@ -542,12 +542,12 @@ describe('036 — frozen artefacts are untouched', () => {
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('4616088fd7c2a8d2'); // RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('3fd60562d9c42018'); // RE-PINNED 2026-11-10 (Follow-up E, PI review F1/F2/F3: one acknowledgement shape per route (400 acknowledgement_shape_invalid), the acknowledgement reported on both [id] gated paths, record semantics documented); before that RE-PINNED 2026-11-10 (Follow-up E: a person ending the run (lifecycle end, evaluation end) acknowledges an unresolved uncertain communication first; opt_out never held); before that RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
   });
 
   it('034 canonical invocation route is byte-identical at its post-port baseline', () => {
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
-      .toBe('6c303af15da7a4bf');
+      .toBe('29a0f9fc30836b98'); // RE-PINNED 2026-11-10 (Follow-up E, PI review F1/F2/F3: one acknowledgement shape per route (400 acknowledgement_shape_invalid), the acknowledgement reported on both [id] gated paths, record semantics documented); before that RE-PINNED 2026-11-10 (Follow-up E: enrolling a person with an unresolved uncertain communication from an earlier run acknowledges it first)
   });
 
   it('032 is byte-identical (029/030 land with the lists slice)', () => {

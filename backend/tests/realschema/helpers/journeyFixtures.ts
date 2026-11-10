@@ -62,8 +62,15 @@ export async function enrol(org: string, actor: string, prospectId: string, defi
   const wf = await s.workflows.createWorkflow({ organizationId: org, name: `wf-${rnd()}`, actorUserId: actor });
   const draft = await s.workflows.createDraftVersion({ organizationId: org, workflowId: wf.id, definition, actorUserId: actor });
   await s.workflows.publishWorkflowVersion({ organizationId: org, versionId: draft.id, actorUserId: actor });
-  const report = await s.enroll({ organizationId: org, campaignId, workflowId: wf.id });
-  const out = report.outcomes.find((o: Row) => o.prospectId === prospectId);
+  let report = await s.enroll({ organizationId: org, campaignId, workflowId: wf.id, actorUserId: actor });
+  let out = report.outcomes.find((o: Row) => o.prospectId === prospectId);
+  // Follow-up E: a person with an unresolved uncertain communication from an earlier run is held
+  // until the enrolling person acknowledges it. The fixture's actor does, as an operator would.
+  const warning = (out?.warning ?? null) as Row | null;
+  if (out?.outcome === 'needs_acknowledgement' && warning !== null) {
+    report = await s.enroll({ organizationId: org, campaignId, workflowId: wf.id, actorUserId: actor, acknowledgements: { [prospectId]: warning.acknowledgementKey } });
+    out = report.outcomes.find((o: Row) => o.prospectId === prospectId);
+  }
   return { instanceId: out?.instanceId as string, workflowId: String(wf.id), report };
 }
 
