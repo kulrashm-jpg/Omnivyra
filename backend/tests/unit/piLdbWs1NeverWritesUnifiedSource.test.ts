@@ -8,6 +8,24 @@
  *
  * This turns that assumption into a failing test the moment a WS-1 writer
  * starts writing the column.
+ *
+ * SCOPE, A STATED DECISION (measured 2026-11-11): WS-1 = backend/services/
+ * prospectIdentity. On this branch exactly two code paths INSERT into
+ * canonical_leads: prospectIdentity/prospectResolution.ts (WS-1, every PI
+ * prospect) and the legacy crmIngestionService.ts (its OWN rows, keyed by the
+ * CRM's external id, fenced in production). Every other file that mentions
+ * unified_source either READS it (lib/leadIntelligence/adapters.ts,
+ * sourceTaxonomy.ts, leadProjectionReconciliation.ts) or writes it to a
+ * DIFFERENT table (ingestionRunService/unifiedIngestionService ->
+ * data_source_status; touchpointService -> unified_touchpoints). If a new PI
+ * write path to canonical_leads appears outside prospectIdentity, this scope
+ * must grow to include it.
+ *
+ * STRICTER THAN THE ASSUMPTION, ON PURPOSE: any non-comment MENTION fails, not
+ * only a write. Nothing in WS-1 needs to read unified_source today. If a
+ * legitimate read is ever needed, it is ACKNOWLEDGED EXPLICITLY as a named
+ * exception (reviewed like a migration under #27). It is NEVER accommodated by
+ * weakening this predicate: loosening a scan to make it pass is suppression.
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
