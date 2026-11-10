@@ -36,7 +36,6 @@ beforeEach(() => {
 const CASES: Array<{ name: string; path: string; method: string; body?: unknown; query?: Record<string, string> }> = [
   { name: 'extension/bootstrap', path: 'extension/bootstrap', method: 'POST', body: { organization_id: CO_A } },
   { name: 'extension/session', path: 'extension/session', method: 'GET', query: { organization_id: CO_A } },
-  { name: 'rpa/auth/start', path: 'rpa/auth/start', method: 'POST', body: { organization_id: CO_A, platform: 'linkedin' } },
 ];
 
 const noEnvNames = (body: unknown) => {
@@ -86,10 +85,13 @@ describe('COMPAT: with AUTH_SECRET configured (production) the routes issue toke
     expect(typeof r.body.data.sessionToken).toBe('string');
   });
 
-  it('rpa/auth/start → 200 with a session token', async () => {
+  // rpa/auth/start no longer issues tokens: RPA logins are disabled (owner decision #17,
+  // 2026-11-10; backend/tests/unit/rpaLoginBlock410.test.ts). It answers 410 before the
+  // signing secret is consulted, so it left the 503 table above as well.
+  it('rpa/auth/start → 410 RPA_DISABLED, no token (owner #17)', async () => {
     const r = await invoke(route('rpa/auth/start'), { method: 'POST', as: 'A', body: { organization_id: CO_A, platform: 'linkedin' } });
-    expect(r.status).toBe(200);
-    expect(typeof r.body.session_token).toBe('string');
+    expect(r.status).toBe(410);
+    expect(r.body.session_token).toBeUndefined();
   });
 
   it('authorization is unchanged: anonymous extension/session → 401, no token', async () => {
