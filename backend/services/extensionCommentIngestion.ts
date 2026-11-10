@@ -12,6 +12,10 @@ import { derivePlatformThreadId, validateSyncRecord } from '@/lib/engagement/syn
 
 export type IncomingPost = {
   post_urn?: string;
+  /** 1.5 only: the post author's member URN, already checked equal to the bound member. */
+  post_author_urn?: string | null;
+  /** 1.5 only: provenance tag. */
+  ingested_via?: 'extension_v15';
   post_url?: string | null;
   post_text_preview?: string | null;
   reaction_count?: number | null;
@@ -133,7 +137,11 @@ export async function persistExtensionComments(
         post_text_preview: p.post_text_preview ?? null,
         reaction_count: p.reaction_count ?? null,
         comment_count: p.comment_count ?? null,
-        ingested_via: 'extension_comments',
+        // 1.5 own-post collection records the post author and its provenance so the
+        // write path can fail closed on own content (authorize-submit). The 1.4 shape
+        // never carries them, so 1.4 rows are unchanged.
+        ...(p.post_author_urn ? { post_author_urn: p.post_author_urn } : {}),
+        ingested_via: p.ingested_via === 'extension_v15' ? 'extension_v15' : 'extension_comments',
       };
 
       if (existing?.id) {

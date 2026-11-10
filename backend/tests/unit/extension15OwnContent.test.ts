@@ -25,7 +25,7 @@ describe('own-content rule', () => {
     if (r.ok !== true) throw new Error();
     expect(r.comments).toHaveLength(1);
     expect(r.comments[0]).toMatchObject({ post_urn: 'urn:li:activity:7001', actor_id: OTHER, author_self: false, content: 'Great post', source: 'extension_v15' });
-    expect(r.posts).toEqual([{ post_urn: 'urn:li:activity:7001' }]);
+    expect(r.posts).toEqual([{ post_urn: 'urn:li:activity:7001', post_author_urn: ME, ingested_via: 'extension_v15' }]);
   });
   it('the member own reply on their own post is kept and marked self', () => {
     const r = mapOwnPostComments([item({ author_urn: ME })], ME, {});

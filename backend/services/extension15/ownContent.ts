@@ -36,7 +36,7 @@ export function mapOwnPostComments(items: unknown, actingMemberUrn: string, para
       rejectedNotOwn += 1;
       continue;
     }
-    if (!posts.has(postUrn)) posts.set(postUrn, { post_urn: postUrn });
+    if (!posts.has(postUrn)) posts.set(postUrn, { post_urn: postUrn, post_author_urn: postAuthor, ingested_via: 'extension_v15' });
     comments.push({
       post_urn: postUrn,
       comment_urn: commentUrn,
