@@ -98,23 +98,72 @@ describe('reconciliation uses the batch and falls back for unanswered keys', () 
   });
 });
 
-describe('operator CLI --canonical --dry relies on this: a refusing sink writes nothing and is reported by message', () => {
+describe('operator CLI --canonical --dry relies on this: counted by WHICH prospects the refusing sink received', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { reconcileLeadProjections } = require('../../services/leadIntelligence/leadProjectionReconciliation');
   const ORG = '00000000-0000-4000-8000-0000000000aa';
-  it('an absent prospect + a sink that throws DRY_RUN_NO_WRITE -> still_missing whose detail names the marker', async () => {
+  const prow = (id: string) => ({ id, company_id: ORG, user_id: 'u', source: 'csv', created_at: '2026-11-11T00:00:00Z', unified_person_id: 'p' });
+
+  it('the refusing sink receives the prospect (sourceRef.id), and that prospect closes still_missing - nothing written', async () => {
+    const received: string[] = [];
     const res = await reconcileLeadProjections({
       organizationId: ORG,
       ports: {
-        readProspects: async () => ({ rows: [{ id: 'a9', company_id: ORG, user_id: 'u', source: 'csv', created_at: '2026-11-11T00:00:00Z', unified_person_id: 'p' }], truncated: false }),
+        readProspects: async () => ({ rows: [prow('a9')], truncated: false }),
         findProjections: async () => new Map(),
         findProjection: async () => ({ outcome: 'absent' }),
-        sink: { emit: async () => { throw new Error('DRY_RUN_NO_WRITE'); } },
+        sink: { emit: async (l: { sourceRef?: { id?: string } }) => { received.push(String(l.sourceRef?.id)); throw new Error('dry run'); } },
       },
     });
-    expect(res.outcomes).toHaveLength(1);
-    expect(res.outcomes[0].status).toBe('still_missing');
-    expect(res.outcomes[0].detail).toContain('DRY_RUN_NO_WRITE');
+    expect(received).toEqual(['a9']);
+    expect(res.outcomes[0]).toMatchObject({ prospectId: 'a9', status: 'still_missing' });
+  });
+
+  it('NEGATIVE CONTROL: a prospect that fails BEFORE the sink is not received, so it can never count as "would project"', async () => {
+    const received: string[] = [];
+    const res = await reconcileLeadProjections({
+      organizationId: ORG,
+      ports: {
+        readProspects: async () => ({ rows: [prow('ok1'), prow('bad1')], truncated: false }),
+        findProjections: async () => new Map(),
+        // bad1's presence cannot be established -> 'unknown', never reaches the sink
+        findProjection: async (_o: string, k: string) => (k.endsWith('bad1') ? { outcome: 'unknown' } : { outcome: 'absent' }),
+        sink: { emit: async (l: { sourceRef?: { id?: string } }) => { received.push(String(l.sourceRef?.id)); throw new Error('dry run'); } },
+      },
+    });
+    expect(received).toEqual(['ok1']);
+    expect(res.outcomes.find((o: { prospectId: string }) => o.prospectId === 'bad1').status).toBe('unknown');
+  });
+});
+
+describe('presence fallbacks are COUNTED by reason, not logged per key', () => {
+  it('unanswered / oversize / unmeasurable each counted', async () => {
+    const st = { unanswered: 0, oversize: 0, unmeasurable: 0 };
+    respond = () => ({ data: null, error: null, status: 204 });
+    await findCanonicalLeadIdsByDedupeKeys('c', [key(1), key(2)], 3000, st);
+    expect(st.unanswered).toBe(2);
+    respond = (chunk) => ({ data: [], error: null, status: 200 });
+    await findCanonicalLeadIdsByDedupeKeys('c', [`src:x|id:${'z'.repeat(4000)}`, key(3)], 3000, st);
+    expect(st.oversize).toBe(1);
+    measurable = false;
+    await findCanonicalLeadIdsByDedupeKeys('c', [key(4), key(5), key(6)], 3000, st);
+    expect(st).toEqual({ unanswered: 2, oversize: 1, unmeasurable: 3 });
+  });
+
+  it('reconciliation reports them in its result', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { reconcileLeadProjections } = require('../../services/leadIntelligence/leadProjectionReconciliation');
+    const ORG = '00000000-0000-4000-8000-0000000000aa';
+    const res = await reconcileLeadProjections({
+      organizationId: ORG,
+      ports: {
+        readProspects: async () => ({ rows: [{ id: 'a1', company_id: ORG, user_id: 'u', source: 'csv', created_at: '2026-11-11T00:00:00Z', unified_person_id: 'p' }], truncated: false }),
+        findProjections: async (_o: string, keys: string[], _b: unknown, st: { unanswered: number }) => { st.unanswered += keys.length; return new Map(); },
+        findProjection: async () => ({ outcome: 'found', leadId: 'L' }),
+        sink: { emit: async () => { throw new Error('no'); } },
+      },
+    });
+    expect(res.presenceFallbacks).toEqual({ unanswered: 1, oversize: 0, unmeasurable: 0 });
   });
 });
 

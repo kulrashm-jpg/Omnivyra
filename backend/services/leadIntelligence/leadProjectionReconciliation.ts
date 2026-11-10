@@ -100,7 +100,11 @@ import {
   type LeadProjectionResult,
 } from '../../../lib/leadIntelligence';
 import { durableLeadIntelligenceSink } from './durableLeadIntelligenceSink';
-import { findCanonicalLeadIdByDedupeKey, findCanonicalLeadIdsByDedupeKeys } from './leadIntelligenceRepository';
+import {
+  findCanonicalLeadIdByDedupeKey,
+  findCanonicalLeadIdsByDedupeKeys,
+  type PresenceFallbackStats,
+} from './leadIntelligenceRepository';
 
 const CANONICAL_TABLE = 'canonical_leads';
 
@@ -138,6 +142,12 @@ export interface ReconcileProjectionsResult {
   readonly skipped: number;
   /** More prospects exist than this call examined. */
   readonly truncated: boolean;
+  /**
+   * Keys the batched presence read did NOT answer, by reason. Correct
+   * behaviour (each fell back to the per-key read) but its FREQUENCY is the
+   * signal: a tenant whose keys always fall back has silently lost the batch.
+   */
+  readonly presenceFallbacks: PresenceFallbackStats;
   readonly outcomes: readonly ReconcileItemOutcome[];
 }
 
@@ -305,7 +315,12 @@ export async function reconcileLeadProjections(
     try { knownKeys.push(computeLeadDedupeKey(routeToCanonicalInput('crm', row as Record<string, unknown>))); } catch { /* adapted again below */ }
   }
   let batched = new Map<string, { outcome: 'found'; leadId: string } | { outcome: 'absent' }>();
-  try { batched = await findProjections(organizationId, knownKeys); } catch { /* per-key fallback */ }
+  const presenceFallbacks: PresenceFallbackStats = { unanswered: 0, oversize: 0, unmeasurable: 0 };
+  try {
+    batched = await findProjections(organizationId, knownKeys, undefined, presenceFallbacks);
+  } catch {
+    presenceFallbacks.unanswered += knownKeys.length;   // per-key fallback for all
+  }
 
   for (const row of rows) {
     const prospectId = typeof row.id === 'string' || typeof row.id === 'number' ? String(row.id) : null;
@@ -442,6 +457,7 @@ export async function reconcileLeadProjections(
     unknown: count('unknown'),
     skipped: count('skipped'),
     truncated,
+    presenceFallbacks,
     outcomes,
   };
 }

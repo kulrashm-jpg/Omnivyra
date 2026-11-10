@@ -67,21 +67,29 @@ async function main() {
       return;
     }
     const { reconcileLeadProjections, MAX_RECONCILE_BATCH } = await import('../../../backend/services/leadIntelligence/leadProjectionReconciliation');
-    const DRY_MARK = 'DRY_RUN_NO_WRITE';
+    // --dry: a REFUSING sink (fail-closed by construction: there is nothing to
+    // write with). The report counts the prospects the sink ACTUALLY RECEIVED,
+    // by id, never by matching an error message - so a different, real failure
+    // can never be absorbed into "would project" (PI review).
+    const refusedProspectIds = new Set<string>();
     const res = await reconcileLeadProjections({
       organizationId: companyArg,
       limit: Math.min(limitArg, MAX_RECONCILE_BATCH),
-      ...(DRY ? { ports: { sink: { emit: async () => { throw new Error(DRY_MARK); } } } } : {}),
+      ...(DRY ? { ports: { sink: { emit: async (lead) => {
+        if (lead?.sourceRef?.id) refusedProspectIds.add(String(lead.sourceRef.id));
+        throw new Error('dry run: nothing is written');
+      } } } } : {}),
     });
     const tally: Record<string, number> = {};
     let wouldProject = 0;
     for (const o of res.outcomes) {
-      if (DRY && typeof o.detail === 'string' && o.detail.includes(DRY_MARK)) { wouldProject++; continue; }
+      if (DRY && o.status === 'still_missing' && o.prospectId && refusedProspectIds.has(o.prospectId)) { wouldProject++; continue; }
       tally[o.status] = (tally[o.status] ?? 0) + 1;
     }
     console.info(JSON.stringify({
       phase: DRY ? 'CANONICAL_DRY_DONE' : 'CANONICAL_DONE', company: companyArg,
       prospects: res.outcomes.length, truncated: res.truncated, ...(DRY ? { wouldProject } : {}), byStatus: tally,
+      presenceFallbacks: res.presenceFallbacks,
     }));
     return;
   }
