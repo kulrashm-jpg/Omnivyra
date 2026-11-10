@@ -987,7 +987,9 @@ function main() {
   const immut = immutabilityViolations(
     topLevel,
     readJson(APPLIED_BOUNDARY, null),
-    (f) => sha256(fs.readFileSync(path.join(MIG_DIR, f))),
+    // LF basis, like rule 6b: the database ran LF text, and a CRLF checkout must not
+    // fail an unchanged applied migration. A no-op on a clean (0 CR) checkout.
+    (f) => lfSha256(fs.readFileSync(path.join(MIG_DIR, f))),
   );
   errors.push(...immut.violations);
 
@@ -1075,6 +1077,7 @@ module.exports = {
   reservationViolations,
   immutabilityViolations,
   aboveBoundaryViolations,
+  lfSha256,
   rollbackViolations,
   setNullContradictions,
   scanRefs,

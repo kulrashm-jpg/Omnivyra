@@ -178,3 +178,22 @@ describe('RULE 6b — applied-above-boundary immutability', () => {
     expect(aboveBoundaryViolations([APPLIED], b, () => loneCr).violations[0]).toContain('APPLIED MIGRATION MODIFIED (above boundary)');
   });
 });
+
+describe('RULE 6 — LF digest basis (virality-05 follow-up b)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { lfSha256 } = require('../../../scripts/check-migration-quality.js');
+  it('lfSha256 equals the plain sha256 of LF content, for both LF and CRLF checkouts', () => {
+    const lf = Buffer.from('CREATE TABLE IF NOT EXISTS t (id int);\nCOMMIT;\n');
+    const crlf = Buffer.from('CREATE TABLE IF NOT EXISTS t (id int);\r\nCOMMIT;\r\n');
+    expect(lfSha256(lf)).toBe(sha(lf));
+    expect(lfSha256(crlf)).toBe(sha(lf));
+  });
+  it('rule 6 fed through lfSha256: a CRLF checkout of an unchanged applied file passes, a real edit still fails', () => {
+    const f = '20260101000000_a.sql';
+    const lf = Buffer.from('SELECT 1;\n');
+    const b = { schema_version: 2, ledger_max: LEDGER_MAX, digests: { [f]: sha(lf) } };
+    expect(immutabilityViolations([f], b, () => lfSha256(Buffer.from('SELECT 1;\r\n'))).violations).toEqual([]);
+    expect(immutabilityViolations([f], b, () => lfSha256(Buffer.from('SELECT 2;\r\n'))).violations[0])
+      .toContain('APPLIED MIGRATION MODIFIED');
+  });
+});
