@@ -67,6 +67,17 @@ Every command is a row in the existing `extension_commands` table: `status` pend
   approval_id?, text_sha256?, target? }            // write commands only
 ```
 
+**Canonical form (normative; both sides implement it identically):**
+- `canonical(v)`:
+  - objects: keys sorted by UTF-16 code unit, encoded as `{"k":canonical(v),...}`, with `undefined`-valued keys omitted;
+  - arrays: `[canonical(e),...]`;
+  - strings, numbers, booleans and `null`: `JSON.stringify(v)`;
+  - no whitespace anywhere.
+- `envelope_signature = hex(HMAC-SHA256(hmac_secret, "omnivyra.ext.cmd.v1\n" + canonical(envelope_without_signature)))`.
+- The extension compares signatures in constant time.
+- `expires_at` is epoch milliseconds. The extension refuses `Date.now() > expires_at`, and also refuses a `schema_version` other than `2026-11-10.1`.
+- Shared test vector: `{"a":1,"b":[true,null,"x"]}` canonicalises to exactly that string. Both suites also pin the signature of one fixed envelope with a fixed secret, using the vector file `lib/extension/envelopeVectors.json` (server repo), copied to `tests/fixtures/envelopeVectors.json` (extension repo).
+
 | `action` | `params` | Write? |
 |---|---|---|
 | `li.collect.own_post_comments` | `{ post_urns?: string[≤10], max_items: ≤200 }` | no |

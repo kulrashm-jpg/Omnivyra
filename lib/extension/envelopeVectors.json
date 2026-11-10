@@ -1,0 +1,37 @@
+{
+  "$comment": "Shared test vectors for the 1.5.0 command envelope (EXTENSION-1.5.0-CONTRACT.md section 4). The secret is a TEST value, not a real one. Copy byte-for-byte to the extension repo tests/fixtures/envelopeVectors.json.",
+  "canonical_basic": {
+    "input": {
+      "b": [
+        true,
+        null,
+        "x"
+      ],
+      "a": 1
+    },
+    "expected": "{\"a\":1,\"b\":[true,null,\"x\"]}"
+  },
+  "envelope": {
+    "secret": "test-vector-secret-not-real-0123456789abcdef",
+    "envelope": {
+      "command_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "2026-11-10.1",
+      "org_id": "00000000-0000-4000-8000-0000000000aa",
+      "user_id": "00000000-0000-4000-8000-0000000000bb",
+      "platform": "linkedin",
+      "acting_member_urn": "urn:li:fsd_profile:ACoAATESTVECTOR0000000001",
+      "action": "li.comment.reply",
+      "params": {},
+      "expires_at": 1893456000000,
+      "approval_id": "00000000-0000-4000-8000-0000000000cc",
+      "text_sha256": "a51d01d74ab9e6c24d097b2a7a0048059437c3724ab6411eb6c229de549a3234",
+      "target": {
+        "post_urn": "urn:li:activity:7000000000000000001",
+        "parent_comment_urn": "urn:li:comment:(activity:7000000000000000001,7000000000000000002)"
+      }
+    },
+    "canonical": "{\"acting_member_urn\":\"urn:li:fsd_profile:ACoAATESTVECTOR0000000001\",\"action\":\"li.comment.reply\",\"approval_id\":\"00000000-0000-4000-8000-0000000000cc\",\"command_id\":\"00000000-0000-4000-8000-000000000001\",\"expires_at\":1893456000000,\"org_id\":\"00000000-0000-4000-8000-0000000000aa\",\"params\":{},\"platform\":\"linkedin\",\"schema_version\":\"2026-11-10.1\",\"target\":{\"parent_comment_urn\":\"urn:li:comment:(activity:7000000000000000001,7000000000000000002)\",\"post_urn\":\"urn:li:activity:7000000000000000001\"},\"text_sha256\":\"a51d01d74ab9e6c24d097b2a7a0048059437c3724ab6411eb6c229de549a3234\",\"user_id\":\"00000000-0000-4000-8000-0000000000bb\"}",
+    "domain": "omnivyra.ext.cmd.v1",
+    "signature": "2cf7fb79b575b06d9f3e89b143eafcbfcf52530f02d928554c4a39db8c2d18ee"
+  }
+}
