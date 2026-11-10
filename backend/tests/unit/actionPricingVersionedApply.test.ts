@@ -16,7 +16,7 @@ jest.mock('../../db/writeOwner', () => ({
 jest.mock('../../services/pricingService', () => ({ refreshPricingCache: () => refresh() }));
 jest.mock('../../services/logger', () => ({ logger: { error: jest.fn(), warn: jest.fn(), info: jest.fn() } }));
 
-import { applyActionPricingChange, ActionPricingInputError } from '../../services/actionPricingApplyService';
+import { applyActionPricingChange, applyModelPricingChange, ActionPricingInputError } from '../../services/actionPricingApplyService';
 
 beforeEach(() => { rpc.mockReset(); refresh.mockClear(); tableCalls.length = 0; });
 
@@ -72,5 +72,36 @@ describe('applyActionPricingChange (B-1)', () => {
     rpc.mockResolvedValue(resp);
     await expect(applyActionPricingChange({ actionKey: 'x', costMultiplier: 1 })).rejects.toThrow('returned no row id');
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyModelPricingChange (B-1 follow-up)', () => {
+  it('makes exactly ONE rpc call to apply_model_pricing_change, never a direct table write', async () => {
+    rpc.mockResolvedValue({ data: 'm-id', error: null });
+    const r = await applyModelPricingChange({
+      provider: 'openai', modelName: 'gpt-x', kind: 'completion', inputPer1kUsd: 0.5, outputPer1kUsd: 1.5,
+      effectiveFrom: '2026-11-10T00:00:00.000Z', notes: 'n',
+    });
+    expect(r).toEqual({ id: 'm-id' });
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('apply_model_pricing_change', {
+      p_provider: 'openai', p_model_name: 'gpt-x', p_kind: 'completion', p_input_per_1k_usd: 0.5, p_output_per_1k_usd: 1.5,
+      p_effective_from: '2026-11-10T00:00:00.000Z', p_notes: 'n', p_max_context_tokens: null, p_max_output_tokens: null,
+    });
+    expect(tableCalls).toEqual([]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('FAIL input: a kind the CHECK rejects (23514) is an input error, and the cache is not refreshed', async () => {
+    rpc.mockResolvedValue({ data: null, error: { code: '23514', message: 'llm_model_pricing_kind_check' } });
+    await expect(applyModelPricingChange({ provider: 'p', modelName: 'm', kind: 'bogus', inputPer1kUsd: 0, outputPer1kUsd: 0 }))
+      .rejects.toBeInstanceOf(ActionPricingInputError);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('FAIL input: a blank answer is NOT success', async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+    await expect(applyModelPricingChange({ provider: 'p', modelName: 'm', kind: 'completion', inputPer1kUsd: 0, outputPer1kUsd: 0 }))
+      .rejects.toThrow('returned no row id');
   });
 });

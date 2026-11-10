@@ -39,12 +39,13 @@ import {
 } from '../../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { refreshPricingCache, getActionPricing } from '../../../../backend/services/pricingService';
+import { getActionPricing } from '../../../../backend/services/pricingService';
 import { resolveActionKey } from '../../../../backend/services/usageLedgerService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { logger } from '../../../../backend/services/logger';
 import {
   applyActionPricingChange,
+  applyModelPricingChange,
   ActionPricingInputError,
 } from '../../../../backend/services/actionPricingApplyService';
 
@@ -96,51 +97,38 @@ async function handleModelUpdate(body: ModelUpdateBody, actorId: string, res: Ne
   const modelName  = body.model_name.toLowerCase().trim();
   const effective  = body.effective_from ?? new Date().toISOString();
 
-  // Versioned insert: deactivate prior active row, then insert new active row.
-  // Two statements — acceptable since admin writes are rare and the UNIQUE
-  // partial index protects against concurrent duplicate is_active=true rows.
-  const { error: deactivateErr } = await supabase
-    .from('llm_model_pricing')
-    .update({ is_active: false })
-    .eq('provider', provider)
-    .eq('model_name', modelName)
-    .eq('kind', kind)
-    .eq('is_active', true);
-  if (deactivateErr) {
-    logger.error('pricing_deactivate_failed', { message: deactivateErr.message });
-    return res.status(500).json({ error: 'Failed to deactivate prior pricing row', code: 'DEACTIVATE_FAILED' });
-  }
-
-  const { data, error: insertErr } = await supabase
-    .from('llm_model_pricing')
-    .insert({
+  // B-1 follow-up: ONE atomic write (the database function deactivates-then-
+  // inserts in a single transaction and carries the token limits). The old
+  // two-statement path here is gone.
+  let newId: string;
+  try {
+    const result = await applyModelPricingChange({
       provider,
-      model_name:        modelName,
+      modelName,
       kind,
-      input_per_1k_usd:  body.input_per_1k_usd,
-      output_per_1k_usd: body.output_per_1k_usd,
-      effective_from:    effective,
-      is_active:         true,
-      notes:             body.notes ?? null,
-    })
-    .select('id')
-    .single();
-
-  if (insertErr) {
-    logger.error('pricing_insert_failed', { message: insertErr.message });
-    return res.status(500).json({ error: 'Failed to insert pricing row', code: 'INSERT_FAILED' });
+      inputPer1kUsd:  body.input_per_1k_usd,
+      outputPer1kUsd: body.output_per_1k_usd,
+      effectiveFrom:  effective,
+      notes:          body.notes,
+    });
+    newId = result.id;
+  } catch (err) {
+    if (err instanceof ActionPricingInputError) {
+      return res.status(400).json({ error: err.message, code: 'PRICING_INPUT_REJECTED' });
+    }
+    logger.error('model_pricing_update_failed', { message: err instanceof Error ? err.message : String(err) });
+    return res.status(500).json({ error: 'Failed to apply model-pricing change', code: 'APPLY_FAILED' });
   }
 
-  await refreshPricingCache();
   await recordAdminAudit({
     actorUserId:    actorId,
     action:         'ADMIN_PRICING_UPDATE_MODEL',
     targetType:     'llm_model_pricing',
-    targetId:       (data as any).id,
+    targetId:       newId,
     metadata:       { provider, model_name: modelName, kind, input_per_1k_usd: body.input_per_1k_usd, output_per_1k_usd: body.output_per_1k_usd, effective_from: effective },
-    idempotencyKey: String((data as any).id),
+    idempotencyKey: String(newId),
   });
-  return res.status(200).json({ ok: true, id: (data as any).id, target: 'model' });
+  return res.status(200).json({ ok: true, id: newId, target: 'model' });
 }
 
 async function handleActionUpdate(body: ActionUpdateBody, actorId: string, res: NextApiResponse) {

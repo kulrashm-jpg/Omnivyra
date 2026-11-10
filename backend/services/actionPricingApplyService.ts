@@ -57,22 +57,20 @@ export class ActionPricingInputError extends Error {
 
 const INPUT_ERROR_CODES = new Set(['22023', '23514']);
 
-export async function applyActionPricingChange(
-  opts: ApplyActionPricingOpts,
+/**
+ * One versioned-apply database function call, shared by the action and model
+ * paths: maps input refusals to ActionPricingInputError, treats a blank answer
+ * as failure, and refreshes the pricing cache only after success.
+ */
+async function callVersionedApply(
+  fn: 'apply_action_pricing_change' | 'apply_model_pricing_change',
+  args: Record<string, unknown>,
 ): Promise<ApplyActionPricingResult> {
-  const { data, error } = await ownedDbRpc('apply_action_pricing_change', {
-    p_action_key:         opts.actionKey,
-    p_cost_multiplier:    opts.costMultiplier,
-    p_minimum_charge_usd: opts.minimumChargeUsd ?? 0,
-    p_ceiling_usd:        opts.ceilingUsd ?? null,
-    p_effective_from:     opts.effectiveFrom ?? new Date().toISOString(),
-    p_notes:              opts.notes ?? null,
-    p_source_type:        opts.sourceType ?? null,
-  });
+  const { data, error } = await ownedDbRpc(fn, args);
 
   if (error) {
     const code = String((error as { code?: unknown }).code ?? '');
-    logger.error('action_pricing_apply_failed', { code, message: error.message });
+    logger.error('pricing_versioned_apply_failed', { fn, code, message: error.message });
     if (INPUT_ERROR_CODES.has(code)) {
       throw new ActionPricingInputError(error.message, code);
     }
@@ -81,10 +79,59 @@ export async function applyActionPricingChange(
   // A blank answer is not success (postgrest-js can turn a blank response into
   // {data: null, error: null}): the function always returns the new row's id.
   if (typeof data !== 'string' || data.length === 0) {
-    logger.error('action_pricing_apply_no_id', { data_type: typeof data });
+    logger.error('pricing_versioned_apply_no_id', { fn, data_type: typeof data });
     throw new Error('Failed to apply pricing change: the database returned no row id');
   }
 
   await refreshPricingCache();
   return { id: data };
+}
+
+export async function applyActionPricingChange(
+  opts: ApplyActionPricingOpts,
+): Promise<ApplyActionPricingResult> {
+  return callVersionedApply('apply_action_pricing_change', {
+    p_action_key:         opts.actionKey,
+    p_cost_multiplier:    opts.costMultiplier,
+    p_minimum_charge_usd: opts.minimumChargeUsd ?? 0,
+    p_ceiling_usd:        opts.ceilingUsd ?? null,
+    p_effective_from:     opts.effectiveFrom ?? new Date().toISOString(),
+    p_notes:              opts.notes ?? null,
+    p_source_type:        opts.sourceType ?? null,
+  });
+}
+
+export interface ApplyModelPricingOpts {
+  provider: string;
+  modelName: string;
+  kind: string;
+  inputPer1kUsd: number;
+  outputPer1kUsd: number;
+  effectiveFrom?: string;
+  notes?: string;
+  /** Optional: carried from the active row when omitted (the old writer wiped them). */
+  maxContextTokens?: number | null;
+  maxOutputTokens?: number | null;
+}
+
+/**
+ * THE versioned write for llm_model_pricing (B-1 follow-up, migration
+ * 20270210000001): one call to apply_model_pricing_change, which locks the
+ * (provider, model_name, kind) active row and deactivates-then-inserts in one
+ * transaction, carrying the token limits from it.
+ */
+export async function applyModelPricingChange(
+  opts: ApplyModelPricingOpts,
+): Promise<ApplyActionPricingResult> {
+  return callVersionedApply('apply_model_pricing_change', {
+    p_provider:           opts.provider,
+    p_model_name:         opts.modelName,
+    p_kind:               opts.kind,
+    p_input_per_1k_usd:   opts.inputPer1kUsd,
+    p_output_per_1k_usd:  opts.outputPer1kUsd,
+    p_effective_from:     opts.effectiveFrom ?? new Date().toISOString(),
+    p_notes:              opts.notes ?? null,
+    p_max_context_tokens: opts.maxContextTokens ?? null,
+    p_max_output_tokens:  opts.maxOutputTokens ?? null,
+  });
 }
