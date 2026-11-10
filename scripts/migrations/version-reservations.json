@@ -70,10 +70,6 @@
     { "version": "20270118000000", "slug": "reports_update_policy_with_check", "status": "occupied_elsewhere", "owner": "GOV2 reports policy", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED on disk in worktree C:/tmp/gov2-reports-policy." },
 
     { "version": "20270120000000", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (orchestration recovery)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
-    { "version": "20270206000000", "slug": "prospect_import_review_items", "status": "reserved",
-      "owner": "PI build virality-e1 (feat/pi-salesnav-apollo-20261110; owner R3-A via virality-e9, 2026-11-10)",
-      "evidence": "CODE_VERIFIED",
-      "note": "Reserved by Release-controls (virality-83) on the registry lineage (ad772aa57). New tenant staging table for R3 held-for-review imports; not applied anywhere." },
     { "version": "20270120000001", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (orchestration recovery)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
     { "version": "20270120000002", "slug": "whatsapp_broadcast_recipient_unique", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (WhatsApp send-once)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." }
   ],

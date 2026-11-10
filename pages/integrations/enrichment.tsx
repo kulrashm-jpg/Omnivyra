@@ -4,6 +4,7 @@ import IntegrationHubNav from '../../components/integrations/IntegrationHubNav';
 import LeadSourcesSection from '../../components/prospects/LeadSourcesSection';
 import ApolloFieldGroupsPanel from '../../components/prospects/ApolloFieldGroupsPanel';
 import CentralVendorAccessPanel from '../../components/billing/CentralVendorAccessPanel';
+import DataSourceUsagePanel from '../../components/prospects/DataSourceUsagePanel';
 import {
   buildCapabilityCards,
   credentialFormProviderIds,
@@ -180,6 +181,7 @@ export default function EnrichmentProvidersPage() {
 
         <ApolloFieldGroupsPanel />
         <CentralVendorAccessPanel />
+        <DataSourceUsagePanel />
 
         {PLANNED_CARDS.length > 0 && (
           <section className="mb-8">
