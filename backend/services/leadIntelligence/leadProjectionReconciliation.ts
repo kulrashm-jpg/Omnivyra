@@ -100,7 +100,7 @@ import {
   type LeadProjectionResult,
 } from '../../../lib/leadIntelligence';
 import { durableLeadIntelligenceSink } from './durableLeadIntelligenceSink';
-import { findCanonicalLeadIdByDedupeKey } from './leadIntelligenceRepository';
+import { findCanonicalLeadIdByDedupeKey, findCanonicalLeadIdsByDedupeKeys } from './leadIntelligenceRepository';
 
 const CANONICAL_TABLE = 'canonical_leads';
 
@@ -152,6 +152,8 @@ export interface ReconcileProjectionsPorts {
     truncated: boolean;
   }>;
   readonly findProjection?: typeof findCanonicalLeadIdByDedupeKey;
+  /** PI-LDB C: batched presence for every adapted key (URL-budgeted). */
+  readonly findProjections?: typeof findCanonicalLeadIdsByDedupeKeys;
   readonly sink?: LeadIntelligenceSink;
   readonly now?: () => string;
 }
@@ -211,11 +213,28 @@ export async function reconcileLeadProjections(
   const ports = input.ports ?? {};
   const readProspects = ports.readProspects ?? readProspectsDefault;
   const findProjection = ports.findProjection ?? findCanonicalLeadIdByDedupeKey;
+  // Batched presence only when the caller did not inject a per-key port of its
+  // own: a test or caller that supplies `findProjection` gets exactly that.
+  const findProjections = ports.findProjections
+    ?? (ports.findProjection ? async () => new Map() : findCanonicalLeadIdsByDedupeKeys);
   const sink = ports.sink ?? durableLeadIntelligenceSink;
   const now = () => ports.now?.() ?? new Date().toISOString();
 
   const { rows, truncated } = await readProspects(organizationId, limit);
   const outcomes: ReconcileItemOutcome[] = [];
+
+  // PI-LDB C: the keys are known up front here (unlike the import path), so
+  // presence is read in URL-budgeted batches first. A key the batch did not
+  // answer falls back to the per-key three-valued read below; the batch never
+  // turns an unanswered read into `absent`.
+  const knownKeys: string[] = [];
+  for (const row of rows) {
+    const rowTenant = String(row.company_id ?? row.organization_id ?? '');
+    if (row.id == null || rowTenant !== organizationId) continue;
+    try { knownKeys.push(computeLeadDedupeKey(routeToCanonicalInput('crm', row as Record<string, unknown>))); } catch { /* adapted again below */ }
+  }
+  let batched = new Map<string, { outcome: 'found'; leadId: string } | { outcome: 'absent' }>();
+  try { batched = await findProjections(organizationId, knownKeys); } catch { /* per-key fallback */ }
 
   for (const row of rows) {
     const prospectId = typeof row.id === 'string' || typeof row.id === 'number' ? String(row.id) : null;
@@ -260,7 +279,7 @@ export async function reconcileLeadProjections(
     // the upsert would be harmless, but it would also bump `updated_at` and
     // re-run score materialization on a row nobody asked to change, and a
     // repair pass that quietly rewrites healthy rows is not a repair pass.
-    const existing = await findProjection(organizationId, dedupeKey);
+    const existing = batched.get(dedupeKey) ?? await findProjection(organizationId, dedupeKey);
     if (existing.outcome === 'found') {
       outcomes.push({ prospectId, dedupeKey, status: 'already_projected' });
       continue;

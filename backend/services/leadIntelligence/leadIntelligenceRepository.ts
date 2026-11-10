@@ -562,6 +562,80 @@ export async function findCanonicalLeadIdByDedupeKey(
 }
 
 /**
+ * PI-LDB C (requirement 6, folded in): presence for MANY keys at once, for a
+ * caller that knows its keys up front (reconciliation).
+ *
+ * Packed by MEASURED request URL length, never by a key count: the builder's
+ * own `url` is rendered for each candidate chunk and a key joins the chunk
+ * only while the URL stays within `urlBudget` (default 3000 characters, below
+ * every common proxy/CDN limit). `IN_FILTER_CHUNK`, MAX_RECONCILE_BATCH and
+ * MAX_BATCH_SIZE are row or record caps, not URL budgets, which is why none of
+ * them is used here.
+ *
+ * Returns a verdict ONLY for keys a proven response answered (status 200/206,
+ * no error, an array body): `found` with the id, or `absent`. A key whose chunk
+ * was not answered - or that alone exceeds the budget, or when the builder
+ * exposes no measurable URL - is simply MISSING from the map, and the caller
+ * falls back to the per-key three-valued read. A batch read is an
+ * optimisation; it never manufactures an `absent`.
+ */
+export async function findCanonicalLeadIdsByDedupeKeys(
+  companyId: string,
+  dedupeKeys: readonly string[],
+  urlBudget = 3000,
+): Promise<Map<string, { outcome: 'found'; leadId: string } | { outcome: 'absent' }>> {
+  const out = new Map<string, { outcome: 'found'; leadId: string } | { outcome: 'absent' }>();
+  const keys = [...new Set(dedupeKeys.filter((k) => typeof k === 'string' && k.length > 0))];
+  if (!companyId || keys.length === 0) return out;
+
+  const build = (chunk: string[]) => ownedDbTable(TABLE)
+    .select('dedupe_key, id')
+    .eq('company_id', companyId)
+    .in('dedupe_key', chunk);
+  const urlLength = (chunk: string[]): number | null => {
+    try {
+      const u = (build(chunk) as unknown as { url?: { toString(): string } }).url;
+      return u && typeof u.toString === 'function' ? u.toString().length : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  for (const key of keys) {
+    const candidate = [...current, key];
+    const len = urlLength(candidate);
+    if (len === null) return out;                         // unmeasurable: no batch at all
+    if (len <= urlBudget) { current = candidate; continue; }
+    if (current.length > 0) chunks.push(current);
+    const alone = urlLength([key]);
+    current = alone !== null && alone <= urlBudget ? [key] : [];   // an oversize key is left to the per-key read
+  }
+  if (current.length > 0) chunks.push(current);
+
+  for (const chunk of chunks) {
+    try {
+      const res = await build(chunk).retry(false);
+      const { data, error, status } = res as { data: unknown; error: unknown; status?: unknown };
+      // A null error is not an answer (Prompt 2F): only a 200/206 with an array is.
+      if (error || (status !== 200 && status !== 206) || !Array.isArray(data)) continue;
+      const found = new Map<string, string>();
+      for (const row of data as Array<{ dedupe_key?: unknown; id?: unknown }>) {
+        if (typeof row.dedupe_key === 'string' && row.id != null) found.set(row.dedupe_key, String(row.id));
+      }
+      for (const k of chunk) {
+        const id = found.get(k);
+        out.set(k, id ? { outcome: 'found', leadId: id } : { outcome: 'absent' });
+      }
+    } catch {
+      // Unanswered chunk: its keys stay missing and fall back to the per-key read.
+    }
+  }
+  return out;
+}
+
+/**
  * THE one keyed read behind both callers (Prompt 2B).
  *
  * Two separate functions issuing two near-identical reads against the same

@@ -52,6 +52,40 @@ async function main() {
   // Import + use the admin client EARLY so it initializes (prod env) before ingest.
   const { supabase } = await import('../../../backend/db/supabaseClient');
 
+  // ── --canonical: project canonical_leads prospects (PI-LDB C, 2026-11-11) ──
+  // The SECOND entity this CLI handles. Legacy `leads` (below) and canonical
+  // prospects (`canonical_leads`) are DIFFERENT entities, so this is a separate
+  // mode, not a merge: it calls the ONE reconciliation service
+  // (`reconcileLeadProjections`), which reads prospects newest first, checks
+  // presence in URL-budgeted batches, and projects only what is missing, through
+  // the same durable sink. Tenant-scoped: --company is required.
+  // --dry projects NOTHING: the sink refuses, and those rows report as wouldProject.
+  if (args.includes('--canonical')) {
+    if (!companyArg) {
+      console.error(JSON.stringify({ phase: 'REFUSED', reason: '--canonical requires --company <id>: reconciliation is never tenant-less' }));
+      process.exitCode = 2;
+      return;
+    }
+    const { reconcileLeadProjections, MAX_RECONCILE_BATCH } = await import('../../../backend/services/leadIntelligence/leadProjectionReconciliation');
+    const DRY_MARK = 'DRY_RUN_NO_WRITE';
+    const res = await reconcileLeadProjections({
+      organizationId: companyArg,
+      limit: Math.min(limitArg, MAX_RECONCILE_BATCH),
+      ...(DRY ? { ports: { sink: { emit: async () => { throw new Error(DRY_MARK); } } } } : {}),
+    });
+    const tally: Record<string, number> = {};
+    let wouldProject = 0;
+    for (const o of res.outcomes) {
+      if (DRY && typeof o.detail === 'string' && o.detail.includes(DRY_MARK)) { wouldProject++; continue; }
+      tally[o.status] = (tally[o.status] ?? 0) + 1;
+    }
+    console.info(JSON.stringify({
+      phase: DRY ? 'CANONICAL_DRY_DONE' : 'CANONICAL_DONE', company: companyArg,
+      prospects: res.outcomes.length, truncated: res.truncated, ...(DRY ? { wouldProject } : {}), byStatus: tally,
+    }));
+    return;
+  }
+
   // Existing canonical mirrors (resumable set = leads NOT already present).
   let ciq = supabase.from('lead_intelligence').select('source_id').eq('source_table', 'leads');
   if (companyArg) ciq = ciq.eq('company_id', companyArg);
