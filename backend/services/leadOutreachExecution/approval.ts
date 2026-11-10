@@ -43,6 +43,8 @@ import {
 import { explainTransition, isTransitionAllowed } from './lifecycle';
 import type { OutreachTask, OutreachTaskStatus } from './types';
 import { recordFailure, recordLifecycleTransition, recordStageOutcome } from './telemetry';
+import { computeApprovalBinding, isExternalChannel } from './approvalBinding';
+import { redeemApprovalPasskeyProof } from './approvalPasskey';
 
 /** The two decisions a human may record. Nothing else is a decision. */
 export type ApprovalDecision = 'approved' | 'rejected';
@@ -54,7 +56,13 @@ export type ApprovalRefusal =
   | 'invalid_decision'
   | 'invalid_state'
   | 'already_decided'
-  | 'storage_failure';
+  | 'storage_failure'
+  // D-02
+  | 'approval_stale'
+  | 'binding_unavailable'
+  | 'not_revocable'
+  | 'passkey_required'
+  | 'recipient_required';
 
 export interface ApprovalActionResult {
   ok: boolean;
@@ -80,6 +88,27 @@ export interface DecisionInput {
   notes?: string | null;
   /** Injected for determinism in tests; defaults to the current instant. */
   decidedAt?: string;
+  /**
+   * D-02 — the binding the approver was shown. When given and no longer equal to the
+   * binding recomputed now, the approval is refused as `approval_stale` and nothing moves.
+   * The recorded hash is ALWAYS the server's recomputation, never a caller's value.
+   */
+  expectedContentHash?: string | null;
+  /** D-02 — which surface records the decision. */
+  tier?: 'tenant' | 'platform' | null;
+  /**
+   * D-02 (S-02) — REQUIRED to approve a task on any external channel: the proof
+   * `verifyApprovalPasskey` returned for this approver, task and binding. Nothing else
+   * satisfies it (approvalPasskey.ts), so no caller can approve external execution
+   * without a fresh passkey ceremony. Ignored for the internal channel and for rejections.
+   */
+  passkeyProof?: unknown;
+  /**
+   * D-02 (S-04) — for a NON-journey task on an external channel, the one address the
+   * approval authorises. Bound into the hash; a dispatch to any other address, or an
+   * approval that names none, is refused. A journey email binds its canonical address.
+   */
+  recipient?: string | null;
 }
 
 export interface ApprovalStateView {
@@ -88,8 +117,8 @@ export interface ApprovalStateView {
   requiresApproval: boolean;
   /** True when the task is currently waiting on a human. */
   awaitingDecision: boolean;
-  /** The most recent recorded decision, if any. */
-  latestDecision: ApprovalDecision | null;
+  /** The most recent recorded decision, if any. D-02: `revoked` withdrew an approval. */
+  latestDecision: ApprovalDecision | 'revoked' | null;
   latestApproverUserId: string | null;
   latestDecidedAt: string | null;
   decisionCount: number;
@@ -176,6 +205,12 @@ export async function submitForApproval(companyId: string, taskId: string): Prom
   if (task.status === 'awaiting_approval') {
     return { ok: true, taskId, status: 'awaiting_approval', changed: false, reason: 'already awaiting approval' };
   }
+  // D-02 — the lifecycle now also allows an approved task back to review, but only for a
+  // stale approval and only through `approvalBinding` (settleRefusedApproval /
+  // requestFreshApproval). Submission stays `pending → awaiting_approval` and nothing else.
+  if (task.status !== 'pending' && isTransitionAllowed(task.status, 'awaiting_approval')) {
+    return refuse(taskId, 'invalid_state', `a task in "${task.status}" returns to review only through a fresh-approval request`, task.status);
+  }
   return (await attemptTransition(companyId, task, 'awaiting_approval')).result;
 }
 
@@ -238,11 +273,43 @@ async function recordDecision(
   const task = await getOutreachTaskById(companyId, taskId);
   if (!task || !task.id) return refuse(taskId, 'task_not_found', 'no such task for this tenant');
 
+  // D-02 — an approval is bound to the exact content and action it authorises. The binding
+  // is computed BEFORE the transition, so content that cannot be bound is never approved,
+  // and an approver who was shown different content is refused with nothing moved.
+  let approvedContentHash: string | null = null;
+  let approvedRecipient: string | null = null;
+  let passkey: { credentialId: string; verifiedAt: string } | null = null;
+  if (decision === 'approved') {
+    const binding = await computeApprovalBinding(companyId, task, { recipient: input.recipient ?? null });
+    if (!binding.ok) return refuse(taskId, 'binding_unavailable', binding.reason, task.status);
+    if (input.expectedContentHash != null && input.expectedContentHash !== binding.hash) {
+      return refuse(taskId, 'approval_stale', 'the content or action changed after it was shown for approval; review it again', task.status);
+    }
+    // L-2 — a non-journey external task names the one address it authorises; without one
+    // the gate could never let it send, so it is not recorded as approved at all.
+    if (binding.kind === 'task' && isExternalChannel(task) && binding.recipient === null) {
+      return refuse(taskId, 'recipient_required', 'an external non-journey approval must name the recipient it authorises', task.status);
+    }
+    approvedContentHash = binding.hash;
+    approvedRecipient = binding.recipient;
+    // S-02 — external execution is approved only with a fresh passkey verification bound
+    // to exactly this approver, task and binding. No option, caller or tier skips it.
+    if (isExternalChannel(task)) {
+      const redeemed = redeemApprovalPasskeyProof(input.passkeyProof, {
+        userId: approver, organizationId: companyId, taskId: task.id, bindingHash: binding.hash,
+      });
+      if (redeemed.ok !== true) return refuse(taskId, 'passkey_required', redeemed.reason, task.status);
+      passkey = { credentialId: redeemed.credentialId, verifiedAt: redeemed.verifiedAt };
+    }
+  }
+
   const target: OutreachTaskStatus = decision === 'approved' ? 'approved' : 'rejected';
   const { moved, result } = await attemptTransition(companyId, task, target);
   if (!moved) return result;
 
   recordStageOutcome('approval', 'ok');
+  // State first, then this row (module header). If this append fails the task is
+  // `approved` with no bound approval on record, which the dispatch gate refuses.
   const audit = await appendApproval({
     companyId,
     taskId: task.id,
@@ -252,6 +319,11 @@ async function recordDecision(
     notes: trim(input.notes),
     missingInformation: [],
     decidedAt: trim(input.decidedAt, 40) ?? nowIso(),
+    approvedContentHash,
+    tier: input.tier ?? null,
+    approvedRecipient,
+    passkeyCredentialId: passkey?.credentialId ?? null,
+    passkeyVerifiedAt: passkey?.verifiedAt ?? null,
   });
   // The decision took effect; say so, and say that its record did not.
   if (!audit.ok) recordFailure('approval', audit.error);
@@ -273,14 +345,14 @@ export async function getApprovalState(companyId: string, taskId: string): Promi
   const task = await getOutreachTaskById(companyId, taskId);
   const history = task ? await listApprovals(companyId, taskId) : [];
   const latest = history.length > 0 ? history[history.length - 1] : null;
-  const latestDecision = latest ? (String((latest as Record<string, unknown>).decision) as ApprovalDecision) : null;
+  const latestDecision = latest ? (String((latest as Record<string, unknown>).decision) as ApprovalDecision | 'revoked') : null;
 
   return {
     taskId,
     status: task?.status ?? null,
     requiresApproval: task?.requiresApproval === true,
     awaitingDecision: task?.status === 'awaiting_approval',
-    latestDecision: latestDecision === 'approved' || latestDecision === 'rejected' ? latestDecision : null,
+    latestDecision: latestDecision === 'approved' || latestDecision === 'rejected' || latestDecision === 'revoked' ? latestDecision : null,
     latestApproverUserId: latest ? (trim((latest as Record<string, unknown>).approver_user_id, 200)) : null,
     latestDecidedAt: latest ? (trim((latest as Record<string, unknown>).decided_at, 40)) : null,
     decisionCount: history.length,

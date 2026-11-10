@@ -45,6 +45,13 @@ export interface BeginAuthenticationInput {
    * is identified by the response's credential id at verify time).
    */
   userId: string | null;
+  /**
+   * D-02 — a server-derived challenge instead of a random one, so the signed assertion
+   * names what it authorises (backend/services/leadOutreachExecution/approvalPasskey.ts).
+   * Server-side callers only: no route passes a request field here. Storage, TTL and
+   * single-use claim are unchanged.
+   */
+  challenge?: Uint8Array;
   ip?: string | null;
   userAgent?: string | null;
 }
@@ -73,6 +80,7 @@ export async function beginAuthentication(
     timeout:          60_000,
     userVerification: 'preferred',
     allowCredentials,
+    ...(input.challenge ? { challenge: input.challenge } : {}),
   });
 
   await issue({
@@ -105,7 +113,17 @@ export interface VerifyAuthenticationInput {
   response: AuthenticationResponseJSON;
   ip?: string | null;
   userAgent?: string | null;
+  /**
+   * D-02 — ceremony separation. A purpose-bound challenge (an outreach approval:
+   * 48 bytes, approvalPasskey.ts) is accepted only when the caller names that purpose,
+   * and a caller naming it accepts nothing else. Login and step-up leave it unset.
+   * Refused before the challenge is claimed, so nothing is consumed.
+   */
+  purpose?: 'outreach_approval';
 }
+
+/** D-02 — the length of an outreach-approval challenge (16-byte nonce + SHA-256). */
+const PURPOSE_BOUND_CHALLENGE_BYTES = 48;
 
 export type VerifyAuthenticationFailure =
   | 'CHALLENGE_REJECTED'
@@ -128,6 +146,11 @@ export async function verifyAuthentication(
   if (!challengeFromResponse) {
     await emitFailure(input, null, 'invalid clientDataJSON');
     return { ok: false, reason: 'CHALLENGE_REJECTED', detail: 'invalid clientDataJSON' };
+  }
+  const purposeBound = Buffer.from(challengeFromResponse, 'base64url').length === PURPOSE_BOUND_CHALLENGE_BYTES;
+  if (purposeBound !== (input.purpose === 'outreach_approval')) {
+    await emitFailure(input, null, 'challenge purpose mismatch');
+    return { ok: false, reason: 'CHALLENGE_REJECTED', detail: 'PURPOSE_MISMATCH' };
   }
 
   // Look up the credential FIRST so we can resolve the binding user for

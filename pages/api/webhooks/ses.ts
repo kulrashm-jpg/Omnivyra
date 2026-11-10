@@ -228,8 +228,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse): Promise<void>
   }
 
   if (verification.type === 'SubscriptionConfirmation' || verification.type === 'UnsubscribeConfirmation') {
+    // Signature, topic and age have all passed, and SubscribeURL is a signed field,
+    // so this is AWS's URL for an allow-listed topic. Logged for an operator to
+    // visit (ENG-003); never fetched here. Only a confirmation needs it: the URL in
+    // an UnsubscribeConfirmation would re-subscribe, which nobody is waiting to do.
+    const subscribeUrl = (envelope as { SubscribeURL?: unknown }).SubscribeURL;
     console.warn('[ses-webhook] subscription message received; operator action required', {
       type: verification.type, messageId: verification.messageId,
+      ...(verification.type === 'SubscriptionConfirmation' && typeof subscribeUrl === 'string' ? { subscribeUrl } : {}),
     });
     res.status(200).json({ ok: true, action: 'operator_confirmation_required' });
     return;
@@ -241,18 +247,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse): Promise<void>
 
   switch (result.status) {
     case 'processed':
-      res.status(200).json({ ok: true, duplicate: result.duplicate, eventType: result.eventType, governance: result.governance });
+      res.status(200).json({ ok: true, duplicate: result.duplicate, eventType: result.eventType, governance: result.governance, persistence: result.persistence });
       return;
     case 'dropped':
       res.status(200).json({ ok: true, dropped: result.reason, eventType: result.eventType });
       return;
+    // D2: a failure says exactly what was and was not written (codes only), so
+    // a restriction in force is never mistaken for recorded evidence.
     case 'retryable':
-      console.error('[ses-webhook] transient failure; SNS will retry', { reason: result.reason, messageId: verification.messageId });
-      res.status(503).json({ error: result.reason });
+      console.error('[ses-webhook] transient failure; SNS will retry', { reason: result.reason, messageId: verification.messageId, persistence: result.persistence });
+      res.status(503).json({ error: result.reason, persistence: result.persistence });
       return;
     default:
-      console.error('[ses-webhook] event refused', { reason: result.reason, messageId: verification.messageId });
-      res.status(422).json({ error: result.reason });
+      console.error('[ses-webhook] event refused', { reason: result.reason, messageId: verification.messageId, persistence: result.persistence });
+      res.status(422).json({ error: result.reason, persistence: result.persistence });
   }
 }
 

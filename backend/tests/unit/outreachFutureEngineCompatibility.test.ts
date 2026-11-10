@@ -1,0 +1,186 @@
+/**
+ * Can SMS and Voice arrive through the existing contracts, with no redesign?
+ *
+ * FIXTURES ONLY. Nothing here is an engine, a production adapter or a provider, and
+ * adding either channel still needs its own scope and authorization decision. The
+ * adapters below live in this file and refuse everything. Design and governance:
+ * docs/outreach/FUTURE-ENGINES-SMS-VOICE.md.
+ */
+
+import {
+  buildAdapterRegistry,
+  ENGINE_NAMES,
+  type EngineAdapter,
+  type EngineName,
+  type EngineResult,
+} from '../../services/orchestration/engineAdapters';
+import {
+  checkCapabilityDeclaration,
+  EXECUTION_CONTRACT_VERSION,
+  executionCorrelationId,
+  executionIdempotencyKey,
+  normalizeEngineResult,
+  POSITIVE_ENGAGEMENT_EVENTS,
+  type ActionCapability,
+  type EngineCapabilityDeclaration,
+} from '../../services/orchestration/executionContract';
+import {
+  BROWSER_CAPABILITIES,
+  COMMUNITY_CAPABILITIES,
+  SOCIAL_PUBLISH_CAPABILITIES,
+  WHATSAPP_CAPABILITIES,
+  WS3_CAPABILITIES,
+} from '../../services/orchestration/engineCapabilities';
+import { channelPermissionFact } from '../../services/orchestration/journeyPolicy';
+
+// A future engine is not in the union on purpose: entering it is the scope decision.
+const SMS = 'sms' as unknown as EngineName;
+const VOICE = 'voice' as unknown as EngineName;
+
+const SMS_DECLARATION: EngineCapabilityDeclaration = {
+  contractVersion: EXECUTION_CONTRACT_VERSION,
+  engine: SMS,
+  actions: [{
+    action: 'send_sms', channel: 'sms', contactsPerson: true,
+    idempotency: 'engine_record', approval: 'ws3_task', creditMetered: true,
+    reportsDelivery: true, reportsResponses: true,
+    // Several providers behind one engine; the names are placeholders, not a vendor choice.
+    providers: [
+      { provider: 'sms_provider_a', credentials: 'tenant', verification: 'mocked' },
+      { provider: 'sms_provider_b', credentials: 'platform', verification: 'mocked' },
+    ],
+  }],
+};
+
+const VOICE_DECLARATION: EngineCapabilityDeclaration = {
+  contractVersion: EXECUTION_CONTRACT_VERSION,
+  engine: VOICE,
+  actions: [{
+    action: 'place_call', channel: 'phone', contactsPerson: true,
+    idempotency: 'request_ledger', approval: 'engine_record', creditMetered: true,
+    reportsDelivery: false, reportsResponses: true,
+    providers: [{ provider: 'voice_provider_a', credentials: 'tenant', verification: 'mocked' }],
+  }],
+};
+
+const refusingAdapter = (engine: EngineName, channels: string[]): EngineAdapter => ({
+  engine,
+  channels,
+  async execute(): Promise<EngineResult> {
+    return { engine, outcome: 'unsupported_channel', disposition: 'needs_human', reason: 'fixture', externalRef: null };
+  },
+});
+const smsAdapter = refusingAdapter(SMS, ['sms']);
+const voiceAdapter = refusingAdapter(VOICE, ['phone']);
+
+const CURRENT_DECLARATIONS = [
+  WS3_CAPABILITIES, WHATSAPP_CAPABILITIES, SOCIAL_PUBLISH_CAPABILITIES, COMMUNITY_CAPABILITIES, BROWSER_CAPABILITIES,
+];
+
+const result = (engine: EngineName, outcome: string, disposition: EngineResult['disposition']): EngineResult =>
+  ({ engine, outcome, disposition, reason: null, externalRef: null });
+
+describe('SMS and Voice fit the execution contract without a redesign', () => {
+  it('each declaration is sound against the contract checker', () => {
+    expect(checkCapabilityDeclaration(SMS_DECLARATION, smsAdapter)).toEqual([]);
+    expect(checkCapabilityDeclaration(VOICE_DECLARATION, voiceAdapter)).toEqual([]);
+  });
+
+  it('keeps engine, provider and action as three separate identities', () => {
+    const action = SMS_DECLARATION.actions[0] as ActionCapability;
+    expect(new Set([SMS_DECLARATION.engine as string, action.action, action.providers[0]?.provider]).size).toBe(3);
+    expect(action.providers.length).toBeGreaterThan(1);
+  });
+
+  it('refuses a declaration that contacts a person with no approval model', () => {
+    const bad: EngineCapabilityDeclaration = {
+      ...SMS_DECLARATION,
+      actions: [{ ...(SMS_DECLARATION.actions[0] as ActionCapability), approval: 'not_applicable' }],
+    };
+    expect(checkCapabilityDeclaration(bad, smsAdapter)).toEqual(['send_sms contacts a person with no approval model']);
+  });
+
+  it('refuses a declaration that acts through no provider', () => {
+    const bad: EngineCapabilityDeclaration = {
+      ...VOICE_DECLARATION,
+      actions: [{ ...(VOICE_DECLARATION.actions[0] as ActionCapability), providers: [] }],
+    };
+    expect(checkCapabilityDeclaration(bad, voiceAdapter)).toEqual(['place_call acts but names no provider']);
+  });
+
+  it('refuses a channel the adapter does not route, and one it routes undeclared', () => {
+    expect(checkCapabilityDeclaration(SMS_DECLARATION, refusingAdapter(SMS, ['phone']))).toEqual([
+      'routes "phone" with no declared action',
+      'declares "sms", which the adapter does not route',
+    ]);
+  });
+
+  it('registers beside the five engines with no channel collision, and a second claimant throws', () => {
+    const current = CURRENT_DECLARATIONS.map((d) =>
+      refusingAdapter(d.engine, d.actions.map((a) => a.channel)));
+    const registry = buildAdapterRegistry([...current, smsAdapter, voiceAdapter]);
+    expect(registry.get('sms')?.engine).toBe(SMS);
+    expect(registry.get('phone')?.engine).toBe(VOICE);
+    expect(registry.get('email')?.engine).toBe('ws3');
+    expect(() => buildAdapterRegistry([smsAdapter, refusingAdapter(VOICE, ['sms'])]))
+      .toThrow('two engine adapters claim the "sms" channel');
+  });
+
+  it.each([
+    ['sent', 'completed', 'ACCEPTED', 'definite', null],
+    ['delivered', 'completed', 'DELIVERED', 'definite', null],
+    ['queued', 'wait', 'QUEUED', 'definite', null],
+    ['awaiting_approval', 'wait', 'REQUESTED', 'definite', null],
+    ['blocked_governance', 'needs_human', 'REJECTED', 'definite', 'gate_refused'],
+    ['tenant_kill_switch', 'needs_human', 'REJECTED', 'definite', 'gate_refused'],
+    ['provider_refused_number', 'skipped', 'REJECTED', 'definite', 'person_ineligible'],
+    ['failed', 'needs_human', 'FAILED', 'definite', 'provider_rejected'],
+    ['cancelled', 'skipped', 'CANCELLED', 'definite', null],
+  ] as const)('normalizes an SMS "%s" (%s) to %s', (outcome, disposition, state, certainty, errorClass) => {
+    expect(normalizeEngineResult(result(SMS, outcome, disposition))).toMatchObject({
+      contractVersion: EXECUTION_CONTRACT_VERSION, engine: SMS, state, certainty, errorClass, engineOutcome: outcome,
+    });
+  });
+
+  it('a lost provider response may have acted, so it is uncertain and never asks for a retry', () => {
+    for (const engine of [SMS, VOICE]) {
+      const n = normalizeEngineResult(result(engine, 'timeout', 'needs_human'));
+      expect(n).toMatchObject({ certainty: 'uncertain', errorClass: 'may_have_acted', retryability: 'human_only' });
+      expect(['FAILED', 'RETRY_REQUIRED']).not.toContain(n.state);
+    }
+  });
+
+  it('a call that connected nobody is accepted work, never delivery', () => {
+    const n = normalizeEngineResult(result(VOICE, 'no_answer', 'completed'));
+    expect(n).toMatchObject({ state: 'ACCEPTED', engineOutcome: 'no_answer' });
+  });
+
+  it('keeps one idempotency key and correlation id per task and step, whichever engine', () => {
+    expect(executionIdempotencyKey('t-1')).toBe('task:t-1');
+    expect(executionCorrelationId('i-1', 's-1')).toBe('journey:i-1/step:s-1');
+  });
+
+  it('never reads an SMS STOP, a bounce or a complaint as positive engagement', () => {
+    expect(POSITIVE_ENGAGEMENT_EVENTS).toEqual(['response.replied']);
+  });
+});
+
+describe('scope: declaring compatibility does not start either engine', () => {
+  it('the engine list is still exactly the five', () => {
+    expect([...ENGINE_NAMES]).toEqual(['ws3', 'whatsapp', 'social_publish', 'community', 'browser']);
+  });
+
+  it('neither channel has a permission source, so the sweeper would hold their steps for a person', () => {
+    // The extension point: registering an adapter alone contacts nobody until
+    // channelPermissionFact can answer for the channel.
+    expect(channelPermissionFact('sms')).toBeNull();
+    expect(channelPermissionFact('phone')).toBeNull();
+  });
+
+  it('no current engine declares an SMS or Voice action', () => {
+    const channels = CURRENT_DECLARATIONS.flatMap((d) => d.actions.map((a) => a.channel));
+    expect(channels).not.toContain('sms');
+    expect(channels).not.toContain('phone');
+    expect(channels).not.toContain('voice');
+  });
+});

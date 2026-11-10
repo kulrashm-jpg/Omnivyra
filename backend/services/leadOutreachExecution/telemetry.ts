@@ -48,6 +48,13 @@ export const OUTREACH_METRICS = {
     latency: 'outreach.provider.latency_ms',
     errors: 'outreach.transport.errors',
   },
+  // PI-041-A-I: the Workflow progression sweeper, as ONE counter labelled by what
+  // is being counted. Dispatch VERDICTS are deliberately absent — the dispatcher
+  // already emits them through `recordDispatchOutcome`, and emitting them again
+  // from the sweeper would double-count every send.
+  progression: {
+    sweep: 'outreach.progression.sweep',
+  },
   // WS-3 M6: the stages that previously emitted nothing, plus one taxonomy
   // counter every failure in the runtime funnels through, and the health
   // rollup. Together these make every stage of the pipeline observable rather
@@ -183,6 +190,23 @@ export type StageOutcome = 'ok' | 'skipped' | 'duplicate' | 'refused' | 'failed'
 
 export function recordStageOutcome(stage: RuntimeStage, outcome: StageOutcome): void {
   counter(OUTREACH_METRICS.stage.outcome, { stage, outcome });
+}
+
+/**
+ * PI-041-A-I — one progression-sweep observation.
+ *
+ * `measure` is the counter's name (`instances_scanned`, `tasks_dispatched`, …) and
+ * is a LABEL rather than a metric per measure, so the series count stays bounded
+ * however many counters the sweeper grows. The tenant is deliberately NOT a label:
+ * tenant-cardinality labels are how a metrics backend is accidentally DoSed.
+ */
+export function recordProgressionSweep(measure: string, value: number): void {
+  try {
+    if (!Number.isFinite(value) || value <= 0) return;
+    recordRawCounter(OUTREACH_METRICS.progression.sweep, value, { measure });
+  } catch {
+    /* telemetry must never break the caller */
+  }
 }
 
 /**

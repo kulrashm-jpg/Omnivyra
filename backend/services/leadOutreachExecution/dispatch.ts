@@ -33,6 +33,7 @@ import {
   getOutreachTaskById,
   setOutreachTaskState,
   listAttempts,
+  readAttemptHistory,
   transitionOutreachTaskState,
 } from './storage';
 import { evaluateTaskGovernance, loadTenantGovernanceConfig, type EvaluateOptions } from './governanceService';
@@ -51,6 +52,8 @@ import {
   recordLifecycleTransition,
   recordStageOutcome,
 } from './telemetry';
+import { resolveJourneyHold } from '../emailEngine/emailExecutionContext';
+import { settleRefusedApproval } from './approvalBinding';
 import type { GovernanceEvaluation } from './governance';
 import type { OutreachTask } from './types';
 
@@ -62,7 +65,9 @@ export type DispatchOutcome =
   | 'blocked_governance'
   | 'deferred_governance'
   | 'deferred_quota'
+  | 'deferred_journey'
   | 'skipped_already_dispatched'
+  | 'blocked_prior_attempt'
   | 'skipped_transport_disabled'
   | 'rejected'
   | 'timeout'
@@ -123,6 +128,48 @@ const result = (
   ...over,
 });
 
+/** Transport outcomes that prove nothing left for the recipient. */
+const NOT_SENT_OUTCOMES: readonly string[] = ['rejected', 'disabled'];
+
+/**
+ * Null when a task returned to `queued` may be dispatched again; otherwise why
+ * not. Every earlier attempt must have evidence, none may have been accepted,
+ * and on an external transport each must have ended in an outcome that proves
+ * nothing was sent — a timeout or provider error may have delivered, and nothing
+ * at the provider would catch a second send.
+ * An internal transport's outcome is authoritative (one work item per attempt).
+ * An unreadable history refuses: a requeued task is never re-sent blind.
+ */
+export async function redispatchProblem(companyId: string, taskId: string, external: boolean): Promise<string | null> {
+  const history = await readAttemptHistory(companyId, taskId);
+  if (history.ok === false) return `attempt history is unreadable (${history.error}); a requeued task is never re-sent blind`;
+  for (const attempt of history.attempts) {
+    const outcomes = history.evidence
+      .filter((e) => attempt.id != null && e.attempt_id === attempt.id)
+      .map((e) => String((e.transport_response as Record<string, unknown> | null)?.outcome ?? ''));
+    const n = String(attempt.attempt_number ?? '?');
+    if (outcomes.length === 0) return `attempt ${n} has no delivery evidence, so whether it reached the recipient is unknown`;
+    if (outcomes.includes('accepted')) return `attempt ${n} was accepted; a task is never sent twice`;
+    if (external && !outcomes.every((o) => NOT_SENT_OUTCOMES.includes(o))) {
+      return `attempt ${n} ended "${outcomes.join(', ')}" on an external transport; the provider may have sent it, so it is not dispatched again automatically`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The same prior-attempt check dispatch applies to a requeued task, for callers
+ * that only need to know whether dispatching it could ever proceed (the recovery
+ * sweep skips a task that never can, rather than re-evaluating governance on it
+ * every run). Advisory only: dispatch re-checks under its own claim.
+ */
+export async function requeuedDispatchProblem(companyId: string, task: OutreachTask): Promise<string | null> {
+  if (!task.id) return 'task has no id';
+  const transport = resolveTransport(task.channel);
+  if (!transport) return `no transport serves the "${task.channel}" channel`;
+  return redispatchProblem(companyId, task.id, transport.external);
+}
+
 /** Next attempt number for a task. Sequential and gap-free per task. */
 async function nextAttemptNumber(companyId: string, taskId: string): Promise<number> {
   const attempts = await listAttempts(companyId, taskId);
@@ -162,6 +209,30 @@ export async function dispatchInternalOutreachTask(
     return result(taskId, 'skipped_no_transport', `no transport serves the "${task.channel}" channel`, startedMs, { status: task.status });
   }
 
+  // A switched-off transport can do nothing, so nothing is attempted. This comes
+  // before governance because evaluating governance appends a decision row, and a
+  // sweep re-enters here every run: rows and quota (a raw attempt count) would
+  // grow for as long as the switch is off. The task keeps the state it was in.
+  if (transport.isAvailable?.() === false) {
+    recordDispatchOutcome('skipped');
+    recordStageOutcome('transport', 'skipped');
+    recordExternalOutcome(transport.external, 'disabled');
+    return result(taskId, 'skipped_transport_disabled', `the "${task.channel}" transport is disabled; nothing was attempted`, startedMs, {
+      status: task.status, provider: transport.provider, transportOutcome: 'disabled',
+    });
+  }
+
+  // ── journey hold (D-03) ──────────────────────────────────────────────────
+  // A task a journey handed off is not acted on while that run is anything but
+  // active. Checked before governance, so a hold writes nothing — no decision, claim,
+  // quota or attempt — and a resumed journey dispatches as if never paused. Null for a
+  // task that never came from a journey.
+  const held = await resolveJourneyHold(companyId, task);
+  if (held !== null) {
+    recordDispatchOutcome('deferred');
+    return result(taskId, 'deferred_journey', held.reason, startedMs, { status: task.status });
+  }
+
   recordDispatchOutcome('started');
 
   // ── 1. GOVERNANCE, before anything is touched ────────────────────────────
@@ -178,28 +249,64 @@ export async function dispatchInternalOutreachTask(
   if (evaluation.decision !== 'allowed') {
     const outcome: DispatchOutcome = evaluation.decision === 'deferred' ? 'deferred_governance' : 'blocked_governance';
     recordDispatchOutcome(evaluation.decision === 'deferred' ? 'deferred' : 'blocked');
-    return result(taskId, outcome, evaluation.reasoning, startedMs, { status: task.status, governance: evaluation });
+    // D-02 — CAS only: a lapsed approval ends the task `expired`; a stale one returns it to
+    // `awaiting_approval` for a fresh approval. Every other refusal leaves it as it was.
+    const status = await settleRefusedApproval(companyId, task, evaluation);
+    return result(taskId, outcome, evaluation.reasoning, startedMs, { status, governance: evaluation });
   }
 
   // ── 2. CLAIM the task — compare-and-set, so only one dispatcher proceeds ──
-  const claimedQueued = await transitionOutreachTaskState(companyId, task.id, 'approved', 'queued');
-  if (!claimedQueued.ok) {
-    recordDispatchOutcome('failed');
-    return result(taskId, 'failed', claimedQueued.error ?? 'could not queue task', startedMs, { governance: evaluation });
+  // A task an earlier dispatch returned to `queued` (quota deferral, transport
+  // failure) is claimed from there, but only when no earlier attempt can have
+  // reached the recipient. Governance has already proved its approval.
+  // D-02 (F-1): the prior-attempt check runs for EVERY task, not only a requeued one — a
+  // task re-approved after re-review comes back `approved` with its earlier attempts.
+  const requeued = evaluation.gates.some((g) => g.rule === 'eligibility.requeued_after_approval');
+  const problem = await redispatchProblem(companyId, task.id, transport.external);
+  if (problem !== null) {
+    recordDispatchOutcome('blocked');
+    return result(taskId, 'blocked_prior_attempt', problem, startedMs, { status: task.status, governance: evaluation });
   }
-  if (!claimedQueued.changed) {
-    // Someone else already moved it, or it was never approved.
-    const current = await getOutreachTaskById(companyId, taskId);
-    recordDispatchOutcome('skipped');
-    return result(taskId, 'skipped_already_dispatched', `task is not approved (now ${current?.status ?? 'unknown'})`, startedMs, {
-      status: current?.status ?? null, governance: evaluation,
-    });
+  if (!requeued) {
+    const claimedQueued = await transitionOutreachTaskState(companyId, task.id, 'approved', 'queued');
+    if (!claimedQueued.ok) {
+      recordDispatchOutcome('failed');
+      return result(taskId, 'failed', claimedQueued.error ?? 'could not queue task', startedMs, { governance: evaluation });
+    }
+    if (!claimedQueued.changed) {
+      // Someone else already moved it, or it was never approved.
+      const current = await getOutreachTaskById(companyId, taskId);
+      recordDispatchOutcome('skipped');
+      return result(taskId, 'skipped_already_dispatched', `task is not approved (now ${current?.status ?? 'unknown'})`, startedMs, {
+        status: current?.status ?? null, governance: evaluation,
+      });
+    }
   }
 
   const claimedDispatching = await transitionOutreachTaskState(companyId, task.id, 'queued', 'dispatching');
+  if (requeued && claimedDispatching.ok && !claimedDispatching.changed) {
+    // Another dispatcher claimed the requeued task first.
+    const current = await getOutreachTaskById(companyId, taskId);
+    recordDispatchOutcome('skipped');
+    return result(taskId, 'skipped_already_dispatched', `task was claimed by another dispatcher (now ${current?.status ?? 'unknown'})`, startedMs, {
+      status: current?.status ?? null, governance: evaluation,
+    });
+  }
   if (!claimedDispatching.ok || !claimedDispatching.changed) {
     recordDispatchOutcome('failed');
     return result(taskId, 'failed', 'could not claim task for dispatch', startedMs, { status: 'queued', governance: evaluation });
+  }
+
+  // D-02 (P-1): the prior-attempt check again, now UNDER the claim — the one above is only the
+  // early refusal, and another dispatcher may have attempted and requeued since. Sound only
+  // because the claim is exclusive and every attempt and its evidence are written while the
+  // claim is held, before the release to `queued`. A refusal (or an unreadable history)
+  // releases the claim and writes no attempt, reserves no quota and calls no provider.
+  const claimedProblem = await redispatchProblem(companyId, task.id, transport.external);
+  if (claimedProblem !== null) {
+    await transitionOutreachTaskState(companyId, task.id, 'dispatching', 'queued');
+    recordDispatchOutcome('blocked');
+    return result(taskId, 'blocked_prior_attempt', claimedProblem, startedMs, { status: 'queued', governance: evaluation });
   }
 
   // ── 3. RESERVE quota — after the claim, before the send ───────────────────
@@ -227,8 +334,9 @@ export async function dispatchInternalOutreachTask(
   // The attempt exists before the transport runs, so a crash mid-dispatch
   // leaves evidence that something was tried rather than a silent gap.
   const attemptNumber = await nextAttemptNumber(companyId, task.id);
-  // Deterministic — identity only, never time or randomness. Carried to the
-  // provider so a duplicate request can be refused by the provider itself.
+  // Deterministic — identity only, never time or randomness. Recorded on the
+  // attempt and passed to the port; today's provider function ignores it, so it
+  // does not stop a duplicate send (see `buildIdempotencyKey`).
   const idempotencyKey = buildIdempotencyKey(companyId, task.id, attemptNumber);
   const attempt = await appendAttempt({
     companyId,

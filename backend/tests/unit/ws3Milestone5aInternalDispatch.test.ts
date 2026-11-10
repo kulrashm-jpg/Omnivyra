@@ -118,6 +118,10 @@ import {
   setOutreachTaskState,
   type NewOutreachTask,
 } from '../../services/leadOutreachExecution';
+// D-02 — the one approval path (with its passkey ceremony), used by the approved-task fixture.
+import { approveWithPasskey } from '../helpers/approvalPasskeyDouble';
+// D-02 (S-02) — external approvals need a passkey proof: the real ceremony over a WebAuthn double.
+jest.mock('../../security/webauthn/WebAuthnAuthenticationService', () => require('../helpers/approvalPasskeyDouble').webauthnDouble);
 
 const NOW = '2026-08-05T12:00:00.000Z';
 
@@ -141,7 +145,11 @@ const configureTenant = (over: Row = {}) => {
 const approvedTask = async (over: Partial<NewOutreachTask> = {}): Promise<string> => {
   const res = await insertOutreachTask(newTask(over));
   const id = res.data!.id as string;
-  await setOutreachTaskState('co-a', id, { status: 'approved' });
+  // D-02 — an approved status alone no longer authorises a send: approve through the one
+  // approval path, which records the content binding the dispatch gate re-checks.
+  await setOutreachTaskState('co-a', id, { status: 'awaiting_approval' });
+  // An external (non-internal) task's approval names the address it authorises (Outreach L-2); ignored for internal.
+  await approveWithPasskey('co-a', id, 'u-approver', { recipient: 'person@example.test' });
   return id;
 };
 

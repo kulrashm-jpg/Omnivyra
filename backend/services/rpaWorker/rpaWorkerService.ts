@@ -3,10 +3,13 @@ import { buildScript } from './rpaPlatformScripts';
 import { runRpaScript } from './rpaPlaywrightRunner';
 import { rpaEnvReady, assertRpaEnvReady, isProbeFailure } from './rpaEnv';
 import { admitRpaTask, observeAllActiveOrgs } from './rpaQueueState';
-import { enqueueRpaRetry, flushRpaRetryQueueRoundRobin } from './rpaRetryQueue';
+import { enqueueRpaRetry, flushRpaRetryQueueRoundRobin, type RetryActionRunner } from './rpaRetryQueue';
+import { validateRpaTarget } from './rpaTargetUrlPolicy';
+import { getCommunityExecutionPolicy } from '../communityAiPlatformPolicyService';
 import { withHeavyJobSlot } from '../../queue/bullmqClient';
-import { getCommunityAiPlatformPolicy } from '../communityAiPlatformPolicyService';
-import { ownedDbTable } from '../../db/writeOwner';
+
+/** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
+const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
 
 export type RpaTask = {
   tenant_id: string;
@@ -22,12 +25,27 @@ export type RpaResult = {
   success: boolean;
   /** Platform-native id surfaced by the runner when the script extracted one. */
   platform_id?: string;
-  /** Local filesystem path of the audit screenshot (legacy / fallback). */
+  /**
+   * Object path of the audit screenshot in the private rpa-artifacts bucket.
+   * The only reference that is persisted; sign on demand (rpaArtifactStore).
+   */
   screenshot_path?: string;
-  /** Durable public URL of the screenshot stored in the rpa-artifacts bucket. */
-  screenshot_url?: string;
   error?: string;
+  /**
+   * Consequence classification for a non-success result:
+   *   false     — provably NOT acted (refused/aborted before the submit
+   *               interaction); may be retried or re-routed.
+   *   true / absent — MAY have acted; must never be retried or re-routed and
+   *               is surfaced as `uncertain` for human review.
+   */
+  may_have_acted?: boolean;
+  /** True when the task was not run but was durably queued in rpa_retry_queue. */
+  deferred?: boolean;
 };
+
+/** Conservative reading: anything not explicitly `may_have_acted:false` may have acted. */
+export const rpaResultMayHaveActed = (r: RpaResult | null | undefined): boolean =>
+  !r || (r.success !== true && r.may_have_acted !== false && r.deferred !== true);
 
 type RpaHandler = (task: RpaTask) => Promise<RpaResult>;
 
@@ -62,30 +80,20 @@ export const rpaSchedulerHooks = {
       console.warn(`[rpaRetryQueueFlush] skipped — RPA env not ready: ${ready.reason}`);
       return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
     }
-    // Platform kill switch: when execution is disabled nothing is run and
-    // no retry row is touched (mirrors the community scheduler). An
-    // unreadable policy is fail-closed (execution_enabled=false).
-    const policy = await getCommunityAiPlatformPolicy();
-    if (!policy?.execution_enabled) {
-      console.warn('[rpaRetryQueueFlush] skipped — community execution disabled by platform policy');
-      return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
-    }
+    // Tenant execution policy (OD-1), per organization, BEFORE any retry row or
+    // action row of that organization is claimed: an org whose policy refuses
+    // (kill switch, missing, unreadable, disabled) is skipped untouched, so no
+    // action is consumed and no retry row is touched. The claim RPC
+    // (claim_point 'rpa_retry') re-applies the policy, the approval evidence
+    // and the 7-day lifetime per action, atomically.
+    // Every retry row is re-run THROUGH THE EXECUTOR after the flush has
+    // atomically claimed both the retry row and the action row
+    // (approved → executing). The executor re-applies the policy, approval,
+    // playbook and plan limits, and executeRpaTask re-applies URL policy, env
+    // readiness and per-org admission.
     return flushRpaRetryQueueRoundRobin({
-      handler: async (task) => {
-        // Retry path bypasses the admission gate to avoid infinite
-        // deferral during partial outages. Env readiness is still
-        // enforced downstream by the playwright runner. It does NOT
-        // bypass the kill switch or approval: both are re-checked against
-        // the action of record before anything is re-executed.
-        const gate = await checkRpaRetryAuthorised(task);
-        if (gate.ok === false) {
-          console.warn(`[rpaRetryQueueFlush] refused action=${task.action_id} reason=${gate.reason}`);
-          return { success: false, error: gate.reason };
-        }
-        const h = handlers[normalizePlatform(task.platform)];
-        if (!h) return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED' };
-        return h(task);
-      },
+      runAction: runClaimedRetryAction,
+      orgGate: retryOrgPermitted,
       limitPerOrg: opts?.limit_per_org,
       maxOrgs: opts?.max_orgs,
     });
@@ -93,59 +101,60 @@ export const rpaSchedulerHooks = {
 };
 
 /**
- * Action statuses from which a deferred RPA retry may re-execute. On this
- * code line a deferred RPA run is persisted as `failed`; `approved` covers a
- * row that was approved but never ran. Anything else (executed,
- * sent_unverified, skipped, blocked, pending, rejected, deleted, executing)
- * is not re-run.
+ * Per-org gate of the retry flush. A community tenant is its organization
+ * (pages/api/community-ai/utils.ts), so the decision is read for (org, org).
+ * Any refusal or read failure skips the org (fail closed).
  */
-const RPA_RETRY_REEXECUTABLE_STATUSES = new Set(['approved', 'failed']);
-
-export type RpaRetryGate = { ok: true } | { ok: false; reason: string };
-
-/**
- * Gate for re-executing a retry-queue row (port of the eec0117d intent:
- * the retry flush must honour the platform kill switch and approval of
- * record instead of calling the Playwright handler blindly).
- *
- *   1. platform policy execution_enabled (kill switch; fail-closed on
- *      unreadable policy);
- *   2. the community_ai_actions row of record exists in the SAME
- *      organization as the retry row;
- *   3. its status is re-executable;
- *   4. it carries a recorded approval (`approved_at`). This also satisfies
- *      the executor's require_human_approval / high-risk gates, which both
- *      key on approved_at.
- *
- * Any read error refuses.
- */
-export async function checkRpaRetryAuthorised(task: RpaTask): Promise<RpaRetryGate> {
-  const policy = await getCommunityAiPlatformPolicy();
-  if (!policy?.execution_enabled) return { ok: false, reason: 'RPA_RETRY_EXECUTION_DISABLED' };
-  if (!task?.action_id || !task?.organization_id) {
-    return { ok: false, reason: 'RPA_RETRY_ACTION_UNKNOWN' };
-  }
-  let row: Record<string, any> | null = null;
+export async function retryOrgPermitted(organizationId: string): Promise<boolean> {
   try {
-    const { data, error } = await ownedDbTable('community_ai_actions')
-      .select('id, organization_id, status, approved_at')
-      .eq('id', task.action_id)
-      .eq('organization_id', task.organization_id)
-      .maybeSingle();
-    if (error) return { ok: false, reason: 'RPA_RETRY_ACTION_UNREADABLE' };
-    row = (data as Record<string, any> | null) ?? null;
+    const decision = await getCommunityExecutionPolicy({ organizationId, tenantId: organizationId });
+    if (!decision.ok) {
+      console.warn('[rpaRetryQueueFlush] org skipped by execution policy:', refusedCode(decision));
+      return false;
+    }
+    return true;
   } catch {
-    return { ok: false, reason: 'RPA_RETRY_ACTION_UNREADABLE' };
+    return false;
   }
-  if (!row || row.organization_id !== task.organization_id) {
-    return { ok: false, reason: 'RPA_RETRY_ACTION_NOT_FOUND' };
-  }
-  if (!RPA_RETRY_REEXECUTABLE_STATUSES.has(String(row.status ?? ''))) {
-    return { ok: false, reason: 'RPA_RETRY_ACTION_NOT_RETRYABLE' };
-  }
-  if (!row.approved_at) return { ok: false, reason: 'RPA_RETRY_NOT_APPROVED' };
-  return { ok: true };
 }
+
+/** Map a claimed community_ai_actions row to the executor input. */
+export function retryRowToExecutorAction(row: Record<string, any>) {
+  return {
+    id: row.id,
+    tenant_id: row.tenant_id,
+    organization_id: row.organization_id,
+    platform: row.platform,
+    action_type: row.action_type,
+    target_id: row.target_id,
+    suggested_text: (row.final_text ?? row.suggested_text ?? null) as string | null,
+    playbook_id: row.playbook_id ?? null,
+    discovered_user_id: row.discovered_user_id ?? null,
+    acting_user_id: row.acting_user_id ?? null,
+    requires_approval: row.requires_approval ?? null,
+    requires_human_approval: row.requires_human_approval ?? null,
+    risk_level: row.risk_level ?? null,
+    execution_mode: row.execution_mode ?? null,
+    tone_used: row.tone_used ?? null,
+    approved_at: row.approved_at ?? null,
+    status: row.status ?? null,
+  };
+}
+
+export const runClaimedRetryAction: RetryActionRunner = async (actionRow, ctx) => {
+  const { executeAction } = await import('../communityAiActionExecutorRuntime');
+  const deferredSource = actionRow?.execution_result?.response?.deferred_source;
+  return executeAction(retryRowToExecutorAction(actionRow) as any, true, {
+    source: deferredSource === 'manual' ? 'manual' : 'scheduler',
+    persist: true,
+    expected_from_statuses: ['executing'],
+    // The id the flush's claim (claim point 'rpa_retry') stamped: the executor
+    // confirms the held claim by it (F3) and gives it back by it (F1).
+    correlation_id: ctx?.correlationId,
+    notify: true,
+    webhook: true,
+  });
+};
 
 /**
  * Unified Playwright-backed handler for every platform. Script selection
@@ -155,7 +164,7 @@ export async function checkRpaRetryAuthorised(task: RpaTask): Promise<RpaRetryGa
 const playwrightHandler: RpaHandler = async (task) => {
   const script = buildScript(task);
   if ('error' in script) {
-    return { success: false, error: script.error };
+    return { success: false, error: script.error, may_have_acted: false };
   }
   // Chromium execution counts toward the shared in-process heavy-job budget
   // (HEAVY_JOB_CONCURRENCY) alongside ai-heavy + creator-render. buildScript()
@@ -185,10 +194,33 @@ const validateTask = (task: RpaTask) => {
   return { ok: true };
 };
 
+/**
+ * Defer a provably-not-acted task to the durable retry queue. Only reports
+ * `deferred: true` when the row was actually (re)queued; otherwise the task
+ * is a plain not-acted failure.
+ */
+async function deferToRetryQueue(task: RpaTask, error: string, delaySeconds: number): Promise<RpaResult> {
+  const queued = await enqueueRpaRetry(task, { error, delaySeconds });
+  if (queued.queued) {
+    return { success: false, error, deferred: true, may_have_acted: false };
+  }
+  return {
+    success: false,
+    error: `${error}|RETRY_NOT_QUEUED:${queued.error || 'UNKNOWN'}`,
+    may_have_acted: false,
+  };
+}
+
 export const executeRpaTask = async (task: RpaTask): Promise<RpaResult> => {
   const validation = validateTask(task);
   if (!validation.ok) {
-    return { success: false, error: validation.error };
+    return { success: false, error: validation.error, may_have_acted: false };
+  }
+
+  // Target-URL policy BEFORE anything is queued or navigated.
+  const target = validateRpaTarget(task);
+  if (target.ok === false) {
+    return { success: false, error: target.error, may_have_acted: false };
   }
 
   // Environment gate: fail fast when Playwright isn't ready rather than
@@ -197,30 +229,27 @@ export const executeRpaTask = async (task: RpaTask): Promise<RpaResult> => {
   if (isProbeFailure(ready)) {
     // Defer to the retry buffer so the scheduler's backpressure worker
     // can drain once the env is fixed, rather than losing the task.
-    await enqueueRpaRetry(task, {
-      error: `RPA_ENV_NOT_READY:${ready.reason}`,
-      delaySeconds: 120,
-    });
-    return { success: false, error: `RPA_ENV_NOT_READY:${ready.reason}` };
+    return deferToRetryQueue(task, `RPA_ENV_NOT_READY:${ready.reason}`, 120);
   }
 
   // Per-org backpressure gate. Each tenant gets its own READY / DEGRADED
-  // / BLOCKED state; a noisy org cannot push others into BLOCKED.
+  // / BLOCKED state; a noisy org cannot push others into BLOCKED. Applies to
+  // the durable-retry path too (it re-enters here through the executor).
   const admission = await admitRpaTask({ organization_id: task.organization_id });
   if (!admission.admit) {
-    await enqueueRpaRetry(task, { error: `RPA_DEFERRED:${admission.reason || admission.status}`, delaySeconds: 60 });
-    return { success: false, error: `RPA_DEFERRED:${admission.status}` };
+    const deferred = await deferToRetryQueue(task, `RPA_DEFERRED:${admission.reason || admission.status}`, 60);
+    return deferred.deferred ? { ...deferred, error: `RPA_DEFERRED:${admission.status}` } : deferred;
   }
 
   const handler = handlers[normalizePlatform(task.platform)];
   if (!handler) {
-    return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED' };
+    return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED', may_have_acted: false };
   }
 
   startRpaWorker(async (queuedTask) => {
     const taskHandler = handlers[normalizePlatform(queuedTask.platform)];
     if (!taskHandler) {
-      return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED' };
+      return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED', may_have_acted: false };
     }
     return taskHandler(queuedTask);
   });
@@ -228,6 +257,7 @@ export const executeRpaTask = async (task: RpaTask): Promise<RpaResult> => {
   try {
     return await enqueueRpaTask(task);
   } catch (error: any) {
-    return { success: false, error: error?.message || 'RPA_QUEUE_FAILED' };
+    // The handler threw: unclassified, the browser may have submitted.
+    return { success: false, error: error?.message || 'RPA_QUEUE_FAILED', may_have_acted: true };
   }
 };

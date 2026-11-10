@@ -205,6 +205,48 @@ export async function listOutreachTasksForLead(companyId: string, leadId: string
 }
 
 /**
+ * Tasks resting in `queued`, across tenants, oldest first, at most `limit`.
+ *
+ * One of the two cross-tenant reads in WS-3, both for the platform recovery
+ * sweep. It returns rows only to locate work; every action on them is taken per
+ * tenant through the company-scoped dispatch path. A read failure is reported,
+ * never an empty list, so a broken read is not mistaken for "nothing to recover".
+ */
+export async function listQueuedOutreachTasks(limit: number): Promise<{ ok: true; tasks: OutreachTask[] } | { ok: false; error: string }> {
+  const bounded = Math.max(1, Math.min(Math.floor(limit), 1000));
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .select('*')
+      .eq('status', 'queued')
+      .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(bounded),
+  );
+  if (res.error || !Array.isArray(res.data)) return { ok: false, error: res.error ? errText(res.error) : 'queued tasks unreadable' };
+  return { ok: true, tasks: res.data.map(rowToOutreachTask).filter((t): t is OutreachTask => t !== null) };
+}
+
+/**
+ * Tasks across tenants still `dispatching` since before `before`, oldest first,
+ * at most `limit`. The recovery sweep's other cross-tenant read, for its report
+ * only: such a task may have been sent, so nothing may act on this list.
+ */
+export async function listStaleDispatchingOutreachTasks(before: string, limit: number): Promise<{ ok: true; tasks: OutreachTask[] } | { ok: false; error: string }> {
+  const bounded = Math.max(1, Math.min(Math.floor(limit), 1000));
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .select('*')
+      .eq('status', 'dispatching')
+      .lt('updated_at', before)
+      .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(bounded),
+  );
+  if (res.error || !Array.isArray(res.data)) return { ok: false, error: res.error ? errText(res.error) : 'dispatching tasks unreadable' };
+  return { ok: true, tasks: res.data.map(rowToOutreachTask).filter((t): t is OutreachTask => t !== null) };
+}
+
+/**
  * Record a task's CURRENT state.
  *
  * Deliberately narrow: only `status` and `deliveryStatus` are writable. There
@@ -226,6 +268,43 @@ export async function setOutreachTaskState(
     ownedDbTable(OUTREACH_TASKS_TABLE).update(patch).eq('company_id', companyId).eq('id', taskId),
   );
   return res.error ? { ok: false, error: errText(res.error) } : { ok: true };
+}
+
+/**
+ * D7 / Agent D — compare-and-set on a task's DELIVERY status.
+ *
+ * Feedback ingestion decides a delivery transition from a task it read a
+ * moment earlier. `setOutreachTaskState` writes unconditionally, so two
+ * provider events for one task processed concurrently (SES publishes Delivery,
+ * Bounce and Complaint as separate, independently retried notifications) could
+ * both read `confirmed`, both pass the state machine, and the later write would
+ * OVERWRITE the earlier terminal fact: `bounced` silently replaced by
+ * `delivered`, or the reverse. The `delivery_status = expected` predicate is
+ * evaluated by the database, so exactly one of them wins and the loser is told
+ * it lost. `delivered` and `bounced` are terminal, so the loser's transition is
+ * never legitimately applicable afterwards; its evidence row is already durable.
+ *
+ * `changed: false` is a legitimate outcome (a lost race), not an error.
+ */
+export async function advanceOutreachTaskDeliveryStatus(
+  companyId: string,
+  taskId: string,
+  expectedDeliveryStatus: DeliveryStatus,
+  next: { deliveryStatus: DeliveryStatus; status?: OutreachTaskStatus },
+): Promise<WriteResult<null> & { changed: boolean }> {
+  const patch: Row = { updated_at: new Date().toISOString(), delivery_status: next.deliveryStatus };
+  if (next.status !== undefined) patch.status = next.status;
+
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_TASKS_TABLE)
+      .update(patch)
+      .eq('company_id', companyId)
+      .eq('id', taskId)
+      .eq('delivery_status', expectedDeliveryStatus)
+      .select('id'),
+  );
+  if (res.error) return { ok: false, changed: false, error: errText(res.error) };
+  return { ok: true, changed: Array.isArray(res.data) ? res.data.length > 0 : false };
 }
 
 /**
@@ -329,7 +408,20 @@ export async function appendApproval(record: Omit<OutreachApproval, 'id'>): Prom
       reason: record.reason ?? null,
       notes: record.notes ?? null,
       missing_information: record.missingInformation ?? [],
-      decided_at: record.decidedAt,
+      // D-02 (T1) — the decision time is the DATABASE's: outside tests a caller's value is
+      // dropped and migration 20270120000011 stamps the server clock (and refuses a future
+      // one either way), so no caller can stretch or reorder an approval's lifetime.
+      ...(process.env.NODE_ENV === 'test' && record.decidedAt ? { decided_at: record.decidedAt } : {}),
+      // D-02 — written only when present, so every earlier row shape is unchanged.
+      ...(record.approvedContentHash ? { approved_content_hash: record.approvedContentHash } : {}),
+      ...(record.tier ? { tier: record.tier } : {}),
+      ...(record.approvedRecipient ? { approved_recipient: record.approvedRecipient } : {}),
+      // In tests a back-dated decision carries its verification with it, since the claim
+      // trigger holds passkey_verified_at to the five minutes before decided_at (L-1).
+      ...(record.passkeyCredentialId ? {
+        passkey_credential_id: record.passkeyCredentialId,
+        passkey_verified_at: (process.env.NODE_ENV === 'test' && record.decidedAt ? record.decidedAt : record.passkeyVerifiedAt) ?? null,
+      } : {}),
     }),
   );
   return res.error ? { ok: false, error: errText(res.error) } : { ok: true };
@@ -477,6 +569,50 @@ export const listAttempts = (companyId: string, taskId: string) => listFor(OUTRE
 export const listDeliveryEvidence = (companyId: string, taskId: string) => listFor(OUTREACH_DELIVERY_TABLE, companyId, taskId, 'observed_at');
 export const listOutcomes = (companyId: string, taskId: string) => listFor(OUTREACH_OUTCOMES_TABLE, companyId, taskId, 'occurred_at');
 export const listDecisions = (companyId: string, taskId: string) => listFor(OUTREACH_DECISIONS_TABLE, companyId, taskId, 'decided_at');
+
+/**
+ * D-02 — the approval log of one task, for the dispatch gate, which must not mistake a
+ * failed read for "no approval": an unreadable log refuses without sending the task back
+ * to review. Same query as `listApprovals`; only the failure is reported.
+ */
+export async function readApprovalHistory(
+  companyId: string,
+  taskId: string,
+): Promise<{ ok: true; approvals: Row[] } | { ok: false; error: string }> {
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable(OUTREACH_APPROVALS_TABLE)
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('task_id', taskId)
+      .order('decided_at', { ascending: true }),
+  );
+  if (res.error || !Array.isArray(res.data)) return { ok: false, error: res.error ? errText(res.error) : 'approval history unreadable' };
+  return { ok: true, approvals: res.data };
+}
+
+/**
+ * Attempts and delivery evidence of one task, for decisions that must not
+ * mistake a failed read for an empty history. `listFor` returns `[]` on error,
+ * which is right for display and wrong for "has this task ever been sent?" —
+ * here a read failure is reported, never an empty history.
+ */
+export async function readAttemptHistory(
+  companyId: string,
+  taskId: string,
+): Promise<{ ok: true; attempts: Row[]; evidence: Row[] } | { ok: false; error: string }> {
+  const read = (table: string, orderCol: string) =>
+    safeDb<Row[]>(() =>
+      ownedDbTable(table)
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('task_id', taskId)
+        .order(orderCol, { ascending: true }),
+    );
+  const [attempts, evidence] = await Promise.all([read(OUTREACH_ATTEMPTS_TABLE, 'attempt_number'), read(OUTREACH_DELIVERY_TABLE, 'observed_at')]);
+  if (attempts.error || !Array.isArray(attempts.data)) return { ok: false, error: attempts.error ? errText(attempts.error) : 'attempt history unreadable' };
+  if (evidence.error || !Array.isArray(evidence.data)) return { ok: false, error: evidence.error ? errText(evidence.error) : 'delivery evidence unreadable' };
+  return { ok: true, attempts: attempts.data, evidence: evidence.data };
+}
 
 /** Outcome types recorded for a task, deduped and sorted. */
 export async function outcomeTypesFor(companyId: string, taskId: string): Promise<BusinessOutcomeType[]> {

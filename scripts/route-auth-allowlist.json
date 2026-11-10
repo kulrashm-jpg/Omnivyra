@@ -430,6 +430,13 @@
         "CRON_SECRET"
       ]
     },
+    "pages/api/cron/outreach-dispatch-recovery.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
     "pages/api/cron/process-scheduled-posts.ts": {
       "kind": "machine-secret",
       "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
@@ -468,6 +475,13 @@
     "pages/api/cron/sweep-stuck-publishing.ts": {
       "kind": "machine-secret",
       "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "env": [
+        "CRON_SECRET"
+      ]
+    },
+    "pages/api/cron/workflow-execution-progression.ts": {
+      "kind": "machine-secret",
+      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401) when the secret is unset or wrong, and is inert unless WORKFLOW_ORCHESTRATION_ENABLED is true. Not a user-facing route.",
       "env": [
         "CRON_SECRET"
       ]
@@ -1002,7 +1016,7 @@
           "db-write .insert() backend/services/communityAiOmnivyraService.ts",
           "db-write .insert() backend/services/communityAiAutoRuleService.ts",
           "db-write .insert() backend/services/communityAiActionLogService.ts",
-          "external-call fetch() pages/api/social/comments.ts"
+          "db-rpc .rpc(…) backend/services/communityAiPlatformPolicyService.ts"
         ]
       }
     ]

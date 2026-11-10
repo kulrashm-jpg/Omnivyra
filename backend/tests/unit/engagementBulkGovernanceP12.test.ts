@@ -188,12 +188,15 @@ describe('B4–B6 authorization and capability', () => {
     expect(executeActionMock.mock.calls[0][0].execution_mode).toBe('browser');
   });
 
-  it('a DM resolves the dm capability, not reply', async () => {
+  // Product decision: DMs stay blocked without an authoritative person ->
+  // thread mapping (dmDispatchSafety): a DM is refused even when the dm
+  // capability is verified, and never reaches the executor.
+  it('a DM is refused even with a verified dm capability — never dispatched as dm or reply', async () => {
     seed('A', ORG, 'dm'); actionable.add('A');
     capability = { status: 'api_verified', mode: 'browser' };
-    executeActionMock.mockResolvedValueOnce({ ok: true, status: 'dispatched', response: {} } as never);
-    await bulkReplyThreads(ORG, ['A'], textFor, 'user_1');
-    expect(executeActionMock.mock.calls[0][0].action_type).toBe('dm');
+    const r = await bulkReplyThreads(ORG, ['A'], textFor, 'user_1');
+    expect(executeActionMock).not.toHaveBeenCalled();
+    expect(r.outcomes.skipped_capability).toBe(1);
   });
 });
 

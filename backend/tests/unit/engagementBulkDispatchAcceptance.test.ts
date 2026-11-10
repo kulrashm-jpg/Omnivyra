@@ -187,13 +187,15 @@ describe('§5 C1/C2 the client cannot choose how a reply is dispatched', () => {
     expect(executeActionMock.mock.calls[0][0].execution_mode).toBe('api');
   });
 
-  it('C2: a DM cannot be forced onto the API path when only browser is verified', async () => {
+  // Product decision: DMs stay blocked without an authoritative person ->
+  // thread mapping (dmDispatchSafety). A bulk DM never reaches the executor on
+  // ANY path — so it cannot be forced onto the API path either.
+  it('C2: a DM cannot be forced onto any dispatch path — it is refused before the executor', async () => {
     seed('A', ORG, 'linkedin', 'dm'); actionable.add('A');
-    executeActionMock.mockResolvedValueOnce({ ok: true, status: 'dispatched', response: {} } as never);
-    await bulkReplyThreads(ORG, ['A'], textFor, USER);
-    const action = executeActionMock.mock.calls[0][0];
-    expect(action.action_type).toBe('dm');
-    expect(action.execution_mode).toBe('browser');
+    const r = await bulkReplyThreads(ORG, ['A'], textFor, USER);
+    expect(executeActionMock).not.toHaveBeenCalled();
+    expect(r.sent).toBe(0);
+    expect(r.outcomes.skipped_capability).toBe(1);
   });
 
   it('the bulk request contract exposes no dispatch controls at all', () => {
@@ -216,17 +218,13 @@ describe('§7 self-reply closure: comment vs DM', () => {
     expect((mirrored[0].raw_payload as any).ingested_via).toBe('bulk_reply');
   });
 
-  it('a DM dispatch does NOT mirror — closure depends on extension ingestion', async () => {
+  it('a DM is refused (no authoritative recipient mapping) — never dispatched, never mirrored', async () => {
     seed('A', ORG, 'linkedin', 'dm'); actionable.add('A');
-    executeActionMock.mockResolvedValueOnce({ ok: true, status: 'dispatched', response: {} } as never);
     const r = await bulkReplyThreads(ORG, ['A'], textFor, USER);
 
-    expect(r.sent).toBe(1);
-    // Deliberate, matching /api/engagement/reply: a browser-queued DM has no
-    // confirmed platform id yet, so fabricating a sent message would assert a
-    // delivery that has not happened. The consequence is real and is reported
-    // as a finding: a bulk DM does not self-close until the extension ingests
-    // the sent message.
+    expect(r.sent).toBe(0);
+    expect(executeActionMock).not.toHaveBeenCalled();
+    // Nothing may claim a DM was sent.
     expect(outgoing('A')).toHaveLength(0);
   });
 

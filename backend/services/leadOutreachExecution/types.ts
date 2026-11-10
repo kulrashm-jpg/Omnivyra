@@ -214,7 +214,8 @@ export interface OutreachApproval {
   id: string | null;
   companyId: string;
   taskId: string;
-  decision: 'approved' | 'rejected';
+  /** D-02: `revoked` withdraws an earlier approval by appending, never by editing it. */
+  decision: 'approved' | 'rejected' | 'revoked';
   approverUserId: string | null;
   /** Structured cause — answers "under which rule". */
   reason: string | null;
@@ -223,6 +224,15 @@ export interface OutreachApproval {
   /** Snapshot of HumanReviewAssessment.missingInformation at decision time. */
   missingInformation: string[];
   decidedAt: string;
+  /** D-02: the content/action binding an `approved` row authorised (approvalBinding.ts). */
+  approvedContentHash?: string | null;
+  /** D-02: which surface recorded the decision. Null on rows written before D-02. */
+  tier?: 'tenant' | 'platform' | null;
+  /** D-02: the passkey credential verified for this approval (external channels; approvalPasskey.ts). */
+  passkeyCredentialId?: string | null;
+  /** D-02 (L-3): the normalised address the approval binds (external channels); also inside the hash. */
+  approvedRecipient?: string | null;
+  passkeyVerifiedAt?: string | null;
 }
 
 export interface OutreachAttempt {

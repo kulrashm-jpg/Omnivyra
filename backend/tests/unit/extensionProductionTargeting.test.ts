@@ -27,10 +27,11 @@
  * that cannot be imported here.
  */
 
-import { readFileSync } from 'fs';
+import { describeWithExtensionSource } from '../helpers/extensionSourceRoot';
 
-const SW_PATH = 'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/background/serviceWorker.js';
-const swSrc = readFileSync(SW_PATH, 'utf8');
+// The service worker / manifest / apiClient live in the external extension
+// source (OMNIVYRA_EXTENSION_ROOT). Only the blocks that read them are skipped
+// when it is unset; the decision-model blocks (T1-T7) always run.
 
 const PRODUCTION_EXTENSION_ID = 'khlballmijciomdbigljpafliajdekbg';
 const PRODUCTION_API = 'https://www.omnivyra.com';
@@ -213,7 +214,15 @@ describe('T4 — the developer workflow is preserved', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('source shape — the guard is present at every activation site', () => {
+describeWithExtensionSource(
+  'source shape — the guard is present at every activation site',
+  [['background', 'serviceWorker.js'], ['manifest.json']],
+  (ext) => {
+  let swSrc = '';
+  beforeAll(() => {
+    swSrc = ext.read('background', 'serviceWorker.js');
+  });
+
   it('the production extension id and guard exist', () => {
     expect(swSrc).toContain(`const PRODUCTION_EXTENSION_ID = '${PRODUCTION_EXTENSION_ID}'`);
     expect(swSrc).toMatch(/function isDevelopmentBuild\(\)/);
@@ -252,21 +261,21 @@ describe('source shape — the guard is present at every activation site', () =>
   });
 
   it('manifest version is 1.4.0 and the store id is the one gated on', () => {
-    const manifest = JSON.parse(
-      readFileSync('C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/manifest.json', 'utf8'),
-    );
+    const manifest = JSON.parse(ext.read('manifest.json'));
     expect(manifest.version).toBe('1.4.0');
   });
-});
+  },
+);
 
-describe('T9 — the authenticated command protocol is untouched', () => {
+describeWithExtensionSource(
+  'T9 — the authenticated command protocol is untouched',
+  [['core', 'apiClient.js']],
+  (ext) => {
   it('renewal and result submission are unchanged by this hardening', () => {
-    const apiSrc = readFileSync(
-      'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/apiClient.js',
-      'utf8',
-    );
+    const apiSrc = ext.read('core', 'apiClient.js');
     expect(apiSrc).toContain('async renewDispatchLease');
     expect(apiSrc).toContain("options.headers['X-Omnivyra-Dispatch-Renewal'] = '1'");
     expect(apiSrc).toContain('/api/extension/action-result');
   });
-});
+  },
+);

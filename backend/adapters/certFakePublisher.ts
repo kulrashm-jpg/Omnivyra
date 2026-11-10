@@ -28,10 +28,10 @@
 import type { PublishResult } from './platformAdapterTypes';
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-const TARGET_VARS = ['SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_POOLER_URL', 'SUPABASE_POOLER_DB_URL', 'DATABASE_URL', 'REDIS_URL'];
+export const TARGET_VARS = ['SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_POOLER_URL', 'SUPABASE_POOLER_DB_URL', 'DATABASE_URL', 'REDIS_URL'];
 /** Kept in sync with scripts/lib/certAwareEnv.cjs PROD_MARKERS (asserted by test). */
 export const CERT_FAKE_PROD_MARKERS = ['klkiseupptzbecbxwrky', 'aws-1-ap-southeast-1.pooler.supabase', 'noble-dane-77325.upstash.io'];
-const DEPLOYMENT_MARKERS = ['RAILWAY_ENVIRONMENT', 'RAILWAY_ENVIRONMENT_NAME', 'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_PROJECT_ID', 'RAILWAY_SERVICE_ID', 'RAILWAY_DEPLOYMENT_ID', 'RAILWAY_GIT_COMMIT_SHA', 'VERCEL', 'VERCEL_ENV'];
+export const DEPLOYMENT_MARKERS = ['RAILWAY_ENVIRONMENT', 'RAILWAY_ENVIRONMENT_NAME', 'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_PROJECT_ID', 'RAILWAY_SERVICE_ID', 'RAILWAY_DEPLOYMENT_ID', 'RAILWAY_GIT_COMMIT_SHA', 'VERCEL', 'VERCEL_ENV'];
 
 type Env = Record<string, string | undefined>;
 

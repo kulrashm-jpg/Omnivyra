@@ -10,6 +10,9 @@ import { logCommunityAiActionEvent } from '../../../backend/services/communityAi
 import { notifyCommunityAiBulk } from '../../../backend/services/communityAiNotificationService';
 import { sendCommunityAiWebhooks } from '../../../backend/services/communityAiWebhookService';
 
+/** Statuses a person may skip: not yet claimed (never an executing, leased or ended row). */
+const SKIPPABLE_STATUSES = ['pending', 'approved', 'scheduled'];
+
 type ActionsRequest = {
   tenant_id?: string;
   organization_id?: string;
@@ -327,10 +330,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (body.status === 'skipped') {
-      await supabase
+      // Tenant-scoped compare-and-set: only a row nobody is executing or holding
+      // (pending / approved / scheduled, no extension lease) is skipped. Without
+      // it a skip overwrote an 'executing', leased or terminal row (including an
+      // 'uncertain' one that may have acted), erasing the outcome.
+      const { data: skipped, error: skipError } = await supabase
         .from('community_ai_actions')
         .update({ status: 'skipped', updated_at: new Date().toISOString() })
-        .eq('id', actionId);
+        .eq('id', actionId)
+        .eq('tenant_id', scope.tenantId)
+        .eq('organization_id', scope.organizationId)
+        .in('status', SKIPPABLE_STATUSES)
+        .is('dispatch_lease_id', null)
+        .select('id, status')
+        .maybeSingle();
+
+      if (skipError) {
+        return res.status(500).json({ error: 'SKIP_FAILED' });
+      }
+      if (!skipped) {
+        const { data: latest } = await supabase
+          .from('community_ai_actions')
+          .select('status')
+          .eq('id', actionId)
+          .eq('organization_id', scope.organizationId)
+          .maybeSingle();
+        return res.status(409).json({ error: 'ACTION_NOT_SKIPPABLE', current_status: (latest as { status?: string } | null)?.status ?? null });
+      }
 
       await logCommunityAiActionEvent({
         action_id: actionId,

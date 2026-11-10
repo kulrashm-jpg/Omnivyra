@@ -1,15 +1,28 @@
 /**
  * Response Orchestrator
- * End-to-end flow: intent -> policy -> generate -> format -> execute/suggest.
+ * End-to-end flow: intent -> policy -> generate -> format -> suggest.
+ *
+ * GENERATION NEVER EXECUTES (owner ruling, Outreach foundation, Agent C).
+ * Engagement Intelligence generates and does not send. This module returns a
+ * suggestion and has no path to any platform: it imports no executor, reads no
+ * playbook and writes no action row. It used to take a caller-supplied
+ * `execute` flag and, when a `response_rules.auto_reply` rule matched and an
+ * active playbook existed, call `communityAiActionExecutor.executeAction`
+ * directly — around the audited automation gate (automationService) entirely.
+ * The executor's D-01 refusal of ad-hoc actions already stopped that call from
+ * reaching a platform; the call itself is now gone.
+ *
+ * A matched `auto_reply` rule is reported as `auto_reply_rule_matched` and
+ * changes nothing else. Autonomous response (Mode 3) is governed by ONE switch:
+ * automation_config via `automation/automationService.shouldAutoExecute`, and even
+ * an allowed decision must still pass the executor's own D-01 approval, L-3
+ * recheck and single-execution claim. See automation/automationService.ts.
  */
 
-import { supabase } from '../db/supabaseClient';
 import { resolveResponsePolicy } from './responsePolicyEngine';
 import { generateResponse } from './responseGenerationService';
 import { formatForPlatform } from './platformResponseFormatter';
 import { checkResponseSafety } from './responseSafetyGuard';
-import { executeAction } from './communityAiActionExecutor';
-import { listPlaybooks } from './playbooks/playbookService';
 
 export type OrchestrateInput = {
   message_id: string;
@@ -21,15 +34,16 @@ export type OrchestrateInput = {
   author_name?: string | null;
   thread_context?: string | null;
   original_message: string;
-  /** When true, execute via communityAiActionExecutor when auto_reply and safe */
-  execute?: boolean;
 };
 
 export type OrchestrateResult = {
   ok: boolean;
   suggested_text?: string;
-  executed?: boolean;
+  /** Always false: generation never sends. Kept so existing response shapes stay stable. */
+  executed?: false;
   requires_human_review?: boolean;
+  /** True when a response_rules row with auto_reply matched. Informational only. */
+  auto_reply_rule_matched?: boolean;
   reason?: string;
   error?: string;
 };
@@ -94,61 +108,13 @@ export async function orchestrateResponse(
     emojiPolicy: policy.emoji_policy,
   });
 
-  if (!input.execute || !policy.auto_reply) {
-    return {
-      ok: true,
-      suggested_text: formatted,
-      executed: false,
-    };
-  }
-
-  const { data: message } = await supabase
-    .from('engagement_messages')
-    .select('id, thread_id, platform_message_id')
-    .eq('organization_id', input.organization_id)
-    .eq('id', input.message_id)
-    .maybeSingle();
-
-  if (!message) {
-    return { ok: true, suggested_text: formatted, executed: false };
-  }
-
-  const playbooks = (await listPlaybooks(input.organization_id, input.organization_id)).filter(
-    (p: { status?: string }) => p.status === 'active'
-  );
-  const playbookId = playbooks[0]?.id ?? null;
-
-  if (!playbookId) {
-    return {
-      ok: true,
-      suggested_text: formatted,
-      executed: false,
-      reason: 'No active playbook; suggestion only',
-    };
-  }
-
-  // uuid removed — use crypto.randomUUID()
-  const normalizedPlatform = (input.platform || '').toLowerCase() === 'x' ? 'twitter' : input.platform;
-  const result = await executeAction(
-    {
-      id: crypto.randomUUID(),
-      tenant_id: input.organization_id,
-      organization_id: input.organization_id,
-      platform: normalizedPlatform,
-      action_type: 'reply',
-      target_id: message.platform_message_id ?? input.message_id,
-      suggested_text: formatted,
-      playbook_id: playbookId,
-      execution_mode: 'manual',
-    },
-    true,
-    { source: 'manual', persist: true, auto_insert: true, final_text: formatted }
-  );
-
   return {
-    ok: result.ok,
+    ok: true,
     suggested_text: formatted,
-    executed: result.ok && result.status === 'executed',
-    error: result.ok ? undefined : (result.error as string),
+    executed: false,
+    auto_reply_rule_matched: policy.auto_reply === true,
+    ...(policy.auto_reply === true
+      ? { reason: 'Suggestion only: response generation never sends' }
+      : {}),
   };
 }

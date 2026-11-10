@@ -31,7 +31,8 @@ const CONTROL_KEYS: { key: keyof EngagementControls; label: string }[] = [
 ];
 
 const DEFAULTS: EngagementControls = {
-  auto_reply_enabled: true,
+  // Fail closed, matching engagementGovernanceService: auto reply reads OFF unless stored true.
+  auto_reply_enabled: false,
   bulk_reply_enabled: true,
   ai_suggestions_enabled: true,
   triage_engine_enabled: true,
@@ -88,7 +89,7 @@ export default function EngagementControlsPage() {
       }
       const data = await res.json();
       setControls({
-        auto_reply_enabled: data.auto_reply_enabled ?? true,
+        auto_reply_enabled: data.auto_reply_enabled === true,
         bulk_reply_enabled: data.bulk_reply_enabled ?? true,
         ai_suggestions_enabled: data.ai_suggestions_enabled ?? true,
         triage_engine_enabled: data.triage_engine_enabled ?? true,

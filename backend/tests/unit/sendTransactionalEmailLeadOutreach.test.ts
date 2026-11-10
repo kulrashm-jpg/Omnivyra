@@ -288,11 +288,20 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // Only the provider side of PI-041-A-O was adopted. The Email Engine, and the
     // transport hooks that compose it, depend on tables that are not on main.
     // WP3 / L5 changed the transport (it now mints the unsubscribe link) and is
-    // re-pinned here; dispatch is unchanged.
+    // re-pinned here. Dispatch was re-pinned when it learned to claim a task an
+    // earlier dispatch returned to `queued` (ws3RequeuedDispatch.test.ts); the
+    // provider-facing request it builds is unchanged.
+    // RE-PINNED 2026-11-02: an invoke error that may have acted is no longer `rejected`
+    // (G-1), a disabled transport stops dispatch before it writes (G-8), and comments no
+    // longer claim idempotency at the provider (G-3). The posted payload is unchanged.
+    // Dispatch re-pinned 2026-11-04 for the foundation base: G-8 guard, then the D-03
+    // journey hold (orchJourneyHoldD03.test.ts), then governance; same request. Re-pinned for D-02 rebuilt on 6e96f6680 (an expired
+    // approval ends the task in `expired`; a stale one returns to `awaiting_approval`); same request.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('eb4963aea1b7a6d2');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('3c366bcc862b7bd4');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('c6e86299a89dc60f');
+    // Re-pinned for Outreach F-1 (prior-attempt check for every task) and P-1 (repeated under the claim); same request.
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('a23b5fbf0b38f5f2');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {

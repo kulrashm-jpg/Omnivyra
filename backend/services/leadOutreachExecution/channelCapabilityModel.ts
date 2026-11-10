@@ -213,8 +213,12 @@ export const CHANNEL_CAPABILITIES: readonly ChannelCapabilityDefinition[] = Obje
         status: 'NOT_OPERATIONAL',
         basis: 'no transport is registered by registerDefaultTransports, so resolveTransport returns null and the dispatcher skips the channel; this is absence of a call path, not a disabled one',
       },
-      deliveryReceipt: unsupported('nothing receives a WhatsApp callback'),
-      inboundReply: unsupported('no inbound WhatsApp path records an event on this channel'),
+      // N-1: scoped to the OUTREACH TASK. The Meta webhook does receive statuses and inbound
+      // messages (whatsappWebhookProcessor), but they reach broadcast recipients, the
+      // provider-event ledger and the engagement inbox, never an outreach task: this channel
+      // has no task transport for them to attach to.
+      deliveryReceipt: unsupported('Meta status callbacks are received, but none reaches an outreach task: the channel has no task transport'),
+      inboundReply: unsupported('inbound WhatsApp messages are ingested into the engagement inbox, not linked to an outreach task'),
       callDisposition: unsupported('not a voice channel'),
     }),
   },

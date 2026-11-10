@@ -70,12 +70,28 @@ export function __resetQuotaRedisForTests(): void {
   redisClient = null;
 }
 
+/**
+ * Whether the shared client can take a command now. The shared client is the
+ * BullMQ one: `maxRetriesPerRequest: null`, an offline queue, and a reconnect
+ * strategy that never gives up. While it is not connected, a command is queued
+ * and never rejected, so awaiting it would hang the dispatch until Redis comes
+ * back and the database fallback below would never run. A client that reports
+ * any status other than 'ready' is therefore skipped without being given a
+ * command. (A client with no status field, such as a test double, is used.)
+ *
+ * No timer is used: WS-3 permits a timer only in the email transport.
+ */
+function redisUsable(redis: unknown): boolean {
+  const status = (redis as { status?: unknown }).status;
+  return typeof status !== 'string' || status === 'ready';
+}
+
 const tenantKey = (companyId: string): string => `ws3:quota:tenant:${companyId}`;
 const leadKey = (companyId: string, leadId: string): string => `ws3:quota:lead:${companyId}:${leadId}`;
 
 async function redisIncr(key: string): Promise<number | null> {
   const redis = await getRedis();
-  if (!redis) return null;
+  if (!redis || !redisUsable(redis)) return null;
   try {
     const next = Number(await redis.incrby(key, 1));
     if (next === 1) await redis.expire(key, TTL_SECONDS);
@@ -87,7 +103,7 @@ async function redisIncr(key: string): Promise<number | null> {
 
 async function redisDecr(key: string): Promise<void> {
   const redis = await getRedis();
-  if (!redis) return;
+  if (!redis || !redisUsable(redis)) return;
   try {
     await redis.decrby(key, 1);
   } catch {
@@ -97,7 +113,7 @@ async function redisDecr(key: string): Promise<void> {
 
 async function redisSet(key: string, value: number): Promise<boolean> {
   const redis = await getRedis();
-  if (!redis) return false;
+  if (!redis || !redisUsable(redis)) return false;
   try {
     await redis.set(key, String(value));
     await redis.expire(key, TTL_SECONDS);
@@ -109,7 +125,7 @@ async function redisSet(key: string, value: number): Promise<boolean> {
 
 async function redisGet(key: string): Promise<number | null> {
   const redis = await getRedis();
-  if (!redis) return null;
+  if (!redis || !redisUsable(redis)) return null;
   try {
     const raw = await redis.get(key);
     if (raw === null || raw === undefined) return null;

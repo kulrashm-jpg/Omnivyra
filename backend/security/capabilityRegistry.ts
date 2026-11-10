@@ -65,6 +65,8 @@ import {
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
   BILLING_GRANT_FREE_CREDITS,
+  // D-02 — tenant-tier routine journey approval
+  OUTREACH_JOURNEY_APPROVE,
   // Bridge
   SUPER_ADMIN_LEGACY_BRIDGE,
 } from '../../shared/contracts/security';
@@ -173,6 +175,8 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     // bills the tenant per call, which is a different kind of act from writing
     // a row. Bounded by the REQUIRED daily ceiling (PI-ADR-007 §4).
     PROSPECT_ENRICH_EXECUTE,
+    // D-02 — a tenant admin is a routine approver of the tenant's own journey steps.
+    OUTREACH_JOURNEY_APPROVE,
     // A tenant admin may erase a person from their own tenant's spine (e.g. to
     // answer a data-subject request). Irreversible, so step-up gated; no
     // content-tier or VIEW_ONLY role may.
@@ -197,6 +201,10 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     CAMPAIGN_VIEW,
     CONTENT_REVIEW,
     CONTENT_CREATE,
+    // D-02 — a content reviewer is a routine approver of the tenant's journey steps.
+    // Not implied by CONTENT_REVIEW (which SUPER_ADMIN, COMPANY_ADMIN, CONTENT_PUBLISHER
+    // and CONTENT_ARCHITECT also hold through the hierarchy).
+    OUTREACH_JOURNEY_APPROVE,
     MFA_ENROLL,
     MFA_VIEW_FACTORS,
   ],

@@ -1,4 +1,4 @@
-import { executeAction as executeCommunityAction } from '../../services/communityAiActionExecutor';
+import { executeAction as realExecuteCommunityAction } from '../../services/communityAiActionExecutor';
 import { runCommunityAiScheduler } from '../../services/communityAiScheduler';
 import {
   actionLogStore,
@@ -9,7 +9,31 @@ import {
   roleStore,
   seedPlaybook,
   tokenStore,
+  communityRpc,
+  seedExecutionPolicy,
+  executionPolicyStore,
+  refusalStore,
+  withApprovalEvidence,
+  storeApproved,
 } from './communityAiTestHarness';
+
+/**
+ * SEC3-F3: an external-mode execution needs a held claim. These direct calls let
+ * the executor take it itself (persist: true → the single claim RPC), exactly as
+ * an unclaimed persisting caller does in production; nothing is bypassed.
+ */
+const executeCommunityAction: typeof realExecuteCommunityAction = (action, approved, options) =>
+  realExecuteCommunityAction(action, approved, { persist: true, ...(options || {}) });
+
+
+// L-3: these suites exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement. Here every
+// recipient is allowed (the production gate is unchanged).
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
+}));
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
@@ -25,7 +49,12 @@ const { executeRpaTask } = jest.requireMock('../../services/rpaWorker/rpaWorkerS
 describe('Community-AI RPA Execution', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+    executionPolicyStore.clear();
+    refusalStore.length = 0;
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     resetCommunityAiStores();
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     seedPlaybook({
       execution_modes: {
         api_allowed: true,
@@ -51,7 +80,7 @@ describe('Community-AI RPA Execution', () => {
       },
     });
     const result = await executeCommunityAction(
-      {
+      storeApproved({
         id: 'rpa-1',
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',
@@ -62,7 +91,7 @@ describe('Community-AI RPA Execution', () => {
         playbook_id: 'playbook-rpa-block',
         requires_human_approval: false,
         execution_mode: 'rpa',
-      },
+      }),
       true
     );
     expect(result.ok).toBe(false);
@@ -72,7 +101,7 @@ describe('Community-AI RPA Execution', () => {
 
   it('executes RPA when execution_mode = rpa', async () => {
     const result = await executeCommunityAction(
-      {
+      storeApproved({
         id: 'rpa-2',
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',
@@ -83,7 +112,7 @@ describe('Community-AI RPA Execution', () => {
         playbook_id: 'playbook-1',
         requires_human_approval: false,
         execution_mode: 'rpa',
-      },
+      }),
       true
     );
     expect(result.ok).toBe(true);
@@ -92,7 +121,7 @@ describe('Community-AI RPA Execution', () => {
 
   it('enqueues RPA task with expected payload', async () => {
     await executeCommunityAction(
-      {
+      storeApproved({
         id: 'rpa-3',
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',
@@ -103,7 +132,7 @@ describe('Community-AI RPA Execution', () => {
         playbook_id: 'playbook-1',
         requires_human_approval: false,
         execution_mode: 'rpa',
-      },
+      }),
       true
     );
     expect(executeRpaTask).toHaveBeenCalledWith(
@@ -131,7 +160,7 @@ describe('Community-AI RPA Execution', () => {
       },
     });
     const result = await executeCommunityAction(
-      {
+      storeApproved({
         id: 'rpa-4',
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',
@@ -142,7 +171,7 @@ describe('Community-AI RPA Execution', () => {
         playbook_id: 'playbook-limit',
         requires_human_approval: false,
         execution_mode: 'rpa',
-      },
+      }),
       true
     );
     expect(result.ok).toBe(false);
@@ -159,7 +188,7 @@ describe('Community-AI RPA Execution', () => {
       access_token: 'token-1',
     });
     const past = new Date(Date.now() - 1000).toISOString();
-    actionStore.set('rpa-5', {
+    actionStore.set('rpa-5', withApprovalEvidence({
       id: 'rpa-5',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -170,11 +199,10 @@ describe('Community-AI RPA Execution', () => {
       playbook_id: 'playbook-1',
       execution_mode: 'rpa',
       status: 'approved',
-      // Approval of record, as stamped by POST /api/community-ai/actions/approve.
-      approved_at: '2026-01-01T00:00:00.000Z',
+      // Approval of record (< 7 days old), as approve.ts leaves it: withApprovalEvidence.
       scheduled_at: past,
       requires_human_approval: false,
-    });
+    }));
     await runCommunityAiScheduler(new Date());
     expect(executeRpaTask).toHaveBeenCalled();
     const updated = actionStore.get('rpa-5');

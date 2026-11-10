@@ -30,6 +30,12 @@ jest.mock('../../services/leadOutreachExecution', () => ({
   isUnsubscribeScope: (v: unknown) => v === 'channel' || v === 'all',
 }));
 
+// N-4: the note goes to the clearable notes table, not into append-only evidence.
+const recordOutcomeNote = jest.fn();
+jest.mock('../../services/retention/messageContentRetention', () => ({
+  recordOutcomeNote: (...a: unknown[]) => recordOutcomeNote(...a),
+}));
+
 jest.mock('../../../lib/platform/routeFactory', () => ({
   createApiRoute: (h: unknown) => h,
 }));
@@ -95,6 +101,8 @@ beforeEach(() => {
     role: 'MEMBER', bypass: false, isPlatformSuperAdmin: false,
   });
   ingestFeedback.mockResolvedValue(okResult());
+  recordOutcomeNote.mockReset();
+  recordOutcomeNote.mockResolvedValue(true);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -127,6 +135,20 @@ describe('W09D — method and shape', () => {
     await handler(req, res);
     expect(res._status).toBe(200);
   });
+
+  // M-5: a malformed body is the caller's error. It used to throw out of the handler (500).
+  it.each([['not json', '{"companyId":'], ['an array', '[1,2]'], ['a bare string', '"x"'], ['null', 'null']])(
+    'refuses a string body that is %s with 400 invalid_json, before the guard',
+    async (_label, raw) => {
+      const req = { method: 'POST', body: raw } as unknown as NextApiRequest;
+      const res = makeRes();
+      await handler(req, res);
+      expect(res._status).toBe(400);
+      expect(res._json.error).toBe('invalid_json');
+      expect(requireTenantAccess).not.toHaveBeenCalled();
+      expect(ingestFeedback).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -291,15 +313,34 @@ describe('W09D — the ingestion contract is passed through, not reinterpreted',
     expect(res._json.rejection).toBe('invalid_timestamp');
   });
 
-  it('carries a note as evidence, and omits evidence entirely when there is none', async () => {
-    await call({ note: 'called back, wants a demo' });
-    expect(ingestFeedback).toHaveBeenCalledWith(expect.objectContaining({
-      evidence: { note: 'called back, wants a demo' },
-    }));
+  it('N-4: keeps the note text OUT of append-only evidence and stores it as a clearable note', async () => {
+    const res = await call({ note: 'called back, wants a demo' });
+    expect(ingestFeedback).toHaveBeenCalledWith(expect.objectContaining({ evidence: { noteRecorded: true } }));
+    expect(JSON.stringify(ingestFeedback.mock.calls[0][0])).not.toContain('wants a demo');
+    expect(recordOutcomeNote).toHaveBeenCalledWith({
+      companyId: ORG_A, taskId: TASK, outcomeType: 'replied', note: 'called back, wants a demo', recordedBy: USER,
+    });
+    expect(res._json.noteStored).toBe(true);
 
     ingestFeedback.mockClear();
+    recordOutcomeNote.mockClear();
     await call();
     expect(ingestFeedback.mock.calls[0][0].evidence).toBeUndefined();
+    expect(recordOutcomeNote).not.toHaveBeenCalled();
+  });
+
+  it('N-4: a note on a DUPLICATE outcome is not stored as a second note', async () => {
+    ingestFeedback.mockResolvedValue(okResult({ duplicate: true }));
+    const res = await call({ note: 'same reply again' });
+    expect(res._status).toBe(200);
+    expect(recordOutcomeNote).not.toHaveBeenCalled();
+  });
+
+  it('N-4: a note that could not be stored does not fail the recorded outcome', async () => {
+    recordOutcomeNote.mockResolvedValue(false);
+    const res = await call({ note: 'x' });
+    expect(res._status).toBe(200);
+    expect(res._json.noteStored).toBe(false);
   });
 
   it('a cross-tenant task surfaces the EXISTING task_not_found, not a new semantic', async () => {

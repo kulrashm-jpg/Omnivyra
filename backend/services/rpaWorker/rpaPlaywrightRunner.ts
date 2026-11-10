@@ -6,6 +6,7 @@ import { makeCancellationChecker, RpaCancelledError, type CancellationChecker } 
 import { saveRpaArtifact } from './rpaArtifactStore';
 import { isProbeFailure, rpaEnvReady } from './rpaEnv';
 import type { RpaTask, RpaResult } from './rpaWorkerService';
+import { validateRpaTarget } from './rpaTargetUrlPolicy';
 
 /**
  * Playwright-backed RPA runner. Single place that knows how to drive a
@@ -15,11 +16,13 @@ import type { RpaTask, RpaResult } from './rpaWorkerService';
  *   - launch chromium headless
  *   - inject storageState (per-org session)
  *   - navigate to target
+ *   - re-validate the landed URL (a redirect off-policy refuses, not acted)
  *   - execute platform script steps
  *     · selectors go through the resilient resolver
  *     · cancel signal polled before every step → RpaCancelledError
  *   - probe post-condition
- *   - upload screenshot + index in rpa_artifacts
+ *   - upload screenshot + index in rpa_artifacts (also on a failure after
+ *     the submit interaction started)
  *   - close browser
  *
  * Errors are returned as structured RpaResult; RpaCancelledError → a
@@ -27,7 +30,10 @@ import type { RpaTask, RpaResult } from './rpaWorkerService';
  * `failed` via the central pipeline).
  */
 
-export type RpaStep =
+/** Upper bound on audit evidence capture: it must never hold up an outcome. */
+const EVIDENCE_TIMEOUT_MS = 10_000;
+
+export type RpaStep = (
   | { kind: 'wait_for_selector'; selectors: ResolverCandidate[]; timeout?: number }
   | { kind: 'click'; selectors: ResolverCandidate[]; timeout?: number }
   | { kind: 'fill'; selectors: ResolverCandidate[]; text: string; timeout?: number }
@@ -35,7 +41,17 @@ export type RpaStep =
   | { kind: 'type_contenteditable'; selectors: ResolverCandidate[]; text: string; timeout?: number }
   | { kind: 'wait_for_any'; selectors: ResolverCandidate[]; timeout?: number; textHeuristics?: string[] }
   | { kind: 'wait'; ms: number }
-  | { kind: 'extract_platform_id'; selectors: ResolverCandidate[]; attribute?: string };
+  | { kind: 'extract_platform_id'; selectors: ResolverCandidate[]; attribute?: string }
+) & {
+  /**
+   * Marks THE submit interaction (the click / key press that makes the
+   * platform act). Once this step starts, any failure — including a
+   * post-condition miss, a cancel, or a crash — is a may-have-acted outcome
+   * and must never be retried. A script with no commit step is treated as
+   * may-have-acted from its first step.
+   */
+  commit?: boolean;
+};
 
 export type RpaScript = {
   targetUrl: string;
@@ -62,8 +78,16 @@ async function checkpoint(cancelled: CancellationChecker) {
   if (await cancelled()) throw new RpaCancelledError();
 }
 
-async function runStep(page: any, step: RpaStep, cancelled: CancellationChecker): Promise<void> {
+async function runStep(
+  page: any,
+  step: RpaStep,
+  cancelled: CancellationChecker,
+  onCommit: () => void = () => {},
+): Promise<void> {
   await checkpoint(cancelled);
+  // Called immediately before the interaction itself, AFTER its element was
+  // resolved: a commit step whose element is missing never interacted.
+  const committing = () => { if (step.commit === true) onCommit(); };
 
   switch (step.kind) {
     case 'wait_for_selector': {
@@ -82,18 +106,21 @@ async function runStep(page: any, step: RpaStep, cancelled: CancellationChecker)
     case 'click': {
       const handle = await resolveSelector(page, step.selectors, { perAttemptMs: step.timeout ?? 8_000 });
       if (!handle) throw new Error(`SELECTOR_NOT_FOUND`);
+      committing();
       await handle.click({ timeout: step.timeout ?? 8_000 });
       return;
     }
     case 'fill': {
       const handle = await resolveSelector(page, step.selectors, { perAttemptMs: step.timeout ?? 8_000 });
       if (!handle) throw new Error(`SELECTOR_NOT_FOUND`);
+      committing();
       await handle.fill(step.text, { timeout: step.timeout ?? 8_000 });
       return;
     }
     case 'type_contenteditable': {
       const handle = await resolveSelector(page, step.selectors, { perAttemptMs: step.timeout ?? 8_000 });
       if (!handle) throw new Error(`SELECTOR_NOT_FOUND`);
+      committing();
       await handle.click();
       await page.keyboard.insertText(step.text);
       return;
@@ -101,6 +128,7 @@ async function runStep(page: any, step: RpaStep, cancelled: CancellationChecker)
     case 'press': {
       const handle = await resolveSelector(page, step.selectors, { perAttemptMs: step.timeout ?? 8_000 });
       if (!handle) throw new Error(`SELECTOR_NOT_FOUND`);
+      committing();
       await handle.press(step.key);
       return;
     }
@@ -120,27 +148,94 @@ async function runStep(page: any, step: RpaStep, cancelled: CancellationChecker)
   }
 }
 
-export async function runRpaScript(task: RpaTask, script: RpaScript): Promise<RpaResult> {
-  const ready = await rpaEnvReady();
+/** Test seam: production callers pass nothing and get the real implementations. */
+export type RpaRunnerDeps = {
+  envReady?: typeof rpaEnvReady;
+  loadPlaywright?: () => Promise<any | null>;
+  loadSession?: typeof loadRpaSession;
+  makeCancellationChecker?: (actionId: string) => CancellationChecker;
+  saveArtifact?: typeof saveRpaArtifact;
+  evidenceTimeoutMs?: number;
+};
+
+/**
+ * Screenshot → durable storage. Audit-only: never throws and is time-bounded,
+ * so evidence can neither change nor hold up the action's outcome. Returns the
+ * object path, the only durable reference (the store's signed URL is a bearer
+ * credential and is deliberately not kept). The unencrypted local copy exists
+ * only when an operator opts in with RPA_SCREENSHOT_DIR.
+ */
+async function captureEvidence(page: any, task: RpaTask, deps: RpaRunnerDeps): Promise<string | undefined> {
+  const capture = (async () => {
+    const buf: Buffer = await page.screenshot({ fullPage: false });
+    const saved = await (deps.saveArtifact ?? saveRpaArtifact)({
+      action_id: task.action_id,
+      organization_id: task.organization_id,
+      platform: task.platform,
+      action_type: task.action_type,
+      buffer: buf,
+      kind: 'screenshot',
+      ext: 'png',
+    });
+    const mirrorDir = process.env.RPA_SCREENSHOT_DIR;
+    if (mirrorDir) {
+      try {
+        await fs.mkdir(mirrorDir, { recursive: true });
+        await fs.writeFile(path.join(mirrorDir, `${task.action_id}.png`), buf);
+      } catch { /* mirror is optional */ }
+    }
+    return saved?.object_path;
+  })().catch(() => undefined); // screenshots are audit-only
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), deps.evidenceTimeoutMs ?? EVIDENCE_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([capture, timedOut]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function runRpaScript(task: RpaTask, script: RpaScript, deps: RpaRunnerDeps = {}): Promise<RpaResult> {
+  // Defence in depth: the URL actually navigated must be the task's URL and
+  // must pass the single platform URL policy. Refusal is pre-navigation.
+  const target = validateRpaTarget({
+    platform: task.platform,
+    action_type: task.action_type,
+    target_url: script.targetUrl,
+  });
+  if (target.ok === false) {
+    return { success: false, error: target.error, may_have_acted: false };
+  }
+  if (script.targetUrl !== task.target_url) {
+    return { success: false, error: 'RPA_SCRIPT_TARGET_MISMATCH', may_have_acted: false };
+  }
+  const ready = await (deps.envReady ?? rpaEnvReady)();
   if (isProbeFailure(ready)) {
-    return { success: false, error: `RPA_ENV_NOT_READY:${ready.reason}` };
+    return { success: false, error: `RPA_ENV_NOT_READY:${ready.reason}`, may_have_acted: false };
   }
-  const pw = await loadPlaywright();
+  const pw = await (deps.loadPlaywright ?? loadPlaywright)();
   if (!pw || !pw.chromium) {
-    return { success: false, error: 'RPA_PLAYWRIGHT_NOT_INSTALLED' };
+    return { success: false, error: 'RPA_PLAYWRIGHT_NOT_INSTALLED', may_have_acted: false };
   }
 
-  const storageState = await loadRpaSession(task.organization_id, task.platform);
+  const storageState = await (deps.loadSession ?? loadRpaSession)(task.organization_id, task.platform);
   if (!storageState) {
-    return { success: false, error: 'RPA_NO_SESSION' };
+    return { success: false, error: 'RPA_NO_SESSION', may_have_acted: false };
   }
 
-  const cancelled = makeCancellationChecker(task.action_id);
+  const cancelled = (deps.makeCancellationChecker ?? makeCancellationChecker)(task.action_id);
 
   let browser: any = null;
   let context: any = null;
   let page: any = null;
   let platformId: string | null = null;
+  // Becomes true the moment the submit interaction STARTS. Every failure from
+  // then on may have reached the platform (classified may_have_acted=true).
+  const hasCommitStep = script.steps.some((s) => s.commit === true);
+  let commitStarted = false;
   try {
     await checkpoint(cancelled);
     browser = await pw.chromium.launch({ headless: true });
@@ -148,11 +243,26 @@ export async function runRpaScript(task: RpaTask, script: RpaScript): Promise<Rp
     page = await context.newPage();
 
     await checkpoint(cancelled);
-    await page.goto(script.targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForTimeout(500);
 
+    // A redirect can land anywhere: the URL about to be acted on must pass the
+    // same policy as the URL requested. Nothing has been interacted with yet.
+    const landed = validateRpaTarget({
+      platform: task.platform,
+      action_type: task.action_type,
+      target_url: page.url(),
+    });
+    if (landed.ok === false) {
+      return { success: false, error: `RPA_REDIRECT_REFUSED:${landed.error}`, may_have_acted: false };
+    }
+
     for (const step of script.steps) {
-      await runStep(page, step, cancelled);
+      await checkpoint(cancelled);
+      // Without a declared commit step every step is treated as possibly
+      // acting (conservative).
+      if (!hasCommitStep) commitStarted = true;
+      await runStep(page, step, cancelled, () => { commitStarted = true; });
     }
     platformId = (page as any).__extractedPlatformId ?? null;
 
@@ -167,51 +277,30 @@ export async function runRpaScript(task: RpaTask, script: RpaScript): Promise<Rp
       confirmed = ok;
     }
 
-    // Screenshot → durable storage
-    let screenshotPath: string | undefined;
-    let screenshotUrl: string | null = null;
-    try {
-      const buf: Buffer = await page.screenshot({ fullPage: false });
-      const saved = await saveRpaArtifact({
-        action_id: task.action_id,
-        organization_id: task.organization_id,
-        platform: task.platform,
-        action_type: task.action_type,
-        buffer: buf,
-        kind: 'screenshot',
-        ext: 'png',
-      });
-      if (saved) {
-        screenshotPath = saved.object_path;
-        screenshotUrl = saved.public_url ?? null;
-      }
-      // Best-effort local mirror for offline debugging
-      try {
-        const dir = process.env.RPA_SCREENSHOT_DIR || path.join(process.cwd(), 'tmp', 'rpa-screenshots');
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(path.join(dir, `${task.action_id}.png`), buf);
-      } catch { /* mirror is optional */ }
-    } catch { /* screenshots are audit-only */ }
+    const screenshotPath = await captureEvidence(page, task, deps);
 
     if (!confirmed) {
+      // The submit interaction already ran: the platform may have accepted it.
       return {
         success: false,
         error: 'RPA_POST_CONDITION_FAILED',
+        may_have_acted: true,
         screenshot_path: screenshotPath,
-        screenshot_url: screenshotUrl ?? undefined,
       };
     }
     return {
       success: true,
       screenshot_path: screenshotPath,
-      screenshot_url: screenshotUrl ?? undefined,
       platform_id: platformId ?? undefined,
     };
   } catch (err: any) {
+    // After the submit started this is the outcome that most needs evidence.
+    const screenshotPath = commitStarted && page ? await captureEvidence(page, task, deps) : undefined;
+    const evidence = screenshotPath ? { screenshot_path: screenshotPath } : {};
     if (err instanceof RpaCancelledError) {
-      return { success: false, error: 'RPA_CANCELLED' };
+      return { success: false, error: 'RPA_CANCELLED', may_have_acted: commitStarted, ...evidence };
     }
-    return { success: false, error: err?.message || 'RPA_SCRIPT_FAILED' };
+    return { success: false, error: err?.message || 'RPA_SCRIPT_FAILED', may_have_acted: commitStarted, ...evidence };
   } finally {
     try { if (page) await page.close(); } catch { /* swallow */ }
     try { if (context) await context.close(); } catch { /* swallow */ }

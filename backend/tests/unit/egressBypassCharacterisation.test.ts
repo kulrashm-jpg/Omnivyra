@@ -22,6 +22,8 @@
  * the canonical store sees it. Nothing here contacts any provider.
  */
 
+import { withApprovalEvidence } from '../helpers/communityApprovalEvidenceFixture';
+
 type Row = Record<string, unknown>;
 
 const ORG = 'org-a';
@@ -110,11 +112,37 @@ const sends = {
   edge: [] as Row[],
 };
 
-jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => table(t) }));
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbTable: (t: string) => table(t),
+  // The owned RPC seam goes to the same database functions as supabase.rpc below.
+  ownedDbRpc: (fn: string, args: Row) => require('../../db/supabaseClient').supabase.rpc(fn, args),
+}));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (t: string) => table(t),
-    rpc: async () => ({ data: null, error: null }),
+    // Prompt 3 database functions the extension route calls: the tenant policy is
+    // open, the browser claim grants an unclaimed approved row a lease (its own
+    // gates are proven in the RS suites), refusal records are accepted.
+    rpc: async (name: string, args: Row) => {
+      if (name === 'community_execution_policy_decision') return { data: [{ allowed: true, code: null, auto_rules_enabled: false, policy_version: 'test' }], error: null };
+      if (name === 'record_community_execution_refusal') return { data: true, error: null };
+      if (name === 'claim_community_ai_action_for_execution') {
+        // The single claim, as its final CAS (its gates are proven in the RS suites).
+        const hit = (db.community_ai_actions || []).find((r) => r.id === args.p_action_id);
+        if (!hit || hit.status !== 'approved') return { data: [{ claimed: false, code: 'CLAIM_CONFLICT', current_status: hit?.status ?? null }], error: null };
+        hit.status = 'executing';
+        if (args.p_correlation_id) hit.execution_correlation_id = args.p_correlation_id;
+        return { data: [{ claimed: true, code: null, current_status: 'executing' }], error: null };
+      }
+      if (name === 'claim_community_ai_browser_command') {
+        const hit = (db.community_ai_actions || []).find((r) => r.id === args.p_action_id && r.status === 'pending' && r.dispatch_lease_id == null && r.approved_at);
+        if (!hit) return { data: [], error: null };
+        hit.dispatch_lease_id = args.p_lease_id;
+        hit.dispatch_lease_expires_at = new Date(Date.now() + 90_000).toISOString();
+        return { data: [{ id: hit.id, dispatch_lease_expires_at: hit.dispatch_lease_expires_at }], error: null };
+      }
+      return { data: null, error: null };
+    },
     functions: { invoke: async (_fn: string, opts: { body: Row }) => { sends.edge.push(opts.body); return { data: null, error: null }; } },
   },
 }));
@@ -127,7 +155,10 @@ jest.mock('../../auth/credentialEncryption', () => ({ requireEncryptionKey: () =
 
 // Community executor (API, RPA, browser)
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: async () => ({ execution_enabled: true, require_human_approval: false }),
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(async () => ({ execution_enabled: true, require_human_approval: false })),
 }));
 jest.mock('../../services/usageEnforcementService', () => ({ checkUsageBeforeExecution: async () => ({ allowed: true }) }));
 jest.mock('../../services/usageLedgerService', () => ({ logUsageEvent: async () => undefined }));
@@ -163,8 +194,10 @@ jest.mock('../../services/extensionReliabilityService', () => ({ isCurrentlyDisa
 jest.mock('../../services/extensionCommandSchema', () => ({
   COMMAND_SCHEMA_VERSION: 'schema-test', validateCommandPayload: (_p: string, _a: string, payload: Row) => ({ ok: true, payload }),
 }));
+const mockPersisted: Row[] = [];
 jest.mock('../../services/communityAiExecutionResultService', () => ({
-  recordExecutionMetric: async () => undefined, persistExecutionResult: async () => ({ ok: true }),
+  recordExecutionMetric: async () => undefined,
+  persistExecutionResult: async (input: Row) => { mockPersisted.push(input); return { ok: true }; },
 }));
 jest.mock('../../services/rpaWorker/rpaAccountTier', () => ({ resolveAccountTier: async () => 'business' }));
 
@@ -198,15 +231,24 @@ const encryptPhone = (e164: string): string => {
   return `${iv.toString('hex')}:${c.getAuthTag().toString('hex')}:${enc}`;
 };
 
-const action = (over: Partial<CommunityAiAction>): CommunityAiAction => ({
-  id: 'act-1', tenant_id: ORG, organization_id: ORG, platform: 'linkedin', action_type: 'reply',
-  target_id: 'comment-1', suggested_text: 'Thanks!', playbook_id: null, risk_level: 'low',
-  requires_human_approval: false, discovered_user_id: PERSON, ...over,
-});
+// Prompt 3: the community rows are human-APPROVED (stored with their approval of
+// record), so a refusal measured here can only come from the recipient gate, not
+// from a missing approval.
+const action = (over: Partial<CommunityAiAction>): CommunityAiAction => {
+  const stored = withApprovalEvidence({
+    id: 'act-1', tenant_id: ORG, organization_id: ORG, platform: 'linkedin', action_type: 'reply',
+    target_id: 'comment-1', suggested_text: 'Thanks!', playbook_id: null, risk_level: 'low',
+    requires_human_approval: false, discovered_user_id: PERSON, status: 'approved', ...over,
+  } as Record<string, unknown>);
+  db.community_ai_actions = [stored];
+  seedDiscoveredRecipient();
+  return stored as unknown as CommunityAiAction;
+};
 
 beforeEach(() => {
   for (const k of Object.keys(db)) delete db[k];
   sends.fetch.length = 0; sends.connector.length = 0; sends.rpa.length = 0; sends.edge.length = 0;
+  mockPersisted.length = 0;
   suppressEverywhere();
   (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
     sends.fetch.push(String(url));
@@ -214,46 +256,75 @@ beforeEach(() => {
   };
 });
 
+/**
+ * The recipient as the community engine knows it: the tenant's discovered user
+ * PERSON on LinkedIn, whose platform identity is HANDLE (which the suppression
+ * targets). The L-3 recheck resolves an action's recipient through
+ * discovered_user_id, so every community row below names this person.
+ */
+const seedDiscoveredRecipient = () => {
+  db.community_ai_discovered_users = [{
+    id: PERSON, organization_id: ORG, platform: 'linkedin', external_user_id: HANDLE, eligible_for_engagement: true, blocked_reason: null,
+  }];
+};
+
 // ── Path runners: each returns how many sends reached the provider/hand-off ───
 
-/** Row 9: pages/api/social/comments.ts action=reply (LinkedIn) — direct fetch. */
-async function socialCommentReply(): Promise<number> {
+/**
+ * Row 9: pages/api/social/comments.ts action=reply (LinkedIn). Step C
+ * (`086106170`) removed the direct reply: the route answers 410 REPLY_REMOVED
+ * and calls no platform, so the path is gone rather than enforced.
+ */
+async function socialCommentReply(): Promise<{ sends: number; status: number; error: unknown }> {
   db.social_accounts = [{ id: 'acct-1', user_id: 'user-1', company_id: ORG }];
-  await callRoute(commentsRoute, {
+  const res = await callRoute(commentsRoute, {
     method: 'POST',
     body: { action: 'reply', platform: 'linkedin', postId: 'post-1', accountId: 'acct-1', commentId: 'comment-1', replyText: 'Thanks!' },
   });
-  return sends.fetch.filter((u) => u.includes('api.linkedin.com')).length;
+  return { sends: sends.fetch.filter((u) => u.includes('api.linkedin.com')).length, status: res.statusCode, error: res.body?.error };
 }
 
+type Enforced = { sends: number; reason: unknown };
+
 /** Row 6: executeAction → runExecution → runApiExecution → connector.executeAction. */
-async function communityApiReply(): Promise<number> {
-  await executeAction(action({ execution_mode: 'api' }), true, { source: 'manual' });
-  return sends.connector.length;
+async function communityApiReply(): Promise<Enforced> {
+  const r = await executeAction(action({ execution_mode: 'api' }), true, { source: 'manual', persist: true }); // SEC3-F3: the executor takes the claim
+  return { sends: sends.connector.length, reason: r.reason };
 }
 
 /** Row 8: executeAction → runExecution → runRpaExecution → executeRpaTask. */
-async function communityRpaReply(): Promise<number> {
-  await executeAction(action({ execution_mode: 'rpa', target_id: HANDLE }), true, { source: 'manual' });
-  return sends.rpa.length;
+async function communityRpaReply(): Promise<Enforced> {
+  const r = await executeAction(action({ execution_mode: 'rpa', target_id: HANDLE }), true, { source: 'manual', persist: true }); // SEC3-F3: the executor takes the claim
+  return { sends: sends.rpa.length, reason: r.reason };
 }
 
-/** Row 7a: executeAction → prepareBrowserDispatch (DM queued for the extension). */
-async function communityBrowserDm(): Promise<number> {
-  const r = await executeAction(action({ execution_mode: 'browser', action_type: 'dm', target_id: HANDLE }), true, { source: 'manual' });
-  return r.status === 'dispatched' ? 1 : 0;
+/**
+ * Row 7a: executeAction → prepareBrowserDispatch (queued for the extension). A
+ * reply, not a DM: a DM is refused earlier by the DM policy (dmDispatchSafety),
+ * which would hide whether the recipient gate holds.
+ */
+async function communityBrowserDispatch(): Promise<Enforced> {
+  const r = await executeAction(action({ execution_mode: 'browser' }), true, { source: 'manual', persist: true }); // SEC3-F3: the executor takes the claim
+  return { sends: r.status === 'dispatched' ? 1 : 0, reason: r.reason };
 }
 
-/** Row 7b: GET /api/extension/commands hands the pending DM to the browser. */
-async function extensionLeaseHandout(): Promise<number> {
-  db.community_ai_actions = [{
-    id: 'act-dm', organization_id: ORG, platform: 'linkedin', action_type: 'dm', target_id: HANDLE,
+/** Row 7b: GET /api/extension/commands hands a prepared (approved) reply to the browser. */
+async function extensionLeaseHandout(): Promise<Enforced> {
+  db.community_ai_actions = [withApprovalEvidence({
+    id: 'act-dm', tenant_id: ORG, organization_id: ORG, platform: 'linkedin', action_type: 'reply', target_id: 'comment-1',
     suggested_text: 'Hello', execution_mode: 'browser', status: 'pending', created_at: '2026-11-03T00:00:00.000Z',
     dispatch_lease_expires_at: null, dispatch_lease_id: null, execution_correlation_id: 'c-1',
     command_chain: null, command_chain_index: 0, discovered_user_id: PERSON,
-  }];
+  } as Record<string, unknown>)];
+  seedDiscoveredRecipient();
   const res = await callRoute(extensionCommandsRoute, { method: 'GET', headers: { 'x-omnivyra-capability-version': 'cap-test' } });
-  return Array.isArray(res.body?.commands) ? res.body.commands.length : 0;
+  // Refused before the claim and recorded terminally through the central writer
+  // (never handed out, never claimed).
+  const refusal = mockPersisted.find((p) => p.actionId === 'act-dm') as { result?: { status?: string; error?: unknown } } | undefined;
+  return {
+    sends: Array.isArray(res.body?.commands) ? res.body.commands.length : 0,
+    reason: refusal?.result?.status === 'skipped' ? refusal.result.error : null,
+  };
 }
 
 /** Row 2: emailService transactional helpers → edge function send-transactional-email. */
@@ -290,18 +361,72 @@ async function whatsappPersonAnchor(): Promise<number> {
 // ── The table ─────────────────────────────────────────────────────────────────
 
 const PATHS: Array<[string, () => Promise<number>]> = [
-  ['social/comments direct reply (pages/api/social/comments.ts)', socialCommentReply],
-  ['community runExecution API mode (communityAiActionExecutorRuntime.runExecution)', communityApiReply],
-  ['community runExecution RPA mode (runRpaExecution → executeRpaTask)', communityRpaReply],
-  ['community runExecution browser dispatch (prepareBrowserDispatch)', communityBrowserDm],
-  ['extension lease handout (GET /api/extension/commands)', extensionLeaseHandout],
-  ['WhatsApp broadcast person anchor (whatsappBroadcastService.processBatch)', whatsappPersonAnchor],
   // K-6 is undecided for these; only E4 (domain reminder) is a decided exemption and is not listed.
   ['transactional company_referral email (emailService.sendCompanyAdminReferral)', () => transactionalEmail('company_referral')],
   ['transactional team_invite email (emailService.sendInvite)', () => transactionalEmail('team_invite')],
   ['transactional inbound_signup_notice email (emailService.sendInboundSignupNoticeToAdmin)', () => transactionalEmail('inbound_signup_notice')],
   ['transactional credit_alert email (emailService.sendCreditAlert)', () => transactionalEmail('credit_alert')],
 ];
+
+// ── Enforcement landed (L-3 recipient recheck, W1; Prompt 3 approval of record) ─
+// Per this file's rule: CURRENT deleted, PENDING turned into a normal test. Each
+// action is human-approved with a complete approval of record, so the refusal
+// can only come from the recipient gate, and it must be the suppression itself
+// (RECIPIENT_RESTRICTED), never an unresolved recipient.
+const ENFORCED: Array<[string, () => Promise<Enforced>]> = [
+  ['community runExecution API mode (communityAiActionExecutorRuntime.runExecution)', communityApiReply],
+  ['community runExecution RPA mode (runRpaExecution → executeRpaTask)', communityRpaReply],
+  ['community runExecution browser dispatch (prepareBrowserDispatch)', communityBrowserDispatch],
+  ['extension lease handout (GET /api/extension/commands)', extensionLeaseHandout],
+];
+
+describe('egress enforced: the suppressed recipient is refused (L-3)', () => {
+  it.each(ENFORCED)('%s refuses the suppressed recipient because of the suppression', async (_path, run) => {
+    const out = await run();
+    expect(out.sends).toBe(0);
+    expect(out.reason).toBe('RECIPIENT_RESTRICTED');
+  });
+
+  it.each(ENFORCED)('control: %s does send once the suppression is lifted (the harness reaches the real send)', async (_path, run) => {
+    gov.records = [];
+    const out = await run();
+    expect(out.sends).toBe(1);
+  });
+});
+
+// ── Enforcement landed: WhatsApp broadcast person anchor (owner GO 2026-11-08) ─
+// Per this file's rule: CURRENT deleted, PENDING turned into a normal test. The journey
+// recipient carries its person (20270128000004) and processBatch reads it.
+describe('egress enforced: WhatsApp broadcast person anchor (whatsappBroadcastService.processBatch)', () => {
+  it('refuses a recipient whose PERSON is suppressed, though its number carries no restriction', async () => {
+    expect(await whatsappPersonAnchor()).toBe(0);
+    expect(db.whatsapp_broadcast_recipients[0]).toMatchObject({ status: 'blocked_governance' });
+  });
+
+  it('control: does send once the suppression is lifted (the harness reaches the real send)', async () => {
+    gov.records = [];
+    db.unified_persons = [{ id: PERSON, company_id: ORG, primary_phone: PHONE }];
+    db.social_accounts = [{ id: 'sa1', company_id: ORG, phone_number_id: 'pn1' }];
+    db.whatsapp_broadcasts = [{ id: 'b1', company_id: ORG, social_account_id: 'sa1', message_type: 'text', body: 'hi', name: 'n' }];
+    db.whatsapp_broadcast_recipients = [{ id: 'r1', broadcast_id: 'b1', encrypted_phone: encryptPhone(PHONE), status: 'pending', person_id: PERSON }];
+    await processBatch('b1', ['r1']);
+    expect(sends.fetch.filter((u) => u.includes('graph.facebook.com')).length).toBe(1);
+  });
+});
+
+// ── Path removed (step C) ─────────────────────────────────────────────────────
+// Neither enforced nor exempt: the send no longer exists, so its CURRENT and
+// PENDING tests are replaced by this one (GD-3 has nothing left to decide here).
+describe('egress removed: social/comments direct reply (pages/api/social/comments.ts)', () => {
+  it('answers 410 REPLY_REMOVED and calls no platform for a suppressed recipient', async () => {
+    expect(await socialCommentReply()).toEqual({ sends: 0, status: 410, error: 'REPLY_REMOVED' });
+  });
+
+  it('control: still 410 and no platform call with the suppression lifted (removed, not gated)', async () => {
+    gov.records = [];
+    expect(await socialCommentReply()).toEqual({ sends: 0, status: 410, error: 'REPLY_REMOVED' });
+  });
+});
 
 describe('egress bypass characterisation (GD-3 undecided)', () => {
   describe.each(PATHS)('%s', (path, run) => {

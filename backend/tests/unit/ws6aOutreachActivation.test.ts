@@ -122,6 +122,15 @@ describe('WS-6A activation caller — safety properties', () => {
     expect(dispatched).toHaveLength(0);
   });
 
+  it('hands a task an earlier dispatch returned to queued back to the dispatcher (it decides whether re-sending is safe)', async () => {
+    tasksForLead = [task({ id: 'q1', status: 'queued' }), task({ id: 'p1', status: 'pending' })];
+    const reports = await dispatchApprovedOutreachForLead('co', 'L1');
+
+    expect(dispatched).toEqual([{ companyId: 'co', taskId: 'q1' }]);
+    expect(reports.find((r) => r.taskId === 'q1')?.action).toBe('dispatched');
+    expect(reports.find((r) => r.taskId === 'p1')?.action).toBe('not_approved');
+  });
+
   it('reports a lead with no envelope instead of throwing', async () => {
     const report = await runOutreachActivation('co', 'L1', { persistence: portWith(undefined) as never });
 

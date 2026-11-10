@@ -4,7 +4,8 @@
  * The only connector eligible this wave. It supports preview, dry-run, idempotency and
  * cancellation-before-dispatch. It NEVER transmits a real email in W5.1: a second hard
  * gate (GTM_LIVE_SEND, default OFF) plus the W5.1 out-of-scope rule keep it dry-run. The
- * live path is the existing `emailService` (`send-transactional-email` edge fn, idempotent)
+ * live path is the existing `emailService` (`send-transactional-email` edge fn, which
+ * receives an idempotency key and ignores it, so it does not dedupe a repeated call)
  * — wired only in a future certified wave (M5), never here.
  */
 
@@ -40,6 +41,6 @@ export function validateEmailTarget(recipient: string): { ok: boolean; reason?: 
 export async function dispatchEmail(input: { campaignId: string; entityId: string; recipient: string; message: EmailMessage }): Promise<ConnectorResult> {
   const messageId = input.message.messageId ?? 'default';
   const idempotencyKey = buildIdempotencyKey(input.campaignId, input.entityId, 'email', messageId);
-  // W5.1: NO LIVE SEND. The live path (emailService.sendTransactional, idempotent) is M5-only.
+  // W5.1: NO LIVE SEND. The live path (emailService.sendTransactional) is M5-only.
   return { dispatched: false, dryRun: true, idempotencyKey, preview: previewEmail(input.message, input.recipient) };
 }

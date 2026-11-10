@@ -51,9 +51,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * ─── NO IDEMPOTENCY KEY ───────────────────────────────────────────────────
  * The database already owns it: `(company_id, task_id, outcome_type,
- * occurred_at)` is unique, and a repeat is reported as `duplicate: true` with
- * `ok: true`. That is the expected steady state, not an error, and adding an
- * application-level check in front of it would be a race, not a guarantee.
+ * occurred_at)` is unique, and (N-3) a MANUAL outcome is unique per
+ * `(company_id, task_id, outcome_type)` whatever its occurred_at
+ * (idx_outreach_outcomes_manual_once), so the same reply entered twice at
+ * different times is one outcome. A repeat is reported as `duplicate: true`
+ * with `ok: true`. That is the expected steady state, not an error, and adding
+ * an application-level check in front of it would be a race, not a guarantee.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
@@ -63,6 +66,7 @@ import {
   UNSUBSCRIBE_SCOPES,
   type FeedbackSignal,
 } from '../../../backend/services/leadOutreachExecution';
+import { recordOutcomeNote } from '../../../backend/services/retention/messageContentRetention';
 
 /**
  * The signals an operator may record in the pilot.
@@ -133,7 +137,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'method_not_allowed' });
   }
 
-  const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {})) as Record<string, unknown>;
+  // M-5: a malformed string body is the caller's error (400), not ours (500).
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return res.status(400).json({ error: 'invalid_json' });
+    }
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return res.status(400).json({ error: 'invalid_json' });
+  }
 
   const companyId = str(body.companyId);
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
@@ -190,7 +204,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // provider and therefore no provider event to deduplicate against.
     provider: null,
     providerEventId: null,
-    evidence: note ? { note } : undefined,
+    // N-4: the free-text note is NOT written into append-only outreach_outcomes, where an
+    // approved clearing could never reach it. It goes to outreach_outcome_notes below.
+    evidence: note ? { noteRecorded: true } : undefined,
     unsubscribeScope,
     // The actor comes from the guard's authenticated principal, never the body.
     // `outreach_outcomes` has no actor column and does not need one: metadata is
@@ -198,7 +214,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     metadata: { recordedByUserId: tenant.userId },
   });
 
-  if (result.ok) return res.status(200).json(result);
+  if (result.ok) {
+    // The outcome is recorded either way; a note on a duplicate is not a second note.
+    if (note && !result.duplicate) {
+      const noted = await recordOutcomeNote({ companyId, taskId, outcomeType: signal, note, recordedBy: tenant.userId ?? null });
+      return res.status(200).json({ ...result, noteStored: noted });
+    }
+    return res.status(200).json(result);
+  }
 
   // The existing rejection vocabulary is passed through verbatim — no parallel
   // error vocabulary is invented here. Only the HTTP status is chosen.

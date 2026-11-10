@@ -629,3 +629,52 @@ describe('Closure-003 — a node that becomes uncertain between the read and its
     expect(node('t0')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
   });
 });
+
+// ─── Owner ruling 2026-11-04 (Checkpoint 1, item 5): resume applies the publish predicate ──
+
+describe('super-admin resume applies authorizePostPublish before anything publishes', () => {
+  const partial = (campaignId: string | null): void => seedThread({
+    t0: { status: 'published', platform_post_id: 'tw_root', campaign_id: campaignId },
+    t1: { status: 'blocked', campaign_id: campaignId },
+    t2: { status: 'blocked', campaign_id: campaignId },
+  });
+
+  test.each(['paused', 'cancelled', 'draft'])('a campaign that is %s: refused, zero platform calls, nodes untouched', async (state) => {
+    store.campaigns.push({ id: 'c1', status: state });
+    partial('c1');
+    const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(r).toMatchObject({ status: 'NOT_AUTHORIZED', code: 'PUBLISH_BLOCKED_CAMPAIGN_NOT_ACTIVE' });
+    expect(platformCalls).toHaveLength(0);
+    expect([node('t1').status, node('t2').status]).toEqual(['blocked', 'blocked']);
+  });
+
+  test('a campaign row that does not exist: refused, zero calls', async () => {
+    partial('c-missing');
+    const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(r).toMatchObject({ status: 'NOT_AUTHORIZED', code: 'PUBLISH_BLOCKED_CAMPAIGN_NOT_ACTIVE' });
+    expect(platformCalls).toHaveLength(0);
+  });
+
+  test('a root that was never released (draft): refused, zero calls', async () => {
+    seedThread({ t0: { status: 'draft' } });
+    const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(r).toMatchObject({ status: 'NOT_AUTHORIZED', code: 'PUBLISH_BLOCKED_POST_NOT_RELEASED' });
+    expect(platformCalls).toHaveLength(0);
+  });
+
+  test('control: an ACTIVE campaign still resumes, publishing only the unpublished nodes, as replies', async () => {
+    store.campaigns.push({ id: 'c1', status: 'active' });
+    partial('c1');
+    const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(r).toMatchObject({ status: 'PUBLISHED' });
+    expect(platformCalls.map((c) => c.rowId)).toEqual(['t1', 't2']);
+    expect(platformCalls[0].replyTo).toBe('tw_root');
+  });
+
+  test('control: a standalone thread (no campaign) still resumes', async () => {
+    partial(null);
+    const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(r).toMatchObject({ status: 'PUBLISHED' });
+    expect(platformCalls.map((c) => c.rowId)).toEqual(['t1', 't2']);
+  });
+});

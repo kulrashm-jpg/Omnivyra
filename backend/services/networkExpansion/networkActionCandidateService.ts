@@ -159,8 +159,11 @@ export const generateNetworkActionCandidates = async (input: CandidateInput) => 
       execution_mode: executionMode,
       playbook_id: playbook?.id || input.playbook_id,
       playbook_name: playbook?.name || null,
+      // `primary_intent` is the field every reader gates on (the Phase-5B
+      // observation lock, the playbook's network limits and automation level).
       intent_classification: {
         type: 'network_expansion',
+        primary_intent: 'network_expansion',
       },
       status: 'pending',
       discovered_user_id: user.id,

@@ -1,195 +1,200 @@
 /**
- * H-2: the RPA retry flush (cron `rpaRetryQueueFlush`) must honour the
- * platform kill switch and require an approval of record before it
- * re-executes a deferred action. Uses the real flushRpaRetryQueueRoundRobin
- * over an in-memory table double; only the Playwright runner is stubbed.
+ * RPA retry flush gates (H-2), on the W1 path kept under CR-X-01.
+ *
+ * Round 3 (451fc985c) gated the retry flush with checkRpaRetryAuthorised, an
+ * unclaimed read that also re-ran `failed` rows. CR-X-01 keeps W1's path
+ * instead: the flush claims the retry row AND the action row
+ * (approved -> executing, tenant-scoped, not cancelled) and runs only what it
+ * claimed, through the executor, which applies the approval of record. This
+ * suite keeps round 3's intents against that path:
+ *   - Prompt 3 (OD-1): the policy is the ORG's tenant policy, decided per org
+ *     BEFORE any of its retry rows is claimed (orgGate): refused (kill switch,
+ *     missing, disabled, unreadable) -> nothing claimed, run or touched for that
+ *     org, while another org's retries still run;
+ *   - an action not in `approved` (failed, pending, rejected, executed, ...):
+ *     never run (round 3 re-ran `failed`);
+ *   - action row missing or in another organization: never run;
+ *   - action row unreadable: never run (fail closed);
+ *   - approved action: run exactly once, retry row removed, a second flush
+ *     runs nothing;
+ *   - a claimed row reaches the executor as a persisting call bound to the
+ *     claim, so the executor's approved_at gate (D-01) decides an unapproved
+ *     row (covered in communityAiExecutionBoundary.test.ts).
  */
 
-type Row = Record<string, any>;
-const tables: Record<string, Row[]> = { rpa_retry_queue: [], community_ai_actions: [] };
-let actionReadFails = false;
+import { createFakeDb, COMMUNITY_STATUS_VOCABULARY, type FakeDb } from './helpers/communityExecutionFakeDb';
 
-function makeQuery(table: string) {
-  const filters: Array<(r: Row) => boolean> = [];
-  let op: 'select' | 'delete' | 'update' = 'select';
-  let patch: Row = {};
-  let countMode = false;
-  let single = false;
-  const run = () => {
-    const rows = tables[table] || [];
-    const matched = rows.filter((r) => filters.every((f) => f(r)));
-    if (op === 'delete') {
-      tables[table] = rows.filter((r) => !matched.includes(r));
-      return { data: null, error: null };
-    }
-    if (op === 'update') {
-      matched.forEach((r) => Object.assign(r, patch));
-      return { data: null, error: null };
-    }
-    if (table === 'community_ai_actions' && actionReadFails) {
-      return { data: null, error: { code: '57014' } };
-    }
-    if (countMode) return { data: null, count: matched.length, error: null };
-    if (single) return { data: matched[0] ?? null, error: null };
-    return { data: matched.map((r) => ({ ...r })), error: null };
-  };
-  const q: any = {
-    select: (_cols?: string, opts?: { count?: string }) => {
-      if (opts?.count) countMode = true;
-      return q;
-    },
-    delete: () => {
-      op = 'delete';
-      return q;
-    },
-    update: (p: Row) => {
-      op = 'update';
-      patch = p;
-      return q;
-    },
-    insert: () => Promise.resolve({ error: null }),
-    eq: (k: string, v: unknown) => {
-      filters.push((r) => r[k] === v);
-      return q;
-    },
-    lte: (k: string, v: string) => {
-      filters.push((r) => String(r[k]) <= v);
-      return q;
-    },
-    lt: (k: string, v: number) => {
-      filters.push((r) => Number(r[k]) < v);
-      return q;
-    },
-    order: () => q,
-    limit: () => q,
-    maybeSingle: () => {
-      single = true;
-      return Promise.resolve(run());
-    },
-    then: (res: any, rej: any) => Promise.resolve(run()).then(res, rej),
-  };
-  return q;
-}
+let mockDb: FakeDb = createFakeDb();
+let mockUnreadable: string | null = null;
 
+// A table that fails every read and write, as an unreadable store would.
+const failingTable = (): any => {
+  const result = Promise.resolve({ data: null, error: { message: 'unreadable', code: '08006' } });
+  const proxy: any = new Proxy(function () {}, {
+    get: (_t, prop) => (prop === 'then' ? result.then.bind(result) : () => proxy),
+    apply: () => proxy,
+  });
+  return proxy;
+};
+const mockFrom = (t: string) => (mockUnreadable === t ? failingTable() : mockDb.from(t));
+
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbTable: (t: string) => mockFrom(t),
+  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+}));
 jest.mock('../../db/supabaseClient', () => ({
-  supabase: { from: jest.fn((t: string) => makeQuery(t)), rpc: jest.fn() },
+  supabase: { from: (t: string) => mockFrom(t), rpc: jest.fn(async () => ({ data: null, error: null })) },
 }));
-
-const policy = { execution_enabled: true, auto_rules_enabled: true, require_human_approval: false };
-jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({ ...policy, updated_at: null, updated_by: null })),
-}));
-
+jest.mock('../../queue/bullmqClient', () => ({ withHeavyJobSlot: (fn: () => any) => fn() }));
 jest.mock('../../services/rpaWorker/rpaEnv', () => ({
   rpaEnvReady: jest.fn(async () => ({ ok: true })),
-  assertRpaEnvReady: jest.fn(async () => undefined),
-  isProbeFailure: jest.fn(() => false),
+  assertRpaEnvReady: jest.fn(),
+  isProbeFailure: (r: any) => r && r.ok === false,
 }));
-jest.mock('../../services/rpaWorker/rpaTaskQueue', () => ({
-  enqueueRpaTask: jest.fn(),
-  startRpaWorker: jest.fn(),
+const mockDecisions: Record<string, { ok: boolean; code?: string }> = {};
+const mockPolicyCalls: Array<Record<string, unknown>> = [];
+jest.mock('../../services/communityAiPlatformPolicyService', () => ({
+  getCommunityExecutionPolicy: jest.fn(async (scope: { organizationId: string; tenantId: string }) => {
+    mockPolicyCalls.push(scope);
+    const d = mockDecisions[scope.organizationId] ?? { ok: false, code: 'POLICY_MISSING' };
+    return d.ok ? { ok: true, policy: { execution_enabled: true, auto_rules_enabled: false }, version: 'v1' } : { ok: false, code: d.code };
+  }),
 }));
-jest.mock('../../services/rpaWorker/rpaQueueState', () => ({
-  admitRpaTask: jest.fn(async () => ({ admit: true })),
-  observeAllActiveOrgs: jest.fn(async () => undefined),
-}));
-jest.mock('../../services/rpaWorker/rpaPlatformScripts', () => ({
-  buildScript: jest.fn(() => ({ targetUrl: 'https://www.linkedin.com/feed/update/urn:1', steps: [] })),
-}));
-jest.mock('../../services/rpaWorker/rpaPlaywrightRunner', () => ({
-  runRpaScript: jest.fn(async () => ({ success: true, platform_id: 'p-1' })),
-}));
-jest.mock('../../queue/bullmqClient', () => ({
-  withHeavyJobSlot: jest.fn((fn: () => unknown) => fn()),
+const mockExecuteAction = jest.fn();
+const mockClaimCalls: Array<Record<string, unknown>> = [];
+// The claim RPC is proven in the RS suites; here it is the CAS it ends in.
+jest.mock('../../services/communityAiActionExecutorRuntime', () => ({
+  executeAction: (...a: any[]) => mockExecuteAction(...a),
+  claimCommunityActionForExecution: jest.fn(async (input: any) => {
+    mockClaimCalls.push(input);
+    const r = mockDb.tables.community_ai_actions.find((x: any) => x.id === input.actionId);
+    if (!r || r.organization_id !== input.organizationId || r.tenant_id !== input.tenantId) {
+      return { claimed: false, code: 'TENANT_SCOPE_VIOLATION', currentStatus: null };
+    }
+    if (r.status !== 'approved' || r.cancel_requested_at || !r.approved_at) {
+      return { claimed: false, code: 'CLAIM_CONFLICT', currentStatus: r.status };
+    }
+    r.status = 'executing';
+    return { claimed: true, code: null, currentStatus: 'executing' };
+  }),
 }));
 
 import { rpaSchedulerHooks } from '../../services/rpaWorker/rpaWorkerService';
-import { runRpaScript } from '../../services/rpaWorker/rpaPlaywrightRunner';
 
-const ORG = 'org-1';
-const past = new Date(Date.now() - 60_000).toISOString();
+const PAST = '2020-01-01T00:00:00.000Z';
+const A1 = '00000000-0000-0000-0000-0000000000a1';
 
-function seed(action: Row | null) {
-  tables.rpa_retry_queue = [
-    {
-      id: 'rq-1',
-      action_id: 'act-1',
-      organization_id: ORG,
-      platform: 'linkedin',
-      action_type: 'like',
-      target_url: 'https://www.linkedin.com/feed/update/urn:1',
-      text: null,
-      attempts: 1,
-      max_attempts: 5,
-      next_retry_at: past,
+const actionRow = (over: Record<string, any> = {}) => ({
+  id: A1, tenant_id: 'o1', organization_id: 'o1', platform: 'linkedin', action_type: 'like',
+  target_id: 'https://www.linkedin.com/feed/update/urn:li:activity:1/', suggested_text: null,
+  execution_mode: 'rpa', status: 'approved', cancel_requested_at: null, playbook_id: 'pb1',
+  approved_at: PAST, ...over,
+});
+const retryRow = (over: Record<string, any> = {}) => ({
+  id: 'r1', action_id: A1, organization_id: 'o1', platform: 'linkedin', action_type: 'like',
+  target_url: 'https://www.linkedin.com/feed/update/urn:li:activity:1/', text: null,
+  attempts: 1, max_attempts: 5, next_retry_at: PAST, claim_token: null, claimed_at: null, ...over,
+});
+
+const seed = (action: Record<string, any> | null) => {
+  mockDb = createFakeDb({ community_ai_actions: action ? [actionRow(action)] : [], rpa_retry_queue: [retryRow()] });
+  mockDb.statusCheck.community_ai_actions = COMMUNITY_STATUS_VOCABULARY;
+  mockDb.unique.rpa_retry_queue = ['action_id'];
+};
+const flush = () => rpaSchedulerHooks.flushRetries({ limit_per_org: 10, max_orgs: 10 });
+
+beforeEach(() => {
+  seed({});
+  mockUnreadable = null;
+  for (const k of Object.keys(mockDecisions)) delete mockDecisions[k];
+  mockDecisions.o1 = { ok: true };
+  mockPolicyCalls.length = 0;
+  mockClaimCalls.length = 0;
+  mockExecuteAction.mockReset().mockImplementation(async () => {
+    mockDb.tables.community_ai_actions[0].status = 'executed';
+    return { ok: true, status: 'executed' };
+  });
+});
+
+describe('RPA retry flush gates (H-2), W1 claimed path', () => {
+  it.each(['PLATFORM_KILL_SWITCH', 'POLICY_MISSING', 'POLICY_EXECUTION_DISABLED', 'POLICY_UNREADABLE'])(
+    'org policy refuses (%s): nothing is claimed or executed and the retry row is not touched',
+    async (code) => {
+      mockDecisions.o1 = { ok: false, code };
+      const out = await flush();
+      expect(out.claimed).toBe(0);
+      expect(mockPolicyCalls).toContainEqual({ organizationId: 'o1', tenantId: 'o1' });
+      expect(mockClaimCalls).toEqual([]);
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+      expect(mockDb.tables.rpa_retry_queue).toEqual([retryRow()]);
+      expect(mockDb.tables.community_ai_actions[0].status).toBe('approved');
     },
-  ];
-  tables.community_ai_actions = action ? [{ id: 'act-1', organization_id: ORG, ...action }] : [];
-}
+  );
 
-describe('RPA retry flush gates (H-2)', () => {
-  let warn: jest.SpyInstance;
-  beforeEach(() => {
-    (runRpaScript as jest.Mock).mockClear();
-    policy.execution_enabled = true;
-    actionReadFails = false;
-    warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-  });
-  afterEach(() => warn.mockRestore());
-
-  it('kill switch on: nothing is executed and the retry row is not touched', async () => {
-    seed({ status: 'failed', approved_at: '2026-11-01T00:00:00Z' });
-    policy.execution_enabled = false;
-    const out = await rpaSchedulerHooks.flushRetries({ limit_per_org: 10, max_orgs: 10 });
-    expect(runRpaScript).not.toHaveBeenCalled();
-    expect(out.claimed).toBe(0);
-    expect(tables.rpa_retry_queue[0].attempts).toBe(1);
+  it('the policy is per org: a refusing org is skipped, another org still runs', async () => {
+    const A2 = '00000000-0000-0000-0000-0000000000a2';
+    mockDb.tables.community_ai_actions.push(actionRow({ id: A2, tenant_id: 'o2', organization_id: 'o2' }));
+    mockDb.tables.rpa_retry_queue.push(retryRow({ id: 'r2', action_id: A2, organization_id: 'o2' }));
+    mockDecisions.o1 = { ok: false, code: 'POLICY_EXECUTION_DISABLED' };
+    mockDecisions.o2 = { ok: true };
+    mockExecuteAction.mockReset().mockImplementation(async (act: any) => {
+      mockDb.tables.community_ai_actions.find((r: any) => r.id === act.id)!.status = 'executed';
+      return { ok: true, status: 'executed' };
+    });
+    await flush();
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockExecuteAction.mock.calls[0][0].id).toBe(A2);
+    expect(mockDb.tables.rpa_retry_queue.map((r: any) => r.id)).toEqual(['r1']);
+    expect(mockDb.tables.community_ai_actions.find((r: any) => r.id === A1)!.status).toBe('approved');
   });
 
-  it('unapproved action (no approval of record): not executed', async () => {
-    seed({ status: 'failed', approved_at: null });
-    const out = await rpaSchedulerHooks.flushRetries();
-    expect(runRpaScript).not.toHaveBeenCalled();
-    expect(out.succeeded).toBe(0);
-    expect(tables.rpa_retry_queue[0].last_error).toBe('RPA_RETRY_NOT_APPROVED');
+  it('the action claim is the single claim with claim point rpa_retry', async () => {
+    await flush();
+    expect(mockClaimCalls).toEqual([expect.objectContaining({ actionId: A1, organizationId: 'o1', tenantId: 'o1', claimPoint: 'rpa_retry' })]);
   });
 
-  it.each([
-    ['rejected', 'RPA_RETRY_ACTION_NOT_RETRYABLE'],
-    ['executed', 'RPA_RETRY_ACTION_NOT_RETRYABLE'],
-    ['pending', 'RPA_RETRY_ACTION_NOT_RETRYABLE'],
-  ])('action in status %s: not executed', async (status, reason) => {
-    seed({ status, approved_at: '2026-11-01T00:00:00Z' });
-    await rpaSchedulerHooks.flushRetries();
-    expect(runRpaScript).not.toHaveBeenCalled();
-    expect(tables.rpa_retry_queue[0].last_error).toBe(reason);
-  });
+  it.each(['failed', 'pending', 'rejected', 'executed', 'sent_unverified', 'skipped', 'uncertain'])(
+    'action in status %s: not executed (only an approved row can be claimed)',
+    async (status) => {
+      seed({ status });
+      await flush();
+      expect(mockExecuteAction).not.toHaveBeenCalled();
+      expect(mockDb.tables.community_ai_actions[0].status).toBe(status);
+    },
+  );
 
-  it('action row missing or in another organization: not executed', async () => {
+  it('action row missing: not executed', async () => {
     seed(null);
-    tables.community_ai_actions = [
-      { id: 'act-1', organization_id: 'org-2', status: 'failed', approved_at: '2026-11-01T00:00:00Z' },
-    ];
-    await rpaSchedulerHooks.flushRetries();
-    expect(runRpaScript).not.toHaveBeenCalled();
-    expect(tables.rpa_retry_queue[0].last_error).toBe('RPA_RETRY_ACTION_NOT_FOUND');
+    await flush();
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it('action row in another organization: not executed and left unchanged', async () => {
+    seed({ organization_id: 'o-other' });
+    await flush();
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+    expect(mockDb.tables.community_ai_actions[0]).toMatchObject({ status: 'approved', organization_id: 'o-other' });
   });
 
   it('action row unreadable: not executed (fail closed)', async () => {
-    seed({ status: 'failed', approved_at: '2026-11-01T00:00:00Z' });
-    actionReadFails = true;
-    await rpaSchedulerHooks.flushRetries();
-    expect(runRpaScript).not.toHaveBeenCalled();
-    expect(tables.rpa_retry_queue[0].last_error).toBe('RPA_RETRY_ACTION_UNREADABLE');
+    mockUnreadable = 'community_ai_actions';
+    await flush();
+    expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
   it('approved action: executed exactly once, retry row removed, a second flush runs nothing', async () => {
-    seed({ status: 'failed', approved_at: '2026-11-01T00:00:00Z' });
-    const first = await rpaSchedulerHooks.flushRetries();
-    expect(first.succeeded).toBe(1);
-    expect(runRpaScript).toHaveBeenCalledTimes(1);
-    expect(tables.rpa_retry_queue).toHaveLength(0);
-    await rpaSchedulerHooks.flushRetries();
-    expect(runRpaScript).toHaveBeenCalledTimes(1);
+    const first = await flush();
+    expect(first.claimed).toBe(1);
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockDb.tables.rpa_retry_queue).toHaveLength(0);
+    await flush();
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('the claimed row reaches the executor bound to the claim, with its approval of record', async () => {
+    await flush();
+    const [act, , opts] = mockExecuteAction.mock.calls[0];
+    expect(act).toMatchObject({ id: A1, approved_at: PAST });
+    expect(opts).toMatchObject({ persist: true, expected_from_statuses: ['executing'] });
   });
 });

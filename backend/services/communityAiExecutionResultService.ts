@@ -3,7 +3,10 @@ import { supabase } from '../db/supabaseClient';
 import { ownedDbTable } from '../db/writeOwner';
 
 type ExecutionMode = 'api' | 'rpa' | 'browser' | 'manual';
-type ResultStatus = 'executed' | 'sent_unverified' | 'dispatched' | 'failed' | 'skipped' | 'blocked';
+// Must stay identical in meaning to ResultStatus in
+// communityAiActionExecutorContracts.ts ('uncertain' = may have acted, review,
+// never re-executed; 'deferred' = not acted, persisted as 'approved').
+type ResultStatus = 'executed' | 'sent_unverified' | 'dispatched' | 'failed' | 'skipped' | 'blocked' | 'uncertain' | 'deferred';
 type MetricEventType =
   | 'execution_started'
   | 'execution_success'
@@ -25,6 +28,7 @@ export type LightweightExecutionResult = {
   automation_decision_log_id?: string | null;
   deduplicated?: boolean;
   prior_action_id?: string | null;
+  may_have_acted?: boolean;
 };
 
 export type CommandChainStep = {
@@ -33,7 +37,9 @@ export type CommandChainStep = {
 };
 
 const IDEMPOTENCY_BUCKET_MS = 5 * 60 * 1000;
-const TERMINAL_ROW_STATUSES = new Set(['executed', 'sent_unverified', 'failed', 'skipped', 'blocked']);
+const TERMINAL_ROW_STATUSES = new Set(['executed', 'sent_unverified', 'failed', 'skipped', 'blocked', 'uncertain']);
+/** Statuses a persist may write FROM when the caller names none (never a terminal one). */
+const NON_TERMINAL_ROW_STATUSES = ['pending', 'approved', 'scheduled', 'dispatched', 'acknowledged', 'executing'];
 
 const metricFailureCounters = {
   metric_insert_failed: 0,
@@ -117,12 +123,17 @@ export async function persistExecutionResult(input: {
   idempotencyKey?: string | null;
   leaseGuard?: { expectedLeaseId: string; expectedHolderId: string };
   expectedFromStatuses?: string[];
+  /** Only write while no extension holds (or ever held) a claim on the row. */
+  requireUnleased?: boolean;
   rowHint?: { platform?: string | null; action_type?: string | null; target_id?: string | null };
   final_text?: string | null;
   command_chain?: CommandChainStep[];
 }): Promise<{ ok: boolean; current_status?: string; error?: string; deduplicated?: boolean; prior_action_id?: string | null }> {
   const result = input.result;
-  const finalStatus = result.status === 'dispatched' ? 'pending' : result.status;
+  const finalStatus =
+    result.status === 'dispatched' ? 'pending'
+    : result.status === 'deferred' ? 'approved'
+    : result.status;
   const effectiveMode = result.execution_mode || null;
 
   const update: Record<string, unknown> = {
@@ -165,7 +176,10 @@ export async function persistExecutionResult(input: {
   }
 
   let q = ownedDbTable('community_ai_actions').update(update).eq('id', input.actionId);
-  if (input.expectedFromStatuses?.length) q = q.in('status', input.expectedFromStatuses);
+  // Default guard: a terminal row (incl. 'uncertain' — may have acted) is never
+  // revived or overwritten unless the caller names the expected from-state.
+  q = q.in('status', input.expectedFromStatuses?.length ? input.expectedFromStatuses : NON_TERMINAL_ROW_STATUSES);
+  if (input.requireUnleased) q = q.is('dispatch_lease_id', null);
   if (input.leaseGuard) {
     q = q.eq('dispatch_lease_id', input.leaseGuard.expectedLeaseId)
       .eq('dispatch_lease_holder_id', input.leaseGuard.expectedHolderId);
@@ -212,7 +226,7 @@ export async function persistExecutionResult(input: {
         platform_id: result.platform_id ?? null,
       },
     });
-  } else if (finalStatus === 'failed' || finalStatus === 'blocked' || finalStatus === 'skipped') {
+  } else if (finalStatus === 'failed' || finalStatus === 'blocked' || finalStatus === 'skipped' || finalStatus === 'uncertain') {
     await recordExecutionMetric({
       organization_id: input.organizationId,
       action_id: input.actionId,

@@ -19,9 +19,10 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/functions-js';
 
 const invocations: Array<{ fn: string; body: Record<string, unknown> }> = [];
-let functionResponse: { data?: unknown; error?: { message?: string } } = {};
+let functionResponse: { data?: unknown; error?: { message?: string } | null } = {};
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -182,6 +183,35 @@ describe('WP1 — the SES message id survives the round trip', () => {
     // A property READ of the snake_case key; `p_provider_message_id` (the RPC
     // parameter the id is persisted through) is correct and stays.
     expect(cron).not.toMatch(/\.message_id\b|'message_id' in/);
+  });
+});
+
+// G-1 — the error classes are the real ones `functions.invoke` returns, so this
+// fails if the library renames one. Only a 4xx from the function proves not sent.
+describe('G-1 — an invoke error is "rejected" only when it proves nothing was sent', () => {
+  const http = (status: number) => new FunctionsHttpError(new Response(null, { status }));
+
+  it.each([400, 401, 403, 404, 405, 429])('a %i from the function is a definitive refusal', async (status) => {
+    functionResponse = { data: null, error: http(status) };
+    const result = await createEmailTransport(undefined, { enabled: () => true }).send(request);
+    expect(result.outcome).toBe('rejected');
+    expect(result.response).toMatchObject({ status });
+  });
+
+  it.each([
+    ['a 500', () => http(500)],
+    ['a 502', () => http(502)],
+    ['a 504', () => http(504)],
+    ['a 546', () => http(546)],
+    ['a 408, where a gateway gave up on a call that may still be running', () => http(408)],
+    ['a network failure', () => new FunctionsFetchError(new Error('socket hang up'))],
+    ['a relay error', () => new FunctionsRelayError(new Response(null, { status: 400 }))],
+    ['an error of an unknown class', () => ({ message: 'something else' })],
+  ])('%s may have acted, so it is provider_error', async (_label, error) => {
+    functionResponse = { data: null, error: error() };
+    const result = await createEmailTransport(undefined, { enabled: () => true }).send(request);
+    expect(result.outcome).toBe('provider_error');
+    expect(result.providerMessageId).toBeNull();
   });
 });
 

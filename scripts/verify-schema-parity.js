@@ -49,19 +49,48 @@
  * with a severity reflecting real operational impact (BLOCKING only if the write is
  * NOT fail-open). This keeps the gate's coverage current with schema evolution.
  *
+ *   - ORCH-STACK (orchestration-engine-adapters release, migrations
+ *     20261127000000 + 20261226000000 … 20261231000010): every table, added
+ *     column, index, function, trigger and load-bearing CHECK the stack
+ *     creates, plus RLS, client-role privileges, SECURITY DEFINER flags and
+ *     body markers of the safety-critical functions. See the ORCH-STACK block.
+ *
  * Usage:
- *   node scripts/verify-schema-parity.js
+ *   node scripts/verify-schema-parity.js            (default mode)
+ *   node scripts/verify-schema-parity.js --strict   (or SCHEMA_PARITY_STRICT=1)
+ *
+ * Strict mode (fail closed): "could not check" is never success. A required
+ * check that cannot run — a client role that does not exist (privilege checks
+ * unrunnable), or the migration-ledger probe failing — becomes a BLOCKING
+ * `check_skipped` finding (exit 1) instead of a WARN / silent note. Missing
+ * credentials, a refused connection, or ANY catalog query error (permission
+ * denied included) exit 2 in both modes; they are never read as an empty
+ * catalog. WARN findings exit 3 (non-zero) in both modes. INFO-severity stack
+ * `advisories` (owner-pending) never affect the exit code.
+ * `scripts/predeploy-check.js` passes --strict when PREDEPLOY_STRICT_SCHEMA=1
+ * and then blocks on EVERY non-zero exit (see predeployParityDecision).
  *
  * Requires:
- *   SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in env (.env.local loaded if
- *   process.env doesn't already have them).
+ *   A direct Postgres connection string, first found of SCHEMA_PARITY_DB_URL,
+ *   SUPABASE_POOLER_DB_URL, SUPABASE_DB_URL, DATABASE_URL.
+ *   SCHEMA_PARITY_DB_URL is the release-gate credential: when it is set,
+ *   .env.local is NOT read. Otherwise .env.local in the CWD fills variables
+ *   missing from the environment (unless SUPABASE_URL and
+ *   SUPABASE_SERVICE_ROLE_KEY are both set), and a URL taken from it is
+ *   announced on stderr by variable NAME (never value).
+ *   The session is pinned to default_transaction_read_only = on with
+ *   statement/lock timeouts; `session.role` / `session.tx_read_only` in the
+ *   JSON output record which role ran the check.
  *
  * Exit codes:
  *   0 — all required columns present, all required indexes structurally sound,
  *       all declared column types as expected, and no ledger desync
- *   1 — at least one BLOCKING finding (structured stdout below)
- *   2 — environmental failure (missing creds, network error)
- *   3 — WARN/INFO findings only
+ *   1 — at least one BLOCKING finding (structured stdout below); under
+ *       --strict this includes every required check that could not run
+ *   2 — environmental failure (missing creds, network error, a catalog query
+ *       that threw — e.g. permission denied)
+ *   3 — WARN/INFO findings only (REQUIRED_COLUMNS INFO entries keep their
+ *       historical exit-3 behaviour; stack `advisories` are not findings)
  *
  *   A BLOCKING index finding and a BLOCKING type finding are the SAME class of
  *   outcome as a BLOCKING missing column: they join the one findings list and
@@ -931,8 +960,650 @@ const REQUIRED_COLUMN_TYPES = [
   },
 ];
 
+// ══ ORCH-STACK — the orchestration-engine-adapters release ════════════════
+//
+// The migrations 20261127000000 and 20261226000000 … 20261231000010 create 18
+// tables, 27 functions, 16 triggers and ~40 indexes, and NONE of it was in the
+// manifest above: a database where the whole stack was unapplied (or half
+// applied, or applied and then hand-edited) passed this gate. This block names
+// every object the stack creates — `verifySchemaParityCoverage.test.ts` parses
+// the migration files and fails if a CREATE TABLE / INDEX / FUNCTION / TRIGGER
+// or ADD COLUMN in that series is not listed here — plus the safety properties
+// existence alone cannot see: RLS, client-role privileges, SECURITY DEFINER,
+// body markers of the safety-critical functions, trigger wiring and CHECK
+// vocabularies.
+//
+// SEVERITY IS A PROPERTY OF THE CHECK RULE, not chosen per entry:
+//   BLOCKING — the object is absent, or a safety property is violated: a
+//              stack table/column/unique index/function/trigger/CHECK value is
+//              missing; RLS is off; anon holds any table privilege; a table
+//              whose migration REVOKEs from authenticated grants it anything;
+//              a SECURITY DEFINER RPC is executable by anon/authenticated/
+//              PUBLIC or not by service_role; SECURITY DEFINER differs from
+//              the migration; a body marker is missing or a forbidden body
+//              pattern is present (e.g. the reaper writing 'failed').
+//   WARN     — a non-unique (query-plan) index is absent; a SECURITY INVOKER
+//              RPC whose migration revokes client roles is executable by them
+//              (invoker semantics bound the exposure to the caller's own
+//              table privileges, so it is drift, not an escalation).
+//   INFO     — owner-pending: authenticated's effective privileges on the 10
+//              tables whose migration relies on RLS only (no explicit REVOKE).
+//              Reported in `advisories`; NEVER part of the exit decision, in
+//              any mode, until the owner decides the intended grant.
+//
+// WHAT THIS DOES NOT PROVE. Function bodies are checked by marker substrings
+// over pg_get_functiondef(), not by equality with the migration text. Index
+// keys are substring-checked like GAP-B. Trigger checks prove name, table,
+// enabled state and the function called — not timing/WHEN clauses. Privilege
+// checks use has_table_privilege/has_function_privilege, i.e. EFFECTIVE
+// privilege including role membership, as seen by the connecting role's
+// catalog view. Nothing here reads row data.
+
+/** Source migration for each group, cited in output and in the coverage test. */
+const STACK_MIGRATIONS = [
+  '20261127000000_pi_prospect_lists.sql',
+  '20261231000010_rpa_legacy_session_invalidation.sql',
+  '20270111100000_pi_prospect_campaigns.sql',
+  '20270111100001_pi_workflow_definitions.sql',
+  '20270111100002_pi_execution_instances.sql',
+  '20270111100003_pi_execution_plans.sql',
+  '20270111100004_pi_execution_step_scheduling.sql',
+  '20270111100005_pi_outreach_bridge.sql',
+  '20270111100006_orchestration_engine_requests.sql',
+  '20270111100007_orchestration_campaign_targeting.sql',
+  '20270111100008_orchestration_engine_requests_engines.sql',
+  '20270111100009_community_execution_safety.sql',
+  '20270111100010_community_journey_link.sql',
+  '20270111100011_social_publish_step_channel.sql',
+  '20270111100012_extension_dispatch_safety.sql',
+  '20270111100013_community_identity_link.sql',
+  '20270111100014_identity_verification.sql',
+  '20270111100015_engagement_request_idempotency.sql',
+  '20270111100016_migration_rerun_safety.sql',
+  '20270120000000_orchestration_journey_decisions.sql',
+  '20270120000001_pi_email_content_evidence.sql',
+  '20270120000002_whatsapp_broadcast_recipient_unique.sql',
+];
+
+/**
+ * Stack tables. `revokesClientRoles` = the migration issues an explicit
+ * `REVOKE ALL … FROM anon, authenticated` (so authenticated holding anything is
+ * BLOCKING); false = RLS-only (authenticated is reported as INFO).
+ * `serviceRoleGrants` = privileges the migration GRANTs to service_role
+ * explicitly; absence is BLOCKING (the worker cannot use the table).
+ */
+const STACK_TABLES = [
+  // 20261127000000_pi_prospect_lists.sql:114,155 (RLS :268-269)
+  { table: 'prospect_lists',                     source: '20261127000000:114', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'name', 'description', 'status', 'created_by_user_id', 'created_at', 'updated_at'] },
+  { table: 'prospect_list_members',              source: '20261127000000:155', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'list_id', 'prospect_id', 'status', 'added_via', 'added_at', 'added_by_user_id', 'removed_at', 'removed_by_user_id', 'removal_reason'] },
+  // 20270111100000_pi_prospect_campaigns.sql:93 (RLS :149)
+  { table: 'prospect_campaigns',                 source: '20261226000000:93', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'name', 'description', 'status', 'created_at', 'updated_at'] },
+  // 20270111100001_pi_workflow_definitions.sql:98,139 (RLS :565-566)
+  { table: 'workflows',                          source: '20261227000000:98', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'name', 'description', 'status', 'created_by', 'created_at', 'updated_at'] },
+  { table: 'workflow_versions',                  source: '20261227000000:139', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'workflow_id', 'version', 'status', 'definition', 'created_by', 'created_at', 'updated_at', 'published_at', 'published_by'] },
+  // 20270111100002_pi_execution_instances.sql:110 (RLS :397)
+  { table: 'execution_instances',                source: '20261228000000:110', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'campaign_id', 'workflow_id', 'workflow_version_id', 'target_id', 'subject_kind', 'subject_id', 'lifecycle_state', 'created_at', 'updated_at'] },
+  // 20270111100003_pi_execution_plans.sql:98,166,236 (RLS :158,222,296)
+  { table: 'execution_plans',                    source: '20261228000001:98', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'execution_instance_id', 'workflow_version_id', 'definition_snapshot', 'step_count', 'status', 'created_at', 'updated_at'] },
+  { table: 'execution_plan_steps',               source: '20261228000001:166', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'plan_id', 'step_key', 'step_order', 'channel', 'instruction', 'delay_after_previous_hours', 'state', 'created_at', 'updated_at',
+      // 20270111100004_pi_execution_step_scheduling.sql:94-98
+      'ready_at', 'started_at', 'settled_at', 'completed_at'] },
+  { table: 'execution_tasks',                    source: '20261228000001:236', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'execution_instance_id', 'plan_step_id', 'subject_kind', 'subject_id', 'channel', 'action', 'delay_after_previous_hours', 'requires_approval', 'state', 'created_at', 'updated_at'] },
+  // 20270111100005_pi_outreach_bridge.sql:90 (RLS :194)
+  { table: 'outreach_bridge_handoffs',           source: '20261229000000:90', revokesClientRoles: false,
+    columns: ['id', 'organization_id', 'execution_task_id', 'outreach_task_id', 'campaign_id', 'workflow_id', 'workflow_version_id', 'execution_instance_id', 'execution_plan_id', 'execution_plan_step_id', 'subject_kind', 'subject_id', 'person_id', 'execution_mode', 'workflow_requires_approval', 'policy_source', 'created_at'] },
+  // 20270111100006_orchestration_engine_requests.sql:40 (RLS :104, REVOKE :110)
+  { table: 'execution_engine_requests',          source: '20261230000000:40', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'execution_task_id', 'engine', 'state', 'external_ref', 'detail', 'created_at', 'updated_at'] },
+  // 20270120000001_pi_email_content_evidence.sql (REVOKE right after RLS)
+  { table: 'email_outreach_content_evidence',    source: '20270120000001:70', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'outreach_attempt_id', 'rendered_subject', 'rendered_body', 'personalization_inputs', 'content_source', 'created_at'] },
+  // 20270120000000_orchestration_journey_decisions.sql:28
+  { table: 'execution_journey_decisions',        source: '20270120000000:28', revokesClientRoles: true,
+    serviceRoleGrants: ['SELECT', 'INSERT'],
+    columns: ['id', 'organization_id', 'execution_instance_id', 'plan_step_id', 'step_key', 'channel', 'engine', 'decision', 'outcome', 'reasons', 'decision_key', 'decided_at'] },
+  // 20270111100007_orchestration_campaign_targeting.sql:164,194 (RLS :185,276; REVOKE :189,283)
+  { table: 'prospect_campaign_lists',            source: '20261231000000:164', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'campaign_id', 'list_id', 'attached_by', 'attached_at'] },
+  { table: 'prospect_campaign_targets',          source: '20261231000000:194', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'campaign_id', 'list_id', 'prospect_id', 'selection_event_key', 'selected_at', 'origin', 'actor_user_id', 'icp_id', 'icp_version', 'score_evaluation_id', 'created_at'] },
+  // 20270111100010_community_journey_link.sql:88 (RLS :121, REVOKE :127)
+  { table: 'community_action_journey_links',     source: '20261231000003:88', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'execution_task_id', 'execution_instance_id', 'community_action_id', 'linked_by', 'created_at',
+      // 20270111100013_community_identity_link.sql:100-101
+      'person_id', 'identity_claim_id'] },
+  // 20270111100012_extension_dispatch_safety.sql:340 (RLS :352, REVOKE :358-365, GRANT :368)
+  { table: 'rpa_auth_token_redemptions',         source: '20261231000005:340', revokesClientRoles: true,
+    serviceRoleGrants: ['SELECT', 'INSERT', 'DELETE'],
+    columns: ['nonce', 'organization_id', 'platform', 'user_id', 'token_expires_at', 'redeemed_at'] },
+  // 20270111100014_identity_verification.sql:74 (RLS :238, REVOKE :243)
+  { table: 'identity_verification_attestations', source: '20261231000007:74', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'person_id', 'platform', 'provider_user_id', 'identity_claim_id', 'discovered_user_id', 'method', 'basis', 'statement', 'evidence', 'attested_by', 'step_up_session_id', 'step_up_factor', 'attested_at', 'status', 'withdrawn_at', 'withdrawn_by', 'withdrawn_reason', 'confers_verification', 'created_at'] },
+  // 20270111100015_engagement_request_idempotency.sql:55 (RLS :116, REVOKE :117-119, GRANT :120)
+  { table: 'engagement_request_idempotency',     source: '20261231000008:55', revokesClientRoles: true,
+    serviceRoleGrants: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+    columns: ['id', 'organization_id', 'actor_id', 'scope', 'idempotency_key', 'key_source', 'request_fingerprint', 'state', 'attempt', 'action_id', 'platform', 'action_type', 'target_id', 'outcome_status', 'outcome_error', 'reserved_at', 'finalized_at', 'expires_at', 'created_at', 'updated_at'] },
+  // 20261231000010_rpa_legacy_session_invalidation.sql:45 (RLS :55, REVOKE :56)
+  { table: 'rpa_session_invalidation_audit',     source: '20261231000010:45', revokesClientRoles: true,
+    columns: ['id', 'organization_id', 'platform', 'reason', 'rows_invalidated', 'migration_version', 'invalidated_at'] },
+];
+
+/** Columns the stack ADDs to tables that pre-date it. */
+const STACK_ADDED_COLUMNS = [
+  // 20270111100007_orchestration_campaign_targeting.sql:62,82-85
+  { table: 'prospect_lists',     column: 'icp_id',         source: '20261231000000:62' },
+  { table: 'prospect_campaigns', column: 'targeting_mode', source: '20261231000000:82' },
+  { table: 'prospect_campaigns', column: 'icp_id',         source: '20261231000000:83' },
+  { table: 'prospect_campaigns', column: 'icp_version',    source: '20261231000000:84' },
+  { table: 'prospect_campaigns', column: 'min_icp_score',  source: '20261231000000:85' },
+  // 20270111100009_community_execution_safety.sql:130-131 — compare-and-set claim
+  { table: 'rpa_retry_queue',    column: 'claim_token',    source: '20261231000002:130' },
+  { table: 'rpa_retry_queue',    column: 'claimed_at',     source: '20261231000002:131' },
+];
+
+/** Declared types that are load-bearing (the migrations themselves assert them). */
+const STACK_COLUMN_TYPES = [
+  // 20261231000002:55-63 refuses to run if these exist with other types.
+  { table: 'rpa_retry_queue',    column: 'claim_token',   udtName: 'text' },
+  { table: 'rpa_retry_queue',    column: 'claimed_at',    udtName: 'timestamptz' },
+  // 20261231000000:84-85 — compared against prospect_icp_versions / scores.
+  { table: 'prospect_campaigns', column: 'icp_version',   udtName: 'int4' },
+  { table: 'prospect_campaigns', column: 'min_icp_score', udtName: 'float8' },
+  // 20261231000008:65 — uq_engagement_request_idempotency_action keys on it.
+  { table: 'engagement_request_idempotency', column: 'action_id', udtName: 'uuid' },
+];
+
+/**
+ * Stack indexes. Unique ones are idempotency / composite-FK mechanisms
+ * (BLOCKING); non-unique ones are query-plan only (WARN). `predicate` lists
+ * fragments the partial index's WHERE must mention.
+ */
+const STACK_INDEXES = [
+  // 20261127000000_pi_prospect_lists.sql:142-245
+  { table: 'prospect_lists', index: 'uq_prospect_lists_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'prospect_lists', index: 'idx_prospect_lists_org_status_created', unique: false, partial: false, keys: ['organization_id', 'status', 'created_at'] },
+  { table: 'prospect_list_members', index: 'uq_prospect_list_members_active', unique: true, partial: true, keys: ['organization_id', 'list_id', 'prospect_id'], predicate: ["'active'"] },
+  { table: 'prospect_list_members', index: 'idx_prospect_list_members_list', unique: false, partial: false, keys: ['organization_id', 'list_id', 'status', 'added_at'] },
+  { table: 'prospect_list_members', index: 'idx_prospect_list_members_prospect', unique: false, partial: false, keys: ['organization_id', 'prospect_id', 'status'] },
+  // 20270111100000_pi_prospect_campaigns.sql:114-118
+  { table: 'prospect_campaigns', index: 'uq_prospect_campaigns_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'prospect_campaigns', index: 'idx_prospect_campaigns_org_status', unique: false, partial: false, keys: ['organization_id', 'status'] },
+  // 20270111100001_pi_workflow_definitions.sql:130-226
+  { table: 'workflows', index: 'uq_workflows_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'workflows', index: 'idx_workflows_org_status', unique: false, partial: false, keys: ['organization_id', 'status'] },
+  { table: 'workflow_versions', index: 'uq_workflow_versions_identity', unique: true, partial: false, keys: ['organization_id', 'workflow_id', 'version'] },
+  { table: 'workflow_versions', index: 'uq_workflow_versions_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'workflow_versions', index: 'uq_workflow_versions_one_published', unique: true, partial: true, keys: ['organization_id', 'workflow_id'], predicate: ["'published'"] },
+  { table: 'workflow_versions', index: 'idx_workflow_versions_workflow', unique: false, partial: false, keys: ['organization_id', 'workflow_id', 'version'] },
+  // 20270111100002_pi_execution_instances.sql:181-196
+  { table: 'execution_instances', index: 'uq_execution_instances_active', unique: true, partial: true, keys: ['organization_id', 'campaign_id', 'workflow_id', 'subject_kind', 'subject_id'], predicate: ['lifecycle_state', "'created'", "'queued'", "'active'", "'paused'"] },
+  { table: 'execution_instances', index: 'idx_execution_instances_campaign', unique: false, partial: false, keys: ['organization_id', 'campaign_id', 'created_at'] },
+  { table: 'execution_instances', index: 'idx_execution_instances_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
+  { table: 'execution_instances', index: 'idx_execution_instances_version', unique: false, partial: false, keys: ['organization_id', 'workflow_version_id'] },
+  // 20270111100003_pi_execution_plans.sql:152-293
+  { table: 'execution_plans', index: 'uq_execution_plans_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'execution_plans', index: 'ix_execution_plans_org_status', unique: false, partial: false, keys: ['organization_id', 'status'] },
+  { table: 'execution_plan_steps', index: 'uq_execution_plan_steps_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'execution_plan_steps', index: 'ix_execution_plan_steps_plan_order', unique: false, partial: false, keys: ['organization_id', 'plan_id', 'step_order'] },
+  { table: 'execution_tasks', index: 'ix_execution_tasks_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
+  { table: 'execution_tasks', index: 'ix_execution_tasks_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
+  // 20270111100004_pi_execution_step_scheduling.sql:127
+  { table: 'execution_plan_steps', index: 'ix_execution_plan_steps_pending', unique: false, partial: true, keys: ['organization_id', 'plan_id', 'step_order'], predicate: ["'pending'"] },
+  // 20270111100005_pi_outreach_bridge.sql:84-191
+  { table: 'execution_tasks', index: 'uq_execution_tasks_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
+  { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
+  // 20270111100006_orchestration_engine_requests.sql:74
+  { table: 'whatsapp_broadcast_recipients', index: 'unique_broadcast_recipient', unique: true, partial: false, keys: ['broadcast_id', 'hashed_phone'] },
+  { table: 'email_outreach_content_evidence', index: 'ix_email_outreach_content_evidence_org', unique: false, partial: false, keys: ['organization_id', 'created_at'] },
+  { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id', 'decided_at'] },
+  { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_needs_human', unique: false, partial: true, keys: ['organization_id', 'decided_at'], predicate: ["'needs_human'"] },
+  { table: 'execution_engine_requests', index: 'ix_execution_engine_requests_open', unique: false, partial: true, keys: ['organization_id', 'state'], predicate: ["'requested'", "'submitting'", "'submitted'"] },
+  // 20270111100007_orchestration_campaign_targeting.sql:182-256
+  { table: 'prospect_campaign_lists', index: 'uq_prospect_campaign_lists_identity', unique: true, partial: false, keys: ['organization_id', 'campaign_id', 'list_id'] },
+  { table: 'prospect_campaign_targets', index: 'uq_prospect_campaign_targets_selection', unique: true, partial: false, keys: ['organization_id', 'campaign_id', 'list_id', 'prospect_id', 'selection_event_key'] },
+  { table: 'prospect_campaign_targets', index: 'uq_prospect_campaign_targets_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'prospect_campaign_targets', index: 'ix_prospect_campaign_targets_campaign', unique: false, partial: false, keys: ['organization_id', 'campaign_id', 'selected_at'] },
+  // 20270111100009_community_execution_safety.sql:152-156
+  { table: 'rpa_retry_queue', index: 'idx_rpa_retry_queue_due_unclaimed', unique: false, partial: true, keys: ['organization_id', 'next_retry_at'], predicate: ['claim_token IS NULL'] },
+  { table: 'rpa_retry_queue', index: 'idx_rpa_retry_queue_claimed', unique: false, partial: true, keys: ['claimed_at'], predicate: ['claim_token IS NOT NULL'] },
+  // 20270111100010_community_journey_link.sql:82-118
+  { table: 'community_ai_actions', index: 'uq_community_ai_actions_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
+  { table: 'community_action_journey_links', index: 'ix_community_action_journey_links_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
+  // 20270111100012_extension_dispatch_safety.sql:349
+  { table: 'rpa_auth_token_redemptions', index: 'idx_rpa_auth_token_redemptions_expires', unique: false, partial: false, keys: ['token_expires_at'] },
+  // 20270111100013_community_identity_link.sql:129
+  { table: 'community_action_journey_links', index: 'ix_community_action_journey_links_person', unique: false, partial: false, keys: ['organization_id', 'person_id'] },
+  // 20270111100014_identity_verification.sql:141-145
+  { table: 'identity_verification_attestations', index: 'uq_identity_verification_attestations_active_account', unique: true, partial: true, keys: ['organization_id', 'platform', 'provider_user_id'], predicate: ["'recorded'"] },
+  { table: 'identity_verification_attestations', index: 'ix_identity_verification_attestations_person', unique: false, partial: false, keys: ['organization_id', 'person_id', 'attested_at'] },
+  // 20270111100015_engagement_request_idempotency.sql:98-111
+  { table: 'engagement_request_idempotency', index: 'uq_engagement_request_idempotency_key', unique: true, partial: false, keys: ['organization_id', 'actor_id', 'scope', 'idempotency_key'] },
+  { table: 'engagement_request_idempotency', index: 'uq_engagement_request_idempotency_action', unique: true, partial: false, keys: ['action_id'] },
+  { table: 'engagement_request_idempotency', index: 'ix_engagement_request_idempotency_expiry', unique: false, partial: true, keys: ['organization_id', 'expires_at'], predicate: ["'completed'", "'failed_not_acted'"] },
+  { table: 'engagement_request_idempotency', index: 'ix_engagement_request_idempotency_reserved', unique: false, partial: true, keys: ['reserved_at'], predicate: ["'reserved'"] },
+  // 20261231000010_rpa_legacy_session_invalidation.sql:58
+  { table: 'rpa_session_invalidation_audit', index: 'idx_rpa_session_invalidation_audit_org', unique: false, partial: false, keys: ['organization_id', 'platform'] },
+];
+
+/** The closed channel vocabulary of publish_workflow_version (20261231000004:109-112). */
+const WORKFLOW_STEP_CHANNELS = [
+  'email', 'linkedin', 'phone', 'whatsapp', 'sms', 'github', 'discord', 'slack',
+  'community', 'content', 'internal', 'social_post',
+];
+
+/**
+ * Stack functions, matched on (name, argument types). `secdef` is the
+ * SECURITY DEFINER flag the migration declares. `exec`:
+ *   'service_role_only'         — anon/authenticated/PUBLIC must NOT execute,
+ *                                 service_role MUST (BLOCKING both ways)
+ *   'service_role_only_invoker' — same grant shape, SECURITY INVOKER: a client
+ *                                 role holding EXECUTE is WARN, service_role
+ *                                 lacking it is BLOCKING
+ *   undefined                   — trigger function / helper: existence and
+ *                                 SECURITY flag only
+ * `bodyContains` / `bodyForbidden` — markers over pg_get_functiondef().
+ */
+const STACK_FUNCTIONS = [
+  // 20270111100000_pi_prospect_campaigns.sql:125
+  { name: 'prospect_campaigns_guard', args: '', secdef: false },
+  // 20270111100001_pi_workflow_definitions.sql:233,259,397 (redefined 20261231000004:33)
+  { name: 'workflows_guard', args: '', secdef: false },
+  { name: 'workflow_versions_guard_immutable', args: '', secdef: false },
+  { name: 'publish_workflow_version', args: 'uuid, uuid, uuid', secdef: false, exec: 'service_role_only_invoker',
+    bodyContains: WORKFLOW_STEP_CHANNELS.map((c) => `'${c}'`) },
+  // 20270111100002_pi_execution_instances.sql:208,264
+  { name: 'execution_instances_guard', args: '', secdef: false },
+  { name: 'create_execution_instance', args: 'uuid, uuid, uuid, text, text, uuid', secdef: false, exec: 'service_role_only_invoker' },
+  // 20270111100003_pi_execution_plans.sql:304,367,404,483 (steps guard redefined 20261228000002:139)
+  { name: 'execution_plans_guard', args: '', secdef: false },
+  { name: 'execution_plan_steps_guard', args: '', secdef: false },
+  { name: 'execution_tasks_guard', args: '', secdef: false },
+  { name: 'create_execution_plan', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
+  // 20270111100004_pi_execution_step_scheduling.sql:211,273,394
+  { name: 'execution_step_anchor', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
+  { name: 'advance_execution_plan', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
+  { name: 'cancel_execution_run', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
+  // 20270111100005_pi_outreach_bridge.sql:202,285
+  { name: 'outreach_bridge_handoffs_guard', args: '', secdef: false },
+  { name: 'bridge_execution_task', args: 'uuid, uuid, uuid, text, boolean, text, text, text, text, text', secdef: false, exec: 'service_role_only_invoker' },
+  // 20270111100006_orchestration_engine_requests.sql:80
+  { name: 'execution_engine_requests_guard', args: '', secdef: false },
+  // 20270120000001_pi_email_content_evidence.sql
+  { name: 'email_outreach_content_evidence_guard', args: '', secdef: false },
+  // 20270120000000_orchestration_journey_decisions.sql:78
+  { name: 'execution_journey_decisions_guard', args: '', secdef: false },
+  // 20270111100007_orchestration_campaign_targeting.sql:120,264
+  { name: 'prospect_campaigns_targeting_guard', args: '', secdef: false },
+  { name: 'prospect_campaign_targets_guard', args: '', secdef: false },
+  // 20270111100010_community_journey_link.sql:135
+  { name: 'community_action_journey_links_guard', args: '', secdef: false },
+  // 20270111100012_extension_dispatch_safety.sql:88,229,295 — SECURITY DEFINER;
+  // privileges :398-403; the reaper's uncertain-outcome postcondition :413-420.
+  { name: 'reap_community_ai_action_leases', args: '', secdef: true, exec: 'service_role_only',
+    bodyContains: ["'uncertain'", "'DISPATCH_LEASE_EXPIRED'", "'DISPATCH_LEASE_EXPIRED_IN_FLIGHT'", "'EXECUTING_TIMEOUT'"],
+    bodyForbidden: [{ pattern: "status\\s*=\\s*'failed'", why: "writes status = 'failed' — a possibly-delivered action would be retryable" }] },
+  { name: 'claim_community_ai_browser_command', args: 'uuid, uuid, text, text, integer', secdef: true, exec: 'service_role_only' },
+  { name: 'record_community_ai_late_dispatch_result', args: 'uuid, uuid, text, text, jsonb', secdef: true, exec: 'service_role_only' },
+  // 20270111100013_community_identity_link.sql:142,170
+  { name: 'community_identity_normalize_external_id', args: 'text', secdef: false },
+  { name: 'community_action_journey_links_identity_guard', args: '', secdef: false },
+  // 20270111100014_identity_verification.sql:153,254
+  { name: 'identity_verification_attestations_guard', args: '', secdef: false },
+  { name: 'community_action_journey_links_identity_proof_guard', args: '', secdef: false },
+  // 20270111100016_migration_rerun_safety.sql:80 — converts a reaper 'failed'
+  // write on a claimed row into 'uncertain', whichever reaper body is installed.
+  { name: 'community_ai_actions_reap_uncertain_guard', args: '', secdef: false,
+    bodyContains: ["'uncertain'", "'DISPATCH_LEASE_EXPIRED'", "'DISPATCH_LEASE_EXPIRED_IN_FLIGHT'", "'EXECUTING_TIMEOUT'"] },
+];
+
+/** Stack triggers: (table, trigger) → the function it must call, enabled. */
+const STACK_TRIGGERS = [
+  { table: 'prospect_lists',                     trigger: 'trg_prospect_lists_updated_at',                           fn: 'omnivyra_touch_updated_at' },                      // 20261127000000:261
+  { table: 'prospect_campaigns',                 trigger: 'trg_prospect_campaigns_guard',                            fn: 'prospect_campaigns_guard' },                       // 20261226000000:142
+  { table: 'workflows',                          trigger: 'trg_workflows_guard',                                     fn: 'workflows_guard' },                                // 20261227000000:254
+  { table: 'workflow_versions',                  trigger: 'trg_workflow_versions_guard',                             fn: 'workflow_versions_guard_immutable' },              // 20261227000000:332
+  { table: 'execution_instances',                trigger: 'trg_execution_instances_guard',                           fn: 'execution_instances_guard' },                      // 20261228000000:243
+  { table: 'execution_plans',                    trigger: 'trg_execution_plans_guard',                               fn: 'execution_plans_guard' },                          // 20261228000001:363
+  { table: 'execution_plan_steps',               trigger: 'trg_execution_plan_steps_guard',                          fn: 'execution_plan_steps_guard' },                     // 20261228000001:400
+  { table: 'execution_tasks',                    trigger: 'trg_execution_tasks_guard',                               fn: 'execution_tasks_guard' },                          // 20261228000001:463
+  { table: 'outreach_bridge_handoffs',           trigger: 'trg_outreach_bridge_handoffs_guard',                      fn: 'outreach_bridge_handoffs_guard' },                 // 20261229000000:266
+  { table: 'email_outreach_content_evidence',    trigger: 'trg_email_outreach_content_evidence_guard',               fn: 'email_outreach_content_evidence_guard' },          // 20270120000001
+  { table: 'execution_journey_decisions',        trigger: 'trg_execution_journey_decisions_guard',                   fn: 'execution_journey_decisions_guard' },              // 20270120000000:96
+  { table: 'execution_engine_requests',          trigger: 'trg_execution_engine_requests_guard',                     fn: 'execution_engine_requests_guard' },                // 20261230000000:100
+  { table: 'prospect_campaigns',                 trigger: 'trg_prospect_campaigns_targeting_guard',                  fn: 'prospect_campaigns_targeting_guard' },             // 20261231000000:157
+  { table: 'prospect_campaign_targets',          trigger: 'trg_prospect_campaign_targets_guard',                     fn: 'prospect_campaign_targets_guard' },                // 20261231000000:272
+  { table: 'community_action_journey_links',     trigger: 'trg_community_action_journey_links_guard',                fn: 'community_action_journey_links_guard' },           // 20261231000003:197
+  { table: 'community_action_journey_links',     trigger: 'trg_community_action_journey_links_identity_guard',       fn: 'community_action_journey_links_identity_guard' },  // 20261231000006:302
+  { table: 'identity_verification_attestations', trigger: 'trg_identity_verification_attestations_guard',            fn: 'identity_verification_attestations_guard' },       // 20261231000007:231
+  { table: 'community_action_journey_links',     trigger: 'trg_community_action_journey_links_identity_proof_guard', fn: 'community_action_journey_links_identity_proof_guard' }, // 20261231000007:304
+  { table: 'community_ai_actions',               trigger: 'trg_community_ai_actions_reap_uncertain_guard',           fn: 'community_ai_actions_reap_uncertain_guard' },      // 20261231000009:132
+];
+
+/** CHECK constraints whose vocabulary / predicate the runtime depends on. */
+const STACK_CHECKS = [
+  // 20270111100009_community_execution_safety.sql:70-72 — the complete 12-value
+  // status vocabulary; without 'uncertain'/'executing' the reaper and the
+  // extension dispatch path raise 23514.
+  { table: 'community_ai_actions', constraint: 'community_ai_actions_status_check',
+    contains: ['pending', 'approved', 'scheduled', 'dispatched', 'acknowledged', 'executing', 'executed', 'sent_unverified', 'failed', 'skipped', 'blocked', 'uncertain'].map((v) => `'${v}'`) },
+  // 20270111100008_orchestration_engine_requests_engines.sql:29-30
+  { table: 'execution_engine_requests', constraint: 'execution_engine_requests_engine_valid',
+    contains: ["'whatsapp'", "'social_publish'", "'community'", "'browser'"] },
+  // 20270111100006_orchestration_engine_requests.sql:57
+  { table: 'execution_engine_requests', constraint: 'execution_engine_requests_state_valid',
+    contains: ["'requested'", "'submitting'", "'submitted'", "'completed'", "'skipped'", "'failed'", "'uncertain'"] },
+  // 20270111100007_orchestration_campaign_targeting.sql:91
+  { table: 'prospect_campaigns', constraint: 'prospect_campaigns_targeting_mode_valid', contains: ["'manual'", "'icp'"] },
+  // 20270111100009_community_execution_safety.sql:141-142
+  { table: 'rpa_retry_queue', constraint: 'rpa_retry_queue_claim_pair', contains: ['claim_token IS NULL', 'claimed_at IS NULL'] },
+  // 20270111100014_identity_verification.sql:107 — an attestation never verifies.
+  { table: 'identity_verification_attestations', constraint: 'identity_verification_attestations_never_verifies', contains: ['confers_verification = false'] },
+  // 20270111100015_engagement_request_idempotency.sql:79
+  { table: 'engagement_request_idempotency', constraint: 'engagement_request_idempotency_state_check',
+    contains: ["'reserved'", "'completed'", "'failed_not_acted'", "'uncertain'"] },
+];
+
+/** Severity by rule (see the block comment above). */
+const STACK_SEVERITY = Object.freeze({
+  missingObject: 'BLOCKING',
+  safetyProperty: 'BLOCKING',
+  queryPlanIndex: 'WARN',
+  invokerClientExecute: 'WARN',
+  ownerPending: 'INFO',
+});
+
+// Fold the stack columns / indexes / types into the existing manifests, so the
+// existing column / index / type checks (and their output fields) cover them
+// with unchanged semantics.
+for (const t of STACK_TABLES) {
+  for (const column of t.columns) {
+    REQUIRED_COLUMNS.push({ severity: STACK_SEVERITY.missingObject, table: t.table, column,
+      motivation: `ORCH-STACK (${t.source}): column of a table the orchestration-engine-adapters release creates; absent means the migration is unapplied or diverged.` });
+  }
+}
+for (const c of STACK_ADDED_COLUMNS) {
+  REQUIRED_COLUMNS.push({ severity: STACK_SEVERITY.missingObject, table: c.table, column: c.column,
+    motivation: `ORCH-STACK (${c.source}): column the release ADDs to an existing table.` });
+}
+for (const ct of STACK_COLUMN_TYPES) {
+  REQUIRED_COLUMN_TYPES.push({ severity: STACK_SEVERITY.safetyProperty, ...ct,
+    motivation: 'ORCH-STACK: declared type the migration asserts; a different type fails the write path or the migration re-run.' });
+}
+for (const ix of STACK_INDEXES) {
+  REQUIRED_INDEXES.push({
+    severity: ix.unique ? STACK_SEVERITY.missingObject : STACK_SEVERITY.queryPlanIndex,
+    ...ix,
+    motivation: ix.unique
+      ? 'ORCH-STACK: unique index that IS an idempotency / composite-FK mechanism; absent, duplicates persist silently.'
+      : 'ORCH-STACK: query-plan index; absence slows a path but persists no wrong state.',
+  });
+}
+
+/** Strict mode: `--strict` or SCHEMA_PARITY_STRICT=1. */
+function isStrictMode(argv, env) {
+  return (argv || []).includes('--strict') || (env || {}).SCHEMA_PARITY_STRICT === '1';
+}
+
+/**
+ * The predeploy decision for a verifier exit code. Lives here (not in
+ * predeploy-check.js) so the contract is defined beside the exit codes it
+ * interprets and is unit-testable without running git/tsc.
+ *
+ *   strict=false (default, unchanged): 0 ok; 1 block; 2 continue (SKIPPED);
+ *                3 continue (WARN); anything else continue (WARN).
+ *   strict=true  (fail closed): 0 ok; EVERY non-zero code blocks — including 2
+ *                (credentials missing / connection failed / a required catalog
+ *                check could not run) and unrecognised codes.
+ */
+function predeployParityDecision(code, strict) {
+  if (code === 0) return { action: 'ok', reason: 'clean' };
+  if (code === 1) return { action: 'block', reason: 'blocking' };
+  if (strict) {
+    if (code === 2) return { action: 'block', reason: 'strict_env_unavailable' };
+    if (code === 3) return { action: 'block', reason: 'strict_warn' };
+    return { action: 'block', reason: 'strict_unrecognized_exit' };
+  }
+  if (code === 2) return { action: 'continue', reason: 'skipped_env_unavailable' };
+  if (code === 3) return { action: 'continue', reason: 'warn' };
+  return { action: 'continue', reason: 'unrecognized_exit' };
+}
+
+const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+const CLIENT_ROLES = ['anon', 'authenticated', 'service_role'];
+
+/**
+ * Pure evaluation of the stack catalog observations → { findings, advisories }.
+ * `obs` = { roles:Set, tables:Map(name→{rls, priv:{role:[privs]}}),
+ *           functions:Map('name(args)'→{secdef, def, exec:{anon,authenticated,service_role,public}}),
+ *           triggers:Map('table.trigger'→{enabled, fn}), checks:Map('table.constraint'→def) }
+ * A role that does not exist makes its privilege checks UNRUNNABLE: that is a
+ * `check_skipped` finding (WARN, BLOCKING under strict), never a pass.
+ */
+function evaluateStack(obs, strict) {
+  const findings = [];
+  const advisories = [];
+  const skipSeverity = strict ? 'BLOCKING' : 'WARN';
+  const push = (f) => findings.push(f);
+  const missingRoles = CLIENT_ROLES.filter((r) => !obs.roles.has(r));
+  for (const r of missingRoles) {
+    push({ kind: 'check_skipped', severity: skipSeverity, table: null, object: `role ${r}`,
+      reason: `role ${r} does not exist — its privilege checks could not run`,
+      motivation: 'A privilege expectation that cannot be evaluated is not a pass.' });
+  }
+  const hasRole = (r) => obs.roles.has(r);
+
+  for (const t of STACK_TABLES) {
+    const o = obs.tables.get(t.table);
+    if (!o) continue; // absence is reported once, by the column check
+    if (o.rls !== true) {
+      push({ kind: 'table_rls', severity: STACK_SEVERITY.safetyProperty, table: t.table, object: t.table,
+        reason: 'row level security is DISABLED', motivation: `ORCH-STACK (${t.source}): every stack table enables RLS.` });
+    }
+    if (hasRole('anon') && o.priv.anon.length > 0) {
+      push({ kind: 'table_privilege', severity: STACK_SEVERITY.safetyProperty, table: t.table, object: t.table,
+        reason: `anon holds ${o.priv.anon.join(', ')}`, motivation: 'anon must hold no privilege on a stack table.' });
+    }
+    if (hasRole('authenticated') && o.priv.authenticated.length > 0) {
+      if (t.revokesClientRoles) {
+        push({ kind: 'table_privilege', severity: STACK_SEVERITY.safetyProperty, table: t.table, object: t.table,
+          reason: `authenticated holds ${o.priv.authenticated.join(', ')} although the migration REVOKEs ALL`,
+          motivation: `ORCH-STACK (${t.source}): explicit REVOKE ALL FROM anon, authenticated.` });
+      } else {
+        advisories.push({ kind: 'table_privilege', severity: STACK_SEVERITY.ownerPending, table: t.table,
+          reason: `authenticated holds ${o.priv.authenticated.join(', ')} (RLS-only table; owner decision pending)` });
+      }
+    }
+    if (t.serviceRoleGrants && hasRole('service_role')) {
+      const lacking = t.serviceRoleGrants.filter((p) => !o.priv.service_role.includes(p));
+      if (lacking.length > 0) {
+        push({ kind: 'table_privilege', severity: STACK_SEVERITY.safetyProperty, table: t.table, object: t.table,
+          reason: `service_role lacks ${lacking.join(', ')}`, motivation: `ORCH-STACK (${t.source}): explicit GRANT to service_role.` });
+      }
+    }
+  }
+
+  for (const f of STACK_FUNCTIONS) {
+    const key = `${f.name}(${f.args})`;
+    const o = obs.functions.get(key);
+    if (!o) {
+      push({ kind: 'function', severity: STACK_SEVERITY.missingObject, table: null, object: key,
+        reason: 'absent', motivation: 'ORCH-STACK function the release creates.' });
+      continue;
+    }
+    if (o.secdef !== f.secdef) {
+      push({ kind: 'function', severity: STACK_SEVERITY.safetyProperty, table: null, object: key,
+        reason: `SECURITY ${o.secdef ? 'DEFINER' : 'INVOKER'}, expected ${f.secdef ? 'DEFINER' : 'INVOKER'}`,
+        motivation: 'The privilege context a function runs in is part of its contract.' });
+    }
+    for (const m of f.bodyContains || []) {
+      if (!o.def.includes(m)) {
+        push({ kind: 'function_body', severity: STACK_SEVERITY.safetyProperty, table: null, object: key,
+          reason: `body does not contain ${m}`, motivation: 'Safety-critical body marker missing — a different body is installed.' });
+      }
+    }
+    for (const b of f.bodyForbidden || []) {
+      if (new RegExp(b.pattern).test(o.def)) {
+        push({ kind: 'function_body', severity: STACK_SEVERITY.safetyProperty, table: null, object: key,
+          reason: `body ${b.why}`, motivation: 'Forbidden body pattern present — the unsafe version is installed.' });
+      }
+    }
+    if (f.exec) {
+      const clientSev = f.exec === 'service_role_only' ? STACK_SEVERITY.safetyProperty : STACK_SEVERITY.invokerClientExecute;
+      const holders = [];
+      if (hasRole('anon') && o.exec.anon) holders.push('anon');
+      if (hasRole('authenticated') && o.exec.authenticated) holders.push('authenticated');
+      if (o.exec.public) holders.push('PUBLIC');
+      if (holders.length > 0) {
+        push({ kind: 'function_privilege', severity: clientSev, table: null, object: key,
+          reason: `EXECUTE held by ${holders.join(', ')}`, motivation: 'Migration restricts EXECUTE to service_role.' });
+      }
+      if (hasRole('service_role') && !o.exec.service_role) {
+        push({ kind: 'function_privilege', severity: STACK_SEVERITY.safetyProperty, table: null, object: key,
+          reason: 'service_role cannot EXECUTE', motivation: 'The worker calls this as service_role.' });
+      }
+    }
+  }
+
+  for (const tr of STACK_TRIGGERS) {
+    const o = obs.triggers.get(`${tr.table}.${tr.trigger}`);
+    let reason = null;
+    if (!o) reason = 'absent';
+    else if (o.enabled === 'D') reason = 'DISABLED';
+    else if (o.fn !== tr.fn) reason = `calls ${o.fn}, expected ${tr.fn}`;
+    if (reason) {
+      push({ kind: 'trigger', severity: o ? STACK_SEVERITY.safetyProperty : STACK_SEVERITY.missingObject,
+        table: tr.table, object: tr.trigger, reason, motivation: 'ORCH-STACK guard trigger.' });
+    }
+  }
+
+  for (const c of STACK_CHECKS) {
+    const def = obs.checks.get(`${c.table}.${c.constraint}`);
+    if (def == null) {
+      push({ kind: 'check_constraint', severity: STACK_SEVERITY.missingObject, table: c.table, object: c.constraint,
+        reason: 'absent', motivation: 'ORCH-STACK CHECK constraint.' });
+      continue;
+    }
+    const lacking = c.contains.filter((v) => !def.includes(v));
+    if (lacking.length > 0) {
+      push({ kind: 'check_constraint', severity: STACK_SEVERITY.safetyProperty, table: c.table, object: c.constraint,
+        reason: `definition lacks ${lacking.join(', ')}`, motivation: 'A narrowed vocabulary raises 23514 on a runtime write.' });
+    }
+  }
+  return { findings, advisories };
+}
+
+/** Runs the stack catalog queries. Any thrown query propagates (caller exits 2). */
+async function observeStack(db) {
+  const roles = new Set((await db.query(
+    'SELECT rolname FROM pg_roles WHERE rolname = ANY($1)', [CLIENT_ROLES])).rows.map((r) => r.rolname));
+  const roleList = CLIENT_ROLES.filter((r) => roles.has(r));
+
+  const tables = new Map();
+  const tRes = await db.query(
+    `SELECT c.relname, c.relrowsecurity, r.rolname, p.priv,
+            has_table_privilege(r.rolname, c.oid, p.priv) AS granted
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      CROSS JOIN unnest($2::text[]) AS r(rolname)
+      CROSS JOIN unnest($3::text[]) AS p(priv)
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = ANY($1)`,
+    [STACK_TABLES.map((t) => t.table), roleList, TABLE_PRIVILEGES]);
+  // A table with zero existing roles still needs its RLS flag.
+  const rlsRes = await db.query(
+    `SELECT c.relname, c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = ANY($1)`,
+    [STACK_TABLES.map((t) => t.table)]);
+  for (const row of rlsRes.rows) {
+    tables.set(row.relname, { rls: row.relrowsecurity === true, priv: { anon: [], authenticated: [], service_role: [] } });
+  }
+  for (const row of tRes.rows) {
+    if (row.granted === true) tables.get(row.relname).priv[row.rolname].push(row.priv);
+  }
+
+  const functions = new Map();
+  const fRes = await db.query(
+    `SELECT p.proname, oidvectortypes(p.proargtypes) AS args, p.prosecdef,
+            pg_get_functiondef(p.oid) AS def,
+            CASE WHEN 'anon' = ANY($2) THEN has_function_privilege('anon', p.oid, 'EXECUTE') END AS anon,
+            CASE WHEN 'authenticated' = ANY($2) THEN has_function_privilege('authenticated', p.oid, 'EXECUTE') END AS authenticated,
+            CASE WHEN 'service_role' = ANY($2) THEN has_function_privilege('service_role', p.oid, 'EXECUTE') END AS service_role,
+            EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+                     WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE') AS public_exec
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = ANY($1)`,
+    [[...new Set(STACK_FUNCTIONS.map((f) => f.name))], roleList]);
+  for (const row of fRes.rows) {
+    functions.set(`${row.proname}(${row.args})`, {
+      secdef: row.prosecdef === true,
+      def: row.def || '',
+      exec: { anon: row.anon === true, authenticated: row.authenticated === true,
+        service_role: row.service_role === true, public: row.public_exec === true },
+    });
+  }
+
+  const triggers = new Map();
+  const gRes = await db.query(
+    `SELECT c.relname, t.tgname, t.tgenabled, p.proname
+       FROM pg_trigger t
+       JOIN pg_class c     ON c.oid = t.tgrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_proc p      ON p.oid = t.tgfoid
+      WHERE n.nspname = 'public' AND NOT t.tgisinternal AND t.tgname = ANY($1)`,
+    [STACK_TRIGGERS.map((t) => t.trigger)]);
+  for (const row of gRes.rows) {
+    triggers.set(`${row.relname}.${row.tgname}`, { enabled: row.tgenabled, fn: row.proname });
+  }
+
+  const checks = new Map();
+  const cRes = await db.query(
+    `SELECT c.relname, k.conname, pg_get_constraintdef(k.oid) AS def
+       FROM pg_constraint k
+       JOIN pg_class c     ON c.oid = k.conrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND k.contype = 'c' AND k.conname = ANY($1)`,
+    [STACK_CHECKS.map((c) => c.constraint)]);
+  for (const row of cRes.rows) checks.set(`${row.relname}.${row.conname}`, row.def || '');
+
+  return { roles, tables, functions, triggers, checks };
+}
+
+// URL sources, highest precedence first. SCHEMA_PARITY_DB_URL is the explicit
+// release-gate credential: when it is set, .env.local is never read, so a stale
+// or privileged URL in that file can never silently replace the operator's
+// read-only credential.
+const DB_URL_VARS = ['SCHEMA_PARITY_DB_URL', 'SUPABASE_POOLER_DB_URL', 'SUPABASE_DB_URL', 'DATABASE_URL'];
+
+function resolveDbUrl(env) {
+  for (const name of DB_URL_VARS) if (env[name]) return { name, url: env[name] };
+  return { name: null, url: null };
+}
+
 async function main() {
-  loadEnvLocal();
+  const strict = isStrictMode(process.argv.slice(2), process.env);
+  if (!process.env.SCHEMA_PARITY_DB_URL) {
+    const before = new Set(DB_URL_VARS.filter((k) => process.env[k]));
+    loadEnvLocal();
+    const chosen = resolveDbUrl(process.env).name;
+    if (chosen && !before.has(chosen)) {
+      // Name only — never the value.
+      process.stderr.write(JSON.stringify({
+        event: 'schema_parity.warning',
+        reason: 'db_url_from_env_local',
+        variable: chosen,
+        hint: 'The connection string came from .env.local, not the shell. Set SCHEMA_PARITY_DB_URL to use an explicit credential.',
+      }) + '\n');
+    }
+  }
 
   // ─── WHY THIS DOES NOT GO THROUGH PostgREST ──────────────────────────────
   // It used to. `client.from('information_schema.columns')` resolves as the
@@ -949,14 +1620,12 @@ async function main() {
   // is what every other schema probe in this repository already uses. Exit 2
   // is now reserved for a genuinely absent connection string or a real
   // connection failure — never for a lookup this script chose incorrectly.
-  const dbUrl = process.env.SUPABASE_POOLER_DB_URL
-    || process.env.SUPABASE_DB_URL
-    || process.env.DATABASE_URL;
+  const { name: dbUrlVar, url: dbUrl } = resolveDbUrl(process.env);
   if (!dbUrl) {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
       reason: 'missing_credentials',
-      missing: ['SUPABASE_POOLER_DB_URL'],
+      missing: ['SCHEMA_PARITY_DB_URL', 'SUPABASE_POOLER_DB_URL'],
       hint: 'A direct Postgres connection string is required; information_schema is not reachable over PostgREST.',
     }) + '\n');
     process.exit(2);
@@ -974,14 +1643,62 @@ async function main() {
     process.exit(2);
   }
 
-  const db = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  // The explicit gate credential should authenticate the server. Without
+  // sslmode=verify-full the default below encrypts but does not verify, so say
+  // so (variable name only). Not fatal: disposable runs use sslmode=disable.
+  if (dbUrlVar === 'SCHEMA_PARITY_DB_URL' && !/[?&]sslmode=verify-full(&|$)/.test(dbUrl)) {
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.warning',
+      reason: 'tls_not_verified',
+      variable: dbUrlVar,
+      hint: 'Add sslmode=verify-full&sslrootcert=<CA file> to authenticate the server.',
+    }) + '\n');
+  }
+
+  // Constructed inside the try: a malformed URL is a connection failure, not an
+  // unhandled crash.
+  let db;
   try {
+    db = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
     await db.connect();
   } catch (e) {
     process.stderr.write(JSON.stringify({
       event: 'schema_parity.error',
       reason: 'connection_failed',
       message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
+
+  // Every query below is a read. Pin the session read-only with timeouts so a
+  // privileged credential still cannot write through this script, and record
+  // which role actually ran it (name only).
+  let session;
+  try {
+    await db.query("SET default_transaction_read_only = on; SET statement_timeout = '120s'; "
+      + "SET lock_timeout = '2s'; SET application_name = 'schema-parity-verifier'");
+    const res = await db.query(
+      "SELECT current_user AS role, current_setting('transaction_read_only') AS tx_read_only");
+    session = { role: res.rows[0].role, tx_read_only: res.rows[0].tx_read_only };
+  } catch (e) {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'session_setup_failed',
+      message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
+  // Recording read-only is not enough: refuse to continue if it did not take
+  // effect (e.g. a transaction-mode pooler that does not keep session SETs).
+  if (session.tx_read_only !== 'on') {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'session_not_read_only',
+      role: session.role,
+      tx_read_only: session.tx_read_only,
+      hint: 'Use a direct or session-mode connection (not a transaction-mode pooler).',
     }) + '\n');
     process.exit(2);
   }
@@ -1064,6 +1781,25 @@ async function main() {
     process.exit(2);
   }
 
+  // ORCH-STACK catalog observation (RLS, privileges, functions, triggers,
+  // CHECKs). Same failure semantics as the queries above: a thrown query —
+  // permission denied on a catalog function included — is environmental and
+  // exits 2. It is never read as "nothing there", which would fabricate
+  // findings, and never swallowed, which would be a silent pass.
+  let stackObserved;
+  try {
+    stackObserved = await observeStack(db);
+  } catch (e) {
+    await db.end().catch(() => {});
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'stack_catalog_query_failed',
+      strict,
+      message: (e && e.message) || String(e),
+    }) + '\n');
+    process.exit(2);
+  }
+
   // ONE findings list, still called `missing`, deliberately. The exit-0
   // condition below is `missing.length === 0 && !ledgerDesyncDetected` and it
   // must remain the single place that decides success — a structural finding
@@ -1090,7 +1826,9 @@ async function main() {
     const found = observedIndexes.get(req.index);
     let reason = null;
     if (!found) {
-      reason = 'absent — the INSERT never conflicts, so the 23505 idempotency branch is unreachable';
+      reason = req.unique
+        ? 'absent — the INSERT never conflicts, so the 23505 idempotency branch is unreachable'
+        : 'absent — query-plan index (no persisted-state impact)';
     } else if (found.table !== req.table) {
       reason = `attached to ${found.table}, expected ${req.table}`;
     } else if (req.unique && !found.isUnique) {
@@ -1106,6 +1844,14 @@ async function main() {
       const unmentioned = req.keys.filter((k) => !found.definition.includes(k));
       if (unmentioned.length > 0) {
         reason = `definition does not mention ${unmentioned.join(', ')} — same name, different key`;
+      } else if (req.predicate) {
+        // ORCH-STACK partial indexes: the WHERE must still name the rows it
+        // covers (substring test over pg_get_indexdef, like the keys).
+        const where = found.definition.split(' WHERE ')[1] || '';
+        const absentPred = req.predicate.filter((p) => !where.includes(p));
+        if (absentPred.length > 0) {
+          reason = `predicate does not mention ${absentPred.join(', ')} — same name, different partial scope`;
+        }
       }
     }
     if (reason) {
@@ -1156,16 +1902,27 @@ async function main() {
     }
   }
 
+  // ORCH-STACK safety properties. Findings join the ONE list; INFO
+  // (owner-pending) observations go to `advisories`, which never decide the
+  // exit code in any mode.
+  const stackEval = evaluateStack(stackObserved, strict);
+  for (const f of stackEval.findings) missing.push(f);
+  const advisories = stackEval.advisories;
+
   /** What a clean run reports — every dimension this gate actually checked. */
   const okSummary = `SCHEMA PARITY OK — ${REQUIRED_COLUMNS.length} required columns present, `
     + `${REQUIRED_INDEXES.length} structural indexes intact, `
-    + `${REQUIRED_COLUMN_TYPES.length} declared column types as expected.`;
+    + `${REQUIRED_COLUMN_TYPES.length} declared column types as expected; `
+    + `stack: ${STACK_TABLES.length} tables RLS/privileges, ${STACK_FUNCTIONS.length} functions, `
+    + `${STACK_TRIGGERS.length} triggers, ${STACK_CHECKS.length} CHECK constraints as expected`
+    + `${strict ? ' (strict)' : ''}.`;
 
   /** One line naming a finding, whatever kind it is. */
   const describeFinding = (m) => (
     m.kind === 'index' ? `index ${m.index} on ${m.table} — ${m.reason}`
     : m.kind === 'column_type' ? `${m.table}.${m.column} — ${m.reason}`
-    : `${m.table}.${m.column}`
+    : m.kind === 'column' ? `${m.table}.${m.column}`
+    : `${m.kind} ${m.object}${m.table && m.table !== m.object ? ` on ${m.table}` : ''} — ${m.reason}`
   );
 
   // Severity-bucketed status over the ONE findings list — a missing column, a
@@ -1176,13 +1933,6 @@ async function main() {
   //   3 — WARN    (only WARN/INFO findings — operator should
   //               apply soon but deploy can proceed; non-zero so CI
   //               can flag but distinct from BLOCKING)
-  const missingBlocking = missing.filter((m) => m.severity === 'BLOCKING');
-  const missingWarn     = missing.filter((m) => m.severity === 'WARN');
-  const missingInfo     = missing.filter((m) => m.severity === 'INFO');
-  const overall =
-    missingBlocking.length > 0 ? 'BLOCKING'
-    : missingWarn.length > 0    ? 'WARN'
-    :                             'INFO';
 
   // Ledger probe — by VERSION identity (scripts/lib/migrationLedger.js), never by
   // comparing row and file counts. Migrations are applied by hand and recording
@@ -1249,6 +1999,29 @@ async function main() {
     ledgerProbeNote = { verified: false, reason: (e && e.message) || String(e) };
   }
 
+  // STRICT: "could not check" is never success. A ledger probe that did not
+  // run (e.g. no SELECT on supabase_migrations.schema_migrations) is a
+  // BLOCKING `check_skipped` finding under --strict; outside strict it stays
+  // advisory exactly as before.
+  if (strict && ledgerProbeNote && ledgerProbeNote.verified === false) {
+    missing.push({
+      kind: 'check_skipped',
+      severity: 'BLOCKING',
+      table: null,
+      object: 'ledger probe',
+      reason: `migration ledger probe did not run: ${ledgerProbeNote.reason}`,
+      motivation: 'STRICT: a required check that could not run is a failure.',
+    });
+  }
+
+  const missingBlocking = missing.filter((m) => m.severity === 'BLOCKING');
+  const missingWarn     = missing.filter((m) => m.severity === 'WARN');
+  const missingInfo     = missing.filter((m) => m.severity === 'INFO');
+  const overall =
+    missingBlocking.length > 0 ? 'BLOCKING'
+    : missingWarn.length > 0    ? 'WARN'
+    :                             'INFO';
+
   await db.end().catch(() => {});
 
   const out = {
@@ -1257,6 +2030,14 @@ async function main() {
     checked_columns: REQUIRED_COLUMNS.length,
     checked_indexes: REQUIRED_INDEXES.length,
     checked_column_types: REQUIRED_COLUMN_TYPES.length,
+    strict,
+    session,
+    checked_stack: {
+      tables: STACK_TABLES.length,
+      functions: STACK_FUNCTIONS.length,
+      triggers: STACK_TRIGGERS.length,
+      check_constraints: STACK_CHECKS.length,
+    },
     // TOTAL findings, not only absent columns — a structural finding counts
     // here too. `missing_columns` below keeps its original meaning and shape.
     missing_count: missing.length,
@@ -1288,9 +2069,12 @@ async function main() {
       table: m.table,
       index: m.index ?? null,
       column: m.column ?? null,
+      object: m.object ?? null,
       reason: m.reason,
       motivation: m.motivation,
     })),
+    // ORCH-STACK owner-pending observations (INFO). Never part of the verdict.
+    advisories,
   };
 
   // stdout: machine-readable JSON (single line for log parsers).
@@ -1388,11 +2172,35 @@ async function main() {
   process.exit(3);
 }
 
-main().catch((err) => {
-  process.stderr.write(JSON.stringify({
-    event: 'schema_parity.error',
-    reason: 'unhandled',
-    message: err && err.message ? err.message : String(err),
-  }) + '\n');
-  process.exit(2);
-});
+// Runs only when executed; `require()` (the coverage/strict tests, and
+// predeploy-check's decision table) gets the manifests without a connection.
+if (require.main === module) {
+  main().catch((err) => {
+    process.stderr.write(JSON.stringify({
+      event: 'schema_parity.error',
+      reason: 'unhandled',
+      message: err && err.message ? err.message : String(err),
+    }) + '\n');
+    process.exit(2);
+  });
+}
+
+module.exports = {
+  REQUIRED_COLUMNS,
+  REQUIRED_INDEXES,
+  REQUIRED_COLUMN_TYPES,
+  STACK_MIGRATIONS,
+  STACK_TABLES,
+  STACK_ADDED_COLUMNS,
+  STACK_COLUMN_TYPES,
+  STACK_INDEXES,
+  STACK_FUNCTIONS,
+  STACK_TRIGGERS,
+  STACK_CHECKS,
+  STACK_SEVERITY,
+  isStrictMode,
+  predeployParityDecision,
+  evaluateStack,
+  DB_URL_VARS,
+  resolveDbUrl,
+};

@@ -2,7 +2,14 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 /**
  * POST /api/response/generate
- * Generate (and optionally execute) AI response for a message.
+ * Generate an AI response suggestion for a message. It never sends.
+ *
+ * Engagement Intelligence generates and does not send (owner ruling). The
+ * former caller-supplied `execute` flag is REFUSED with 400
+ * GENERATION_DOES_NOT_EXECUTE rather than silently ignored, so a caller that
+ * expected a send learns that none happened. Sending a reply is the job of the
+ * community executor on a persisted, human-approved action (D-01), and
+ * autonomous response is governed only by automation/automationService.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -21,7 +28,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const body = (req.body || {}) as Record<string, unknown>;
     const organizationId = (body.organization_id ?? user?.defaultCompanyId) as string | undefined;
     const messageId = (body.message_id ?? body.messageId) as string | undefined;
-    const execute = Boolean(body.execute);
+    if (body.execute !== undefined && body.execute !== false) {
+      return res.status(400).json({
+        error: 'execute is not supported: response generation never sends',
+        code: 'GENERATION_DOES_NOT_EXECUTE',
+      });
+    }
 
     if (!organizationId) {
       return res.status(400).json({ error: 'organization_id required' });
@@ -83,14 +95,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       original_message: (message.content ?? '').toString(),
       author_name: null,
       thread_context: null,
-      execute,
     });
 
     return res.status(result.ok ? 200 : 500).json({
       ok: result.ok,
       suggested_text: result.suggested_text,
-      executed: result.executed,
+      executed: false,
       requires_human_review: result.requires_human_review,
+      auto_reply_rule_matched: result.auto_reply_rule_matched,
       reason: result.reason,
       error: result.error,
     });

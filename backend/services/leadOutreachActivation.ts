@@ -47,7 +47,10 @@
 
 import {
   approveOutreachTask,
+  computeApprovalBinding,
   dispatchInternalOutreachTask,
+  getOutreachTaskById,
+  INTERNAL_CHANNEL,
   listOutreachTasksForLead,
   materializeAutomationPlan,
   registerDefaultTransports,
@@ -58,6 +61,11 @@ import {
   type MaterializationResult,
   type OutreachTask,
 } from './leadOutreachExecution';
+import { beginApprovalPasskey, verifyApprovalPasskey } from './leadOutreachExecution/approvalPasskey';
+import { isJourneyTask } from './leadOutreachExecution/approvalBinding';
+import { selfApprovalRefusal } from './orchestration/journeyApproval';
+import { logSecurityEvent } from '../security/audit/SecurityAuditService';
+import { OUTREACH_PLATFORM_MANAGE } from '../../shared/contracts/security/SecurityCapabilities';
 import { getPersistedLeadIntelligence } from './leadIntelligenceOrchestration/readIntegration';
 import { ENGINE_VERSION } from './leadIntelligenceOrchestration/engineVersion';
 import type { IntelligencePersistencePort } from './leadIntelligenceOrchestration/types';
@@ -82,6 +90,12 @@ export interface ActivationOptions {
   region?: string | null;
   /** Translate and report without writing anything. */
   previewOnly?: boolean;
+  /**
+   * Restrict dispatch to these task ids; the lead's other tasks are neither
+   * dispatched nor reported. The recovery sweep uses it so a run touches only
+   * the requeued tasks it found, never a lead's other approved tasks.
+   */
+  taskIds?: readonly string[];
   /**
    * Injected intelligence-read port. `getPersistedLeadIntelligence` already
    * takes one; threading it through keeps this entry point testable without a
@@ -126,7 +140,7 @@ export interface ActivationReport {
  * `registerTransport` is a keyed `Map.set` (transport.ts:91-93).
  */
 function ensureTransports(): void {
-  registerDefaultTransports();
+  registerDefaultTransports({ email: 'engine' });
 }
 
 /**
@@ -169,10 +183,13 @@ const TERMINAL = new Set(['sent', 'delivered', 'failed', 'rejected', 'cancelled'
 /**
  * Dispatch the lead's tasks that are already approved.
  *
- * Approval is NOT performed here. A task in any state other than `approved` is
- * reported and left alone — `evaluateEligibility` would refuse it anyway
- * (governance.ts:194-202), and pre-empting that refusal in the caller would put
- * a second copy of the eligibility rule outside the governance engine.
+ * Approval is NOT performed here. A task in any state other than `approved` or
+ * `queued` is reported and left alone — `evaluateEligibility` would refuse it
+ * anyway, and pre-empting that refusal in the caller would put a second copy of
+ * the eligibility rule outside the governance engine. A `queued` task is one an
+ * earlier dispatch deferred or failed; it is handed to the dispatcher, which
+ * re-dispatches it only with an approval on record and no prior attempt that
+ * may have reached the recipient.
  */
 export async function dispatchApprovedOutreachForLead(
   companyId: string,
@@ -182,7 +199,8 @@ export async function dispatchApprovedOutreachForLead(
   ensureTransports();
 
   const permitted = new Set(options.channels ?? DEFAULT_ACTIVATION_CHANNELS);
-  const tasks = await listOutreachTasksForLead(companyId, leadId);
+  const selected = options.taskIds ? new Set(options.taskIds) : null;
+  const tasks = (await listOutreachTasksForLead(companyId, leadId)).filter((t) => selected === null || (t?.id != null && selected.has(String(t.id))));
   const reports: ActivationTaskReport[] = [];
 
   for (const task of tasks) {
@@ -195,7 +213,7 @@ export async function dispatchApprovedOutreachForLead(
       reports.push({ taskId, channel, status, action: 'terminal' });
       continue;
     }
-    if (status !== 'approved') {
+    if (status !== 'approved' && status !== 'queued') {
       reports.push({ taskId, channel, status, action: 'not_approved' });
       continue;
     }
@@ -300,23 +318,115 @@ export async function runOutreachActivation(
  * compare-and-set transitions that make a contested approval safe. The
  * approver's identity is required: an approval with no attributable decider is
  * not an approval.
+ *
+ * `auditFailed` means the task did move to `approved` and its record in the
+ * append-only log was not written. That is not `ok`: a caller reading only `ok`
+ * must not take it for a recorded approval, and `status` still says what happened.
  */
+export interface OperatorApprovalOptions {
+  /**
+   * D-02 — the passkey assertion for an external-channel task: a fresh verification bound
+   * to this one approval (approvalPasskey.ts). Always required for an external channel;
+   * there is no opt-out for any caller, and the approval writer refuses without its proof.
+   */
+  passkey?: unknown;
+  /** The binding the operator was shown; refused as `approval_stale` when it changed. */
+  expectedContentHash?: string | null;
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+/**
+ * D-02 — what a platform operator approving `taskId` would be bound to, and for an
+ * external channel the passkey ceremony bound to it. Writes only the WebAuthn challenge.
+ */
+export async function beginOperatorApproval(
+  companyId: string, taskId: string, approverUserId: string, meta: { ip?: string | null; userAgent?: string | null } = {},
+): Promise<{ ok: boolean; reason?: string; contentHash?: string; passkeyRequired?: boolean; passkeyOptions?: unknown }> {
+  const task = await getOutreachTaskById(companyId, taskId);
+  if (!task || !task.id) return { ok: false, reason: 'task_not_found' };
+  const binding = await computeApprovalBinding(companyId, task);
+  if (!binding.ok) return { ok: false, reason: binding.code };
+  // L-2 — a non-journey external task needs a named recipient, which this override cannot
+  // supply; refused here, before a passkey challenge is issued for an unapprovable task.
+  if (binding.kind === 'task' && binding.recipient === null && task.channel !== INTERNAL_CHANNEL) return { ok: false, reason: 'recipient_required' };
+  // S-01 — the override is held to the same self-approval rule as the tenant route.
+  if (isJourneyTask(task)) {
+    const self = await selfApprovalRefusal(companyId, taskId, approverUserId);
+    if (self !== null) return { ok: false, reason: self.code };
+  }
+  const passkeyRequired = task.channel !== INTERNAL_CHANNEL;
+  const passkeyOptions = passkeyRequired
+    ? await beginApprovalPasskey({ userId: approverUserId, organizationId: companyId, taskId, action: 'approve', bindingHash: binding.hash }, meta)
+    : null;
+  return { ok: true, contentHash: binding.hash, passkeyRequired, passkeyOptions };
+}
+
 export async function approveOutreachTaskForOperator(
   companyId: string,
   taskId: string,
   approverUserId: string,
   reason: string,
   notes: string | null = null,
-): Promise<{ ok: boolean; status?: string; reason?: string }> {
+  options: OperatorApprovalOptions = {},
+): Promise<{ ok: boolean; status?: string; reason?: string; auditFailed?: boolean }> {
+  const outcome = await operatorApprovalOutcome(companyId, taskId, approverUserId, reason, notes, options);
+  // S-01 — every platform override, granted or refused, is a security-audit event.
+  try {
+    await logSecurityEvent({
+      capability: OUTREACH_PLATFORM_MANAGE,
+      decision: outcome.ok ? 'allowed' : 'denied',
+      reason: `outreach_platform_override: ${outcome.ok ? 'approved' : (outcome.reason ?? 'refused')}`,
+      actorUserId: approverUserId,
+      principalUserId: approverUserId,
+      organizationId: companyId,
+      resourceId: taskId,
+      ip: options.ip ?? null,
+      userAgent: options.userAgent ?? null,
+    });
+  } catch { /* the audit writer is best-effort by contract; the decision stands either way */ }
+  return outcome;
+}
+
+async function operatorApprovalOutcome(
+  companyId: string, taskId: string, approverUserId: string, reason: string, notes: string | null, options: OperatorApprovalOptions,
+): Promise<{ ok: boolean; status?: string; reason?: string; auditFailed?: boolean }> {
+  // D-02 — checked before anything moves, so a refused override leaves the task as it was.
+  const task = await getOutreachTaskById(companyId, taskId);
+  if (!task || !task.id) return { ok: false, reason: 'task_not_found' };
+  // S-01 — the same self-approval rule as the tenant route: not the version's publisher or author.
+  if (isJourneyTask(task)) {
+    const self = await selfApprovalRefusal(companyId, taskId, approverUserId);
+    if (self !== null) return { ok: false, status: task.status, reason: self.code };
+  }
+  let expectedContentHash = options.expectedContentHash ?? null;
+  let passkeyProof: unknown = null;
+  // S-02 — an external channel ALWAYS needs a fresh passkey bound to this approval.
+  if (task.channel !== INTERNAL_CHANNEL) {
+    const binding = await computeApprovalBinding(companyId, task);
+    if (!binding.ok) return { ok: false, reason: binding.code };
+    // L-2 — as in `beginOperatorApproval`: refused before the passkey is spent.
+    if (binding.kind === 'task' && binding.recipient === null) return { ok: false, status: task.status, reason: 'recipient_required' };
+    if (expectedContentHash !== null && expectedContentHash !== binding.hash) return { ok: false, reason: 'approval_stale' };
+    const passkey = await verifyApprovalPasskey(
+      { userId: approverUserId, organizationId: companyId, taskId, action: 'approve', bindingHash: binding.hash },
+      options.passkey, { ip: options.ip, userAgent: options.userAgent },
+    );
+    if (passkey.ok !== true) return { ok: false, reason: passkey.code };
+    expectedContentHash = binding.hash;
+    passkeyProof = passkey.proof;
+  }
   const submitted = await submitForApproval(companyId, taskId);
   if (!submitted.ok && submitted.status !== 'awaiting_approval') {
     return { ok: false, status: submitted.status, reason: submitted.reason ? String(submitted.reason) : 'submission refused' };
   }
-  const decided = await approveOutreachTask(companyId, taskId, { approverUserId, reason, notes });
+  // D-02 — the platform override is labelled `platform` on the append-only record.
+  const decided = await approveOutreachTask(companyId, taskId, { approverUserId, reason, notes, expectedContentHash, tier: 'platform', passkeyProof });
   return {
-    ok: decided.ok === true,
+    ok: decided.ok === true && decided.auditFailed !== true,
     status: decided.status ? String(decided.status) : undefined,
     reason: decided.reason ? String(decided.reason) : undefined,
+    ...(decided.auditFailed === true ? { auditFailed: true } : {}),
   };
 }
 

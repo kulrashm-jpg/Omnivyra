@@ -61,6 +61,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (result.status === 'NOT_FOUND') {
     return res.status(404).json({ error: 'THREAD_NOT_FOUND', details: result.message });
   }
+  const refused = result.status === 'NOT_AUTHORIZED' ? result : null;
 
   await insertAuditLogStrict({
     actorUserId,
@@ -72,6 +73,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reason,
       root_id: rootId,
       outcome: result.status,
+      authorization_code: refused ? refused.code : null,
       total_nodes: 'total_nodes' in result ? result.total_nodes : null,
       published_count: 'published_count' in result ? result.published_count : null,
       failed_count: 'failed_count' in result ? result.failed_count : null,
@@ -80,6 +82,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     },
   });
 
+  // A refused resume is audited above like any other outcome, then reported as a conflict.
+  if (refused) return res.status(409).json({ error: 'THREAD_NOT_AUTHORIZED', code: refused.code, details: refused.message });
   return res.status(200).json(result);
 }
 

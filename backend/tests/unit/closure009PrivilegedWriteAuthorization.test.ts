@@ -458,6 +458,21 @@ describe('identity and attribution come from the authenticated principal', () =>
     expect(JSON.stringify(fx.approveOutreachTask.mock.calls[0])).not.toContain('someone-else');
   });
 
+  it('outreach/approve: an approval with no audit record is a 500 naming both facts, never plain ok', async () => {
+    fx.approveOutreachTask.mockResolvedValueOnce({ ok: false, status: 'approved', reason: 'connection failure 08006', auditFailed: true } as never);
+    const r = await call(s('POST outreach/approve'), { user: SUPER });
+    expect(r.statusCode).toBe(500);
+    expect(r.body).toMatchObject({ ok: false, status: 'approved', auditFailed: true });
+    expect(JSON.stringify(r.body)).not.toContain('08006');
+  });
+
+  it('outreach/approve: an ordinary refusal stays a 409 and carries no audit flag', async () => {
+    fx.approveOutreachTask.mockResolvedValueOnce({ ok: false, status: 'approved', reason: 'lost the race' } as never);
+    const r = await call(s('POST outreach/approve'), { user: SUPER });
+    expect(r.statusCode).toBe(409);
+    expect(r.body).toEqual({ ok: false, status: 'approved', reason: 'lost the race' });
+  });
+
   it.each([['an address', 'attacker@example.test'], ['an empty string', ''], ['an object', { to: 'x@example.test' }]])(
     'outreach/activate: a caller-supplied recipient (%s) is refused 400 before anything runs', async (_n, recipient) => {
       const r = await call(s('POST outreach/activate'), { user: SUPER }, { companyId: 'co-1', leadId: 'l-1', recipient });
