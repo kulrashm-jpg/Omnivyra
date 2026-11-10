@@ -45,7 +45,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       groups: APOLLO_FIELD_GROUPS.map((g) => ({
         id: g.id, label: g.label, subject: g.subject, contact: g.contact,
         available: g.availability.available,
-        ...(g.availability.available ? {} : { unavailableReason: g.availability.reason }),
+        // `'reason' in`, not `!available`: the root tsconfig is non-strict, so a
+        // boolean discriminant does not narrow the union.
+        ...('reason' in g.availability ? { unavailableReason: g.availability.reason } : {}),
       })),
       selected,
     });

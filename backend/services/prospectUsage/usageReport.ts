@@ -154,7 +154,9 @@ async function defaultRead(kind: UsageKind, org: string, from: string, to: strin
       .limit(USAGE_ROW_CAP + 1);
     // A null error is not an answer: only an array is.
     if (res.error || !Array.isArray(res.data)) return { rows: [], state: 'unavailable' };
-    const rows = res.data as Array<Record<string, unknown>>;
+    // The select list is a runtime string, so supabase-js types rows as an
+    // error-string union; the columns are fixed above.
+    const rows = res.data as unknown as Array<Record<string, unknown>>;
     return rows.length > USAGE_ROW_CAP ? { rows: rows.slice(0, USAGE_ROW_CAP), state: 'truncated' } : { rows, state: 'ok' };
   } catch {
     return { rows: [], state: 'unavailable' };

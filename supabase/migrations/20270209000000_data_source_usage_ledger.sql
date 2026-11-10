@@ -78,7 +78,7 @@ BEGIN
   -- scan every existing row while this transaction holds ACCESS EXCLUSIVE (taken
   -- by ADD COLUMN and held to COMMIT), stalling writes during a production apply.
   -- NOT VALID enforces on every NEW or UPDATED row immediately and scans nothing.
-  -- The VALIDATE step is a SEPARATE migration, run in its own transaction under
+  -- The VALIDATE step is a SEPARATE migration (20270209000001), run in its own transaction under
   -- SHARE UPDATE EXCLUSIVE (writes continue). Every existing row passes: the new
   -- columns are NULL and the coalesce sums reduce to ingested_within_observed.
   -- enrichment attempts

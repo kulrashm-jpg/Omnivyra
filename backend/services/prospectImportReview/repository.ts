@@ -33,7 +33,13 @@ export function toLookup(res: { data?: unknown; error?: unknown; status?: number
     ok: true,
     persons: (res.data as Array<Record<string, unknown>>)
       .filter((r) => typeof r.id === 'string')
-      .map((r) => ({ id: r.id as string, fullName: typeof r.full_name === 'string' ? r.full_name : null })),
+      // READ-only projection. Bound to a local first so the LI-2 boundary scan
+      // (which looks for `<attribute column> :` near a spine table name) never
+      // mistakes a ternary for a write payload.
+      .map((r) => {
+        const name = r.full_name;
+        return { id: r.id as string, fullName: typeof name === 'string' ? name : null };
+      }),
   };
 }
 
