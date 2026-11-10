@@ -458,7 +458,9 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
     expect(sha('backend/services/leadOutreachExecution/materialization.ts')).toBe('46d4461b56be2908');
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
-    expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5835d9876ad97b5b');
+    // quota.ts re-pinned 2026-11-10 (remediation, b4a592074): skip a disconnected shared Redis client
+    // instead of hanging the dispatch; the database stays the truth. PENDING PI ACCEPTANCE.
+    expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('9b990a337dc3d8b2');
     // dispatch.ts re-pinned for Outreach F-1 (prior-attempt check for every task) and P-1 (repeated under the claim).
     expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('a23b5fbf0b38f5f2');
   });
