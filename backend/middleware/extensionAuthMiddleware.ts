@@ -19,6 +19,7 @@ import {
   verifyExtensionRequestSignature,
 } from '@/backend/services/extensionSessionService';
 import { supabase } from '@/backend/db/supabaseClient';
+import { claimSharedRequestNonce } from '@/backend/services/extensionNonceStore';
 
 function take(h: string | string[] | undefined) { return (Array.isArray(h) ? h[0] : h) || ''; }
 
@@ -122,6 +123,15 @@ export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResp
 
   if (!verify.ok) {
     res.status(401).json({ success: false, error: 'SIGNATURE_INVALID', reason: verify.reason });
+    return null;
+  }
+
+  // Cross-instance replay protection (EXTENSION-1.5.0-CONTRACT.md §2). The local
+  // check above already refused a nonce seen by this instance; this refuses one
+  // seen by any instance while the shared store is reachable.
+  const nonce = take(req.headers['x-omnivyra-nonce']).trim();
+  if ((await claimSharedRequestNonce(session.userId, nonce)) === 'replayed') {
+    res.status(401).json({ success: false, error: 'SIGNATURE_INVALID', reason: 'NONCE_REPLAYED' });
     return null;
   }
 

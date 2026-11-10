@@ -30,6 +30,8 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { resolveEngagementCapability, CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
 import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityService';
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
+import { getActiveBinding, isUndefinedColumnError } from '@/backend/services/extension15';
+import { normalizePlatform } from '@/backend/constants/platforms';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
 import { getCommunityExecutionPolicy } from '@/backend/services/communityAiPlatformPolicyService';
@@ -180,18 +182,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   recorded by /api/extension/action-result. Cancelled rows are skipped
     //   here as an optimisation; the claim RPC below is the authority for
     //   cancellation, the platform kill switch and approval.
-    const query = supabase
-      .from('community_ai_actions')
-      .select('id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
-      .eq('organization_id', session.orgId)
-      .eq('status', 'pending')
-      .eq('execution_mode', 'browser')
-      .is('dispatch_lease_id', null)
-      .is('cancel_requested_at', null);
+    const pendingCommands = (columns: string, unmarkedOnly: boolean) => {
+      let q = supabase
+        .from('community_ai_actions')
+        .select(columns)
+        .eq('organization_id', session.orgId)
+        .eq('status', 'pending')
+        .eq('execution_mode', 'browser')
+        .is('dispatch_lease_id', null)
+        .is('cancel_requested_at', null);
+      if (unmarkedOnly) q = q.is('delivery_path', null);
+      return q.order('created_at', { ascending: false }).limit(10);
+    };
+    const COMMAND_COLUMNS = 'id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at';
 
-    const { data, error } = await query
-      .order('created_at', { ascending: false })
-      .limit(10);
+    // U1: delivery_path is the v15-only mark (migration 20270207000002). Marked rows are
+    // filtered IN the query, before the limit, so ten pending marked rows can never fill
+    // every slot and starve this route (the in-loop skip below stays as defence in
+    // depth). Code deployed ahead of that migration gets "undefined column" and re-reads
+    // without the column or the filter: no row can carry the mark then, so 1.4
+    // behaviour is unchanged.
+    let { data, error } = (await pendingCommands(`${COMMAND_COLUMNS}, delivery_path`, true)) as { data: any[] | null; error: any };
+    if (error && isUndefinedColumnError(error)) {
+      ({ data, error } = (await pendingCommands(COMMAND_COLUMNS, false)) as { data: any[] | null; error: any });
+    }
 
     if (error) {
       console.error('[extension/commands] supabase error:', error.message);
@@ -215,7 +229,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // written. The claim RPC re-applies all of it atomically and is authoritative.
     const decision = await getCommunityExecutionPolicy({ organizationId: session.orgId, tenantId: session.orgId });
 
+    // Extension 1.5 (EXTENSION-1.5.0-CONTRACT.md §4): a session whose user has an active
+    // 1.5 account binding receives LinkedIn reply/like ONLY through
+    // /api/extension/v15/commands, where the own-content check applies before the claim.
+    // Offering them here too would race that claim, and a 1.5 extension refuses a write
+    // arriving on this route, so the approved action would end failed. A session with no
+    // binding (1.4.x) is unaffected. Only a POSITIVELY found binding skips them: an
+    // unreadable binding (e.g. code deployed before migration 20270207000000) must not
+    // take LinkedIn writes away from 1.4.x sessions; at worst the race returns, and its
+    // cost is a failed action with no click.
+    const v15Binding = await getActiveBinding(session.orgId, session.userId);
+    const skipLinkedInWrites = v15Binding.ok === true && v15Binding.urn !== null;
+
     for (const row of data || []) {
+      // U1: a row marked v15-only by the database at creation (it targets a thread
+      // collected by extension 1.5) is never offered here, to ANY session, so a 1.4.x
+      // extension of another user cannot claim it.
+      if (normalizePlatform(row.platform) === 'linkedin') {
+        const type = String(row.action_type ?? '').trim().toLowerCase();
+        if ((type === 'reply' || type === 'like') && (skipLinkedInWrites || row.delivery_path === 'extension_v15')) continue;
+      }
       // ── Chain-aware step selection ────────────────────────────────────────
       // When the row carries a command_chain, dispatch the step at
       // command_chain_index instead of the row's top-level action_type.

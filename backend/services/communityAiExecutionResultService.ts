@@ -122,6 +122,14 @@ export async function persistExecutionResult(input: {
   correlationId: string;
   idempotencyKey?: string | null;
   leaseGuard?: { expectedLeaseId: string; expectedHolderId: string };
+  /**
+   * Keep the lease fields on an 'uncertain' outcome (default false: every terminal
+   * status clears them, as before). Set ONLY for an extension 1.5 post-submit
+   * failure, so the holder's later report reaches the existing late-result path
+   * (record_community_ai_late_dispatch_result re-checks status='uncertain' + lease
+   * + holder), exactly as the lease reaper leaves an uncertain row.
+   */
+  retainLeaseOnUncertain?: boolean;
   expectedFromStatuses?: string[];
   /** Only write while no extension holds (or ever held) a claim on the row. */
   requireUnleased?: boolean;
@@ -154,7 +162,7 @@ export async function persistExecutionResult(input: {
     update.command_chain_index = 0;
   }
 
-  if (TERMINAL_ROW_STATUSES.has(finalStatus)) {
+  if (TERMINAL_ROW_STATUSES.has(finalStatus) && !(finalStatus === 'uncertain' && input.retainLeaseOnUncertain === true)) {
     update.dispatch_lease_id = null;
     update.dispatch_lease_expires_at = null;
     update.dispatch_lease_holder_id = null;
