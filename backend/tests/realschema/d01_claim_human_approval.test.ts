@@ -545,9 +545,13 @@ describe('concurrency (committed fixtures, separate sessions)', () => {
     await db.query('COMMIT');
   });
   let hadPlatformRow = false;
-  const approveCommitted = async (id: string) => {
+  // This block runs on the full C3 schema, whose claim refuses an approval older than
+  // 7 days (APPROVAL_EXPIRED, 20270126000001). The fixed AT above stopped being claimable
+  // at 2026-11-10T10:15:30Z, so (g)'s FIRST, uncontested claim returned [] from then on.
+  // The approval here is therefore one minute old at the time of the run.
+  const approveCommitted = async (id: string, at: string = new Date(Date.now() - 60_000).toISOString()) => {
     await db.query('BEGIN');
-    await approve(id, APPROVER, AT);
+    await approve(id, APPROVER, at);
     await db.query('COMMIT');
   };
 
@@ -605,5 +609,15 @@ describe('concurrency (committed fixtures, separate sessions)', () => {
     } finally {
       await Promise.all([c1.end(), c2.end()]);
     }
+  });
+
+  it('(g-control) an approval older than 7 days is never claimed: APPROVAL_EXPIRED (why a fixed fixture date failed (g))', async () => {
+    const id = await newAction();
+    ids.push(id);
+    await approveCommitted(id, new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString());
+    expect(await claim(id)).toEqual([]);
+    const { rows } = await db.query(
+      `SELECT public.community_action_approval_evidence_code(a, now()) AS code FROM public.community_ai_actions a WHERE a.id = $1`, [id]);
+    expect(rows[0].code).toBe('APPROVAL_EXPIRED');
   });
 });
