@@ -77,12 +77,19 @@ describe('E: batch enrolment', () => {
     expect(r.enrolled).toBe(2);
   });
 
-  it('a malformed acknowledgements value is ignored (no key reaches anyone)', async () => {
-    for (const bad of ['k', ['k'], null, 7]) {
-      mockChecks.length = 0;
-      await run({ acknowledgements: bad });
-      expect(mockChecks.every((c) => c.acknowledgementKey === undefined)).toBe(true);
+  it('PI F1: a malformed acknowledgements value is REFUSED (acknowledgement_shape_invalid), never read as empty; nobody is checked or enrolled', async () => {
+    for (const bad of ['k', ['k'], null, 7, { 'p-held': 7 }, { 'p-held': { k: 'k' } }]) {
+      mockChecks.length = 0; mockCreated.length = 0;
+      await expect(run({ acknowledgements: bad })).rejects.toMatchObject({ code: 'acknowledgement_shape_invalid' });
+      expect(mockChecks).toEqual([]);
+      expect(mockCreated).toEqual([]);
     }
+  });
+
+  it('PI F1: an absent or empty map is valid (nobody acknowledged)', async () => {
+    await run({});
+    await run({ acknowledgements: {} });
+    expect(mockCreated).toEqual(['p-clear', 'p-clear']);
   });
 
   it('a preview checks without recording and creates nothing', async () => {

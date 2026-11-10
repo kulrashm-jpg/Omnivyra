@@ -26,6 +26,8 @@ const mockAuth = { allow: true };
 const mockVerdict: { next: Row } = { next: { ok: true, acknowledged: null } };
 
 jest.mock('../../services/orchestration/uncertainCommunicationAcknowledgement', () => ({
+  // PI F1: the real shape check (pure); only the database check is a double.
+  acknowledgementShapeError: jest.requireActual('../../services/orchestration/uncertainCommunicationAcknowledgement').acknowledgementShapeError,
   checkUncertainAcknowledgement: jest.fn(async (input: Row) => { mockChecks.push(input); mockCalls.push(`check:${String(input.operation)}`); return mockVerdict.next; }),
   acknowledgementRefusalBody: (c: Row) => ('warning' in c ? { error: c.error, code: c.code, warning: c.warning } : { error: c.error, code: c.code }),
 }));
@@ -181,7 +183,7 @@ describe('E wiring: ending a run', () => {
       [progressionRoute, 'POST', { action: 'cancel', acknowledgeUncertain: 'k' }],
       [instanceRoute, 'PATCH', { lifecycleState: 'cancelled', acknowledgeUncertain: 'k' }],
       [invokeRoute, 'POST', { workflowId: WORKFLOW, subjectKind: 'prospect', subjectId: 'p-1', acknowledgeUncertain: 'k' }],
-      [enrollRoute, 'POST', { workflowId: WORKFLOW, acknowledgeUncertain: { 'p-1': 'k' } }],
+      [enrollRoute, 'POST', { workflowId: WORKFLOW, acknowledgeUncertainByProspect: { 'p-1': 'k' } }],
     ] as const) {
       expect((await call(route, method, route === progressionRoute || route === instanceRoute ? RUN : CAMPAIGN, body as Row)).status).toBe(403);
     }
@@ -210,7 +212,78 @@ describe('E wiring: enrolling a person again', () => {
   });
 
   it('batch enrolment passes the AUTHENTICATED person and the per-person keys to the enrolment service', async () => {
-    await call(enrollRoute, 'POST', CAMPAIGN, { workflowId: WORKFLOW, acknowledgeUncertain: { 'p-1': 'k' }, actorUserId: 'spoofed' });
+    await call(enrollRoute, 'POST', CAMPAIGN, { workflowId: WORKFLOW, acknowledgeUncertainByProspect: { 'p-1': 'k' }, actorUserId: 'spoofed' });
     expect(mockChecks[0]).toEqual({ batch: expect.objectContaining({ organizationId: ORG, actorUserId: ACTOR, acknowledgements: { 'p-1': 'k' } }) });
+  });
+});
+
+describe('PI review F1: one field, one shape, per route; a wrong shape is refused before anything happens', () => {
+  const SHAPE = 'acknowledgement_shape_invalid';
+  const scalarRoutes: Array<[string, (req: NextApiRequest, res: NextApiResponse) => unknown, string, string, Row]> = [
+    ['progression cancel', progressionRoute, 'POST', RUN, { action: 'cancel' }],
+    ['lifecycle end', instanceRoute, 'PATCH', RUN, { lifecycleState: 'cancelled' }],
+    ['evaluation end', instanceRoute, 'PATCH', RUN, { evaluation: 'end' }],
+    ['single enrolment', invokeRoute, 'POST', CAMPAIGN, { workflowId: WORKFLOW, subjectKind: 'prospect', subjectId: 'p-1' }],
+  ];
+
+  it.each(scalarRoutes)('%s: a non-string acknowledgeUncertain is 400, nothing checked or done', async (_n, route, method, id, body) => {
+    for (const bad of [{ 'p-1': 'k' }, ['k'], 42, null, true]) {
+      mockCalls.length = 0; mockChecks.length = 0;
+      const out = await call(route, method, id, { ...body, acknowledgeUncertain: bad });
+      expect(out.status).toBe(400);
+      expect(out.json.code).toBe(SHAPE);
+      expect(mockChecks).toEqual([]);
+      expect(mockCalls).toEqual([]);
+    }
+  });
+
+  it.each(scalarRoutes)('%s: the batch field acknowledgeUncertainByProspect is 400, nothing checked or done', async (_n, route, method, id, body) => {
+    const out = await call(route, method, id, { ...body, acknowledgeUncertainByProspect: { 'p-1': 'k' } });
+    expect(out).toMatchObject({ status: 400, json: { code: SHAPE } });
+    expect(mockChecks).toEqual([]);
+    expect(mockCalls).toEqual([]);
+  });
+
+  it('batch enrolment: the single-enrolment field, or a malformed map, is 400 before anyone is enrolled', async () => {
+    for (const body of [
+      { acknowledgeUncertain: 'k' }, { acknowledgeUncertain: { 'p-1': 'k' } },
+      { acknowledgeUncertainByProspect: 'k' }, { acknowledgeUncertainByProspect: ['k'] }, { acknowledgeUncertainByProspect: null },
+      { acknowledgeUncertainByProspect: { 'p-1': 7 } }, { acknowledgeUncertainByProspect: { 'p-1': { k: 'k' } } },
+    ]) {
+      mockCalls.length = 0; mockChecks.length = 0;
+      const out = await call(enrollRoute, 'POST', CAMPAIGN, { workflowId: WORKFLOW, ...body });
+      expect(out.status).toBe(400);
+      expect(out.json.code).toBe(SHAPE);
+      expect(mockCalls).toEqual([]);
+    }
+  });
+
+  it('a valid shape still reaches the check: a string on scalar routes, a string map on batch', async () => {
+    expect((await call(progressionRoute, 'POST', RUN, { action: 'cancel', acknowledgeUncertain: 'k' })).status).toBe(200);
+    await call(enrollRoute, 'POST', CAMPAIGN, { workflowId: WORKFLOW, acknowledgeUncertainByProspect: {} });
+    expect(mockCalls).toContain('enrollCampaignTargets');
+  });
+
+  it('a shape check never runs where no acknowledgement applies: an opt_out with a junk field is not refused', async () => {
+    const out = await call(instanceRoute, 'PATCH', RUN, { evaluation: 'opt_out', acknowledgeUncertain: 42 });
+    expect(out.status).toBe(200);
+  });
+});
+
+describe('PI review F2: the run route reports the acknowledgement on both gated paths', () => {
+  it('lifecycle end: { instance, acknowledgement } with the recorded acknowledgement, or null when nothing was gated', async () => {
+    mockVerdict.next = { ok: true, acknowledged: { id: 'ack-9', repeated: false } };
+    const acked = await call(instanceRoute, 'PATCH', RUN, { lifecycleState: 'cancelled', acknowledgeUncertain: 'k' });
+    expect(acked.json).toMatchObject({ instance: { id: RUN }, acknowledgement: { id: 'ack-9', repeated: false } });
+    mockVerdict.next = { ok: true, acknowledged: null };
+    expect((await call(instanceRoute, 'PATCH', RUN, { lifecycleState: 'cancelled' })).json.acknowledgement).toBeNull();
+    expect((await call(instanceRoute, 'PATCH', RUN, { lifecycleState: 'paused' })).json).toHaveProperty('acknowledgement', null);
+  });
+
+  it('evaluation end: the evaluation answer carries the acknowledgement; other evaluations carry null', async () => {
+    mockVerdict.next = { ok: true, acknowledged: { id: 'ack-7', repeated: true } };
+    const ended = await call(instanceRoute, 'PATCH', RUN, { evaluation: 'end', acknowledgeUncertain: 'k' });
+    expect(ended.json).toMatchObject({ evaluation: { action: 'end' }, acknowledgement: { id: 'ack-7', repeated: true } });
+    expect((await call(instanceRoute, 'PATCH', RUN, { evaluation: 'opt_out' })).json).toHaveProperty('acknowledgement', null);
   });
 });

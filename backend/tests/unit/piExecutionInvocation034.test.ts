@@ -373,7 +373,7 @@ describe('034 — isolation, proven by content', () => {
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code.
     expect(sha(STORE_REL)).toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('98b846a3cdbbe6b3'); // RE-PINNED 2026-11-10 (Follow-up E: a person ending the run (lifecycle end, evaluation end) acknowledges an unresolved uncertain communication first; opt_out never held); before that RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('3fd60562d9c42018'); // RE-PINNED 2026-11-10 (Follow-up E, PI review F1/F2/F3: one acknowledgement shape per route (400 acknowledgement_shape_invalid), the acknowledgement reported on both [id] gated paths, record semantics documented); before that RE-PINNED 2026-11-10 (Follow-up E: a person ending the run (lifecycle end, evaluation end) acknowledges an unresolved uncertain communication first; opt_out never held); before that RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
   });
 
   it('032’s and 029’s certified artefacts are untouched by 034', () => {

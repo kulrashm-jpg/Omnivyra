@@ -118,9 +118,15 @@ export async function enrollCampaignTargets(input: {
   let excluded = 0;
   let needsAcknowledgement = 0;
   let versionChangedDuringRun = 0;
-  const acknowledgements = input.acknowledgements !== null && typeof input.acknowledgements === 'object' && !Array.isArray(input.acknowledgements)
-    ? input.acknowledgements as Record<string, unknown>
-    : {};
+  // PI review F1: a malformed map is refused, never silently read as "no acknowledgements".
+  const given = input.acknowledgements;
+  const validMap = given !== null && typeof given === 'object' && !Array.isArray(given)
+    && Object.getPrototypeOf(given) === Object.prototype
+    && Object.values(given as Record<string, unknown>).every((k) => typeof k === 'string');
+  if (given !== undefined && !validMap) {
+    fail('acknowledgements must map each prospectId to its warning\'s acknowledgementKey (a string)', 'acknowledgement_shape_invalid');
+  }
+  const acknowledgements = (given ?? {}) as Record<string, unknown>;
   const exclusionReasons: Record<string, number> = {};
   const outcomes: Array<CampaignEnrollmentReport['outcomes'][number]> = [];
   const record = (o: CampaignEnrollmentReport['outcomes'][number]) => { if (outcomes.length < MAX_OUTCOMES) outcomes.push(o); };

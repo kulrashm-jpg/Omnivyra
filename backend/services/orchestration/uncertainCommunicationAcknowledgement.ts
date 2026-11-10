@@ -28,6 +28,18 @@
  * IDEMPOTENT. A repeat of the same acknowledged operation converges on one row (UNIQUE on
  * the tenant and key; a concurrent duplicate is a 23505, read as already recorded).
  *
+ * WHAT THE RECORD MEANS (PI review F3). It is written BEFORE the operation, so it means "this
+ * person was warned and acknowledged", never "the operation completed". If the operation then
+ * fails (an enrolment refused as already active, a cancel whose withdrawal fails), the record
+ * stays and nothing records completion; a retry reuses the same record. Completion is shown
+ * only by the operation's own records: the run state, the `cancelled_by_person` decision, the
+ * created run.
+ *
+ * REQUEST SHAPE (PI review F1). The key travels as `acknowledgeUncertain` (one string) on the
+ * routes that act on one run or one person, and as `acknowledgeUncertainByProspect`
+ * ({ [prospectId]: key }) on batch enrolment. A wrong field or shape is refused with 400
+ * `acknowledgement_shape_invalid` before anything happens (`acknowledgementShapeError`).
+ *
  * FAILS SAFE.
  *   - reenrol: a history that cannot be read refuses the enrolment (`refuse`), because
  *     starting a journey is the direction that could contact the person again.
@@ -327,6 +339,34 @@ export async function checkUncertainAcknowledgement(input: {
     if (row !== undefined && typeof row.id === 'string') return { ok: true, acknowledged: { id: row.id, repeated: true } };
   }
   return { ok: false, status: 503, code: 'acknowledgement_unrecorded', error: 'the acknowledgement could not be recorded; nothing was done' };
+}
+
+export const ACKNOWLEDGEMENT_SHAPE_INVALID = 'acknowledgement_shape_invalid';
+
+const isKeyMap = (v: unknown): v is Record<string, string> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v)
+  && Object.getPrototypeOf(v) === Object.prototype
+  && Object.values(v as Record<string, unknown>).every((k) => typeof k === 'string');
+
+/**
+ * PI review F1: the acknowledgement fields of a request body, checked BEFORE anything happens.
+ * `scalar`: a route acting on one run or one person; `acknowledgeUncertain` must be a string when
+ * present, and `acknowledgeUncertainByProspect` is not accepted. `by_prospect`: batch enrolment;
+ * `acknowledgeUncertainByProspect` must be a plain object of string keys when present, and
+ * `acknowledgeUncertain` is not accepted. Returns the 400 body, or null when the shape is valid.
+ */
+export function acknowledgementShapeError(body: Record<string, unknown>, expects: 'scalar' | 'by_prospect'): Record<string, unknown> | null {
+  const scalar = body.acknowledgeUncertain;
+  const byProspect = body.acknowledgeUncertainByProspect;
+  const refuse = (error: string) => ({ error, code: ACKNOWLEDGEMENT_SHAPE_INVALID });
+  if (expects === 'scalar') {
+    if (byProspect !== undefined) return refuse('acknowledgeUncertainByProspect is for batch enrolment; send acknowledgeUncertain (the warning\'s acknowledgementKey); nothing was done');
+    if (scalar !== undefined && typeof scalar !== 'string') return refuse('acknowledgeUncertain must be the warning\'s acknowledgementKey (a string); nothing was done');
+    return null;
+  }
+  if (scalar !== undefined) return refuse('batch enrolment takes acknowledgeUncertainByProspect ({ [prospectId]: acknowledgementKey }), not acknowledgeUncertain; nothing was done');
+  if (byProspect !== undefined && !isKeyMap(byProspect)) return refuse('acknowledgeUncertainByProspect must map each prospectId to its warning\'s acknowledgementKey (a string); nothing was done');
+  return null;
 }
 
 /** The HTTP answer for a check that stops the operation. */

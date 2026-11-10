@@ -62,7 +62,7 @@ jest.mock('../../services/executionInstances/executionInstanceStore', () => ({
 }));
 
 import {
-  checkUncertainAcknowledgement, acknowledgementKeyFor, acknowledgementRefusalBody,
+  checkUncertainAcknowledgement, acknowledgementKeyFor, acknowledgementRefusalBody, acknowledgementShapeError,
   type AcknowledgementCheck, type UncertaintyScope,
 } from '../../services/orchestration/uncertainCommunicationAcknowledgement';
 
@@ -434,6 +434,29 @@ describe('E: acknowledgement is not approval, and changes nothing it reads', () 
       { requestIds: ['a', 'b', 'c'] }, { historyUnreadable: true },
     ]) {
       expect(acknowledgementKeyFor({ ...base, ...changed })).not.toBe(k);
+    }
+  });
+});
+
+describe('PI review F1: acknowledgementShapeError', () => {
+  it('scalar routes: absent or a string is valid; anything else, or the batch field, is refused', () => {
+    expect(acknowledgementShapeError({}, 'scalar')).toBeNull();
+    expect(acknowledgementShapeError({ acknowledgeUncertain: 'k' }, 'scalar')).toBeNull();
+    for (const bad of [{ acknowledgeUncertain: { a: 'k' } }, { acknowledgeUncertain: null }, { acknowledgeUncertain: 1 }, { acknowledgeUncertainByProspect: {} }]) {
+      expect(acknowledgementShapeError(bad, 'scalar')).toMatchObject({ code: 'acknowledgement_shape_invalid' });
+    }
+  });
+
+  it('batch: absent or a plain object of strings is valid; the scalar field or any other shape is refused', () => {
+    expect(acknowledgementShapeError({}, 'by_prospect')).toBeNull();
+    expect(acknowledgementShapeError({ acknowledgeUncertainByProspect: {} }, 'by_prospect')).toBeNull();
+    expect(acknowledgementShapeError({ acknowledgeUncertainByProspect: { 'p-1': 'k', 'p-2': 'j' } }, 'by_prospect')).toBeNull();
+    for (const bad of [
+      { acknowledgeUncertain: 'k' }, { acknowledgeUncertainByProspect: 'k' }, { acknowledgeUncertainByProspect: ['k'] },
+      { acknowledgeUncertainByProspect: null }, { acknowledgeUncertainByProspect: { 'p-1': 7 } },
+      { acknowledgeUncertainByProspect: Object.create({ inherited: 'k' }) },
+    ]) {
+      expect(acknowledgementShapeError(bad, 'by_prospect')).toMatchObject({ code: 'acknowledgement_shape_invalid' });
     }
   });
 });
