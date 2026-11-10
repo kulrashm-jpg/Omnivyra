@@ -18,6 +18,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *       Recorded as a journey decision with the actor (`actor:<user id>`). Not given with
  *       `lifecycleState`. Nothing reaches PI (P-1 = a). Same guards.
  *
+ * Follow-up E: a person ENDING the run (lifecycleState completed | cancelled | failed, or the
+ * evaluation `end`) while it holds an unresolved uncertain communication answers 409
+ * { code: 'uncertain_communication_unacknowledged', warning } until they send
+ * `acknowledgeUncertain: warning.acknowledgementKey`; the acknowledgement is recorded. It is not
+ * an approval and resolves nothing. An `opt_out` evaluation is never held: it stops contact.
+ *
  * O2-F1: every resume of a paused run (plain, with a return date, or an evaluation) moves the
  * run only from `paused`, a compare-and-set; the loser answers 409 `resume_race_lost`.
  *
@@ -44,6 +50,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withdrawUnsentTasks } from '../../../backend/services/orchestration/journeyExit';
+import { checkUncertainAcknowledgement, acknowledgementRefusalBody } from '../../../backend/services/orchestration/uncertainCommunicationAcknowledgement';
 import { resumeJourneyWithReturnDate } from '../../../backend/services/orchestration/journeyRetiming';
 import { evaluateSuspendedReply } from '../../../backend/services/orchestration/journeyReplyEvaluation';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -107,6 +114,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (body.lifecycleState !== undefined) {
         return res.status(400).json({ error: 'give either lifecycleState or evaluation, not both', code: 'evaluation_with_lifecycle_state' });
       }
+      if (body.evaluation === 'end') {
+        const acknowledgement = await checkUncertainAcknowledgement({
+          organizationId: companyId, operation: 'end_run', scope: { kind: 'run', executionInstanceId: instanceId },
+          actorUserId: guard.principal.userId, acknowledgementKey: body.acknowledgeUncertain, onUnreadable: 'warn',
+        });
+        if (acknowledgement.ok !== true) return res.status(acknowledgement.status).json(acknowledgementRefusalBody(acknowledgement));
+      }
       const evaluated = await evaluateSuspendedReply({
         organizationId: companyId,                 // the VERIFIED tenant
         executionInstanceId: instanceId,
@@ -165,6 +179,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // A run that ended must not leave a task someone can still approve and send. Withdrawn
     // first, so a failure leaves the run open; again after, for anything created meanwhile.
     const ending = (TERMINAL_LIFECYCLE_STATES as readonly string[]).includes(lifecycleState);
+    if (ending) {
+      const acknowledgement = await checkUncertainAcknowledgement({
+        organizationId: companyId, operation: 'end_run', scope: { kind: 'run', executionInstanceId: instanceId },
+        actorUserId: guard.principal.userId, acknowledgementKey: body.acknowledgeUncertain, onUnreadable: 'warn',
+      });
+      if (acknowledgement.ok !== true) return res.status(acknowledgement.status).json(acknowledgementRefusalBody(acknowledgement));
+    }
     if (ending) await withdrawUnsentTasks(companyId, instanceId);
     const updated = await setExecutionInstanceState({
       organizationId: companyId,                   // the VERIFIED tenant

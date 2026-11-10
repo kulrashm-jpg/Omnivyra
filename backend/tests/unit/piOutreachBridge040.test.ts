@@ -498,7 +498,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
       .toBe('652e20fb2f6425e2');
     expect(sha('backend/services/workflowExecution/stepProgressionStore.ts'))
       .toBe('e36a36c6439315ab'); // RE-PINNED 2026-11-05 (Prompt 4): reads not_before; deferStepUntil (20270127000000)
-    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('ff81c0cfaff48267'); // RE-PINNED 2026-11-06 (Prompt 5): recordPersonDecision moved to journeyDecisionLog (widened to keep d.reasons; progression passes reasons: [], so its records are unchanged)
+    expect(sha('pages/api/execution-instances/[id]/progression.ts')).toBe('6399f93889812016'); // RE-PINNED 2026-11-10 (Follow-up E: cancel acknowledges an unresolved uncertain communication first (uncertainCommunicationAcknowledgement)); before that RE-PINNED 2026-11-06 (Prompt 5): recordPersonDecision moved to journeyDecisionLog (widened to keep d.reasons; progression passes reasons: [], so its records are unchanged)
   });
 
   it('033 artefacts are byte-identical', () => {
@@ -507,9 +507,9 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
-    expect(sha('pages/api/execution-instances/[id].ts')).toBe('4616088fd7c2a8d2'); // RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
+    expect(sha('pages/api/execution-instances/[id].ts')).toBe('98b846a3cdbbe6b3'); // RE-PINNED 2026-11-10 (Follow-up E: a person ending the run (lifecycle end, evaluation end) acknowledges an unresolved uncertain communication first; opt_out never held); before that RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
-      .toBe('6c303af15da7a4bf');
+      .toBe('66d03e8648c2955f'); // RE-PINNED 2026-11-10 (Follow-up E: enrolling a person with an unresolved uncertain communication from an earlier run acknowledges it first)
   });
 
   it('THE ONLY AUTHORIZED 036 CHANGE IS THE COMPANION INDEX', () => {

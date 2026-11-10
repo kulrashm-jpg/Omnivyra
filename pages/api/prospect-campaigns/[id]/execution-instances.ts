@@ -109,6 +109,7 @@ import {
 } from '../../../../backend/services/executionInstances/executionInstanceStore';
 import { getProspectCampaign } from '../../../../backend/services/prospectCampaigns/prospectCampaignStore';
 import { checkEnrollmentEligibility } from '../../../../backend/services/orchestration/enrollment';
+import { checkUncertainAcknowledgement, acknowledgementRefusalBody } from '../../../../backend/services/orchestration/uncertainCommunicationAcknowledgement';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -192,6 +193,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // Follow-up E: enrolling a person with an unresolved uncertain communication from an
+    // earlier run needs that possible send acknowledged (and recorded) first; it approves
+    // nothing. Under withIdempotency the acknowledged retry is a new body, so a new key.
+    const acknowledgement = await checkUncertainAcknowledgement({
+      organizationId: companyId, operation: 'reenrol',
+      scope: { kind: 'subject', subjectKind, subjectId, campaignId, workflowId },
+      actorUserId: guard.principal.userId, acknowledgementKey: body.acknowledgeUncertain, onUnreadable: 'refuse',
+    });
+    if (acknowledgement.ok !== true) return res.status(acknowledgement.status).json(acknowledgementRefusalBody(acknowledgement));
+
     const instance = await createExecutionInstance({
       organizationId: companyId,                   // the VERIFIED tenant, never the body's
       campaignId,                                  // the BOUND campaign, from the path
@@ -202,7 +213,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ? {}
         : { targetId: String(body.targetId) }),
     });
-    return res.status(201).json({ instance });
+    return res.status(201).json({ instance, acknowledgement: acknowledgement.acknowledged });
   } catch (e) {
     if (e instanceof ExecutionInstanceError) {
       // PI-034 — name the run that is in the way. The caller already knows a

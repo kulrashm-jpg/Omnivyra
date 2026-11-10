@@ -1,7 +1,12 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/prospect-campaigns/:id/enroll?company_id=<uuid>
- * Body: { workflowId, selectionEventKey?, dryRun? }
+ * Body: { workflowId, selectionEventKey?, dryRun?, acknowledgeUncertain? }
+ *
+ * Follow-up E: a person with an unresolved uncertain communication from an earlier run is
+ * reported `needs_acknowledgement` with its warning and is not enrolled, until the request
+ * carries `acknowledgeUncertain: { [prospectId]: warning.acknowledgementKey }`. The
+ * acknowledgement is recorded per person; it authorizes no send.
  *
  * Enrolls the campaign's selected targets into ONE workflow, under its current
  * published version: one journey per distinct prospect, the version's
@@ -65,6 +70,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       workflowId,
       ...(selectionEventKey ? { selectionEventKey } : {}),
       dryRun: body.dryRun === true,
+      actorUserId: guard.principal.userId,           // the authenticated person, never the body's
+      acknowledgements: body.acknowledgeUncertain,
     });
     return res.status(200).json({ report });
   } catch (e) {

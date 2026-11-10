@@ -39,6 +39,8 @@ jest.mock('../../db/writeOwner', () => ({
       update: (p: Row) => { st.op = 'update'; st.payload = p; return b; },
       insert: (p: Row) => { st.op = 'insert'; st.payload = p; return b; },
       eq: (c: string, v: unknown) => { st.filters.push([c, v]); return b; },
+      // Follow-up E reads tasks and the ledger with in/limit: those tables are not modelled here, so they hold no rows.
+      in: () => b, limit: () => b,
       maybeSingle: () => { st.one = true; return b; },
       then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => exec().then(res, rej),
     };
