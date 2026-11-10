@@ -94,6 +94,8 @@ const SAFETY_SUITE_REGISTRY = [
   'backend/tests/unit/publishChannelVocabulary.test.ts',
   // Migration re-run / rollback-order safety (20261231000009)
   'backend/tests/unit/migrationRerunSafety.test.ts',
+  // GD-4 ordering postcondition: security-gated function bodies stay last on replay
+  'backend/tests/unit/migrationFunctionOrderSecurity.test.ts',
   // Legacy RPA session invalidation (20261231000010) and RPA login-token pruning
   'backend/tests/unit/rpaLegacySessionInvalidation.test.ts',
   'backend/tests/unit/rpaAuthTokenRedemptionPrune.test.ts',
