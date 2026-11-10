@@ -43,6 +43,32 @@ const okPost = (calls: Array<{ count: number; runId: string }>) =>
     };
   };
 
+describe('the synchronous request ceiling (D4)', () => {
+  it('is 100 records, as the owner ruled', () => {
+    // Pinned as a literal in exactly one place. Every other assertion in this
+    // file derives from the constant, so this is the only test that fails if
+    // the value is changed - which is the point: changing a platform-safety
+    // bound should require editing the test that states it.
+    expect(MAX_BATCH_SIZE).toBe(100);
+  });
+
+  it('equals the ceiling the SERVER enforces', () => {
+    // This is a client bundle and cannot import the server module, so the value
+    // is restated there. Compare the server's SOURCE TEXT rather than trusting
+    // the comment that says they match: a drift here makes the client provoke
+    // a 413 on every oversized chunk.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require('path');
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../services/leadIngestion/orchestrator.ts'), 'utf8');
+    const m = src.match(new RegExp('export const MAX_BATCH_SIZE = ([0-9_]+);'));
+    expect(m).not.toBeNull();
+    expect(Number((m as RegExpMatchArray)[1].replace(/_/g, ''))).toBe(MAX_BATCH_SIZE);
+  });
+});
+
 describe('batching', () => {
   it('never submits more than the route accepts', async () => {
     const calls: Array<{ count: number; runId: string }> = [];
@@ -53,8 +79,15 @@ describe('batching', () => {
       post: okPost(calls),
     });
 
-    expect(calls.map((c) => c.count)).toEqual([1_000, 1_000, 500]);
+    // Derived from the constant on purpose: this test owns the CHUNKING, and
+    // 'the value is 100' is pinned once, in its own test below. Asserted as
+    // properties so it cannot pass for the wrong shape: every chunk is full
+    // except the last, nothing exceeds the ceiling, and the parts sum to the
+    // whole.
+    expect(calls).toHaveLength(Math.ceil(2_500 / MAX_BATCH_SIZE));
     for (const call of calls) expect(call.count).toBeLessThanOrEqual(MAX_BATCH_SIZE);
+    for (const call of calls.slice(0, -1)) expect(call.count).toBe(MAX_BATCH_SIZE);
+    expect(calls.reduce((t, c) => t + c.count, 0)).toBe(2_500);
     expect(result.recordsSent).toBe(2_500);
     expect(result.succeeded).toBe(2_500);
   });
@@ -68,7 +101,9 @@ describe('batching', () => {
       chunkSize: 99_999,
       post: okPost(calls),
     });
-    expect(calls.map((c) => c.count)).toEqual([1_000, 200]);
+    expect(calls).toHaveLength(Math.ceil(1_200 / MAX_BATCH_SIZE));
+    for (const call of calls) expect(call.count).toBeLessThanOrEqual(MAX_BATCH_SIZE);
+    expect(calls.reduce((t, c) => t + c.count, 0)).toBe(1_200);
   });
 
   it('shares ONE run id across every chunk of one import', async () => {
@@ -122,8 +157,8 @@ describe('progress', () => {
 
     expect(seen[0]).toMatchObject({ chunksDone: 0, recordsSent: 0, recordsTotal: 2_500 });
     expect(seen[seen.length - 1]).toMatchObject({
-      chunksDone: 3,
-      chunksTotal: 3,
+      chunksDone: Math.ceil(2_500 / MAX_BATCH_SIZE),
+      chunksTotal: Math.ceil(2_500 / MAX_BATCH_SIZE),
       recordsSent: 2_500,
       succeeded: 2_500,
     });
@@ -158,8 +193,8 @@ describe('a partial import tells the truth', () => {
     });
 
     // No rollback, and no pretending: the first chunk is durable.
-    expect(result.succeeded).toBe(1_000);
-    expect(result.recordsSent).toBe(1_000);
+    expect(result.succeeded).toBe(MAX_BATCH_SIZE);
+    expect(result.recordsSent).toBe(MAX_BATCH_SIZE);
     expect(result.transportError).toContain('upstream exploded');
     expect(result.aborted).toBe(false);
   });
@@ -195,7 +230,7 @@ describe('a partial import tells the truth', () => {
         };
       },
     });
-    expect(result.succeeded).toBe(1_000);
+    expect(result.succeeded).toBe(MAX_BATCH_SIZE);
     expect(result.transportError).toBe('network died');
   });
 
@@ -218,7 +253,7 @@ describe('a partial import tells the truth', () => {
 
     expect(result.aborted).toBe(true);
     expect(result.transportError).toBeNull();
-    expect(result.succeeded).toBe(1_000);
+    expect(result.succeeded).toBe(MAX_BATCH_SIZE);
   });
 });
 

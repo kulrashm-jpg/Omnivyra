@@ -11,6 +11,9 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+// Declared in the provenance contract, which is the authoritative vocabulary
+// (lib/leadIntelligence re-exports neither the type nor the guard).
+import type { SourceCategory } from '../../../lib/prospectProvenance/contract';
 import {
   computeLeadDedupeKey,
   buildCampaignIntelligence,
@@ -68,6 +71,22 @@ function toRow(lead: CanonicalLead, scores: CanonicalLeadScores): Record<string,
     // tell which keys the provider actually sent. Until now this was dropped
     // entirely, so a durable lead had no name on any surface.
     display: lead.display ?? null,
+    // D2/D3: THE AUTHORITATIVE ORIGIN, and only when it is asserted.
+    //
+    // An adapter hint reaches this as NULL, which the table's trigger reads
+    // as "this write has nothing to say about origin" and leaves whatever is
+    // stored alone. So a website or reconciliation write can neither
+    // manufacture a classification nor erase one.
+    //
+    // Both keys are ALWAYS present in the body, never omitted. Omitting a key
+    // from a merge-duplicates upsert to mean "do not touch" is the
+    // unverifiable PostgREST behaviour this repository refuses to rely on
+    // (see `issueCanonicalWrite`): if the SET list were built from the
+    // table's columns rather than the body's keys, an absent key would assign
+    // the default and WIPE the value. Sending NULL and letting the trigger
+    // decide needs no such assumption.
+    origin_category: lead.origin?.provenance === 'asserted' ? (lead.origin.category ?? null) : null,
+    origin_observed_at: lead.origin?.provenance === 'asserted' ? (lead.origin.observedAt ?? null) : null,
     source_table: lead.sourceRef?.table ?? null,
     source_id: lead.sourceRef?.id ?? null,
     occurred_at: lead.occurredAt ?? null,
@@ -99,6 +118,42 @@ function rowToView(row: Record<string, unknown>): CanonicalLeadView {
     // UNKNOWN label — and `{ name: null }` would assert we looked and found
     // nothing, which is a different claim.
     display: row.display ? (obj(row.display) as CanonicalLeadView['display']) : undefined,
+    // D2: the origin comes back from the DURABLE row, so scoring and journey
+    // wording no longer depend on a provenance read succeeding. Three read
+    // surfaces never attach provenance at all (`getCompanyIntelligence`, the
+    // default `listAllLeads`, and any row whose `source_table` is not
+    // `canonical_leads`), and those are precisely where the +15
+    // `lead_captured` contribution used to vanish.
+    //
+    // Set only when a category is actually stored. `undefined` rather than an
+    // object full of nulls, for the same reason `display` does it: an origin
+    // of `{ category: null }` asserts we looked and found nothing recorded,
+    // which is a different claim from never having looked - and
+    // `hasLeadFormEvidence` is fail-closed on both, so neither earns points.
+    //
+    // `platform` is NOT persisted: D2/D3 named two fields and this is not one
+    // of them. It is display-only (the "· Apollo" half of a provenance
+    // label), so `originFrom` may still take it from the originating
+    // contribution. It may NOT take the category or the observation from
+    // there: D3 (owner ruling, 2026-11-07) INVERTED that precedence, and this
+    // row is now the authority.
+    //
+    // `provenance: 'asserted'` ROUND-TRIPS the marker, and that is what makes
+    // the inversion implementable at all. The write boundary above only ever
+    // sends this column when `origin.provenance === 'asserted'`, so a stored
+    // value is asserted BY CONSTRUCTION. Without re-attaching the marker here
+    // the read path cannot tell a stored classification from a read-time
+    // display hint, and those two must not carry the same authority.
+    ...(row.origin_category
+      ? {
+        origin: {
+          category: String(row.origin_category) as SourceCategory,
+          platform: null,
+          observedAt: (row.origin_observed_at as string | null) ?? null,
+          provenance: 'asserted' as const,
+        },
+      }
+      : {}),
   };
 }
 
@@ -544,8 +599,44 @@ async function readCanonicalLeadByDedupeKey(
       .eq('company_id', companyId)
       .eq('dedupe_key', dedupeKey);
     const res = await (autoRetry ? query : query.retry(false)).maybeSingle();
-    const { data, error } = res as { data: unknown; error: unknown };
+    const { data, error, status } = res as { data: unknown; error: unknown; status?: unknown };
     if (error) return { outcome: 'unknown' };
+
+    // A NULL `error` IS NOT AN ANSWER (Prompt 2F).
+    //
+    // `absent` is a positive claim - "the database holds no row for this key" -
+    // and on this path it authorizes `resolveScoreWrite` to replace the
+    // `scores` column. So it may be made only from a response that proves it,
+    // and `!error` does not prove it.
+    //
+    // @supabase/postgrest-js 2.105.3 REWRITES two failures into error-free
+    // responses in `processResponse`: a 404 with an EMPTY body becomes
+    // `{ status: 204, error: null }`, and a 404 with a JSON ARRAY body becomes
+    // `{ data: [], error: null, status: 200 }`. A blank 404 is what an edge, a
+    // WAF or a paused project answers, so the first shape arrived here looking
+    // exactly like an empty table - `error` null, no row - and returned
+    // `absent`. That is the fail-open overwrite this read exists to prevent,
+    // reached by the one error shape the read did not inspect.
+    //
+    // Not a new discovery about the library: `projectionResult.ts` names this
+    // same rewrite and holds 204 in `UNCERTAIN_STATUSES` because of it. That
+    // reasoning was only ever applied to WRITES. Same library, same lie - the
+    // read side now reads the status too.
+    //
+    // Deliberately NOT the write path's status set. A write must separate
+    // pre-send from post-send to stay idempotent; a read only needs to know
+    // whether it was answered. So anything that is not a plain 2xx - and 204 in
+    // particular, which IS 2xx and still means "no answer" here - is
+    // `unknown`, which preserves the stored score.
+    //
+    // A response carrying NO `status` is left as it was. The real client always
+    // sets one, so this concerns only test doubles, and reading their silence as
+    // uncertainty would change what those suites assert without making a single
+    // production path safer.
+    if (typeof status === 'number' && (status === 204 || status < 200 || status >= 300)) {
+      return { outcome: 'unknown' };
+    }
+
     const row = data as Record<string, unknown> | null;
     const id = row?.id;
     if (!id) return { outcome: 'absent' };

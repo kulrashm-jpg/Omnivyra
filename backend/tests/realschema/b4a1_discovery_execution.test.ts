@@ -48,7 +48,7 @@ jest.mock('../../services/enrichment/providers/credentials', () => ({
 }));
 
 import {
-  db, inRollback, seedTenants, ORG_A, ORG_B, attempt, constraintDef, uniqueIndexColumns,
+  db, inRollback, seedTenants, ORG_A, ORG_B, attempt, effect, constraintDef, uniqueIndexColumns,
 } from './setup';
 
 jest.mock('../../db/writeOwner', () => ({
@@ -284,6 +284,64 @@ describe('B4-A1 — the CHECKs refuse what the application must never write', ()
          VALUES ($1, 'synthetic', '{}'::jsonb, 'nope', 1, 1, 1, 1, 'c', $2)`,
         [ORG_A, NOW],
       )).toBe('23514');
+    });
+  });
+
+  it('D1: a billed search that ingested NOTHING closes `failed` and the table ACCEPTS it', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      // D1 (owner ruling, 2026-11-07) introduces a ledger state combination
+      // that no row carried before: execution_status `failed` together with
+      // provider_call_state `called` and non-zero counters — "we paid, and
+      // nothing became durable". Two CHECKs could have refused it, and both
+      // are asked here rather than reasoned about:
+      //
+      //   * results_need_transport permits results only when the provider was
+      //     called or the outcome is unknown — satisfied, because D1 keeps
+      //     `called`: the vendor really did execute, and that stays separately
+      //     true from the overall verdict;
+      //   * open_iff_uncompleted requires completed_at to be set for any
+      //     status outside the open three — satisfied, because `failed` is
+      //     terminal and close() stamps completed_at in the same statement.
+      //
+      // If either had refused, the executor would have raised inside its own
+      // guard and re-closed the row as executor_failed, reporting a crash for
+      // what was really a search that found nothing usable.
+      expect(await effect(
+        `INSERT INTO ${T} (organization_id, provider_key, search_criteria, search_digest,
+            max_pages, max_results, max_provider_calls, attempt_number, correlation_id, started_at,
+            execution_status, provider_call_state, outcome, completed_at, last_failure_at,
+            pages_fetched, results_observed, results_ingested, provider_calls_made)
+         VALUES ($1, 'synthetic', '{}'::jsonb, $2, 1, 25, 1, 1, 'c-d1', $3,
+            'failed', 'called', 'discovered_not_ingested', $3, $3,
+            1, 25, 0, 1)`,
+        [ORG_A, DIGEST, NOW],
+      )).toBe('ok');
+
+      const { rows } = await db.query(
+        `SELECT execution_status, provider_call_state, outcome, results_observed, results_ingested,
+                completed_at IS NOT NULL AS closed, last_failure_at IS NOT NULL AS failed_at_set
+           FROM ${T} WHERE organization_id = $1 AND correlation_id = 'c-d1'`,
+        [ORG_A],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].execution_status).toBe('failed');
+      expect(rows[0].provider_call_state).toBe('called');
+      expect(rows[0].outcome).toBe('discovered_not_ingested');
+      expect(rows[0].results_observed).toBe(25);
+      expect(rows[0].results_ingested).toBe(0);
+      expect(rows[0].closed).toBe(true);
+      expect(rows[0].failed_at_set).toBe(true);
+
+      // And the row no longer occupies the live slot, so the operator can
+      // re-run the search: the partial unique index is WHERE completed_at IS
+      // NULL, and a failed row is completed.
+      const live = await db.query(
+        `SELECT count(*)::int c FROM ${T}
+          WHERE organization_id = $1 AND search_digest = $2 AND completed_at IS NULL`,
+        [ORG_A, DIGEST],
+      );
+      expect(live.rows[0].c).toBe(0);
     });
   });
 

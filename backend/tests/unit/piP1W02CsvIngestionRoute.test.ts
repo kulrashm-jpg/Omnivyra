@@ -40,7 +40,7 @@ jest.mock('../../services/leadIngestion/orchestrator', () => ({
   // Tenant-scoped gate, doubled ALLOW: this suite tests the CSV route, not the
   // gate. Every deny path lives in piTenantScopedIngestionGate.test.ts.
   resolveLeadIngestionGate: async () => ({ allowed: tenantGateAllowed, reason: 'test' }),
-  MAX_BATCH_SIZE: 1000,
+  MAX_BATCH_SIZE: 100,
 }));
 
 jest.mock('../../services/leadIngestion', () => ({

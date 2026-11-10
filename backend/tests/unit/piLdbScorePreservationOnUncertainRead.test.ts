@@ -63,7 +63,7 @@ const requests: Observed[] = [];
 const store = new Map<string, Record<string, unknown>>();
 
 /** How the protective read (the one asking for `scores`) should answer. */
-type ReadFault = 'none' | 'denied' | 'unavailable';
+type ReadFault = 'none' | 'denied' | 'unavailable' | 'blank_404';
 let readFault: ReadFault = 'none';
 
 const BASE = { url: '' };
@@ -139,6 +139,16 @@ beforeAll(async () => {
           // A definite answer that we may NOT look — which is exactly "I do
           // not know what is stored".
           json(403, { code: '42501', message: 'permission denied for table lead_intelligence', details: null, hint: null });
+          return;
+        }
+        if (isProtectiveRead(query) && readFault === 'blank_404') {
+          // AN EDGE, A WAF OR A PAUSED PROJECT: 404 with an EMPTY body, which
+          // never reaches PostgREST. postgrest-js's `processResponse` rewrites
+          // it to `{ status: 204, error: null }`, so it arrives at the read
+          // looking exactly like an empty table. Written with the raw socket,
+          // not `json()`, because the empty body IS the condition.
+          res.writeHead(404);
+          res.end();
           return;
         }
         if (isProtectiveRead(query) && readFault === 'unavailable') {
@@ -233,6 +243,12 @@ describe('PI-LDB 2C · an uncertain protective read leaves a stored score alone'
   it.each<[string, ReadFault]>([
     ['an authorization refusal', 'denied'],
     ['a gateway that will not answer', 'unavailable'],
+    // Prompt 2F. This one carried NO `error` at all: postgrest-js turns a blank
+    // 404 into `{ status: 204, error: null }`, the read reported `absent`, and
+    // `absent` authorizes the merge-duplicates upsert to assign `scores`. It
+    // belongs in this table because it is the same claim, not a new one - the
+    // read simply had one more way of not knowing than it used to inspect.
+    ['an edge answering a blank 404', 'blank_404'],
   ])('%s does not assign `scores` on the existing row', async (_label, fault) => {
     readFault = fault;
     const l = lead();

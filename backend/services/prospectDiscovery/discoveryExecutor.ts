@@ -655,11 +655,12 @@ export async function runDiscoveryExecution(input: {
     // it would train operators to ignore the warning that matters. The counters
     // above are reported either way, so a caller can still see `projected: 0`.
     //
-    // `execution_status` stays `completed`, deliberately. The ledger's three
-    // columns answer three different questions, and `failed` is the one that
-    // carries `last_failure_at` and retry safety — a read-model shortfall that
-    // marked the execution failed would invite a retry to pay the provider again
-    // for a row that is already durable. The claim belongs in `outcome`.
+    // For the PROJECTION cases below, `execution_status` stays `completed`,
+    // deliberately: the ledger's three columns answer three different questions,
+    // and a read-model shortfall on records that ARE durable is not a failed
+    // vendor execution. The claim belongs in `outcome`. D1 (owner ruling,
+    // 2026-11-07) keeps that, and separates out the one case where nothing
+    // became durable at all — see `discovered_not_ingested` below.
     let outcome: string;
     let detail: string | null = null;
     if (state.observed === 0) {
@@ -681,8 +682,24 @@ export async function runDiscoveryExecution(input: {
       // this line of work exists to remove - a billed search reporting a
       // discovery that produced nothing.
       //
-      // `execution_status` stays `completed` for the reason given below: the
-      // provider call happened and `failed` invites a retry that pays again.
+      // D1 (owner ruling, 2026-11-07): this one closes `failed`.
+      //
+      // The previous justification for `completed` was that `failed` "invites a
+      // retry that pays again". That was FALSE at this commit, and the PI 2F
+      // review measured it: `prospect_discovery_attempts.next_retry_at` has no
+      // writer, no cron, worker or queue job reads this table, and
+      // `reclaimExpiredDiscoveryExecution` runs only when a caller issues the
+      // same search again. There is no automatic retry to invite. The HTTP code
+      // and the idempotency cache are driven by the response status, not by this
+      // field, so moving it changes what a HUMAN reads and nothing else.
+      //
+      // And what a human reads mattered: `completed` is also the value a fully
+      // successful run carries, so a billed search that produced no prospect, no
+      // person and no evidence was indistinguishable from one that worked unless
+      // the reader knew to compare `results_ingested` against
+      // `results_observed`. `provider_call_state` stays `called` and the
+      // counters stay authoritative, so "we paid and got nothing" is still fully
+      // answerable — it is now answerable from the status alone.
       outcome = 'discovered_not_ingested';
       detail = `${state.observed} records observed this run, 0 ingested — the ingestion boundary accepted none of them`;
     } else if (!projection.reported) {
@@ -694,7 +711,12 @@ export async function runDiscoveryExecution(input: {
       outcome = projection.projected === 0 ? 'discovered_not_projected' : 'discovered_partially_projected';
       detail = `read-model projection: ${projection.projected} persisted, ${projection.attention} needing attention, of ${ingestedThisRun} ingested this run`;
     }
-    return close('completed', 'called', outcome, detail, state, stopReason, { providerUsage });
+    // Vendor execution completed, so `provider_call_state` is `called` either
+    // way; only the OVERALL verdict differs. Projection shortfalls stay
+    // `completed` (D1), zero durable records close `failed` (D1).
+    const executionStatus: 'completed' | 'failed' =
+      outcome === 'discovered_not_ingested' ? 'failed' : 'completed';
+    return close(executionStatus, 'called', outcome, detail, state, stopReason, { providerUsage });
 
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

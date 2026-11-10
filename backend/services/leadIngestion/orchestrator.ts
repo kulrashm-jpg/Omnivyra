@@ -79,8 +79,28 @@ import { isSourceCategory } from '../../../lib/prospectProvenance/contract';
 import { durableLeadIntelligenceSink } from '../leadIntelligence/durableLeadIntelligenceSink';
 import { evaluateFeatureFlag } from '../featureFlagService';
 
-/** A batch bounded so a single call cannot be used to exhaust the platform. */
-export const MAX_BATCH_SIZE = 1_000;
+/**
+ * Records per SYNCHRONOUS ingestion request. NOT a maximum CSV size —
+ * a larger file is submitted in chunks of this size by `submitChunks`.
+ *
+ * D4 (owner ruling, 2026-11-07): 100, down from 1,000.
+ *
+ * WHY, measured rather than guessed. This path is fully synchronous
+ * (`ingestLeadBatch` awaits `ingestNormalizedRecord` per record in a
+ * sequential loop) and the 2F audit counted the PostgREST round trips a single
+ * record costs: ~18-20 for a lean row, ~52-55 for a first-import row carrying
+ * employer attributes, because source assertions are written one INSERT per
+ * attribute. `vercel.json` declares no `functions.maxDuration` and this
+ * repository holds NO evidence of a plan entitlement, so the effective limit is
+ * a platform default that cannot be verified from here. 1,000 records could not
+ * fit any defensible budget; the only safe move is to reduce the work per
+ * request rather than to assume more time, which is why this is a smaller
+ * number and not a larger `maxDuration`.
+ *
+ * `lib/prospects/import/submitChunks.ts` restates this value so the client
+ * never provokes the 413. The two MUST stay equal; a test pins that.
+ */
+export const MAX_BATCH_SIZE = 100;
 
 /**
  * The ingestion capability switch. Default OFF — absent, empty or unrecognised
@@ -684,6 +704,24 @@ export async function ingestNormalizedRecord(
         // correct outcome rather than an omission: `apollo` is `pi_discovery`,
         // `csv` is `csv`, `crm` is `crm`, `manual` is `manual`. None of them
         // is a person submitting a form, so none of them earns the claim.
+        // D2/D3 (owner ruling, 2026-11-07). Two things changed here.
+        //
+        // `provenance: 'asserted'` is what lets this category be PERSISTED.
+        // It is the one place in the tree entitled to say so: the value comes
+        // from the explicit `PI_ADAPTER_PROFILES` table, not from a label. The
+        // adapters in adapters.ts build an `origin` too, by inference, and
+        // they deliberately do not set this - so their hint still displays and
+        // never reaches the column.
+        //
+        // `observedAt` is now the INGESTION CLOCK, not `record.observedAt`.
+        // D3 defines the persisted observation as "when Omnivyra first
+        // accepted the evidence establishing the current classification", and
+        // names the source event's own time as one of the four things it must
+        // NOT be. `record.observedAt` is exactly that - the provider's or the
+        // source row's event time - and it is still carried on `occurredAt`
+        // just above, which is the field that means it. On a re-ingestion the
+        // database trigger keeps the FIRST acceptance time, so this value is
+        // used only when the classification is new or superseded.
         ...(keys.provenance
           ? {
             origin: {
@@ -691,7 +729,8 @@ export async function ingestNormalizedRecord(
                 ? keys.provenance.sourceCategory
                 : null,
               platform: keys.provenance.platform ?? null,
-              observedAt: record.observedAt ?? at,
+              observedAt: at,
+              provenance: 'asserted' as const,
             },
           }
           : {}),

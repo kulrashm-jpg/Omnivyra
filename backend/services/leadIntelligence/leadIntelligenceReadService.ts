@@ -405,9 +405,49 @@ export function evidenceOf(c: ProvenanceContribution): LeadEvidenceRef[] {
   return refs.filter(([, ref]) => !!ref).map(([kind, ref]) => ({ ...base, kind, ref: String(ref) }));
 }
 
-function originFrom(c: ProvenanceContribution | undefined, fallback: LeadOrigin | null | undefined): LeadOrigin | null {
-  if (c) return { category: c.sourceCategory, platform: c.platform, observedAt: c.observedAt };
-  return fallback ?? null;
+/**
+ * D3 (owner ruling, 2026-11-07) — ORIGIN-CATEGORY READ PRECEDENCE, INVERTED.
+ *
+ * The PERSISTED `lead_intelligence.origin_category` is authoritative for scoring
+ * and journey presentation. A contribution reconstructed from
+ * `prospect_source_contributions` is SUPPORTING AUDIT EVIDENCE, not a replacement
+ * authority. Before this, the reconstruction won whenever a provenance read
+ * happened to succeed, so the same prospect scored differently depending on which
+ * read surface loaded it and whether an external read was reachable.
+ *
+ * `stored` is the persisted row's origin; `c` is the reconstructed originating
+ * contribution. The rules, each one a requirement of the ruling:
+ *
+ *   - a non-null persisted category WINS;
+ *   - `category` and `observedAt` are ONE ATOMIC PAIR - never one field from the
+ *     row and the other from the contribution, because that would date a
+ *     classification by evidence that did not establish it;
+ *   - NULL means UNKNOWN and FAILS CLOSED. The reconstruction may not stand in,
+ *     and nothing is inferred from a display source, a provider name or a
+ *     channel. `hasLeadFormEvidence` tests `=== 'inbound_form'`, so unknown
+ *     earns nothing - which is the intended answer, not a gap;
+ *   - a provenance read FAILURE never erases a persisted category: the two
+ *     callers below already pass `v.origin` through untouched on a failed or
+ *     absent read, and this function keeps the stored value whole.
+ *
+ * `platform` is the one field that may still come from the contribution. It is
+ * deliberately NOT persisted (D2/D3 named two fields and this is not one), it is
+ * display-only - the "· Apollo" half of a provenance label - and taking it is not
+ * an inference ABOUT the category, which continues to come from the row alone.
+ */
+function originFrom(c: ProvenanceContribution | undefined, stored: LeadOrigin | null | undefined): LeadOrigin | null {
+  if (stored?.provenance === 'asserted' && stored.category !== null) {
+    return { ...stored, platform: stored.platform ?? c?.platform ?? null };
+  }
+  // A stored origin that is NOT asserted is a read-time display hint. It keeps
+  // whatever display behaviour it already had, and it is NOT promoted to
+  // authority here - see the note in the test file on the one inference path
+  // this ruling does not reach.
+  if (stored) return stored;
+  // No persisted origin at all. The category stays UNKNOWN (fail closed, and no
+  // historical backfill by inference); only the display-only platform survives,
+  // and `observedAt` stays null with it so the pair never splits.
+  return c ? { category: null, platform: c.platform, observedAt: null } : null;
 }
 
 /**

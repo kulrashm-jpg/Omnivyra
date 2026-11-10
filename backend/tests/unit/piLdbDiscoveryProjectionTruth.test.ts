@@ -722,6 +722,23 @@ describe('PI-LDB 2B - one throwing record does not discard the batch', () => {
     // reachable, because 0 ingested means 0 needing attention, which the
     // projection branches would have read as "all clear".
     expect(run.outcome).toBe('discovered_not_ingested');
+    // D1 (owner ruling, 2026-11-07): AND the overall verdict is `failed`.
+    //
+    // This assertion was missing, so the concealment was unpinned in BOTH
+    // directions: nothing stated that a zero-ingestion run closed `completed`,
+    // and nothing would have caught it changing. `completed` is also the value
+    // a fully successful run carries, so a reader of `execution_status` alone
+    // could not tell a billed search that produced nothing from one that
+    // worked. Asserted on the RESULT and on the durable ledger row, because
+    // those are two different claims.
+    expect(run.status).toBe('failed');
+    expect(ledgerRow(executionId).execution_status).toBe('failed');
+    // The vendor DID execute, and that stays separately true and authoritative:
+    // D1 keeps the four dimensions apart, so `failed` here is the OVERALL
+    // verdict, not a claim that no provider call happened. `last_failure_at` is
+    // now set, which is what a terminal `failed` row carries.
+    expect(ledgerRow(executionId).provider_call_state).toBe('called');
+    expect(ledgerRow(executionId).last_failure_at).toBe(NOW);
     // `detail` is a LEDGER column, not a field on `RunDiscoveryResult` - the
     // result reports `outcome` and `stopReason`, and the prose lives on the row.
     // (Caught by the backend-test typecheck gate, which jest cannot see.)

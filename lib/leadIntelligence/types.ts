@@ -222,6 +222,27 @@ export interface LeadOrigin {
   category: SourceCategory | null;
   platform: string | null;
   observedAt: string | null;
+  /**
+   * WHERE THIS CLASSIFICATION CAME FROM, and therefore whether it may be
+   * PERSISTED (D2, owner ruling 2026-11-07).
+   *
+   * 'asserted' means an ingestion path set it explicitly, from the provenance
+   * profile table. ABSENT means it is a read-time HINT derived from a display
+   * source or a provider name: `crmAdapter` reads `pi_discovery` off
+   * provider-name membership, and `websiteAdapter` reads `inbound_form` off
+   * the free-text `leads.source` string matching 'form' after whitespace and
+   * hyphen normalisation. That last one is worth +15 and the words
+   * "Submitted a lead form".
+   *
+   * A hint is fine for display. Storing one durably would manufacture a claim
+   * about something a human did, so only 'asserted' reaches
+   * `lead_intelligence.origin_category`.
+   *
+   * Optional, so every existing construction still compiles and no read path
+   * changes behaviour: absence is the safe value, and the write boundary -
+   * not the type - is what refuses a hint.
+   */
+  provenance?: 'asserted';
 }
 
 export interface CanonicalLeadInput {

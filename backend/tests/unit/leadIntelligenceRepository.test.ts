@@ -111,3 +111,89 @@ describe('Durable Lead Intelligence repository', () => {
     expect(page).toHaveLength(1000); // capped, never unbounded
   });
 });
+
+/**
+ * PI-LDB 2F / D2 — WHICH origin values this repository is willing to send, and
+ * what it hands back.
+ *
+ * Scope, stated so a reader does not expect the other half here: the D3
+ * preservation rule (a re-ingestion keeps the first acceptance time, a write
+ * asserting nothing cannot erase a stored classification) lives in a database
+ * TRIGGER, because the canonical write assigns every key in its body and this
+ * store has four write paths. A trigger cannot be exercised by an in-memory
+ * double, and modelling one here would prove only that the model matches the
+ * model. It is proved against real PostgreSQL in
+ * backend/tests/realschema/pildb_origin_category_acceptance.test.ts.
+ */
+describe('PI-LDB 2F · the durable origin write contract (D2)', () => {
+  const ASSERTED_AT = '2026-11-07T09:00:00.000Z';
+
+  /** The single row the upsert left behind. */
+  const row = () => {
+    expect(stores.lead_intelligence).toHaveLength(1);
+    return stores.lead_intelligence[0];
+  };
+
+  it('persists an ASSERTED category and its acceptance time', async () => {
+    await upsertCanonicalLead(lead({
+      origin: { category: 'inbound_form', platform: null, observedAt: ASSERTED_AT, provenance: 'asserted' },
+    }));
+    expect(row().origin_category).toBe('inbound_form');
+    expect(row().origin_observed_at).toBe(ASSERTED_AT);
+  });
+
+  it('refuses to persist an adapter HINT — the inference never becomes durable', async () => {
+    // This is the shape `websiteAdapter` produces, and its category can be
+    // `inbound_form` derived from the free-text `leads.source` string matching
+    // 'form'. That is worth +15 and the words "Submitted a lead form". Without
+    // the `provenance` marker it must reach the column as NULL, which the
+    // table's trigger then reads as "this write has nothing to say".
+    await upsertCanonicalLead(lead({
+      origin: { category: 'inbound_form', platform: null, observedAt: ASSERTED_AT },
+    }));
+    expect(row().origin_category).toBeNull();
+    expect(row().origin_observed_at).toBeNull();
+  });
+
+  it('sends both keys ALWAYS, present-and-null rather than absent', async () => {
+    // Omitting a key from a merge-duplicates upsert to mean "leave it alone"
+    // is the unverifiable PostgREST behaviour this repository refuses to rely
+    // on: if the SET list were derived from the table's columns rather than
+    // the body's keys, an absent key would assign the default and WIPE the
+    // stored value. Presence is the contract; the trigger does the deciding.
+    await upsertCanonicalLead(lead({ origin: undefined }));
+    expect(Object.keys(row())).toContain('origin_category');
+    expect(Object.keys(row())).toContain('origin_observed_at');
+    expect(row().origin_category).toBeNull();
+  });
+
+  it('a lead with no origin at all still writes, with nothing claimed', async () => {
+    await upsertCanonicalLead(lead());
+    expect(row().origin_category).toBeNull();
+    expect(row().origin_observed_at).toBeNull();
+  });
+
+  it('reads the stored classification back on a COLD read', async () => {
+    await upsertCanonicalLead(lead({
+      origin: { category: 'pi_discovery', platform: 'apollo', observedAt: ASSERTED_AT, provenance: 'asserted' },
+    }));
+    const [view] = await listCanonicalLeads({ companyId: 'co1' });
+    expect(view.origin?.category).toBe('pi_discovery');
+    expect(view.origin?.observedAt).toBe(ASSERTED_AT);
+    // `platform` is deliberately NOT persisted: D2/D3 named two fields and
+    // this is not one of them. It is the "· Apollo" half of a display label,
+    // and `originFrom` restores it from the originating contribution wherever
+    // provenance IS attached. Asserted so the omission stays deliberate.
+    expect(view.origin?.platform).toBeNull();
+  });
+
+  it('a row with no stored classification has NO origin object — fail-closed', async () => {
+    await upsertCanonicalLead(lead());
+    const [view] = await listCanonicalLeads({ companyId: 'co1' });
+    // `undefined`, not `{ category: null }`. The second asserts we looked and
+    // found nothing recorded, which is a different claim from never having
+    // looked — the same discipline `display` already follows. Both are
+    // fail-closed for `hasLeadFormEvidence`, so neither earns the +15.
+    expect(view.origin).toBeUndefined();
+  });
+});

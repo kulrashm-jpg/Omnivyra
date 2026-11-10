@@ -22,8 +22,17 @@
 import type { ImportOutcome } from './types';
 import { needsAttention } from '@/lib/leadIntelligence/projectionResult';
 
-/** The ceiling the route enforces. Restated so the client never provokes a 413. */
-export const MAX_BATCH_SIZE = 1_000;
+/**
+ * The ceiling the route enforces. Restated so the client never provokes a 413.
+ *
+ * D4 (owner ruling, 2026-11-07): 100. It MUST equal
+ * `backend/services/leadIngestion/orchestrator.ts`'s `MAX_BATCH_SIZE`; this is
+ * a client bundle, so it cannot import the server module to find out, and a
+ * test pins the equality instead. A larger file is still fully importable: it
+ * is submitted as ceil(n/100) sequential chunks under one ingestion run id,
+ * which is what makes progress idempotent and recoverable.
+ */
+export const MAX_BATCH_SIZE = 100;
 
 /** Progress as the submitter knows it. Counts only — never a row payload. */
 export interface SubmitProgress {

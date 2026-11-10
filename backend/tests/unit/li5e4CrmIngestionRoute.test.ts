@@ -43,7 +43,7 @@ jest.mock('../../services/leadIngestion/orchestrator', () => ({
   // authorization ordering; the gate's own deny paths are proven in
   // piTenantScopedIngestionGate.test.ts.
   resolveLeadIngestionGate: async () => ({ allowed: tenantGateAllowed, reason: 'test' }),
-  MAX_BATCH_SIZE: 1000,
+  MAX_BATCH_SIZE: 100,
 }));
 
 jest.mock('../../services/leadIngestion', () => ({

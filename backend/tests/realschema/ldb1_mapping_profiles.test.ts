@@ -575,3 +575,116 @@ describe('PI-LDB · the destinations the engine proposes exist as columns', () =
     expect(rows).toHaveLength(1);
   });
 });
+
+/**
+ * PI-LDB 2F / requirement 11 — the privilege assertions are no longer vacuous.
+ *
+ * THE PROBLEM THESE TESTS EXIST FOR. 20270201000000 ends with a DO block
+ * asserting that `service_role` does NOT hold DELETE or TRUNCATE on the two
+ * mapping tables. On a stock postgres image that assertion cannot fail:
+ * `pg_default_acl` is empty, so the surplus the REVOKE exists to remove never
+ * arrives. Prompt 2B's three-grantee REVOKE — which left `service_role`
+ * holding ALL in production — passed this harness green.
+ *
+ * The bootstrap now reproduces Supabase's hosted default (ALTER DEFAULT
+ * PRIVILEGES FOR ROLE postgres ... GRANT ALL ON TABLES TO service_role), so the
+ * surplus is really present at replay time and the migration really removes it.
+ *
+ * Asserted as a WHOLE SET rather than privilege-by-privilege: a chain of
+ * `IS NOT FALSE` checks cannot catch a privilege nobody thought to name, and
+ * REFERENCES and TRIGGER are exactly what the migration never mentions.
+ */
+describe('PI-LDB 2F · hosted-like default privileges make the REVOKE meaningful', () => {
+  const TABLES = ['source_mapping_profiles', 'source_mapping_profile_entries'];
+  const PRIVS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+
+  /** Every privilege the role actually holds, in a fixed order. */
+  async function held(table: string, role = 'service_role'): Promise<string[]> {
+    const { rows } = await db.query(
+      `SELECT p FROM unnest($1::text[]) p
+        WHERE has_table_privilege($2, ('public.' || quote_ident($3))::regclass, p)
+        ORDER BY array_position($1::text[], p)`,
+      [PRIVS, role, table],
+    );
+    return rows.map((r: { p: string }) => r.p);
+  }
+
+  it('the hosted default really is reproduced: a table created now ARRIVES with the surplus', async () => {
+    await inRollback(async () => {
+      // THE ANTI-VACUITY CONTROL. If this fails, the bootstrap line is missing
+      // or ineffective and every other assertion in this describe is empty.
+      // The probe name follows the `public.__` convention the governance suite
+      // already anticipates, so it cannot be mistaken for a shipped table.
+      await db.query('CREATE TABLE public.__ldb2f_privilege_probe (id int)');
+      expect(await held('__ldb2f_privilege_probe')).toEqual(PRIVS);
+    });
+  });
+
+  it('after the migration the two tables hold EXACTLY SELECT, INSERT, UPDATE', async () => {
+    for (const t of TABLES) {
+      expect(await held(t)).toEqual(['SELECT', 'INSERT', 'UPDATE']);
+    }
+  });
+
+  it('and the client roles hold nothing at all on either table', async () => {
+    for (const t of TABLES) {
+      for (const r of ['anon', 'authenticated', 'authenticator']) {
+        expect(await held(t, r)).toEqual([]);
+      }
+      // PUBLIC is not a role `has_table_privilege` can be asked about by name
+      // in the same way, so it is read off the ACL directly. grantee 0 is
+      // PUBLIC in aclexplode.
+      const { rows } = await db.query(
+        `SELECT count(*)::int n FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+          WHERE c.oid = ('public.' || quote_ident($1))::regclass AND a.grantee = 0`,
+        [t],
+      );
+      expect(rows[0].n).toBe(0);
+    }
+  });
+
+  it('MUTANT: the old THREE-grantee REVOKE leaves the surplus — so the test above can fail', async () => {
+    await inRollback(async () => {
+      // The mutation, applied to a probe rather than to a shipped table so the
+      // real tables are never left in the defective state even inside a
+      // rolled-back transaction. This is the whole point of requirement 11:
+      // reverting the correction must break something.
+      await db.query('CREATE TABLE public.__ldb2f_mutant_probe (id int)');
+      expect(await held('__ldb2f_mutant_probe')).toEqual(PRIVS);
+
+      // Prompt 2B's original: PUBLIC, anon, authenticated — and NOT
+      // authenticator or service_role.
+      await db.query('REVOKE ALL ON TABLE public.__ldb2f_mutant_probe FROM PUBLIC, anon, authenticated');
+      await db.query('GRANT SELECT, INSERT, UPDATE ON TABLE public.__ldb2f_mutant_probe TO service_role');
+
+      // The surplus SURVIVES. DELETE and TRUNCATE are still held, which is
+      // precisely the production exposure, and it is only visible because the
+      // default ACL is now reproduced.
+      expect(await held('__ldb2f_mutant_probe')).toEqual(PRIVS);
+
+      // And the five-grantee form removes it, on the same probe, so the
+      // difference is attributable to the grantee list and nothing else.
+      await db.query(
+        'REVOKE ALL ON TABLE public.__ldb2f_mutant_probe FROM PUBLIC, anon, authenticated, authenticator, service_role');
+      await db.query('GRANT SELECT, INSERT, UPDATE ON TABLE public.__ldb2f_mutant_probe TO service_role');
+      expect(await held('__ldb2f_mutant_probe')).toEqual(['SELECT', 'INSERT', 'UPDATE']);
+    });
+  });
+
+  it('BEHAVIOUR, not just the catalog: as service_role, DELETE and TRUNCATE are refused', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      // `SET LOCAL ROLE` is the privilege context PostgREST uses for a
+      // service_role request, and it genuinely drops the owner rights: 14
+      // real-schema suites rely on it and observe 42501 from it. A catalog
+      // read and an actual refusal are different claims, and the migration
+      // only ever made the first one.
+      await db.query('SET LOCAL ROLE service_role');
+      const del = await attempt('DELETE FROM public.source_mapping_profiles WHERE false');
+      const trunc = await attempt('TRUNCATE public.source_mapping_profiles');
+      await db.query('RESET ROLE');
+      expect(del).toBe('42501');
+      expect(trunc).toBe('42501');
+    });
+  });
+});
