@@ -130,7 +130,7 @@
     },
     "pages/api/billing/vendor-access-quote.ts": {
       "kind": "public",
-      "reason": "Public pricing-page quote for optional central data-vendor access (Omnivyra credits per vendor unit at the standard credit rate); reads only platform pricing config, no tenant data, no writes."
+      "reason": "Public pricing-page quote for optional central data-vendor access (Omnivyra credits per vendor unit at the standard credit rate); reads only platform pricing config, no tenant data, no writes. Per-IP rate limited (30/min, checked before any read) because the pricing reads are not cached in-process."
     },
     "pages/api/billing/settlement-webhook/[provider].ts": {
       "kind": "webhook-signature",
