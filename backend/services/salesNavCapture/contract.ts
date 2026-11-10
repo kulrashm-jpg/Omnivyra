@@ -50,7 +50,8 @@ export type CaptureListKind = typeof CAPTURE_LIST_KINDS[number];
 export interface CaptureCallerContext {
   readonly orgId: string;
   readonly userId: string;
-  readonly socialAccountId: string;
+  /** Null until Outreach links social_accounts (C-PI-1). PI never reads it. */
+  readonly socialAccountId: string | null;
   readonly actingMemberUrn: string;
   readonly commandId: string;
   readonly extensionVersion: string;
