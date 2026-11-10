@@ -182,24 +182,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //   recorded by /api/extension/action-result. Cancelled rows are skipped
     //   here as an optimisation; the claim RPC below is the authority for
     //   cancellation, the platform kill switch and approval.
-    const pendingCommands = (columns: string) => supabase
-      .from('community_ai_actions')
-      .select(columns)
-      .eq('organization_id', session.orgId)
-      .eq('status', 'pending')
-      .eq('execution_mode', 'browser')
-      .is('dispatch_lease_id', null)
-      .is('cancel_requested_at', null)
-      .order('created_at', { ascending: false })
-      .limit(10);
+    const pendingCommands = (columns: string, unmarkedOnly: boolean) => {
+      let q = supabase
+        .from('community_ai_actions')
+        .select(columns)
+        .eq('organization_id', session.orgId)
+        .eq('status', 'pending')
+        .eq('execution_mode', 'browser')
+        .is('dispatch_lease_id', null)
+        .is('cancel_requested_at', null);
+      if (unmarkedOnly) q = q.is('delivery_path', null);
+      return q.order('created_at', { ascending: false }).limit(10);
+    };
     const COMMAND_COLUMNS = 'id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at';
 
-    // U1: delivery_path is the v15-only mark (migration 20270207000002). Code deployed
-    // ahead of that migration gets "undefined column" and re-reads without it: no row
-    // can carry the mark then, so 1.4 behaviour is unchanged.
-    let { data, error } = (await pendingCommands(`${COMMAND_COLUMNS}, delivery_path`)) as { data: any[] | null; error: any };
+    // U1: delivery_path is the v15-only mark (migration 20270207000002). Marked rows are
+    // filtered IN the query, before the limit, so ten pending marked rows can never fill
+    // every slot and starve this route (the in-loop skip below stays as defence in
+    // depth). Code deployed ahead of that migration gets "undefined column" and re-reads
+    // without the column or the filter: no row can carry the mark then, so 1.4
+    // behaviour is unchanged.
+    let { data, error } = (await pendingCommands(`${COMMAND_COLUMNS}, delivery_path`, true)) as { data: any[] | null; error: any };
     if (error && isUndefinedColumnError(error)) {
-      ({ data, error } = (await pendingCommands(COMMAND_COLUMNS)) as { data: any[] | null; error: any });
+      ({ data, error } = (await pendingCommands(COMMAND_COLUMNS, false)) as { data: any[] | null; error: any });
     }
 
     if (error) {

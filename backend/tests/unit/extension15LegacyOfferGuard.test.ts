@@ -234,6 +234,18 @@ describe('U1: actions marked v15-only at creation (20270207000002)', () => {
     expect(mockDb.tables.community_ai_actions.find((r) => r.id === A1)!.dispatch_lease_id).toBeNull();
   });
 
+  it('F1 (no starvation): ten newer pending marked rows do not fill the read; an older twitter row is still offered', async () => {
+    binding.r = { ok: true, urn: null };
+    mockDb.tables.community_ai_actions = [
+      ...Array.from({ length: 10 }, (_, i) => action(`00000000-0000-0000-0000-0000000001${String(i).padStart(2, '0')}`,
+        { created_at: `2026-11-0${i % 9 + 1}T00:00:00Z`, delivery_path: 'extension_v15' })),
+      action(A3, { created_at: '2026-01-01T00:00:00Z' }),
+    ];
+    const res = await poll();
+    expect(res.statusCode).toBe(200);
+    expect(offeredIds(res)).toEqual([A3]);
+  });
+
   it('code ahead of the migration (column missing) re-reads without the mark: 1.4 unchanged', async () => {
     binding.r = { ok: true, urn: null };
     missingDeliveryPath = true;
