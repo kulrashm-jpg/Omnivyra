@@ -48,6 +48,16 @@ const refuse = (status: number, code: string): Refusal => ({ ok: false, status, 
 // ── bindings (§3) ────────────────────────────────────────────────────────────
 
 export async function getActiveBinding(orgId: string, userId: string): Promise<{ ok: true; urn: string | null } | Refusal> {
+  // Never throws: the 1.4 command route calls this too, and an exception there would
+  // fail that route instead of leaving 1.4 behaviour unchanged.
+  try {
+    return await readActiveBinding(orgId, userId);
+  } catch {
+    return refuse(503, 'BINDING_UNREADABLE');
+  }
+}
+
+async function readActiveBinding(orgId: string, userId: string): Promise<{ ok: true; urn: string | null } | Refusal> {
   const { data, error } = await ownedDbTable('extension_account_bindings')
     .select('acting_member_urn')
     .eq('org_id', orgId)

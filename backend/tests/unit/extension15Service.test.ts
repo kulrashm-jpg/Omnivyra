@@ -76,6 +76,13 @@ describe('account binding (§3)', () => {
   it.each(['', 'urn:li:member:123', 'javascript:x', 42, null])('refuses a malformed member urn %p', async (u) => {
     expect(await bindAccount(S, u)).toMatchObject({ ok: false, code: 'INVALID_MEMBER_URN' });
   });
+  it('a THROWING binding read is also unreadable (503), never an exception to the caller', async () => {
+    failNext = null;
+    const spy = jest.spyOn(require('../../db/writeOwner'), 'ownedDbTable').mockImplementationOnce(() => { throw new Error('boom'); });
+    const { getActiveBinding } = require('../../services/extension15');
+    await expect(getActiveBinding(ORG, USER)).resolves.toMatchObject({ ok: false, status: 503, code: 'BINDING_UNREADABLE' });
+    spy.mockRestore();
+  });
   it('an unreadable binding read refuses (503), never treats it as unbound', async () => {
     failNext = { table: 'extension_account_bindings', op: 'select' };
     expect(await bindAccount(S, ME)).toMatchObject({ ok: false, status: 503, code: 'BINDING_UNREADABLE' });
