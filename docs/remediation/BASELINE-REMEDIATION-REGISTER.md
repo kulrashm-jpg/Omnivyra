@@ -50,14 +50,14 @@
 | ID | Diagnostics | Files | Cause | Workstream / owner | Correction | Status |
 |---|---|---|---|---|---|---|
 | TC-1 | 6 (TS2554 ×4, TS2493, TS2322) | `unit/d02JourneyApprovalRoute`, `unit/orchJourneyHoldD03` | Zero-argument `jest.fn` mocks; `status: string` helper | **Outreach** | Typed mock parameters; `OutreachTaskStatus` | **RESOLVED** `d28bf1731`. Scoped tsc shows 0 errors in both files; 78/78 tests pass |
-| TC-2 | 12 (TS2451) | `unit/typecheckBaselineGate`, `unit/backendTestsTypecheckBaselineGate` | Both files are scripts (CommonJS `require`, no import/export), so their top-level `const`s share global scope. Collision since `0d194ef4b` (2026-11-02); **also on main** | CI / release tooling. **UNASSIGNED** | `export {};` in each file, making them modules. No behaviour change | OPEN (one-line fix, waiting for an owner) |
+| TC-2 | 12 (TS2451) | `unit/typecheckBaselineGate`, `unit/backendTestsTypecheckBaselineGate` | Both files were scripts sharing global scope after `0d194ef4b`. **Main already fixed it** in `8289246b0` (2026-11-08); this lineage forked from main at `110a34230` (2026-11-03), before the fix | Release controls / platform-CI (MA ruling); fix is main's own | Cherry-picked main's `8289246b0` (`-x`) | **RESOLVED** in `8921833a7`. Scoped tsc over both files: 0 errors (was 12). Main is only 7 commits ahead of the fork point and fixes no other failing file |
 | TC-3 | 3 (TS2339 `reason`) | `helpers/communityApprovalEvidenceFixture`, `realschema/helpers/c3ClaimFixtures`, `unit/communityApprovalBinding` | `if (!r.ok) … r.reason` does not narrow the `{ok:true}\|{ok:false;reason}` union under `strict: false` | Community / Orchestration Prompt 3 (`47a8c5388`) | `if (r.ok === false)` | OPEN |
 | TC-4 | 6 (TS2339, TS2345) | `integration/community_ai_action_connectors` | The action fixture type lacks `id` and the full action shape | Community / Orchestration Prompt 3 | Type the fixture as the action type | OPEN |
 | TC-5 | 16 + 1 + 1 | `unit/communityExecutionSafety.executor` (TS2345 ×16), `.rpa` (TS2322), `unit/engagementRequestIdempotencyDurable` (TS2339) | Partial action fixtures passed as `CommunityAiAction`; `Promise<never>` mock typing | Community / Orchestration engine-adapter line | Typed fixture builder | OPEN |
 | TC-6 | 2 + 3 | `unit/orchestrationCommunityAdapter` (TS2554, TS2698), `unit/orchestrationCommunityAdapterGates` (TS2554 ×3) | The adapter gained a 4th parameter | Orchestration | Pass the 4th argument | OPEN |
 | TC-7 | 2 | `realschema/orch_journey_lifecycle`:417, `realschema/orch_response_matrix`:137 | `prospect_lifecycle_closed` read from `unknown` | Orchestration | Type the read row | OPEN |
 
-**Totals:** 6 + 12 + 3 + 6 + 18 + 5 + 2 = **52**. Resolved: 6. Open: 46.
+**Totals:** 6 + 12 + 3 + 6 + 18 + 5 + 2 = **52**. Resolved: 18 (TC-1, TC-2). Open: 34, all on Orchestration / community lineage. MA rule: they belong to the introducing branch.
 
 Production typecheck (`typecheck-ci`) and worker typecheck **pass** on `001f79a3f`. They must be re-run on the final remediation head.
 
