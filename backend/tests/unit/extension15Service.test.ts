@@ -45,6 +45,8 @@ function query(table: string) {
 }
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => query(t) }));
 jest.mock('../../services/extensionSessionService', () => ({ deriveExtensionHmacSecret: () => 'test-session-secret' }));
+// Write offers have their own suite (extension15WriteCommands); here the read path only.
+jest.mock('../../services/extension15/writeCommands', () => ({ offerWriteCommands: async () => [] }));
 const gate = { on: true };
 jest.mock('../../services/extensionIngestionSuspension', () => ({
   get EXTENSION_V15_COMMAND_INGESTION_ENABLED() { return gate.on; },

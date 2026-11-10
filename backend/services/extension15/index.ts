@@ -12,6 +12,7 @@
 import { ownedDbTable } from '../../db/writeOwner';
 import { deriveExtensionHmacSecret } from '../extensionSessionService';
 import { EXTENSION_V15_COMMAND_INGESTION_ENABLED } from '../extensionIngestionSuspension';
+import { offerWriteCommands } from './writeCommands';
 import {
   COMMAND_SCHEMA_VERSION_V15,
   signEnvelope,
@@ -186,7 +187,10 @@ export async function offerCommands(session: ExtSession, now: number = Date.now(
       };
       return { envelope, envelope_signature: signEnvelope(envelope, secret) };
     });
-  return { ok: true, commands };
+  // Approved write actions (reply/like) on the bound member's own content, claimed
+  // through the unchanged claim RPC (see writeCommands.ts).
+  const writes = await offerWriteCommands(session, binding.urn, now);
+  return { ok: true, commands: [...commands, ...writes] };
 }
 
 /** pending → dispatched, once, by compare-and-set. */
@@ -237,6 +241,24 @@ export async function verifyResultCommand(session: ExtSession, commandId: unknow
   if (loaded.row.payload?.action !== expected) return refuse(409, 'COMMAND_ACTION_MISMATCH');
   if (loaded.row.status !== 'dispatched') return refuse(409, 'COMMAND_NOT_DISPATCHED');
   return { ok: true, actingMemberUrn: loaded.urn, params: loaded.row.payload?.params ?? {} };
+}
+
+/**
+ * The extension's own verdict on a dispatched READ command it could not complete
+ * (envelope or parameter refusal, no open tab, unreadable member, …): a fixed code,
+ * never page content. Write commands report through /api/extension/action-result.
+ */
+export async function reportReadCommandOutcome(session: ExtSession, body: Record<string, unknown>, now: number = Date.now()):
+  Promise<{ ok: true } | Refusal> {
+  const status = body.status;
+  if (status !== 'refused' && status !== 'failed') return refuse(400, 'INVALID_STATUS');
+  const code = typeof body.error_code === 'string' && /^[A-Z0-9_]{1,64}$/.test(body.error_code) ? body.error_code : 'UNSPECIFIED';
+  const id = body.command_id;
+  if (typeof id !== 'string' || !id) return refuse(400, 'COMMAND_ID_REQUIRED');
+  const loaded = await loadOwnCommand(session, id, now);
+  if (loaded.ok !== true) return loaded;
+  if (loaded.row.status !== 'dispatched') return refuse(409, 'COMMAND_NOT_DISPATCHED');
+  return finishCommand(session, id, status, { code }, now);
 }
 
 /** dispatched → completed | failed | refused, once. The result is a fixed summary, never page content. */

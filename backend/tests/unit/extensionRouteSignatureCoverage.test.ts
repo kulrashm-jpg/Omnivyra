@@ -131,6 +131,7 @@ describe('behaviour: valid token, no signature → 401, database untouched', () 
     // Extension 1.5.0 (EXTENSION-1.5.0-CONTRACT.md)
     'bind-account.ts': 'POST', 'v15/commands/index.ts': 'GET', 'v15/commands/ack.ts': 'POST',
     'v15/events/comments.ts': 'POST',
+    'v15/authorize-submit.ts': 'POST', 'v15/commands/result.ts': 'POST',
   };
 
   it('covers every token-accepting route', () => {
