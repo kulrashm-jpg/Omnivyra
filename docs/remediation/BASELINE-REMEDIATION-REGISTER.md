@@ -80,7 +80,8 @@ The plan is `docs/outreach/platform/GD4-MIGRATION-RENUMBERING-PLAN.md` §9 on `o
 | A-1 | A failed external-API health read counts as **fully reliable** (fail-open) | `getHealthForSource` (`dbHelpers.ts:107-132`) catches and returns null; `trendFetching.ts:252` defaults to 1 | UNASSIGNED | OPEN |
 | A-2 | Duplicate `getHealthForSource` | `externalApi/internalHelpers.ts:219` | UNASSIGNED | OPEN |
 | A-3 | RC-Q residual: a quota command already in flight when the connection drops is re-queued and waits for reconnect | ioredis with `maxRetriesPerRequest: null` | Outreach | OPEN. The full fix (a dedicated client with `commandTimeout`, or a timer exception to the WS-3 rule) needs a decision |
-| A-4 | `whatsappRateLimiter` uses the same shared-client pattern as quota; probably the same hang | `whatsappRateLimiter.ts:53` | Outreach | OPEN: to verify |
+| A-4 | `whatsappRateLimiter` used the same shared-client pattern as quota and hung the same way | `whatsappRateLimiter.ts:53` | Outreach | **RESOLVED** in the commit after `c021217e8` (see §5) |
+| A-7 | The WhatsApp limiter's database fallback is best-effort: usage is linked by `account_name`, and `increment_wa_usage` failures are ignored silently | `whatsappRateLimiter.ts` `dbGetDailyUsage`/`dbIncrUsage` | Outreach | OPEN: needs a design decision |
 | A-5 | `prospect_lists` / `prospect_list_members` in production: anon/authenticated privileges unmeasured; no table REVOKE; policies without TO | MIG-2R finding 2 | PI | **Needs authorization** for a read-only `has_table_privilege` check |
 | A-6 | Test suites historically passed against **production** through `.env.local` (before `49717e80a`) | RC-P | Test infrastructure. UNASSIGNED | Recommend a jest-wide non-loopback egress guard |
 
@@ -91,5 +92,6 @@ The plan is `docs/outreach/platform/GD4-MIGRATION-RENUMBERING-PLAN.md` §9 on `o
 | `d28bf1731` | TC-1: typing of 2 Outreach tests | Outreach | Scoped tsc 0 errors; 78/78 |
 | `b4a592074` | RC-Q: quota skips a disconnected Redis; `ws3QuotaRedisUnavailable` test | Outreach | 041a 45/0/3; unit 9/9; mutant 8/9 fail; 69/69 outreach unit suites |
 | `4ba2b0435` | PI-040 re-pin of `quota.ts` only | **PENDING PI ACCEPTANCE**; drop it if refused | 69/69 |
+| (next) | A-4: WhatsApp rate limiter skips a disconnected Redis; `whatsappRateLimiterRedisUnavailable` test | Outreach | 7/7; mutant 6/7 fail; 19 WhatsApp suites 392/392 |
 
 **T2 on the combined remediation head: NOT YET RUN.** It runs once related workstreams land.
