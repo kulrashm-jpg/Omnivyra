@@ -17,6 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
+import { OAUTH_REFRESH_TIMEOUT_MS } from './oauthRefreshTimeout';
 import { getToken, setToken, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
@@ -81,6 +82,7 @@ export async function refreshLinkedInToken(
         client_secret: clientSecret,
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
@@ -456,6 +458,7 @@ async function doRefreshTwitterTokenInner(
         grant_type: 'refresh_token',
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Authorization: `Basic ${basic}`,
@@ -570,6 +573,7 @@ export async function refreshFacebookToken(
     // Or refresh existing long-lived token
 
     const response = await axios.get('https://graph.facebook.com/v22.0/oauth/access_token', {
+      timeout: OAUTH_REFRESH_TIMEOUT_MS,
       params: {
         grant_type: 'fb_exchange_token',
         client_id: appId,
@@ -627,6 +631,7 @@ async function refreshFacebookTokenWithRefreshToken(
 ): Promise<TokenObject | null> {
   try {
     const response = await axios.get('https://graph.facebook.com/v22.0/oauth/access_token', {
+      timeout: OAUTH_REFRESH_TIMEOUT_MS,
       params: {
         grant_type: 'fb_exchange_token',
         client_id: appId,
@@ -702,6 +707,7 @@ export async function refreshYouTubeToken(
         grant_type: 'refresh_token',
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },

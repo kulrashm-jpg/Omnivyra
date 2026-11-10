@@ -17,6 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
+import { OAUTH_REFRESH_TIMEOUT_MS } from './oauthRefreshTimeout';
 import { getToken, setToken, markSocialAccountNeedsReauth, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
@@ -61,6 +62,7 @@ export async function refreshSpotifyToken(
         refresh_token: currentToken.refresh_token,
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Authorization: `Basic ${credentials}`,
@@ -129,6 +131,7 @@ export async function refreshTikTokToken(
         refresh_token: currentToken.refresh_token,
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
@@ -201,6 +204,7 @@ export async function refreshRedditToken(
         refresh_token: currentToken.refresh_token,
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Authorization: `Basic ${credentials}`,
@@ -274,6 +278,7 @@ export async function refreshPinterestToken(
         refresh_token: currentToken.refresh_token,
       }),
       {
+        timeout: OAUTH_REFRESH_TIMEOUT_MS,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           Authorization: `Basic ${credentials}`,
