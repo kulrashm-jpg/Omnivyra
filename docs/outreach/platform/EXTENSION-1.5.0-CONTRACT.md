@@ -109,6 +109,11 @@ This is the thin Outreach route; the contract was agreed with virality-e1 on 202
 - **`public_profile_url`:** only an `/in/` URL actually displayed, verbatim. It is never constructed, and **never a `/sales/` URL**.
 - The route verifies everything, builds `VerifiedCaptureContext` (`lib/extension/captureContext.ts`, branded, constructible only by the verifier), and calls PI's `ingestCapturedSavedLeads(ctx, payload)`.
 - The response is per lead: `{ key, status: created|updated|unchanged|rejected, reason? }`. It contains no ids and no PII.
+- **Capture `command_id` is single-use; a repeat is a retry of the same batch.**
+  - One command is one batch: one page, ≤ 25 leads. Another page, another list or a user re-run is always a NEW command.
+  - The route calls PI only for a `dispatched` command and then finishes it by CAS, so a repeat is refused (409 `COMMAND_NOT_DISPATCHED`) before PI is called. The extension never retries.
+  - The one exception: PI succeeded but finishing the command failed, so the command is still `dispatched`, and a repeat reaches PI as a retry of the SAME batch, never a different one.
+  - PI's usage ledger is therefore keyed on (organization_id, command_id) and replaces totals on conflict (agreed with virality-e1, 2026-11-10).
 - Profile-URL classification uses PI's shared `lib/linkedin/profileUrl.ts` and its fixtures (`classifyLinkedinProfile`).
 
 ### 5.4 Write outcome: `POST /api/extension/action-result` (1.5 form)
