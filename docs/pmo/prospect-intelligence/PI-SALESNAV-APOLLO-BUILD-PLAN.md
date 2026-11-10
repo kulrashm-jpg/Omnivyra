@@ -86,18 +86,27 @@ A captured lead has no email and no Apollo id, and its account has no domain. Th
 - **(b)** Name plus company fuzzy match. Not recommended.
 - **(c)** Leave captured leads unenriched in v1.
 
-## 5. Mode (B), platform key: designed seam, NOT built (B1-B5 pending)
+## 5. Mode (B), central Apollo access: BUILT (owner decisions B2, B3-dropped, 2026-11-10)
 
-- **Resolution:** tenant BYOK, then the platform key if the tenant's plan entitles it, otherwise unavailable.
-  - A new composite credential port returns `{ value, funding: 'tenant' | 'platform' }` and wraps `tenantCredentialPort` without changing it.
-- **Platform key store:** `providerCredentialResolver` `SUPER_ADMIN_MANAGED` descriptor `apollo_platform`, with no env names. It is entered in Super Admin, API catalogue.
-- **Entitlement:** `isEntitled(resolveSubscriptionState(org))` plus `plan_limits.resource_key = 'apollo_managed_enrichment'` (data rows only). `limit_value` is the monthly quota.
-- **Credits (platform-funded only):** `reserveCreditsForWork`, then confirm or release. This needs a new credit action plus a `credit_cost_config` seed row (one data-only migration via the registry owner).
-  - The executor gains a `confirmCost` port; today it has only authorize and release.
-  - BYOK charges no credits.
-- **Ceiling:** the vendor-subscription exemption becomes funding-aware.
-  - Platform-funded calls pass the daily ceiling (`metadata.providers.apollo_platform`) and the monthly plan quota.
-  - Funding is counted from the credit ledger if it can answer exactly; otherwise a funding column needs a second migration.
+**Who pays.** Own key first: the tenant's stored Apollo key always wins; the vendor bills the tenant and no Omnivyra credits are charged. Otherwise, central access is used ONLY when the tenant has opted in (`feature_flags` `central_vendor_access`, set by a tenant admin who manages external APIs) AND a Super Admin has stored the managed `apollo_platform` key (no env fallback). Otherwise Apollo is unavailable.
+
+**Price.** Vendor cost x 1.5 through the existing pricing engine (`resolveVendorUnitCost`: `llm_model_pricing` kind `unit` + `action_pricing_config` `prospect_enrichment`, source_type `vendor_unit`), converted at each organisation's own `credit_rate_usd`, rounded by the one shared `creditsForPriceUsd`. Credits are reserved before the call, confirmed when the vendor answered (enriched, no_match, field_not_found) and released otherwise. The tenant's credit balance is the limit (no quota).
+
+**Who may trigger it.** Central (paid) access happens only on a USER-CONFIRMED action (the preview shows "~X Apollo credits = Y Omnivyra credits"). Automated retries use the tenant's own key only and never spend credits (e9, 2026-11-10).
+
+**Platform daily ceiling** (`platformCeiling.ts`): global rows in `billing_policy_config`, `central_vendor_daily_ceiling` = `{"apollo": N}` (calls per UTC day) and `central_vendor_tenant_share` = `{"enabled": false, "max_fraction": 0.25}` (per-tenant share, default OFF). Counted from credit HOLDS created since 00:00 UTC, so in-flight calls count.
+
+> **INVARIANT (GOV-SECURITY, recommended by virality-83; policy owned by owner/e9): central (platform-funded) access stays REFUSED until a Super Admin has written the ceiling row.** No ceiling row, a malformed one, or an unreadable count = refused (`central_ceiling_not_configured` / `central_ceiling_unreadable`). Pinned by `modeBPlatformCeiling.test.ts` "FAILS CLOSED: no ceiling configured" (input: no `central_vendor_daily_ceiling` row). A tenant's own key is never affected.
+
+**Usage.** Every attempt records `funding`, `provider_cost_units` and `credits_charged` (written after the close, best-effort); discovery adds screening counts; Sales Navigator captures land in `prospect_capture_runs`. "Data sources & usage" (`/api/prospect-sources/usage`, panel on `/integrations/enrichment`) reports per source, user, day and run.
+
+### Enable checklist for central access (all required; each is a Super Admin or 83 action)
+1. Migrations 20270206000000, 20270208000000, 20270209000000 applied by virality-83 on owner instruction.
+2. `billing_policy_config` confirmed present in production (83's catalogue query).
+3. Super Admin enters the Apollo unit cost (Super Admin > Pricing > vendor unit costs; provider `apollo`, unit `credit`). No cost = paid runs refused.
+4. Super Admin writes the platform daily ceiling row. No ceiling = central access refused (the invariant above).
+5. Super Admin stores the managed `apollo_platform` key.
+6. Each tenant opts in on the enrichment page; the conversion line appears on the public pricing page once 3 is set.
 
 ## 6. Testing (owner #27 tiers)
 

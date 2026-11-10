@@ -25,6 +25,10 @@
 --   action_pricing_config has NO unique CONSTRAINT (the repo restore file
 --   describes a partial unique INDEX on action_key WHERE is_active). Either
 --   way the seed is guarded by WHERE NOT EXISTS, never ON CONFLICT.
+-- effective_from is deliberately OMITTED from the seed: C1 recorded it as
+--   timestamptz NOT NULL DEFAULT now() in production, so the default fills it and
+--   the reader's effective_from <= now() matches. Safe ONLY because of that
+--   measured default (PI review): do not copy this omission to a table without it.
 -- The widened CHECKs keep their exact names so the rollback restores the
 -- originals verbatim. Each PRECONDITION refuses to widen a CHECK whose current
 -- value set differs from the one recorded above (drift => stop, not overwrite).
