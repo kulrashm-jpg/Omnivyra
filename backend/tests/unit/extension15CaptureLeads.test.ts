@@ -52,14 +52,18 @@ describe('when enabled (test switch)', () => {
     const ingest = jest.fn(async (ctx: any) => {
       expect(ctx).toMatchObject({ orgId: 'o-1', userId: 'u-1', actingMemberUrn: ME, commandId: 'cmd-1', extensionVersion: '1.5.0', socialAccountId: null });
       expect(Object.isFrozen(ctx)).toBe(true);
-      return { ok: true as const, results: [{ key: 'k1', status: 'created' as const, prospectId: 'SHOULD-NOT-LEAK', name: 'Jane' } as any, { key: 'k2', status: 'rejected' as const, reason: 'duplicate' }] };
+      return { ok: true, leadKeyProvisional: true, totals: { received: 3, created: 1 } as any, outcomes: [
+        { key: 'k1', status: 'created' as const, prospectId: 'SHOULD-NOT-LEAK', name: 'Jane' } as any,
+        { key: 'k2', status: 'rejected' as const, reason: 'duplicate' },
+        { key: null, status: 'rejected' as const, reason: 'invalid_lead_key' }] };
     });
     const res = await call(createCaptureLeadsHandler({ auth, ingest, issuable: on }), body());
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, results: [{ key: 'k1', status: 'created' }, { key: 'k2', status: 'rejected', reason: 'duplicate' }] });
+    expect(res.body).toEqual({ success: true, lead_key_provisional: true, results: [
+      { key: 'k1', status: 'created' }, { key: 'k2', status: 'rejected', reason: 'duplicate' }, { key: null, status: 'rejected', reason: 'invalid_lead_key' }] });
     expect(JSON.stringify(res.body)).not.toMatch(/SHOULD-NOT-LEAK|Jane/);
     expect(verify).toHaveBeenCalledWith(SESSION, 'cmd-1', 'li.salesnav.capture_saved_leads');
-    expect(finish).toHaveBeenCalledWith(SESSION, 'cmd-1', 'completed', { created: 1, updated: 0, unchanged: 0, rejected: 1 });
+    expect(finish).toHaveBeenCalledWith(SESSION, 'cmd-1', 'completed', { created: 1, updated: 0, unchanged: 0, rejected: 2 });
   });
 
   it.each([
@@ -89,6 +93,29 @@ describe('when enabled (test switch)', () => {
     expect(res.body).toMatchObject({ error: 'INVALID_LEAD_KEY' });
     expect(finish).toHaveBeenCalledWith(SESSION, 'cmd-1', 'refused', { code: 'INVALID_LEAD_KEY' });
     expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['capture_not_enabled_for_tenant', 403],
+    ['ingestion_not_enabled', 403],
+    ['organization_mismatch', 409],
+    ['provider_unavailable', 503],
+    ['batch_too_large', 400],
+    ['something_new', 422],
+  ])('a PI refusal %s finishes the command refused with HTTP %i', async (refusal, status) => {
+    const ingest = jest.fn(async () => ({ ok: false, refusal, detail: 'tenant_flag:off', leadKeyProvisional: true, outcomes: [] }));
+    const res = await call(createCaptureLeadsHandler({ auth, ingest, issuable: on }), body());
+    expect(res.statusCode).toBe(status);
+    expect(res.body).toEqual({ success: false, error: refusal });
+    expect(finish).toHaveBeenCalledWith(SESSION, 'cmd-1', 'refused', { code: refusal });
+  });
+
+  it('a PI throw finishes the command failed with 500 and leaks nothing', async () => {
+    const ingest = jest.fn(async () => { throw new Error('db exploded: secret detail'); });
+    const res = await call(createCaptureLeadsHandler({ auth, ingest, issuable: on }), body());
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual({ success: false, error: 'INGEST_FAILED' });
+    expect(finish).toHaveBeenCalledWith(SESSION, 'cmd-1', 'failed', { code: 'INGEST_FAILED' });
   });
 
   it('auth failure stops the handler (the auth function has already responded)', async () => {

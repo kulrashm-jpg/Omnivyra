@@ -26,9 +26,43 @@ export const MAX_LEADS_PER_BATCH = 25;
 const LEAD_KEY = /^[A-Za-z0-9_-]{6,128}$/;
 const FORBIDDEN_URL = /\/sales\//i;
 
-export type PerLeadStatus = { key: string; status: 'created' | 'updated' | 'unchanged' | 'rejected'; reason?: string };
-export type IngestCapturedSavedLeads = (ctx: VerifiedCaptureContext, payload: Record<string, unknown>) =>
-  Promise<{ ok: true; results: PerLeadStatus[] } | { ok: false; status: number; code: string }>;
+/**
+ * PI's result, mirrored STRUCTURALLY (PI's CaptureBatchResult in
+ * backend/services/salesNavCapture/contract.ts, agreed with virality-e1). Outreach
+ * imports nothing from PI here, so this branch does not depend on PI's module; the
+ * page route binds PI's function in a separate commit that lands with PI's branch.
+ */
+export type PerLeadStatus = { key: string | null; status: 'created' | 'updated' | 'unchanged' | 'rejected'; reason?: string };
+export type CaptureIngestResult = {
+  ok: boolean;
+  refusal?: string;
+  detail?: string;
+  leadKeyProvisional: boolean;
+  outcomes: PerLeadStatus[];
+};
+export type IngestCapturedSavedLeads = (ctx: VerifiedCaptureContext, payload: Record<string, unknown>) => Promise<CaptureIngestResult>;
+
+/** HTTP status for PI's batch refusal codes; an unknown code is a 422 (never a 200). */
+export function refusalStatus(refusal: string | undefined): number {
+  switch (refusal) {
+    case 'capture_disabled':
+    case 'ingestion_not_enabled':
+    case 'capture_not_enabled_for_tenant':
+      return 403;
+    case 'organization_mismatch':
+      return 409;
+    case 'provider_unavailable':
+      return 503;
+    case 'unsupported_provider':
+    case 'unsupported_contract_version':
+    case 'unsupported_surface':
+    case 'invalid_payload':
+    case 'batch_too_large':
+      return 400;
+    default:
+      return 422;
+  }
+}
 
 type Auth = (req: NextApiRequest, res: NextApiResponse) => Promise<{ session: ExtSession } | null>;
 
@@ -82,18 +116,28 @@ export function createCaptureLeadsHandler(deps: { auth: Auth; ingest: IngestCapt
       commandId: body.command_id as string,
       extensionVersion: gate.version,
     });
-    const out = await deps.ingest(ctx, body);
-    if (out.ok !== true) {
-      await finishCommand(auth.session, ctx.commandId, 'failed', { code: out.code });
-      return res.status(out.status).json({ success: false, error: out.code });
+    let out: CaptureIngestResult;
+    try {
+      out = await deps.ingest(ctx, body);
+    } catch {
+      // PI has already recorded the failed run in its own ledger.
+      await finishCommand(auth.session, ctx.commandId, 'failed', { code: 'INGEST_FAILED' });
+      return res.status(500).json({ success: false, error: 'INGEST_FAILED' });
     }
+    if (out.ok !== true) {
+      const code = String(out.refusal ?? 'refused');
+      await finishCommand(auth.session, ctx.commandId, 'refused', { code });
+      return res.status(refusalStatus(out.refusal)).json({ success: false, error: code });
+    }
+    const outcomes = Array.isArray(out.outcomes) ? out.outcomes : [];
     const counts: Record<string, number> = { created: 0, updated: 0, unchanged: 0, rejected: 0 };
-    for (const r of out.results) counts[r.status] = (counts[r.status] ?? 0) + 1;
+    for (const r of outcomes) if (r.status in counts) counts[r.status] += 1;
     await finishCommand(auth.session, ctx.commandId, 'completed', counts);
-    // Only key, status and reason pass through: no ids, no PII.
+    // Only key, status and reason pass through: no ids, no PII, no totals.
     return res.status(200).json({
       success: true,
-      results: out.results.map((r) => ({ key: r.key, status: r.status, ...(r.reason ? { reason: r.reason } : {}) })),
+      lead_key_provisional: out.leadKeyProvisional !== false,
+      results: outcomes.map((r) => ({ key: r.key ?? null, status: r.status, ...(r.reason ? { reason: r.reason } : {}) })),
     });
   };
 }
