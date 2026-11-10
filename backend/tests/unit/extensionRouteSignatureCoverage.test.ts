@@ -43,7 +43,7 @@ const ROOT = path.resolve(__dirname, '../../..');
 const ROUTE_DIR = path.join(ROOT, 'pages/api/extension');
 const NON_TOKEN_ROUTES = new Set(['bootstrap.ts', 'redeem.ts', 'session.ts']);
 // R-3: these refuse with 410 before auth while browser ingestion is suspended.
-const SUSPENDED_UPLOAD_ROUTES = new Set(['events.ts', 'events/comments.ts', 'events/dms.ts']);
+const SUSPENDED_UPLOAD_ROUTES = new Set(['events.ts', 'events/comments.ts', 'events/dms.ts', 'v15/events/comments.ts']);
 
 function routeFiles(dir: string, base = ''): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -128,6 +128,9 @@ describe('behaviour: valid token, no signature → 401, database untouched', () 
     'action-result.ts': 'POST', 'capabilities.ts': 'GET', 'commands.ts': 'GET',
     'dispatch/renew.ts': 'POST', 'events.ts': 'POST', 'events/comments.ts': 'POST',
     'events/dms.ts': 'POST', 'health.ts': 'GET', 'validate.ts': 'POST',
+    // Extension 1.5.0 (EXTENSION-1.5.0-CONTRACT.md)
+    'bind-account.ts': 'POST', 'v15/commands/index.ts': 'GET', 'v15/commands/ack.ts': 'POST',
+    'v15/events/comments.ts': 'POST',
   };
 
   it('covers every token-accepting route', () => {

@@ -45,6 +45,10 @@ function query(table: string) {
 }
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => query(t) }));
 jest.mock('../../services/extensionSessionService', () => ({ deriveExtensionHmacSecret: () => 'test-session-secret' }));
+const gate = { on: true };
+jest.mock('../../services/extensionIngestionSuspension', () => ({
+  get EXTENSION_V15_COMMAND_INGESTION_ENABLED() { return gate.on; },
+}));
 
 import {
   bindAccount, issueReadCommand, offerCommands, acknowledgeCommand, verifyResultCommand, finishCommand,
@@ -78,6 +82,13 @@ describe('account binding (§3)', () => {
 
 describe('issuance gates (§4)', () => {
   beforeEach(async () => { await bindAccount(S, ME); });
+  it('while R-3 is not lifted for 1.5, no collection command is issued at all', async () => {
+    gate.on = false;
+    try {
+      expect(await issueReadCommand({ orgId: ORG, userId: USER, action: 'li.collect.own_post_comments' })).toMatchObject({ status: 403, code: 'BROWSER_SYNC_SUSPENDED' });
+      expect(tables.extension_commands ?? []).toHaveLength(0);
+    } finally { gate.on = true; }
+  });
   it('the inbox command is never issued before B-7, and Sales Navigator capture stays dark', async () => {
     expect(DM_COLLECTION_ISSUABLE).toBe(false);
     expect(SALESNAV_CAPTURE_ISSUABLE).toBe(false);

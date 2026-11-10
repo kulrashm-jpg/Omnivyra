@@ -11,6 +11,7 @@
  */
 import { ownedDbTable } from '../../db/writeOwner';
 import { deriveExtensionHmacSecret } from '../extensionSessionService';
+import { EXTENSION_V15_COMMAND_INGESTION_ENABLED } from '../extensionIngestionSuspension';
 import {
   COMMAND_SCHEMA_VERSION_V15,
   signEnvelope,
@@ -114,6 +115,9 @@ export async function issueReadCommand(input: { orgId: string; userId: string; a
   Promise<{ ok: true; commandId: string } | Refusal> {
   if (!READ_ACTIONS15.includes(input.action as ReadAction15)) return refuse(400, 'UNKNOWN_ACTION');
   const action = input.action as ReadAction15;
+  if (action !== 'li.salesnav.capture_saved_leads' && !EXTENSION_V15_COMMAND_INGESTION_ENABLED) {
+    return refuse(403, 'BROWSER_SYNC_SUSPENDED');
+  }
   if (action === 'li.collect.own_inbox' && !DM_COLLECTION_ISSUABLE) return refuse(403, 'DM_STORAGE_DISABLED');
   if (action === 'li.salesnav.capture_saved_leads' && !SALESNAV_CAPTURE_ISSUABLE) return refuse(403, 'SALESNAV_CAPTURE_DISABLED');
   const v = validateReadParams(action, input.params);
