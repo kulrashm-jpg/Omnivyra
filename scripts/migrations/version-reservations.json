@@ -101,7 +101,8 @@
     { "version": "20270129000006", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
     { "version": "20270129000007", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
     { "version": "20270129000008", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
-    { "version": "20270129000009", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." }
+    { "version": "20270129000009", "status": "reserved", "owner": "Orchestration block 20270129000000-09", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Block reserved; unused." },
+    { "version": "20270204000000", "slug": "rpa_tables_client_privileges_revoked", "status": "reserved", "owner": "Outreach (owner-approved fix-forward, D1 security finding, 2026-11-10)", "evidence": "CODE_VERIFIED", "note": "REVOKE ALL on rpa_sessions and rpa_retry_queue FROM anon, authenticated, with has_table_privilege postconditions. Local only; not applied." }
   ],
   "free_versions_note": "20270114000000 is free. 20270119* is free. The integration branch's renumbered block is claimed in the same change as its rename (GD-4); every version above that block is free. Claim one by adding it here in the same change as the migration."
 }
