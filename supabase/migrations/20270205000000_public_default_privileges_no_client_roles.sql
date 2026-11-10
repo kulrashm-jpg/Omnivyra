@@ -119,3 +119,21 @@ END
 $$;
 
 COMMIT;
+
+-- RESIDUAL REPORT AS A RESULT SET (virality-05 review): an HTTP SQL endpoint may
+-- discard NOTICE output, but it returns the LAST statement's rows. This read-only
+-- SELECT therefore puts the unfixed residual into the apply record itself.
+-- Zero rows means no creator role's public table default grants a client role.
+SELECT d.defaclrole::regrole::text AS creator_role,
+       g.rolname                  AS client_role,
+       string_agg(x.privilege_type, ',' ORDER BY x.privilege_type) AS privileges,
+       'RESIDUAL: not fixed by 20270205000000' AS note
+  FROM pg_default_acl d
+  JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  CROSS JOIN LATERAL aclexplode(d.defaclacl) x
+  JOIN pg_roles g ON g.oid = x.grantee
+ WHERE n.nspname = 'public'
+   AND d.defaclobjtype = 'r'
+   AND g.rolname IN ('anon', 'authenticated')
+ GROUP BY 1, 2
+ ORDER BY 1, 2;
