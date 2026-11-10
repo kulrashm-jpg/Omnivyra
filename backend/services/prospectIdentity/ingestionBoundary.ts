@@ -228,11 +228,28 @@ function isAuthSchemeCredential(scheme: string, token: string): boolean {
   // Bearer needs STRUCTURE, like Basic (virality-05): a wrong redaction in stored evidence is permanent, and
   // provider error strings such as "Bearer token.expired.at.1699" must survive. Redact only:
   //   - a JWT: base64url header starting "eyJ" (base64 of '{"') + payload + signature segments; or
-  //   - an opaque token: 20+ chars, no dots, mixing upper case, lower case AND digits.
-  // Known residual: a short or single-case opaque token in FREE TEXT is kept (it is still redacted when it
-  // sits under a secret-shaped key such as Authorization).
+  //   - an opaque token: 20+ chars, NO dots, and Shannon entropy >= 3.5 bits/char -- the SAME threshold as
+  //     .gitleaks.toml's authorization-bearer-literal rule, so the two definitions agree. Entropy (not
+  //     character classes) is what catches lowercase hex (HMACs, many vendor keys, ~4.0) while keeping
+  //     tokenish prose (~3.3). The dot exclusion stays load-bearing: "token.expired.at.1699" is ~3.75.
+  // JWT note: "eyJ" assumes the header JSON starts with '{"'; a header serialised as '{ "' (base64 "eyAi")
+  // is not matched by the JWT branch (rare; recorded, not widened).
+  // Known residual: a short (<20) or low-entropy opaque token in FREE TEXT is kept; it is still redacted when
+  // it sits under a secret-shaped key such as Authorization.
   if (/^eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*$/.test(token)) return true;
-  return token.length >= 20 && !token.includes('.') && /[a-z]/.test(token) && /[A-Z]/.test(token) && /[0-9]/.test(token);
+  return token.length >= 20 && !token.includes('.') && shannonEntropy(token) >= 3.5;
+}
+
+/** Shannon entropy in bits per character. */
+function shannonEntropy(s: string): number {
+  const counts = new Map<string, number>();
+  for (const ch of s) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const n of counts.values()) {
+    const p = n / s.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
 }
 // `scheme://user:password@` — userinfo WITH a password. `user@host` alone is kept. DELIBERATE: the whole
 // userinfo (the USERNAME too) is replaced, because a username is sometimes itself a key; the loss is permanent.

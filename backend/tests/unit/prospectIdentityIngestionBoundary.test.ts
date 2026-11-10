@@ -138,6 +138,14 @@ describe('redactSecrets', () => {
       .toEqual({ a: [{ h: 'Bearer [REDACTED]' }], b: { c: { d: ['https://[REDACTED]@h/x'] } } });
   });
 
+  it.each([
+    [['a3f8c9213b7e4d05', 'f6a1c8e92b4d7f03'].join(''), 'lowercase hex (HMAC / vendor key shape), entropy ~3.95'],
+    [['abcdef1234', '567890xyzw'].join(''), 'single-case alphanumeric, entropy ~4.32'],
+  ])('MUST REDACT a bearer token with no uppercase: %s (%s) -- virality-05: the value pass is the only guard under a non-secret key', (tok) => {
+    const out = redactSecrets({ headers: [{ name: 'Authorization', value: `${BEARER} ${tok}` }] }) as any;
+    expect(out.headers[0].value).toBe('Bearer [REDACTED]');
+  });
+
   it('redacts lowercase and uppercase auth schemes in values', () => {
     expect(redactSecrets({ note: `${BEARER.toLowerCase()} ${OPAQUE}` })).toEqual({ note: 'bearer [REDACTED]' });
     // base64("user:pass123") contains no digit: Basic is judged by decoding, not by shape.
@@ -166,7 +174,7 @@ describe('redactSecrets', () => {
     ['Bearer tokensarerequiredhere', 'a long plain word after "Bearer" (no digit or token punctuation)'],
     // Built at runtime like every bearer-shaped fixture, so the secret gates see no literal.
     [`{"error":"${'Bear' + 'er'} ${['token', 'expired', 'at', '1699'].join('.')}"}`, 'a provider error string: dots but not JWT-shaped (virality-05)'],
-    [`${'Bear' + 'er'} ${'abcdef1234567890' + 'xyzw'}`, 'single-case opaque text: below the opaque-token structure (recorded residual)'],
+    [`${'Bear' + 'er'} ${'aaaaabbbbb' + 'cccccddddd'}`, 'low-entropy text (2.0 bits/char < 3.5): recorded residual'],
     ['Basic Settings', 'prose: too short to be a credential'],
     ['https://www.linkedin.com/in/ada-lovelace?trk=public_profile', 'a profile URL with a non-secret query'],
     ['ada@example.test', 'an email address'],
