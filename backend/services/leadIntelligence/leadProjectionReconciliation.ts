@@ -179,6 +179,53 @@ const KEY_MOVING_COLUMNS = ['unified_source'] as const;
  * afterwards, and bounded. It asks for one row more than the limit so
  * `truncated` is a fact rather than an inference from a full page.
  */
+/** People per `unified_persons` read: 40 uuids keep the request URL near 1.8 KB. */
+const PERSON_READ_CHUNK = 40;
+
+/**
+ * PI-LDB C (reqs 7-10): recover the display NAME and JOB TITLE a projected lead
+ * would otherwise lack. `canonical_leads` stores no person attributes, but the
+ * prospect's `unified_person_id` points at the spine row that holds them, and
+ * the adapter already reads `row.name` / `row.title` for display. A READ of the
+ * spine (never a write, so the LI-2 boundary is untouched), tenant-filtered,
+ * at zero vendor cost. Best-effort: an unanswered read leaves the display empty
+ * (honest unknown) rather than failing the pass.
+ */
+async function attachPersonDisplay(
+  organizationId: string,
+  rows: Record<string, unknown>[],
+): Promise<Record<string, unknown>[]> {
+  const ids = [...new Set(rows.map((r) => r.unified_person_id).filter((v): v is string => typeof v === 'string' && v.length > 0))];
+  if (ids.length === 0) return rows;
+  const display = new Map<string, { name: string | null; title: string | null }>();
+  for (let i = 0; i < ids.length; i += PERSON_READ_CHUNK) {
+    try {
+      const res = await ownedDbTable('unified_persons')
+        .select('id, full_name, job_title')
+        .eq('company_id', organizationId)
+        .in('id', ids.slice(i, i + PERSON_READ_CHUNK));
+      const { data, error, status } = res as { data: unknown; error: unknown; status?: number };
+      if (error || (status !== 200 && status !== 206) || !Array.isArray(data)) continue;
+      for (const p of data as Array<Record<string, unknown>>) {
+        const fullName = p['full_name'];
+        const jobTitle = p['job_title'];
+        display.set(String(p.id), {
+          name: typeof fullName === 'string' && fullName.trim() ? fullName : null,
+          title: typeof jobTitle === 'string' && jobTitle.trim() ? jobTitle : null,
+        });
+      }
+    } catch { /* unanswered chunk: those leads keep an empty display */ }
+  }
+  return rows.map((r) => {
+    const d = typeof r.unified_person_id === 'string' ? display.get(r.unified_person_id) : undefined;
+    if (!d) return r;
+    const out = { ...r };
+    if (out.name == null && d.name) out.name = d.name;
+    if (out.title == null && d.title) out.title = d.title;
+    return out;
+  });
+}
+
 async function readProspectsDefault(
   organizationId: string,
   limit: number,
@@ -199,7 +246,11 @@ async function readProspectsDefault(
     for (const c of KEY_MOVING_COLUMNS) delete kept[c];
     return kept as ReconcileProspectRow;
   });
-  return { rows: all.slice(0, limit), truncated: all.length > limit };
+  const page = all.slice(0, limit);
+  return {
+    rows: (await attachPersonDisplay(organizationId, page as Record<string, unknown>[])) as ReconcileProspectRow[],
+    truncated: all.length > limit,
+  };
 }
 
 /**

@@ -95,7 +95,7 @@ export interface ManualLeadInput {
    * "Not a product description, and not a note about the person."
    *
    * This existed everywhere EXCEPT here: `NormalizedAccount.description`,
-   * `ACCOUNT_ATTRIBUTE_COLUMNS`, the `prospect_accounts.description` column
+   * `ACCOUNT_ATTRIBUTE_COLUMNS`, the account table's `description` column
    * and the registry key were all already in place, and the mapping engine
    * could propose `description` for a `Company Overview` column. With no
    * field on this type the adapter had nothing to read, so an approved mapping
