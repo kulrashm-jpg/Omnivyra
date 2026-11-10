@@ -46,7 +46,8 @@ export function checkCaptureBatch(body: Record<string, unknown>): string | null 
       if (typeof v === 'string' && FORBIDDEN_URL.test(v)) return 'SALES_URL_REFUSED';
     }
     const url = l.public_profile_url;
-    if (url !== undefined && url !== null && (typeof url !== 'string' || !/^https:\/\/([a-z]{2,3}\.)?(www\.)?linkedin\.com\/in\//i.test(url))) {
+    // Aligned with PI's normalizeLinkedinUrl: http or https, any linkedin.com subdomain, an /in/ path.
+    if (url !== undefined && url !== null && (typeof url !== 'string' || !/^https?:\/\/([a-z0-9-]+\.)*linkedin\.com\/in\/[^/?#\s]+/i.test(url))) {
       return 'INVALID_PROFILE_URL';
     }
   }

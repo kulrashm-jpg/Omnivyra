@@ -36,7 +36,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const cmd = await verifyResultCommand(auth.session, body.command_id, 'li.collect.own_post_comments');
   if (cmd.ok !== true) return res.status(cmd.status).json({ success: false, error: cmd.code });
   const mapped = mapOwnPostComments(body.items, cmd.actingMemberUrn, cmd.params);
-  if (mapped.ok !== true) return res.status(mapped.status).json({ success: false, error: mapped.code });
+  if (mapped.ok !== true) {
+    // A malformed result closes its command (never left hanging in 'dispatched').
+    await finishCommand(auth.session, body.command_id as string, 'refused', { code: mapped.code });
+    return res.status(mapped.status).json({ success: false, error: mapped.code });
+  }
   const result = await persistExtensionComments(auth.session.orgId, 'linkedin', {
     platform: 'linkedin',
     posts: mapped.posts as IncomingPost[],

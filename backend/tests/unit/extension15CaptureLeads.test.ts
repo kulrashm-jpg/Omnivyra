@@ -111,7 +111,14 @@ describe('batch checks', () => {
   ])('refuses %s', (_n, over, code) => {
     expect(checkCaptureBatch(body(over))).toBe(code);
   });
-  it('accepts a displayed /in/ URL, verbatim', () => {
-    expect(checkCaptureBatch(body({ leads: [lead({ public_profile_url: 'https://www.linkedin.com/in/jane-doe-123/' })] }))).toBeNull();
+  it.each([
+    'https://www.linkedin.com/in/jane-doe-123/',
+    'http://linkedin.com/in/jane-doe-123',
+    'https://uk.linkedin.com/in/jane-doe-123',
+  ])('accepts a displayed /in/ URL in any form PI normalizes: %s', (u) => {
+    expect(checkCaptureBatch(body({ leads: [lead({ public_profile_url: u })] }))).toBeNull();
+  });
+  it.each(['https://linkedin.com.evil.example/in/x', 'https://www.linkedin.com/in/', 'javascript:alert(1)'])('refuses a lookalike or empty /in/ URL: %s', (u) => {
+    expect(checkCaptureBatch(body({ leads: [lead({ public_profile_url: u })] }))).toBe('INVALID_PROFILE_URL');
   });
 });
