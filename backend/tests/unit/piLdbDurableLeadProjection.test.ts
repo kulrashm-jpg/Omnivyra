@@ -206,12 +206,19 @@ describe('PI-LDB-4 — what the emitted lead carries', () => {
     // from the explicit `PI_ADAPTER_PROFILES` table, so the durable row and
     // the provenance contribution cannot disagree about what originated the
     // prospect.
-    await ingestNormalizedRecord(csvRecord());
+    // D3 (owner ruling, 2026-11-07): `observedAt` is the INGESTION clock - when
+    // Omnivyra accepted the classification - never the source event time
+    // (`record.observedAt`, still carried on `occurredAt`). And only the
+    // orchestrator marks an origin `asserted`, which is what lets it persist.
+    const INGESTED_AT = '2026-11-11T09:00:00.000Z';
+    await ingestNormalizedRecord(csvRecord(), { now: INGESTED_AT });
     expect(emitted[0].origin).toEqual({
       category: 'csv',
       platform: null,
-      observedAt: '2026-11-02T10:00:00.000Z',
+      observedAt: INGESTED_AT,
+      provenance: 'asserted',
     });
+    expect(emitted[0].origin!.observedAt).not.toBe('2026-11-02T10:00:00.000Z');
     // And it agrees with what the provenance boundary was told.
     expect(ingested[0].sourceCategory).toBe('csv');
   });

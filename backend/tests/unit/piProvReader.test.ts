@@ -233,6 +233,22 @@ function readers(over: Partial<LeadSourceReaders> = {}): LeadSourceReaders & { c
   };
 }
 
+describe('D3 — a PERSISTED origin is the authority over the reconstruction', () => {
+  it('a durable row with a stored asserted origin wins, as one atomic pair', async () => {
+    const base = (await searchLeads({ companyId: CO1 }, readers())).rows[0];
+    const stored = { category: 'inbound_form' as const, platform: null, observedAt: '2026-10-05T00:00:00.000Z', provenance: 'asserted' as const };
+    const res = await searchLeads({ companyId: CO1 }, readers({ durable: async () => [{ ...base, origin: stored }] }));
+    const v = res.rows[0];
+    // Category AND observedAt from the row; only the display platform from the contribution.
+    expect(v.origin).toMatchObject({ category: 'inbound_form', observedAt: '2026-10-05T00:00:00.000Z', platform: 'reddit' });
+  });
+
+  it('NEGATIVE CONTROL: the same lead WITHOUT a stored origin is unknown, not community', async () => {
+    const res = await searchLeads({ companyId: CO1 }, readers());
+    expect(res.rows[0].origin).toMatchObject({ category: null });
+  });
+});
+
 describe('read service — sources[] and evidence[]', () => {
   it('populates typed sources and evidence for a canonical prospect', async () => {
     const res = await searchLeads({ companyId: CO1 }, readers());
@@ -240,7 +256,10 @@ describe('read service — sources[] and evidence[]', () => {
     const v = res.rows[0];
     expect(v.provenanceStatus).toBe('loaded');
     expect(v.sources).toEqual([contribution()]);
-    expect(v.origin).toEqual({ category: 'community', platform: 'reddit', observedAt: '2026-10-01T10:00:00+00:00' });
+    // D3: no persisted origin -> the category is UNKNOWN (fail closed). The
+    // reconstructed contribution is audit evidence and may NOT stand in; only
+    // the display-only platform survives, and observedAt stays paired (null).
+    expect(v.origin).toEqual({ category: null, platform: 'reddit', observedAt: null });
     expect(v.evidence!.map((e) => [e.kind, e.ref])).toEqual([
       ['source_url', 'https://reddit.com/r/x/comments/1'],
       ['source_record', 'sr-1'],
@@ -372,7 +391,10 @@ describe('read service — Apollo is not displayed as CRM', () => {
       canonicalLeads: async () => [canonicalRow({ source: 'hubspot_import' })],
       contributions: async () => okResult({ 'cl-1': [contribution({ sourceCategory: 'pi_enrichment', platform: 'apollo', externalRef: 'apollo:p1' })] }),
     }));
-    expect(res.rows[0].sourceLabel).toBe('Prospect enrichment · Apollo');
+    // D3: with no persisted origin the contribution's category is not
+    // adopted, so the label cannot claim "Prospect enrichment" from it.
+    expect(res.rows[0].sourceLabel).not.toBe('Prospect enrichment · Apollo');
+    expect(res.rows[0].origin).toMatchObject({ category: null, platform: 'apollo' });
   });
 
   it('a real CRM origin keeps the CRM label', async () => {
@@ -451,8 +473,13 @@ describe('stats — per-source breakdowns kept and extended', () => {
     // `unknown`. It now states the category explicitly, so the row that really
     // did come from a form says so. `unknown` here was missing provenance, not
     // a category.
-    expect(s.byOriginCategory).toEqual({ community: 1, pi_discovery: 1, inbound_form: 1 });
-    expect(s.bySourceLabel).toEqual({ Community: 1, 'Prospect discovery · Apollo': 1, Website: 1 });
+    // D3: cl-1 has no persisted origin, so its contribution's `community` is
+    // NOT adopted and it counts as unknown. cl-2 keeps the pi_discovery display
+    // hint (a non-asserted hint keeps its display behaviour) and l1 is an
+    // inbound form. Existing rows get a persisted category from the owner's
+    // one-time STRUCTURAL backfill (D3 option b), not from this reconstruction.
+    expect(s.byOriginCategory).toEqual({ unknown: 1, pi_discovery: 1, inbound_form: 1 });
+    expect(s.bySourceLabel).toMatchObject({ 'Prospect discovery · Apollo': 1, Website: 1 });
     expect(s.provenance).toBe('ok');
     expect(s.truncated).toBe(false);
   });
