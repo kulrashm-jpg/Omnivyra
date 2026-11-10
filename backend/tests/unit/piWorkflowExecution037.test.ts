@@ -37,7 +37,7 @@ const tsCode = (s: string): string => s
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-const MIG_REL = 'supabase/migrations/20261228000002_pi_execution_step_scheduling.sql';
+const MIG_REL = 'supabase/migrations/20270111100004_pi_execution_step_scheduling.sql';
 const STORE_REL = 'backend/services/workflowExecution/stepProgressionStore.ts';
 const ROUTE_REL = 'pages/api/execution-instances/[id]/progression.ts';
 
@@ -446,24 +446,24 @@ describe('037 — authorization is the interim capability, unchanged', () => {
 describe('037 — frozen artefacts are untouched', () => {
   // RE-PINNED 2026-10-28 to the orchestration port (see piExecutionPlan036's note).
   it('036 is byte-identical', () => {
-    expect(sha('supabase/migrations/20261228000001_pi_execution_plans.sql'))
+    expect(sha('supabase/migrations/20270111100003_pi_execution_plans.sql'))
       .toBe('04de68f4eb360825');
     expect(sha('backend/services/executionPlans/executionPlanStore.ts'))
       .toBe('c2f0c2174cb2ca3c');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
     // RE-PINNED 2026-10-28: 036 re-pinned the instance store (targets_not_installed mapping).
-    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('b1497a460231a4cc'); // RE-PINNED 2026-11-07 (G-11): 036 re-pinned the [id] route again (evaluation opt_out); 2026-11-06 (Prompt 5) the [id] route and the instance store
+    expect(sha('backend/tests/unit/piExecutionPlan036.test.ts')).toBe('a8a09b7c5bef2966'); // RE-PINNED 2026-11-07 (G-11): 036 re-pinned the [id] route again (evaluation opt_out); 2026-11-06 (Prompt 5) the [id] route and the instance store
   });
 
   it('033, 034 and 032 are byte-identical', () => {
-    expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
+    expect(sha('supabase/migrations/20270111100002_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
     expect(sha('pages/api/execution-instances/[id].ts')).toBe('4616088fd7c2a8d2'); // RE-PINNED 2026-11-07 (G-11): evaluation opt_out records an all-channel unsubscribe, then ends the run (person_unknown 409, governance_write_failed 503); before that 2026-11-06 (Prompt 5) O2-F1 and PATCH { evaluation }
     expect(sha('pages/api/prospect-campaigns/[id]/execution-instances.ts'))
       .toBe('6c303af15da7a4bf');
-    expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
+    expect(sha('supabase/migrations/20270111100001_pi_workflow_definitions.sql'))
       .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
     expect(sha('backend/services/workflows/workflowStore.ts')).toBe('8b5096c788dc142d'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });
@@ -480,7 +480,7 @@ describe('037 — frozen artefacts are untouched', () => {
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql'));
     expect(files.length).toBeGreaterThan(0);
     expect(files.filter((f) => /_pi_execution_step_scheduling\.sql$/.test(f)))
-      .toEqual(['20261228000002_pi_execution_step_scheduling.sql']);
+      .toEqual(['20270111100004_pi_execution_step_scheduling.sql']);
     // It alters, never creates.
     expect(MIG).not.toMatch(/CREATE\s+TABLE/i);
     expect(MIG).toMatch(/ALTER TABLE public\.execution_plan_steps/);

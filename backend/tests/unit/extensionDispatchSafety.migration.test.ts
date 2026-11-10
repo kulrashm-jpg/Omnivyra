@@ -1,5 +1,5 @@
 /**
- * Static contract for 20261231000005_extension_dispatch_safety.sql and its
+ * Static contract for 20270111100012_extension_dispatch_safety.sql and its
  * rollback. No database is started here; the integration owner verifies the
  * migration on a disposable real PostgreSQL. These assertions pin the safety
  * properties the application code relies on.
@@ -7,7 +7,7 @@
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 
-const MIG = 'supabase/migrations/20261231000005_extension_dispatch_safety.sql';
+const MIG = 'supabase/migrations/20270111100012_extension_dispatch_safety.sql';
 const RB = 'supabase/migrations/rollbacks/extension_dispatch_safety_rollback.sql';
 const sql = readFileSync(MIG, 'utf8');
 const rb = readFileSync(RB, 'utf8');

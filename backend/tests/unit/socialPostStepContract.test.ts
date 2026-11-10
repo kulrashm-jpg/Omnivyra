@@ -18,8 +18,8 @@ import {
 
 const ROOT = process.cwd();
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8');
-const MIG = 'supabase/migrations/20261231000004_social_publish_step_channel.sql';
-const ORIGINAL = 'supabase/migrations/20261227000000_pi_workflow_definitions.sql';
+const MIG = 'supabase/migrations/20270111100011_social_publish_step_channel.sql';
+const ORIGINAL = 'supabase/migrations/20270111100001_pi_workflow_definitions.sql';
 const ROLLBACK = 'supabase/migrations/rollbacks/social_publish_step_channel_rollback.sql';
 const POST = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
@@ -138,7 +138,7 @@ describe('20261231000004 — SQL ⇄ TypeScript agreement', () => {
 
   it('is the LATEST definer of publish_workflow_version and accepts exactly WORKFLOW_STEP_CHANNELS', () => {
     const definers = migrations.filter((x) => /CREATE OR REPLACE FUNCTION public\.publish_workflow_version\(/.test(read(`supabase/migrations/${x}`)));
-    expect(definers).toEqual(['20261227000000_pi_workflow_definitions.sql', '20261231000004_social_publish_step_channel.sql']);
+    expect(definers).toEqual(['20270111100001_pi_workflow_definitions.sql', '20270111100011_social_publish_step_channel.sql']);
     const m = /\(s\.value ->> 'channel'\) NOT IN \(([^)]*)\)/.exec(sql);
     expect(m).not.toBeNull();
     const inSql = [...(m as RegExpExecArray)[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();

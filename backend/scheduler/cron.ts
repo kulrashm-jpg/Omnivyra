@@ -738,7 +738,7 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
 
   // ── Community AI lease reaper (every 30s) ─────────────────────────────────
   // Lapsed browser-dispatch claims and stuck `executing` rows MAY have reached
-  // the platform, so the reaper (20261231000005_extension_dispatch_safety)
+  // the platform, so the reaper (20270111100012_extension_dispatch_safety)
   // moves them to 'uncertain' — terminal, human review, never retried — and
   // keeps the lease id/holder so the claimant's late result is still
   // recorded. It also clears lease metadata from other terminal rows.

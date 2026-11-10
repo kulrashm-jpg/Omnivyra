@@ -109,7 +109,7 @@ const read = (rel: string): string =>
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 const STORE = 'backend/services/executionInstances/executionInstanceStore.ts';
-const MIGRATION = 'supabase/migrations/20261228000000_pi_execution_instances.sql';
+const MIGRATION = 'supabase/migrations/20270111100002_pi_execution_instances.sql';
 // The campaign is a PATH PARENT, matching every other prospect-campaigns
 // sub-resource. An earlier draft took `campaignId` in the query/body on a flat
 // `/api/execution-instances` route and route-auth R3 correctly failed it.
@@ -578,9 +578,9 @@ describe('033 — the migration', () => {
     const owners = files.filter((f: string) =>
       /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?public\.execution_instances\b/i.test(
         fs.readFileSync(path.join(dir, f), 'utf8') as string)).sort();
-    expect(owners).toEqual(['20261228000000_pi_execution_instances.sql']);
-    expect('20261227000000_pi_workflow_definitions.sql'
-      < '20261228000000_pi_execution_instances.sql').toBe(true);
+    expect(owners).toEqual(['20270111100002_pi_execution_instances.sql']);
+    expect('20270111100001_pi_workflow_definitions.sql'
+      < '20270111100002_pi_execution_instances.sql').toBe(true);
   });
 });
 
@@ -588,7 +588,7 @@ describe('033 — the migration', () => {
 
 describe('033 — isolation, proven by content not by git status', () => {
   it('032’s migration and store are unchanged in the ways that matter', () => {
-    const m = read('supabase/migrations/20261227000000_pi_workflow_definitions.sql');
+    const m = read('supabase/migrations/20270111100001_pi_workflow_definitions.sql');
     expect(m).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_versions_one_published/);
     expect(m).toMatch(/WHERE status = 'published'/);
     const s = code(read('backend/services/workflows/workflowStore.ts'));

@@ -495,7 +495,7 @@ describe('attestation route', () => {
 // ── 6. The migration ────────────────────────────────────────────────────────
 
 describe('migration 20261231000007', () => {
-  const sql = read('supabase/migrations/20261231000007_identity_verification.sql');
+  const sql = read('supabase/migrations/20270111100014_identity_verification.sql');
   const rb = read('supabase/migrations/rollbacks/identity_verification_rollback.sql');
   const code = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
 

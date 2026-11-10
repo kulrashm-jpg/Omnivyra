@@ -575,7 +575,7 @@ describe('community adapter — execution-time person re-check', () => {
 // ── 4. Migration contract (static) ─────────────────────────────────────────
 
 describe('community identity link — migration contract', () => {
-  const sql = read('supabase/migrations/20261231000006_community_identity_link.sql');
+  const sql = read('supabase/migrations/20270111100013_community_identity_link.sql');
   const rb = read('supabase/migrations/rollbacks/community_identity_link_rollback.sql');
   const code = sql.replace(/--.*$/gm, '');
 
@@ -643,7 +643,7 @@ describe('community identity link — migration contract', () => {
 
   it('takes its own slot after 20261231000003', () => {
     const files = fs.readdirSync(path.join(process.cwd(), 'supabase/migrations')).filter((f) => /^\d{14}_.*\.sql$/.test(f)).sort();
-    expect(files.indexOf('20261231000006_community_identity_link.sql')).toBeGreaterThan(files.indexOf('20261231000003_community_journey_link.sql'));
+    expect(files.indexOf('20270111100013_community_identity_link.sql')).toBeGreaterThan(files.indexOf('20270111100010_community_journey_link.sql'));
   });
 
   it('the SQL normalizer mirrors normalizeExternalIdentity\'s rules', () => {

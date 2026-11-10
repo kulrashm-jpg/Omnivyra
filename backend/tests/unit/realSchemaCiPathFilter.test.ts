@@ -63,7 +63,7 @@ const STACK_SURFACE: Array<[pattern: string, representative: string]> = [
   ['pages/api/prospect-lists/**', 'pages/api/prospect-lists/members.ts'],
   ['pages/api/prospect-campaigns/**', 'pages/api/prospect-campaigns/[id]/enroll.ts'],
   ['pages/api/execution-instances/**', 'pages/api/execution-instances/[id]/community-link.ts'],
-  ['supabase/migrations/**', 'supabase/migrations/20261231000003_community_journey_link.sql'],
+  ['supabase/migrations/**', 'supabase/migrations/20270111100010_community_journey_link.sql'],
   ['backend/tests/realschema/**', 'backend/tests/realschema/orch_campaign_targets.test.ts'],
 ];
 

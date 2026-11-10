@@ -19,7 +19,7 @@ const RATIFIED_STEP_CHANNELS = [
 
 const ROOT = process.cwd();
 const MIG_DIR = path.join(ROOT, 'supabase/migrations');
-const MINE = '20261231000000_orchestration_campaign_targeting.sql';
+const MINE = '20270111100007_orchestration_campaign_targeting.sql';
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const sql = read(`supabase/migrations/${MINE}`);
 const rollback = read('supabase/migrations/rollbacks/orchestration_campaign_targeting_rollback.sql');
@@ -44,8 +44,8 @@ describe('20261231000000 — depends on the canonical tables, competes with none
       '20261012000000_d1_tenant_icp_model.sql',
       '20261031000000_pi_score_evaluations.sql',
       '20261127000000_pi_prospect_lists.sql',
-      '20261226000000_pi_prospect_campaigns.sql',
-      '20261228000000_pi_execution_instances.sql',
+      '20270111100000_pi_prospect_campaigns.sql',
+      '20270111100002_pi_execution_instances.sql',
     ]) {
       expect(migrations).toContain(dep);
       expect(dep < MINE).toBe(true);
@@ -125,7 +125,7 @@ describe('20261231000000 — ICP association, tenant safety and immutability', (
   });
 
   it('adds the foreign key 20261228000000 deferred, and asserts the resulting counts', () => {
-    expect(read('supabase/migrations/20261228000000_pi_execution_instances.sql')).toMatch(/ei_create:targets_not_installed/);
+    expect(read('supabase/migrations/20270111100002_pi_execution_instances.sql')).toMatch(/ei_create:targets_not_installed/);
     expect(sql).toMatch(/execution_instances_target_tenant_fk\s+FOREIGN KEY \(target_id, organization_id\)\s+REFERENCES public\.prospect_campaign_targets \(id, organization_id\)/);
     expect(sql).toMatch(/IF n <> 5 THEN/);
     expect(sql).toMatch(/IF n <> 6 THEN/);
@@ -158,12 +158,12 @@ describe('agreement between the SQL and the application', () => {
     const check = checkPublishChannelVocabulary(files, WORKFLOW_STEP_CHANNELS, RATIFIED_STEP_CHANNELS);
     expect(check).toEqual({
       ok: true,
-      latestDefiner: '20261231000004_social_publish_step_channel.sql',
+      latestDefiner: '20270111100011_social_publish_step_channel.sql',
       channels: [...WORKFLOW_STEP_CHANNELS].sort(),
     });
     expect(publishFunctionDefiners(files)).toEqual([
-      '20261227000000_pi_workflow_definitions.sql',
-      '20261231000004_social_publish_step_channel.sql',
+      '20270111100001_pi_workflow_definitions.sql',
+      '20270111100011_social_publish_step_channel.sql',
     ]);
   });
 
@@ -176,10 +176,10 @@ describe('agreement between the SQL and the application', () => {
   });
 
   it('earlier postconditions accept exactly what 20261231 adds, so a re-run after it holds', () => {
-    const c = read('supabase/migrations/20261226000000_pi_prospect_campaigns.sql');
+    const c = read('supabase/migrations/20270111100000_pi_prospect_campaigns.sql');
     expect(c).toMatch(/created_at,description,icp_id,icp_version,id,min_icp_score,name,organization_id,status,targeting_mode,updated_at'\s+AND EXISTS \(SELECT 1 FROM pg_constraint WHERE conname = 'prospect_campaigns_targeting_mode_valid'\)/);
     expect(c).toMatch(/'prospect_campaigns_icp_version_tenant_fk,prospect_campaigns_organization_id_fkey'/);
-    const i = read('supabase/migrations/20261228000000_pi_execution_instances.sql');
+    const i = read('supabase/migrations/20270111100002_pi_execution_instances.sql');
     expect(i).toMatch(/IF n <> 4 AND NOT \(n = 5 AND EXISTS \([\s\S]{0,200}conname = 'execution_instances_target_tenant_fk'\)\) THEN/);
   });
 });

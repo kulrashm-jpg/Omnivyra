@@ -63,7 +63,7 @@ const tsCode = (s: string): string => s
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-const MIG_REL = 'supabase/migrations/20261229000000_pi_outreach_bridge.sql';
+const MIG_REL = 'supabase/migrations/20270111100005_pi_outreach_bridge.sql';
 const STORE_REL = 'backend/services/outreachBridge/outreachBridgeStore.ts';
 const ROUTE_REL = 'pages/api/execution-instances/[id]/outreach-bridge.ts';
 const WF_REL = 'backend/services/workflows/workflowStore.ts';
@@ -489,12 +489,12 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
   it('036 and 037 artefacts are byte-identical', () => {
     // RE-PINNED 2026-10-28 to the orchestration port (renumbered migrations; the
     // plan store gained the read-only frequency lookup).
-    expect(sha('supabase/migrations/20261228000001_pi_execution_plans.sql'))
+    expect(sha('supabase/migrations/20270111100003_pi_execution_plans.sql'))
       .toBe('04de68f4eb360825');
     expect(sha('backend/services/executionPlans/executionPlanStore.ts'))
       .toBe('c2f0c2174cb2ca3c');
     expect(sha('pages/api/execution-instances/[id]/plan.ts')).toBe('d133ffc3c1cadc5e');
-    expect(sha('supabase/migrations/20261228000002_pi_execution_step_scheduling.sql'))
+    expect(sha('supabase/migrations/20270111100004_pi_execution_step_scheduling.sql'))
       .toBe('652e20fb2f6425e2');
     expect(sha('backend/services/workflowExecution/stepProgressionStore.ts'))
       .toBe('e36a36c6439315ab'); // RE-PINNED 2026-11-05 (Prompt 4): reads not_before; deferStepUntil (20270127000000)
@@ -503,7 +503,7 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
 
   it('033 artefacts are byte-identical', () => {
     // RE-PINNED 2026-10-28 (see the 036/037 notes).
-    expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
+    expect(sha('supabase/migrations/20270111100002_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
@@ -525,12 +525,12 @@ describe('040 — 036 and 037 are untouched beyond the authorized index', () => 
     const dir = path.join(ROOT, 'supabase/migrations');
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql'));
     expect(files.filter((f) => /_pi_outreach_bridge\.sql$/.test(f)))
-      .toEqual(['20261229000000_pi_outreach_bridge.sql']);
+      .toEqual(['20270111100005_pi_outreach_bridge.sql']);
     expect((MIG.match(/CREATE\s+TABLE/gi) || []).length).toBe(1);
     const creators = files.filter((f) =>
       /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?outreach_bridge_handoffs\b/i
         .test(fs.readFileSync(path.join(dir, f), 'utf8')));
-    expect(creators).toEqual(['20261229000000_pi_outreach_bridge.sql']);
+    expect(creators).toEqual(['20270111100005_pi_outreach_bridge.sql']);
   });
 });
 

@@ -35,7 +35,7 @@ const tsCode = (s: string): string => s
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-const MIG_REL = 'supabase/migrations/20261228000001_pi_execution_plans.sql';
+const MIG_REL = 'supabase/migrations/20270111100003_pi_execution_plans.sql';
 const STORE_REL = 'backend/services/executionPlans/executionPlanStore.ts';
 const ROUTE_REL = 'pages/api/execution-instances/[id]/plan.ts';
 
@@ -469,13 +469,13 @@ describe('036 — the scope fence holds', () => {
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql'));
     expect(files.length).toBeGreaterThan(0);
     const mine = files.filter((f) => /_pi_execution_plans\.sql$/.test(f));
-    expect(mine).toEqual(['20261228000001_pi_execution_plans.sql']);
+    expect(mine).toEqual(['20270111100003_pi_execution_plans.sql']);
     // And each new table has exactly ONE creator migration.
     for (const t of ['execution_plans', 'execution_plan_steps', 'execution_tasks']) {
       const creators = files.filter((f) =>
         new RegExp(`CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:public\\.)?${t}\\b`, 'i')
           .test(fs.readFileSync(path.join(dir, f), 'utf8')));
-      expect(creators).toEqual(['20261228000001_pi_execution_plans.sql']);
+      expect(creators).toEqual(['20270111100003_pi_execution_plans.sql']);
     }
   });
 
@@ -538,7 +538,7 @@ describe('036 — frozen artefacts are untouched', () => {
   // deferred target FK, read-only store listings, the journey-policy validator and
   // the enrollment-eligibility check on the invocation route.
   it('033 is byte-identical', () => {
-    expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
+    expect(sha('supabase/migrations/20270111100002_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     expect(sha('backend/services/executionInstances/executionInstanceStore.ts'))
       .toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added; nothing else changed
@@ -551,7 +551,7 @@ describe('036 — frozen artefacts are untouched', () => {
   });
 
   it('032 is byte-identical (029/030 land with the lists slice)', () => {
-    expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
+    expect(sha('supabase/migrations/20270111100001_pi_workflow_definitions.sql'))
       .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
     expect(sha('backend/services/workflows/workflowStore.ts')).toBe('8b5096c788dc142d'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });

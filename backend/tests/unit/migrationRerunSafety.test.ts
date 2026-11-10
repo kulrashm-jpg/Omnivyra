@@ -20,10 +20,10 @@ const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8');
 const M = 'supabase/migrations/';
 const R = `${M}rollbacks/`;
 
-const M032 = read(`${M}20261227000000_pi_workflow_definitions.sql`);
-const M004 = read(`${M}20261231000004_social_publish_step_channel.sql`);
-const M005 = read(`${M}20261231000005_extension_dispatch_safety.sql`);
-const M009 = read(`${M}20261231000009_migration_rerun_safety.sql`);
+const M032 = read(`${M}20270111100001_pi_workflow_definitions.sql`);
+const M004 = read(`${M}20270111100011_social_publish_step_channel.sql`);
+const M005 = read(`${M}20270111100012_extension_dispatch_safety.sql`);
+const M009 = read(`${M}20270111100016_migration_rerun_safety.sql`);
 const RB009 = read(`${R}migration_rerun_safety_rollback.sql`);
 const RB002 = read(`${R}community_execution_safety_rollback.sql`);
 const RB003 = read(`${R}community_journey_link_rollback.sql`);

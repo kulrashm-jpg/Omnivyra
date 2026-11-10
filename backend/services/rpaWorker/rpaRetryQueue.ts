@@ -19,7 +19,7 @@ import { claimCommunityActionForExecution } from '../communityAiActionExecutorRu
  * Backoff on re-queue: max(caller delay, 2^attempts minutes), capped at 120
  * minutes. Max attempts is 5.
  *
- * Execution-safety contract (20261231000002_community_execution_safety):
+ * Execution-safety contract (20270111100009_community_execution_safety):
  *   - Rows are only ever created for PROVABLY-NOT-ACTED deferrals (env not
  *     ready, admission refused). A may-have-acted outcome is never queued.
  *   - A flush must win an atomic compare-and-set claim on the retry row

@@ -258,7 +258,7 @@ describe('real schema — 20261231000000 as PostgreSQL holds it', () => {
   it('the earlier migrations\' postconditions still hold after 20261231 (re-run safety)', async () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
-    for (const f of ['20261226000000_pi_prospect_campaigns.sql', '20261228000000_pi_execution_instances.sql', '20261231000000_orchestration_campaign_targeting.sql']) {
+    for (const f of ['20270111100000_pi_prospect_campaigns.sql', '20270111100002_pi_execution_instances.sql', '20270111100007_orchestration_campaign_targeting.sql']) {
       const sql = fs.readFileSync(path.join(process.cwd(), 'supabase/migrations', f), 'utf8');
       const blocks = (sql.match(/^DO \$\$[\s\S]*?^\$\$;/gm) ?? []).filter((b) => /postcondition/.test(b));
       expect({ f, blocks: blocks.length > 0 }).toEqual({ f, blocks: true });

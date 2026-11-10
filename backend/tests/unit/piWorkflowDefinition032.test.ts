@@ -105,7 +105,7 @@ const read = (rel: string): string =>
 const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 const STORE = 'backend/services/workflows/workflowStore.ts';
-const MIGRATION = 'supabase/migrations/20261227000000_pi_workflow_definitions.sql';
+const MIGRATION = 'supabase/migrations/20270111100001_pi_workflow_definitions.sql';
 const ROUTES = [
   'pages/api/workflows/index.ts',
   'pages/api/workflows/[id].ts',
@@ -644,9 +644,9 @@ describe('032 — the migration', () => {
     const owners = files.filter((f: string) =>
       /CREATE\s+TABLE[^;]*public\.workflow_versions/i.test(
         fs.readFileSync(path.join(dir, f), 'utf8') as string)).sort();
-    expect(owners).toEqual(['20261227000000_pi_workflow_definitions.sql']);
+    expect(owners).toEqual(['20270111100001_pi_workflow_definitions.sql']);
     // A NAMED predecessor, not "it is the newest".
-    expect('20261109000000_pi_campaign_targets.sql' < '20261227000000_pi_workflow_definitions.sql')
+    expect('20261109000000_pi_campaign_targets.sql' < '20270111100001_pi_workflow_definitions.sql')
       .toBe(true);
   });
 });

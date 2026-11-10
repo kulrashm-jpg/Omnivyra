@@ -15,7 +15,7 @@
  */
 
 /** The migration that FIRST defines publish_workflow_version. Never edited. */
-export const FIRST_PUBLISH_DEFINER = '20261227000000_pi_workflow_definitions.sql';
+export const FIRST_PUBLISH_DEFINER = '20270111100001_pi_workflow_definitions.sql';
 
 /**
  * A channel name: lowercase ASCII words joined by single underscores, starting

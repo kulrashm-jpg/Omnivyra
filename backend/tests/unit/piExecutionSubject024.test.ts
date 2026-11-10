@@ -212,12 +212,12 @@ describe('024 — forbidden scope, proven by content', () => {
   const sql = (s: string) => s.replace(/^\s*--.*$/gm, '').replace(/COMMENT ON [\s\S]*?';/g, '');
   // The orchestration migrations this slice adds. None may reach a WS-3 table.
   const PORTED = [
-    'supabase/migrations/20261226000000_pi_prospect_campaigns.sql',
-    'supabase/migrations/20261227000000_pi_workflow_definitions.sql',
-    'supabase/migrations/20261228000000_pi_execution_instances.sql',
-    'supabase/migrations/20261228000001_pi_execution_plans.sql',
-    'supabase/migrations/20261228000002_pi_execution_step_scheduling.sql',
-    'supabase/migrations/20261229000000_pi_outreach_bridge.sql',
+    'supabase/migrations/20270111100000_pi_prospect_campaigns.sql',
+    'supabase/migrations/20270111100001_pi_workflow_definitions.sql',
+    'supabase/migrations/20270111100002_pi_execution_instances.sql',
+    'supabase/migrations/20270111100003_pi_execution_plans.sql',
+    'supabase/migrations/20270111100004_pi_execution_step_scheduling.sql',
+    'supabase/migrations/20270111100005_pi_outreach_bridge.sql',
   ];
 
   it('(E) the task identity is UNTOUCHED', () => {

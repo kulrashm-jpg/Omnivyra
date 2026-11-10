@@ -527,7 +527,7 @@ describe('community journey link — route', () => {
 // ── 7. Migration contract ──────────────────────────────────────────────────
 
 describe('community journey link — migration contract', () => {
-  const MIG = 'supabase/migrations/20261231000003_community_journey_link.sql';
+  const MIG = 'supabase/migrations/20270111100010_community_journey_link.sql';
   const sql = read(MIG);
   const rb = read('supabase/migrations/rollbacks/community_journey_link_rollback.sql');
 
@@ -606,8 +606,8 @@ describe('community journey link — migration contract', () => {
 
   it('sorts after the slots it depends on (20261231000002 is Agent A\'s)', () => {
     const files = fs.readdirSync(path.join(process.cwd(), 'supabase/migrations')).filter((f) => /^\d{14}_.*\.sql$/.test(f)).sort();
-    const i = files.indexOf('20261231000003_community_journey_link.sql');
-    expect(i).toBeGreaterThan(files.indexOf('20261231000001_orchestration_engine_requests_engines.sql'));
-    expect(i).toBeGreaterThan(files.indexOf('20261229000000_pi_outreach_bridge.sql'));
+    const i = files.indexOf('20270111100010_community_journey_link.sql');
+    expect(i).toBeGreaterThan(files.indexOf('20270111100008_orchestration_engine_requests_engines.sql'));
+    expect(i).toBeGreaterThan(files.indexOf('20270111100005_pi_outreach_bridge.sql'));
   });
 });

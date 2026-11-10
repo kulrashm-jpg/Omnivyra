@@ -230,7 +230,7 @@ describe('backend renewal — fail-closed refusals', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('re-offer rule: no client is ever re-offered a claimed command', () => {
-  // 20261231000005_extension_dispatch_safety removed the legacy lapsed-lease
+  // 20270111100012_extension_dispatch_safety removed the legacy lapsed-lease
   // re-offer that v1.3.9 (no renewal) relied on: a lapsed claim may have acted,
   // so it is reaped to 'uncertain' and its late result recorded, never handed
   // to another session. The renewal header no longer changes what is offered.

@@ -360,7 +360,7 @@ describe('034 — isolation, proven by content', () => {
     const creators = files.filter((f) =>
       /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?execution_instances\b/i
         .test(fs.readFileSync(path.join(dir, f), 'utf8')));
-    expect(creators).toEqual(['20261228000000_pi_execution_instances.sql']);
+    expect(creators).toEqual(['20270111100002_pi_execution_instances.sql']);
   });
 
   it('033’s store and migration are untouched by 034', () => {
@@ -369,7 +369,7 @@ describe('034 — isolation, proven by content', () => {
       .update(fs.readFileSync(path.join(ROOT, rel))).digest('hex').slice(0, 16);
     // RE-PINNED 2026-10-28 to the orchestration port (renumbered migration with the
     // deferred target FK; the store gained the read-only discovery/report listings).
-    expect(sha('supabase/migrations/20261228000000_pi_execution_instances.sql'))
+    expect(sha('supabase/migrations/20270111100002_pi_execution_instances.sql'))
       .toBe('497119eb80564588'); // RE-PINNED 2026-10-28 (real-PostgreSQL verification): postcondition accepts the 20261231 target FK (re-run safe)
     // RE-PINNED 2026-10-28: ei_create:targets_not_installed now maps to its own code.
     expect(sha(STORE_REL)).toBe('09047cce2e897f3d'); // RE-PINNED 2026-11-06 (Prompt 5, O2-F1): compareAndSetExecutionInstanceState added
@@ -382,7 +382,7 @@ describe('034 — isolation, proven by content', () => {
       .update(fs.readFileSync(path.join(ROOT, rel))).digest('hex').slice(0, 16);
     // RE-PINNED 2026-10-28 (renumbered migration; the store validates the journey
     // policy extensions). 029's targets / 030's producer land with the lists slice.
-    expect(sha('supabase/migrations/20261227000000_pi_workflow_definitions.sql'))
+    expect(sha('supabase/migrations/20270111100001_pi_workflow_definitions.sql'))
       .toBe('71691e4328a27592'); // RE-PINNED 2026-10-28 (migration re-run safety): re-running 032 after 20261231000004 no longer narrows the publish vocabulary (function body unchanged)
     expect(sha('backend/services/workflows/workflowStore.ts')).toBe('8b5096c788dc142d'); // RE-PINNED 2026-10-28 (social_post): additive social_post channel + optional step reference (20261231000004)
   });

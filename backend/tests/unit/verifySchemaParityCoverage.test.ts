@@ -20,12 +20,12 @@ const MIGRATIONS = path.join(REPO, 'supabase', 'migrations');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const parity = require(path.join(REPO, 'scripts', 'verify-schema-parity.js'));
 
-/** The release series: 20261127000000, 20261226000000 … 20261231999999, the journey decision record and the email content evidence. */
+/** The release series: 20261127000000, 20261231000010, the GD-4 band 20270111100000 … 20270111100016, the journey decision record and the email content evidence. */
 const inSeries = (f: string): boolean => {
   const m = f.match(/^(\d{14})_.*\.sql$/);
   if (!m) return false;
   const v = m[1];
-  return v === '20261127000000' || v === '20270120000000' || v === '20270120000001' || v === '20270120000002' || (v >= '20261226000000' && v <= '20261231999999');
+  return v === '20261127000000' || v === '20270120000000' || v === '20270120000001' || v === '20270120000002' || v === '20261231000010' || (v >= '20270111100000' && v <= '20270111100016');
 };
 
 const seriesFiles = fs.readdirSync(MIGRATIONS).filter(inSeries).sort();

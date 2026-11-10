@@ -1,12 +1,12 @@
 /**
- * Static contract for 20261231000008_engagement_request_idempotency.sql and
+ * Static contract for 20270111100015_engagement_request_idempotency.sql and
  * its rollback. No database is started here; the integration owner verifies
  * the migration on a disposable real PostgreSQL. These assertions pin the
  * properties engagementRequestIdempotency.ts relies on.
  */
 import { readFileSync } from 'fs';
 
-const MIG = 'supabase/migrations/20261231000008_engagement_request_idempotency.sql';
+const MIG = 'supabase/migrations/20270111100015_engagement_request_idempotency.sql';
 const RB = 'supabase/migrations/rollbacks/engagement_request_idempotency_rollback.sql';
 const sql = readFileSync(MIG, 'utf8');
 const rb = readFileSync(RB, 'utf8');

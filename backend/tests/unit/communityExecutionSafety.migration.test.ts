@@ -1,5 +1,5 @@
 /**
- * Static contract for 20261231000002_community_execution_safety.sql and its
+ * Static contract for 20270111100009_community_execution_safety.sql and its
  * rollback. No database is started here; the integration owner verifies the
  * pair on a disposable PostgreSQL. These checks pin the properties that must
  * not regress: guarded, idempotent, widening-only, explicit vocabulary that
@@ -10,7 +10,7 @@ import path from 'path';
 import { COMMUNITY_STATUS_VOCABULARY } from './helpers/communityExecutionFakeDb';
 
 const root = path.resolve(__dirname, '../../..');
-const MIG = fs.readFileSync(path.join(root, 'supabase/migrations/20261231000002_community_execution_safety.sql'), 'utf8');
+const MIG = fs.readFileSync(path.join(root, 'supabase/migrations/20270111100009_community_execution_safety.sql'), 'utf8');
 const RB = fs.readFileSync(path.join(root, 'supabase/migrations/rollbacks/community_execution_safety_rollback.sql'), 'utf8');
 const code = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
@@ -102,7 +102,7 @@ describe('community execution safety migration (static contract)', () => {
   });
 
   it('slot and rollback name follow the repo convention', () => {
-    expect(fs.existsSync(path.join(root, 'supabase/migrations/20261231000002_community_execution_safety.sql'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'supabase/migrations/20270111100009_community_execution_safety.sql'))).toBe(true);
     expect(MIG).toMatch(/rollbacks\/community_execution_safety_rollback\.sql/);
   });
 });

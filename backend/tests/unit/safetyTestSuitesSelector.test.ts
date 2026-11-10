@@ -139,13 +139,13 @@ const NEW_SAFETY_MARKERS = [
   // Migrations 20261127 and 20261226-20261230, named exactly: the prefix
   // `2026122` also matches unrelated pre-existing migrations.
   '20261127000000',
-  '20261226000000',
-  '20261227000000',
-  '20261228000000',
-  '20261228000001',
-  '20261228000002',
-  '20261229000000',
-  '20261230000000',
+  '20270111100000',
+  '20270111100001',
+  '20270111100002',
+  '20270111100003',
+  '20270111100004',
+  '20270111100005',
+  '20270111100006',
   // Stack rollbacks (supabase/migrations/rollbacks/), by exact basename stem.
   'community_execution_safety_rollback',
   'community_identity_link_rollback',
@@ -293,7 +293,7 @@ describe('safety-test-suites selector', () => {
       'isAuthorizedRpaSessionWriter',
       'workflow-execution-progression',
       'purge-legacy-rpa-session-files',
-      '20261230000000',
+      '20270111100006',
     ]);
     const unitDir = path.join(ROOT, 'backend', 'tests', 'unit');
     const sources = fs.readdirSync(unitDir)

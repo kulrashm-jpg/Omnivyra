@@ -336,7 +336,7 @@ describe('014 — the migration', () => {
     require('fs').readFileSync(require('path').join(process.cwd(), rel), 'utf8') as string;
   /** Strips `--` comments AND `COMMENT ON … IS '…'` literals, which name boundaries on purpose. */
   const sql = (s: string) => s.replace(/^\s*--.*$/gm, '').replace(/COMMENT ON [\s\S]*?';/g, '');
-  const MIGRATION = 'supabase/migrations/20261226000000_pi_prospect_campaigns.sql';
+  const MIGRATION = 'supabase/migrations/20270111100000_pi_prospect_campaigns.sql';
 
   it('creates exactly ONE table and alters no existing one', () => {
     const body = sql(read(MIGRATION));
@@ -436,14 +436,14 @@ describe('014 — the migration', () => {
       .filter((f: string) => f.endsWith('.sql'))
       .filter((f: string) => CREATES.test(fs.readFileSync(path.join(dir, f), 'utf8') as string))
       .sort();
-    expect(owners).toEqual(['20261226000000_pi_prospect_campaigns.sql']);
+    expect(owners).toEqual(['20270111100000_pi_prospect_campaigns.sql']);
   });
 
   it('it is ordered after the PI chain it must not depend on', () => {
     // A NAMED set, not "it is the newest". The earlier form asserted this was the
     // last PI migration, which became false the moment 016 legitimately added one
     // — a guard on other workstreams' work rather than on 014's own ordering.
-    const MINE = '20261226000000_pi_prospect_campaigns.sql';
+    const MINE = '20270111100000_pi_prospect_campaigns.sql';
     for (const earlier of [
       '20261101000000_pi_score_evaluation_icp_identity.sql',
       '20261102000000_pi_prospect_icp_qualification.sql',
@@ -510,7 +510,7 @@ describe('014 — isolation, proven by content', () => {
       /CONSTRAINT outreach_tasks_identity_unique UNIQUE \(company_id, lead_id, plan_task_id\)/,
     );
     // And no migration in this workstream's range alters that table.
-    const body = read('supabase/migrations/20261226000000_pi_prospect_campaigns.sql');
+    const body = read('supabase/migrations/20270111100000_pi_prospect_campaigns.sql');
     expect(body).not.toMatch(/ALTER TABLE\s+(public\.)?outreach_/i);
     // plan_task_id generation is untouched.
     expect(read('backend/services/automationExecution/taskGenerator.ts'))

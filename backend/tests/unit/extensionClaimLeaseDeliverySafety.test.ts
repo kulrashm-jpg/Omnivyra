@@ -4,7 +4,7 @@
  * HISTORY
  *   This file originally CHARACTERISED an unsafe protocol and said so: if
  *   someone fixed it, the pinned assertions would "fail loudly and the finding
- *   gets re-evaluated". 20261231000005_extension_dispatch_safety fixed it, so
+ *   gets re-evaluated". 20270111100012_extension_dispatch_safety fixed it, so
  *   the finding was re-evaluated and the pins now hold the SAFE behaviour:
  *
  *   - /api/extension/commands offers ONLY never-claimed work

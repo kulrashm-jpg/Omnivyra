@@ -1002,24 +1002,24 @@ const REQUIRED_COLUMN_TYPES = [
 /** Source migration for each group, cited in output and in the coverage test. */
 const STACK_MIGRATIONS = [
   '20261127000000_pi_prospect_lists.sql',
-  '20261226000000_pi_prospect_campaigns.sql',
-  '20261227000000_pi_workflow_definitions.sql',
-  '20261228000000_pi_execution_instances.sql',
-  '20261228000001_pi_execution_plans.sql',
-  '20261228000002_pi_execution_step_scheduling.sql',
-  '20261229000000_pi_outreach_bridge.sql',
-  '20261230000000_orchestration_engine_requests.sql',
-  '20261231000000_orchestration_campaign_targeting.sql',
-  '20261231000001_orchestration_engine_requests_engines.sql',
-  '20261231000002_community_execution_safety.sql',
-  '20261231000003_community_journey_link.sql',
-  '20261231000004_social_publish_step_channel.sql',
-  '20261231000005_extension_dispatch_safety.sql',
-  '20261231000006_community_identity_link.sql',
-  '20261231000007_identity_verification.sql',
-  '20261231000008_engagement_request_idempotency.sql',
-  '20261231000009_migration_rerun_safety.sql',
   '20261231000010_rpa_legacy_session_invalidation.sql',
+  '20270111100000_pi_prospect_campaigns.sql',
+  '20270111100001_pi_workflow_definitions.sql',
+  '20270111100002_pi_execution_instances.sql',
+  '20270111100003_pi_execution_plans.sql',
+  '20270111100004_pi_execution_step_scheduling.sql',
+  '20270111100005_pi_outreach_bridge.sql',
+  '20270111100006_orchestration_engine_requests.sql',
+  '20270111100007_orchestration_campaign_targeting.sql',
+  '20270111100008_orchestration_engine_requests_engines.sql',
+  '20270111100009_community_execution_safety.sql',
+  '20270111100010_community_journey_link.sql',
+  '20270111100011_social_publish_step_channel.sql',
+  '20270111100012_extension_dispatch_safety.sql',
+  '20270111100013_community_identity_link.sql',
+  '20270111100014_identity_verification.sql',
+  '20270111100015_engagement_request_idempotency.sql',
+  '20270111100016_migration_rerun_safety.sql',
   '20270120000000_orchestration_journey_decisions.sql',
   '20270120000001_pi_email_content_evidence.sql',
   '20270120000002_whatsapp_broadcast_recipient_unique.sql',
@@ -1038,30 +1038,30 @@ const STACK_TABLES = [
     columns: ['id', 'organization_id', 'name', 'description', 'status', 'created_by_user_id', 'created_at', 'updated_at'] },
   { table: 'prospect_list_members',              source: '20261127000000:155', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'list_id', 'prospect_id', 'status', 'added_via', 'added_at', 'added_by_user_id', 'removed_at', 'removed_by_user_id', 'removal_reason'] },
-  // 20261226000000_pi_prospect_campaigns.sql:93 (RLS :149)
+  // 20270111100000_pi_prospect_campaigns.sql:93 (RLS :149)
   { table: 'prospect_campaigns',                 source: '20261226000000:93', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'name', 'description', 'status', 'created_at', 'updated_at'] },
-  // 20261227000000_pi_workflow_definitions.sql:98,139 (RLS :565-566)
+  // 20270111100001_pi_workflow_definitions.sql:98,139 (RLS :565-566)
   { table: 'workflows',                          source: '20261227000000:98', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'name', 'description', 'status', 'created_by', 'created_at', 'updated_at'] },
   { table: 'workflow_versions',                  source: '20261227000000:139', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'workflow_id', 'version', 'status', 'definition', 'created_by', 'created_at', 'updated_at', 'published_at', 'published_by'] },
-  // 20261228000000_pi_execution_instances.sql:110 (RLS :397)
+  // 20270111100002_pi_execution_instances.sql:110 (RLS :397)
   { table: 'execution_instances',                source: '20261228000000:110', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'campaign_id', 'workflow_id', 'workflow_version_id', 'target_id', 'subject_kind', 'subject_id', 'lifecycle_state', 'created_at', 'updated_at'] },
-  // 20261228000001_pi_execution_plans.sql:98,166,236 (RLS :158,222,296)
+  // 20270111100003_pi_execution_plans.sql:98,166,236 (RLS :158,222,296)
   { table: 'execution_plans',                    source: '20261228000001:98', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'execution_instance_id', 'workflow_version_id', 'definition_snapshot', 'step_count', 'status', 'created_at', 'updated_at'] },
   { table: 'execution_plan_steps',               source: '20261228000001:166', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'plan_id', 'step_key', 'step_order', 'channel', 'instruction', 'delay_after_previous_hours', 'state', 'created_at', 'updated_at',
-      // 20261228000002_pi_execution_step_scheduling.sql:94-98
+      // 20270111100004_pi_execution_step_scheduling.sql:94-98
       'ready_at', 'started_at', 'settled_at', 'completed_at'] },
   { table: 'execution_tasks',                    source: '20261228000001:236', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'execution_instance_id', 'plan_step_id', 'subject_kind', 'subject_id', 'channel', 'action', 'delay_after_previous_hours', 'requires_approval', 'state', 'created_at', 'updated_at'] },
-  // 20261229000000_pi_outreach_bridge.sql:90 (RLS :194)
+  // 20270111100005_pi_outreach_bridge.sql:90 (RLS :194)
   { table: 'outreach_bridge_handoffs',           source: '20261229000000:90', revokesClientRoles: false,
     columns: ['id', 'organization_id', 'execution_task_id', 'outreach_task_id', 'campaign_id', 'workflow_id', 'workflow_version_id', 'execution_instance_id', 'execution_plan_id', 'execution_plan_step_id', 'subject_kind', 'subject_id', 'person_id', 'execution_mode', 'workflow_requires_approval', 'policy_source', 'created_at'] },
-  // 20261230000000_orchestration_engine_requests.sql:40 (RLS :104, REVOKE :110)
+  // 20270111100006_orchestration_engine_requests.sql:40 (RLS :104, REVOKE :110)
   { table: 'execution_engine_requests',          source: '20261230000000:40', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'execution_task_id', 'engine', 'state', 'external_ref', 'detail', 'created_at', 'updated_at'] },
   // 20270120000001_pi_email_content_evidence.sql (REVOKE right after RLS)
@@ -1071,24 +1071,24 @@ const STACK_TABLES = [
   { table: 'execution_journey_decisions',        source: '20270120000000:28', revokesClientRoles: true,
     serviceRoleGrants: ['SELECT', 'INSERT'],
     columns: ['id', 'organization_id', 'execution_instance_id', 'plan_step_id', 'step_key', 'channel', 'engine', 'decision', 'outcome', 'reasons', 'decision_key', 'decided_at'] },
-  // 20261231000000_orchestration_campaign_targeting.sql:164,194 (RLS :185,276; REVOKE :189,283)
+  // 20270111100007_orchestration_campaign_targeting.sql:164,194 (RLS :185,276; REVOKE :189,283)
   { table: 'prospect_campaign_lists',            source: '20261231000000:164', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'campaign_id', 'list_id', 'attached_by', 'attached_at'] },
   { table: 'prospect_campaign_targets',          source: '20261231000000:194', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'campaign_id', 'list_id', 'prospect_id', 'selection_event_key', 'selected_at', 'origin', 'actor_user_id', 'icp_id', 'icp_version', 'score_evaluation_id', 'created_at'] },
-  // 20261231000003_community_journey_link.sql:88 (RLS :121, REVOKE :127)
+  // 20270111100010_community_journey_link.sql:88 (RLS :121, REVOKE :127)
   { table: 'community_action_journey_links',     source: '20261231000003:88', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'execution_task_id', 'execution_instance_id', 'community_action_id', 'linked_by', 'created_at',
-      // 20261231000006_community_identity_link.sql:100-101
+      // 20270111100013_community_identity_link.sql:100-101
       'person_id', 'identity_claim_id'] },
-  // 20261231000005_extension_dispatch_safety.sql:340 (RLS :352, REVOKE :358-365, GRANT :368)
+  // 20270111100012_extension_dispatch_safety.sql:340 (RLS :352, REVOKE :358-365, GRANT :368)
   { table: 'rpa_auth_token_redemptions',         source: '20261231000005:340', revokesClientRoles: true,
     serviceRoleGrants: ['SELECT', 'INSERT', 'DELETE'],
     columns: ['nonce', 'organization_id', 'platform', 'user_id', 'token_expires_at', 'redeemed_at'] },
-  // 20261231000007_identity_verification.sql:74 (RLS :238, REVOKE :243)
+  // 20270111100014_identity_verification.sql:74 (RLS :238, REVOKE :243)
   { table: 'identity_verification_attestations', source: '20261231000007:74', revokesClientRoles: true,
     columns: ['id', 'organization_id', 'person_id', 'platform', 'provider_user_id', 'identity_claim_id', 'discovered_user_id', 'method', 'basis', 'statement', 'evidence', 'attested_by', 'step_up_session_id', 'step_up_factor', 'attested_at', 'status', 'withdrawn_at', 'withdrawn_by', 'withdrawn_reason', 'confers_verification', 'created_at'] },
-  // 20261231000008_engagement_request_idempotency.sql:55 (RLS :116, REVOKE :117-119, GRANT :120)
+  // 20270111100015_engagement_request_idempotency.sql:55 (RLS :116, REVOKE :117-119, GRANT :120)
   { table: 'engagement_request_idempotency',     source: '20261231000008:55', revokesClientRoles: true,
     serviceRoleGrants: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
     columns: ['id', 'organization_id', 'actor_id', 'scope', 'idempotency_key', 'key_source', 'request_fingerprint', 'state', 'attempt', 'action_id', 'platform', 'action_type', 'target_id', 'outcome_status', 'outcome_error', 'reserved_at', 'finalized_at', 'expires_at', 'created_at', 'updated_at'] },
@@ -1099,13 +1099,13 @@ const STACK_TABLES = [
 
 /** Columns the stack ADDs to tables that pre-date it. */
 const STACK_ADDED_COLUMNS = [
-  // 20261231000000_orchestration_campaign_targeting.sql:62,82-85
+  // 20270111100007_orchestration_campaign_targeting.sql:62,82-85
   { table: 'prospect_lists',     column: 'icp_id',         source: '20261231000000:62' },
   { table: 'prospect_campaigns', column: 'targeting_mode', source: '20261231000000:82' },
   { table: 'prospect_campaigns', column: 'icp_id',         source: '20261231000000:83' },
   { table: 'prospect_campaigns', column: 'icp_version',    source: '20261231000000:84' },
   { table: 'prospect_campaigns', column: 'min_icp_score',  source: '20261231000000:85' },
-  // 20261231000002_community_execution_safety.sql:130-131 — compare-and-set claim
+  // 20270111100009_community_execution_safety.sql:130-131 — compare-and-set claim
   { table: 'rpa_retry_queue',    column: 'claim_token',    source: '20261231000002:130' },
   { table: 'rpa_retry_queue',    column: 'claimed_at',     source: '20261231000002:131' },
 ];
@@ -1134,59 +1134,59 @@ const STACK_INDEXES = [
   { table: 'prospect_list_members', index: 'uq_prospect_list_members_active', unique: true, partial: true, keys: ['organization_id', 'list_id', 'prospect_id'], predicate: ["'active'"] },
   { table: 'prospect_list_members', index: 'idx_prospect_list_members_list', unique: false, partial: false, keys: ['organization_id', 'list_id', 'status', 'added_at'] },
   { table: 'prospect_list_members', index: 'idx_prospect_list_members_prospect', unique: false, partial: false, keys: ['organization_id', 'prospect_id', 'status'] },
-  // 20261226000000_pi_prospect_campaigns.sql:114-118
+  // 20270111100000_pi_prospect_campaigns.sql:114-118
   { table: 'prospect_campaigns', index: 'uq_prospect_campaigns_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'prospect_campaigns', index: 'idx_prospect_campaigns_org_status', unique: false, partial: false, keys: ['organization_id', 'status'] },
-  // 20261227000000_pi_workflow_definitions.sql:130-226
+  // 20270111100001_pi_workflow_definitions.sql:130-226
   { table: 'workflows', index: 'uq_workflows_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'workflows', index: 'idx_workflows_org_status', unique: false, partial: false, keys: ['organization_id', 'status'] },
   { table: 'workflow_versions', index: 'uq_workflow_versions_identity', unique: true, partial: false, keys: ['organization_id', 'workflow_id', 'version'] },
   { table: 'workflow_versions', index: 'uq_workflow_versions_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'workflow_versions', index: 'uq_workflow_versions_one_published', unique: true, partial: true, keys: ['organization_id', 'workflow_id'], predicate: ["'published'"] },
   { table: 'workflow_versions', index: 'idx_workflow_versions_workflow', unique: false, partial: false, keys: ['organization_id', 'workflow_id', 'version'] },
-  // 20261228000000_pi_execution_instances.sql:181-196
+  // 20270111100002_pi_execution_instances.sql:181-196
   { table: 'execution_instances', index: 'uq_execution_instances_active', unique: true, partial: true, keys: ['organization_id', 'campaign_id', 'workflow_id', 'subject_kind', 'subject_id'], predicate: ['lifecycle_state', "'created'", "'queued'", "'active'", "'paused'"] },
   { table: 'execution_instances', index: 'idx_execution_instances_campaign', unique: false, partial: false, keys: ['organization_id', 'campaign_id', 'created_at'] },
   { table: 'execution_instances', index: 'idx_execution_instances_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
   { table: 'execution_instances', index: 'idx_execution_instances_version', unique: false, partial: false, keys: ['organization_id', 'workflow_version_id'] },
-  // 20261228000001_pi_execution_plans.sql:152-293
+  // 20270111100003_pi_execution_plans.sql:152-293
   { table: 'execution_plans', index: 'uq_execution_plans_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'execution_plans', index: 'ix_execution_plans_org_status', unique: false, partial: false, keys: ['organization_id', 'status'] },
   { table: 'execution_plan_steps', index: 'uq_execution_plan_steps_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'execution_plan_steps', index: 'ix_execution_plan_steps_plan_order', unique: false, partial: false, keys: ['organization_id', 'plan_id', 'step_order'] },
   { table: 'execution_tasks', index: 'ix_execution_tasks_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
   { table: 'execution_tasks', index: 'ix_execution_tasks_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
-  // 20261228000002_pi_execution_step_scheduling.sql:127
+  // 20270111100004_pi_execution_step_scheduling.sql:127
   { table: 'execution_plan_steps', index: 'ix_execution_plan_steps_pending', unique: false, partial: true, keys: ['organization_id', 'plan_id', 'step_order'], predicate: ["'pending'"] },
-  // 20261229000000_pi_outreach_bridge.sql:84-191
+  // 20270111100005_pi_outreach_bridge.sql:84-191
   { table: 'execution_tasks', index: 'uq_execution_tasks_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
   { table: 'outreach_bridge_handoffs', index: 'ix_outreach_bridge_handoffs_subject', unique: false, partial: false, keys: ['organization_id', 'subject_kind', 'subject_id'] },
-  // 20261230000000_orchestration_engine_requests.sql:74
+  // 20270111100006_orchestration_engine_requests.sql:74
   { table: 'whatsapp_broadcast_recipients', index: 'unique_broadcast_recipient', unique: true, partial: false, keys: ['broadcast_id', 'hashed_phone'] },
   { table: 'email_outreach_content_evidence', index: 'ix_email_outreach_content_evidence_org', unique: false, partial: false, keys: ['organization_id', 'created_at'] },
   { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id', 'decided_at'] },
   { table: 'execution_journey_decisions', index: 'ix_execution_journey_decisions_needs_human', unique: false, partial: true, keys: ['organization_id', 'decided_at'], predicate: ["'needs_human'"] },
   { table: 'execution_engine_requests', index: 'ix_execution_engine_requests_open', unique: false, partial: true, keys: ['organization_id', 'state'], predicate: ["'requested'", "'submitting'", "'submitted'"] },
-  // 20261231000000_orchestration_campaign_targeting.sql:182-256
+  // 20270111100007_orchestration_campaign_targeting.sql:182-256
   { table: 'prospect_campaign_lists', index: 'uq_prospect_campaign_lists_identity', unique: true, partial: false, keys: ['organization_id', 'campaign_id', 'list_id'] },
   { table: 'prospect_campaign_targets', index: 'uq_prospect_campaign_targets_selection', unique: true, partial: false, keys: ['organization_id', 'campaign_id', 'list_id', 'prospect_id', 'selection_event_key'] },
   { table: 'prospect_campaign_targets', index: 'uq_prospect_campaign_targets_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'prospect_campaign_targets', index: 'ix_prospect_campaign_targets_campaign', unique: false, partial: false, keys: ['organization_id', 'campaign_id', 'selected_at'] },
-  // 20261231000002_community_execution_safety.sql:152-156
+  // 20270111100009_community_execution_safety.sql:152-156
   { table: 'rpa_retry_queue', index: 'idx_rpa_retry_queue_due_unclaimed', unique: false, partial: true, keys: ['organization_id', 'next_retry_at'], predicate: ['claim_token IS NULL'] },
   { table: 'rpa_retry_queue', index: 'idx_rpa_retry_queue_claimed', unique: false, partial: true, keys: ['claimed_at'], predicate: ['claim_token IS NOT NULL'] },
-  // 20261231000003_community_journey_link.sql:82-118
+  // 20270111100010_community_journey_link.sql:82-118
   { table: 'community_ai_actions', index: 'uq_community_ai_actions_id_org', unique: true, partial: false, keys: ['id', 'organization_id'] },
   { table: 'community_action_journey_links', index: 'ix_community_action_journey_links_instance', unique: false, partial: false, keys: ['organization_id', 'execution_instance_id'] },
-  // 20261231000005_extension_dispatch_safety.sql:349
+  // 20270111100012_extension_dispatch_safety.sql:349
   { table: 'rpa_auth_token_redemptions', index: 'idx_rpa_auth_token_redemptions_expires', unique: false, partial: false, keys: ['token_expires_at'] },
-  // 20261231000006_community_identity_link.sql:129
+  // 20270111100013_community_identity_link.sql:129
   { table: 'community_action_journey_links', index: 'ix_community_action_journey_links_person', unique: false, partial: false, keys: ['organization_id', 'person_id'] },
-  // 20261231000007_identity_verification.sql:141-145
+  // 20270111100014_identity_verification.sql:141-145
   { table: 'identity_verification_attestations', index: 'uq_identity_verification_attestations_active_account', unique: true, partial: true, keys: ['organization_id', 'platform', 'provider_user_id'], predicate: ["'recorded'"] },
   { table: 'identity_verification_attestations', index: 'ix_identity_verification_attestations_person', unique: false, partial: false, keys: ['organization_id', 'person_id', 'attested_at'] },
-  // 20261231000008_engagement_request_idempotency.sql:98-111
+  // 20270111100015_engagement_request_idempotency.sql:98-111
   { table: 'engagement_request_idempotency', index: 'uq_engagement_request_idempotency_key', unique: true, partial: false, keys: ['organization_id', 'actor_id', 'scope', 'idempotency_key'] },
   { table: 'engagement_request_idempotency', index: 'uq_engagement_request_idempotency_action', unique: true, partial: false, keys: ['action_id'] },
   { table: 'engagement_request_idempotency', index: 'ix_engagement_request_idempotency_expiry', unique: false, partial: true, keys: ['organization_id', 'expires_at'], predicate: ["'completed'", "'failed_not_acted'"] },
@@ -1214,53 +1214,53 @@ const WORKFLOW_STEP_CHANNELS = [
  * `bodyContains` / `bodyForbidden` — markers over pg_get_functiondef().
  */
 const STACK_FUNCTIONS = [
-  // 20261226000000_pi_prospect_campaigns.sql:125
+  // 20270111100000_pi_prospect_campaigns.sql:125
   { name: 'prospect_campaigns_guard', args: '', secdef: false },
-  // 20261227000000_pi_workflow_definitions.sql:233,259,397 (redefined 20261231000004:33)
+  // 20270111100001_pi_workflow_definitions.sql:233,259,397 (redefined 20261231000004:33)
   { name: 'workflows_guard', args: '', secdef: false },
   { name: 'workflow_versions_guard_immutable', args: '', secdef: false },
   { name: 'publish_workflow_version', args: 'uuid, uuid, uuid', secdef: false, exec: 'service_role_only_invoker',
     bodyContains: WORKFLOW_STEP_CHANNELS.map((c) => `'${c}'`) },
-  // 20261228000000_pi_execution_instances.sql:208,264
+  // 20270111100002_pi_execution_instances.sql:208,264
   { name: 'execution_instances_guard', args: '', secdef: false },
   { name: 'create_execution_instance', args: 'uuid, uuid, uuid, text, text, uuid', secdef: false, exec: 'service_role_only_invoker' },
-  // 20261228000001_pi_execution_plans.sql:304,367,404,483 (steps guard redefined 20261228000002:139)
+  // 20270111100003_pi_execution_plans.sql:304,367,404,483 (steps guard redefined 20261228000002:139)
   { name: 'execution_plans_guard', args: '', secdef: false },
   { name: 'execution_plan_steps_guard', args: '', secdef: false },
   { name: 'execution_tasks_guard', args: '', secdef: false },
   { name: 'create_execution_plan', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
-  // 20261228000002_pi_execution_step_scheduling.sql:211,273,394
+  // 20270111100004_pi_execution_step_scheduling.sql:211,273,394
   { name: 'execution_step_anchor', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
   { name: 'advance_execution_plan', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
   { name: 'cancel_execution_run', args: 'uuid, uuid', secdef: false, exec: 'service_role_only_invoker' },
-  // 20261229000000_pi_outreach_bridge.sql:202,285
+  // 20270111100005_pi_outreach_bridge.sql:202,285
   { name: 'outreach_bridge_handoffs_guard', args: '', secdef: false },
   { name: 'bridge_execution_task', args: 'uuid, uuid, uuid, text, boolean, text, text, text, text, text', secdef: false, exec: 'service_role_only_invoker' },
-  // 20261230000000_orchestration_engine_requests.sql:80
+  // 20270111100006_orchestration_engine_requests.sql:80
   { name: 'execution_engine_requests_guard', args: '', secdef: false },
   // 20270120000001_pi_email_content_evidence.sql
   { name: 'email_outreach_content_evidence_guard', args: '', secdef: false },
   // 20270120000000_orchestration_journey_decisions.sql:78
   { name: 'execution_journey_decisions_guard', args: '', secdef: false },
-  // 20261231000000_orchestration_campaign_targeting.sql:120,264
+  // 20270111100007_orchestration_campaign_targeting.sql:120,264
   { name: 'prospect_campaigns_targeting_guard', args: '', secdef: false },
   { name: 'prospect_campaign_targets_guard', args: '', secdef: false },
-  // 20261231000003_community_journey_link.sql:135
+  // 20270111100010_community_journey_link.sql:135
   { name: 'community_action_journey_links_guard', args: '', secdef: false },
-  // 20261231000005_extension_dispatch_safety.sql:88,229,295 — SECURITY DEFINER;
+  // 20270111100012_extension_dispatch_safety.sql:88,229,295 — SECURITY DEFINER;
   // privileges :398-403; the reaper's uncertain-outcome postcondition :413-420.
   { name: 'reap_community_ai_action_leases', args: '', secdef: true, exec: 'service_role_only',
     bodyContains: ["'uncertain'", "'DISPATCH_LEASE_EXPIRED'", "'DISPATCH_LEASE_EXPIRED_IN_FLIGHT'", "'EXECUTING_TIMEOUT'"],
     bodyForbidden: [{ pattern: "status\\s*=\\s*'failed'", why: "writes status = 'failed' — a possibly-delivered action would be retryable" }] },
   { name: 'claim_community_ai_browser_command', args: 'uuid, uuid, text, text, integer', secdef: true, exec: 'service_role_only' },
   { name: 'record_community_ai_late_dispatch_result', args: 'uuid, uuid, text, text, jsonb', secdef: true, exec: 'service_role_only' },
-  // 20261231000006_community_identity_link.sql:142,170
+  // 20270111100013_community_identity_link.sql:142,170
   { name: 'community_identity_normalize_external_id', args: 'text', secdef: false },
   { name: 'community_action_journey_links_identity_guard', args: '', secdef: false },
-  // 20261231000007_identity_verification.sql:153,254
+  // 20270111100014_identity_verification.sql:153,254
   { name: 'identity_verification_attestations_guard', args: '', secdef: false },
   { name: 'community_action_journey_links_identity_proof_guard', args: '', secdef: false },
-  // 20261231000009_migration_rerun_safety.sql:80 — converts a reaper 'failed'
+  // 20270111100016_migration_rerun_safety.sql:80 — converts a reaper 'failed'
   // write on a claimed row into 'uncertain', whichever reaper body is installed.
   { name: 'community_ai_actions_reap_uncertain_guard', args: '', secdef: false,
     bodyContains: ["'uncertain'", "'DISPATCH_LEASE_EXPIRED'", "'DISPATCH_LEASE_EXPIRED_IN_FLIGHT'", "'EXECUTING_TIMEOUT'"] },
@@ -1291,24 +1291,24 @@ const STACK_TRIGGERS = [
 
 /** CHECK constraints whose vocabulary / predicate the runtime depends on. */
 const STACK_CHECKS = [
-  // 20261231000002_community_execution_safety.sql:70-72 — the complete 12-value
+  // 20270111100009_community_execution_safety.sql:70-72 — the complete 12-value
   // status vocabulary; without 'uncertain'/'executing' the reaper and the
   // extension dispatch path raise 23514.
   { table: 'community_ai_actions', constraint: 'community_ai_actions_status_check',
     contains: ['pending', 'approved', 'scheduled', 'dispatched', 'acknowledged', 'executing', 'executed', 'sent_unverified', 'failed', 'skipped', 'blocked', 'uncertain'].map((v) => `'${v}'`) },
-  // 20261231000001_orchestration_engine_requests_engines.sql:29-30
+  // 20270111100008_orchestration_engine_requests_engines.sql:29-30
   { table: 'execution_engine_requests', constraint: 'execution_engine_requests_engine_valid',
     contains: ["'whatsapp'", "'social_publish'", "'community'", "'browser'"] },
-  // 20261230000000_orchestration_engine_requests.sql:57
+  // 20270111100006_orchestration_engine_requests.sql:57
   { table: 'execution_engine_requests', constraint: 'execution_engine_requests_state_valid',
     contains: ["'requested'", "'submitting'", "'submitted'", "'completed'", "'skipped'", "'failed'", "'uncertain'"] },
-  // 20261231000000_orchestration_campaign_targeting.sql:91
+  // 20270111100007_orchestration_campaign_targeting.sql:91
   { table: 'prospect_campaigns', constraint: 'prospect_campaigns_targeting_mode_valid', contains: ["'manual'", "'icp'"] },
-  // 20261231000002_community_execution_safety.sql:141-142
+  // 20270111100009_community_execution_safety.sql:141-142
   { table: 'rpa_retry_queue', constraint: 'rpa_retry_queue_claim_pair', contains: ['claim_token IS NULL', 'claimed_at IS NULL'] },
-  // 20261231000007_identity_verification.sql:107 — an attestation never verifies.
+  // 20270111100014_identity_verification.sql:107 — an attestation never verifies.
   { table: 'identity_verification_attestations', constraint: 'identity_verification_attestations_never_verifies', contains: ['confers_verification = false'] },
-  // 20261231000008_engagement_request_idempotency.sql:79
+  // 20270111100015_engagement_request_idempotency.sql:79
   { table: 'engagement_request_idempotency', constraint: 'engagement_request_idempotency_state_check',
     contains: ["'reserved'", "'completed'", "'failed_not_acted'", "'uncertain'"] },
 ];

@@ -21,7 +21,7 @@ import {
 import { WORKFLOW_STEP_CHANNELS, WorkflowError, validateWorkflowDefinition } from '../../services/workflows/workflowStore';
 
 const MIG_DIR = path.join(process.cwd(), 'supabase/migrations');
-const LATEST = '20261231000004_social_publish_step_channel.sql';
+const LATEST = '20270111100011_social_publish_step_channel.sql';
 const RATIFIED = [
   'email', 'linkedin', 'phone', 'whatsapp', 'sms',
   'github', 'discord', 'slack', 'community', 'content', 'internal', 'social_post',
@@ -100,7 +100,7 @@ describe('an invalid channel name in the SQL list is a failure, never skipped', 
     const c21771d4 = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
     expect(c21771d4).toEqual([...WORKFLOW_STEP_CHANNELS].sort());          // the old check: silently equal
     expect(problemsOf([...real.filter((f) => f.name !== LATEST), mutated]))  // the hardened check: refused
-      .toContain('20261231000004_social_publish_step_channel.sql: invalid channel name: "Social-Post"');
+      .toContain('20270111100011_social_publish_step_channel.sql: invalid channel name: "Social-Post"');
   });
 
   it.each(['SOCIAL_POST', 'social-post', 'social post', '1abc', '_x', 'x_', 'a__b', '', 'Email'])(
@@ -142,16 +142,16 @@ describe('SQL and TypeScript must agree in both directions', () => {
 
 describe('the definer chain', () => {
   it('a later migration that redefines the function WITHOUT social_post → rejected (it becomes the latest)', () => {
-    const files = [...real, laterRedefinition('20270101000000_regress.sql', (fn) => fn)];
+    const files = [...real, laterRedefinition('20991231000000_regress.sql', (fn) => fn)];
     const r = checkPublishChannelVocabulary(files, WORKFLOW_STEP_CHANNELS, RATIFIED);
     expect(r.ok).toBe(false);
     if (r.ok === false) expect(r.problems).toContain('in TypeScript, not in SQL: social_post');
   });
 
   it('a later redefinition with NO channel list at all → rejected', () => {
-    const files = [...real, laterRedefinition('20270101000000_regress.sql',
+    const files = [...real, laterRedefinition('20991231000000_regress.sql',
       (fn) => fn.replace(/OR \(s\.value ->> 'channel'\) NOT IN \([^)]*\)/, ''))];
-    expect(problemsOf(files).join('\n')).toMatch(/20270101000000_regress\.sql: no channel list/);
+    expect(problemsOf(files).join('\n')).toMatch(/20991231000000_regress\.sql: no channel list/);
   });
 
   it.each([
@@ -161,8 +161,8 @@ describe('the definer chain', () => {
     ['quoted', (fn: string) => fn.replace(HEAD, 'CREATE OR REPLACE FUNCTION "public"."publish_workflow_version"(')],
     ['plain CREATE (after a DROP)', (fn: string) => `DROP FUNCTION public.publish_workflow_version(uuid, uuid, uuid);\n${fn.replace(HEAD, 'CREATE FUNCTION public.publish_workflow_version(')}`],
   ])('a stale-vocabulary redefinition spelled %s is still found and rejected', (_l, mutate) => {
-    const files = [...real, laterRedefinition('20270101000000_regress.sql', mutate)];
-    expect(publishFunctionDefiners(files)).toEqual([FIRST_PUBLISH_DEFINER, LATEST, '20270101000000_regress.sql']);
+    const files = [...real, laterRedefinition('20991231000000_regress.sql', mutate)];
+    expect(publishFunctionDefiners(files)).toEqual([FIRST_PUBLISH_DEFINER, LATEST, '20991231000000_regress.sql']);
     expect(problemsOf(files)).toContain('in TypeScript, not in SQL: social_post');
   });
 

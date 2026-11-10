@@ -82,7 +82,7 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
 const MIG_DIR = join(__dirname, '..', '..', '..', 'supabase', 'migrations');
 const FORWARD = readFileSync(join(MIG_DIR, '20270120000010_community_action_approved_by.sql'), 'utf8');
 const ROLLBACK = readFileSync(join(MIG_DIR, 'rollbacks', 'community_action_approved_by_rollback.sql'), 'utf8');
-const PRIOR_MIGRATION = readFileSync(join(MIG_DIR, '20261231000005_extension_dispatch_safety.sql'), 'utf8');
+const PRIOR_MIGRATION = readFileSync(join(MIG_DIR, '20270111100012_extension_dispatch_safety.sql'), 'utf8');
 const ACK_WAIVER = "SET LOCAL omnivyra.community_action_approved_by_restore_waiver = 'i-accept-unapproved-claims'";
 const ACK_DROP = "SET LOCAL omnivyra.community_action_approved_by_drop_column = 'i-accept-approve-route-failure'";
 const C3_FORWARD = [

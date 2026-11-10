@@ -29,7 +29,7 @@ const ADAPTERS: readonly EngineAdapter[] = [
 
 describe('engine contract — shared vocabulary', () => {
   it('the request ledger accepts exactly the adapter-fronted engines (all but ws3)', () => {
-    const sql = read('supabase/migrations/20261231000001_orchestration_engine_requests_engines.sql');
+    const sql = read('supabase/migrations/20270111100008_orchestration_engine_requests_engines.sql');
     const m = /CHECK \(engine IN \(([^)]*)\)\)/.exec(sql);
     expect(m).not.toBeNull();
     const inSql = [...(m as RegExpExecArray)[1].matchAll(/'([a-z_0-9]+)'/g)].map((x) => x[1]).sort();
@@ -69,7 +69,7 @@ describe('engine contract — shared vocabulary', () => {
   });
 
   it('the widening migration is additive, guarded and has a rollback that refuses while rows depend on it', () => {
-    const sql = read('supabase/migrations/20261231000001_orchestration_engine_requests_engines.sql');
+    const sql = read('supabase/migrations/20270111100008_orchestration_engine_requests_engines.sql');
     expect(sql).toMatch(/DROP CONSTRAINT IF EXISTS execution_engine_requests_engine_valid/);
     expect(sql).not.toMatch(/DROP TABLE|DELETE FROM|ALTER COLUMN/i);
     const rb = read('supabase/migrations/rollbacks/orchestration_engine_requests_engines_rollback.sql');
