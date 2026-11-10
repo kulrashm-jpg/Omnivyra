@@ -34,7 +34,7 @@ const base = {
 };
 const hashOf = (over: Record<string, unknown> = {}) => {
   const r = communityApprovalBindingHash({ ...base, ...over } as any);
-  if (!r.ok) throw new Error(r.reason);
+  if (!r.ok) throw new Error((r as { reason: string }).reason);
   return r.hash;
 };
 

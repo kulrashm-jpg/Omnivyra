@@ -81,6 +81,7 @@ import {
   executeAction,
   claimCommunityActionForExecution,
   persistExecutionResult,
+  type CommunityAiAction,
 } from '../../services/communityAiActionExecutor';
 import { runCommunityAiScheduler } from '../../services/communityAiScheduler';
 
@@ -112,7 +113,7 @@ const row = (over: Record<string, any> = {}) => {
 
 const action = (over: Record<string, any> = {}) => {
   const r = row(over);
-  return { ...r, action_type: r.action_type as any, risk_level: r.risk_level as any, execution_mode: r.execution_mode as any };
+  return { ...r, action_type: r.action_type as any, risk_level: r.risk_level as any, execution_mode: r.execution_mode as any } as unknown as CommunityAiAction;
 };
 
 const statusOf = (id = ACTION_ID) => mockDb.tables.community_ai_actions.find((r) => r.id === id)?.status;

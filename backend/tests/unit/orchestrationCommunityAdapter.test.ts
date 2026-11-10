@@ -67,7 +67,7 @@ function approvedAction(over: Partial<CommunityActionRow> = {}): CommunityAction
     return withApprovalEvidence({ ...base, ...over } as never, { approvedAt: approvedAgo() }) as CommunityActionRow;
   } catch {
     // An unbindable override (e.g. a tenant mismatch): the approval of the base row, then the override.
-    return { ...withApprovalEvidence(base as never, { approvedAt: approvedAgo() }), ...over } as CommunityActionRow;
+    return { ...withApprovalEvidence(base as Record<string, any>, { approvedAt: approvedAgo() }), ...over } as CommunityActionRow;
   }
 }
 
@@ -436,9 +436,9 @@ describe('community adapter — concurrency', () => {
   it('when the route or scheduler claims the action first, the adapter releases its claim and acts on nothing', async () => {
     const w = world();
     const inner = w.deps.claimAction;
-    w.deps.claimAction = async (org, id, now) => {
+    w.deps.claimAction = async (org, id, now, correlationId) => {
       w.actions.get(id)!.status = 'executing';                  // someone else won the engine claim
-      return inner(org, id, now);
+      return inner(org, id, now, correlationId);
     };
     const r = await run(w);
     expect(r).toMatchObject({ outcome: 'action_moved', disposition: 'wait' });

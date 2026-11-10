@@ -44,6 +44,8 @@ import {
 const ORG = 'org-1';
 const ACTION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const NOW = '2026-10-28T09:00:00.000Z';
+// The engine claims with the execution task id as its correlation id (Prompt 3), as the adapter does.
+const TASK_ID = 'task-gates-1';
 const THREAD = 'https://www.linkedin.com/messaging/thread/2-abcdefghijklmnop/';
 
 const row = (over: Partial<CommunityActionRow> = {}): CommunityActionRow => ({
@@ -68,7 +70,7 @@ const stored = () => mockDb.tables.community_ai_actions[0];
 describe('G-6: the default claim is the engine claim', () => {
   it('claims an approved action of this tenant', async () => {
     seed();
-    expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW)).toBe(true);
+    expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW, TASK_ID)).toBe(true);
     expect(stored().status).toBe('executing');
     // LD-4: the journey claims at its own claim point, never 'auto'.
     expect(mockClaimRpcCalls.at(-1)).toMatchObject({ p_action_id: ACTION_ID, p_org: ORG, p_tenant: ORG, p_claim_point: 'orchestration' });
@@ -76,13 +78,13 @@ describe('G-6: the default claim is the engine claim', () => {
 
   it('does not claim an action with a cancel request', async () => {
     seed({ cancel_requested_at: NOW });
-    expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW)).toBe(false);
+    expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW, TASK_ID)).toBe(false);
     expect(stored().status).toBe('approved');
   });
 
   it('does not claim an action whose tenant_id disagrees', async () => {
     seed({ tenant_id: 'org-other' });
-    expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW)).toBe(false);
+    expect(await defaultCommunityDeps.claimAction(ORG, ACTION_ID, NOW, TASK_ID)).toBe(false);
     expect(stored().status).toBe('approved');
   });
 });

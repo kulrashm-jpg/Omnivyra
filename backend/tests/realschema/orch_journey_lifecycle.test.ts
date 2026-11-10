@@ -414,7 +414,7 @@ describe('Prospect Intelligence decides who is closed', () => {
       await openLedger(ORG_A, closed.prospectId, 'closed_disqualified');
       const first = await enrol(ORG_A, actor, closed.prospectId, { steps: [EMAIL_STEP('only')] });
       expect(first.report.enrolled).toBe(0);
-      expect(first.report.exclusionReasons.prospect_lifecycle_closed).toBe(1);
+      expect((first.report.exclusionReasons as Record<string, number>).prospect_lifecycle_closed).toBe(1);
 
       const open = await newProspect(ORG_A, { email: 'o@example.test' });
       await openLedger(ORG_A, open.prospectId);
