@@ -21,6 +21,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { RPA_LOGIN_DISABLED, rejectRpaLogin } from '../../../../backend/services/rpaWorker/rpaLoginBlock';
 
 import { verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { saveRpaSession } from '../../../../backend/services/rpaWorker/rpaSessionStore';
@@ -34,6 +35,8 @@ type Body = {
 };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Owner decision #17 (2026-11-10): RPA logins are disabled before anything else runs.
+  if (RPA_LOGIN_DISABLED) return rejectRpaLogin(res);
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
