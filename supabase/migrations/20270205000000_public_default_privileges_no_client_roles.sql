@@ -48,11 +48,11 @@ BEGIN
   SELECT string_agg(DISTINCT g.rolname, ', ')
     INTO bad
     FROM pg_default_acl d
-    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
     CROSS JOIN LATERAL aclexplode(d.defaclacl) x
     JOIN pg_roles g ON g.oid = x.grantee
    WHERE d.defaclrole = 'postgres'::regrole
-     AND n.nspname = 'public'
+     AND (n.nspname = 'public' OR d.defaclnamespace = 0)  -- 0 = an all-schemas default also applies to public
      AND d.defaclobjtype = 'r'
      AND g.rolname IN ('anon', 'authenticated');
   IF bad IS NOT NULL THEN
@@ -103,10 +103,10 @@ BEGIN
   SELECT string_agg(DISTINCT format('%s -> %s', d.defaclrole::regrole, g.rolname), '; ')
     INTO residual
     FROM pg_default_acl d
-    JOIN pg_namespace n ON n.oid = d.defaclnamespace
+    LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
     CROSS JOIN LATERAL aclexplode(d.defaclacl) x
     JOIN pg_roles g ON g.oid = x.grantee
-   WHERE n.nspname = 'public'
+   WHERE (n.nspname = 'public' OR d.defaclnamespace = 0)
      AND d.defaclobjtype = 'r'
      AND g.rolname IN ('anon', 'authenticated')
    GROUP BY ();
@@ -125,15 +125,16 @@ COMMIT;
 -- SELECT therefore puts the unfixed residual into the apply record itself.
 -- Zero rows means no creator role's public table default grants a client role.
 SELECT d.defaclrole::regrole::text AS creator_role,
+       CASE WHEN d.defaclnamespace = 0 THEN '(all schemas)' ELSE 'public' END AS scope,
        g.rolname                  AS client_role,
        string_agg(x.privilege_type, ',' ORDER BY x.privilege_type) AS privileges,
        'RESIDUAL: not fixed by 20270205000000' AS note
   FROM pg_default_acl d
-  JOIN pg_namespace n ON n.oid = d.defaclnamespace
+  LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
   CROSS JOIN LATERAL aclexplode(d.defaclacl) x
   JOIN pg_roles g ON g.oid = x.grantee
- WHERE n.nspname = 'public'
+ WHERE (n.nspname = 'public' OR d.defaclnamespace = 0)
    AND d.defaclobjtype = 'r'
    AND g.rolname IN ('anon', 'authenticated')
- GROUP BY 1, 2
- ORDER BY 1, 2;
+ GROUP BY 1, 2, 3
+ ORDER BY 1, 2, 3;
