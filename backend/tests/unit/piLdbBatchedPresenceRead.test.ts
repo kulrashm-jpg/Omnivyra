@@ -117,3 +117,40 @@ describe('operator CLI --canonical --dry relies on this: a refusing sink writes 
     expect(res.outcomes[0].detail).toContain('DRY_RUN_NO_WRITE');
   });
 });
+
+describe('reqs 7-10: tenant precedence cannot route a row into another tenant', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { reconcileLeadProjections } = require('../../services/leadIntelligence/leadProjectionReconciliation');
+  const ORG = '00000000-0000-4000-8000-0000000000aa';
+  const OTHER = '00000000-0000-4000-8000-0000000000bb';
+  const run = (row: Record<string, unknown>) => {
+    const emitted: unknown[] = [];
+    return reconcileLeadProjections({
+      organizationId: ORG,
+      ports: {
+        readProspects: async () => ({ rows: [row], truncated: false }),
+        findProjections: async () => new Map(),
+        findProjection: async () => ({ outcome: 'absent' }),
+        sink: { emit: async (l: unknown) => { emitted.push(l); throw new Error('stop'); } },
+      },
+    }).then((res: { outcomes: Array<{ status: string; detail?: string }> }) => ({ res, emitted }));
+  };
+  const base = { id: 'a1', user_id: 'u', source: 'csv', created_at: '2026-11-11T00:00:00Z', unified_person_id: 'p' };
+
+  it('company_id = this tenant but organization_id = another -> skipped, nothing emitted', async () => {
+    const { res, emitted } = await run({ ...base, company_id: ORG, organization_id: OTHER });
+    expect(res.outcomes[0].status).toBe('skipped');
+    expect(res.outcomes[0].detail).toContain(OTHER);
+    expect(emitted).toEqual([]);
+  });
+
+  it('a row naming no tenant at all -> skipped', async () => {
+    const { res } = await run({ ...base });
+    expect(res.outcomes[0].status).toBe('skipped');
+  });
+
+  it('NEGATIVE CONTROL: both fields naming this tenant -> proceeds to the sink', async () => {
+    const { emitted } = await run({ ...base, company_id: ORG, organization_id: ORG });
+    expect(emitted).toHaveLength(1);
+  });
+});

@@ -202,6 +202,27 @@ async function readProspectsDefault(
   return { rows: all.slice(0, limit), truncated: all.length > limit };
 }
 
+/**
+ * The tenant a row NAMES, checked strictly (PI-LDB C, reqs 7-10).
+ *
+ * The adapter's `tenantOf` reads `organization_id ?? company_id`, while this
+ * pass used to read `company_id ?? organization_id`. A row carrying both, with
+ * different values, would pass a guard that looked at one and then be adapted
+ * into the tenant named by the other. So EVERY tenant-naming field present on
+ * the row must equal the batch tenant; a row naming none, or naming two
+ * different tenants, is refused.
+ */
+function rowTenantVerdict(row: ReconcileProspectRow, organizationId: string): { ok: true } | { ok: false; detail: string } {
+  const named = (['company_id', 'organization_id', 'companyId', 'organizationId'] as const)
+    .map((k) => row[k])
+    .filter((v) => v !== undefined && v !== null && String(v) !== '')
+    .map((v) => String(v));
+  if (named.length === 0) return { ok: false, detail: 'the row names no tenant' };
+  const other = named.find((t) => t !== organizationId);
+  if (other !== undefined) return { ok: false, detail: `the row names tenant '${other}' in a pass owned by '${organizationId}'` };
+  return { ok: true };
+}
+
 export async function reconcileLeadProjections(
   input: ReconcileProjectionsInput,
 ): Promise<ReconcileProjectionsResult> {
@@ -229,8 +250,7 @@ export async function reconcileLeadProjections(
   // turns an unanswered read into `absent`.
   const knownKeys: string[] = [];
   for (const row of rows) {
-    const rowTenant = String(row.company_id ?? row.organization_id ?? '');
-    if (row.id == null || rowTenant !== organizationId) continue;
+    if (row.id == null || !rowTenantVerdict(row, organizationId).ok) continue;
     try { knownKeys.push(computeLeadDedupeKey(routeToCanonicalInput('crm', row as Record<string, unknown>))); } catch { /* adapted again below */ }
   }
   let batched = new Map<string, { outcome: 'found'; leadId: string } | { outcome: 'absent' }>();
@@ -242,15 +262,15 @@ export async function reconcileLeadProjections(
     // The tenant of the BATCH is authoritative. A row that names another one is
     // refused rather than projected into whichever tenant it claimed - the same
     // rule `ingestLeadBatch` applies to an adapter's output.
-    const rowTenant = String(row.company_id ?? row.organization_id ?? '');
-    if (!prospectId || rowTenant !== organizationId) {
+    const tenant = rowTenantVerdict(row, organizationId);
+    if (!prospectId || !tenant.ok) {
       outcomes.push({
         prospectId,
         dedupeKey: null,
         status: 'skipped',
         detail: !prospectId
           ? 'the prospect row carries no id, so it has no stable projection key'
-          : `the row names tenant '${rowTenant}' in a pass owned by '${organizationId}'`,
+          : (tenant as { detail: string }).detail,
       });
       continue;
     }
@@ -271,6 +291,18 @@ export async function reconcileLeadProjections(
         dedupeKey: null,
         status: 'skipped',
         detail: `the prospect row could not be adapted: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      continue;
+    }
+
+    // Belt to the row check above: the ADAPTED lead must belong to this pass's
+    // tenant too, whatever precedence the adapter applied.
+    if (projectionInput.organizationId !== organizationId) {
+      outcomes.push({
+        prospectId,
+        dedupeKey: null,
+        status: 'skipped',
+        detail: `the adapted lead names tenant '${projectionInput.organizationId}' in a pass owned by '${organizationId}'`,
       });
       continue;
     }
