@@ -662,6 +662,48 @@ function aboveBoundaryViolations(topLevelFiles, boundary, readBytes) {
 }
 
 /**
+ * RULE 6c — BELOW-BOUNDARY PROVENANCE (virality-05 follow-up to #18).
+ *
+ * `digests_provenance` records, per file, why a digest was attested on
+ * evidence OTHER than the top-level ledger read (e.g. an out-of-band
+ * application found by a catalogue read). Rule 6b already refuses incomplete
+ * provenance above the boundary; the same honesty applies below it:
+ *   - every entry carries the same nine fields as rule 6b (A3-equivalent);
+ *   - an entry must describe a file that IS in `digests` (no orphan provenance);
+ *   - its sha256 must equal the pinned digest (one fact, recorded once).
+ * Absent `digests_provenance`: silent.
+ */
+function digestProvenanceViolations(boundary) {
+  const out = [];
+  if (!boundary || boundary.__parseError) return out;
+  const prov = boundary.digests_provenance;
+  if (prov === undefined) return out;
+  if (!prov || typeof prov !== 'object' || Array.isArray(prov)) {
+    out.push('scripts/migrations/applied-boundary.json\n    ✗ digests_provenance must be an object keyed by migration filename.');
+    return out;
+  }
+  const digests = boundary.digests || {};
+  for (const [f, entry] of Object.entries(prov)) {
+    const e = entry && typeof entry === 'object' ? entry : {};
+    const missing = ABOVE_BOUNDARY_FIELDS.filter((k) => {
+      const val = e[k];
+      if (k === 'ledger_row') return typeof val !== 'boolean';
+      if (k === 'sha256') return typeof val !== 'string' || !/^[0-9a-f]{64}$/.test(val);
+      return typeof val !== 'string' || val.trim() === '';
+    });
+    if (missing.length) {
+      out.push(`${f}\n    ✗ DIGEST PROVENANCE INCOMPLETE. Missing or empty: ${missing.join(', ')}.`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(digests, f)) {
+      out.push(`${f}\n    ✗ DIGEST PROVENANCE INCONSISTENT. It has provenance but no pinned digest; provenance describes a digest.`);
+    } else if (typeof e.sha256 === 'string' && e.sha256 !== digests[f]) {
+      out.push(`${f}\n    ✗ DIGEST PROVENANCE INCONSISTENT. Its sha256 differs from the pinned digest; one fact, recorded once.`);
+    }
+  }
+  return out;
+}
+
+/**
  * RULE 7 — ROLLBACK COMPANION NAMING.
  *
  * THE HAZARD, ANSWERED DIRECTLY. Rollbacks live at
@@ -1001,6 +1043,9 @@ function main() {
   );
   errors.push(...aboveB.violations);
 
+  // 6c. Below-boundary provenance completeness (follow-up to #18).
+  errors.push(...digestProvenanceViolations(readJson(APPLIED_BOUNDARY, null)));
+
   // 7. Rollback companion naming (GOV-H).
   const rollbacks = fs.existsSync(ROLLBACK_DIR)
     ? fs.readdirSync(ROLLBACK_DIR).filter((f) => f.endsWith('.sql'))
@@ -1077,6 +1122,7 @@ module.exports = {
   reservationViolations,
   immutabilityViolations,
   aboveBoundaryViolations,
+  digestProvenanceViolations,
   lfSha256,
   rollbackViolations,
   setNullContradictions,

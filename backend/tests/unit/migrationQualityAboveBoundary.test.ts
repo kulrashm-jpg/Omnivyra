@@ -197,3 +197,44 @@ describe('RULE 6 — LF digest basis (virality-05 follow-up b)', () => {
       .toContain('APPLIED MIGRATION MODIFIED');
   });
 });
+
+describe('RULE 6c — below-boundary provenance (virality-05 follow-up c)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { digestProvenanceViolations } = require('../../../scripts/check-migration-quality.js');
+  const lists = '20261127000000_pi_prospect_lists.sql';
+  const pinned = sha('lists');
+  const prov = (overrides: Record<string, unknown> = {}) => ({
+    ...entry({ sha256: pinned, operator: 'unknown (out of band)', applied_at: 'unknown (out of band)', method: 'unknown_out_of_band' }),
+    ...overrides,
+  });
+  const b = (p: unknown, digests: Record<string, string> = { [lists]: pinned }) =>
+    ({ schema_version: 2, ledger_max: LEDGER_MAX, digests, digests_provenance: p });
+
+  it('absent digests_provenance is silent (today\'s file)', () => {
+    expect(digestProvenanceViolations({ schema_version: 1, ledger_max: LEDGER_MAX, digests: {} })).toEqual([]);
+  });
+  it('a complete entry whose sha256 equals the pinned digest passes ("unknown" is an honest, non-empty value)', () => {
+    expect(digestProvenanceViolations(b({ [lists]: prov() }))).toEqual([]);
+  });
+  it('a missing or empty field fails INCOMPLETE', () => {
+    const { record: _r, ...noRecord } = prov();
+    void _r;
+    const v = digestProvenanceViolations(b({ [lists]: { ...noRecord, operator: '' } }));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain('DIGEST PROVENANCE INCOMPLETE');
+    expect(v[0]).toContain('operator');
+    expect(v[0]).toContain('record');
+  });
+  it('provenance for a file with no pinned digest fails INCONSISTENT', () => {
+    const v = digestProvenanceViolations(b({ [lists]: prov() }, {}));
+    expect(v.some((x: string) => x.includes('DIGEST PROVENANCE INCONSISTENT') && x.includes('no pinned digest'))).toBe(true);
+  });
+  it('a provenance sha256 that differs from the pinned digest fails INCONSISTENT', () => {
+    const v = digestProvenanceViolations(b({ [lists]: prov({ sha256: sha('other') }) }));
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain('differs from the pinned digest');
+  });
+  it('a non-object digests_provenance fails closed', () => {
+    expect(digestProvenanceViolations(b([]))[0]).toContain('must be an object');
+  });
+});
