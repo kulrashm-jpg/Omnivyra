@@ -26,8 +26,11 @@
 --
 -- SECURITY INVOKER (service_role, which bypasses RLS, is the only caller). EXECUTE is revoked from PUBLIC,
 -- anon and authenticated by name (a function's NULL proacl means EXECUTE to PUBLIC) and granted to
--- service_role. search_path is pinned; a postcondition requires proconfig to be EXACTLY that pin, because a
--- later CREATE OR REPLACE without the SET clause would silently drop it on a privileged write path.
+-- service_role. search_path is pinned to `pg_catalog, public, pg_temp` with pg_temp LAST: when pg_temp is not
+-- listed, PostgreSQL searches the session's temporary schema FIRST for relations, so a temp table named
+-- action_pricing_config would shadow the real one (measured by virality-05 on 17.11). A postcondition requires
+-- proconfig to be EXACTLY that pin, because a later CREATE OR REPLACE without the SET clause would silently
+-- drop it on a privileged write path.
 --
 -- Additive: no table, column, constraint or index changes. Rollback:
 --   supabase/migrations/rollbacks/action_pricing_versioned_apply_rollback.sql
@@ -47,7 +50,7 @@ CREATE OR REPLACE FUNCTION public.apply_action_pricing_change(
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY INVOKER
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
   v_prior_source text;
@@ -63,7 +66,11 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  -- Serialise concurrent edits of this action (locks its current active row, if any).
+  -- Serialise concurrent edits of this action. The advisory lock covers the case FOR UPDATE cannot: when
+  -- there is NO active row (a new action_key, or a damaged one) FOR UPDATE locks nothing. It is
+  -- transaction-scoped (released at commit/rollback) and does not depend on the partial unique index,
+  -- whose presence in production is unverified (C1 did not read indexes).
+  PERFORM pg_advisory_xact_lock(hashtext('action_pricing:' || p_action_key));
   PERFORM 1
      FROM public.action_pricing_config
     WHERE action_key = p_action_key
@@ -126,7 +133,9 @@ BEGIN
       RAISE EXCEPTION 'postcondition P1 failed: % can EXECUTE apply_action_pricing_change', v_role;
     END IF;
   END LOOP;
-  -- P2: service_role must execute it (trigger: the GRANT line removed).
+  -- P2: service_role must execute it (trigger: the GRANT line removed on a FRESH create). NOTE: hosted
+  -- Supabase's default function privileges may grant service_role EXECUTE regardless, so a green P2 in
+  -- production does not prove the explicit GRANT is load-bearing; it fires only when both are absent.
   IF NOT has_function_privilege('service_role', v_sig, 'EXECUTE') THEN
     RAISE EXCEPTION 'postcondition P2 failed: service_role cannot EXECUTE apply_action_pricing_change';
   END IF;
@@ -136,8 +145,8 @@ BEGIN
   IF v_def THEN
     RAISE EXCEPTION 'postcondition P3 failed: apply_action_pricing_change is SECURITY DEFINER';
   END IF;
-  IF v_cfg IS DISTINCT FROM ARRAY['search_path=pg_catalog, public'] THEN
-    RAISE EXCEPTION 'postcondition P4 failed: apply_action_pricing_change proconfig is %, expected {search_path=pg_catalog, public}', v_cfg;
+  IF v_cfg IS DISTINCT FROM ARRAY['search_path=pg_catalog, public, pg_temp'] THEN
+    RAISE EXCEPTION 'postcondition P4 failed: apply_action_pricing_change proconfig is %, expected {"search_path=pg_catalog, public, pg_temp"}', v_cfg;
   END IF;
 END
 $$;
