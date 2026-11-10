@@ -57,7 +57,10 @@ Session tokens are stateless and carry only `{userId, orgId, expiresAt, hmacNonc
 
 Every command is a row in the existing `extension_commands` table: `status` pending → dispatched → completed | failed | refused | uncertain, plus `expires_at`. It is issued ONLY by a user action in Omnivyra (inbox "Sync", the Sales Navigator "Capture" button, or an approved reply), never by a background job.
 
-`GET /api/extension/commands` offers a 1.5 command only to a session whose (org, user) issued it AND whose active binding matches `payload.acting_member_urn`.
+`GET /api/extension/v15/commands` (a SEPARATE route; `GET /api/extension/commands` keeps serving 1.4.x unchanged) offers a 1.5 command only to a session whose (org, user) issued it AND whose active binding matches `payload.acting_member_urn`.
+- The response is `{ success, commands: [{ envelope, envelope_signature }] }`.
+- The extension acknowledges with `POST /api/extension/v15/commands/ack`, signed body `{ command_id, extension_version }`, immediately before acting. This moves the command from `pending` to `dispatched`; it may be acknowledged only once.
+- The path is separate because the request signature covers METHOD and PATH but not the query string.
 
 **The signed command envelope** is HMAC-SHA256 with the session's derived secret, over the canonical JSON of the fields below. The extension verifies it before acting and refuses on any mismatch.
 
