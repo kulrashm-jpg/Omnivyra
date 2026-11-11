@@ -1,7 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { ownedDbTable } from '../db/writeOwner';
-import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
+import { resolveCreditCostConfigKey } from '../../shared/monetization/featureRegistry';
 
 // Phase 8A — activity economy catalog. Re-exported here so callers resolve
 // activity economics through the same pricing-resolution surface as
@@ -353,8 +353,7 @@ export interface ActivityCreditRange {
  * non-throwing on absence (so resolveActivityCreditRange can fall through).
  */
 async function fetchFlatCreditCost(actionKey: string): Promise<number | null> {
-  const feature = resolveMonetizationFeature({ action_key: actionKey });
-  const costConfigKey = feature?.feature.pricing_keys.credit_cost_config ?? actionKey;
+  const costConfigKey = resolveCreditCostConfigKey(actionKey);
   const { data, error } = await supabase
     .from('credit_cost_config')
     .select('credits')

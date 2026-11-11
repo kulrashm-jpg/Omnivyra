@@ -19,7 +19,7 @@ import { supabase } from '../db/supabaseClient';
 import { checkDomainEligibility } from './domainEligibilityService';
 import { reviewableResults } from '../../lib/auth/domainEligibilityModel';
 import { getTotalAvailable } from './creditPriorityService';
-import { getFeatureDisplayGroup, resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
+import { getFeatureDisplayGroup, resolveCreditCostConfigKey } from '../../shared/monetization/featureRegistry';
 
 // ── Credit cost map ───────────────────────────────────────────────────────────
 
@@ -142,8 +142,7 @@ export const CREDIT_ACTIONS: CreditAction[] = [
 
 /** Returns the credit cost for an action from credit_cost_config. */
 export async function getCreditCost(action: CreditAction): Promise<number> {
-  const feature = resolveMonetizationFeature({ action_key: action });
-  const costConfigKey = feature?.feature.pricing_keys.credit_cost_config ?? action;
+  const costConfigKey = resolveCreditCostConfigKey(action);
   const { data, error } = await supabase
     .from('credit_cost_config')
     .select('credits')
@@ -161,8 +160,7 @@ export async function getCreditCost(action: CreditAction): Promise<number> {
 // ── Smart Mode dedup windows (seconds) ────────────────────────────────────────
 // Skip re-running the same background action within this window.
 export async function getSmartModeDedupSeconds(action: CreditAction): Promise<number | undefined> {
-  const feature = resolveMonetizationFeature({ action_key: action });
-  const costConfigKey = feature?.feature.pricing_keys.credit_cost_config ?? action;
+  const costConfigKey = resolveCreditCostConfigKey(action);
   const { data, error } = await supabase
     .from('credit_cost_config')
     .select('smart_dedup_seconds')

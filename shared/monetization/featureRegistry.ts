@@ -738,6 +738,20 @@ export function resolveFeatureFromActionKey(actionKey: string): MonetizationFeat
   ) ?? null;
 }
 
+/**
+ * The credit_cost_config row that prices an action key (money, 2026-11-12).
+ *
+ * Exact registry match ONLY. resolveMonetizationFeature() ends in a report
+ * fallback that, for a key no entry names, returns the FIRST report entry
+ * (website_audit) - so pricing through it charged 21 unregistered actions the
+ * website-audit fee (50) and applied its 24h smart-dedup window, instead of
+ * their own rows (blog_generation 60, campaign_chat 1, ...). A key no entry
+ * names is priced by its OWN row; a registered key keeps its declared remap.
+ */
+export function resolveCreditCostConfigKey(actionKey: string): string {
+  return resolveFeatureFromActionKey(actionKey)?.pricing_keys.credit_cost_config ?? actionKey;
+}
+
 export function resolveFeatureFromProcessType(processType: string): MonetizationFeatureRegistryEntry | null {
   return MONETIZATION_FEATURE_REGISTRY.find((entry) =>
     entry.process_type_mapping?.includes(processType),
