@@ -39,9 +39,13 @@ const templateSubmits: Row[] = [];
 const fetchCalls: string[] = [];
 
 function table(name: string) {
-  const st = { op: 'select' as 'select' | 'update' | 'insert', patch: null as Row | null, eq: [] as Array<[string, unknown]>, ins: [] as Array<[string, unknown[]]> };
+  const st = {
+    op: 'select' as 'select' | 'update' | 'insert', patch: null as Row | null, eq: [] as Array<[string, unknown]>, ins: [] as Array<[string, unknown[]]>,
+    gts: [] as Array<[string, string]>, limit: null as number | null,
+  };
   const rows = (): Row[] => ((db as unknown as Record<string, Row[]>)[name] ?? []);
-  const match = (r: Row) => st.eq.every(([c, v]) => r[c] === v) && st.ins.every(([c, vs]) => vs.includes(r[c]));
+  const match = (r: Row) => st.eq.every(([c, v]) => r[c] === v) && st.ins.every(([c, vs]) => vs.includes(r[c]))
+    && st.gts.every(([c, v]) => String(r[c]) > v);
   const run = async (): Promise<{ data: unknown; error: unknown; count?: number }> => {
     if (db.failTable === name) return { data: null, error: { message: `${name} unreadable` } };
     if (st.op === 'insert') {
@@ -55,7 +59,9 @@ function table(name: string) {
       return { data: null, error: null };
     }
     const found = rows().filter(match);
-    return { data: found, error: null, count: found.length };
+    // Keyset enqueue paging (order by id, limit, id > last).
+    const page = st.limit === null ? found : found.slice(0, st.limit);
+    return { data: page, error: null, count: found.length };
   };
   const first = async () => {
     const r = await run();
@@ -71,6 +77,8 @@ function table(name: string) {
     in: (c: string, vs: unknown[]) => { st.ins.push([c, vs]); return api; },
     range: () => api,
     order: () => api,
+    gt: (c: string, v: string) => { st.gts.push([c, v]); return api; },
+    limit: (n: number) => { st.limit = n; return api; },
     single: first,
     maybeSingle: first,
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => run().then(res, rej),

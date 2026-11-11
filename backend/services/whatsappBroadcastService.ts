@@ -35,6 +35,8 @@ const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
+const RECIPIENT_ID_PAGE = 1000;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface ContactInput {
@@ -285,19 +287,30 @@ export async function enqueueBroadcast(
   const { getContentQueue } = await import('../queue/contentGenerationQueues');
   const queue = getContentQueue('whatsapp-broadcast');
 
-  let offset = 0;
-  let batchIndex = 0;
-
-  while (offset < totalCount) {
-    const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
+  // Every id is read BEFORE the first job is queued, and paged by key. Batch 0 has no
+  // delay, so a worker moves rows out of `pending` while this runs: an offset over that
+  // shrinking set skips recipients, and they are never queued.
+  const pendingIds: string[] = [];
+  for (;;) {
+    let page = ownedDbTable('whatsapp_broadcast_recipients')
       .select('id')
       .eq('broadcast_id', broadcastId)
-      .eq('status', 'pending')
-      .range(offset, offset + batch_size - 1);
+      .eq('status', 'pending');
+    if (pendingIds.length > 0) page = page.gt('id', pendingIds[pendingIds.length - 1]);
 
+    const { data: recipients, error: readError } = await page
+      .order('id', { ascending: true })
+      .limit(RECIPIENT_ID_PAGE);
+    if (readError) throw new Error(`Broadcast recipients unreadable: ${readError.message}`);
+    // Until an empty page: the server's row cap may be lower than the page asked for.
     if (!recipients?.length) break;
+    pendingIds.push(...recipients.map((r) => r.id as string));
+  }
 
-    const recipientIds = recipients.map((r) => r.id);
+  let batchIndex = 0;
+
+  for (let i = 0; i < pendingIds.length; i += batch_size) {
+    const recipientIds = pendingIds.slice(i, i + batch_size);
 
     await enqueueOrThrow(
       queue,
@@ -313,7 +326,6 @@ export async function enqueueBroadcast(
       },
     );
 
-    offset     += batch_size;
     batchIndex += 1;
   }
 
