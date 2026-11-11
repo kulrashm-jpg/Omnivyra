@@ -57,11 +57,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── STEP 4: Load active reward amounts from DB with fallback ─────────────
 
-  const { data: configRows } = await serviceSb
+  // MONEY: a failed read is not "no overrides". Falling back to the defaults
+  // granted the default amount even for a category the config had changed or
+  // deactivated. 503, nothing claimed.
+  const { data: configRows, error: configErr } = await serviceSb
     .from('free_credit_config')
     .select('category, credits')
     .eq('is_active', true)
     .in('category', Object.keys(CREDIT_REWARDS_DEFAULT));
+  if (configErr) {
+    logger.error('credits_claim_action_config_read_failed', { userId: user.id, message: configErr.message });
+    return res.status(503).json({ error: 'reward_config_unavailable', retryable: true });
+  }
 
   const CREDIT_REWARDS: Record<string, number> = { ...CREDIT_REWARDS_DEFAULT };
   for (const row of (configRows ?? []) as Array<{ category: string; credits: number }>) {
@@ -75,6 +82,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const credits = CREDIT_REWARDS[category];
 
   try {
+    /*
+     * Get org to apply credit transaction.
+     *
+     * MEMBERSHIP-DERIVATION-SWEEP-001 — the status filter is load-bearing.
+     * This lookup chooses which organisation's ledger RECEIVES the grant.
+     * user_company_roles carries non-active rows by design: inviting writes
+     * status='invited' with no acceptance and no session revocation, and
+     * deactivation writes status='inactive'. Without this predicate a user
+     * holding only a revoked or never-accepted membership had credits written
+     * into that organisation's ledger, and with several rows the unordered
+     * limit(1) could prefer a stale one over a live one.
+     *
+     * MONEY (2026-11-12): resolved BEFORE the one-time claim is consumed. It
+     * used to run after the insert, and a failed read - or a user with no
+     * active organisation - consumed the claim, granted nothing, and answered
+     * 200 "success, N credits". Nothing replays claim-action claims, so those
+     * credits were lost for good.
+     */
+    const { data: membership, error: membershipErr } = await serviceSb
+      .from('user_company_roles')
+      .select('company_id')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (membershipErr) {
+      logger.error('credits_claim_action_membership_read_failed', { userId: user.id, category, message: membershipErr.message });
+      return res.status(503).json({ error: 'membership_unavailable', retryable: true });
+    }
+    const orgId = (membership as any)?.company_id ?? null;
+    if (!orgId) {
+      return res.status(409).json({ error: 'no_active_organization', message: 'Join or create an organisation before claiming credits.' });
+    }
+
     // Insert claim — UNIQUE(user_id, category) will reject duplicates
     const { error: claimErr } = await serviceSb.from('free_credit_claims').insert({
       user_id:         user.id,
@@ -89,52 +130,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       throw claimErr;
     }
 
-    /*
-     * Get org to apply credit transaction.
-     *
-     * MEMBERSHIP-DERIVATION-SWEEP-001 — the status filter is load-bearing.
-     * This lookup chooses which organisation's ledger RECEIVES the grant.
-     * user_company_roles carries non-active rows by design: inviting writes
-     * status='invited' with no acceptance and no session revocation, and
-     * deactivation writes status='inactive'. Without this predicate a user
-     * holding only a revoked or never-accepted membership had credits written
-     * into that organisation's ledger, and with several rows the unordered
-     * limit(1) could prefer a stale one over a live one.
-     */
-    const { data: membership } = await serviceSb
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', user.id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-
-    const orgId = (membership as any)?.company_id ?? null;
-    if (orgId) {
-      try {
-        await createCredit({
-          orgId,
-          amount:         credits,
-          category:       'paid', // approved policy: earn / promo / referral → PAID (never expire, consumed after FREE, subscription-locked). No new INCENTIVE allocations.
-          referenceType:  'free_credits_earn',
-          referenceId:    `${user.id}:${category}`,
-          note:           `Free credits — ${category.replace(/_/g, ' ')}`,
-          performedBy:    user.id,
-          idempotencyKey: makeIdempotencyKey(user.id, `earn:${category}`, orgId),
-        });
-      } catch (creditErr: any) {
-        logger.error('credits_claim_action_grant_failed', { userId: user.id, orgId, category, message: creditErr.message });
-        // Roll back the claim so the user can retry
-        await serviceSb.from('free_credit_claims').delete()
-          .eq('user_id', user.id).eq('category', category);
-        return res.status(500).json({ error: 'Credit grant failed. Please try again.' });
+    try {
+      await createCredit({
+        orgId,
+        amount:         credits,
+        category:       'paid', // approved policy: earn / promo / referral → PAID (never expire, consumed after FREE, subscription-locked). No new INCENTIVE allocations.
+        referenceType:  'free_credits_earn',
+        referenceId:    `${user.id}:${category}`,
+        note:           `Free credits — ${category.replace(/_/g, ' ')}`,
+        performedBy:    user.id,
+        idempotencyKey: makeIdempotencyKey(user.id, `earn:${category}`, orgId),
+      });
+    } catch (creditErr: any) {
+      logger.error('credits_claim_action_grant_failed', { userId: user.id, orgId, category, message: creditErr.message });
+      // Roll back the claim so the user can retry. If the rollback itself
+      // fails the claim is stranded (the user can never retry) - logged as
+      // its own event so it can be found and released.
+      const { error: rollbackErr } = await serviceSb.from('free_credit_claims').delete()
+        .eq('user_id', user.id).eq('category', category);
+      if (rollbackErr) {
+        logger.error('credits_claim_action_rollback_failed', { userId: user.id, orgId, category, message: rollbackErr.message });
       }
+      return res.status(500).json({ error: 'Credit grant failed. Please try again.' });
     }
 
     return res.status(200).json({ success: true, category, credits });
   } catch (err: any) {
     logger.error('credits_claim_action_failed', { userId: user.id, category, message: err?.message ?? 'Internal server error' });
-    return res.status(500).json({ error: err?.message ?? 'Internal server error' });
+    // The database message is logged above, never returned to the client.
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
