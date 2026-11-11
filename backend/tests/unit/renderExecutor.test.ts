@@ -63,17 +63,27 @@ function registryOf(p: RenderProvider | null): RenderProviderRegistry {
 }
 
 /** In-memory supabase + ownedDbTable. Records every write for asserts. */
-function mockDeps(opts: { existingJob?: any; existingOutput?: any } = {}) {
+function mockDeps(opts: { existingJob?: any; existingOutput?: any; attachedOutputId?: string | null; otherOutputs?: any[] } = {}) {
   const tables: Record<string, any[]> = {};
   const writes: { table: string; op: string; row?: any }[] = [];
   let seq = 0;
+  // Every output in the table, oldest first. A query BY ID finds that row; an UNFILTERED "latest"
+  // query (the old reuse path) gets the newest row of ANY job or tenant.
+  const outputs: any[] = [...(opts.existingOutput ? [opts.existingOutput] : []), ...(opts.otherOutputs ?? [])];
+  const attachedOutputId = opts.attachedOutputId !== undefined ? opts.attachedOutputId : (opts.existingOutput?.id ?? null);
   const reader = (table: string) => {
     const q: any = { _t: table, _f: {} as any };
     q.select = () => q; q.order = () => q; q.limit = () => q;
     q.eq = (k: string, v: any) => { q._f[k] = v; return q; };
     q.maybeSingle = async () => {
       if (table === 'creator_render_job') return { data: opts.existingJob ?? null };
-      if (table === 'creator_render_output') return { data: opts.existingOutput ?? null };
+      if (table === 'creator_render_job_state') {
+        return { data: opts.existingJob && q._f.render_job_id === opts.existingJob.id ? { attached_output_id: attachedOutputId } : null };
+      }
+      if (table === 'creator_render_output') {
+        if (q._f.id !== undefined) return { data: outputs.find((o) => o.id === q._f.id) ?? null };
+        return { data: outputs.length ? outputs[outputs.length - 1] : null };
+      }
       return { data: null };
     };
     return q;
@@ -359,6 +369,27 @@ describe('control RPCs and billing hold fail closed', () => {
     expect(rpcNames).not.toContain('claim_job_execution');
     expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
     expect(w.calls.submit).toBe(0);
+  });
+
+  it("SECURITY: the reuse output is THIS job's attached output, never another tenant's newer output", async () => {
+    const mine = { id: 'out-mine', storage_ref: 'https://cdn/mine.png', content_sha256: 'h1', attempt_id: 'a1' };
+    const foreignNewer = { id: 'out-tenant-B', storage_ref: 'https://cdn/tenant-B-private.png', content_sha256: 'h2', attempt_id: 'aB' };
+    const m = mockDeps({ existingJob: { id: 'job-mine' }, existingOutput: mine, otherOutputs: [foreignNewer] });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('reused');
+    expect(r.output?.output_id).toBe('out-mine');
+    const attached = JSON.stringify(m.writes.filter((x) => x.table === 'content_core_asset' || x.table === 'content_asset_attachment'));
+    expect(attached).not.toContain('tenant-B-private');
+    expect(attached).toContain('https://cdn/mine.png');
+  });
+
+  it('SECURITY: an existing job with NO attached output attaches NOTHING (no foreign output, no "latest" fallback)', async () => {
+    const foreignNewer = { id: 'out-tenant-B', storage_ref: 'https://cdn/tenant-B-private.png', content_sha256: 'h2', attempt_id: 'aB' };
+    const m = mockDeps({ existingJob: { id: 'job-mine' }, attachedOutputId: null, otherOutputs: [foreignNewer] });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.output ?? null).toBeNull();
+    expect(r.attached).toBe(false);
+    expect(JSON.stringify(m.writes)).not.toContain('tenant-B-private');
   });
 
   it('attempt insert fails: the provider is NEVER called, the hold is released, retryable', async () => {
