@@ -381,6 +381,21 @@ BEGIN
     RAISE EXCEPTION 'PI-LDB-1 postcondition: mapping profile tables must be empty on arrival';
   END IF;
 
+  -- Step E: the vocabulary this file was edited to widen. Asserted, because an
+  -- environment that applied an EARLIER form of this file keeps its old
+  -- constraint (CREATE TABLE IF NOT EXISTS changes nothing there) and nothing
+  -- else here would say so (virality-05, 2026-11-11).
+  IF COALESCE(position('platform_approved' IN (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'smpe_mapping_method_valid'
+                  AND conrelid = 'public.source_mapping_profile_entries'::regclass)), 0) = 0 THEN
+    RAISE EXCEPTION 'PI-LDB-1 postcondition: smpe_mapping_method_valid does not admit platform_approved (an earlier form of this file was applied?)';
+  END IF;
+  IF COALESCE(position('platform_approved' IN (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE conname = 'smpe_tenant_decision_has_provenance'
+                  AND conrelid = 'public.source_mapping_profile_entries'::regclass)), 0) = 0 THEN
+    RAISE EXCEPTION 'PI-LDB-1 postcondition: smpe_tenant_decision_has_provenance does not require approved_at for platform_approved';
+  END IF;
+
   RAISE NOTICE 'PI-LDB-1: source_mapping_profiles + entries created (tenant + platform scope), 9 unique indexes, tenant + scope FKs, no actor FK, 0 rows.';
 END
 $verify$;
