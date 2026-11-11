@@ -86,6 +86,50 @@ CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb
 
 GRANT USAGE ON SCHEMA public, auth, extensions TO anon, authenticated, service_role;
 
+-- ─── HOSTED DEFAULT TABLE PRIVILEGES (PI-LDB 2F, requirement 11) ───────────
+--
+-- A stock postgres image has an EMPTY `pg_default_acl`. Supabase's hosted
+-- database does not: every table `postgres` creates in `public` arrives with
+-- ALL privileges (arwdDxtm) already granted to `service_role`, and nothing in
+-- this repository revokes that default. Measured on cert, which is a restore
+-- of a production pg_dump INCLUDING ACLs:
+--   docs/security/CLOSURE_015Q_RBAC_EFFECTIVE_PRIVILEGES.md:42
+--   docs/security/CLOSURE_015P_RELEASE_BOUNDARY_AND_CERT_RESULTS.md:333
+--   docs/security/CLOSURE_015U_FINAL_OPERATOR_PACKET.md (P-4)
+--
+-- WHY THIS LINE HAS TO EXIST. Without it the surplus never arrives here, so
+-- every assertion of the form
+--
+--     has_table_privilege('service_role', <table>, 'TRUNCATE') IS NOT FALSE
+--
+-- is VACUOUSLY satisfied: the privilege the migration exists to remove was
+-- never present to remove. A privilege migration could ship with a
+-- three-grantee REVOKE that leaves `service_role` holding DELETE and TRUNCATE
+-- in production, and this harness would stay green. That is not a
+-- hypothetical — it is what Prompt 2B found and corrected.
+--
+-- NOT the reason an earlier note gave. `has_table_privilege(<role>, ...)`
+-- answers about the NAMED role, not about the asking session, and
+-- `service_role` here is NOLOGIN NOINHERIT BYPASSRLS rather than a superuser.
+-- The harness connecting as `postgres` is therefore not what made those
+-- assertions vacuous; the empty default ACL was.
+--
+-- `FOR ROLE postgres` is the same owner the in-repo precedent targets
+-- (20261026000000_close_anon_rls_exposure.sql:453-457), and `postgres` is the
+-- role this harness creates every table as, so these defaults are the ones
+-- that will apply.
+--
+-- SCOPE, deliberately minimum: `service_role` only. The client roles
+-- (`anon`, `authenticated`) are left without default table privileges, because
+-- several suites assert client-role emptiness across tables that the
+-- enumerated hardening migrations may not all reach, and granting them here
+-- would convert those into failures about the bootstrap rather than about the
+-- schema. `service_role` is the exposure that matters: it is the application
+-- role, and BYPASSRLS means RLS does not compensate for excess table
+-- privileges.
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  GRANT ALL ON TABLES TO service_role;
+
 -- Supabase puts `extensions` on the database search_path, which is why
 -- migrations can write `vector(1536)` unqualified. Without this a replay fails
 -- with "type vector does not exist" even though the extension is installed.
