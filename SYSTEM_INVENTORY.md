@@ -373,7 +373,6 @@ Generated: 2026-03-29
 
 | File | Purpose |
 |------|---------|
-| `aggregate-blog-analytics.ts` | Aggregates blog post analytics |
 | `anomaly-sweep.ts` | Detects anomalies in metrics |
 | `autonomous-scheduler.ts` | Auto-scheduling logic |
 | `campaign-health-monitor.ts` | Campaign health checks |

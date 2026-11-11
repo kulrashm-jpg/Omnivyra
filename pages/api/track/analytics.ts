@@ -11,6 +11,13 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * Prefers blog_analytics_daily for historical data (faster at scale).
  * Falls back to raw blog_analytics if daily table is empty.
+ *
+ * NOTHING WRITES blog_analytics_daily (2026-11-12): its only writer, the never-scheduled
+ * /api/cron/aggregate-blog-analytics, was retired, so this route serves the raw path. The
+ * preference below is ALL-OR-NOTHING: if ANY daily row exists in the window, raw events are ignored
+ * for the whole window - so a rollup that covers only some days (and never today) would UNDERCOUNT.
+ * Re-introduce a rollup only together with a reader that uses daily rows for complete past days and
+ * raw events for the rest (and a backfill).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';

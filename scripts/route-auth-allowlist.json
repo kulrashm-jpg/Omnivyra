@@ -360,13 +360,6 @@
       "kind": "public",
       "reason": "Public credit price list for activities; no tenant data."
     },
-    "pages/api/cron/aggregate-blog-analytics.ts": {
-      "kind": "machine-secret",
-      "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
-      "env": [
-        "CRON_SECRET"
-      ]
-    },
     "pages/api/cron/analytics-ingestion.ts": {
       "kind": "machine-secret",
       "reason": "Scheduler/worker endpoint authenticated by the CRON_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",

@@ -13,8 +13,8 @@
  *
  * ── blog_analytics is NOT a competing lead tracker ───────────────────────────────
  *    `tracker.js` → `/api/track` → `blog_analytics` is the BLOG CONTENT-PERFORMANCE
- *    system (hook/angle/cluster analytics; consumed by /api/track/* and the
- *    aggregate-blog-analytics cron). It is a DIFFERENT domain, not a second lead
+ *    system (hook/angle/cluster analytics; consumed by /api/track/*; the never-scheduled
+ *    aggregate-blog-analytics cron was retired 2026-11-12). It is a DIFFERENT domain, not a second lead
  *    tracker, and is intentionally left untouched. `blog_analytics` additionally
  *    serves as a legitimate lead SOURCE for blog-origin leads via the canonical
  *    `blogAdapter` (source='blog') — that is adapter-routed ingestion, not a
