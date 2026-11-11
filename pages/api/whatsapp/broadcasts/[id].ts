@@ -41,10 +41,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── GET: broadcast detail ──────────────────────────────────────────────────
   if (req.method === 'GET') {
-    const { data: recipientStats } = await supabase
+    const { data: recipientStats, error: statsError } = await supabase
       .from('whatsapp_broadcast_recipients')
       .select('status', { count: 'exact' })
       .eq('broadcast_id', id);
+    // A failed read is not "no recipients": the operator would read zeros as the truth.
+    if (statsError) return res.status(503).json({ error: 'Recipient status unavailable. Please try again.' });
 
     // Group by status
     const byStatus: Record<string, number> = {};

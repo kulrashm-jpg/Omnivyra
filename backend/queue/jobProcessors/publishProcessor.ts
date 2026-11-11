@@ -929,13 +929,19 @@ async function processPublishJobInner(params: {
       await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message, undefined, platformError.code);
       
       // Update scheduled_post with error code
-      await supabase
+      // best-effort: a mirror - updateScheduledPostOnFailure above already wrote this code and message and throws on its own failure
+      const { error: codeMirrorError } = await supabase
         .from('scheduled_posts')
         .update({
           error_code: platformError.code,
           error_message: platformError.user_message,
         })
         .eq('id', scheduled_post_id);
+      if (codeMirrorError) {
+        console.warn('[publishProcessor] error_code mirror not written (already recorded by the failure update)', {
+          scheduled_post_id, error: codeMirrorError.message,
+        });
+      }
 
       // The adapter's explicit `retryable: false` is honoured here, where the
       // outcome is already known to be 'not_created'. It is never read as

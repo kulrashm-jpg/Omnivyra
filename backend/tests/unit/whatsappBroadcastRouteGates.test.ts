@@ -8,12 +8,18 @@ const gates = { roleAllowed: true, accessAllowed: true, roleCalls: [] as unknown
 const mockSvc = { enqueue: jest.fn(), retry: jest.fn(), create: jest.fn() };
 
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
+const stats = { fail: false };
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
-    from: () => {
+    from: (t: string) => {
       const q: any = {};
       q.select = () => q; q.eq = () => q;
       q.single = async () => ({ data: { id: 'b1', company_id: 'co-of-broadcast' }, error: null });
+      if (t === 'whatsapp_broadcast_recipients') {
+        q.then = (res: (v: unknown) => unknown) => Promise.resolve(stats.fail
+          ? { data: null, error: { message: 'connection reset' } }
+          : { data: [{ status: 'sent' }, { status: 'pending' }], error: null }).then(res);
+      }
       return q;
     },
   },
@@ -66,7 +72,7 @@ const retry  = () => call(idRoute, { method: 'POST', query: { id: 'b1', action: 
 const create = () => call(createRoute, { method: 'POST', body: { company_id: 'co-a', social_account_id: 'sa1', name: 'n', message_type: 'text', body: 'hi' } });
 
 beforeEach(() => {
-  gates.roleAllowed = true; gates.accessAllowed = true;
+  gates.roleAllowed = true; gates.accessAllowed = true; stats.fail = false;
   gates.roleCalls.length = 0; gates.accessCalls.length = 0;
   mockSvc.enqueue.mockReset().mockResolvedValue({ run_id: 'r', batches: 1, recipients: 1 });
   mockSvc.retry.mockReset().mockResolvedValue({ retried: 1 });
@@ -105,5 +111,20 @@ describe('Resume and Retry are gated exactly as create', () => {
     expect(mockSvc.create).toHaveBeenCalledTimes(1);
     expect(mockSvc.enqueue).toHaveBeenCalledTimes(1);
     expect(mockSvc.retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GET broadcast detail: a failed recipient-status read is not "no recipients" (unread-error census)', () => {
+  it('the stats read fails: 503, never zeros presented as the truth', async () => {
+    stats.fail = true;
+    const res = await call(idRoute, { method: 'GET', query: { id: 'b1' } });
+    expect(res.statusCode).toBe(503);
+    expect(res.body).not.toHaveProperty('recipient_status_counts');
+  });
+
+  it('NEGATIVE CONTROL: the stats read succeeds: 200 with the counts', async () => {
+    const res = await call(idRoute, { method: 'GET', query: { id: 'b1' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.recipient_status_counts).toMatchObject({ sent: 1, pending: 1 });
   });
 });

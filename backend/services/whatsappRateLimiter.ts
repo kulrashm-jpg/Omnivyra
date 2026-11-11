@@ -175,10 +175,16 @@ export async function checkAndConsume(params: {
   const { social_account_id, phone_number_id, company_id, plan, count } = params;
 
   // Resolve tier from social_accounts
-  const { data: account } = await ownedDbTable('social_accounts')
+  // best-effort: an unreadable tier falls back to tier 1, the MOST restrictive limit, so a failed read never raises the cap
+  const { data: account, error: tierError } = await ownedDbTable('social_accounts')
     .select('messaging_tier')
     .eq('id', social_account_id)
     .single();
+  if (tierError) {
+    console.warn('[whatsappRateLimiter] messaging_tier unreadable; using tier 1 (most restrictive)', {
+      social_account_id, error: tierError.message,
+    });
+  }
 
   const tier      = account?.messaging_tier ?? 1;
   const tierLimit = TIER_LIMITS[tier] ?? TIER_LIMITS[1];

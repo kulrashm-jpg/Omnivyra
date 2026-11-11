@@ -551,9 +551,15 @@ async function insertRecipients(
   }
 
   // Update total_recipients count on broadcast
-  await ownedDbTable('whatsapp_broadcasts')
+  // best-effort: a display count only; whatsapp_refresh_broadcast_counts recomputes the total from the recipient rows
+  const { error: totalError } = await ownedDbTable('whatsapp_broadcasts')
     .update({ total_recipients: inserted, updated_at: new Date().toISOString() })
     .eq('id', broadcastId);
+  if (totalError) {
+    console.warn('[wa-broadcast] total_recipients not written (display only; the counts refresh recomputes it)', {
+      broadcast_id: broadcastId, error: totalError.message,
+    });
+  }
 
   return { inserted, skipped };
 }
@@ -774,10 +780,13 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
   await screenPendingRecipients(broadcast.company_id, broadcastId);
 
   // Count pending recipients
-  const { count } = await ownedDbTable('whatsapp_broadcast_recipients')
+  const { count, error: countError } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('*', { count: 'exact', head: true })
     .eq('broadcast_id', broadcastId)
     .eq('status', 'pending');
+  // A failed count is not "no pending recipients" (unread-error census): nothing is queued and
+  // no quota is consumed, and the caller is told the read failed.
+  if (countError) throw new Error(`Broadcast recipients unreadable: ${countError.message}`);
 
   const totalCount = count ?? 0;
   if (totalCount === 0) throw new Error('No pending recipients for broadcast');
@@ -796,9 +805,13 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
   });
 
   if (!rateCheck.allowed) {
-    await ownedDbTable('whatsapp_broadcasts')
+    // best-effort: the refusal below is raised either way; an unpaused row still shows Resume (running + open recipients)
+    const { error: pauseError } = await ownedDbTable('whatsapp_broadcasts')
       .update({ status: 'paused', updated_at: new Date().toISOString() })
       .eq('id', broadcastId);
+    if (pauseError) {
+      console.warn('[wa-broadcast] rate-limited broadcast could not be marked paused', { broadcast_id: broadcastId, error: pauseError.message });
+    }
     throw new Error(
       `Rate limit exceeded (tier ${rateCheck.tier}). ` +
       `Remaining today: ${rateCheck.remaining}. Broadcast paused.`
@@ -1083,10 +1096,15 @@ export async function processBatch(
   broadcastId:  string,
   recipientIds: string[],
 ): Promise<void> {
-  const { data: broadcast } = await ownedDbTable('whatsapp_broadcasts')
+  const { data: broadcast, error: broadcastError } = await ownedDbTable('whatsapp_broadcasts')
     .select('*')
     .eq('id', broadcastId)
     .single();
+  // An unreadable broadcast is not "not found": the job fails with the real cause and retries;
+  // nothing in it is sent either way.
+  if (broadcastError && broadcastError.code !== 'PGRST116') {
+    throw new Error(`Broadcast unreadable: ${broadcastId}: ${broadcastError.message}`);
+  }
 
   if (!broadcast) throw new Error(`Broadcast not found: ${broadcastId}`);
 
@@ -1134,7 +1152,7 @@ export async function processBatch(
   // path still reaches them. The person is part of the identity the check needs: an
   // unreadable page throws, so the job retries and nothing in it is sent.
   const { data: recipients, error: recipientsError } = await ownedDbTable('whatsapp_broadcast_recipients')
-    .select('id, encrypted_phone, contact_name, person_id')
+    .select('id, encrypted_phone, contact_name, person_id, retry_count')
     .in('id', recipientIds)
     .eq('status', 'pending');
   if (recipientsError) throw new Error(`Broadcast recipients unreadable: ${recipientsError.message}`);
@@ -1279,11 +1297,19 @@ export async function processBatch(
     // invocation that moves the row `pending → sending` may send it; every other
     // one skips, so a retry can never message a recipient twice.
     // send_started_at dates the claim, so the unconfirmed-send sweep measures age from it.
-    const { data: claimed } = await ownedDbTable('whatsapp_broadcast_recipients')
+    const { data: claimed, error: claimError } = await ownedDbTable('whatsapp_broadcast_recipients')
       .update({ status: 'sending', send_started_at: new Date().toISOString() })
       .eq('id', recipient.id)
       .eq('status', 'pending')
       .select('id');
+    if (claimError) {
+      // FAIL CLOSED, and no longer silent: an unwritten claim is not a claim, so this recipient
+      // is NOT sent; it stays `pending` for a later run.
+      console.error('[wa-broadcast] claim not written; recipient NOT sent, left pending', {
+        recipient_id: recipient.id, error: claimError.message,
+      });
+      continue;
+    }
     if (!Array.isArray(claimed) || claimed.length === 0) continue;
 
     // L-4: the provider call alone is inside the try. Its outcome decides the state; a
@@ -1336,10 +1362,12 @@ export async function processBatch(
       } else if (!Array.isArray(sentRows) || sentRows.length === 0) {
         // Another path resolved the row first. Record this worker's proof alongside
         // what the row now says: a DIFFERENT id there means the recipient was messaged twice.
-        const { data: now } = await ownedDbTable('whatsapp_broadcast_recipients')
+        // best-effort: forensic context for the ERROR below; the send already happened and the row is not changed here
+        const { data: now, error: nowError } = await ownedDbTable('whatsapp_broadcast_recipients')
           .select('status, wa_message_id')
           .eq('id', recipient.id)
           .maybeSingle();
+        if (nowError) console.warn('[wa-broadcast] could not read the conflicting row for the log below', { recipient_id: recipient.id, error: nowError.message });
         console.error('[wa-broadcast] SENT (provider id below) but the row had already been resolved by another path', {
           recipient_id: recipient.id,
           worker_wa_message_id: waMessageId,
@@ -1361,12 +1389,10 @@ export async function processBatch(
     } else {
       const errCode    = result?.error?.code ?? res.status;
       const errMessage = result?.error?.message ?? 'Unknown error';
-      // Fetch current retry_count then increment (supabase.rpc can't be used inline as a value)
-      const { data: cur } = await ownedDbTable('whatsapp_broadcast_recipients')
-        .select('retry_count')
-        .eq('id', recipient.id)
-        .single();
-      await resolveClaimedSend(recipient.id, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 });
+      // retry_count comes from the batch read: a separate re-read whose failure read as 0 reset
+      // the count and let a recipient be retried without end (unread-error census). The claim
+      // changed only `status`, so the batch read's value is current.
+      await resolveClaimedSend(recipient.id, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (Number(recipient.retry_count) || 0) + 1 });
       failedCount++;
     }
   }
@@ -1497,11 +1523,13 @@ async function retryRun(broadcastId: string): Promise<RetryResult> {
   const live = await liveBatchJobCount(queue as never, broadcastId);
   if (live > 0) throw alreadyRunning(live, 'retrying');
 
-  const { data: failed } = await ownedDbTable('whatsapp_broadcast_recipients')
+  const { data: failed, error: failedError } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id')
     .eq('broadcast_id', broadcastId)
     .eq('status', 'failed')
     .lt('retry_count', 3);
+  // A failed read is not "nothing to retry" (unread-error census).
+  if (failedError) throw new Error(`Failed recipients unreadable: ${failedError.message}`);
 
   if (!failed?.length) return { retried: 0, ...(await unretryableCounts(broadcastId)) };
 
