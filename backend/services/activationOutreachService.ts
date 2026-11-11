@@ -110,6 +110,9 @@ export async function loadOutreachContext(companyId: string, deps: GovernedOutre
   let admin_email: string | null = null;
   if (adminRole?.user_id) {
     const userRes = await db.from('users').select('email').eq('id', adminRole.user_id).maybeSingle();
+    // A failed read is not "this admin has no email" (unread-error census): the outreach would be
+    // rejected for the wrong reason. Thrown; the governed send reports it as a failure.
+    if (userRes?.error) throw new Error(`Admin email unreadable: ${userRes.error.message ?? 'unknown'}`);
     admin_email = userRes?.data?.email ?? null;
   }
 
@@ -152,10 +155,12 @@ export interface GovernedOutreachResult {
 export async function sendGovernedActivationOutreach(companyId: string, deps: GovernedOutreachDeps): Promise<GovernedOutreachResult> {
   const send = deps.send ?? sendActivationOutreach;
   const audit = deps.audit ?? (async (entry) => {
-    await deps.db.from('customer_activation_activity_log').insert({
+    // best-effort: an audit mirror of the attempt/result; the send decision never depends on it
+    const { error: auditError } = await deps.db.from('customer_activation_activity_log').insert({
       company_id: entry.company_id, activity_type: entry.activity_type, activity_date: deps.now(),
       owner: 'governed-activation-outreach', notes: entry.notes, status: entry.status,
     });
+    if (auditError) console.warn('[activationOutreach] audit row not written', { company_id: entry.company_id, activity_type: entry.activity_type, error: auditError.message });
   });
 
   const ctx = await loadOutreachContext(companyId, deps);

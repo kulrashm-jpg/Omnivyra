@@ -50,14 +50,14 @@ describe('evaluateOutreach — governance gate', () => {
 });
 
 // Minimal chainable supabase stub: single tables resolve via maybeSingle, list tables via await.
-function dbStub(spec: Record<string, { single?: any; list?: any[] }>, inserts: any[]) {
+function dbStub(spec: Record<string, { single?: any; list?: any[]; error?: { message: string }; insertError?: { message: string } }>, inserts: any[]) {
   return {
     from(table: string) {
       const api: any = {
         select: () => api,
         eq: () => api,
-        maybeSingle: () => Promise.resolve({ data: spec[table]?.single ?? null }),
-        insert: (row: any) => { inserts.push({ table, row }); return Promise.resolve({ error: null }); },
+        maybeSingle: () => Promise.resolve({ data: spec[table]?.error ? null : spec[table]?.single ?? null, error: spec[table]?.error ?? null }),
+        insert: (row: any) => { inserts.push({ table, row }); return Promise.resolve({ error: spec[table]?.insertError ?? null }); },
         then: (resolve: any) => Promise.resolve({ data: spec[table]?.list ?? [] }).then(resolve),
       };
       return api;
@@ -107,5 +107,47 @@ describe('sendGovernedActivationOutreach — orchestration (no real send)', () =
     expect(res.reason).toBe('NOT_CUSTOMER');
     expect(sendCalled).toBe(false);
     expect(inserts[0].row.status).toBe('rejected:NOT_CUSTOMER');
+  });
+});
+
+describe('unread-error census: the governed send reads its errors', () => {
+  const spec = () => ({
+    customer_population_classification: { single: { classification: 'CUSTOMER' } },
+    companies: { single: { id: 'c1', name: 'Acme' } },
+    user_company_roles: { list: [{ user_id: 'u1', role: 'OWNER', status: 'active', created_at: '2026-01-01' }] },
+    users: { single: { email: 'admin@acme.com' } } as { single?: any; error?: { message: string } },
+    company_profiles: { single: { overall_confidence: 100 } },
+    company_domains: { list: [] },
+    analytics_integrations: { list: [] },
+    customer_activation_activity_log: {} as { insertError?: { message: string } },
+  });
+
+  it('a FAILED admin-email read is not "no active admin": it fails as unreadable and nothing is sent', async () => {
+    const s = spec();
+    s.users = { error: { message: 'connection reset' } };
+    let sendCalled = false;
+    await expect(sendGovernedActivationOutreach('c1', {
+      db: dbStub(s, []) as any, appUrl: 'https://x', now: () => 't', send: (async () => { sendCalled = true; }) as any,
+    })).rejects.toThrow('Admin email unreadable');
+    expect(sendCalled).toBe(false);
+  });
+
+  it('a failed AUDIT insert is best-effort: the send still happens, and the failure is logged', async () => {
+    const s = spec();
+    s.customer_activation_activity_log = { insertError: { message: 'audit table down' } };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const res = await sendGovernedActivationOutreach('c1', {
+      db: dbStub(s, []) as any, appUrl: 'https://x', now: () => 't', send: (async () => undefined) as any,
+    });
+    expect(res.sent).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('audit row not written'), expect.objectContaining({ error: 'audit table down' }));
+    warn.mockRestore();
+  });
+
+  it('NEGATIVE CONTROL: no errors - the admin is resolved and the outreach is sent', async () => {
+    const res = await sendGovernedActivationOutreach('c1', {
+      db: dbStub(spec(), []) as any, appUrl: 'https://x', now: () => 't', send: (async () => undefined) as any,
+    });
+    expect(res).toMatchObject({ sent: true, recipientEmail: 'admin@acme.com' });
   });
 });

@@ -29,11 +29,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'User not identified' });
   }
 
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('opportunity_items')
     .select('id, company_id')
     .eq('id', opportunityId)
     .single();
+  // A failed read is not "not found" (unread-error census). PGRST116 is the genuine no-row case.
+  if (existingError && existingError.code !== 'PGRST116') {
+    return res.status(500).json({ error: 'Failed to load opportunity' });
+  }
 
   if (!existing) {
     return res.status(404).json({ error: 'Opportunity not found' });

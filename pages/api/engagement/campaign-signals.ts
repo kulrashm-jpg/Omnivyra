@@ -67,11 +67,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (!campaignId && !activityId) {
-      const { data: versions } = await supabase
+      const { data: versions, error: versionsError } = await supabase
         .from('campaign_versions')
         .select('campaign_id')
         .eq('company_id', companyId)
         .limit(500);
+      // A failed read is not "no campaigns" (unread-error census): the inbox would show no signals as the truth.
+      if (versionsError) {
+        console.warn('[engagement/campaign-signals] campaign_versions unreadable', versionsError.message);
+        return res.status(500).json({ error: 'Failed to fetch campaign signals' });
+      }
       const campaignIds = (versions ?? []).map((v: { campaign_id: string }) => v.campaign_id).filter(Boolean);
       if (campaignIds.length > 0) {
         query = query.in('campaign_id', campaignIds);
