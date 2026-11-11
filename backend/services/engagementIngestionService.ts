@@ -150,6 +150,15 @@ function fetchCommentsFromPlatform(
 }
 
 /**
+ * A fetch that did not answer in time. AbortSignal.timeout rejects with a DOMException
+ * named 'TimeoutError' (an explicit abort is 'AbortError').
+ */
+function isRequestTimeout(e: unknown): boolean {
+  const name = String((e as { name?: unknown } | null)?.name ?? '');
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
+/**
  * Fetch comments via platform adapter when available; fall back to the legacy
  * direct fetchers ONLY when the adapter could not attempt the call.
  *
@@ -173,6 +182,9 @@ async function fetchCommentsWithAdapterFallback(
       // A real provider response — the request was made and answered. Retrying
       // it through the legacy path would only duplicate the failure.
       if (isProviderRequestError(e)) throw e;
+      // A request that TIMED OUT was made and not answered; re-issuing it through the
+      // legacy fetcher doubled the wait (2 x the request timeout per post).
+      if (isRequestTimeout(e)) throw e;
       // Adapter could not attempt the call (unsupported operation, adapter
       // defect). The legacy fetcher is a genuine alternative here.
       console.warn('[engagementIngestion] adapter could not attempt fetch, using legacy path', {
