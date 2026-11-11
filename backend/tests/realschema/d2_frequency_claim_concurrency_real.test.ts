@@ -18,8 +18,25 @@
  *     fails closed; terminal outcomes stop counting; the gap boundary is exact.
  */
 import { Client } from 'pg';
-import { db, seedTenants, ORG_A, ORG_B } from './setup';
+import { randomUUID } from 'crypto';
+import { db } from './setup';
+
 import { enableOutreach, enrol, humanStep, newProspect, newUser, one } from './helpers/journeyFixtures';
+
+// FRESH TENANTS FOR THIS SUITE (2026-11-11). This suite COMMITS its fixtures, because two independent
+// `pg` connections must see them, and its journeys, tasks and ledger rows are append-only, so they cannot
+// be cleaned up afterwards. On the shared ORG_A / ORG_B they leaked into every later suite's PER-TENANT
+// counts, e.g. orch_response_matrix's `sweep(ORG_B).instances_scanned`, p4_reply_suspension and
+// p4_governance_whatsapp D-2 (5 red when the D2 suite runs first, green when it runs last). Two tenants
+// of its own make it invisible to every other suite whatever the order. The only rows it leaves are
+// inert: two `companies` rows that no suite counts.
+const ORG_A = randomUUID();
+const ORG_B = randomUUID();
+async function seedTenants(): Promise<void> {
+  for (const [id, name] of [[ORG_A, 'D2 frequency isolated tenant A'], [ORG_B, 'D2 frequency isolated tenant B']]) {
+    await db.query('INSERT INTO public.companies (id, name) VALUES ($1, $2)', [id, name]);
+  }
+}
 
 jest.mock('../../db/writeOwner', () => {
   const { pgTable, pgRpc } = require('./helpers/pgTransport');
