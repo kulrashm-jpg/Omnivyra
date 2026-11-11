@@ -9,20 +9,17 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
-import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
-
+// 2026-11-11: platform VIEW capability; requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  // SEC-001A: the raw === '1' test matched ONLY a forged cookie (Phase 2
-  // issues a signed value), so it authorized attackers and no real operator.
-  if (getLegacySuperAdminSession(req) !== null || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'Forbidden' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/free-credits/activity read',
+  });
+  return guard.ok === true;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -16,7 +16,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *       body { action: 'update_company_activity',  job_type, company_id, ...fields }
  *       body { action: 'update_infra_limits',       limits: InfraLimitsConfig['redis'|…] }
  *
- * Auth: super_admin_session cookie (HttpOnly) required.
+ * Auth: GET SUPER_ADMIN_DASHBOARD_VIEW; PATCH PLATFORM_CONTROLS_MANAGE + step-up
+ * + platform authority (see authorize()).
  */
 
 export const runtime = 'nodejs';
@@ -37,9 +38,8 @@ import {
   DEFAULT_INFRA_LIMITS,
   type InfraLimitsConfig,
 } from '../../../backend/services/adminRuntimeConfig';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW, PLATFORM_CONTROLS_MANAGE } from '../../../shared/contracts/security';
 
 // Lazy-imported to avoid loading Redis on non-worker processes
 let _applyOverride: ((l: { redisMaxCommandsPerDay?: number; redisMaxMemoryBytes?: number }) => void) | null = null;
@@ -55,20 +55,15 @@ async function getApplyOverride() {
 // Auth guard
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * SEC-001D: identical two-arm gate to every sibling /api/super-admin/* route.
- * This route was BRIDGE-ONLY — its sole authorization source is scheduled to
- * die at LEGACY_BRIDGE_HARD_EXPIRY_AT, after which it would have returned 403
- * permanently with no credential able to reopen it. The canonical arm is not a
- * bypass: `isPlatformSuperAdmin` is a DB-backed role check requiring a real
- * authenticated identity, and it is the migration target the bridge exists to
- * be replaced by.
- */
-async function isSuperAdmin(req: NextApiRequest): Promise<boolean> {
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  return false;
+// 2026-11-11: reads need SUPER_ADMIN_DASHBOARD_VIEW; writes need PLATFORM_CONTROLS_MANAGE on a platform
+// SUPER_ADMIN principal with step-up. requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
+async function authorize(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  const write = req.method !== 'GET' && req.method !== 'HEAD';
+  const guard = await requireCapability(req, res, write
+    ? { capability: PLATFORM_CONTROLS_MANAGE, reason: '/api/super-admin/activity-control write', requireStepUp: true, requirePlatformAuthority: true }
+    : { capability: SUPER_ADMIN_DASHBOARD_VIEW, reason: '/api/super-admin/activity-control read' });
+  return guard.ok === true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -250,9 +245,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await isSuperAdmin(req))) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
+  if (!(await authorize(req, res))) return;
   if (req.method === 'GET')   return handleGet(req, res);
   if (req.method === 'PATCH') return handlePatch(req, res);
   return res.status(405).json({ error: 'Method not allowed' });

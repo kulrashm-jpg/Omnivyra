@@ -12,7 +12,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -37,8 +36,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyAccess) return;
 
   // Auth: any authenticated company member can read
-  const legacy = getLegacySuperAdminSession(req);
-  if (!legacy) {
+  {
     const { user, error } = await getSupabaseUserFromRequest(req);
     if (error || !user) return res.status(401).json({ error: 'UNAUTHORIZED' });
 

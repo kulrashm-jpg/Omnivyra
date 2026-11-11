@@ -19,25 +19,34 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * the very state it exists to fix. Pass ?dryRun=1 for a read-only inspection.
  *
  * Schedule: every 15 minutes, matching billing-reservation-reconcile.
- * Auth: CRON_SECRET bearer OR super_admin_session cookie OR SUPER_ADMIN role.
+ * Auth: CRON_SECRET bearer, OR BILLING_PLATFORM_MANAGE + platform authority + step-up (manual trigger).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { reconcile } from '../../../backend/services/billing/commercialReconciliationService';
 import { runJob } from '../../../backend/services/jobRunner';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { logger } from '../../../backend/services/logger';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { BILLING_PLATFORM_MANAGE } from '../../../shared/contracts/security';
 
-async function isAuthorized(req: NextApiRequest): Promise<boolean> {
+/**
+ * Scheduler: the CRON_SECRET bearer. A person triggering it manually: the
+ * BILLING_PLATFORM_MANAGE capability on a platform SUPER_ADMIN principal, with step-up
+ * (requireCapability writes the 401/403 itself). 2026-11-11: the legacy
+ * super-admin cookie and the bare platform-role check
+ * (no step-up) are gone.
+ */
+async function authorize(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && bearerTokenMatches(req.headers.authorization, cronSecret)) return true;
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_PLATFORM_MANAGE,
+    reason: 'manual trigger cron:billing-commercial-reconcile',
+    requirePlatformAuthority: true,
+    requireStepUp: true,
+  });
+  return guard.ok === true;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -45,7 +54,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!(await isAuthorized(req))) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
+  if (!(await authorize(req, res))) return;
 
   const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
 

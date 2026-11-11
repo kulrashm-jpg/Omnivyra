@@ -118,7 +118,6 @@ jest.mock('../../services/requestAccessService', () => ({
 }));
 // GET-only helpers of the routes under test; never reached by a write.
 jest.mock('../../services/supabaseAuthService', () => ({ getSupabaseUserFromRequest: async () => ({ user: null, error: 'NO_TOKEN' }) }));
-jest.mock('../../services/superAdminSession', () => ({ getLegacySuperAdminSession: () => null }));
 jest.mock('../../services/rbacService', () => ({ isPlatformSuperAdmin: async () => false, isSuperAdmin: async () => false }));
 
 // ── Route side effects (every protected effect is a spy) ───────────────────────

@@ -54,13 +54,13 @@ export default function ConsumptionPage() {
   const [infraTotal, setInfraTotal] = useState(0);
   const [infraOrgCount, setInfraOrgCount] = useState(0);
 
-  // Detect tier: check super_admin_session cookie (HttpOnly — must ask server),
+  // Detect tier: ask the server whether this session is a super admin,
   // then fall back to Supabase userRole for regular users.
   // Wait for CompanyContext to finish loading so we don't fire panels with no auth.
   useEffect(() => {
     async function resolveTier() {
       try {
-        // Check for super-admin session cookie via check-super-admin endpoint
+        // Ask check-super-admin (server-side capability check)
         const res = await fetch('/api/admin/check-super-admin', { credentials: 'include' });
         const json = await res.json();
         if (json.isSuperAdmin) {

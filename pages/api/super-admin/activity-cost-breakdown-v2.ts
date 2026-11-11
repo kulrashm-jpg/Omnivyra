@@ -20,9 +20,8 @@ export const runtime = 'nodejs';
 
 import { supabase } from '@/backend/db/supabaseClient';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 // Production cost rates (USD)
 const COST_RATES = {
@@ -111,13 +110,13 @@ async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const hasCookie = getLegacySuperAdminSession(req) !== null;
-  if (!hasCookie) {
-    const { user, error: authError } = await getSupabaseUserFromRequest(req);
-    if (authError || !user) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-  }
+  // 2026-11-11: platform VIEW capability (requireCapability answers 401/403);
+  // the legacy super-admin cookie arm is gone.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/activity-cost-breakdown-v2 read',
+  });
+  if (guard.ok !== true) return;
 
   try {
     const { period = 'month', org_id = 'all' } = req.query;

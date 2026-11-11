@@ -5,7 +5,7 @@
  * inconsistently:
  *
  *   platformScopeRequested = req.query.scope === 'platform'   (caller input)
- *   hasPlatformScope       = legacy session | platform admin | super admin
+ *   hasPlatformScope       = platform admin | super admin
  *                                                            (server verdict)
  *
  * DELETE gated its `company_id` filter on the VERDICT. GET and PUT gated
@@ -57,10 +57,6 @@ const writes: Array<{ op: string; filters: Record<string, unknown>; payload?: Ro
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () =>
     authUser ? { user: { id: authUser }, error: null } : { user: null, error: 'MISSING_AUTH' }),
-}));
-
-jest.mock('../../services/superAdminSession', () => ({
-  getLegacySuperAdminSession: jest.fn(() => null),
 }));
 
 jest.mock('../../services/userContextService', () => ({

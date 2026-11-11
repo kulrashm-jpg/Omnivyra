@@ -37,12 +37,6 @@ jest.mock('../../security/audit/SecurityAuditService', () => ({
 
 import { mintSignedBridgeCookieValue } from '../../security/bridgeCookie';
 import { LEGACY_BRIDGE_HARD_EXPIRY_AT } from '../../security/legacyCookieSuperAdminBridge';
-import {
-  getLegacySuperAdminSession,
-  getBridgeBypassMetrics,
-  resetBridgeBypassMetrics,
-  LEGACY_SUPER_ADMIN_USER_ID,
-} from '../../services/superAdminSession';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
@@ -84,7 +78,6 @@ const mintAt = (epochMs: number): string => {
 
 beforeEach(() => {
   auditEvents.length = 0;
-  resetBridgeBypassMetrics();
   delete process.env.LEGACY_BRIDGE_DRY_RUN;
   nowMs = BEFORE_EXPIRY_MS;
   jest.spyOn(Date, 'now').mockImplementation(() => nowMs);
@@ -95,99 +88,10 @@ afterEach(() => {
   delete process.env.LEGACY_BRIDGE_DRY_RUN;
 });
 
-// ══ (A) BEHAVIOUR — the canonical helper enforces all seven properties ══
-describe('SEC-001C (A) — canonical helper lifecycle matrix', () => {
-  it('✓ signed cookie → ACCEPTED, with the legacy sentinel principal', () => {
-    setNow(BEFORE_EXPIRY_MS);
-    const session = getLegacySuperAdminSession(reqWith(mintAt(BEFORE_EXPIRY_MS)));
-    expect(session).toEqual({ userId: LEGACY_SUPER_ADMIN_USER_ID, role: 'SUPER_ADMIN' });
-  });
+// (A) BEHAVIOUR of the route-level getter was pinned here. e9 (C), 2026-11-11:
+// that getter is DELETED (every route authorizes by capability or tenant role),
+// so its lifecycle matrix has no subject; (B) below pins that it stays gone.
 
-  it('✓ forged "1" → REJECTED', () => {
-    setNow(BEFORE_EXPIRY_MS);
-    expect(getLegacySuperAdminSession(reqWith('1'))).toBeNull();
-  });
-
-  it('✓ tampered signature → REJECTED', () => {
-    setNow(BEFORE_EXPIRY_MS);
-    const [payload] = mintAt(BEFORE_EXPIRY_MS).split('.');
-    expect(getLegacySuperAdminSession(reqWith(`${payload}.forgedsig`))).toBeNull();
-  });
-
-  it('✓ embedded expiry (age > max) → REJECTED even before hard expiry', () => {
-    const cookie = mintAt(BEFORE_EXPIRY_MS - 48 * 60 * 60 * 1000); // 48h old
-    setNow(BEFORE_EXPIRY_MS);
-    expect(getLegacySuperAdminSession(reqWith(cookie))).toBeNull();
-  });
-
-  it('✓ LEGACY_BRIDGE_HARD_EXPIRY_AT → REJECTED past the date (age is NOT the cause)', () => {
-    const cookie = mintAt(AFTER_EXPIRY_MS - 60 * 60 * 1000); // 1h old at check time
-    setNow(AFTER_EXPIRY_MS);
-    expect(getLegacySuperAdminSession(reqWith(cookie))).toBeNull();
-    expect(getBridgeBypassMetrics().rejectedHardExpired).toBe(1);
-    // Same cookie, same age, clock before the expiry ⇒ accepted. Isolates the cause.
-    setNow(AFTER_EXPIRY_MS - 61 * 60 * 1000 + 60 * 1000);
-    expect(getLegacySuperAdminSession(reqWith(mintAt(BEFORE_EXPIRY_MS)))).not.toBeNull();
-  });
-
-  it('✓ LEGACY_BRIDGE_DRY_RUN → REJECTED while the same cookie would otherwise pass', () => {
-    const cookie = mintAt(BEFORE_EXPIRY_MS);
-    setNow(BEFORE_EXPIRY_MS);
-    expect(getLegacySuperAdminSession(reqWith(cookie))).not.toBeNull();
-
-    resetBridgeBypassMetrics();
-    process.env.LEGACY_BRIDGE_DRY_RUN = '1';
-    expect(getLegacySuperAdminSession(reqWith(cookie))).toBeNull();
-    expect(getBridgeBypassMetrics().rejectedDryRun).toBe(1);
-  });
-
-  it('✓ AUDIT — an authoritative use emits bridge_authority_used with viaLegacyBridge', () => {
-    setNow(BEFORE_EXPIRY_MS);
-    getLegacySuperAdminSession(reqWith(mintAt(BEFORE_EXPIRY_MS), '/api/super-admin/thing'));
-    const used = auditEvents.filter((e) => e.decision === 'bridge_authority_used');
-    expect(used).toHaveLength(1);
-    expect(used[0]).toMatchObject({ capability: 'super_admin.legacy', viaLegacyBridge: true });
-    expect(String(used[0].reason)).toContain('/api/super-admin/thing');
-  });
-
-  it('✓ AUDIT — every rejection mode is audited too (no silent denials)', () => {
-    // signature
-    setNow(BEFORE_EXPIRY_MS);
-    getLegacySuperAdminSession(reqWith('1'));
-    // dry-run
-    process.env.LEGACY_BRIDGE_DRY_RUN = '1';
-    getLegacySuperAdminSession(reqWith(mintAt(BEFORE_EXPIRY_MS)));
-    delete process.env.LEGACY_BRIDGE_DRY_RUN;
-    // hard expiry
-    setNow(AFTER_EXPIRY_MS);
-    getLegacySuperAdminSession(reqWith(mintAt(AFTER_EXPIRY_MS - 60 * 60 * 1000)));
-
-    const rejected = auditEvents.filter((e) => e.decision === 'bridge_authority_rejected');
-    expect(rejected).toHaveLength(3);
-    expect(rejected.every((e) => e.viaLegacyBridge === true)).toBe(true);
-  });
-
-  it('✓ METRICS — counters attribute reads, grants and each rejection reason per route', () => {
-    setNow(BEFORE_EXPIRY_MS);
-    getLegacySuperAdminSession(reqWith(mintAt(BEFORE_EXPIRY_MS), '/api/cron/credit-expiry?x=1'));
-    getLegacySuperAdminSession(reqWith(mintAt(BEFORE_EXPIRY_MS), '/api/cron/credit-expiry?x=2'));
-
-    const m = getBridgeBypassMetrics();
-    expect(m.granted).toBe(2);
-    expect(m.totalReads).toBe(2);
-    // Query string stripped so per-route attribution is stable.
-    expect(m.byRoute['/api/cron/credit-expiry']).toBe(2);
-  });
-
-  it('no cookie at all → null, and emits NOTHING (absence is not an event)', () => {
-    setNow(BEFORE_EXPIRY_MS);
-    expect(getLegacySuperAdminSession(reqWith(undefined))).toBeNull();
-    expect(auditEvents).toHaveLength(0);
-    expect(getBridgeBypassMetrics().totalReads).toBe(0);
-  });
-});
-
-// ══ (B) TOPOLOGY — one canonical entry point, nothing else reachable ══
 describe('SEC-001C (B) — single canonical bridge entry point', () => {
   const PROD_DIRS = ['pages', 'backend', 'lib', 'components', 'scripts'];
 
@@ -281,13 +185,14 @@ describe('SEC-001C (B) — single canonical bridge entry point', () => {
     expect(copiers.map(rel)).toEqual([]);
   });
 
-  it('every API route that authorizes via the bridge uses the canonical helper', () => {
+  it('NO production file uses the route-level bridge getter, and its module is gone (e9 (C))', () => {
     const routes = files.filter((f) => f.includes(`${path.sep}pages${path.sep}api${path.sep}`));
-    const bridgeAuthorizers = routes.filter((f) =>
-      /getLegacySuperAdminSession/.test(stripComments(fs.readFileSync(f, 'utf8')))
+    expect(routes.length).toBeGreaterThan(200); // non-vacuous
+    const users = files.filter((f) =>
+      /getLegacySuperAdminSession|services\/superAdminSession/.test(stripComments(fs.readFileSync(f, 'utf8')))
     );
-    // Sanity: the migration actually landed on a large surface.
-    expect(bridgeAuthorizers.length).toBeGreaterThanOrEqual(50);
+    expect(users.map(rel)).toEqual([]);
+    expect(fs.existsSync(path.join(REPO_ROOT, 'backend/services/superAdminSession.ts'))).toBe(false);
 
     // No route may name the bridge cookie outside a Set-Cookie write.
     const rawReaders = routes.filter((f) =>
@@ -298,9 +203,9 @@ describe('SEC-001C (B) — single canonical bridge entry point', () => {
     expect(rawReaders.map(rel)).toEqual([]);
   });
 
-  it('render-ops has BOTH arms — bridge and canonical DB-backed super admin', () => {
+  it('render-ops authorizes by capability only - no bridge arm (e9 (C), 2026-11-11)', () => {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'pages/api/internal/render-ops.ts'), 'utf8');
-    expect(/getLegacySuperAdminSession\(req\)/.test(src)).toBe(true);
-    expect(/isPlatformSuperAdmin/.test(src)).toBe(true);
+    expect(/getLegacySuperAdminSession/.test(src)).toBe(false);
+    expect(/requireCapability\(req, res/.test(src)).toBe(true);
   });
 });

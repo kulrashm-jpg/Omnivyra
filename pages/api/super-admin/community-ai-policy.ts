@@ -1,12 +1,9 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
-import { INTELLIGENCE_OVERRIDE_MANAGE } from '../../../shared/contracts/security';
+import { INTELLIGENCE_OVERRIDE_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 type PolicyInput = {
@@ -15,23 +12,19 @@ type PolicyInput = {
   require_human_approval?: boolean;
 };
 
-// READ guard: bridge accepted via centralized helper (signature-validated +
-// dry-run-aware). Mutations gate separately on `requireCapability`.
+// READ guard (2026-11-11): platform VIEW capability; requireCapability answers
+// 401/403 itself. The legacy super-admin cookie arm is gone. Mutations gate
+// separately on `requireCapability(INTELLIGENCE_OVERRIDE_MANAGE)`.
 const requireSuperAdminRead = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<{ userId: string; email: string | null } | null> => {
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return { userId: user.id, email: user.email || null };
-  }
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) {
-    return { userId: legacy.userId, email: 'superadmin' };
-  }
-  res.status(401).json({ error: 'UNAUTHORIZED' });
-  return null;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/community-ai-policy read',
+  });
+  if (guard.ok !== true) return null;
+  return { userId: guard.principal.userId, email: guard.principal.email || null };
 };
 
 const fetchCurrentPolicy = async () => {
@@ -119,7 +112,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         : existing?.require_human_approval ?? false,
   };
 
-  const updatedBy = admin.userId === 'super_admin_session' ? null : admin.userId;
+  const updatedBy = admin.userId;
   let savedPolicy = null;
   if (existing?.id) {
     const { data, error } = await supabase

@@ -1,20 +1,18 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+// 2026-11-11: platform VIEW capability; requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
+async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/plans/list read',
+  });
+  return guard.ok === true;
+}
 
 /**
  * GET /api/super-admin/plans/list

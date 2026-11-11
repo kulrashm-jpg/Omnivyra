@@ -31,24 +31,33 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { runIntegrationHealthCheckWithRetry } from '../../../backend/services/integrationHealthRetry';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { CRON_CONFIG_MANAGE } from '../../../shared/contracts/security';
 
 const BATCH_SIZE = 25;
 const STALE_HOURS = 24;
 const SWEEP_TIMEOUT_MS = 4 * 60 * 1000; // 4 min — must finish well inside any Vercel 5-min function ceiling
 
-async function isAuthorized(req: NextApiRequest): Promise<boolean> {
+/**
+ * Scheduler: the CRON_SECRET bearer. A person triggering it manually: the
+ * CRON_CONFIG_MANAGE capability on a platform SUPER_ADMIN principal, with step-up
+ * (requireCapability writes the 401/403 itself). 2026-11-11: the legacy
+ * super-admin cookie and the bare platform-role check
+ * (no step-up) are gone.
+ */
+async function authorize(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && bearerTokenMatches(req.headers.authorization, cronSecret)) return true;
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: CRON_CONFIG_MANAGE,
+    reason: 'manual trigger cron:integration-health-sweep',
+    requirePlatformAuthority: true,
+    requireStepUp: true,
+  });
+  return guard.ok === true;
 }
 
 interface StaleRow {
@@ -61,7 +70,7 @@ interface StaleRow {
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await isAuthorized(req))) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
+  if (!(await authorize(req, res))) return;
 
   const sweepStartedAt = Date.now();
   const cutoffIso = new Date(Date.now() - STALE_HOURS * 60 * 60 * 1000).toISOString();

@@ -11,8 +11,6 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { updateActivity, insertActivity } from '@/backend/services/executionPlannerService';
 import {
-  isContentArchitectSession,
-  checkContentArchitectAccess,
 } from '@/backend/services/contentArchitectService';
 import { inferExecutionMode } from '@/backend/services/executionModeInference';
 import { deriveCreatorAssetTypeFromIntent } from '@/backend/services/creatorTemplateRegistryService';
@@ -202,19 +200,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (camp?.company_id) companyId = camp.company_id as string;
     }
 
-    if (isContentArchitectSession(req)) {
-      const archAccess = checkContentArchitectAccess(req, res, companyId ?? undefined);
-      if (archAccess === null) return;
-    } else {
-      const access = await enforceCompanyAccess({
-        req,
-        res,
-        companyId,
-        campaignId,
-        requireCampaignId: true,
-      });
-      if (!access) return;
-    }
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId,
+      requireCampaignId: true,
+    });
+    if (!access) return;
 
     const validWeek = Number.isFinite(weekNumber) && weekNumber > 0 ? weekNumber : 1;
     const validDay = day || 'Monday';

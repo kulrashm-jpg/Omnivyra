@@ -1,23 +1,22 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 import {
   getAllProviders,
   upsertProvider,
 } from '../../../../backend/services/llmProviderService';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW, PLATFORM_CONTROLS_MANAGE } from '../../../../shared/contracts/security';
 
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+// 2026-11-11: reads need SUPER_ADMIN_DASHBOARD_VIEW; writes need PLATFORM_CONTROLS_MANAGE on a platform
+// SUPER_ADMIN principal with step-up. requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
+async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  const write = req.method !== 'GET' && req.method !== 'HEAD';
+  const guard = await requireCapability(req, res, write
+    ? { capability: PLATFORM_CONTROLS_MANAGE, reason: '/api/super-admin/llm/providers write', requireStepUp: true, requirePlatformAuthority: true }
+    : { capability: SUPER_ADMIN_DASHBOARD_VIEW, reason: '/api/super-admin/llm/providers read' });
+  return guard.ok === true;
+}
 
 /**
  * GET  /api/super-admin/llm/providers  → list all providers

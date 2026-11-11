@@ -243,7 +243,7 @@ export function useSysHealth() {
   const [railwayView, setRailwayView] = useState<'efficiency' | 'company-costs'>('company-costs');
 
   // ── Auth gate ────────────────────────────────────────────────────────────
-  // Effect 1: check super_admin_session cookie once on mount (HttpOnly — server only)
+  // Effect 1: ask the server once on mount whether this session is a super admin
   useEffect(() => {
     fetch('/api/admin/check-super-admin', { credentials: 'include' })
       .then(r => r.json())

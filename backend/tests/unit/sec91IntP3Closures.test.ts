@@ -90,10 +90,13 @@ describe('SEC91-W2F-2a — super-admin env-credential login', () => {
     expect(r.headers['set-cookie']).toBeUndefined();
   });
 
-  it('correct credentials still log in (behaviour unchanged)', async () => {
+  it('correct credentials pass the check; with no canonical session the login fails CLOSED (e9 (C))', async () => {
+    // No primary SUPER_ADMIN user is configured here, so no auth_session can be
+    // minted. The bridge cookie fallback is gone: 503, never a 403 (the
+    // credentials were right) and never a bridge cookie.
     const r = await login('fake-operator', 'fake-password-w2f2a');
-    expect(r.status).toBe(200);
-    expect(r.body.success).toBe(true);
+    expect(r.status).toBe(503);
+    expect(r.body.code).toBe('CANONICAL_SESSION_UNAVAILABLE');
   });
 
   it('both halves go through constantTimeEqual, even when the username is already wrong', async () => {
@@ -132,9 +135,9 @@ describe('SEC91-W2F-2b — content-architect env-credential login', () => {
     expect(mockInserts.map((i) => (i.row as { action: string }).action)).toEqual(['content_architect_failed_login']);
   });
 
-  it('correct credentials still log in (behaviour unchanged)', async () => {
+  it('correct credentials pass the check (audited); with no canonical session the login fails CLOSED (e9 (C))', async () => {
     const r = await login('fake-architect', 'fake-password-w2f2b');
-    expect(r.status).toBe(200);
+    expect(r.status).toBe(503);
     expect(mockInserts.map((i) => (i.row as { action: string }).action)).toEqual(['content_architect_login']);
   });
 

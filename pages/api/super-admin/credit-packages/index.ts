@@ -11,21 +11,18 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
-import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW, BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 
+// 2026-11-11: reads need SUPER_ADMIN_DASHBOARD_VIEW; writes need BILLING_PLAN_MANAGE on a platform
+// SUPER_ADMIN principal with step-up. requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  // SEC-001A: the raw === '1' test matched ONLY a forged cookie (Phase 2
-  // issues a signed value), so it authorized attackers and no real operator.
-  // SEC-001C: routed through the lifecycle-aware helper so this gate also
-  // honours the bridge hard expiry, dry-run, audit and bypass counters.
-  if (getLegacySuperAdminSession(req) !== null || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const write = req.method !== 'GET' && req.method !== 'HEAD';
+  const guard = await requireCapability(req, res, write
+    ? { capability: BILLING_PLAN_MANAGE, reason: '/api/super-admin/credit-packages/index write', requireStepUp: true, requirePlatformAuthority: true }
+    : { capability: SUPER_ADMIN_DASHBOARD_VIEW, reason: '/api/super-admin/credit-packages/index read' });
+  return guard.ok === true;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -31,10 +31,6 @@ import {
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { checkSuperAdminIdentity } from '../../../backend/security/startup/superAdminIdentityCheck';
 import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
-import {
-  mintSignedBridgeCookieValue,
-  buildBridgeSetCookieHeader,
-} from '../../../backend/security/bridgeCookie';
 import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
 interface CanonicalUserRow {
@@ -175,25 +171,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // Phase 2 — bridge cookie hardening. The cookie is now an HMAC-signed
-  // payload (`<base64url(payload)>.<sig>`) instead of a static `1`,
-  // includes Secure in production, and is independently age-bounded
-  // server-side. See backend/security/bridgeCookie.ts.
-  let superAdminCookie: string;
-  try {
-    superAdminCookie = buildBridgeSetCookieHeader(mintSignedBridgeCookieValue());
-  } catch (err) {
-    // Should be unreachable in any properly-configured environment —
-    // BRIDGE_COOKIE_SECRET / SESSION_COOKIE_SECRET is required. Fail
-    // loud rather than silently downgrade to an unsigned cookie.
-    logger.error('super_admin_login_bridge_cookie_mint_failed', {
-      message: err instanceof Error ? err.message : String(err),
-    });
+  // 2026-11-11: the legacy bridge cookie is no longer issued. A login that
+  // could not mint a canonical auth_session fails closed - there is no
+  // bridge-only session to fall back to (the bridge had hard-expired anyway).
+  if (canonicalSessionId === null) {
     return res.status(503).json({
-      error: 'Bridge cookie signing not configured',
-      code: 'BRIDGE_COOKIE_SECRET_MISSING',
+      error: 'Canonical session unavailable',
+      code: 'CANONICAL_SESSION_UNAVAILABLE',
+      identity: identityState.ok === true
+        ? { ok: true as const }
+        : { ok: false as const, issue: identityState.reason },
     });
   }
+
+  // Clear any legacy bridge cookie still held by the browser.
+  const clearSuperAdminCookie = [
+    'super_admin_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
   const clearContentArchitectCookie = [
     'content_architect_session=',
     'Path=/',
@@ -208,16 +206,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allCookies: string[] = [];
   if (Array.isArray(existingSetCookie)) allCookies.push(...existingSetCookie);
   else if (typeof existingSetCookie === 'string') allCookies.push(existingSetCookie);
-  allCookies.push(superAdminCookie, clearContentArchitectCookie);
+  allCookies.push(clearSuperAdminCookie, clearContentArchitectCookie);
   res.setHeader('Set-Cookie', allCookies);
 
   return res.status(200).json({
     success: true,
-    canonicalSession: canonicalSessionId !== null,
+    canonicalSession: true,
     // Phase 1 — Session Integrity Diagnostics: surface the auth mode +
     // identity-wiring health to the login page so it can show the
     // operator a meaningful banner BEFORE they hit the APIs tab.
-    authMode: canonicalSessionId !== null ? 'canonical' : 'bridge',
+    authMode: 'canonical' as const,
     identity: identityState.ok === true
       ? { ok: true as const }
       : { ok: false as const, issue: identityState.reason },

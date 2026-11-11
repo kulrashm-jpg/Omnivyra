@@ -6,7 +6,6 @@ import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -29,48 +28,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error: userError } = legacySession
-    ? { user: { id: legacySession.userId }, error: null }
-    : await getSupabaseUserFromRequest(req);
+  const { user, error: userError } = await getSupabaseUserFromRequest(req);
   if (userError || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
   let canManageExternalApis = false;
   let hasPlatformScope = false;
-  if (legacySession) {
+  // 2026-11-11: the legacy super-admin cookie no longer grants anything here.
+  const platformAdmin = await isPlatformSuperAdmin(user.id);
+  if (platformAdmin) {
+    canManageExternalApis = true;
+    hasPlatformScope = true;
+  } else if (await isSuperAdmin(user.id)) {
+    console.debug('SUPER_ADMIN_FALLBACK', {
+      path: req.url,
+      userId: user.id,
+      source: 'rbacService.isSuperAdmin',
+    });
     canManageExternalApis = true;
     hasPlatformScope = true;
   } else {
-    const platformAdmin = await isPlatformSuperAdmin(user.id);
-    if (platformAdmin) {
-      canManageExternalApis = true;
-      hasPlatformScope = true;
-    } else if (await isSuperAdmin(user.id)) {
-      console.debug('SUPER_ADMIN_FALLBACK', {
-        path: req.url,
-        userId: user.id,
-        source: 'rbacService.isSuperAdmin',
-      });
-      canManageExternalApis = true;
-      hasPlatformScope = true;
-    } else {
-      if (!companyId) {
-        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      }
-      let { role, error: roleError } = await getUserRole(user.id, companyId);
-      if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
-        const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
-        if (fallbackRole) {
-          role = fallbackRole;
-          roleError = null;
-        }
-      }
-      if (roleError || !role) {
-        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      }
-      canManageExternalApis = await hasPermission(role, 'MANAGE_EXTERNAL_APIS');
+    if (!companyId) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     }
+    let { role, error: roleError } = await getUserRole(user.id, companyId);
+    if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+      const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+      if (fallbackRole) {
+        role = fallbackRole;
+        roleError = null;
+      }
+    }
+    if (roleError || !role) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+    canManageExternalApis = await hasPermission(role, 'MANAGE_EXTERNAL_APIS');
   }
 
   /*
@@ -82,8 +74,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
    *     if (!platformScopeRequested) query = query.eq('company_id', companyId);
    *
    * `platformScopeRequested` is a query parameter. `hasPlatformScope` is the
-   * server's verdict (legacy super-admin session, platform super admin, or
-   * super admin). Only DELETE consulted the verdict; GET and PUT consulted the
+   * server's verdict (platform super admin or super admin). Only DELETE consulted the verdict; GET and PUT consulted the
    * request. So `?scope=platform&companyId=<a company the caller belongs to>`
    * passed the role check against the caller's OWN company and then read and
    * wrote rows with no company filter at all.

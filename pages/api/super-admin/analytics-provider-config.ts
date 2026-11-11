@@ -3,11 +3,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * GET  /api/super-admin/analytics-provider-config — read GA4 OAuth config
  * POST /api/super-admin/analytics-provider-config — upsert GA4 OAuth config
  *
- * Phase 2 — direct-cookie migration (mutation only):
- *   - GET stays bridge-compatible via the centralized
- *     `getLegacySuperAdminSession` helper (now signature-validated +
- *     dry-run-aware). Read access continues to work for env-credential
- *     operators on the home tab.
+ * Auth:
+ *   - GET gates on `requireCapability(SUPER_ADMIN_DASHBOARD_VIEW)` (2026-11-11:
+ *     the legacy super-admin cookie arm is gone).
  *   - POST gates on `requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE)`.
  *     This is the same capability that protects /super-admin/platform-oauth-configs;
  *     overwriting Google Analytics OAuth client secrets has the same blast
@@ -15,43 +13,25 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *     (phishing-resistant + trusted device) is required.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import {
   getAnalyticsProviderConfigSummary,
   getDefaultAnalyticsProviderScopes,
   getDefaultAnalyticsRedirectUri,
   upsertAnalyticsProviderConfig,
 } from '../../../backend/services/analyticsProviderConfigService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
-import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
+// 2026-11-11: platform VIEW capability; requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
 async function requireAnalyticsProviderRead(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  // Bridge accepted for READ only via centralized helper.
-  if (getLegacySuperAdminSession(req) !== null) return true;
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
-  }
-
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (roleRow) return true;
-
-  res.status(403).json({ error: 'Super admin access required' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/analytics-provider-config read',
+  });
+  return guard.ok === true;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

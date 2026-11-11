@@ -9,12 +9,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *          queue.cancel. Each writes an IMMUTABLE audit row.
  *
  * SAFETY
- *   - Internal-only, super-admin. Fail-closed → 403 otherwise. The gate is
- *     the same two-step every /api/super-admin endpoint uses: the audited
- *     legacy bridge session, else a canonical DB-backed platform super admin.
- *     SEC-001C added the canonical arm — this route previously accepted ONLY
- *     the bridge, so it would have become permanently unreachable at the
- *     bridge hard expiry (2026-08-05T00:00:00Z) with no way back in.
+ *   - Internal-only, super-admin. Fail-closed → 401/403 otherwise, via
+ *     requireCapability (see authorize()): GET SUPER_ADMIN_DASHBOARD_VIEW,
+ *     POST PLATFORM_CONTROLS_MANAGE + step-up + platform authority.
  *   - Fail-closed actions via pure builders; NO immutable-lineage
  *     mutation (only governance/provider config + mutable queue state).
  *   - Scheduler-isolated; R3–R6 cores untouched; image-only preserved.
@@ -28,25 +25,24 @@ import {
   buildGovernancePatch, buildProviderPatch, classifyQueueAction, buildOpsAuditRow,
   GLOBAL_GOVERNANCE_SENTINEL,
 } from '@/backend/services/creator/rendering';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { requireCapability } from '@/backend/security/requireCapability';
+import { PLATFORM_CONTROLS_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '@/shared/contracts/security';
 
 const ACTIVE = ['claimed', 'rendering', 'processing', 'moderation'];
 
 /**
- * SEC-001C: identical to the gate used by the /api/super-admin/* routes.
- * The canonical DB-backed arm is NOT a bypass — `isPlatformSuperAdmin` is the
- * migration TARGET the bridge exists to be replaced by, and it is strictly
- * harder to satisfy than a cookie. Without it this route had a single
- * authorization source that is scheduled to die, which is an availability
- * defect, not a security property.
+ * 2026-11-11: GET needs SUPER_ADMIN_DASHBOARD_VIEW; POST needs
+ * PLATFORM_CONTROLS_MANAGE on a platform SUPER_ADMIN principal with step-up.
+ * requireCapability answers 401/403 itself. The legacy super-admin cookie arm
+ * is gone, and the audit actor is the authenticated principal (never a
+ * client-settable cookie).
  */
-async function isSuperAdmin(req: NextApiRequest): Promise<boolean> {
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  return false;
+async function authorize(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
+  const write = req.method !== 'GET' && req.method !== 'HEAD';
+  const guard = await requireCapability(req, res, write
+    ? { capability: PLATFORM_CONTROLS_MANAGE, reason: '/api/internal/render-ops write', requireStepUp: true, requirePlatformAuthority: true }
+    : { capability: SUPER_ADMIN_DASHBOARD_VIEW, reason: '/api/internal/render-ops read' });
+  return guard.ok === true ? guard.principal.userId : null;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -54,10 +50,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!(await isSuperAdmin(req))) {
-    return res.status(403).json({ error: 'Operator access required.', code: 'NOT_OPERATOR' });
-  }
-  const actor = String(req.cookies?.super_admin_actor || 'super_admin');
+  const actor = await authorize(req, res);
+  if (actor === null) return;
   const nowIso = new Date().toISOString();
 
   try {

@@ -13,7 +13,6 @@ import {
   getCompanyConfigRows,
 } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -60,39 +59,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error } = legacySession ? { user: { id: legacySession.userId }, error: null } : await getSupabaseUserFromRequest(req);
+  const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
+  // 2026-11-11: the legacy super-admin cookie no longer grants anything here.
   let canManageExternalApis = false;
-  if (legacySession) {
+  const platformAdmin = await isPlatformSuperAdmin(user.id);
+  if (platformAdmin) {
+    canManageExternalApis = true;
+  } else if (await isSuperAdmin(user.id)) {
+    console.debug('SUPER_ADMIN_FALLBACK', {
+      path: req.url,
+      userId: user.id,
+      source: 'rbacService.isSuperAdmin',
+    });
     canManageExternalApis = true;
   } else {
-    const platformAdmin = await isPlatformSuperAdmin(user.id);
-    if (platformAdmin) {
-      canManageExternalApis = true;
-    } else if (await isSuperAdmin(user.id)) {
-      console.debug('SUPER_ADMIN_FALLBACK', {
-        path: req.url,
-        userId: user.id,
-        source: 'rbacService.isSuperAdmin',
-      });
-      canManageExternalApis = true;
-    } else {
-      let { role, error: roleError } = await getUserRole(user.id, companyId);
-      if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
-        const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
-        if (fallbackRole) {
-          role = fallbackRole;
-          roleError = null;
-        }
+    let { role, error: roleError } = await getUserRole(user.id, companyId);
+    if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+      const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+      if (fallbackRole) {
+        role = fallbackRole;
+        roleError = null;
       }
-      if (roleError || !role) {
-        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      }
-      canManageExternalApis = await hasPermission(role, 'MANAGE_EXTERNAL_APIS');
     }
+    if (roleError || !role) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+    canManageExternalApis = await hasPermission(role, 'MANAGE_EXTERNAL_APIS');
   }
 
   if (req.method === 'GET') {

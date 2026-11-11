@@ -7,8 +7,6 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { canonicalExecutionAdapter, resolveAuthoritativeWorkspace } from '@/backend/services/orchestration';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import {
-  isContentArchitectSession,
-  checkContentArchitectAccess,
 } from '@/backend/services/contentArchitectService';
 import { blueprintItemToUnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
 import { buildRepurposingContext } from '@/lib/planning/repurposingContext';
@@ -90,19 +88,14 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    if (isContentArchitectSession(req)) {
-      const archAccess = checkContentArchitectAccess(req, res, companyId ?? undefined);
-      if (archAccess === null) return;
-    } else {
-      const access = await enforceCompanyAccess({
-        req,
-        res,
-        companyId,
-        campaignId,
-        requireCampaignId: false,
-      });
-      if (!access) return;
-    }
+    const access = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId,
+      requireCampaignId: false,
+    });
+    if (!access) return;
 
     const targetExecId = executionId;
 

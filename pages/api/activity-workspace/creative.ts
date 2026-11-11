@@ -23,8 +23,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import {
-  isContentArchitectSession,
-  checkContentArchitectAccess,
 } from '@/backend/services/contentArchitectService';
 import {
   resolveActivityCreative,
@@ -48,12 +46,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // The SAME access gate the rest of the workspace uses. The company is taken
   // from the authenticated session's allowed set, never from the query alone.
-  if (isContentArchitectSession(req)) {
-    if (checkContentArchitectAccess(req, res, companyId) === null) return;
-  } else {
-    const access = await enforceCompanyAccess({ req, res, companyId, requireCampaignId: false });
-    if (!access) return;
-  }
+  const access = await enforceCompanyAccess({ req, res, companyId, requireCampaignId: false });
+  if (!access) return;
 
   const creative = await resolveActivityCreative({ companyId, activityId });
   /*

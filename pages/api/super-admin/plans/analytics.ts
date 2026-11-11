@@ -11,13 +11,13 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * - Plan popularity ranking
  * - Usage trends
  *
- * Auth: super_admin_session cookie or Supabase auth with SUPER_ADMIN role
+ * Auth: requireCapability(SUPER_ADMIN_DASHBOARD_VIEW)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -45,27 +45,14 @@ interface PlanAnalyticsResponse {
   };
 }
 
-async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
-  // Check for super_admin_session cookie
-  if (getLegacySuperAdminSession(req) !== null) {
-    return true;
-  }
-
-  // Check Firebase user role
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (error || !user) return false;
-
-    const { data: profile } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    return String(profile?.role ?? '').toUpperCase() === 'SUPER_ADMIN';
-  } catch {
-    return false;
-  }
+// 2026-11-11: platform VIEW capability; requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
+async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/plans/analytics read',
+  });
+  return guard.ok === true;
 }
 
 async function handler(
@@ -76,10 +63,7 @@ async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const isSuperAdmin = await checkSuperAdmin(req);
-  if (!isSuperAdmin) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
+  if (!(await requireSuperAdmin(req, res))) return;
 
   try {
     // Get all pricing plans

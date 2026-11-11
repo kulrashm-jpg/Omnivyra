@@ -10,7 +10,6 @@ import {
   isPlatformSuperAdmin,
   isSuperAdmin,
 } from '../../../backend/services/rbacService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 
 const authTypeRequiresKey = (authType?: string | null) =>
   ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
@@ -23,14 +22,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error } = legacySession ? { user: { id: legacySession.userId }, error: null } : await getSupabaseUserFromRequest(req);
+  const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
   if (req.method === 'GET') {
     if (platformScopeRequested && !companyId) {
-      const platformAdmin = legacySession ? true : await isPlatformSuperAdmin(user.id);
+      const platformAdmin = await isPlatformSuperAdmin(user.id);
       if (platformAdmin || (await isSuperAdmin(user.id))) {
         const { data, error: listError } = await supabase
           .from('external_api_source_requests')
@@ -43,7 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     }
-    const platformAdmin = legacySession ? true : await isPlatformSuperAdmin(user.id);
+    const platformAdmin = await isPlatformSuperAdmin(user.id);
     if (platformAdmin) {
       const createQuery = () =>
         supabase
@@ -70,7 +68,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       return res.status(200).json({ requests: fallbackResult.data || [] });
     }
-    const legacyAdmin = legacySession ? true : await isSuperAdmin(user.id);
+    const legacyAdmin = await isSuperAdmin(user.id);
     if (legacyAdmin) {
       console.debug('SUPER_ADMIN_FALLBACK', {
         path: req.url,
@@ -135,7 +133,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'POST') {
-    if (!legacySession) {
+    {
       const { role, error: roleError } = await getUserRole(user.id, companyId);
       if (roleError || !role) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });

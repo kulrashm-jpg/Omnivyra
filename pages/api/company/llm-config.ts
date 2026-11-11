@@ -14,7 +14,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -37,10 +36,6 @@ async function requireCompanyLlmAccess(
   res: NextApiResponse,
   companyId: string,
 ): Promise<{ userId: string; role: string } | null> {
-  // Legacy super admin cookie
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) return { userId: legacy.userId, role: 'SUPER_ADMIN' };
-
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -159,7 +154,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         model_id,
         api_key:     api_key !== undefined ? api_key : undefined, // preserve if not sent
         is_active:   typeof is_active === 'boolean' ? is_active : true,
-        updated_by:  access.userId !== 'super_admin_session' ? access.userId : null,
+        updated_by:  access.userId,
       });
 
       return res.status(200).json({ success: true, config });

@@ -19,7 +19,6 @@ jest.mock('../../db/supabaseClient', () => require('../helpers/routeAuthHarness'
 jest.mock('../../db/writeOwner', () => require('../helpers/routeAuthHarness').writeOwnerModule());
 jest.mock('../../services/supabaseAuthService', () => require('../helpers/routeAuthHarness').authModule());
 jest.mock('../../auth/oauthTelemetry', () => ({ logOAuthEvent: jest.fn(), safeHost: () => 'host' }));
-jest.mock('../../services/superAdminSession', () => ({ getLegacySuperAdminSession: () => null }));
 const mockHandle = jest.fn();
 jest.mock('../../services/analyticsIntegrationService', () => ({
   handleGoogleOAuthCallback: (...a: unknown[]) => mockHandle(...a),

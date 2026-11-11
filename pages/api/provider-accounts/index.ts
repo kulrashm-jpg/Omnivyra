@@ -7,9 +7,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../backend/services/rbacService';
 import {
   buildCredentialEnvelope,
   createProviderAccount,
@@ -20,30 +17,23 @@ import { describeRejectedEnvVarName, isEnvVarName } from '../../../backend/secur
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
-import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 // ── Auth guards ────────────────────────────────────────────────────────────────
 //
-// READ guard: bridge accepted via centralized helper (signature-validated +
-// dry-run-aware). Mutations gate on `requireCapability` below.
+// READ guard: SUPER_ADMIN_DASHBOARD_VIEW (2026-11-11: the legacy super-admin
+// cookie path is removed). Mutations gate on `requireCapability` below.
 
 async function requireSuperAdminRead(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ userId: string } | null> {
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) return { userId: legacy.userId };
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  if ((await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id))) {
-    return { userId: user.id };
-  }
-  res.status(403).json({ error: 'SUPER_ADMIN_ONLY' });
-  return null;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'provider accounts list',
+  });
+  if (guard.ok !== true) return null;
+  return { userId: guard.principal.userId };
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────

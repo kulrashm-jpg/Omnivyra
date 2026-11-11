@@ -5,7 +5,6 @@ import { decodeOAuthState, isCallbackStateInvalid } from '../../../../../backend
 import { handleGoogleOAuthCallback } from '../../../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { safeRelativeRedirectPath } from '../../../../../backend/auth/safeRedirect';
 
 const DEFAULT_RETURN = '/integrations?focus=data';
@@ -69,7 +68,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const state = typeof req.query.state === 'string' ? req.query.state : undefined;
   const providerError = typeof req.query.error === 'string' ? req.query.error : '';
   const decodedState = decodeOAuthState(state);
-  const hasSuperAdminSession = getLegacySuperAdminSession(req) !== null;
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
 
   console.log('[GA-OAUTH][callback] params', {
@@ -81,7 +79,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     state_company_id: decodedState.companyId ?? null,
     state_user_id: decodedState.userId ?? null,
     state_return_to: decodedState.returnTo ?? null,
-    has_super_admin_session: hasSuperAdminSession,
     auth_user_id: user?.id ?? null,
     auth_error: authError ?? null,
   });
@@ -100,7 +97,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     request_origin: (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string | undefined) || null,
   });
 
-  if (!hasSuperAdminSession && (authError || !user)) {
+  if (authError || !user) {
     console.warn('[GA-OAUTH][callback] failure_point=unauthorized');
     logOAuthEvent({
       event: 'oauth_failure',
@@ -114,14 +111,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: 'unauthorized' }));
   }
 
-  // A state that names a user binds the callback to THAT user, whatever other session is present:
-  // a super-admin cookie must not complete another user's connect for another company. Only a
-  // state minted without a user (the super-admin bridge flow) is accepted on the super-admin session.
+  // A state that names a user binds the callback to THAT user. 2026-11-11: the legacy super-admin
+  // cookie path is removed, so a state minted without a user is never accepted here.
   const invalidState = isCallbackStateInvalid({
     stateValid: decodedState.valid === true,
     stateUserId: decodedState.userId ?? null,
     authUserId: user?.id ?? null,
-    hasSuperAdminSession,
+    hasSuperAdminSession: false,
   });
 
   if (invalidState) {

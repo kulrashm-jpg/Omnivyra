@@ -12,34 +12,34 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * Auth:
  *   - Vercel cron calls: validated via CRON_SECRET header
- *   - Manual calls: super_admin_session cookie OR Supabase SUPER_ADMIN role
+ *   - Manual calls: CRON_CONFIG_MANAGE on a platform SUPER_ADMIN principal,
+ *     with step-up (2026-11-11: the legacy super-admin cookie and the
+ *     bare SUPER_ADMIN role check are gone)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { runAnomalySweep } from '../../../lib/anomaly/sweepDetector';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { CRON_CONFIG_MANAGE } from '../../../shared/contracts/security';
 
-async function isAuthorized(req: NextApiRequest): Promise<boolean> {
+async function authorize(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
   // Vercel cron secret (set CRON_SECRET env var, Vercel sends it automatically)
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && bearerTokenMatches(req.headers.authorization, cronSecret)) return true;
-
-  // Legacy super-admin cookie
-  if (getLegacySuperAdminSession(req) !== null) return true;
-
-  // Supabase SUPER_ADMIN role
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-
-  return false;
+  // A person: capability + platform authority + step-up (requireCapability answers 401/403).
+  const guard = await requireCapability(req, res, {
+    capability: CRON_CONFIG_MANAGE,
+    reason: 'manual trigger cron:anomaly-sweep',
+    requirePlatformAuthority: true,
+    requireStepUp: true,
+  });
+  return guard.ok === true;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await isAuthorized(req))) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
+  if (!(await authorize(req, res))) return;
 
   try {
     const result = await runAnomalySweep();

@@ -18,29 +18,21 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
+import { isPlatformSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
 import {
   getLlmConsumption,
   getAllOrgsConsumption,
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { CONSUMPTION_VIEW_AGGREGATE } from '../../../../shared/contracts/security';
 
 async function resolveTier(
   req: NextApiRequest,
   res: NextApiResponse,
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; userId: string; orgId: string | null } | null> {
-  // Super admin cookie session (username/password login — no Supabase token).
-  // SEC-001C: take the userId from the session itself — LEGACY_SUPER_ADMIN_USER_ID
-  // is the same 'super_admin_session' sentinel this used to hardcode, so the
-  // emitted principal is byte-identical while the sentinel now has one owner.
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) {
-    return { tier: 'super_admin', userId: legacy.userId, orgId: companyId ?? null };
-  }
-
   const auth = await getSupabaseUserFromRequest(req);
   if (auth.error || !auth.user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -48,7 +40,15 @@ async function resolveTier(
   }
   const userId = auth.user.id;
 
-  if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) {
+  // 2026-11-11: the role only DETECTS the super-admin tier; the capability
+  // authorizes it (requireCapability answers 401/403 itself). The legacy
+  // super-admin cookie arm is gone. Tenant tiers below are unchanged.
+  if (await isPlatformSuperAdmin(userId)) {
+    const guard = await requireCapability(req, res, {
+      capability: CONSUMPTION_VIEW_AGGREGATE,
+      reason: '/api/admin/consumption/llm super-admin read',
+    });
+    if (guard.ok !== true) return null;
     return { tier: 'super_admin', userId, orgId: companyId ?? null };
   }
 

@@ -8,7 +8,6 @@ import {
   attachSessionCookie,
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
-import { mintSignedBridgeCookieValue } from '../../../backend/security/bridgeCookie';
 import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 
@@ -95,6 +94,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ip = clientIp(req);
   const ua = (req.headers['user-agent'] as string | undefined) ?? null;
   const primaryUserId = (process.env.CONTENT_ARCHITECT_PRIMARY_USER_ID ?? '').trim();
+  let canonicalMinted = false;
   if (primaryUserId) {
     try {
       const userRow = await lookupCanonicalContentArchitect(primaryUserId);
@@ -106,6 +106,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           userAgent: ua,
         });
         attachSessionCookie(res, created.cookieValue);
+        canonicalMinted = true;
         await logSecurityEvent({
           capability: 'super_admin.legacy',
           decision: 'auth_session_created',
@@ -129,44 +130,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // SEC-001A: mint a SIGNED bridge value instead of the forgeable static `1`.
-  // Same primitive the super-admin bridge already uses (Phase 2) — HMAC over
-  // issuedAt+nonce, server-verified age, Secure in production. If no signing
-  // secret is configured the legacy cookie is simply not issued: the canonical
-  // auth_session minted above is the supported path, and failing closed is
-  // correct for a deprecated bridge.
-  let sessionCookie: string | null = null;
-  try {
-    sessionCookie = [
-      `content_architect_session=${mintSignedBridgeCookieValue()}`,
-      'Path=/',
-      'HttpOnly',
-      'SameSite=Lax',
-      'Max-Age=86400',
-      ...(process.env.NODE_ENV === 'production' ? ['Secure'] : []),
-    ].join('; ');
-  } catch (err) {
-    logger.warn('content_architect_bridge_cookie_not_issued', {
-      message: err instanceof Error ? err.message : String(err),
-      note: 'no BRIDGE_COOKIE_SECRET/SESSION_COOKIE_SECRET; canonical auth_session is the supported path',
+  // 2026-11-11: the legacy content-architect bridge cookie and its company
+  // cookie are no longer issued (both are cleared below). Without a canonical
+  // auth_session the login fails closed.
+  if (!canonicalMinted) {
+    return res.status(503).json({
+      error: 'Canonical session unavailable',
+      code: 'CANONICAL_SESSION_UNAVAILABLE',
     });
   }
-  const scopedCompanyId = String(process.env.CONTENT_ARCHITECT_COMPANY_ID ?? '').trim();
-  const companyCookie = scopedCompanyId
-    ? [
-        `content_architect_company_id=${encodeURIComponent(scopedCompanyId)}`,
-        'Path=/',
-        'HttpOnly',
-        'SameSite=Lax',
-        'Max-Age=86400',
-      ].join('; ')
-    : [
-        'content_architect_company_id=',
-        'Path=/',
-        'HttpOnly',
-        'SameSite=Lax',
-        'Max-Age=0',
-      ].join('; ');
+  const clearArchitect = [
+    'content_architect_session=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
+  const clearCompany = [
+    'content_architect_company_id=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
   const clearSuperAdmin = [
     'super_admin_session=',
     'Path=/',
@@ -179,8 +165,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allCookies: string[] = [];
   if (Array.isArray(existing)) allCookies.push(...existing);
   else if (typeof existing === 'string') allCookies.push(existing);
-  if (sessionCookie) allCookies.push(sessionCookie);
-  allCookies.push(companyCookie, clearSuperAdmin);
+  allCookies.push(clearArchitect, clearCompany, clearSuperAdmin);
   res.setHeader('Set-Cookie', allCookies);
 
   return res.status(200).json({ success: true });

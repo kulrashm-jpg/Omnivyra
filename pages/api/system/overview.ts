@@ -8,9 +8,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignCount } from '../../../backend/db/campaignStore';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 const STRATEGIST_PROCESS_TYPES = new Set([
   'generateCampaignPlan',
@@ -58,23 +57,14 @@ export interface SystemOverviewResponse {
   }>;
 }
 
-async function requireSuperAdminAccess(
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> {
-  const hasSession = getLegacySuperAdminSession(req) !== null;
-  if (hasSession) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+// 2026-11-11: platform VIEW capability; requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
+async function requireSuperAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/system/overview read',
+  });
+  return guard.ok === true;
 }
 
 function parseRange(range: string | string[] | undefined): number {

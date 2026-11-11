@@ -11,9 +11,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
 // ── Auth guard ─────────────────────────────────────────────────────────────────
 
@@ -21,19 +20,14 @@ async function requireSuperAdmin(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ userId: string } | null> {
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) return { userId: legacy.userId };
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  if ((await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id))) {
-    return { userId: user.id };
-  }
-  res.status(403).json({ error: 'SUPER_ADMIN_ONLY' });
-  return null;
+  // 2026-11-11: capability gate (GET-only route -> view capability); the legacy
+  // super-admin cookie path is removed. requireCapability writes its own 401/403.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'external-apis accounts summary',
+  });
+  if (guard.ok !== true) return null;
+  return { userId: guard.principal.userId };
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────

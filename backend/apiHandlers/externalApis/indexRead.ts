@@ -12,7 +12,6 @@ import {
   VALID_API_CATEGORIES,
 } from '../../services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,

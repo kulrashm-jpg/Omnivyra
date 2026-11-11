@@ -67,8 +67,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const companyId = req.query.company_id as string | undefined;
   // STABILIZE-INT-001 (1): canonical company-scoped authorization.
-  // resolveCompanyAccess() short-circuits on isContentArchitectSession(), which
-  // trusts the UNSIGNED, client-settable cookie `content_architect_session=1`
+  // resolveCompanyAccess() used to short-circuit on the legacy content-architect
+  // cookie (then UNSIGNED and client-settable; removed 2026-11-11)
   // and then grants access to ANY company — so this read was reachable without
   // authentication. enforceCompanyAccess is the platform's existing guard (no
   // second auth implementation is introduced): it resolves a real Supabase

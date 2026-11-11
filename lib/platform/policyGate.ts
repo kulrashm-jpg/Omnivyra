@@ -35,16 +35,17 @@ export const ROUTE_POLICY_GATE_FLAG = defineRolloutFlag({
 
 /** Resolve identity into the pure principal view. Heavy imports stay lazy. */
 async function buildPrincipalView(req: NextApiRequest): Promise<PolicyPrincipalView> {
-  const [identity, contentArchitect] = await Promise.all([
-    import('../../backend/security/IdentityResolver'),
-    import('../../backend/services/contentArchitectService'),
-  ]);
-  const isContentArchitect = contentArchitect.isContentArchitectSession(req);
+  const identity = await import('../../backend/security/IdentityResolver');
   const result = await identity.resolvePrincipal(req);
   if (!result.ok) {
-    return { authenticated: false, isContentArchitect };
+    return { authenticated: false, isContentArchitect: false };
   }
   const p = result.principal;
+  // 2026-11-11: content architect comes from an ACTIVE CONTENT_ARCHITECT
+  // membership on the canonical principal; the legacy cookie reader is gone.
+  const isContentArchitect = p.organizations.some(
+    (m) => m.status === 'active' && m.role === 'CONTENT_ARCHITECT',
+  );
   const organizationRoles: Record<string, string> = {};
   for (const m of p.organizations) {
     // Closure-015E — ACTIVE memberships only, matching route authorization

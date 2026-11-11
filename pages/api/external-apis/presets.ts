@@ -4,7 +4,6 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { externalApiPresets } from '../../../backend/services/externalApiPresets';
 import { ExternalApiSource } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import {
@@ -19,8 +18,8 @@ import {
 // Phase 2: requirePlatformAdmin migrated to canonical capability gate.
 // Replaces the previous legacy-session-synthesizer + Supabase + role-string
 // fallback chain with a single requireCapability(SUPER_ADMIN_DASHBOARD_VIEW)
-// call. Bridge principals satisfy this read-only capability via the
-// expanded LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES allowlist.
+// call. (2026-11-11: the legacy super-admin cookie path is removed from the
+// tenant helper below as well.)
 const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
   const guard = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
@@ -39,10 +38,6 @@ const requireExternalApiAccess = async (
   if (!companyId) {
     res.status(400).json({ error: 'companyId required' });
     return null;
-  }
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) {
-    return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
   }
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {

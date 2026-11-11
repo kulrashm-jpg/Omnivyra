@@ -2,104 +2,20 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getUserRole, isSuperAdmin } from './rbacService';
 import { getCompanyRoleIncludingInvited, Role } from './rbacPrimitives';
-import {
-  LEGACY_BRIDGE_HARD_EXPIRY_AT,
-  evaluateBridgeCookieLifecycle,
-} from '../security/legacyCookieSuperAdminBridge';
-import { logger } from './logger';
 
 /**
- * Content Architect: platform-level role (next to Super Admin) with access to all companies'
- * content to help refine strategy or campaigns.
+ * Company access for a request: the authenticated Supabase user's role for the
+ * company (or platform SUPER_ADMIN).
  *
- * SEC-001A — AUTHORIZATION HARDENING. This helper previously returned true for
- * `content_architect_session === '1'`: an UNSIGNED, static value any client
- * could set, which then granted access to EVERY company across ~43 routes. It
- * now enforces exactly the guarantees SEC-001 Phase 2 already applied to the
- * super-admin bridge cookie, reusing those same primitives — no second
- * authentication system is introduced:
- *   • HMAC signature (`parseSignedBridgeCookie`) — a forged or tampered value
- *     cannot validate without BRIDGE_COOKIE_SECRET / SESSION_COOKIE_SECRET;
- *   • server-enforced max age — independent of the browser cookie expiry;
- *   • the bridge HARD EXPIRY — after LEGACY_BRIDGE_HARD_EXPIRY_AT this path is
- *     dead platform-wide and cannot be revived without a code change;
- *   • the Wave-3A dry-run switch (LEGACY_BRIDGE_DRY_RUN=1) — fail-closed
- *     simulation of bridge removal.
- *
- * DEPRECATED — REMOVAL DATE 2026-08-05T00:00:00Z (LEGACY_BRIDGE_HARD_EXPIRY_AT).
- * The canonical replacement already ships: /api/super-admin/content-architect-login
- * mints a real `auth_session` via SessionAuthorityService for the designated
- * CONTENT_ARCHITECT user, and authorization should resolve from that
- * authenticated identity. Callers still on this helper must migrate before the
- * expiry, after which every one of them fails closed.
- *
- * BREAKING (intended): a Phase-1 `=1` cookie is now rejected as `legacy_format`,
- * exactly as the super-admin bridge already rejects it. Legitimate architects
- * re-login once to receive a signed cookie.
+ * 2026-11-11: the legacy content-architect bridge cookie is GONE. It had
+ * hard-expired (2026-08-05), so it granted nothing in production; the cookie
+ * readers (session check, pinned-company cookie, per-company shortcut) are
+ * deleted, not just disabled. A Content Architect authenticates with the
+ * canonical auth_session minted by /api/super-admin/content-architect-login
+ * and is authorized by capability (CONTENT_ARCHITECT_READ / _WRITE).
  */
-export function isContentArchitectSession(req: NextApiRequest): boolean {
-  const raw = req.cookies?.content_architect_session;
-  if (!raw) return false;
-
-  // SEC-001C: the signature + dry-run + hard-expiry sequence is no longer
-  // re-implemented here. It is ONE shared decision procedure owned by the
-  // module that owns the lifecycle constants, so this cookie and the
-  // super-admin cookie can never drift apart in behaviour or attribution.
-  const verdict = evaluateBridgeCookieLifecycle(raw);
-  // Narrow with `!== true`, not a truthy test — a truthy check on the
-  // discriminant does not reliably narrow this union under the repo's TS
-  // settings (the same trap SEC-001A hit on BridgeCookieParseResult).
-  if (verdict.ok !== true) {
-    const reason = verdict.reason;
-    logger.warn('content_architect_cookie_rejected', {
-      reason,
-      action:
-        reason === 'legacy_format'
-          ? 'stale unsigned cookie — operator must re-login to receive a signed cookie'
-          : reason === 'bad_signature'
-            ? 'possible forgery or tamper'
-            : reason === 'dry_run'
-              ? 'LEGACY_BRIDGE_DRY_RUN=1 — simulating Wave-3 bridge removal'
-              : reason === 'hard_expired'
-                ? `legacy bridge hard-expired at ${LEGACY_BRIDGE_HARD_EXPIRY_AT.toISOString()}`
-                : 'see reason',
-    });
-    return false;
-  }
-
-  return true;
-}
-
 /**
- * Returns the pinned company ID if the request is a Content Architect session
- * with a company cookie set; otherwise null (session can still be architect with access to all companies).
- */
-export function getContentArchitectCompanyId(req: NextApiRequest): string | null {
-  const companyId = req.cookies?.content_architect_company_id;
-  if (!companyId || typeof companyId !== 'string') return null;
-  const trimmed = companyId.trim();
-  return trimmed || null;
-}
-
-/**
- * Content Architect is a platform-level role (next to Super Admin) with access to all companies'
- * content so they can help any company refine strategy or campaigns.
- *
- * If the request has a valid Content Architect session, grants access to the requested company
- * (any company). The content_architect_company_id cookie is for UI default only, not for gating.
- */
-export function checkContentArchitectAccess(
-  req: NextApiRequest,
-  res: NextApiResponse,
-  companyId: string | null | undefined
-): { userId: string; role: string } | null | undefined {
-  if (!isContentArchitectSession(req)) return undefined;
-  if (!companyId) return undefined;
-  return { userId: 'content_architect', role: 'CONTENT_ARCHITECT' };
-}
-
-/**
- * Resolve company access for any request: Content Architect (cookie) or Supabase user with role.
+ * Resolve company access for any request: the Supabase user with a role for the company.
  * Sends 400/401/403 and returns null on failure; returns { userId, role } on success.
  *
  * Isolation: COMPANY_ADMIN only gets access when getUserRole(userId, companyId) returns a role
@@ -114,9 +30,6 @@ export async function resolveCompanyAccess(
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  const archAccess = checkContentArchitectAccess(req, res, companyId);
-  if (archAccess === null) return null;
-  if (archAccess) return archAccess;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -145,9 +58,6 @@ export async function resolveCompanyAccess(
     }
   }
   if (roleError || !role) {
-    if (isContentArchitectSession(req)) {
-      return { userId: 'content_architect', role: 'CONTENT_ARCHITECT' };
-    }
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }

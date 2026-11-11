@@ -5,7 +5,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *                                          { action: 'check' } one free request with the live credential
  *
  * Same gates as /api/super-admin/analytics-provider-config:
- *   - GET: legacy super-admin bridge (read only) or an active SUPER_ADMIN role.
+ *   - GET: requireCapability(SUPER_ADMIN_DASHBOARD_VIEW) (2026-11-11: no legacy cookie arm).
  *   - POST save: requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE) (step-up: phishing-resistant
  *     + trusted device) and enforcePlatformWriteAuthority. Replacing the key every tenant report
  *     uses has the same blast radius as replacing the GA/GSC OAuth client.
@@ -15,33 +15,20 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * shape-only summary (getPageSpeedConfigSummary), errors carry a fixed message.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { checkPageSpeedConfig, getPageSpeedConfigSummary, PageSpeedSaveError, savePageSpeedConfig } from '../../../backend/services/pageSpeedProviderConfigService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { enforcePlatformWriteAuthority } from '../../../backend/security/platformWriteAuthority';
-import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
+// 2026-11-11: platform VIEW capability; requireCapability answers 401/403 itself.
+// The legacy super-admin cookie arm is gone.
 async function requireSuperAdminRead(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
-  }
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-  if (roleRow) return true;
-  res.status(403).json({ error: 'Super admin access required' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: '/api/super-admin/pagespeed-config read',
+  });
+  return guard.ok === true;
 }
 
 /** A save error that is safe to show: our own validation messages only, never a provider or DB body. */

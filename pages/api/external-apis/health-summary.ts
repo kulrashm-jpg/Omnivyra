@@ -1,29 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../backend/services/rbacService';
-
-const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) {
-    return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  if (await isPlatformSuperAdmin(user.id)) {
-    return { userId: user.id, role: 'SUPER_ADMIN' };
-  }
-  if (await isSuperAdmin(user.id)) {
-    return { userId: user.id, role: 'SUPER_ADMIN' };
-  }
-  res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-  return null;
-};
+import { requirePlatformAdmin } from '../../../backend/apiHandlers/externalApis/indexShared';
 
 const authRequiresKey = (authType?: string | null) =>
   ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));

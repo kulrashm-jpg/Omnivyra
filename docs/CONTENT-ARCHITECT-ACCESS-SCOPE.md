@@ -1,61 +1,43 @@
 # Content Architect — Access Scope
 
-**Role:** Content Architect is a credential-based role (like Super Admin). They are **not** in the company team (`user_company_roles`). They log in from the Super Admin login page with env credentials and have **access to all companies** (view any company, create new company profiles, and access any company’s campaigns and weekly/daily plans via search and selection).
+**Role:** Content Architect is a platform role that authenticates with a **canonical session** (`auth_session`, the same mechanism as every other user). Authorization comes from the principal's capabilities (`CONTENT_ARCHITECT_WRITE`, which includes `CONTENT_ARCHITECT_READ`) and from its **active** `CONTENT_ARCHITECT` memberships in `user_company_roles`.
 
-**View level:** Content Architect has **full view** of all details (company profile, campaigns, weekly plans, daily plans). Company Admin and other roles have a **limited view** that will be customized per role.
+**View level:** Content Architect has **full view** of the companies it holds an active membership in (company profile, campaigns, weekly plans, daily plans). Company Admin and other roles have a **limited view** that will be customized per role.
+
+> **REMOVED 2026-11-11 - the cookie path.** Earlier versions of this document described two cookies, `content_architect_session` and `content_architect_company_id`, and an env var `CONTENT_ARCHITECT_COMPANY_ID`. All three are gone, and they must not be revived:
+> - `content_architect_session` was an unsigned `=1` until SEC-001A, then a signed bridge cookie that hard-expired on 2026-08-05 (`LEGACY_BRIDGE_HARD_EXPIRY_AT`). It has granted nothing since August; its readers were deleted in e9 (C).
+> - `content_architect_company_id` was never signed, session-bound or expiring, and `/api/company-profile?mode=list` answered from it **before authentication** - an unauthenticated cross-tenant read (fixed in `fix/company-profile-architect-cookie-20261111`). SEC-001A hardened the first cookie and missed this sibling.
+> - `CONTENT_ARCHITECT_COMPANY_ID` only fed that cookie. It does nothing now; remove it from env files.
+>
+> The login endpoint still CLEARS both cookies, so a browser holding an old (or attacker-set) value is cleaned up on the next login. If the feature looks broken, fix the canonical path below - do not reintroduce a cookie reader.
 
 ---
 
 ## 1. How Content Architect logs in
 
-Content Architect uses the **same entry point** as Super Admin: the Super Admin login page (`/super-admin/login`), with **credentials stored in `.env.local`** (like `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD`).
+Same entry page as Super Admin (`/super-admin/login`, Content Architect mode), endpoint `POST /api/super-admin/content-architect-login`.
 
-### Option A — Single Content Architect (one company per env)
-
-- **Env vars** (add to `.env.local`; same pattern as Super Admin):
-  - `CONTENT_ARCHITECT_USERNAME` — e.g. `contentarchitect`
-  - `CONTENT_ARCHITECT_PASSWORD` — password
-  - `CONTENT_ARCHITECT_COMPANY_ID` — the single company this login is scoped to (UUID from `companies.id`)
+- **Env vars:**
+  - `CONTENT_ARCHITECT_USERNAME`, `CONTENT_ARCHITECT_PASSWORD` - the login credentials (compared in constant time).
+  - `CONTENT_ARCHITECT_PRIMARY_USER_ID` - the canonical `users.id` of the architect. That user must exist, not be deleted, and hold an **active** `CONTENT_ARCHITECT` row in `user_company_roles`.
 - **Login flow:**
-  1. User goes to `/super-admin/login`.
-  2. Page has a **mode toggle**: “Sign in as **Super Admin**” vs “Sign in as **Content Architect**” (or a separate “Content Architect” link that goes to the same page with `?mode=content-architect`).
-  3. They enter username and password. Frontend sends to either:
-     - `POST /api/super-admin/login` (Super Admin), or  
-     - `POST /api/super-admin/content-architect-login` (Content Architect).
-  4. **Content Architect login API** (new):
-     - Reads `CONTENT_ARCHITECT_USERNAME`, `CONTENT_ARCHITECT_PASSWORD`, `CONTENT_ARCHITECT_COMPANY_ID` from env.
-     - If credentials match, sets **two cookies** (HttpOnly, SameSite=Lax, Path=/, e.g. Max-Age=86400):
-       - `content_architect_session=1`
-       - `content_architect_company_id=<CONTENT_ARCHITECT_COMPANY_ID>`
-     - Returns 200; frontend redirects to Content Architect landing (e.g. `/company-profile?companyId=<id>` or a dedicated `/content-architect` hub that shows company profile + campaign health for that company).
-  5. **Super Admin login** stays as today: same endpoint, `super_admin_session=1` only; redirect to `/super-admin/dashboard`.
+  1. Credentials match, so the endpoint looks up the primary user and mints a canonical `auth_session` for it (`SessionAuthorityService.createSession`).
+  2. It clears `content_architect_session`, `content_architect_company_id` and `super_admin_session`.
+  3. **If no canonical session can be minted** (no primary user id, user missing or deleted, no active CONTENT_ARCHITECT membership), the login **fails closed with 503 `CANONICAL_SESSION_UNAVAILABLE`**. There is no cookie fallback.
+- **Super Admin** works the same way (`POST /api/super-admin/login`, `SUPER_ADMIN_PRIMARY_USER_ID` with an active `SUPER_ADMIN` membership); without a canonical session it also returns 503.
 
-So: **one** Content Architect login per env, tied to **one** company. To support multiple Content Architects (one per company), use Option B or multiple env sets (e.g. separate deploy per architect).
+### Which companies a Content Architect reaches
 
-### Option B — Multiple Content Architects (e.g. one per company)
-
-- Env could hold a **list** (e.g. JSON or repeated vars), e.g.  
-  `CONTENT_ARCHITECT_CREDENTIALS='[{"username":"arch1","password":"...","companyId":"uuid1"},...]'`
-- Login API checks username/password against that list; if found, sets the same two cookies with the matching `companyId`.
-- Same cookie names; backend resolves “Content Architect for company X” from `content_architect_company_id`.
-
-### What the frontend needs
-
-- On `/super-admin/login`: **toggle or link** to choose “Super Admin” vs “Content Architect”.
-- When “Content Architect” is selected, submit to the Content Architect login endpoint (e.g. `POST /api/super-admin/content-architect-login` with `{ username, password }`).
-- On success, redirect to the Content Architect experience (company profile for their company, or a hub that links to company profile + campaign health), **not** to `/super-admin/dashboard`.
-
-### Middleware / API recognition
-
-- **Middleware** (`middleware.ts`): allow requests that have `content_architect_session=1` (and optionally `content_architect_company_id`) to hit **only** the APIs and routes that Content Architect is allowed to use (company-profile, content-architect campaign-health, campaigns for that company, recommendations, activity-workspace). Do **not** allow them to hit `/api/super-admin/*` (except the login endpoint used for Content Architect, if it lives under that path).
-- **Backend** (company-profile, campaigns, etc.): in addition to Supabase user + company, treat request as “Content Architect for company X” when `req.cookies.content_architect_session === '1'` and `req.cookies.content_architect_company_id === '<companyId>'`; then allow the same read/write as Company Admin for that company (for the scoped APIs only).
+- **Company-scoped routes** (company profile, campaigns, activity workspace, market pulse, ...) authorize through the normal company check (`resolveCompanyAccess` / `enforceCompanyAccess`): the architect reaches a company only through an **active membership** in it.
+- **Cross-company search** (`GET /api/content-architect/search`) requires `CONTENT_ARCHITECT_READ` on the canonical principal.
+- There is **no** "all companies by cookie" access any more. To give an architect a company, grant an active `CONTENT_ARCHITECT` membership in it.
 
 ### Summary
 
-| Who | Login page | Env vars | Cookie(s) | Redirect after login |
-|-----|------------|----------|-----------|------------------------|
-| Super Admin | `/super-admin/login` | `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD` | `super_admin_session=1` | `/super-admin/dashboard` |
-| Content Architect | Same page, “Content Architect” mode | `CONTENT_ARCHITECT_USERNAME`, `CONTENT_ARCHITECT_PASSWORD`, `CONTENT_ARCHITECT_COMPANY_ID` | `content_architect_session=1`, `content_architect_company_id=<id>` | Company profile or Content Architect hub for that company |
+| Who | Login endpoint | Env vars | Session | Without a canonical session |
+|-----|----------------|----------|---------|----------------------------|
+| Super Admin | `POST /api/super-admin/login` | `SUPER_ADMIN_USERNAME`, `SUPER_ADMIN_PASSWORD`, `SUPER_ADMIN_PRIMARY_USER_ID` | canonical `auth_session` | 503, no cookie |
+| Content Architect | `POST /api/super-admin/content-architect-login` | `CONTENT_ARCHITECT_USERNAME`, `CONTENT_ARCHITECT_PASSWORD`, `CONTENT_ARCHITECT_PRIMARY_USER_ID` | canonical `auth_session` | 503, no cookie |
 
 ---
 
@@ -106,7 +88,7 @@ APIs that must allow Content Architect when `companyId` matches their assigned c
 Content Architect must **not** have access to:
 - Super-admin-only APIs (RBAC config, platform-wide analytics, user management, audit logs, etc.) unless explicitly added later.
 
-**Full view vs limited view:** Content Architect sees **all details** (company profile, campaigns, weekly/daily plans, activity workspace) for any company they select. Company Admin and other roles see a **limited view** (to be customized per role) so that only relevant sections and actions are visible.
+**Full view vs limited view:** Content Architect sees **all details** (company profile, campaigns, weekly/daily plans, activity workspace) for every company they hold an active membership in. Company Admin and other roles see a **limited view** (to be customized per role) so that only relevant sections and actions are visible.
 
 ---
 
@@ -127,7 +109,7 @@ A dedicated hub at **`/content-architect`** lets Content Architect search and op
 
 ## 6. Access via search and create (company profile page)
 
-- **View any company:** Content Architect can select any company from the list on the company profile page (search/filter by name) and view or refine that company’s profile.
+- **View a company:** Content Architect can select any company it is a member of from the list on the company profile page (search/filter by name) and view or refine that company’s profile.
 - **Create company profile:** Content Architect can create a new company (name, website, industry) from the company profile page; the new company is then available in the list and can be refined.
 - **Access campaigns and plans:** From the company profile page, “View campaigns & weekly/daily plans” opens the campaigns list for the selected company; from there they can open campaign details, weekly plans, and daily plans (full view).
 
@@ -143,4 +125,4 @@ A dedicated hub at **`/content-architect`** lets Content Architect search and op
 | Weekly plan | From campaign | `/campaign-daily-plan/[id]` | Yes |
 | Activity workspace | From weekly plan / campaign | `/activity-workspace?workspaceKey=...` | Yes |
 
-This document defines the **scope** of Content Architect access and the **login flow** (same page as Super Admin, env credentials, cookie session; see §1). Content Architect has **all companies** access (no single-company restriction).
+This document defines the **scope** of Content Architect access and the **login flow** (same page as Super Admin, env credentials, canonical session; see §1). Content Architect reaches the companies it holds an **active** CONTENT_ARCHITECT membership in, plus cross-company search via CONTENT_ARCHITECT_READ.

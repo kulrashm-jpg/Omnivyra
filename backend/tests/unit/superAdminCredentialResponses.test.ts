@@ -63,7 +63,6 @@ jest.mock('../../security/requireCapability', () => ({
 }));
 jest.mock('../../services/requestAccessService', () => ({ requireAdminRateLimit: async () => true }));
 jest.mock('../../security/platformWriteAuthority', () => ({ enforcePlatformWriteAuthority: async () => true }));
-jest.mock('../../services/superAdminSession', () => ({ getLegacySuperAdminSession: () => ({ ok: true }) }));
 jest.mock('../../services/supabaseAuthService', () => ({ getSupabaseUserFromRequest: async () => ({ user: null, error: 'NO_TOKEN' }) }));
 jest.mock('../../services/rbacService', () => ({ isPlatformSuperAdmin: async () => true }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));

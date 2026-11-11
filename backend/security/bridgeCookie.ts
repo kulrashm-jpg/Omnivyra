@@ -177,7 +177,7 @@ export function parseSignedBridgeCookie(rawValue: string | null | undefined): Br
  * different semantics — the inconsistency SEC-001C exists to remove.
  *
  * The single canonical entry point for route-level bridge authorization is
- * `superAdminSession.getLegacySuperAdminSession(req)`, which layers the
+ * the route-level bridge getter (removed 2026-11-11), which layered the
  * lifecycle on top of `parseSignedBridgeCookie` below. This module stays a
  * pure CRYPTO leaf (mint / parse / cookie headers) with no lifecycle
  * knowledge — that is what keeps the dependency graph acyclic.

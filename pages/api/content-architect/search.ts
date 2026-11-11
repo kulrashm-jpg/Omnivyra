@@ -1,11 +1,13 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { CONTENT_ARCHITECT_READ } from '../../../shared/contracts/security';
 
 /**
  * GET /api/content-architect/search?q=
- * Content Architect only. Search companies (by ID, name, or URL), campaigns, and recommendations.
+ * Content Architect only (CONTENT_ARCHITECT_READ on the canonical session; the
+ * legacy content-architect cookie is gone since 2026-11-11). Search companies (by ID, name, or URL), campaigns, and recommendations.
  * Every company is identified by company_id and can be accessed by ID, name, or website URL.
  * Returns { companies, campaigns, recommendations } so Content Architect can open by ID.
  */
@@ -13,9 +15,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!isContentArchitectSession(req)) {
-    return res.status(403).json({ error: 'CONTENT_ARCHITECT_ONLY' });
-  }
+  const guard = await requireCapability(req, res, {
+    capability: CONTENT_ARCHITECT_READ,
+    reason: 'content architect cross-company search',
+  });
+  if (guard.ok !== true) return;
 
   const q = (req.query.q as string || '').trim();
   if (!q) {

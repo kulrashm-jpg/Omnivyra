@@ -27,7 +27,6 @@ const updates: Row[] = [];
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () => (authUser ? { user: { id: authUser }, error: null } : { user: null, error: 'MISSING_AUTH' })),
 }));
-jest.mock('../../services/superAdminSession', () => ({ getLegacySuperAdminSession: jest.fn(() => null) }));
 jest.mock('../../services/userContextService', () => ({
   resolveUserContext: jest.fn(async () => ({ userId: authUser ?? '', role: 'user', companyIds: [COMPANY_A], defaultCompanyId: COMPANY_A, authenticated: Boolean(authUser) })),
 }));

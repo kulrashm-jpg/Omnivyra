@@ -112,10 +112,11 @@ function withArchitectCookie(
 }
 
 test(
-  'content-architect session: a SIGNED cookie is still honoured (deprecated bridge, pre-expiry)',
+  'content-architect cookie: even a SIGNED pre-expiry cookie grants nothing (reader removed, e9 (C))',
   withArchitectCookie(false, (access, userWasCalled) => {
-    expect(access).toEqual({ userId: 'content_architect', role: 'CONTENT_ARCHITECT' });
-    expect(userWasCalled()).toBe(false);
+    // Falls through to real authentication, which the mock denies.
+    expect(access).toBeNull();
+    expect(userWasCalled()).toBe(true);
   }),
 );
 

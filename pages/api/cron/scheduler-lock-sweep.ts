@@ -12,24 +12,33 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  * Auth:
  *   - Cron host: CRON_SECRET bearer
- *   - Manual: super_admin_session cookie OR canonical SUPER_ADMIN role
+ *   - Manual: capability + platform authority + step-up (see authorize())
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { sweepStaleSchedulerLocks } from '../../../backend/services/schedulerLockSweeper';
 import { runJob } from '../../../backend/services/jobRunner';
-import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { CRON_CONFIG_MANAGE } from '../../../shared/contracts/security';
 
-async function isAuthorized(req: NextApiRequest): Promise<boolean> {
+/**
+ * Scheduler: the CRON_SECRET bearer. A person triggering it manually: the
+ * CRON_CONFIG_MANAGE capability on a platform SUPER_ADMIN principal, with step-up
+ * (requireCapability writes the 401/403 itself). 2026-11-11: the legacy
+ * super-admin cookie and the bare platform-role check
+ * (no step-up) are gone.
+ */
+async function authorize(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && bearerTokenMatches(req.headers.authorization, cronSecret)) return true;
-  if (getLegacySuperAdminSession(req) !== null) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: CRON_CONFIG_MANAGE,
+    reason: 'manual trigger cron:scheduler-lock-sweep',
+    requirePlatformAuthority: true,
+    requireStepUp: true,
+  });
+  return guard.ok === true;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -37,7 +46,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!(await isAuthorized(req))) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
+  if (!(await authorize(req, res))) return;
 
   const staleAgeMsParam = typeof req.query.staleAgeMs === 'string' ? Number(req.query.staleAgeMs) : NaN;
   const limitParam      = typeof req.query.limit      === 'string' ? Number(req.query.limit)      : NaN;

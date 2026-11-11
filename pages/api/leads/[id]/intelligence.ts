@@ -39,7 +39,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // STABILIZE-INT-002 (B1, completing STABILIZE-INT-001 (1)): the sibling bulk
   // route was migrated off resolveCompanyAccess, but this twin was left on it —
   // so the single-lead read remained reachable via the UNSIGNED, client-settable
-  // `content_architect_session=1` cookie, which that helper short-circuits on
+  // legacy content-architect cookie (removed 2026-11-11), which that helper short-circuited on
   // and then honours for ANY company. Same guard as the bulk route now: a real
   // Supabase session plus TenantGuard membership, writing its own 400/401/403.
   const access = await enforceCompanyAccess({ req, res, companyId: companyId ?? null });

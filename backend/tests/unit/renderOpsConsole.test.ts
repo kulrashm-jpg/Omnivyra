@@ -101,14 +101,17 @@ describe('Validation-7/8/10 — lineage/scheduler isolation + access gate', () =
     const ep = fs.readFileSync('pages/api/internal/render-ops.ts', 'utf8');
     // SEC-001B: never a raw `=== '1'` comparison (that matched only a FORGED
     // cookie once Phase 2 began issuing signed values).
-    // SEC-001C: the gate must be the LIFECYCLE-AWARE canonical helper, and the
-    // route must also accept a canonical DB-backed super admin — without that
-    // second arm it becomes permanently unreachable at the bridge hard expiry.
-    expect(/getLegacySuperAdminSession\(req\)/.test(ep)).toBe(true);
-    expect(/isPlatformSuperAdmin/.test(ep)).toBe(true);
+    // e9 (C) 2026-11-11: the legacy cookie arm is gone. The gate is
+    // requireCapability - GET a platform VIEW capability, POST
+    // PLATFORM_CONTROLS_MANAGE with step-up + platform authority - and the
+    // audit actor is the authenticated principal, never a cookie.
+    expect(/getLegacySuperAdminSession/.test(ep)).toBe(false);
+    expect(/requireCapability\(req, res/.test(ep)).toBe(true);
+    expect(/PLATFORM_CONTROLS_MANAGE[^\n]*requireStepUp: true, requirePlatformAuthority: true/.test(ep)).toBe(true);
+    expect(/SUPER_ADMIN_DASHBOARD_VIEW/.test(ep)).toBe(true);
+    expect(/req\.cookies/.test(ep)).toBe(false);
     expect(/super_admin_session\s*===\s*'1'/.test(ep)).toBe(false);
     expect(/hasValidLegacySuperAdminCookie/.test(ep)).toBe(false);
-    expect(/NOT_OPERATOR/.test(ep)).toBe(true);
     expect(/creator_render_ops_audit/.test(ep)).toBe(true);
     // never writes immutable render lineage tables
     expect(/ownedDbTable\('creator_render_job'\)|ownedDbTable\('creator_render_output'\)|ownedDbTable\('creator_render_attempt'\)/.test(ep)).toBe(false);
