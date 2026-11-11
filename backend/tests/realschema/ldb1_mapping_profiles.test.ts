@@ -181,6 +181,34 @@ describe('PI-LDB-1 · the tables are shaped the way the store assumes', () => {
     }
   });
 
+  it('the SCOPE FK is load-bearing: without it, the tenant FK (MATCH SIMPLE) admits a platform entry on a profile that does not exist', async () => {
+    // smpe_profile_tenant_fk (profile_id, organization_id) is MATCH SIMPLE, so
+    // it is NOT checked when organization_id is NULL - every platform row.
+    // smpe_profile_scope_fk (profile_id, scope) has two NOT NULL columns and is
+    // always checked. This proves the hole is real, so the pair is not
+    // mistaken for redundancy and the scope FK "simplified" away.
+    await inRollback(async () => {
+      await seedTenants();
+      const ghost = '00000000-0000-4000-8000-00000000dead';   // no such profile
+      const insert = `INSERT INTO public.source_mapping_profile_entries
+          (scope, organization_id, profile_id, source_field, source_field_normalized, target_field, decision, mapping_method)
+        VALUES ('platform', NULL, $1, 'x', 'x', 'jobTitle', 'approved', 'high_confidence_suggestion')`;
+      // With both FKs: REJECTED (by the scope FK).
+      expect(await attempt(insert, [ghost])).toBe('23503');
+      // Drop ONLY the scope FK; the tenant FK stays.
+      await db.query('ALTER TABLE public.source_mapping_profile_entries DROP CONSTRAINT smpe_profile_scope_fk');
+      const { rows } = await db.query(
+        `SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'smpe_profile_tenant_fk' AND contype = 'f'`);
+      expect(rows[0].n).toBe(1);
+      // THE HOLE: the same orphan entry is now ACCEPTED.
+      expect(await attempt(insert, [ghost])).toBe('ok');
+    });
+    // The rollback restored the scope FK.
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'smpe_profile_scope_fk' AND contype = 'f'`);
+    expect(rows[0].n).toBe(1);
+  });
+
   it('scope: a platform profile has NO tenant and an entry cannot attach to the other scope', async () => {
     await inRollback(async () => {
       await seedTenants();
