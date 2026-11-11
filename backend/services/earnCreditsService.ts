@@ -182,6 +182,11 @@ export async function checkAndGrantSetupCredits(
   // A failed read is not "steps not done" (the grant would be silently skipped
   // and the caller told 0 credits). Throw: the step itself is already saved, so
   // the next setup-progress call re-evaluates the grant.
+  // Callers that swallow this with a logging .catch (the OAuth callbacks,
+  // external-apis) are safe ONLY because the throw writes nothing AND a later
+  // trigger (another completed step / setup-progress call) re-attempts from a
+  // clean state. Do not copy that .catch to a caller with no second trigger.
+  // Accepted cost: if the user never completes another step, the grant waits.
   const { data: setupRow, error: setupErr } = await ownedDbTable('company_setup_progress')
     .select('profile_complete, external_api_connected, social_accounts_connected, website_blog_connected, lead_capture_connected')
     .eq('company_id', orgId)
