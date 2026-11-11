@@ -42,6 +42,16 @@ export async function evaluateRenderGovernanceGate(
     if (dailyJobs?.error) return unavailable(`daily jobs: ${describe(dailyJobs.error)}`);
     if (!Array.isArray(dailyJobs?.data)) return unavailable('daily jobs: no array body');
 
+    // The DAILY QUOTA uses an EXACT count (e9 / 05, 2026-11-11). The id list above is capped at 1000
+    // rows (it only scopes the concurrency count below), so its length clamps at 1000: an org whose
+    // max_daily_renders is set above 1000 had a quota that could never trip.
+    const dailyCountRead = (await supabase
+      .from('creator_render_job').select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId).gte('created_at', since)) as Read & { count?: number | null };
+    if (dailyCountRead?.error) return unavailable(`daily count: ${describe(dailyCountRead.error)}`);
+    if (typeof dailyCountRead?.count !== 'number') return unavailable('daily count: no count');
+    const dailyRenderCount = dailyCountRead.count;
+
     // CONCURRENCY IS PER TENANT (e9 ruling 3, 2026-11-11). creator_render_job_state has no organization
     // column, and the count used to run over EVERY tenant's active jobs, so one tenant's renders could
     // exhaust another's max_concurrent_renders. It is now scoped to THIS org's jobs from the window
@@ -64,7 +74,7 @@ export async function evaluateRenderGovernanceGate(
       globalGov?.data ? coerceGovernanceRow(globalGov.data, GLOBAL_GOVERNANCE_SENTINEL) : null,
       {
         provider: ctx.provider, assetFamily: ctx.assetFamily,
-        dailyRenderCount: (dailyJobs.data as unknown[]).length,
+        dailyRenderCount,
         concurrentRenderCount: activeCount,
       },
     );

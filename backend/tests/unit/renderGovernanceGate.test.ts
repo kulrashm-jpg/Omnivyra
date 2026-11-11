@@ -15,7 +15,11 @@ const err: R = { data: null, error: { code: '57014', message: 'canceling stateme
  * `activeRows` is a MULTI-TENANT creator_render_job_state table; the active-state read is answered by
  * applying the `.in('render_job_id', ...)` filter it was given (none = every tenant's rows).
  */
-function fakeClient(over: { org?: R; global?: R; daily?: R; active?: R; activeRows?: { render_job_id: string; current_state: string }[] } = {}) {
+function fakeClient(over: {
+  org?: R; global?: R; daily?: R; active?: R; activeRows?: { render_job_id: string; current_state: string }[];
+  /** The EXACT daily count (head query); default = the daily list's length. */
+  dailyCount?: number | null; dailyCountError?: R['error'];
+} = {}) {
   const answers = {
     org: over.org ?? ok(null),
     global: over.global ?? ok(null),
@@ -27,8 +31,16 @@ function fakeClient(over: { org?: R; global?: R; daily?: R; active?: R; activeRo
     from(table: string) {
       const f: Record<string, unknown> = {};
       let jobFilter: string[] | null = null;
+      let head = false;
       const q: any = {
-        select: () => q,
+        select: (_c?: string, opts?: { head?: boolean }) => { head = Boolean(opts?.head); return q; },
+        // A HEAD count is awaited directly after its filters.
+        then: (resolve: (v: unknown) => unknown) => {
+          if (!head) return resolve({ data: null, error: { code: 'TEST', message: 'unexpected bare await' } });
+          if (over.dailyCountError) return resolve({ count: null, error: over.dailyCountError });
+          const n = over.dailyCount !== undefined ? over.dailyCount : (Array.isArray(answers.daily.data) ? (answers.daily.data as unknown[]).length : null);
+          return resolve({ count: n, error: null });
+        },
         eq: (k: string, v: unknown) => { f[k] = v; return q; },
         gte: () => q,
         in: (k: string, vs: string[]) => { if (k === 'render_job_id') jobFilter = vs; return q; },
@@ -88,6 +100,22 @@ describe('a readable store is evaluated as before', () => {
   it('the daily quota still trips on a readable count', async () => {
     const r = await evaluateRenderGovernanceGate(fakeClient({ org: ok({ max_daily_renders: 2 }), daily: ok([{ id: 'a' }, { id: 'b' }]) }), 'org-1', CTX);
     expect(r).toMatchObject({ ok: true, decision: { allowed: false, event: 'quota_exceeded' } });
+  });
+
+  it('the DAILY QUOTA uses an exact count: an org with a cap above 1000 is blocked at its cap (the 1000-row list no longer clamps it)', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, i) => ({ id: `job-${i}` })); // what .limit(1000) returns
+    const c = fakeClient({ org: ok({ max_daily_renders: 1500 }), daily: ok(thousand), dailyCount: 1600 });
+    const r = await evaluateRenderGovernanceGate(c, 'org-1', CTX);
+    expect(r).toMatchObject({ ok: true, decision: { allowed: false, event: 'quota_exceeded' } });
+    // CONTROL: the clamped list length (1000) would have been read as under the 1500 cap.
+    expect(thousand.length).toBeLessThan(1500);
+  });
+
+  it('an exact count that errors, or comes back without a number, fails closed', async () => {
+    const a = await evaluateRenderGovernanceGate(fakeClient({ dailyCountError: err.error }), 'org-1', CTX);
+    const b = await evaluateRenderGovernanceGate(fakeClient({ dailyCount: null }), 'org-1', CTX);
+    expect(a).toMatchObject({ ok: false, reason: 'governance_unavailable' });
+    expect(b).toMatchObject({ ok: false, reason: 'governance_unavailable' });
   });
 
   it('CONCURRENCY IS PER TENANT: other tenants’ active renders do not exhaust this tenant’s cap', async () => {
