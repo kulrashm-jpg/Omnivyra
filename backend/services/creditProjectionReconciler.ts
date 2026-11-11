@@ -230,11 +230,21 @@ async function reconcileImpl(organizationId: string): Promise<ReconcileResult> {
   // to the caller. Re-read the row immediately before writing — if a healthy
   // row exists, the projection was never broken: skip the write entirely so
   // a live wallet is never clobbered by a rebuild.
-  const { data: existingRow } = await supabase
+  //
+  // MONEY (2026-11-12): the guard's OWN read must be read. A failed re-read
+  // returned existingRow=null, the guard passed, and the wallet was REBUILT
+  // FROM DELTAS - the exact 2026-07-09 incident this guard exists to prevent,
+  // reached through the same kind of transient failure. A failed guard read
+  // is "unknown", never "absent": write NOTHING.
+  const { data: existingRow, error: guardErr } = await supabase
     .from('organization_credits')
     .select('free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed')
     .eq('organization_id', organizationId)
     .maybeSingle();
+  if (guardErr) {
+    diag('reconcile_skipped_guard_read_failed', { organizationId, message: guardErr.message });
+    return { outcome: 'failed', organizationId };
+  }
   if (existingRow && !projectionIsBroken(existingRow as Record<string, unknown>)) {
     diag('reconcile_skipped_row_healthy', { organizationId });
     return { outcome: 'skipped_healthy', organizationId };

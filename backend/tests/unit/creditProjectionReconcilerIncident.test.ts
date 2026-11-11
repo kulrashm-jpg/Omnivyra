@@ -19,6 +19,9 @@
 // ── Scripted supabase for reconcileImpl paths ──
 let ledgerRows: any[] = [];
 let walletRow: any = null;
+// The guard read's ERROR channel. This mock used to return error:null always,
+// which is why the unread guard error below was never exercised.
+let walletReadError: { message: string } | null = null;
 const upsertCalls: any[] = [];
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -31,7 +34,7 @@ jest.mock('../../db/supabaseClient', () => ({
       });
       builder.maybeSingle = () => ({
         then: (res: any, rej: any) =>
-          Promise.resolve({ data: walletRow, error: null }).then(res, rej),
+          Promise.resolve({ data: walletReadError ? null : walletRow, error: walletReadError }).then(res, rej),
       });
       builder.upsert = (payload: any) => {
         upsertCalls.push({ table, payload });
@@ -64,6 +67,7 @@ const row = (
 beforeEach(() => {
   ledgerRows = [];
   walletRow = null;
+  walletReadError = null;
   upsertCalls.length = 0;
 });
 
@@ -145,6 +149,18 @@ describe('reconcileImpl write guard — never clobber a healthy wallet', () => {
     expect(result.outcome).toBe('rebuilt');
     expect(upsertCalls).toHaveLength(1);
     expect(upsertCalls[0].payload.free_balance).toBe(100);
+  });
+
+  it('a FAILED guard read never rebuilds: "unknown" is not "absent" (2026-11-12 - the guard swallowed its own read error)', async () => {
+    // Ledger with activity + a guard read that ERRORS. Before the fix the error
+    // was ignored, existingRow was null, and the wallet was rebuilt from deltas -
+    // the 2026-07-09 incident, through the guard meant to prevent it.
+    ledgerRows = [row('grant', 100, null), row('hold', -10, 'j:hold')];
+    walletRow = { free_balance: 2399, paid_balance: 0, incentive_balance: 0, lifetime_purchased: 0, lifetime_consumed: 0 };
+    walletReadError = { message: 'connection reset' };
+    const r = await reconcileOrgCreditProjection('org-guard');
+    expect(r.outcome).toBe('failed');
+    expect(upsertCalls).toEqual([]);
   });
 
   it('rebuilds when the row is genuinely ABSENT but ledger has activity', async () => {
