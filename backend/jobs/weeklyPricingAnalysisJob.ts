@@ -285,12 +285,20 @@ async function computePricingIntelligence(
     // a real change. Supersede any older pending proposal for the same
     // (action, model) so the queue never shows stale suggestions.
     if (rec.proposed_multiplier != null && rec.deviation_flag) {
-      await supabase
+      // If the older proposals cannot be superseded, do NOT queue a new one: two
+      // pending proposals for the same (action, model) means applying the older
+      // one later rolls the price back (same hazard as admin pricing/apply).
+      // Next week's run retries.
+      const { error: supersedeErr } = await supabase
         .from('pricing_adjustment_queue')
         .update({ status: 'superseded' })
         .eq('action_key', g.action_key)
         .is('model_name', g.model_name)   // null-safe match
         .eq('status', 'pending');
+      if (supersedeErr) {
+        console.error('[weeklyPricingAnalysis] supersede failed - no new proposal queued:', g.action_key, g.model_name, supersedeErr.message);
+        continue;
+      }
 
       const { error: queueErr } = await supabase.from('pricing_adjustment_queue').insert({
         action_key:          g.action_key,

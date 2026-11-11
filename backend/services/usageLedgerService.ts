@@ -431,7 +431,12 @@ export async function logUsageEvent(params: {
     // kept flowing via its own first-class columns. We now write ONLY columns
     // that exist; provider/model values fall back into provider_name/model_name,
     // and feature_area is preserved inside `metadata`. No billing/behavior change.
-    await ownedDbTable('usage_events').insert({
+    // NOTE (2026-11-12): supabase RETURNS insert errors - it does not throw - so
+    // the 2026-03-14 outage above was an UNREAD error, not one "caught by the
+    // catch". The error is now read and logged (best-effort: usage telemetry
+    // must not break the caller), so a schema drift can never again silence
+    // usage_events for months.
+    const { error: usageInsertErr } = await ownedDbTable('usage_events').insert({
       organization_id: params.organization_id,
       campaign_id: params.campaign_id ?? null,
       user_id: params.user_id ?? null,
@@ -467,6 +472,11 @@ export async function logUsageEvent(params: {
       // feature_area preserved here (its dedicated column doesn't exist in prod).
       metadata: { ...(mergedMetadata ?? {}), feature_area: params.feature_area ?? null },
     });
+    if (usageInsertErr) {
+      logger.error('usage_events_insert_failed', {
+        organization_id: params.organization_id, action_key: actionKey, process_type: params.process_type, message: usageInsertErr.message,
+      });
+    }
 
     // ── Phase 5: dual-write to unified_transactions ───────────────────────
     // Analytics and reporting read only from this table going forward.
