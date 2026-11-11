@@ -37,11 +37,22 @@ const SUPPORTED = [
   { w: 1792, h: 1024 }, { w: 1200, h: 627 }, { w: 1200, h: 675 },
 ];
 
-/** Map an arbitrary requested resolution onto the nearest supported
- *  OpenAI size bucket (square / portrait / landscape). Pure. */
-function bucketSize(w: number, h: number): '1024x1024' | '1024x1792' | '1792x1024' {
-  if (h > w * 1.2) return '1024x1792';
-  if (w > h * 1.2) return '1792x1024';
+export type OpenAIImageSize = '1024x1024' | '1024x1536' | '1536x1024' | '1024x1792' | '1792x1024';
+
+/**
+ * Map an arbitrary requested resolution onto the nearest size bucket THE CONFIGURED MODEL accepts
+ * (square / portrait / landscape). Pure.
+ *
+ * The portrait / landscape sizes differ by model family: the gpt-image models take 1024x1536 /
+ * 1536x1024, and only dall-e-3 takes 1024x1792 / 1792x1024. This used to return the dall-e-3 sizes
+ * for every model, so with the default gpt-image model every non-square render (4:5, 9:16, 16:9)
+ * would have been rejected by the provider (e9 ruling, 2026-11-12; latent, as render never ran in
+ * prod). The size is also part of the billed SKU, so it must be the size actually sent.
+ */
+export function openAIImageSize(model: string, w: number, h: number): OpenAIImageSize {
+  const dalle3 = /^dall-e-3/i.test(model.trim());
+  if (h > w * 1.2) return dalle3 ? '1024x1792' : '1024x1536';
+  if (w > h * 1.2) return dalle3 ? '1792x1024' : '1536x1024';
   return '1024x1024';
 }
 
@@ -93,7 +104,8 @@ export function createOpenAIRenderProvider(
       throw new Error('OPENAI_API_KEY missing — provider cannot submit');
     }
     const doFetch = cfg.fetchImpl || (globalThis.fetch as typeof fetch);
-    const size = bucketSize(
+    const size = openAIImageSize(
+      model,
       spec.platform_projection.resolution.w,
       spec.platform_projection.resolution.h,
     );
