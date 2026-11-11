@@ -15,11 +15,17 @@
 -- earlier miss, and old broadcasts are backfilled on their next refresh.
 --
 --   sent      = sent + delivered + read         (the provider accepted it)
---   delivered = delivered + read
---   read      = read
 --   failed    = failed + blocked_governance + blocked_send_control
+--   open      = pending + sending                (still to resolve)
+--   uncertain = send_uncertain                   (outcome unknown)
 --   total     = every recipient row
--- send_uncertain counts as none of these: its outcome is unknown.
+-- INVARIANT (05): total = sent + failed + open + uncertain - those FOUR partition the
+-- recipients. delivered_count (delivered + read) and read_count (read) are SUBSETS of
+-- sent_count, reported separately for the delivery funnel; they are NOT addends, so the
+-- five columns do not sum to the total. On a completed broadcast open = 0, so
+-- uncertain_count is exactly the number of sends whose outcome nobody knows.
+-- EXHAUSTIVENESS: a recipient status in none of the four buckets RAISES, naming it, so a
+-- new status is caught where it appears instead of as a sum that silently stops holding.
 --
 -- COMPLETION: a broadcast in 'running' becomes 'completed' (completed_at set once) when no
 -- recipient is pending or sending. Only from 'running' - a 'paused', 'draft' or
@@ -48,11 +54,19 @@ ALTER TABLE public.whatsapp_broadcasts
   ADD COLUMN IF NOT EXISTS counts_refreshed_at timestamptz;
 ALTER TABLE public.whatsapp_broadcasts
   ADD COLUMN IF NOT EXISTS counts_dirty boolean NOT NULL DEFAULT false;
+ALTER TABLE public.whatsapp_broadcasts
+  ADD COLUMN IF NOT EXISTS open_count integer NOT NULL DEFAULT 0;
+ALTER TABLE public.whatsapp_broadcasts
+  ADD COLUMN IF NOT EXISTS uncertain_count integer NOT NULL DEFAULT 0;
 
 COMMENT ON COLUMN public.whatsapp_broadcasts.counts_refreshed_at IS
   'When whatsapp_refresh_broadcast_counts last recomputed the counts from the recipient rows.';
 COMMENT ON COLUMN public.whatsapp_broadcasts.counts_dirty IS
   'A debounced refresh was deferred; readers and the next batch end refresh it.';
+COMMENT ON COLUMN public.whatsapp_broadcasts.open_count IS
+  'Recipients still pending or sending. total = sent + failed + open + uncertain.';
+COMMENT ON COLUMN public.whatsapp_broadcasts.uncertain_count IS
+  'Recipients whose send outcome is unknown (send_uncertain). On a completed broadcast, the sends nobody can confirm.';
 
 GRANT SELECT ON TABLE public.whatsapp_broadcast_recipients TO service_role;
 GRANT SELECT, UPDATE ON TABLE public.whatsapp_broadcasts TO service_role;
@@ -67,7 +81,8 @@ SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
-  v_id uuid;
+  v_id      uuid;
+  v_unknown text;
 BEGIN
   IF p_broadcast_id IS NULL OR p_min_interval_seconds IS NULL OR p_min_interval_seconds < 0 THEN
     RAISE EXCEPTION 'whatsapp_refresh_broadcast_counts: invalid arguments' USING ERRCODE = '22023';
@@ -86,13 +101,28 @@ BEGIN
     END IF;
   END IF;
 
+  -- Exhaustiveness: every status must fall in exactly one of the four buckets.
+  SELECT string_agg(DISTINCT coalesce(r.status, '<null>'), ', ') INTO v_unknown
+    FROM public.whatsapp_broadcast_recipients r
+   WHERE r.broadcast_id = p_broadcast_id
+     AND (r.status IS NULL OR r.status NOT IN (
+       'sent', 'delivered', 'read',
+       'failed', 'blocked_governance', 'blocked_send_control',
+       'pending', 'sending',
+       'send_uncertain'));
+  IF v_unknown IS NOT NULL THEN
+    RAISE EXCEPTION 'whatsapp_refresh_broadcast_counts: recipient status(es) in no count bucket: %', v_unknown
+      USING ERRCODE = '22023';
+  END IF;
+
   WITH c AS (
     SELECT count(*)::integer                                                                  AS total,
            (count(*) FILTER (WHERE r.status IN ('sent', 'delivered', 'read')))::integer      AS sent,
            (count(*) FILTER (WHERE r.status IN ('delivered', 'read')))::integer              AS delivered,
            (count(*) FILTER (WHERE r.status = 'read'))::integer                              AS read,
            (count(*) FILTER (WHERE r.status IN ('failed', 'blocked_governance', 'blocked_send_control')))::integer AS failed,
-           (count(*) FILTER (WHERE r.status IN ('pending', 'sending')))::integer             AS open
+           (count(*) FILTER (WHERE r.status IN ('pending', 'sending')))::integer             AS open,
+           (count(*) FILTER (WHERE r.status = 'send_uncertain'))::integer                    AS uncertain
       FROM public.whatsapp_broadcast_recipients r
      WHERE r.broadcast_id = p_broadcast_id
   )
@@ -102,6 +132,8 @@ BEGIN
          delivered_count     = c.delivered,
          read_count          = c.read,
          failed_count        = c.failed,
+         open_count          = c.open,
+         uncertain_count     = c.uncertain,
          counts_refreshed_at = now(),
          counts_dirty        = false,
          status       = CASE WHEN b.status = 'running' AND c.open = 0 AND c.total > 0 THEN 'completed' ELSE b.status END,
@@ -131,9 +163,9 @@ BEGIN
   SELECT count(*) INTO v_n FROM pg_attribute
    WHERE attrelid = 'public.whatsapp_broadcasts'::regclass AND NOT attisdropped
      AND ((attname = 'counts_refreshed_at' AND NOT attnotnull)
-       OR (attname = 'counts_dirty' AND attnotnull));
-  IF v_n <> 2 THEN
-    RAISE EXCEPTION 'WBC postcondition: counts_refreshed_at (nullable) and counts_dirty (NOT NULL) must exist';
+       OR (attname IN ('counts_dirty', 'open_count', 'uncertain_count') AND attnotnull));
+  IF v_n <> 4 THEN
+    RAISE EXCEPTION 'WBC postcondition: counts_refreshed_at (nullable) and counts_dirty, open_count, uncertain_count (NOT NULL) must exist';
   END IF;
 
   -- The recompute must be served by an index on (broadcast_id, status).

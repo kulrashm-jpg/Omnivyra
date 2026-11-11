@@ -67,6 +67,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .select(
       `id, name, template_name, status,
        total_recipients, sent_count, delivered_count, read_count, failed_count,
+       open_count, uncertain_count,
        created_at, completed_at, counts_dirty`,
       { count: 'exact' },
     )

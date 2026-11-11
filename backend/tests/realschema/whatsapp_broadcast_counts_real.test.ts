@@ -32,7 +32,10 @@ async function refresh(id: string, minInterval = 0, role = 'service_role'): Prom
 }
 
 const broadcast = async (id = B) =>
-  (await db.query('SELECT status, total_recipients, sent_count, delivered_count, read_count, failed_count, completed_at, counts_dirty, counts_refreshed_at FROM public.whatsapp_broadcasts WHERE id = $1', [id])).rows[0];
+  (await db.query('SELECT status, total_recipients, sent_count, delivered_count, read_count, failed_count, open_count, uncertain_count, completed_at, counts_dirty, counts_refreshed_at FROM public.whatsapp_broadcasts WHERE id = $1', [id])).rows[0];
+
+/** total = sent + failed + open + uncertain (delivered/read are subsets of sent, not addends). */
+const partitions = (b: Record<string, number>) => b.sent_count + b.failed_count + b.open_count + b.uncertain_count === b.total_recipients;
 
 const recipients = async (broadcastId: string, statuses: string[]) => {
   await db.query('DELETE FROM public.whatsapp_broadcast_recipients WHERE broadcast_id = $1', [broadcastId]);
@@ -75,7 +78,8 @@ describe('counts are recomputed from the recipient rows', () => {
     await recipients(B, ['sent', 'delivered', 'read', 'read', 'failed', 'blocked_governance', 'blocked_send_control', 'send_uncertain', 'pending']);
     expect(await refresh(B)).toBe('refreshed');
     const first = await broadcast();
-    expect(first).toMatchObject({ total_recipients: 9, sent_count: 4, delivered_count: 3, read_count: 2, failed_count: 3, status: 'running', counts_dirty: false });
+    expect(first).toMatchObject({ total_recipients: 9, sent_count: 4, delivered_count: 3, read_count: 2, failed_count: 3, open_count: 1, uncertain_count: 1, status: 'running', counts_dirty: false });
+    expect(partitions(first)).toBe(true);
     expect(await refresh(B)).toBe('refreshed');
     expect(await broadcast()).toMatchObject({ total_recipients: 9, sent_count: 4, delivered_count: 3, read_count: 2, failed_count: 3 });
   });
@@ -85,6 +89,9 @@ describe('counts are recomputed from the recipient rows', () => {
     await refresh(B);
     const done = await broadcast();
     expect(done.status).toBe('completed');
+    // On completion open = 0, so the gap to total is exactly the unknown outcomes.
+    expect(done).toMatchObject({ open_count: 0, uncertain_count: 1 });
+    expect(partitions(done)).toBe(true);
     expect(done.completed_at).not.toBeNull();
     await refresh(B);
     expect((await broadcast()).completed_at).toEqual(done.completed_at);
@@ -101,6 +108,12 @@ describe('counts are recomputed from the recipient rows', () => {
     await recipients(B_PAUSED, ['sent', 'sent']);
     await refresh(B_PAUSED);
     expect(await broadcast(B_PAUSED)).toMatchObject({ status: 'paused', sent_count: 2, completed_at: null });
+  });
+
+  it('a status in NO bucket raises, naming it (exhaustiveness), and the counts are not touched', async () => {
+    await recipients(B, ['sent', 'mystery_status']);
+    expect(await refresh(B)).toBe('22023');
+    expect((await broadcast()).sent_count).toBe(0);
   });
 
   it('an unknown broadcast answers missing', async () => {

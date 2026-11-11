@@ -1,6 +1,6 @@
 -- Rollback for <version>_whatsapp_broadcast_counts_refresh.sql.
 --
--- Removes the refresh function and the two bookkeeping columns. The counts themselves
+-- Removes the refresh function and the four columns it added. The counts themselves
 -- (sent_count etc.) are pre-existing columns and keep their last recomputed values.
 -- Roll back the application change (calls to whatsapp_refresh_broadcast_counts) FIRST:
 -- without the function those calls log an ERROR and the counts stop updating. The
@@ -10,6 +10,8 @@
 BEGIN;
 
 DROP FUNCTION IF EXISTS public.whatsapp_refresh_broadcast_counts(uuid, integer);
+ALTER TABLE public.whatsapp_broadcasts DROP COLUMN IF EXISTS uncertain_count;
+ALTER TABLE public.whatsapp_broadcasts DROP COLUMN IF EXISTS open_count;
 ALTER TABLE public.whatsapp_broadcasts DROP COLUMN IF EXISTS counts_dirty;
 ALTER TABLE public.whatsapp_broadcasts DROP COLUMN IF EXISTS counts_refreshed_at;
 
