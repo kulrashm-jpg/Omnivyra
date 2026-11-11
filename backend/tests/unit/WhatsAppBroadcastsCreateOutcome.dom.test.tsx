@@ -20,17 +20,24 @@ jest.mock('next/link', () => ({ __esModule: true, default: ({ children, href }: 
 import WhatsAppBroadcastsPage from '../../../pages/whatsapp/broadcasts';
 
 let createAnswer: { status: number; body: Record<string, unknown> };
+let listed: Array<Record<string, unknown>> = [];
+let resumeAnswer: { status: number; body: Record<string, unknown> };
+const posted: string[] = [];
 
 const json = (status: number, body: unknown) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => body });
 
 beforeEach(() => {
+  listed = [];
+  posted.length = 0;
   (global as unknown as { fetch: unknown }).fetch = jest.fn((url: string, init?: { method?: string }) => {
+    if (init?.method === 'POST') posted.push(url);
+    if (url.includes('?action=enqueue')) return json(resumeAnswer.status, resumeAnswer.body);
     if (url.startsWith('/api/social-accounts/status')) {
       return json(200, { accounts: [{ platform_key: 'whatsapp', connected: true, expired: false, social_account_id: 'sa-1', account_name: 'WA' }] });
     }
     if (url.startsWith('/api/whatsapp/templates')) return json(200, { templates: [{ template_name: 'tpl', status: 'APPROVED' }] });
     if (url === '/api/whatsapp/broadcasts' && init?.method === 'POST') return json(createAnswer.status, createAnswer.body);
-    if (url.startsWith('/api/whatsapp/broadcasts')) return json(200, { broadcasts: [], total: 0 });
+    if (url.startsWith('/api/whatsapp/broadcasts')) return json(200, { broadcasts: listed, total: listed.length });
     if (url.startsWith('/api/analytics/whatsapp/broadcasts')) return json(200, { broadcasts: [] });
     return json(404, {});
   });
@@ -59,15 +66,58 @@ describe('WhatsApp broadcasts page: the create outcome is told honestly', () => 
   it('partially queued (202, partial:true): an amber notice, not silence and not an error', async () => {
     createAnswer = { status: 202, body: { broadcast_id: 'b1', inserted: 30, skipped: 0, enqueued: true, partial: true, uncertain: false, batches: 2 } };
     await createBroadcast();
-    const notice = await screen.findByRole('status');
-    expect(notice).toHaveTextContent('only partly queued: 2 batches will send');
+    // Assertive (role=alert): the rest is never sent without the operator's Resume (05).
+    const notice = await screen.findByText(/Only partly queued: 2 batches will send/);
+    expect(notice).toHaveAttribute('role', 'alert');
+    expect(notice).toHaveAttribute('data-tone', 'warning');
+    expect(notice).toHaveTextContent('until you Resume this broadcast');
   });
 
   it('NEGATIVE CONTROL: fully queued (201, enqueued:true) shows no banner', async () => {
     createAnswer = { status: 201, body: { broadcast_id: 'b1', inserted: 1, skipped: 0, enqueued: true, batches: 1 } };
     await createBroadcast();
     await waitFor(() => expect(screen.queryByPlaceholderText('April promo blast')).not.toBeInTheDocument()); // form closed
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText(/nothing was sent/)).not.toBeInTheDocument();
+  });
+});
+
+const row = (over: Record<string, unknown>) => ({
+  id: 'b9', name: 'Spring', message_type: 'template', template_name: 'tpl', total_recipients: 10,
+  sent_count: 4, delivered_count: 0, read_count: 0, failed_count: 0, open_count: 6,
+  created_at: '2026-11-11T10:00:00.000Z', status: 'running', ...over,
+});
+
+describe('WhatsApp broadcasts page: stranded recipients always have an action', () => {
+  it('a running broadcast with recipients not yet queued (a partial enqueue) offers Resume, which POSTs ?action=enqueue', async () => {
+    listed = [row({ status: 'running', open_count: 6 })];
+    resumeAnswer = { status: 200, body: { enqueued: true, run_id: 'r', batches: 1, recipients: 6 } };
+    render(<WhatsAppBroadcastsPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /resume/i }));
+    await waitFor(() => expect(posted).toContain('/api/whatsapp/broadcasts/b9?action=enqueue'));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('Resume refused while a batch is live (409): the reason the server gives is shown, as an error', async () => {
+    listed = [row({ status: 'paused' })];
+    resumeAnswer = { status: 409, body: { enqueued: false, code: 'BROADCAST_ALREADY_RUNNING', error: 'A batch of this broadcast is still queued or running.' } };
+    render(<WhatsAppBroadcastsPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /resume/i }));
+    expect(await screen.findByText('A batch of this broadcast is still queued or running.')).toHaveAttribute('role', 'alert');
+  });
+
+  it('failed recipients on a COMPLETED broadcast offer Retry (the server never writes "failed")', async () => {
+    listed = [row({ status: 'completed', failed_count: 2, open_count: 0 })];
+    render(<WhatsAppBroadcastsPage />);
+    expect(await screen.findByRole('button', { name: /retry/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume/i })).not.toBeInTheDocument();
+  });
+
+  it('NEGATIVE CONTROL: a running broadcast with nothing left and nothing failed offers neither', async () => {
+    listed = [row({ status: 'running', open_count: 0, failed_count: 0 })];
+    render(<WhatsAppBroadcastsPage />);
+    expect(await screen.findByText('Spring')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
   });
 });
