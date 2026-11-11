@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { refreshDirtyBroadcastCounts } from '../../../../backend/services/whatsappBroadcastService';
 /**
  * GET /api/analytics/whatsapp/broadcasts
  *
@@ -66,7 +67,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .select(
       `id, name, template_name, status,
        total_recipients, sent_count, delivered_count, read_count, failed_count,
-       created_at, completed_at`,
+       open_count, uncertain_count,
+       created_at, completed_at, counts_dirty`,
       { count: 'exact' },
     )
     .eq('company_id', company_id)
@@ -77,11 +79,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (date_from) query = query.gte('created_at', `${date_from}T00:00:00Z`);
   if (date_to)   query = query.lte('created_at', `${date_to}T23:59:59Z`);
 
-  const { data: broadcasts, count, error } = await query;
+  let { data: broadcasts, count, error } = await query;
 
   if (error) {
     console.error('[analytics/whatsapp/broadcasts] query error:', error.message);
     return res.status(500).json({ error: 'Failed to fetch broadcast analytics' });
+  }
+
+  // Counts are recomputed from the recipient rows; a debounced (dirty) one is refreshed
+  // now and the page re-read, so the figures shown are never a deferred gap.
+  if (await refreshDirtyBroadcastCounts((broadcasts ?? []) as Array<{ id: string; counts_dirty?: boolean | null }>)) {
+    ({ data: broadcasts, count, error } = await query);
+    if (error) {
+      console.error('[analytics/whatsapp/broadcasts] query error:', error.message);
+      return res.status(500).json({ error: 'Failed to fetch broadcast analytics' });
+    }
   }
 
   // Compute rates for each broadcast
