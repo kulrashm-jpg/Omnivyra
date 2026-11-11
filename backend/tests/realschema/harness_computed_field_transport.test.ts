@@ -33,6 +33,14 @@ describe('real-schema transport: PostgREST computed fields', () => {
       expect(sel.error).toBeNull();
       expect(sel.data).toEqual({ id: 3, harness_cf_double: 6 });
 
+      // PostgREST shape for a timestamptz computed field: to_json under the UTC server zone keeps
+      // the microseconds and the "+00:00" offset (node-pg's Date -> toISOString would give ".123Z").
+      await db.query(`SET LOCAL TimeZone = 'UTC'`);
+      await db.query(`CREATE FUNCTION public.harness_cf_at(r public.harness_cf_rows) RETURNS timestamptz LANGUAGE sql STABLE AS $f$ SELECT '2026-11-12 10:00:00.123456+00'::timestamptz $f$`);
+      const at = await (pgTable(client, 'harness_cf_rows') as any).select('id, harness_cf_at').eq('id', 3).maybeSingle();
+      expect(at.error).toBeNull();
+      expect(at.data).toEqual({ id: 3, harness_cf_at: '2026-11-12T10:00:00.123456+00:00' });
+
       const unknown = await (pgTable(client, 'harness_cf_rows') as any).select('id, harness_cf_missing');
       expect(unknown.data).toBeNull();
       expect(String((unknown.error as { code?: string })?.code)).toBe('42703');

@@ -9,8 +9,13 @@
  *
  * Rules (same as PostgREST): a bare identifier that IS a column passes through; one
  * that is not a column but has a one-argument function over the table's row type is
- * rendered `public."<name>"("<table>") AS "<name>"`; anything else passes through
+ * rendered `to_json(public."<name>"("<table>")) AS "<name>"`; anything else passes through
  * unchanged, so an unknown name still fails exactly as before (42703).
+ *
+ * The value goes through to_json because PostgREST builds its response with to_json: a
+ * timestamptz arrives as PostgREST sends it (ISO, microseconds kept, "+00:00" under the UTC
+ * server zone), NOT as node-pg Date -> toISOString ("Z", milliseconds), which would lose the
+ * sub-millisecond part of a database instant.
  */
 type Queryable = { query: Function };
 
@@ -38,7 +43,7 @@ export async function selectList(client: Queryable, table: string, cols: string)
       isComputed = (r.rows as Array<{ ok: unknown }>)[0]?.ok === true;
       computedCache.set(key, isComputed);
     }
-    out.push(isComputed ? `public."${name}"("${table}") AS "${name}"` : name);
+    out.push(isComputed ? `to_json(public."${name}"("${table}")) AS "${name}"` : name);
   }
   return out.join(', ');
 }
