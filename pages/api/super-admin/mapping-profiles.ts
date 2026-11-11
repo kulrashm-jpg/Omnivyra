@@ -33,6 +33,16 @@ import {
  * bridge principal is refused (audited elevated_route_denied, Closure-015).
  * The GET reads only vendor mapping rows (no tenant data).
  *
+ * DELIBERATE, NOT INHERITED FROM THE NAME: the POST is a WRITE gated by a
+ * capability whose name says "view". What authorises the write is
+ * requirePlatformAuthority (an active canonical platform SUPER_ADMIN), not the
+ * view capability. No existing platform WRITE capability fits a vendor mapping
+ * (PLATFORM_CONTROLS_MANAGE is for safety kill-switches behind passkey step-up),
+ * so this follows the planner-control/force-mode precedent. Do NOT cite this
+ * route as evidence that a view capability authorises writes. Whether a
+ * dedicated capability should exist is a GOV-SECURITY decision (virality-05
+ * flag, 2026-11-11).
+ *
  * GOV-H writer validation: `approved_by` is the VERIFIED principal's id from
  * that gate - never a body field. Every entry must use the
  * 'platform_approved' method; the shared validator and the store both enforce
