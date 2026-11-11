@@ -19,6 +19,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
+import { logger } from '../../../backend/services/logger';
 import { applyStripeSubscriptionEvent } from '../../../backend/services/billingSubscriptionService';
 import {
   recordPaymentProviderEvent,
@@ -97,11 +98,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return { id: r.id, duplicate: r.duplicate, processingStatus: r.processingStatus ?? null };
     },
     findPurchaseByProviderEventId: async (providerEventId) => {
-      const { data } = await ownedDbTable('credit_purchases')
+      // MONEY: this runs BEFORE the event is recorded. Answering "no purchase"
+      // on a failed read recorded the payment event against no purchase and
+      // marked it processed - Stripe's retry then hit 'duplicate', so the
+      // credits were never granted. A failed read throws -> 500 -> Stripe
+      // retries the whole event.
+      const { data, error } = await ownedDbTable('credit_purchases')
         .select('id, organization_id, status, fulfillment_status')
         .eq('provider', PROVIDER)
         .or(`provider_event_id.eq.${providerEventId},provider_payment_id.eq.${providerEventId},provider_order_id.eq.${providerEventId}`)
         .maybeSingle();
+      if (error) throw new Error(`credit_purchases lookup failed: ${error.message}`);
       if (!data) return null;
       const row = data as { id: string; organization_id: string; status: string; fulfillment_status: string | null };
       return { id: row.id, organization_id: row.organization_id, status: row.status, fulfillment_status: row.fulfillment_status };
@@ -141,13 +148,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     applySubscriptionEvent: async (eventType, obj, organizationId) =>
       applyStripeSubscriptionEvent(eventType, obj as any, organizationId, { db: { from: ownedDbTable } }),
     markEvent: async (eventId, status, errorMsg) => {
-      await ownedDbTable('payment_provider_events')
+      // best-effort: the event's side effects are already done and idempotent;
+      // a failed status write only leaves processing_status stale (a redelivery
+      // is a recorded duplicate). Logged, never silent.
+      const { error } = await ownedDbTable('payment_provider_events')
         .update({
           processing_status: status,
           processed_at: new Date().toISOString(),
           error_message: errorMsg ?? null,
         })
         .eq('id', eventId);
+      if (error) logger.error('stripe_webhook_mark_event_failed', { eventId, status, message: error.message });
     },
   };
 

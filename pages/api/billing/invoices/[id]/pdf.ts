@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import PDFDocument from 'pdfkit';
 import { withOrgAccess } from '../../../../../backend/middleware/withOrgAccess';
 import { supabase } from '@/backend/db/supabaseClient';
+import { logger } from '../../../../../backend/services/logger';
 
 const money = (a: number, c: string) => `${c === 'INR' ? '₹' : c === 'EUR' ? '€' : c === 'USD' ? '$' : c + ' '}${Number(a).toLocaleString()}`;
 
@@ -18,18 +19,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const orgId = String(req.query.org_id ?? '');
   if (!id || !orgId) return res.status(400).json({ error: 'id and org_id required' });
 
-  const { data: invoice } = await supabase
+  // MONEY: a failed read is neither "no such invoice" nor "no line items" -
+  // either answer would hand the customer a wrong tax document. 503, nothing rendered.
+  const { data: invoice, error: invoiceErr } = await supabase
     .from('invoices')
     .select('id, organization_id, invoice_number, currency, subtotal_amount, tax_amount, total_amount, status, issued_at, metadata')
     .eq('id', id)
     .maybeSingle();
+  if (invoiceErr) {
+    logger.error('invoice_pdf_lookup_failed', { invoiceId: id, message: invoiceErr.message });
+    return res.status(503).json({ error: 'invoice_unavailable', retryable: true });
+  }
   if (!invoice || (invoice as any).organization_id !== orgId) return res.status(404).json({ error: 'invoice_not_found' });
   const inv = invoice as any;
 
-  const { data: items } = await supabase
+  const { data: items, error: itemsErr } = await supabase
     .from('invoice_line_items')
     .select('description, quantity, unit_price, subtotal, currency')
     .eq('invoice_id', id);
+  if (itemsErr) {
+    logger.error('invoice_pdf_line_items_failed', { invoiceId: id, message: itemsErr.message });
+    return res.status(503).json({ error: 'invoice_unavailable', retryable: true });
+  }
 
   const cur = inv.currency ?? 'INR';
   const meta = inv.metadata ?? {};
