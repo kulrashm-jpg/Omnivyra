@@ -49,13 +49,15 @@ export interface SubmitArgs {
   records: ReadonlyArray<Record<string, unknown>>;
   /** Shared by every chunk of ONE import. */
   ingestionRunId: string;
+  /** PI-LDB D: the mapping the records were produced with (advisory; server-verified). */
+  mapping?: ImportMappingDescription;
   chunkSize?: number;
   onProgress?: (progress: SubmitProgress) => void;
   signal?: AbortSignal;
   /** Injected for tests; defaults to the authenticated browser fetch. */
   post?: (
     companyId: string,
-    body: { records: ReadonlyArray<Record<string, unknown>>; ingestionRunId: string },
+    body: { records: ReadonlyArray<Record<string, unknown>>; ingestionRunId: string; mapping?: ImportMappingDescription },
     signal?: AbortSignal,
   ) => Promise<{ ok: boolean; status: number; json: unknown }>;
 }
@@ -85,6 +87,13 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * otherwise would be a lie about the state of the database. The caller reports
  * what succeeded and offers a retry for the rest.
  */
+/** What the browser says about the mapping it applied. Advisory only. */
+export interface ImportMappingDescription {
+  schemaFingerprint: string;
+  profileId: string | null;
+  fields: ReadonlyArray<{ sourceField: string; target: string; method: string }>;
+}
+
 export async function submitChunks(args: SubmitArgs): Promise<SubmitResult> {
   const chunkSize = Math.max(1, Math.min(args.chunkSize ?? MAX_BATCH_SIZE, MAX_BATCH_SIZE));
   const batches = chunk(args.records, chunkSize);
@@ -120,7 +129,7 @@ export async function submitChunks(args: SubmitArgs): Promise<SubmitResult> {
     try {
       response = await post(
         args.companyId,
-        { records: batch, ingestionRunId: args.ingestionRunId },
+        { records: batch, ingestionRunId: args.ingestionRunId, ...(args.mapping ? { mapping: args.mapping } : {}) },
         args.signal,
       );
     } catch (error) {
@@ -168,7 +177,7 @@ export async function submitChunks(args: SubmitArgs): Promise<SubmitResult> {
  */
 async function defaultPost(
   companyId: string,
-  body: { records: ReadonlyArray<Record<string, unknown>>; ingestionRunId: string },
+  body: { records: ReadonlyArray<Record<string, unknown>>; ingestionRunId: string; mapping?: ImportMappingDescription },
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; status: number; json: unknown }> {
   const { apiFetch } = await import('@/lib/apiFetch');

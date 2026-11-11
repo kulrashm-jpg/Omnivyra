@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { ingestLeadBatch, isLeadIngestionEnabled, resolveLeadIngestionGate, MAX_BATCH_SIZE } from '../../../backend/services/leadIngestion/orchestrator';
+import { verifyImportMapping } from '../../../backend/services/leadMapping/importMappingProvenance';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
@@ -136,12 +137,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const ingestionRunId = typeof body.ingestionRunId === 'string' ? body.ingestionRunId : null;
 
+  // PI-LDB D: field-level mapping provenance. The browser's description is
+  // RE-VERIFIED against the tenant's stored profile (a request-supplied profile
+  // id is never used); a malformed or unverifiable description only downgrades
+  // the provenance, it never refuses the import.
+  const verified = body.mapping === undefined ? null : await verifyImportMapping({
+    organizationId: companyId,
+    source: CSV_SOURCE,
+    mapping: body.mapping,
+    principalUserId: guard.principal.userId,
+    now: new Date().toISOString(),
+  }).catch(() => null);
+
   try {
     const result = await ingestLeadBatch({
       organizationId: companyId,          // the VERIFIED tenant, never the body's
       source: CSV_SOURCE,
       records: records as Array<Record<string, unknown>>,
       ingestionRunId,
+      ...(verified ? { mappingProvenance: { person: verified.person, account: verified.account } } : {}),
     });
 
     // ONE durable event per ADMITTED batch — never per record, and never for a

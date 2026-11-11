@@ -54,6 +54,19 @@ import ResultsTable from './ResultsTable';
 
 const SOURCE = 'csv';
 
+/**
+ * How ONE column's destination was decided - the single rule used both for a
+ * saved profile's entries and for the mapping described with an import, so the
+ * two cannot disagree. (The server re-verifies any 'approved_profile_match'.)
+ */
+function decisionMethod(
+  p: MappingProposalResponse['proposals'][number],
+  target: string | null,
+): 'approved_profile_match' | 'tenant_confirmed' | 'tenant_override' {
+  if (p.status === 'approved_profile_match') return 'approved_profile_match';
+  return p.candidate?.target === target ? 'tenant_confirmed' : 'tenant_override';
+}
+
 type Phase = 'choose' | 'map' | 'confirm' | 'results';
 
 export default function ImportWizard({ companyId }: { companyId: string }) {
@@ -269,7 +282,6 @@ export default function ImportWizard({ companyId }: { companyId: string }) {
       const entries = proposal.proposals.map((p) => {
         const decision = decisions[p.sourceField];
         const target = decision?.target ?? null;
-        const fromProfile = p.status === 'approved_profile_match';
         return {
           sourceField: p.sourceField,
           target,
@@ -280,11 +292,7 @@ export default function ImportWizard({ companyId }: { companyId: string }) {
                 ? (p.alternatives.find((a) => a.target === target)?.transformation ?? 'trim')
                 : 'none',
           decision: (target === null ? 'ignored' : 'approved') as 'approved' | 'ignored',
-          mappingMethod: fromProfile
-            ? ('approved_profile_match' as const)
-            : p.candidate?.target === target
-              ? ('tenant_confirmed' as const)
-              : ('tenant_override' as const),
+          mappingMethod: decisionMethod(p, target),
         };
       });
 
@@ -337,6 +345,19 @@ export default function ImportWizard({ companyId }: { companyId: string }) {
         companyId,
         records,
         ingestionRunId: newRunId(),
+        // PI-LDB D: describe the mapping these records were produced with, so
+        // the server can stamp per-field provenance. Advisory: the server
+        // re-verifies it against the stored profile and trusts no id from here.
+        ...(proposal ? {
+          mapping: {
+            schemaFingerprint: proposal.sourceSchemaFingerprint,
+            profileId: proposal.profile?.profileId ?? null,
+            fields: proposal.proposals
+              .map((p) => ({ p, target: decisions[p.sourceField]?.target ?? null }))
+              .filter((x): x is { p: typeof x.p; target: string } => x.target !== null)
+              .map(({ p, target }) => ({ sourceField: p.sourceField, target, method: decisionMethod(p, target) })),
+          },
+        } : {}),
         onProgress: setProgress,
         signal: controller.signal,
       });

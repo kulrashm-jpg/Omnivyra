@@ -51,6 +51,12 @@ jest.mock('../../../lib/platform/routeFactory', () => ({
   createApiRoute: (h: unknown) => h,
 }));
 
+// PI-LDB D: the route re-verifies a submitted mapping against the stored profile.
+const loadActiveProfile = jest.fn();
+jest.mock('../../services/leadMapping/mappingProfileStore', () => ({
+  loadActiveProfile: (...a: unknown[]) => loadActiveProfile(...a),
+}));
+
 import handler from '../../../pages/api/lead-ingestion/csv';
 import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -257,5 +263,43 @@ describe('PI-P1-W02 — the response and telemetry', () => {
     expect(res._status).toBe(200);
     expect(res._json.failed).toBe(1);
     expect(res._json.succeeded).toBe(1);
+  });
+});
+
+
+describe('PI-LDB D - field-level mapping provenance is VERIFIED before it reaches ingestion', () => {
+  const FP = 'c'.repeat(64);
+  beforeEach(() => {
+    loadActiveProfile.mockReset();
+    loadActiveProfile.mockResolvedValue({
+      profileId: 'prof-9', version: 1, sourceSchemaFingerprint: FP, headers: ['Designation'],
+      entries: [{ sourceField: 'Designation', target: 'jobTitle', transformation: 'trim', approvedBy: 'u-approver', approvedAt: '2026-11-01T00:00:00Z' }],
+    });
+  });
+
+  it('no mapping in the request -> no provenance passed (and no profile read)', async () => {
+    await call();
+    expect(ingestLeadBatch.mock.calls[0][0]).not.toHaveProperty('mappingProvenance');
+    expect(loadActiveProfile).not.toHaveBeenCalled();
+  });
+
+  it('a verified pair reaches ingestion stamped with the SERVER-loaded profile, for THIS tenant', async () => {
+    await call({ body: { records: [{ email: 'dana@example.com' }], mapping: {
+      schemaFingerprint: FP, profileId: 'forged-id', fields: [{ sourceField: 'Designation', target: 'jobTitle', method: 'approved_profile_match' }],
+    } } } as never);
+    expect(loadActiveProfile).toHaveBeenCalledWith({ organizationId: ORG_A, source: 'csv', schemaFingerprint: FP });
+    expect(ingestLeadBatch.mock.calls[0][0].mappingProvenance.person.job_title).toMatchObject({
+      mappingMethod: 'approved_profile_match', mappingProfileId: 'prof-9', approvedBy: 'u-approver',
+    });
+  });
+
+  it('an unverifiable claim is downgraded to tenant_confirmed by the VERIFIED principal - and the import still runs', async () => {
+    loadActiveProfile.mockRejectedValue(new Error('read_failed'));
+    const res = await call({ body: { records: [{ email: 'dana@example.com' }], mapping: {
+      schemaFingerprint: FP, fields: [{ sourceField: 'Designation', target: 'jobTitle', method: 'approved_profile_match' }],
+    } } } as never);
+    expect(res._status).toBe(200);
+    expect(ingestLeadBatch.mock.calls[0][0].mappingProvenance.person.job_title).toMatchObject({ mappingMethod: 'tenant_confirmed', approvedBy: 'u-1' });
+    expect(ingestLeadBatch.mock.calls[0][0].mappingProvenance.person.job_title.mappingProfileId).toBeUndefined();
   });
 });

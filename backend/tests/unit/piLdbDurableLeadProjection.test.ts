@@ -349,3 +349,16 @@ describe('PI-LDB-4 — it cannot take good intake down with it', () => {
     expect(out.leadProjection?.status).not.toBe('failed');
   });
 });
+
+describe('PI-LDB D - verified mapping provenance reaches the LI-2 boundary per entity', () => {
+  it('the PERSON map goes with the person record; no provenance option means none is passed', async () => {
+    const person = { job_title: { sourceField: 'Designation', mappingMethod: 'tenant_confirmed' as const, approvedBy: 'u-1', approvedAt: '2026-11-11T00:00:00Z' } };
+    const before = ingested.length;
+    await ingestNormalizedRecord(csvRecord(), { mappingProvenance: { person, account: {} } });
+    expect(ingested[before].entityType).toBe('person');
+    expect(ingested[before].mappingProvenance).toBe(person);
+    const before2 = ingested.length;
+    await ingestNormalizedRecord(csvRecord());
+    expect(ingested[before2]).not.toHaveProperty('mappingProvenance');
+  });
+});

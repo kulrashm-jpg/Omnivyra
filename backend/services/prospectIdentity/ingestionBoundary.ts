@@ -113,6 +113,60 @@ export type SourceEntityType = 'person' | 'account';
  * Nothing in it names a provider, so adding one requires no change here and no
  * migration (`source_records.provider` is free text on purpose).
  */
+/**
+ * PI-LDB D: FIELD-LEVEL MAPPING PROVENANCE for an assertion (migration
+ * 20270211000001). Which source column produced the value, and which mapping
+ * decision sent it to this attribute. Built ONLY by the server-side verifier
+ * (leadMapping/importMappingProvenance.ts) from a mapping it re-checked
+ * against the stored profile - never taken from a request as-is.
+ */
+export interface AssertionMappingProvenance {
+  /** The source's own column heading, verbatim. */
+  sourceField: string;
+  mappingMethod: 'approved_profile_match' | 'high_confidence_suggestion' | 'tenant_confirmed' | 'tenant_override' | 'no_mapping_layer';
+  /** A VERIFIED tenant profile version (exclusive with platformMappingProfileId). */
+  mappingProfileId?: string | null;
+  /** A VERIFIED platform (vendor) profile version. */
+  platformMappingProfileId?: string | null;
+  /** GOV-H actor (no FK), writer-validated: the profile entry's approver or the verified principal. */
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+}
+
+/**
+ * The mapping-provenance columns exist only once 20270211000001 is applied, and
+ * source_assertions is insert-only: naming an absent column would fail EVERY
+ * assertion insert and stop ingestion. So the write is OFF until that migration
+ * is live in the target environment (an enable-checklist item, flipped in the
+ * same change that confirms the apply). Until then the provenance is computed,
+ * verified and simply not persisted.
+ */
+export const MAPPING_PROVENANCE_WRITES_ENABLED = false;
+
+/** The insert columns for one assertion's provenance; empty when disabled or absent. */
+export function mappingProvenanceColumns(
+  prov: AssertionMappingProvenance | undefined,
+  enabled: boolean = MAPPING_PROVENANCE_WRITES_ENABLED,
+): Record<string, unknown> {
+  if (!enabled || !prov || !prov.sourceField?.trim()) return {};
+  const tenantProfile = prov.mappingProfileId ?? null;
+  // Exclusive by construction (the table CHECK says the same): a tenant
+  // profile wins only if a platform one was not also supplied - never both.
+  const platformProfile = tenantProfile ? null : (prov.platformMappingProfileId ?? null);
+  const approvedBy = prov.approvedBy ?? null;
+  const approvedAt = approvedBy ? (prov.approvedAt ?? null) : null;
+  return {
+    source_field: prov.sourceField,
+    mapping_method: prov.mappingMethod,
+    mapping_profile_id: tenantProfile,
+    platform_mapping_profile_id: platformProfile,
+    platform_mapping_profile_scope: platformProfile ? 'platform' : null,
+    // Coherence (source_assertions_approval_coherent): both or neither.
+    approved_by: approvedBy && approvedAt ? approvedBy : null,
+    approved_at: approvedBy && approvedAt ? approvedAt : null,
+  };
+}
+
 export interface ProviderSourceRecord {
   /** TENANT. Never the prospect's employer. */
   organizationId: string;
@@ -147,6 +201,12 @@ export interface ProviderSourceRecord {
   sourceCategory?: SourceCategory | null;
   platform?: string | null;
   sourceUrl?: string | null;
+  /**
+   * PI-LDB D: per-ATTRIBUTE-COLUMN mapping provenance for THIS entity's claims
+   * (e.g. { job_title: {...} }). Server-verified; persisted only when
+   * MAPPING_PROVENANCE_WRITES_ENABLED.
+   */
+  mappingProvenance?: Readonly<Record<string, AssertionMappingProvenance>>;
 }
 
 export type SourceRecordOutcome = 'created' | 'unchanged' | 'changed';
@@ -434,6 +494,8 @@ export async function recordAssertions(
       confidence: input.confidence ?? null,
       observed_at: input.observedAt ?? null,
       recorded_at: now,
+      // PI-LDB D: field-level mapping provenance (gated; see the constant).
+      ...mappingProvenanceColumns(input.mappingProvenance?.[a.attribute]),
     };
     const res = await ownedDbTable('source_assertions').insert(row).select('id').single();
     if (!res.error) { recorded += 1; continue; }

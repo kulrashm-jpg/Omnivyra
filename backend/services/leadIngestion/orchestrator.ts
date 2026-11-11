@@ -38,7 +38,7 @@ const isIdentityConflict = (e: unknown): e is IdentityConflictError =>
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { resolveOrCreateProspect } from '../prospectIdentity/prospectResolution';
 import { piProspectCandidateKeys, recordPiIngestionContribution } from '../prospectProvenance/ingestion/piIngestionContribution';
-import type { ProviderSourceRecord } from '../prospectIdentity/ingestionBoundary';
+import type { AssertionMappingProvenance, ProviderSourceRecord } from '../prospectIdentity/ingestionBoundary';
 
 type ProviderSourceCategory = ProviderSourceRecord['sourceCategory'];
 import { planProspectEnrichment, type EnrichmentPorts } from '../enrichment/service';
@@ -200,6 +200,18 @@ export interface IngestBatchInput {
   ingestionRunId?: string | null;
   /** Injected instant, so a run is reproducible. */
   now?: string;
+  /**
+   * PI-LDB D: field-level mapping provenance for the WHOLE batch (one import =
+   * one mapping), already VERIFIED server-side (importMappingProvenance.ts).
+   * Keyed per entity by attribute column. Never built from a request as-is.
+   */
+  mappingProvenance?: BatchMappingProvenance;
+}
+
+/** Per-entity, per-attribute-column provenance (see ingestionBoundary). */
+export interface BatchMappingProvenance {
+  person: Readonly<Record<string, AssertionMappingProvenance>>;
+  account: Readonly<Record<string, AssertionMappingProvenance>>;
 }
 
 const fail = (
@@ -291,6 +303,8 @@ export async function ingestNormalizedRecord(
   options: {
     ingestionRunId?: string | null;
     now?: string;
+    /** PI-LDB D: verified batch mapping provenance (see IngestBatchInput). */
+    mappingProvenance?: BatchMappingProvenance;
     /**
      * WS-2 seam ports. OPTIONAL by design: without them no enrichment planning
      * happens and ingestion behaves exactly as before, so wiring the planner
@@ -504,6 +518,9 @@ export async function ingestNormalizedRecord(
       confidence: record.confidence ?? null,
       sourceCategory: (keys.provenance?.sourceCategory ?? null) as ProviderSourceCategory,
       platform: keys.provenance?.platform ?? null,
+      ...(options.mappingProvenance
+        ? { mappingProvenance: record.entityType === 'person' ? options.mappingProvenance.person : options.mappingProvenance.account }
+        : {}),
     }, at);
   } catch (e) {
     return fail(externalId, 'provenance_failed', e);
@@ -542,6 +559,7 @@ export async function ingestNormalizedRecord(
         ingestionRunId: options.ingestionRunId ?? null,
         accountAttributes: toAccountAttributeInput(record.account),
         confidence: record.confidence ?? null,
+        ...(options.mappingProvenance ? { mappingProvenance: options.mappingProvenance.account } : {}),
       }, at);
     } catch (e) {
       // Consistent with the employer resolution above, which already fails a
@@ -924,6 +942,7 @@ export async function ingestLeadBatch(input: IngestBatchInput): Promise<Ingestio
         // One decision for the batch. The kill switch is still re-read per
         // record inside, so a mid-batch flip still stops the next one.
         gateDecision,
+        ...(input.mappingProvenance ? { mappingProvenance: input.mappingProvenance } : {}),
       }), raw));
     } catch (e) {
       outcomes.push(withIgnored(fail(translated.normalized.externalId ?? null, 'unexpected_failure', e), raw));
