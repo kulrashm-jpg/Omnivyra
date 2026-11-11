@@ -31,12 +31,24 @@ interface PlanAnalytics {
   avg_cost_per_org: number;
   monthly_price: number | null;
   monthly_credits: number | null;
-  feature_adoption: Record<string, number>;
+  /**
+   * NOT AVAILABLE (null). There is no canonical per-plan adoption source for
+   * these features; the values used to be RANDOM - invented numbers on
+   * an admin screen (C10, 2026-11-11). Never fill this with a guess: add a real
+   * source first (a reviewed definition of "adopted" per feature).
+   */
+  feature_adoption: Record<string, number> | null;
   usage_health: 'low' | 'medium' | 'high';
 }
 
 interface PlanAnalyticsResponse {
   plans: PlanAnalytics[];
+  /**
+   * 'ok' when this month's usage meter was read; 'unavailable' when the read
+   * failed, in which case every usage figure below is 0 because it is UNKNOWN,
+   * not because nothing was used. The UI must not present those zeros as real.
+   */
+  usage_status: 'ok' | 'unavailable';
   summary: {
     total_organizations: number;
     total_monthly_revenue: number;
@@ -68,6 +80,44 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
   }
 }
 
+interface MeterRow {
+  organization_id: string;
+  llm_total_tokens: number | null;
+  external_api_calls: number | null;
+  automation_executions: number | null;
+}
+
+const METER_PAGE = 1000;
+
+/**
+ * Every organisation's meter row for the CURRENT UTC month - the same month
+ * convention the meter's writer uses (usageMeterService.currentYearMonth).
+ * Paged, so a large tenant count is not silently truncated at the PostgREST row
+ * cap. A failed read is reported as not-ok, never as an empty month: a null
+ * error is not an answer, only an array body is.
+ */
+export async function readMonthlyUsage(now: Date = new Date()): Promise<{ rows: MeterRow[]; ok: boolean }> {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const rows: MeterRow[] = [];
+  for (let from = 0; ; from += METER_PAGE) {
+    try {
+      const res = await supabase
+        .from('usage_meter_monthly')
+        .select('organization_id, llm_total_tokens, external_api_calls, automation_executions')
+        .eq('year', year)
+        .eq('month', month)
+        .order('organization_id', { ascending: true })
+        .range(from, from + METER_PAGE - 1);
+      if (res.error || !Array.isArray(res.data)) return { rows: [], ok: false };
+      rows.push(...(res.data as MeterRow[]));
+      if (res.data.length < METER_PAGE) return { rows, ok: true };
+    } catch {
+      return { rows: [], ok: false };
+    }
+  }
+}
+
 async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PlanAnalyticsResponse | { error: string }>
@@ -92,6 +142,7 @@ async function handler(
     if (!plans || plans.length === 0) {
       return res.status(200).json({
         plans: [],
+        usage_status: 'ok',
         summary: {
           total_organizations: 0,
           total_monthly_revenue: 0,
@@ -147,25 +198,20 @@ async function handler(
     // Track free credit orgs separately
     const freeCreditsOrgIds = new Set((freeCreditGrants || []).map(g => g.organization_id));
 
-    // Get usage metrics (mock data structure — in production, join with consumption logs)
-    let usageData: any[] = [];
-    try {
-      const result = await supabase.rpc('get_organization_monthly_usage', {
-        month: new Date().getMonth() + 1,
-        year: new Date().getFullYear(),
-      });
-      usageData = result.data || [];
-    } catch (e) {
-      // Fallback if RPC doesn't exist — use mock data
-      usageData = [];
-    }
+    // This month's usage, from the canonical meter (usage_meter_monthly, written
+    // by usageMeterService and read by usageEnforcementService/usageAlertService).
+    // C10 (2026-11-11): this used to call an RPC, get_organization_monthly_usage,
+    // that has never existed in any branch or in production, and swallowed the
+    // failure - so this page has always shown ZERO usage for every plan. It now
+    // reads the meter directly; no new database function is needed.
+    const { rows: usageData, ok: usageOk } = await readMonthlyUsage();
 
     const usageByOrg: Record<string, any> = {};
-    usageData?.forEach((u: any) => {
+    usageData.forEach((u) => {
       usageByOrg[u.organization_id] = {
-        llm_tokens: u.llm_tokens_used || 0,
-        api_calls: u.api_calls_used || 0,
-        automations: u.automation_executions || 0,
+        llm_tokens: Number(u.llm_total_tokens) || 0,
+        api_calls: Number(u.external_api_calls) || 0,
+        automations: Number(u.automation_executions) || 0,
       };
     });
 
@@ -193,13 +239,8 @@ async function handler(
       const totalCost = tokenCost + apiCost;
       const avgCostPerOrg = orgs.length > 0 ? totalCost / orgs.length : 0;
 
-      // Feature adoption (mock)
-      const featureAdoption: Record<string, number> = {
-        campaigns_created: orgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-        ai_content_generated: orgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-        engagement_ai: orgs.length > 0 ? Math.round(Math.random() * 80) : 0,
-        automation_enabled: orgs.length > 0 ? Math.round(Math.random() * 60) : 0,
-      };
+      // Feature adoption: NOT AVAILABLE - no canonical source (see the type).
+      const featureAdoption = null;
 
       // Health indicator based on usage
       let usageHealth: 'low' | 'medium' | 'high' = 'low';
@@ -246,12 +287,7 @@ async function handler(
     const freeCreditsTotalCost = freeCreditsTokenCost + freeCreditsApiCost;
     const freeCreditsAvgCostPerOrg = freeCreditsOrgs.length > 0 ? freeCreditsTotalCost / freeCreditsOrgs.length : 0;
 
-    const freeCreditsFeatureAdoption: Record<string, number> = {
-      campaigns_created: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-      ai_content_generated: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-      engagement_ai: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 80) : 0,
-      automation_enabled: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 60) : 0,
-    };
+    const freeCreditsFeatureAdoption = null; // NOT AVAILABLE - no canonical source
 
     let freeCreditsHealth: 'low' | 'medium' | 'high' = 'low';
     if (freeCreditsAvgTokens > 50000) freeCreditsHealth = 'high';
@@ -297,6 +333,7 @@ async function handler(
     };
 
     return res.status(200).json({
+      usage_status: usageOk ? 'ok' : 'unavailable',
       plans: planAnalytics,
       summary,
     });

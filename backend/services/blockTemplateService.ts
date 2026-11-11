@@ -7,7 +7,6 @@ import { ownedDbTable } from '../db/writeOwner';
  * Follows the strategyTemplateService pattern.
  */
 
-import { supabase } from '../db/supabaseClient';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -418,17 +417,62 @@ export async function deleteBlockTemplate(id: string): Promise<void> {
   if (error) throw new Error(`Failed to delete block template: ${error.message}`);
 }
 
-// ── Increment usage ─────────────────────────────────────────────────────────
+// ── Usage count ─────────────────────────────────────────────────────────────
+// C10 (2026-11-11). History: an `incrementTemplateUsage` here called an RPC
+// (increment_block_template_usage) that never existed and had NO caller, so
+// usage_count was never incremented. Owner decision (relayed by virality-e9):
+// COUNT USE PROPERLY. The use points are the "use this template" actions on the
+// blog, newsletter and managed (article/case study/guide/story/whitepaper)
+// template pages, which call POST /api/block-templates/[id].
 
-export async function incrementTemplateUsage(id: string): Promise<void> {
-  const { error } = await supabase.rpc('increment_block_template_usage', { template_id: id });
-  if (error) {
-    // Fallback: manual increment
-    const tpl = await getBlockTemplate(id);
-    if (tpl) {
-      await ownedDbTable('block_templates')
-        .update({ usage_count: tpl.usage_count + 1 })
-        .eq('id', id);
-    }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_INCREMENT_ATTEMPTS = 5;
+
+export class BlockTemplateUsageError extends Error {
+  constructor(message: string, readonly kind: 'invalid_argument' | 'not_found' | 'conflict' | 'read_failed' | 'write_failed') {
+    super(message);
+    this.name = 'BlockTemplateUsageError';
   }
+}
+
+/**
+ * Records ONE use of a block template and returns the new count.
+ *
+ * ATOMIC without a database function: a compare-and-set update
+ * (SET usage_count = n + 1 WHERE id = ... AND usage_count = n). Two concurrent
+ * uses cannot both write n + 1: one matches no row and re-reads. Bounded to
+ * MAX_INCREMENT_ATTEMPTS, then reported as a conflict - never silently dropped.
+ *
+ * TENANT-SCOPED: only a template this company can see (its own, or a system
+ * default) is counted; anything else is not_found. Every failure THROWS; a null
+ * error is not an answer, only an array body is.
+ */
+export async function recordBlockTemplateUse(id: string, companyId: string): Promise<number> {
+  if (!UUID.test(id ?? '')) throw new BlockTemplateUsageError('id must be a uuid', 'invalid_argument');
+  if (!UUID.test(companyId ?? '')) throw new BlockTemplateUsageError('companyId must be a uuid', 'invalid_argument');
+
+  for (let attempt = 0; attempt < MAX_INCREMENT_ATTEMPTS; attempt += 1) {
+    const read = await ownedDbTable('block_templates')
+      .select('id, usage_count')
+      .eq('id', id)
+      .or(`company_id.eq.${companyId},is_default.eq.true`)
+      .limit(1);
+    if (read.error || !Array.isArray(read.data)) {
+      throw new BlockTemplateUsageError(`block_templates read failed: ${read.error?.message ?? 'no rows array returned'}`, 'read_failed');
+    }
+    if (read.data.length === 0) throw new BlockTemplateUsageError('template not found for this company', 'not_found');
+
+    const raw = (read.data[0] as { usage_count: number | null }).usage_count;
+    const current = typeof raw === 'number' ? raw : 0;
+    let write = ownedDbTable('block_templates').update({ usage_count: current + 1 }).eq('id', id);
+    // The column is nullable (DEFAULT 0, no NOT NULL): compare against what was READ.
+    write = raw === null || raw === undefined ? write.is('usage_count', null) : write.eq('usage_count', current);
+    const res = await write.select('id');
+    if (res.error || !Array.isArray(res.data)) {
+      throw new BlockTemplateUsageError(`block_templates usage write failed: ${res.error?.message ?? 'no rows array returned'}`, 'write_failed');
+    }
+    if (res.data.length === 1) return current + 1;
+    // 0 rows: another use landed between the read and the write. Re-read.
+  }
+  throw new BlockTemplateUsageError('usage could not be recorded: the template is being used concurrently; retry', 'conflict');
 }

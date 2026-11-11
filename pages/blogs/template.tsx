@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { recordBlockTemplateUse } from '../../lib/content/recordBlockTemplateUse';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowLeft, Loader2, Pencil, LayoutGrid, Eye } from 'lucide-react';
@@ -99,6 +100,8 @@ export default function BlogTemplatePage() {
   const [customBlocks, setCustomBlocks] = useState<ContentBlock[]>([]);
   const [selectedFormatType, setSelectedFormatType] = useState<string | null>(null);
   const [selectedTemplateName, setSelectedTemplateName] = useState<string | null>(null);
+  // The SAVED template the current selection came from, if any (C10: its use is counted).
+  const [selectedSavedId, setSelectedSavedId] = useState<string | null>(null);
   const [savedTemplates, setSavedTemplates] = useState<Array<{ id: string; name: string; description: string | null; content_blocks: ContentBlock[]; usage_count: number; format_type?: string | null }>>([]);
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -112,6 +115,7 @@ export default function BlogTemplatePage() {
     const first = defaults[0];
     const blocks = instantiateBlogTemplate(first, targetWords);
     setSelectedIdx(0);
+    setSelectedSavedId(null);
     setCustomBlocks(blocks);
     setSelectedFormatType(first.format_type ?? null);
     setSelectedTemplateName(first.name);
@@ -133,6 +137,7 @@ export default function BlogTemplatePage() {
     const tpl = defaults[idx];
     const blocks = instantiateBlogTemplate(tpl, targetWords);
     setSelectedIdx(idx);
+    setSelectedSavedId(null);
     setCustomBlocks(blocks);
     setSelectedFormatType(tpl.format_type ?? null);
     setSelectedTemplateName(tpl.name);
@@ -140,6 +145,7 @@ export default function BlogTemplatePage() {
 
   const handleSelectSaved = useCallback((tpl: typeof savedTemplates[0]) => {
     setSelectedIdx(null);
+    setSelectedSavedId(tpl.id);
     setCustomBlocks(tpl.content_blocks);
     setSelectedFormatType(tpl.format_type ?? null);
     setSelectedTemplateName(tpl.name);
@@ -180,6 +186,8 @@ export default function BlogTemplatePage() {
     // Store blocks with template format so generation and scoring stay consistent.
     const token = `tpl_${Date.now()}`;
     sessionStorage.setItem(token, JSON.stringify({ blocks, format_type: formatType, template_name: selectedTemplateName }));
+    // ONE use of a saved template (C10). Built-in layouts have no row to count.
+    void recordBlockTemplateUse(companyId, selectedSavedId);
     router.push({
       pathname: '/blogs/suggestions',
       query: { words, topic, tpl: token },

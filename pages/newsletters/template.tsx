@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { recordBlockTemplateUse } from '../../lib/content/recordBlockTemplateUse';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowLeft, Eye, LayoutGrid, Loader2, Pencil } from 'lucide-react';
@@ -45,6 +46,8 @@ export default function NewsletterTemplatePage() {
   const [customBlocks, setCustomBlocks] = useState<ContentBlock[]>([]);
   const [selectedFormatType, setSelectedFormatType] = useState<string | null>(null);
   const [selectedTemplateName, setSelectedTemplateName] = useState<string | null>(null);
+  // The SAVED template the current selection came from, if any (C10: its use is counted).
+  const [selectedSavedId, setSelectedSavedId] = useState<string | null>(null);
   const [savedTemplates, setSavedTemplates] = useState<SavedTemplate[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [previewTpl, setPreviewTpl] = useState<{ name: string; description: string; blocks: ContentBlock[]; formatType?: string | null; isDefault?: boolean } | null>(null);
@@ -69,6 +72,7 @@ export default function NewsletterTemplatePage() {
     if (!tpl) return;
     const blocks = instantiateNewsletterTemplate(tpl, targetWords);
     setSelectedIdx(initialIndex);
+    setSelectedSavedId(null);
     setCustomBlocks(blocks);
     setSelectedFormatType(tpl.format_type ?? null);
     setSelectedTemplateName(tpl.name);
@@ -89,6 +93,7 @@ export default function NewsletterTemplatePage() {
     if (!tpl) return;
     const blocks = instantiateNewsletterTemplate(tpl, targetWords);
     setSelectedIdx(idx);
+    setSelectedSavedId(null);
     setCustomBlocks(blocks);
     setSelectedFormatType(tpl.format_type ?? null);
     setSelectedTemplateName(tpl.name);
@@ -96,6 +101,7 @@ export default function NewsletterTemplatePage() {
 
   const handleSelectSaved = useCallback((tpl: SavedTemplate) => {
     setSelectedIdx(null);
+    setSelectedSavedId(tpl.id);
     setCustomBlocks(tpl.content_blocks);
     setSelectedFormatType(tpl.format_type ?? null);
     setSelectedTemplateName(tpl.name);
@@ -132,6 +138,8 @@ export default function NewsletterTemplatePage() {
       target_words: targetWords,
       topic: topic.trim(),
     }));
+    // ONE use of a saved template (C10). Built-in layouts have no row to count.
+    void recordBlockTemplateUse(companyId, selectedSavedId);
     router.push({
       pathname: '/newsletters/suggestions',
       query: { tpl: token, topic: topic.trim(), depth, format: formatType || undefined },
