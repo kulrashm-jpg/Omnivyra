@@ -80,6 +80,10 @@ describe('P2D — manual input carries firmographics', () => {
       countryCode: null, region: null, city: null,
       annualRevenue: null, revenueBand: null, foundedYear: null,
       technologies: null, fundingStage: null, lastFundingAt: null,
+      // PI-LDB: `description` is now carried end to end (manualAdapter). Absent
+      // in the input -> null here, and pendingFromAccount drops null attributes,
+      // so no assertion is written: the behaviour is unchanged.
+      description: null,
     });
   });
 

@@ -12,6 +12,11 @@ const view = (over: Partial<CanonicalLeadView> = {}): CanonicalLeadView => ({
   utm: { source: 'linkedin', medium: 'social', campaign: 'spring', content: 'carousel', term: null },
   occurredAt: '2026-06-01T00:00:00Z', sourceRef: { table: 'leads', id: 'L1' },
   attribution: { originalSource: 'website', originalChannel: 'social', campaign: 'spring', content: 'pricing', session: null, journey: null, referrer: null, utm: { source: 'linkedin', medium: 'social', campaign: 'spring', content: 'carousel', term: null }, identity: {}, sourceMetadata: { metadata: { intent: 'request_demo', web_attribution: { landing_page: 'https://omnivyra.com/' } } } },
+  // PI-LDB: "Submitted a lead form" is granted only on RECORDED evidence - an
+  // asserted origin of 'inbound_form' (hasLeadFormEvidence, fail closed) - never
+  // because the display source is 'website'. This fixture IS a website lead that
+  // submitted a form, so it carries that evidence, as a real persisted row does.
+  origin: { category: 'inbound_form', platform: null, observedAt: '2026-06-01T00:00:00Z', provenance: 'asserted' },
   ...over,
 });
 
@@ -75,7 +80,7 @@ describe('Phase 10 — Buying Intent engine', () => {
     expect(customer.decisionStage).toBe('customer');
 
     // signal-only community lead with weak signal → awareness (not a form submit)
-    const awareness = buildBuyingIntentProfile({ view: view({ source: 'community', sourceLabel: 'Community', scores: { intent: 0.2 }, campaign: null, content: null, utm: { source: null, medium: null, campaign: null, content: null, term: null }, attribution: { ...view().attribution, campaign: null, content: null, utm: { source: null, medium: null, campaign: null, content: null, term: null }, sourceMetadata: {} } }) });
+    const awareness = buildBuyingIntentProfile({ view: view({ origin: undefined /* a community signal: no form evidence */, source: 'community', sourceLabel: 'Community', scores: { intent: 0.2 }, campaign: null, content: null, utm: { source: null, medium: null, campaign: null, content: null, term: null }, attribution: { ...view().attribution, campaign: null, content: null, utm: { source: null, medium: null, campaign: null, content: null, term: null }, sourceMetadata: {} } }) });
     expect(awareness.decisionStage).toBe('awareness');
   });
 

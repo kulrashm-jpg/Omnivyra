@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { validateMappingApprovalBody } from '../../../backend/services/leadMapping/mappingApprovalValidation';
 import { PLATFORM_VENDOR_KEYS, platformVendorKey } from '../../../backend/services/leadMapping/platformVendorSources';
@@ -21,13 +22,19 @@ import {
  *
  * A data vendor's mapping (e.g. Apollo's export shape) is approved ONCE here
  * and applies to every company (owner direction, relayed by virality-e9,
- * 2026-11-11). Tenants can never reach this: the route requires a Super Admin
- * (canonical identity + isPlatformSuperAdmin, never the legacy bridge cookie),
- * and the tenant approval route refuses vendor sources with
- * PLATFORM_VENDOR_SOURCE.
+ * 2026-11-11). Tenants can never reach this, and the tenant approval route
+ * refuses vendor sources with PLATFORM_VENDOR_SOURCE.
  *
- * GOV-H writer validation: `approved_by` is the VERIFIED Super Admin's id from
- * requireSuperAdminUser - never a body field. Every entry must use the
+ * AUTHORITY (the canonical capability gate, not the legacy requireSuperAdminUser
+ * facade - Platform Authority Legacy Facade Elimination; same shape as
+ * planner-control/force-mode): requireCapability(SUPER_ADMIN_DASHBOARD_VIEW).
+ * The POST is a platform-wide WRITE, so it also sets requirePlatformAuthority:
+ * only an active canonical platform SUPER_ADMIN passes; a direct grantee or a
+ * bridge principal is refused (audited elevated_route_denied, Closure-015).
+ * The GET reads only vendor mapping rows (no tenant data).
+ *
+ * GOV-H writer validation: `approved_by` is the VERIFIED principal's id from
+ * that gate - never a body field. Every entry must use the
  * 'platform_approved' method; the shared validator and the store both enforce
  * it. The body carries no tenant: platform rows have organization_id NULL.
  */
@@ -45,8 +52,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const admin = await requireSuperAdminUser(req, res);
-  if (!admin) return; // 401/403 already sent
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: `platform vendor mapping profiles (${req.method})`,
+    // A platform-wide write: platform authority required (Closure-015).
+    requirePlatformAuthority: req.method === 'POST',
+  });
+  if (guard.ok !== true) return; // 401/403 already sent
 
   if (req.method === 'GET') {
     const source = typeof req.query.source === 'string' ? req.query.source : '';
@@ -81,12 +93,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     sourceMessage: `source must be a platform vendor: ${PLATFORM_VENDOR_KEYS.join(', ')}`,
     methods: PLATFORM_METHODS,
   });
-  if (!checked.ok) return res.status(checked.status).json(checked.body);
+  // `=== false`, not `!checked.ok`: without strictNullChecks a truthiness test
+  // does not narrow the union (CI-29 TS2339).
+  if (checked.ok === false) return res.status(checked.status).json(checked.body);
   const { source, schemaFingerprint, headers, entries } = checked.value;
 
   try {
     const saved = await savePlatformProfileVersion({
-      source, schemaFingerprint, headers, entries, approvedBy: admin.id,
+      source, schemaFingerprint, headers, entries, approvedBy: guard.principal.userId,
     });
     return res.status(201).json({ profileId: saved.profileId, version: saved.version });
   } catch (err) {

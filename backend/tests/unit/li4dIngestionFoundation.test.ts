@@ -582,7 +582,7 @@ describe('LI-4D — 13/14. bulk limits and capabilities', () => {
     registerLeadSourceAdapter(fakeAdapter());
     const many = Array.from({ length: MAX_BATCH_SIZE + 1 }, (_, i) => row({ id: `E${i}` }));
     await expect(ingestLeadBatch({ organizationId: ORG_A, source: 'test_source', records: many }))
-      .rejects.toThrow(/exceeds the 1000 limit/);
+      .rejects.toThrow(new RegExp(`exceeds the ${MAX_BATCH_SIZE} limit`)); // the cap itself is pinned elsewhere (PI-LDB 2F: 1000 -> 100)
   });
 
   it('an empty batch is a valid no-op', async () => {

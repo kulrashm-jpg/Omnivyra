@@ -14,6 +14,13 @@
  * 'apollo.io', 'APOLLO_export' and 'enrichment_apollo' resolve to 'apollo';
  * 'myapollo' does not.
  *
+ * The strip list ('enrichment') is OBSERVATIONAL, not complete: it holds the
+ * prefixes actually seen in this codebase. For THIS matcher under-matching is
+ * the unsafe direction - a source named e.g. 'import_apollo' escapes the guard
+ * and a tenant could approve its own mapping for a vendor export. Meeting such
+ * a form means adding it here, not assuming the matcher already covers it
+ * (virality-05, 2026-11-11).
+ *
  * FAIL-SAFE DIRECTION: this matcher deliberately OVER-matches. Its only
  * consequence is REFUSING a tenant approval (403 PLATFORM_VENDOR_SOURCE, naming
  * the key that matched), never applying anyone's mapping. The OTHER vendor

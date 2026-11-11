@@ -68,9 +68,11 @@ describe('report plugin — merged signal evidence', () => {
     expect(pipeline.findings).toEqual(expect.arrayContaining([
       '1 leads in pipeline',
       '1 from community',
-      '1 originated via community',
+      // PI-LDB D3: no persisted origin in this world -> no 'originated via' line (fail closed).
       '1 signal record(s) linked to their canonical prospect (counted once)',
     ]));
+    // ...and no origin claim is made from the reconstructed contribution.
+    expect(pipeline.findings.some((f: string) => /originated via/.test(f))).toBe(false);
   });
 
   it('states when signal linking is unavailable (possible double count)', async () => {

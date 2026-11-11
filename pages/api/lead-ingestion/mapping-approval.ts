@@ -155,7 +155,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     sourceMessage: `source must be one of: ${[...ALLOWED_SOURCES].join(', ')}`,
     methods: TENANT_METHODS,
   });
-  if (!checked.ok) return res.status(checked.status).json(checked.body);
+  // `=== false`, not `!checked.ok`: without strictNullChecks a truthiness test
+  // does not narrow the union (CI-29 TS2339).
+  if (checked.ok === false) return res.status(checked.status).json(checked.body);
   const { source, schemaFingerprint, headers, entries } = checked.value;
 
   // ── SAVE (PI-LDB D, 2026-11-11) ─────────────────────────────────────────

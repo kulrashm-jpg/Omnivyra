@@ -54,6 +54,54 @@ describe('LI-2 — schema shape', () => {
     expect(rows[0].d).toMatch(/ON DELETE SET NULL \(platform_mapping_profile_id, platform_mapping_profile_scope\)/);
   });
 
+  it('PREMISE for set_null_vs_check (actor-FK CI): deleting a CITED platform profile nulls BOTH columns and leaves a valid row', async () => {
+    // The actor-FK detector flags any CHECK containing `<col> IS NOT NULL` under
+    // an ON DELETE SET NULL FK. Here the FK's column list nulls BOTH columns and
+    // source_assertions_platform_profile_scope's first branch admits
+    // (NULL, NULL), so the delete must succeed - and the insert-only guard on
+    // source_assertions must not block the referential UPDATE. Executed, not
+    // argued: this deletes a real cited profile.
+    await inRollback(async () => {
+      await seedTenants();
+      const fp = 'f'.repeat(64);
+      const { rows: p } = await db.query(
+        `INSERT INTO public.source_mapping_profiles (scope, organization_id, source, schema_fingerprint, version, status, header_count, headers)
+         VALUES ('platform', NULL, 'apollo', $1, 1, 'active', 1, '["Title"]'::jsonb) RETURNING id`, [fp]);
+      const rec = await insertSource(ORG_A, { source_record_id: 'REC-SETNULL' });
+      const { rows: a } = await db.query(
+        `INSERT INTO public.source_assertions (organization_id,source_record_id,entity_type,attribute,raw_value,normalized_value,value_hash,provider,
+                                               source_field, mapping_method, platform_mapping_profile_id, platform_mapping_profile_scope)
+         VALUES ($1,$2,'person','job_title','CTO','CTO',$3,'testprov','Title','approved_profile_match',$4,'platform') RETURNING id`,
+        [ORG_A, rec, h('CTO-setnull'), p[0].id]);
+      await db.query('DELETE FROM public.source_mapping_profiles WHERE id = $1', [p[0].id]);
+      const { rows: after } = await db.query(
+        'SELECT platform_mapping_profile_id, platform_mapping_profile_scope FROM public.source_assertions WHERE id = $1', [a[0].id]);
+      expect(after[0]).toEqual({ platform_mapping_profile_id: null, platform_mapping_profile_scope: null });
+    });
+  });
+
+  it('REMOVAL CONTROL: with a SET NULL that nulls only the id, the same delete is REFUSED by the CHECK', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      await db.query('ALTER TABLE public.source_assertions DROP CONSTRAINT source_assertions_platform_mapping_profile_fk');
+      await db.query(`ALTER TABLE public.source_assertions ADD CONSTRAINT source_assertions_platform_mapping_profile_fk
+        FOREIGN KEY (platform_mapping_profile_id, platform_mapping_profile_scope) REFERENCES public.source_mapping_profiles (id, scope)
+        ON DELETE SET NULL (platform_mapping_profile_id)`);
+      const fp = 'f'.repeat(64);
+      const { rows: p } = await db.query(
+        `INSERT INTO public.source_mapping_profiles (scope, organization_id, source, schema_fingerprint, version, status, header_count, headers)
+         VALUES ('platform', NULL, 'apollo', $1, 1, 'active', 1, '["Title"]'::jsonb) RETURNING id`, [fp]);
+      const rec = await insertSource(ORG_A, { source_record_id: 'REC-SETNULL-CTL' });
+      await db.query(
+        `INSERT INTO public.source_assertions (organization_id,source_record_id,entity_type,attribute,raw_value,normalized_value,value_hash,provider,
+                                               source_field, mapping_method, platform_mapping_profile_id, platform_mapping_profile_scope)
+         VALUES ($1,$2,'person','job_title','CTO','CTO',$3,'testprov','Title','approved_profile_match',$4,'platform')`,
+        [ORG_A, rec, h('CTO-setnull-ctl'), p[0].id]);
+      // (id NULL, scope 'platform') violates the CHECK: the column list is what makes the real FK safe.
+      expect(await attempt('DELETE FROM public.source_mapping_profiles WHERE id = $1', [p[0].id])).toBe('23514');
+    });
+  });
+
   it('has 7 composite tenant-safe foreign keys', async () => {
     const { rows } = await db.query(`
       SELECT con.conname, pg_get_constraintdef(con.oid) d

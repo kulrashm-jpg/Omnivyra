@@ -163,6 +163,12 @@ export interface MappingProfileContext {
    * there are none. A refusal from a platform (vendor) profile came from a
    * Super Admin, on a profile the tenant cannot see, so the UI must be able to
    * say so rather than present it as the tenant's own rule.
+   *
+   * INVARIANT: exactly ONE profile answers a context (resolveActive), so this
+   * single citation IS the per-rejection citation. Anything that ever merges
+   * refusals from more than one profile (tenant + platform) MUST make this
+   * per-rejection, or it becomes silently wrong while still type-checking
+   * (virality-05, 2026-11-11).
    */
   rejectionSource: { profileId: string; scope: 'tenant' | 'platform' } | null;
 }
@@ -236,20 +242,26 @@ function assertPlatformKey(key: PlatformProfileKey): string {
 }
 
 /** The query-builder surface `scoped` needs. */
-interface Filterable<Q> {
-  eq(column: string, value: unknown): Q;
-  is(column: string, value: null): Q;
+interface Filterable {
+  eq(column: string, value: unknown): Filterable;
+  is(column: string, value: null): Filterable;
 }
 
 /**
  * Narrows a query to one scope. Tenant: scope 'tenant' AND this tenant.
  * Platform: scope 'platform' AND organization_id IS NULL. Both filters every
  * time - the scope column alone or the tenant column alone is not enough.
+ *
+ * The builder is handled through the minimal `Filterable` surface and returned
+ * as the caller's own type: a self-referential generic bound over the
+ * PostgREST builder made the compiler give up (CI-29 TS2589).
  */
-function scoped<Q extends Filterable<Q>>(q: Q, target: Target): Q {
-  return target.scope === 'tenant'
-    ? q.eq('scope', 'tenant').eq('organization_id', target.organizationId)
-    : q.eq('scope', 'platform').is('organization_id', null);
+function scoped<Q>(q: Q, target: Target): Q {
+  const b = q as unknown as Filterable;
+  const narrowed = target.scope === 'tenant'
+    ? b.eq('scope', 'tenant').eq('organization_id', target.organizationId)
+    : b.eq('scope', 'platform').is('organization_id', null);
+  return narrowed as unknown as Q;
 }
 
 async function fetchEntries(target: Target, profileId: string): Promise<EntryRow[]> {

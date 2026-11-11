@@ -368,7 +368,11 @@ describe('signal merge — counts, filters, profile alias', () => {
     const stats = await getLeadStats({ companyId: CO1 }, readers(pair()));
     expect(stats.total).toBe(1);
     expect(stats.bySource).toEqual({ community: 1 });
-    expect(stats.byOriginCategory).toEqual({ community: 1 });
+    // PI-LDB D3 (owner ruling 2026-11-07): this world seeds NO persisted origin
+    // (lead_intelligence.origin_category), so the category is UNKNOWN - the
+    // reconstructed contribution may not stand in (fail closed). Pinned in
+    // piLdbOriginReadPrecedence; source attribution is unaffected.
+    expect(stats.byOriginCategory).toEqual({ unknown: 1 });
     expect(stats.signalMerge).toEqual({ status: 'ok', merged: 1, ambiguous: 0 });
   });
 

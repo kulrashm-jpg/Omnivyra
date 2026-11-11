@@ -63,7 +63,11 @@ describe('GET /api/lead-intelligence/leads — provenance', () => {
     expect(row.sourceRef).toMatchObject({ table: 'canonical_leads', id: LEAD_A });
     expect(row.provenanceStatus).toBe('loaded');
     expect(row.sources.map((c: { id: string }) => c.id)).toEqual(['psc-a']);
-    expect(row.origin).toMatchObject({ category: 'community', platform: 'reddit' });
+    // PI-LDB D3 (owner ruling 2026-11-07): this world seeds NO persisted origin
+    // (lead_intelligence.origin_category), so the category is UNKNOWN - the
+    // reconstructed contribution may not stand in (fail closed). Pinned in
+    // piLdbOriginReadPrecedence; source attribution is unaffected.
+    expect(row.origin).toMatchObject({ category: null, platform: 'reddit' }); // display-only platform survives
     expect(row.evidence).toEqual([expect.objectContaining({ kind: 'source_url', ref: 'https://reddit.com/r/a/1' })]);
     expect(row.scores).toMatchObject({ total: 0.4, scale: 'unit' });
   });
@@ -91,7 +95,11 @@ describe('GET /api/lead-intelligence/stats — per-origin breakdown', () => {
     const r = await invoke(statsRoute, { as: 'A', query: { company_id: CO_A } });
     expect(r.status).toBe(200);
     expect(r.body.bySource).toEqual({ community: 1 });
-    expect(r.body.byOriginCategory).toEqual({ community: 1 });
+    // PI-LDB D3 (owner ruling 2026-11-07): this world seeds NO persisted origin
+    // (lead_intelligence.origin_category), so the category is UNKNOWN - the
+    // reconstructed contribution may not stand in (fail closed). Pinned in
+    // piLdbOriginReadPrecedence; source attribution is unaffected.
+    expect(r.body.byOriginCategory).toEqual({ unknown: 1 });
     expect(r.body.provenance).toBe('ok');
   });
 

@@ -8,13 +8,15 @@
  */
 jest.mock('@/config', () => ({ config: {} }), { virtual: true });
 
+// The canonical capability gate. `superAdmin` = a principal who passes it
+// (for POST: one WITH platform authority); null = refused (403 already sent).
 let superAdmin: { id: string } | null = { id: '00000000-0000-4000-8000-0000000000d1' };
-const requireSuperAdminUser = jest.fn(async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }) => {
-  if (!superAdmin) { res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' }); return null; }
-  return superAdmin;
+const requireCapability = jest.fn(async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }, _opts: unknown) => {
+  if (!superAdmin) { res.status(403).json({ error: 'Forbidden', code: 'PLATFORM_SUPER_ADMIN_REQUIRED' }); return { ok: false, sent: true }; }
+  return { ok: true, principal: { userId: superAdmin.id } };
 });
-jest.mock('../../services/requestAccessService', () => ({
-  requireSuperAdminUser: (...a: unknown[]) => (requireSuperAdminUser as unknown as (...x: unknown[]) => unknown)(...a),
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: (...a: unknown[]) => (requireCapability as unknown as (...x: unknown[]) => unknown)(...a),
 }));
 jest.mock('../../middleware/withIdempotency', () => ({ withIdempotency: (h: unknown) => h }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
@@ -64,12 +66,23 @@ const call = async (r: Partial<NextApiRequest>) => {
 
 beforeEach(() => {
   superAdmin = { id: SUPER };
+  requireCapability.mockClear();
   savePlatformProfileVersion.mockReset();
   savePlatformProfileVersion.mockResolvedValue({ profileId: 'plat-1', version: 1 });
   loadPlatformProfile.mockReset();
 });
 
 describe('who can approve a vendor mapping', () => {
+  it('the gate is SUPER_ADMIN_DASHBOARD_VIEW, and the WRITE requires platform authority (Closure-015); the read does not', async () => {
+    const { SUPER_ADMIN_DASHBOARD_VIEW } = jest.requireActual('../../../shared/contracts/security');
+    await call({});
+    expect(requireCapability.mock.calls[0][2]).toMatchObject({ capability: SUPER_ADMIN_DASHBOARD_VIEW, requirePlatformAuthority: true });
+    requireCapability.mockClear();
+    loadPlatformProfile.mockResolvedValue(null);
+    await call({ method: 'GET', query: { source: 'apollo', schemaFingerprint: FP } });
+    expect(requireCapability.mock.calls[0][2]).toMatchObject({ capability: SUPER_ADMIN_DASHBOARD_VIEW, requirePlatformAuthority: false });
+  });
+
   it('a non-Super-Admin is refused 403 and the store is never reached', async () => {
     superAdmin = null;
     const res = await call({});

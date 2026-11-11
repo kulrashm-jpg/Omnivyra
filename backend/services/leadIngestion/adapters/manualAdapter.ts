@@ -133,7 +133,7 @@ const MANUAL_INPUT_FIELD_SET = {
   observedAt: true, metadata: true, industry: true, employeeCount: true, employeeBand: true,
   annualRevenue: true, revenueBand: true, foundedYear: true, technologies: true,
   fundingStage: true, lastFundingAt: true, companyCountryCode: true, companyRegion: true,
-  companyCity: true,
+  companyCity: true, description: true,
 } as const satisfies Record<keyof ManualLeadInput, true>;
 
 export const MANUAL_INPUT_FIELDS: readonly (keyof ManualLeadInput)[] =
