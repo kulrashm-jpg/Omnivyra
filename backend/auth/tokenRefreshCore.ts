@@ -17,7 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
-import { OAUTH_REFRESH_TIMEOUT_MS } from './oauthRefreshTimeout';
+import { OAUTH_REFRESH_TIMEOUT_MS, noteRefreshFailure, isRefreshTimeoutText } from './oauthRefreshTimeout';
 import { getToken, setToken, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
@@ -108,6 +108,7 @@ export async function refreshLinkedInToken(
     console.log('âœ… LinkedIn token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [clientSecret, currentToken.refresh_token, currentToken.access_token] });
     console.error('âŒ LinkedIn token refresh error:', errorDetails);
     
@@ -332,6 +333,15 @@ async function recordRefreshOutcomeInner(
       refreshStatus = 'PROVIDER_REAUTH_REQUIRED';
       connectionState = 'PROVIDER_REAUTH_REQUIRED';
       unreadableRetryStreaks.delete(accountId);
+    } else if (isRefreshTimeoutText(errText)) {
+      // D2 policy (virality-e9, option B): the provider did not answer in time. That
+      // says nothing about the token, so it is a retryable failure that does NOT
+      // consume the reauth ceiling: refresh_retry_count is left exactly as stored
+      // (not written) and the unreadable-counter streak is untouched. A 5xx still
+      // takes the transient branch below and still counts.
+      refreshStatus = 'REFRESH_FAILED_RETRYABLE';
+      connectionState = 'TOKEN_EXPIRED';
+      retryCountKnown = false;
     } else if (errText.includes('invalid_client')) {
       refreshStatus = 'REFRESH_FAILED_FATAL';   // app credentials wrong â€” operator alert
       connectionState = 'TOKEN_EXPIRED';
@@ -608,6 +618,7 @@ export async function refreshFacebookToken(
     console.log('âœ… Facebook token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [appSecret, currentToken.refresh_token, currentToken.access_token] });
     console.error('âŒ Facebook token refresh error:', errorDetails);
 
@@ -656,6 +667,7 @@ async function refreshFacebookTokenWithRefreshToken(
     console.log('âœ… Facebook token refreshed via refresh_token');
     return refreshedToken;
   } catch (error) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     console.error('âŒ Facebook refresh token also failed:', describeProviderError(error, { secrets: [appSecret, currentToken.refresh_token, currentToken.access_token] }));
     return null;
   }
@@ -732,6 +744,7 @@ export async function refreshYouTubeToken(
     console.log('âœ… YouTube token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [clientSecret, currentToken.refresh_token, currentToken.access_token] });
     console.error('âŒ YouTube token refresh error:', errorDetails);
     

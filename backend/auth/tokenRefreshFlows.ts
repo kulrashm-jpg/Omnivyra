@@ -17,7 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
-import { OAUTH_REFRESH_TIMEOUT_MS } from './oauthRefreshTimeout';
+import { OAUTH_REFRESH_TIMEOUT_MS, noteRefreshFailure, takeRefreshTimedOut, REFRESH_TIMEOUT_ERROR } from './oauthRefreshTimeout';
 import { getToken, setToken, markSocialAccountNeedsReauth, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
@@ -88,6 +88,7 @@ export async function refreshSpotifyToken(
     console.log('✅ Spotify token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ Spotify token refresh error:', errorDetails);
     return null;
@@ -157,6 +158,7 @@ export async function refreshTikTokToken(
     console.log('✅ TikTok token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ TikTok token refresh error:', errorDetails);
     
@@ -231,6 +233,7 @@ export async function refreshRedditToken(
     console.log('✅ Reddit token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ Reddit token refresh error:', errorDetails);
 
@@ -304,6 +307,7 @@ export async function refreshPinterestToken(
     console.log('✅ Pinterest token refreshed successfully');
     return newToken;
   } catch (error: any) {
+    noteRefreshFailure(socialAccountId, error); // D2: a timeout never counts toward the reauth ceiling
     const errorDetails = describeProviderError(error, { secrets: [currentToken.refresh_token, currentToken.access_token] });
     console.error('❌ Pinterest token refresh error:', errorDetails);
     
@@ -403,9 +407,16 @@ export async function refreshPlatformToken(
 
   try {
     const refreshed = await refresher(socialAccountId, currentToken);
+    // Taken on every path, so a note can never leak into a later refresh.
+    const timedOut = takeRefreshTimedOut(socialAccountId);
     if (refreshed) {
       await safeRecord(socialAccountId, 'success', null);
       return refreshed;
+    }
+    if (timedOut) {
+      // D2 policy: recorded as a timeout, which never consumes the reauth ceiling.
+      await safeRecord(socialAccountId, 'failed', REFRESH_TIMEOUT_ERROR);
+      return null;
     }
     // The refresher swallowed its own provider error and returned null, so the
     // terminal signal is not visible here. Transient is the SAFE reading: it
