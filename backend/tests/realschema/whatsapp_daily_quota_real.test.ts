@@ -47,18 +47,14 @@ beforeAll(async () => {
   for (const id of [ACCOUNT, OTHER]) {
     await db.query(
       `INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, account_name, access_token)
-       VALUES ($1, gen_random_uuid(), 'whatsapp', $1::text, 'wdu-test', 'x') ON CONFLICT (id) DO NOTHING`,
-      [id],
+       VALUES ($1::uuid, gen_random_uuid(), 'whatsapp', $2::text, 'wdu-test', 'x') ON CONFLICT (id) DO NOTHING`,
+      [id, id],
     );
   }
 });
 
 afterEach(async () => {
   await db.query('DELETE FROM public.whatsapp_daily_usage WHERE social_account_id = ANY($1::uuid[])', [[ACCOUNT, OTHER]]);
-});
-
-afterAll(async () => {
-  await db.query('DELETE FROM public.social_accounts WHERE id = ANY($1::uuid[])', [[ACCOUNT, OTHER]]);
 });
 
 describe('whatsapp_consume_daily_quota: check and consume in one statement', () => {

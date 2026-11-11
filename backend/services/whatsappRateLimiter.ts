@@ -192,6 +192,9 @@ export async function checkAndConsume(params: {
   // ── Layer 2: DB fallback (Refinement 6) - atomic, fails CLOSED ────────────
   // An unlimited plan/tier is metered against the integer maximum (still counted).
   const dbLimit  = Number.isFinite(effective) ? effective : INT_MAX;
+  // The usage day is the UTC date (toISOString is always UTC), matching the Redis key
+  // above and WhatsApp's UTC-aligned daily window; a local-time day would misalign at
+  // the boundary and over-permit.
   const consumed = await dbConsume(social_account_id, new Date().toISOString().slice(0, 10), count, dbLimit);
   if (!consumed) {
     return { allowed: false, remaining: 0, tier, source: 'db' };

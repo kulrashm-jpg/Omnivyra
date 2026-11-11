@@ -1,4 +1,4 @@
--- Rollback for <version>_whatsapp_daily_usage_quota.sql.
+-- Rollback for 20270214000000_whatsapp_daily_usage_quota.sql.
 --
 -- Removes the WhatsApp daily-usage table and its check-and-consume function.
 -- WARNING: the application's database fallback calls this function and fails

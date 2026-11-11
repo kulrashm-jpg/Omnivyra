@@ -15,6 +15,10 @@
 -- THE REPLACEMENT. One table owned by this control, and one function that checks and
 -- consumes the quota in a SINGLE statement:
 --
+-- p_usage_day is the caller's UTC date (WhatsApp's own daily window is UTC-aligned;
+-- a local-time day would misalign at the boundary and over-permit). Taking it as a
+-- parameter keeps the function free of time-zone opinion.
+--
 --   INSERT ... ON CONFLICT (social_account_id, usage_day) DO UPDATE
 --     SET used = used + p_count WHERE used + p_count <= p_limit RETURNING used
 --
@@ -30,7 +34,10 @@
 --
 -- PRIVILEGES. service_role only: SELECT, INSERT, UPDATE on the table (what the
 -- upsert needs) and EXECUTE on the function. anon, authenticated, authenticator and
--- PUBLIC hold nothing. The function is SECURITY INVOKER with a pinned search_path.
+-- PUBLIC hold nothing. The function is SECURITY INVOKER with a pinned search_path
+-- (pg_catalog, public, pg_temp: pg_temp LAST, the repo convention, so a temporary
+-- relation can never shadow a public one; every reference in the body is also
+-- schema-qualified).
 --
 -- Re-runnable: every object is created IF NOT EXISTS or replaced in place, and the
 -- postcondition block re-proves the end state on every replay.
@@ -112,7 +119,7 @@ CREATE OR REPLACE FUNCTION public.whatsapp_consume_daily_quota(
 RETURNS TABLE (allowed boolean, used integer)
 LANGUAGE plpgsql
 SECURITY INVOKER
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   v_used integer;
@@ -244,8 +251,8 @@ BEGIN
   IF v_secdef THEN
     RAISE EXCEPTION 'WDU postcondition: whatsapp_consume_daily_quota must be SECURITY INVOKER';
   END IF;
-  IF v_config IS NULL OR NOT ('search_path=pg_catalog, public' = ANY (v_config)) THEN
-    RAISE EXCEPTION 'WDU postcondition: whatsapp_consume_daily_quota must pin search_path=pg_catalog, public, found %',
+  IF v_config IS NULL OR NOT ('search_path=pg_catalog, public, pg_temp' = ANY (v_config)) THEN
+    RAISE EXCEPTION 'WDU postcondition: whatsapp_consume_daily_quota must pin search_path=pg_catalog, public, pg_temp, found %',
       coalesce(v_config::text, '{}');
   END IF;
 
