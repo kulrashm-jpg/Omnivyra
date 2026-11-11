@@ -21,9 +21,16 @@ jest.mock('../../db/writeOwner', () => ({
   }),
 }));
 const mockLoad = jest.fn();
+// Shaped like the real loader since A2 (contactGovernanceRepository): an answer without
+// `reads` has no decision instant and is INDETERMINATE, so the recheck would refuse as
+// UNREADABLE for the wrong reason. The stub's rows come back as one read at the moment of
+// the call (standing in for the database instant).
+const withReads = (r: any) => (r && r.ok && r.reads === undefined
+  ? { ...r, reads: [{ anchor: 'target', ok: true, records: r.records, readAt: new Date().toISOString() }] }
+  : r);
 jest.mock('../../services/prospectIdentity/contactGovernanceRepository', () => {
   const actual = jest.requireActual('../../services/prospectIdentity/contactGovernanceRepository');
-  return { ...actual, loadGovernanceRecords: (...a: unknown[]) => mockLoad(...a) };
+  return { ...actual, loadGovernanceRecords: async (...a: unknown[]) => withReads(await mockLoad(...a)) };
 });
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => { throw new Error('unused'); } } }));
 
