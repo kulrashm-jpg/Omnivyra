@@ -365,3 +365,41 @@ export const enforceCompanyAccess = async (input: {
   input.res.status(403).json({ error: 'Access denied to company' });
   return null;
 };
+
+/** The ONE body a caller gets when a resource does not exist OR belongs to a company it may not access. */
+export const UNIFORM_NOT_FOUND = Object.freeze({ error: 'Not found', code: 'NOT_FOUND' });
+
+/**
+ * enforceCompanyAccess for a resource LOOKED UP BY ID (2026-11-12, plan-status authz fix): a DENIAL
+ * (403, or 404 from campaign binding) is answered with the same 404 a missing resource gets, so the
+ * answer never tells an outsider that the id exists in another company (no existence oracle).
+ * Every other outcome passes through unchanged: 401 unauthenticated, 503 lookup error, 400. The
+ * decision itself is enforceCompanyAccess's, with all of its principals and rules; only the denial's
+ * wording changes.
+ * Callers answer a missing or company-unresolvable resource with UNIFORM_NOT_FOUND themselves, so
+ * all three cases are byte-identical.
+ */
+export const enforceCompanyAccessUniform = async (input: {
+  req: NextApiRequest;
+  res: NextApiResponse;
+  companyId: string;
+  campaignId?: string | null;
+}): Promise<UserContext | null> => {
+  const captured: { status: number | null; body: unknown } = { status: null, body: undefined };
+  const probe: any = {
+    status(code: number) { captured.status = code; return probe; },
+    json(body: unknown) { captured.body = body; return probe; },
+    send(body: unknown) { captured.body = body; return probe; },
+    setHeader() { return probe; },
+    end() { return probe; },
+  };
+  const access = await enforceCompanyAccess({ req: input.req, res: probe as NextApiResponse, companyId: input.companyId, campaignId: input.campaignId ?? null });
+  if (access) return access;
+  const status = captured.status ?? 403;
+  if (status === 403 || status === 404) {
+    input.res.status(404).json(UNIFORM_NOT_FOUND);
+    return null;
+  }
+  input.res.status(status).json(captured.body ?? { error: 'Access check failed' });
+  return null;
+};
