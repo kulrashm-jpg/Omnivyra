@@ -25,6 +25,12 @@ if (!process.env.ENV_FILE) process.env.ENV_FILE = '.env.cert';
 if (!process.env.CERT_ENV) process.env.CERT_ENV = '1';
 const loaded = loadCertAwareEnv(process.cwd());
 console.log(`[dev:cert] env: ${loaded} (isolation guard passed)`);
+// BETA_AI_MODE takes effect ONLY with the explicit beta marker (config/betaAiMode.ts, 2026-11-12).
+// The cert runtime is non-production (the isolation guard above refuses anything that points at
+// production) and relies on the deterministic, zero-cost mock, so it carries the marker. Without it,
+// certification would make REAL paid provider calls. Child processes inherit it (dotenv does not
+// override an existing variable).
+if (process.env.BETA_AI_MODE === '1' || process.env.BETA_AI_MODE === 'true') process.env.OMNIVYRA_ENV = 'beta';
 
 // 2) Ensure the official Supabase local API tier is up (best-effort reuse).
 try {

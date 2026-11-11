@@ -12,14 +12,20 @@
  * to before (the caller falls straight through to the real OpenAI provider).
  */
 import sharp from 'sharp';
+import { config } from '@/config';
+import { betaAiModeActive } from '@/config/betaAiMode';
 
 export const BETA_MOCK_MODEL = 'beta-mock';
 const BETA_MOCK_SIZE = 1024;
 
-/** True only when the Beta AI render mode is explicitly enabled. */
+/**
+ * True only when beta AI mode TAKES EFFECT: BETA_AI_MODE on AND the deployment carries the explicit
+ * beta marker (RESOLVED config OMNIVYRA_ENV === 'beta'; 83 / e9, 2026-11-12). Anywhere else, including
+ * production with BETA_AI_MODE accidentally set, it is false: the real provider is called and image
+ * credits are reserved. See config/betaAiMode.ts. The once-only boot log lives in config/index.ts.
+ */
 export function isBetaAiRenderMode(): boolean {
-  const v = process.env.BETA_AI_MODE;
-  return v === '1' || v === 'true';
+  return betaAiModeActive(process.env.BETA_AI_MODE, config.OMNIVYRA_ENV);
 }
 
 /** Deterministic FNV-1a → a mid-tone RGB colour (kept in a legible range). */

@@ -21,7 +21,7 @@
  * envelope only.
  *
  * Run:
- *   DOTENV_CONFIG_PATH=.env.cert BETA_AI_MODE=1 CERT_ENV=1 \
+ *   DOTENV_CONFIG_PATH=.env.cert BETA_AI_MODE=1 OMNIVYRA_ENV=beta CERT_ENV=1 \
  *     npx tsx -r dotenv/config -r tsconfig-paths/register scripts/cert/textgen-runtime-parity-cert.ts
  */
 import { randomUUID } from 'crypto';

@@ -256,9 +256,11 @@ export const envSchema = z.object({
   APP_URL: v3Url('APP_URL must be a valid URL').optional(),
   
   OMNIVYRA_ENV: z
-    .enum(['development', 'staging', 'production'])
+    // 'beta' (2026-11-12) is the explicit beta-only marker that BETA_AI_MODE requires (config/betaAiMode.ts).
+    // It must be in this enum BEFORE any deployment sets OMNIVYRA_ENV=beta, or boot validation fails.
+    .enum(['development', 'staging', 'production', 'beta'])
     .default('production')
-    .describe('Deployment environment'),
+    .describe('Deployment environment. "beta" marks the beta deployment, the only place BETA_AI_MODE takes effect.'),
   
   OMNIVYRA_AI_MODE: z
     .enum(['responses', 'planning', 'hybrid'])

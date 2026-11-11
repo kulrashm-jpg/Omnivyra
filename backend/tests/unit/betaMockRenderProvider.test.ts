@@ -5,6 +5,9 @@
  * byte-identical output; different prompts differ; and no AI/network is involved (sharp only).
  */
 import sharp from 'sharp';
+// The mode needs the explicit beta marker (OMNIVYRA_ENV === 'beta', resolved config) since 2026-11-12;
+// these tests exercise the mode itself, so they run as the beta deployment. The guard is betaAiModeGuard.test.ts.
+jest.mock('@/config', () => ({ config: { OMNIVYRA_ENV: 'beta' } }));
 import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from '../../services/creator/rendering/providers/betaMockRenderProvider';
 
 const withFlag = async <T>(on: boolean | undefined, fn: () => Promise<T> | T): Promise<T> => {

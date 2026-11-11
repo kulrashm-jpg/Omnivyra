@@ -4088,7 +4088,7 @@
       "issues": [
         {
           "path": "OMNIVYRA_ENV",
-          "message": "Invalid enum value. Expected 'development' | 'staging' | 'production', received 'qa'",
+          "message": "Invalid enum value. Expected 'development' | 'staging' | 'production' | 'beta', received 'qa'",
           "custom": false
         }
       ]

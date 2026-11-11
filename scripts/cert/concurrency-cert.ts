@@ -3,7 +3,7 @@
  * Fires N independent full mini-lifecycles in parallel against the live cert DB
  * to expose races: lost writes, cross-content contamination, approval-trail
  * corruption. Deterministic (BETA_AI_MODE). Run:
- *   DOTENV_CONFIG_PATH=.env.cert BETA_AI_MODE=1 CERT_ENV=1 \
+ *   DOTENV_CONFIG_PATH=.env.cert BETA_AI_MODE=1 OMNIVYRA_ENV=beta CERT_ENV=1 \
  *     npx tsx -r dotenv/config -r tsconfig-paths/register scripts/cert/concurrency-cert.ts
  */
 import { randomUUID } from 'crypto';

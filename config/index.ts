@@ -24,6 +24,7 @@
  */
 
 import { validateEnv, type EnvConfig } from './env.schema';
+import { betaAiModeRequested, BETA_AI_MODE_NEUTRALISED_MESSAGE } from './betaAiMode';
 import { maskRedisUrl } from '@/lib/redis/sanitizer';
 import { protectConfig } from '@/lib/config/deepFreeze';
 import { initEnforcer, withSanctionedEnvAccess } from '@/lib/config/enforcer';
@@ -74,7 +75,13 @@ function initConfig(): Readonly<EnvConfig> {
       appUrl: _config.NEXT_PUBLIC_APP_URL,
       hardened: 'deep-frozen + readonly proxy + runtime enforcer',
     });
-    
+
+    // 5. BETA_AI_MODE takes effect ONLY on the explicit beta deployment (config/betaAiMode.ts). Set
+    //    anywhere else, it is neutralised (billing stays on), and said so ONCE, here, at boot.
+    if (betaAiModeRequested(process.env.BETA_AI_MODE) && _config.OMNIVYRA_ENV !== 'beta') {
+      console.error(BETA_AI_MODE_NEUTRALISED_MESSAGE, { OMNIVYRA_ENV: _config.OMNIVYRA_ENV });
+    }
+
     return _config;
   } catch (error) {
     // Safely extract error message
