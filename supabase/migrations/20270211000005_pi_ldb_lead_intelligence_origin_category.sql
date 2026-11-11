@@ -74,23 +74,10 @@
 BEGIN;
 
 DO $pre$
-DECLARE
-  v_pre bigint := 0;
 BEGIN
   IF to_regclass('public.lead_intelligence') IS NULL THEN
     RAISE EXCEPTION 'PI-LDB 2F precondition: lead_intelligence is missing. This migration only widens the durable lead store.';
   END IF;
-  -- NO-BACKFILL BASELINE: how many rows carry a category BEFORE this run (0
-  -- when the column does not exist yet). The postcondition asserts the count
-  -- is unchanged, i.e. THIS run backfilled nothing. That keeps 0005 re-runnable
-  -- after write-time classification (or an owner-approved backfill) has set
-  -- categories. Transaction-local setting; this file is one transaction.
-  IF EXISTS (SELECT 1 FROM pg_attribute
-              WHERE attrelid = 'public.lead_intelligence'::regclass
-                AND attname = 'origin_category' AND NOT attisdropped) THEN
-    EXECUTE 'SELECT count(*) FROM public.lead_intelligence WHERE origin_category IS NOT NULL' INTO v_pre;
-  END IF;
-  PERFORM set_config('pi_ldb.origin_pre_count', v_pre::text, true);
 END
 $pre$;
 
@@ -99,6 +86,21 @@ ALTER TABLE public.lead_intelligence
 
 ALTER TABLE public.lead_intelligence
   ADD COLUMN IF NOT EXISTS origin_observed_at timestamptz;
+
+-- NO-BACKFILL BASELINE: how many rows carry a category at the START of this
+-- run's changes; the postcondition asserts the count is unchanged, i.e. THIS
+-- run filled nothing. That keeps 0005 re-runnable after write-time
+-- classification (or an owner-approved backfill) has set categories. Taken
+-- AFTER the ALTERs on purpose: ALTER TABLE holds ACCESS EXCLUSIVE to COMMIT
+-- even when IF NOT EXISTS makes it a no-op, so no concurrent writer can move
+-- the count between here and the check. Transaction-local setting; this file
+-- is one transaction.
+DO $baseline$
+BEGIN
+  PERFORM set_config('pi_ldb.origin_pre_count',
+    (SELECT count(*) FROM public.lead_intelligence WHERE origin_category IS NOT NULL)::text, true);
+END
+$baseline$;
 
 DO $checks$
 BEGIN
@@ -239,9 +241,15 @@ BEGIN
 
   -- NO BACKFILL BY THIS RUN. Asserted, because a later edit that added one
   -- would otherwise pass every other check in this file. The premise is "this
-  -- run classified nothing" (count unchanged since $pre$), NOT "no row has a
+  -- run filled nothing" (count unchanged since $baseline$), NOT "no row has a
   -- category": rows classified at write time or by an approved backfill after
   -- a first apply must not make a re-run fail.
+  -- KNOWN GAP, ACCEPTED (virality-05, 2026-11-11): a count does not see an
+  -- OVERWRITE-only edit (e.g. UPDATE ... SET origin_category = 'manual' WHERE
+  -- origin_category = 'website'). The D3 trigger does NOT stop that: it allows
+  -- a different non-NULL category as an explicit supersession. Not a realistic
+  -- accident in this file. To close it, assert that this transaction wrote no
+  -- lead_intelligence row at all (an xmin test; mind subtransactions).
   IF current_setting('pi_ldb.origin_pre_count', true) IS NULL
      OR current_setting('pi_ldb.origin_pre_count', true) = '' THEN
     RAISE EXCEPTION 'PI-LDB 2F postcondition: the no-backfill baseline was not captured (run the whole file as one transaction)';
