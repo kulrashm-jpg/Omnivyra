@@ -13,7 +13,7 @@ const ORG = '00000000-0000-4000-8000-0000000000aa';
 
 class PricingMissing extends Error {}
 
-function world(opts: { balance?: number; priceCredits?: number | 'missing'; registry?: string | null; slow?: string | null } = {}) {
+function world(opts: { balance?: number; priceCredits?: number | 'missing'; registry?: string | null; slow?: string | null; confirmStatus?: string; releaseStatus?: string; closeMiss?: string; raceOnOpen?: boolean } = {}) {
   let balance = opts.balance ?? 100;
   const holds = new Map<string, { credits: number; state: 'held' | 'confirmed' | 'released' }>();
   const ops = new Map<string, Record<string, any>>();
@@ -33,12 +33,18 @@ function world(opts: { balance?: number; priceCredits?: number | 'missing'; regi
     findOpByKey: async (k) => stall('lookup', [...ops.values()].find((o) => o.idempotency_key === k) as any ?? null),
     findOpById: async (id) => (ops.get(id) as any) ?? null,
     openOp: async (a) => {
+      if (opts.raceOnOpen) {
+        // A concurrent first-open won: the upsert lands on THEIR row (same key).
+        const winner = [...ops.values()].find((o) => o.idempotency_key === a.idempotencyKey);
+        if (winner) return winner.id;
+      }
       const id = `op-${++seq}`;
       ops.set(id, { id, status: 'initiated', organization_id: a.organizationId, idempotency_key: a.idempotencyKey, metadata: a.metadata });
       return id;
     },
     closeOp: async (id, patch: any, from) => {
       const o = ops.get(id);
+      if (opts.closeMiss === patch.status) return { updated: 0, error: null };
       if (!o || !from.includes(o.status)) return { updated: 0, error: null };
       Object.assign(o, { status: patch.status, metadata: patch.metadata ?? o.metadata, amount_charged: patch.amountCharged });
       return { updated: 1, error: null };
@@ -58,6 +64,7 @@ function world(opts: { balance?: number; priceCredits?: number | 'missing'; regi
       return { status: 'reserved', ...handle, creditsReserved: o.amountOverride };
     },
     confirm: async (h) => {
+      if (opts.confirmStatus) return { status: opts.confirmStatus } as any;
       const x = holds.get(h.idempotencyKey)!;
       if (x.state === 'confirmed') return { status: 'already_confirmed' };
       if (x.state === 'released') return { status: 'already_released' };
@@ -66,6 +73,7 @@ function world(opts: { balance?: number; priceCredits?: number | 'missing'; regi
       return { status: 'confirmed', creditsCharged: x.credits, confirmTransactionId: `c-${h.idempotencyKey}` };
     },
     release: async (h) => {
+      if (opts.releaseStatus) return { status: opts.releaseStatus } as any;
       const x = holds.get(h.idempotencyKey)!;
       if (x.state === 'released') return { status: 'already_released' };
       if (x.state === 'confirmed') return { status: 'already_confirmed' };
@@ -222,5 +230,57 @@ describe('fail closed and the contract details', () => {
     expect(op.metadata).toMatchObject({ helper: IMAGE_CREDITS_HELPER, sku: SKU });
     expect(op.metadata.pricing).toMatchObject({ unclamped_credits: 5, catalog_min: 2, catalog_max: 12, credits: 5 });
     expect(imageUnitFor('GPT-Image-1.5', '1024x1024', '')).toBe('gpt-image-1.5:1024x1024:auto');
+  });
+});
+
+describe('05 money findings (BLOCKING): charge only from a named status; release reports a missed row', () => {
+  it.each(['released', 'already_released', 'insufficient_credits', 'no_credit_account', 'not_a_member', 'something_new'])(
+    'settle with confirm status %s records NO charge and leaves the row held', async (status) => {
+      const w = world({ confirmStatus: status });
+      const r = await w.api.reserveImageCredits(input('k'));
+      if (!r.ok) throw new Error('unreachable');
+      const out = await w.api.settleImageCredits({ billingOperationId: r.billingOperationId });
+      expect(out.ok).toBe(false);
+      const op = [...w.ops.values()][0];
+      expect(op.status).toBe('held');
+      expect(op.amount_charged).toBeUndefined();
+    });
+
+  it.each([['confirmed', true], ['already_confirmed', true]])('settle with confirm status %s marks confirmed', async (status) => {
+    const w = world({ confirmStatus: status as string });
+    const r = await w.api.reserveImageCredits(input('k'));
+    if (!r.ok) throw new Error('unreachable');
+    expect((await w.api.settleImageCredits({ billingOperationId: r.billingOperationId })).ok).toBe(true);
+    expect([...w.ops.values()][0]).toMatchObject({ status: 'confirmed', amount_charged: 5 });
+  });
+
+  it('a release whose CAS moves 0 rows is REPORTED (not ok), never silent', async () => {
+    const w = world({ closeMiss: 'released' });
+    const r = await w.api.reserveImageCredits(input('k'));
+    if (!r.ok) throw new Error('unreachable');
+    expect(await w.api.releaseImageCredits({ billingOperationId: r.billingOperationId, reason: 'x' }))
+      .toMatchObject({ ok: false, reason: 'not_held' });
+  });
+
+  it('a release answered with an unexpected status records nothing', async () => {
+    const w = world({ releaseStatus: 'something_new' });
+    const r = await w.api.reserveImageCredits(input('k'));
+    if (!r.ok) throw new Error('unreachable');
+    expect(await w.api.releaseImageCredits({ billingOperationId: r.billingOperationId, reason: 'x' }))
+      .toMatchObject({ ok: false, reason: 'unavailable' });
+    expect([...w.ops.values()][0].status).toBe('held');
+  });
+
+  it('a lost first-open race CONVERGES on the row that owns the key (no second hold)', async () => {
+    const w = world({ raceOnOpen: true });
+    // The winner opened and HELD the key between our lookup and our open.
+    const winner = await w.api.reserveImageCredits(input('k'));
+    if (!winner.ok) throw new Error('unreachable');
+    const realFind = w.deps.findOpByKey;
+    let first = true;
+    w.deps.findOpByKey = async (k) => { if (first) { first = false; return null; } return realFind(k); };
+    const loser = await w.api.reserveImageCredits(input('k'));
+    expect(loser).toMatchObject({ ok: true, billingOperationId: winner.billingOperationId });
+    expect(w.ledger.filter((l) => l.phase === 'hold')).toHaveLength(1);
   });
 });
