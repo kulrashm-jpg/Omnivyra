@@ -1034,10 +1034,13 @@ async function screenPendingRecipients(companyId: string, broadcastId: string): 
 
 /**
  * The WS-3 tenant controls for this channel: null when it may be used, otherwise why
- * not. A failed read gives `configured: false`, so it refuses.
+ * not. A failed read gives `configured: false`, so it refuses. BOTH global stops (env and the
+ * instant Super Admin switch, fail-safe) come first, through whatsappGlobalStop: the same answer
+ * the adapter's pre-creation gate (journeyGovernance.channelRefusal) gives.
  */
 export async function whatsappChannelRefusal(companyId: string): Promise<string | null> {
-  if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+  const globalStop = await whatsappGlobalStop();
+  if (globalStop) return globalStop;
   const config = await loadTenantGovernanceConfig(companyId);
   if (!config.configured || !config.enabled) return 'tenant_not_enabled';
   if (config.killSwitch) return 'tenant_kill_switch';

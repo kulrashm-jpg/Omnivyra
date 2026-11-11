@@ -24,6 +24,12 @@ jest.mock('../../auth/credentialEncryption', () => ({ requireEncryptionKey: () =
 jest.mock('../../middleware/queueBackpressure', () => ({ enqueueOrThrow: jest.fn() }));
 jest.mock('../../services/whatsappTemplateService', () => ({ getActiveTemplate: async () => ({}) }));
 jest.mock('../../services/whatsappRateLimiter', () => ({ checkAndConsume: jest.fn(), getBroadcastChunkStrategy: jest.fn() }));
+// The instant Super Admin WhatsApp stop (rollout flag `whatsapp-sending`), as whatsappInstantStop.test does.
+// Default ALLOW: an enforcing flag read successfully, so only the env stop and tenant controls decide.
+type Checked = { decision: { mode: string; source: string }; adminReadable: boolean | null };
+const ALLOW: Checked = { decision: { mode: 'enforce', source: 'default' }, adminReadable: true };
+const mockFlag: { next: Checked } = { next: ALLOW };
+jest.mock('../../../lib/platform/rolloutAdmin', () => ({ resolveRolloutChecked: async () => mockFlag.next }));
 
 import { fakeDb, failNext, resetFakeDb, type Row } from '../helpers/fakeWhatsappDb';
 import {
@@ -70,6 +76,7 @@ const inboundAt = (createdAt: string, digits = DIGITS, over: Row = {}) => {
 const fetchCalls: string[] = [];
 beforeEach(() => {
   fetchCalls.length = 0;
+  mockFlag.next = ALLOW;
   delete process.env.LEAD_OUTREACH_EXECUTION_DISABLED;
   (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
     fetchCalls.push(String(url));
@@ -297,10 +304,42 @@ describe('agreement with the adapter, which this service cannot import', () => {
     ['no row', () => { fakeDb.tables.outreach_governance_config = []; }],
     ['other channel', () => { config().enabled_channels = ['email']; }],
     ['global', () => { process.env.LEAD_OUTREACH_EXECUTION_DISABLED = 'true'; }],
+    ['super admin stop', () => { mockFlag.next = { decision: { mode: 'off', source: 'admin' }, adminReadable: true }; }],
+    ['super admin stop unreadable', () => { mockFlag.next = { ...ALLOW, adminReadable: false }; }],
   ])('the send-time refusal matches the adapter\'s pre-creation refusal: %s', async (_name, arrange) => {
     seed();
     arrange();
     expect(await whatsappChannelRefusal(ORG)).toBe(await defaultWhatsAppDeps.channelRefusal(ORG));
+  });
+
+  // e9 / 6f, 2026-11-12: the instant Super Admin stop was enforced at SEND time only, so while it was on
+  // a journey could still CREATE a broadcast that would never send. Creation now refuses with the SAME
+  // code as the send path.
+  it.each<[string, Checked, string]>([
+    ['the Super Admin stop is on', { decision: { mode: 'off', source: 'admin' }, adminReadable: true }, 'super_admin_stop'],
+    ['the stop switch cannot be read (fail safe)', { ...ALLOW, adminReadable: false }, 'stop_switch_unreadable'],
+  ])('when %s, journey CREATION is refused, adapter gate and B-17 agreeing on the code', async (_name, flag, code) => {
+    seed();
+    mockFlag.next = flag;
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await defaultWhatsAppDeps.channelRefusal(ORG)).toBe(code);
+    expect(await whatsappChannelRefusal(ORG)).toBe(code);
+    err.mockRestore();
+  });
+
+  it('the kit-wide rollout kill is NOT a WhatsApp stop (only this flag\'s own stop counts)', async () => {
+    seed();
+    mockFlag.next = { decision: { mode: 'off', source: 'global-kill' }, adminReadable: true };
+    expect(await defaultWhatsAppDeps.channelRefusal(ORG)).toBeNull();
+  });
+
+  it('the WhatsApp stop does not reach other channels through the central gate', async () => {
+    seed();
+    config().enabled_channels = ['whatsapp', 'email'];
+    const { channelRefusal } = await import('../../services/orchestration/journeyGovernance');
+    mockFlag.next = { decision: { mode: 'off', source: 'admin' }, adminReadable: true };
+    expect(await channelRefusal(ORG, 'email')).toBeNull();
+    expect(await channelRefusal(ORG, 'whatsapp')).toBe('super_admin_stop');
   });
 
   // The adapter has no case for the new status today and its default answers `wait`. Once
