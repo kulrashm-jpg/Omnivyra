@@ -295,6 +295,12 @@ export async function processBatch(
   // `evaluateGovernanceReads` judges the read's rows at the read's own `read_at`
   // (the database's transaction instant), and anything without a usable instant is
   // INDETERMINATE and fails closed, like an unreadable store.
+  //
+  // LIMIT, stated: the verdict is current as of THIS BATCH'S single read, not as
+  // of each send. The read happens once, then one provider call per recipient, so
+  // a restriction committed mid-batch (e.g. an unsubscribe) is not seen by the
+  // recipients still to go. This fix removes clock skew, not batch staleness
+  // (whether long batches should re-read or be capped is an open decision, e9).
 
   let sentCount = 0;
   let failedCount = 0;
@@ -312,6 +318,10 @@ export async function processBatch(
         channel: 'whatsapp',
       }, governance.records?.length ?? 0)
       : null;
+    // The third argument (records produced) is VACUOUS here: for this producer
+    // `records` and `reads[0].records` are the same array, so the consistency check
+    // it feeds cannot fire. It is passed because the signature requires it, not as
+    // a guard doing work at this call site (05).
     // `'verdict' in`, not the discriminant: this repo compiles with strict:false,
     // where `decision.ok` does not narrow the union.
     const verdict = decision && 'verdict' in decision ? decision.verdict : null;
