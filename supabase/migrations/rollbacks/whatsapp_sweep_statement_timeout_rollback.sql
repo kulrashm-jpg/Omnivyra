@@ -1,4 +1,4 @@
--- Rollback for <version>_whatsapp_sweep_statement_timeout.sql.
+-- Rollback for 20270215000001_whatsapp_sweep_statement_timeout.sql.
 --
 -- Removes ONLY the statement_timeout from the four sweep functions; their search_path pin
 -- (from 20270128000007) is kept. Without the timeout, a hung sweep statement abandoned by

@@ -1,4 +1,4 @@
--- Rollback for <version>_whatsapp_broadcast_counts_refresh.sql.
+-- Rollback for 20270215000000_whatsapp_broadcast_counts_refresh.sql.
 --
 -- Removes the refresh function and the four columns it added. The counts themselves
 -- (sent_count etc.) are pre-existing columns and keep their last recomputed values.

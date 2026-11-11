@@ -1,5 +1,5 @@
--- WhatsApp broadcast counts, recomputed from the recipient rows (PLACEHOLDER VERSION -
--- to be renamed to 83's reservation).
+-- WhatsApp broadcast counts, recomputed from the recipient rows (version 20270215000000,
+-- reserved by virality-83 in f47f05962).
 --
 -- THE DEFECT THIS CLOSES (C10, 2026-11-11). processBatch called
 -- rpc('increment_broadcast_counts') and the delivery webhook rpc('increment_broadcast_stat');

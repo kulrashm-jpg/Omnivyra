@@ -1,5 +1,5 @@
 -- A server-side statement_timeout on the WhatsApp unconfirmed-send sweep functions
--- (PLACEHOLDER VERSION - to be renamed to 83's reservation; must order after 20270128000007).
+-- (version 20270215000001, reserved by virality-83 in f47f05962; orders after 20270128000007).
 --
 -- WHY (05, 2026-11-11). The sweep is now scheduled (cron, every 10 minutes) and the job
 -- abandons a hung call client-side (a 30 s race per tenant). Abandoning only stops the
