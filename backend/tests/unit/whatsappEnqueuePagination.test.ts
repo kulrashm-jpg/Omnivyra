@@ -13,7 +13,13 @@ jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => require('
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => require('../helpers/fakeWhatsappDb').fakeTable(t) } }));
 jest.mock('../../auth/metaAuthService', () => ({ getValidAccessToken: async () => 'test-token' }));
 jest.mock('../../services/whatsappTemplateService', () => ({ getActiveTemplate: async () => ({}) }));
-jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
+// No live batch jobs; the enqueue lease is a DELIBERATE NO-OP pass-through (always
+// acquired), so this suite does NOT cover lease or live-job behaviour -
+// whatsappBroadcastResume.test.ts does.
+jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
+jest.mock('../../../lib/platform/distributedLock', () => ({
+  withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
+}));
 jest.mock('../../services/whatsappRateLimiter', () => ({
   checkAndConsume: async () => ({ allowed: true, tier: 'TIER_1' }),
   getBroadcastChunkStrategy: () => ({ batch_size: 2, delay_ms: 1000 }),
@@ -55,7 +61,12 @@ describe('enqueueBroadcast', () => {
     seed(['r5', 'r3', 'r1', 'r4', 'r2']);
     await enqueueBroadcast('b1', 'free');
     expect(mockBatches.map((b) => b.ids)).toEqual([['r1', 'r2'], ['r3', 'r4'], ['r5']]);
-    expect(mockBatches.map((b) => b.jobId)).toEqual(['wa-batch-b1-0', 'wa-batch-b1-1', 'wa-batch-b1-2']);
+    // One run token for the whole run (a fresh UUID per run, so a resume is never
+    // deduped against a retained job), batch index in order.
+    const ids = mockBatches.map((b) => b.jobId);
+    const run = ids[0].replace(/^wa-batch-b1-(.+)-0$/, '$1');
+    expect(run).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(ids).toEqual([0, 1, 2].map((n) => `wa-batch-b1-${run}-${n}`));
     expect(mockBatches.map((b) => b.delay)).toEqual([0, 1000, 2000]);
   });
 

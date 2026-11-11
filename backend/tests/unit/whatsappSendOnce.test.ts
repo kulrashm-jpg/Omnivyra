@@ -36,7 +36,13 @@ jest.mock('../../db/supabaseClient', () => ({
 jest.mock('../../auth/metaAuthService', () => ({ getValidAccessToken: async () => 'test-token' }));
 jest.mock('../../auth/credentialEncryption', () => ({ requireEncryptionKey: () => Buffer.from('11'.repeat(32), 'hex') }));
 jest.mock('../../services/whatsappTemplateService', () => ({ getActiveTemplate: async () => ({}), handleTemplateStatusWebhook: async () => undefined }));
-jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
+// No live batch jobs; the enqueue lease is a DELIBERATE NO-OP pass-through (always
+// acquired), so this suite does NOT cover lease or live-job behaviour -
+// whatsappBroadcastResume.test.ts does.
+jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
+jest.mock('../../../lib/platform/distributedLock', () => ({
+  withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
+}));
 const mockCheckAndConsume = jest.fn(async () => ({ allowed: true, tier: 'TIER_1' }));
 jest.mock('../../services/whatsappRateLimiter', () => ({
   checkAndConsume: (...a: unknown[]) => (mockCheckAndConsume as any)(...a),
@@ -236,7 +242,8 @@ describe('a lost queue acknowledgement (enqueueBroadcast)', () => {
   it('the job was stored and already ran before the error reached us: treated as queued, sent once, no error', async () => {
     seed();
     mockEnqueue = async (data, opts) => { await runNow(data, opts); throw new Error('Command timed out'); };
-    await expect(enqueueBroadcast('b1', 'free')).resolves.toBeUndefined();
+    // Treated as queued: the run reports the batch as in the queue (it ran), no error.
+    await expect(enqueueBroadcast('b1', 'free')).resolves.toMatchObject({ batches: 1, recipients: 1 });
     expect(sends).toHaveLength(1);
     expect(rec().status).toBe('sent');
     expect(fakeDb.tables.whatsapp_broadcasts[0].status).toBe('running');

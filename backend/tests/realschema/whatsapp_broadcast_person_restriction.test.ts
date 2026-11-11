@@ -40,7 +40,13 @@ const mockJobs: Array<{ broadcast_id: string; recipient_ids: string[] }> = [];
 jest.mock('../../middleware/queueBackpressure', () => ({
   enqueueOrThrow: async (_q: unknown, _n: unknown, _j: unknown, data: { broadcast_id: string; recipient_ids: string[] }) => { mockJobs.push(data); },
 }));
-jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
+// No live batch jobs; the enqueue lease is a DELIBERATE NO-OP pass-through (always
+// acquired), so this suite does NOT cover lease or live-job behaviour -
+// whatsappBroadcastResume.test.ts does.
+jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
+jest.mock('../../../lib/platform/distributedLock', () => ({
+  withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
+}));
 
 process.env.PHONE_HASH_SALT = 'test-salt';
 

@@ -15,6 +15,7 @@ import {
   createBroadcast,
   expandRecipients,
   enqueueBroadcast,
+  BroadcastPartiallyEnqueuedError,
   senderAccountRefusalResponse,
   type CreateBroadcastInput,
   type ContactInput,
@@ -113,18 +114,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Optionally enqueue immediately
     if (enqueue && inserted > 0) {
+      let run;
       try {
-        await enqueueBroadcast(broadcastId, plan as string);
+        run = await enqueueBroadcast(broadcastId, plan as string);
       } catch (err) {
+        // A partial run still has queued batches that WILL send: enqueued stays true.
+        const partial = err instanceof BroadcastPartiallyEnqueuedError;
         return res.status(202).json({
           broadcast_id: broadcastId,
           inserted,
           skipped,
-          enqueued: false,
+          enqueued: partial,
+          ...(partial ? { partial: true, uncertain: err.uncertain, batches: err.result.batches } : {}),
           enqueue_error: err instanceof Error ? err.message : String(err),
         });
       }
-      return res.status(201).json({ broadcast_id: broadcastId, inserted, skipped, enqueued: true });
+      // `enqueued: true` only when jobs are known to be queued.
+      return res.status(201).json({ broadcast_id: broadcastId, inserted, skipped, enqueued: run.batches > 0, batches: run.batches });
     }
 
     return res.status(201).json({ broadcast_id: broadcastId, inserted, skipped, enqueued: false });
