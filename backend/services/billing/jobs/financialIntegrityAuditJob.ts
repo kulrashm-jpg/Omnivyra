@@ -44,19 +44,23 @@ export async function runFinancialIntegrityAudit(opts?: {
   ]);
 
   // Stale pending approvals (older than 24h)
-  const { data: stale } = await supabase
+  // A failed read is not "0 stale / 0 stuck" (which feeds a HEALTHY status).
+  // Throw: the audit fails visibly instead of reporting a false all-clear.
+  const { data: stale, error: staleErr } = await supabase
     .from('credit_action_approvals')
     .select('id')
     .eq('status', 'pending')
     .lt('proposed_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString());
+  if (staleErr) throw new Error(`[financialIntegrityAudit] stale approvals read failed: ${staleErr.message}`);
   const stalePendingApprovals = stale?.length ?? 0;
 
   // Stuck fulfillments — payment provider events recorded but never processed
-  const { data: stuck } = await supabase
+  const { data: stuck, error: stuckErr } = await supabase
     .from('payment_provider_event_state')
     .select('provider_event_pk')
     .in('processing_status', ['recorded', 'requeued'])
     .lt('updated_at', new Date(Date.now() - 30 * 60 * 1000).toISOString());
+  if (stuckErr) throw new Error(`[financialIntegrityAudit] stuck payment events read failed: ${stuckErr.message}`);
   const stuckFulfillments = stuck?.length ?? 0;
 
   // Derive overall status
