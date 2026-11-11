@@ -710,7 +710,10 @@ const simpleEntries = CREDIT_ACTIONS
 // key itself, so each action is priced by its own credit_cost_config row and
 // no price moves. Flags are feature()'s defaults - identical to the
 // website_audit entry these actions resolved to before - so only display and
-// keys change. An action BASE_FEATURES registers itself (e.g. image_generation
+// keys change. NOTE: those flags (charge_mode fixed_credits, requires_credit_
+// hold, enforcement_eligible, ...) are INHERITED from that fallback, not chosen
+// for these actions; whether they are right for e.g. campaign_chat is an open
+// owner question raised 2026-11-12 (05). Do not read them as a decision. An action BASE_FEATURES registers itself (e.g. image_generation
 // once its vendor-priced entry lands) is skipped here: BASE always wins.
 // video_generation has no price row, so it stays refused (getCreditCost throws).
 const UNREGISTERED_ACTION_FAMILIES: Record<string, { family: string; display_name: string }> = {

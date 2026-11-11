@@ -11,6 +11,7 @@ jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: 
 import { CREDIT_ACTIONS } from '../../services/creditDeductionService';
 import {
   MONETIZATION_FEATURE_REGISTRY,
+  resolveCreditCostConfigKey,
   resolveFeatureFromActionKey,
   resolveFeatureFromReport,
   resolveMonetizationFeature,
@@ -38,6 +39,23 @@ it('the accepted family mapping: display from the family, every pricing key = th
     expect(e.pricing_keys).toEqual({ action_key: k, credit_cost_config: k, action_pricing_config: k, usage_action_key: k });
   }
   expect(resolveFeatureFromActionKey('video_generation')?.feature_key).toBe('ai_generation.video_generation');
+});
+
+it('image_generation is claimed by EXACTLY ONE entry, and the vendor-priced one wins when present (05, merge guard)', () => {
+  // On this branch the family entry is the only claimant. Once fix/image-credits
+  // lands its BASE entry (creator_content.image_generation, action_pricing_config
+  // vendor pricing), the family generator must SKIP image_generation: a second
+  // claimant, or resolution to the family entry, fails here.
+  const claimants = MONETIZATION_FEATURE_REGISTRY.filter((e) =>
+    [e.pricing_keys.action_key, e.pricing_keys.credit_cost_config, e.pricing_keys.action_pricing_config, e.pricing_keys.usage_action_key]
+      .includes('image_generation'));
+  expect(claimants).toHaveLength(1);
+  const vendorPriced = MONETIZATION_FEATURE_REGISTRY.find((e) => e.feature_key === 'creator_content.image_generation'
+    && e.pricing_strategy === 'action_pricing_config');
+  if (vendorPriced) {
+    expect(resolveFeatureFromActionKey('image_generation')).toBe(vendorPriced);
+    expect(resolveCreditCostConfigKey('image_generation')).toBe('image_generation');
+  }
 });
 
 it('feature keys stay unique', () => {
