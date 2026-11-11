@@ -42,11 +42,22 @@ export async function evaluateRenderGovernanceGate(
     if (dailyJobs?.error) return unavailable(`daily jobs: ${describe(dailyJobs.error)}`);
     if (!Array.isArray(dailyJobs?.data)) return unavailable('daily jobs: no array body');
 
-    const activeStates = (await supabase
-      .from('creator_render_job_state').select('current_state')
-      .in('current_state', ['queued', 'rendering', 'processing', 'moderation']).limit(1000)) as Read;
-    if (activeStates?.error) return unavailable(`active states: ${describe(activeStates.error)}`);
-    if (!Array.isArray(activeStates?.data)) return unavailable('active states: no array body');
+    // CONCURRENCY IS PER TENANT (e9 ruling 3, 2026-11-11). creator_render_job_state has no organization
+    // column, and the count used to run over EVERY tenant's active jobs, so one tenant's renders could
+    // exhaust another's max_concurrent_renders. It is now scoped to THIS org's jobs from the window
+    // above (a job still active more than 24h after creation is outside it: such a job is stale, and
+    // the dead-runner takeover is its own follow-up).
+    const orgJobIds = (dailyJobs.data as { id?: unknown }[]).map((j) => String(j?.id ?? '')).filter(Boolean);
+    let activeCount = 0;
+    if (orgJobIds.length > 0) {
+      const activeStates = (await supabase
+        .from('creator_render_job_state').select('current_state')
+        .in('render_job_id', orgJobIds)
+        .in('current_state', ['queued', 'rendering', 'processing', 'moderation']).limit(1000)) as Read;
+      if (activeStates?.error) return unavailable(`active states: ${describe(activeStates.error)}`);
+      if (!Array.isArray(activeStates?.data)) return unavailable('active states: no array body');
+      activeCount = (activeStates.data as unknown[]).length;
+    }
 
     const decision = evaluateRenderGovernance(
       orgGov?.data ? coerceGovernanceRow(orgGov.data, orgId) : null,
@@ -54,7 +65,7 @@ export async function evaluateRenderGovernanceGate(
       {
         provider: ctx.provider, assetFamily: ctx.assetFamily,
         dailyRenderCount: (dailyJobs.data as unknown[]).length,
-        concurrentRenderCount: (activeStates.data as unknown[]).length,
+        concurrentRenderCount: activeCount,
       },
     );
     return { ok: true, decision };

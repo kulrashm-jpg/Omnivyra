@@ -10,27 +10,41 @@ type R = { data: unknown; error: { code: string; message: string } | null };
 const ok = (data: unknown): R => ({ data, error: null });
 const err: R = { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
 
-/** org governance, global governance, daily jobs, active states: each read answers what it is told. */
-function fakeClient(over: { org?: R; global?: R; daily?: R; active?: R } = {}) {
+/**
+ * org governance, global governance, daily jobs, active states: each read answers what it is told.
+ * `activeRows` is a MULTI-TENANT creator_render_job_state table; the active-state read is answered by
+ * applying the `.in('render_job_id', ...)` filter it was given (none = every tenant's rows).
+ */
+function fakeClient(over: { org?: R; global?: R; daily?: R; active?: R; activeRows?: { render_job_id: string; current_state: string }[] } = {}) {
   const answers = {
     org: over.org ?? ok(null),
     global: over.global ?? ok(null),
-    daily: over.daily ?? ok([]),
-    active: over.active ?? ok([]),
+    daily: over.daily ?? ok([{ id: 'job-own-1' }]),
   };
-  return {
+  const seen = { activeQueries: 0, activeJobFilter: null as string[] | null };
+  const client = {
+    seen,
     from(table: string) {
       const f: Record<string, unknown> = {};
+      let jobFilter: string[] | null = null;
       const q: any = {
         select: () => q,
         eq: (k: string, v: unknown) => { f[k] = v; return q; },
-        gte: () => q, in: () => q,
+        gte: () => q,
+        in: (k: string, vs: string[]) => { if (k === 'render_job_id') jobFilter = vs; return q; },
         maybeSingle: async () => (f.organization_id === GLOBAL_GOVERNANCE_SENTINEL ? answers.global : answers.org),
-        limit: async () => (table === 'creator_render_job' ? answers.daily : answers.active),
+        limit: async () => {
+          if (table === 'creator_render_job') return answers.daily;
+          seen.activeQueries += 1; seen.activeJobFilter = jobFilter;
+          if (over.active) return over.active;
+          const rows = (over.activeRows ?? []).filter((r) => jobFilter === null || jobFilter.includes(r.render_job_id));
+          return ok(rows);
+        },
       };
       return q;
     },
   };
+  return client;
 }
 const CTX = { provider: 'openai', assetFamily: 'image' };
 const STOP = { emergency_stop: true };
@@ -74,6 +88,28 @@ describe('a readable store is evaluated as before', () => {
   it('the daily quota still trips on a readable count', async () => {
     const r = await evaluateRenderGovernanceGate(fakeClient({ org: ok({ max_daily_renders: 2 }), daily: ok([{ id: 'a' }, { id: 'b' }]) }), 'org-1', CTX);
     expect(r).toMatchObject({ ok: true, decision: { allowed: false, event: 'quota_exceeded' } });
+  });
+
+  it('CONCURRENCY IS PER TENANT: other tenants’ active renders do not exhaust this tenant’s cap', async () => {
+    const others = Array.from({ length: 10 }, (_, i) => ({ render_job_id: `job-other-${i}`, current_state: 'rendering' }));
+    const c = fakeClient({ org: ok({ max_concurrent_renders: 4 }), daily: ok([{ id: 'job-own-1' }]), activeRows: [...others, { render_job_id: 'job-own-1', current_state: 'queued' }] });
+    const r = await evaluateRenderGovernanceGate(c, 'org-1', CTX);
+    expect(r).toMatchObject({ ok: true, decision: { allowed: true } });
+    expect(c.seen.activeJobFilter).toEqual(['job-own-1']);
+  });
+
+  it('the cap still trips on THIS tenant’s own active renders', async () => {
+    const own = Array.from({ length: 4 }, (_, i) => ({ id: `job-own-${i}` }));
+    const c = fakeClient({ org: ok({ max_concurrent_renders: 4 }), daily: ok(own), activeRows: own.map((j) => ({ render_job_id: j.id, current_state: 'rendering' })) });
+    const r = await evaluateRenderGovernanceGate(c, 'org-1', CTX);
+    expect(r).toMatchObject({ ok: true, decision: { allowed: false, event: 'provider_rate_limited' } });
+  });
+
+  it('no jobs of this tenant in the window -> concurrency 0 without reading every tenant’s states', async () => {
+    const c = fakeClient({ daily: ok([]), activeRows: [{ render_job_id: 'job-other', current_state: 'rendering' }] });
+    const r = await evaluateRenderGovernanceGate(c, 'org-1', CTX);
+    expect(r).toMatchObject({ ok: true, decision: { allowed: true } });
+    expect(c.seen.activeQueries).toBe(0);
   });
 
   it('CONTROL: the PRE-FIX route logic, on the same unreadable kill switch, ALLOWED the render', async () => {
