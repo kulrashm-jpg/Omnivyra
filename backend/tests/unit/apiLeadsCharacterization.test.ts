@@ -123,6 +123,7 @@ describe('P0-D — Mode 1: inbound webhook', () => {
       name: 'Jane', email: 'jane@acme.com', phone: '555',
       source: 'webhook',                    // default when body.source absent
       integration_id: 'int-1',
+      provenance_mode: 'inbound_webhook',   // asserted, not inferred from column precedence
       website_id: 'w-1',                    // auth website wins over attribution
       visitor_session_id: 'vs-1',
       consent_state: null,
@@ -138,6 +139,25 @@ describe('P0-D — Mode 1: inbound webhook', () => {
     }));
     expect(stitchSessionToLead).toHaveBeenCalledWith({ leadId: 'L1', companyId: 'co-1', visitorSessionId: 'vs-1', unifiedPersonId: 'up-1' });
     expect(persistCampaignTouchpoint).toHaveBeenCalledWith(expect.objectContaining({ touchpointType: 'conversion' }));
+  });
+
+  test('NON-STRING integration_id ["<id>"]: the AUTHENTICATED id (DB row value) is stored, never the raw body value', async () => {
+    // String(["int-1"]) === "int-1" passes the auth gate; the raw array must not reach the insert.
+    validateWebhookAuth.mockResolvedValue({ company_id: 'co-1', website_id: null, integration_id: 'int-1' });
+    const res = createMockRes();
+    await handler(req({ body: { integration_id: ['int-1'], webhook_secret: 's', name: 'J', email: 'j@a.c' } }), res);
+    expect(validateWebhookAuth).toHaveBeenCalledWith('int-1', 's');
+    expect(res.statusCode).toBe(201);
+    const [, input] = createLead.mock.calls[0];
+    expect(input.integration_id).toBe('int-1');
+    expect(typeof input.integration_id).toBe('string');
+  });
+
+  test('stored integration_id is the auth result even when it differs in representation from the body value', async () => {
+    validateWebhookAuth.mockResolvedValue({ company_id: 'co-1', website_id: null, integration_id: 'int-canonical' });
+    const res = createMockRes();
+    await handler(req({ body: { integration_id: ' INT-CANONICAL ', webhook_secret: 's', name: 'J', email: 'j@a.c' } }), res);
+    expect(createLead.mock.calls[0][1].integration_id).toBe('int-canonical');
   });
 
   test('createLead failure → 500 {error: message}', async () => {
@@ -198,7 +218,7 @@ describe('P0-D — Mode 2: embedded form', () => {
     expect(companyId).toBe('co-2');
     expect(input).toMatchObject({
       name: 'Pat Lee', email: 'user@acme.com', phone: '777',
-      source: 'form_embed', form_id: 'F1', integration_id: 'int-2',
+      source: 'form_embed', form_id: 'F1', integration_id: 'int-2', provenance_mode: 'inbound_form',
       website_id: 'w-2', visitor_session_id: 'vs-1',
     });
     expect(input.metadata).toMatchObject({ form_name: 'Contact Us', origin_decision: decision });
@@ -241,7 +261,7 @@ describe('P0-D — Mode 3: authenticated manual entry', () => {
     expect(res.body).toEqual({ lead: LEAD });
     const [companyId, input] = createLead.mock.calls[0];
     expect(companyId).toBe('co-3');
-    expect(input).toMatchObject({ name: 'Sam', email: 'sam@x.io', source: 'manual', website_id: null });
+    expect(input).toMatchObject({ name: 'Sam', email: 'sam@x.io', source: 'manual', website_id: null, provenance_mode: 'manual' });
     expect(input.visitor_session_id).toBeUndefined(); // manual mode never resolves a session
     expect(resolveVisitorSession).not.toHaveBeenCalled();
     expect(stitchSessionToLead).not.toHaveBeenCalled();

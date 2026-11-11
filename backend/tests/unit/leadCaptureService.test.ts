@@ -86,6 +86,7 @@ describe('Phase 8 — canonical website lead capture', () => {
     expect(input.name).toBe('Jane Doe');
     expect(input.email).toBe('jane@acme.com'); // normalized
     expect(input.source).toBe('website'); // canonical
+    expect(input.provenance_mode).toBe('website'); // asserted by the entry point
     expect(input.consent_state).toBe('granted');
     expect(input.metadata).toMatchObject({ lead_capture: true, intent: 'request_demo', company_name: 'Acme', job_title: 'CTO', company_size: '51–200', industry: 'SaaS / Technology', country: 'US', primary_interest: 'Product demo', message: 'Interested' });
     expect(input.attribution).toMatchObject({ utm_source: 'google', utm_campaign: 'spring' });

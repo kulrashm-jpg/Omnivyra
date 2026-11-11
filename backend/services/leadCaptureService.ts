@@ -222,6 +222,7 @@ export async function captureWebsiteLead(
     email,
     phone: submission.phone?.trim() || undefined,
     source: 'website',
+    provenance_mode: 'website',  // website lead capture, asserted (holds even when no visitor session resolves)
     website_id: websiteId,
     visitor_session_id: session.sessionId,
     attribution: attribution as Record<string, unknown>,
