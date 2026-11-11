@@ -53,7 +53,7 @@
  * hard-fails for an action the monetization registry cannot resolve, and
  * `fetchActionPricingRow` throws for an action with no `action_pricing_config`
  * row. The registry entry ships in this change; the two catalog rows ship in
- * migration `20270201000004`, which is NOT applied anywhere real. Until it is
+ * migration `20270211000004`, which is NOT applied anywhere real. Until it is
  * applied, this proposer throws on every call and the engine degrades to
  * deterministic mapping. That is fail-closed and costs nothing — no credits
  * are reserved and no model call is made, because the assertion runs before

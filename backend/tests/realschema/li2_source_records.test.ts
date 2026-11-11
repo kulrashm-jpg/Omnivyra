@@ -45,12 +45,27 @@ describe('LI-2 — schema shape', () => {
     }
   });
 
+  it('the PI-LDB platform profile reference is a SCOPE-binding composite FK, not a tenant leg', async () => {
+    const { rows } = await db.query(
+      `SELECT pg_get_constraintdef(oid) d FROM pg_constraint
+        WHERE conname = 'source_assertions_platform_mapping_profile_fk' AND conrelid = 'public.source_assertions'::regclass`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].d).toMatch(/FOREIGN KEY \(platform_mapping_profile_id, platform_mapping_profile_scope\) REFERENCES source_mapping_profiles\(id, scope\)/);
+    expect(rows[0].d).toMatch(/ON DELETE SET NULL \(platform_mapping_profile_id, platform_mapping_profile_scope\)/);
+  });
+
   it('has 7 composite tenant-safe foreign keys', async () => {
     const { rows } = await db.query(`
       SELECT con.conname, pg_get_constraintdef(con.oid) d
         FROM pg_constraint con JOIN pg_class s ON s.oid=con.conrelid
        WHERE con.contype='f' AND s.relname IN ('source_records','source_assertions')
-         AND array_length(con.conkey,1)=2 ORDER BY con.conname`);
+         AND array_length(con.conkey,1)=2
+         AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) AND a.attname = 'organization_id')
+       ORDER BY con.conname`);
+    // TENANT legs only (the FK includes organization_id). The PI-LDB platform
+    // profile reference (20270211000001) is composite but binds SCOPE, not
+    // tenant - a platform profile belongs to no tenant - and is pinned by name
+    // in its own test below.
     // SEVEN, and neither branch said so.
     //
     // This conflict LOOKED already resolved: main and the sprint both land on
@@ -59,7 +74,7 @@ describe('LI-2 — schema shape', () => {
     //   * main   +1: `source_assertions_relationship_tenant_fk` (20261122000000),
     //                the relationship SUBJECT.
     //   * sprint +1: `source_assertions_mapping_profile_tenant_fk`
-    //                (20270201000001), so an assertion can cite the exact mapping
+    //                (20270211000001), so an assertion can cite the exact mapping
     //                profile version that decided its field.
     // Both are composite and tenant-second, both are present once merged, and
     // this query spans source_records AND source_assertions — so 5 + 1 + 1 = 7.

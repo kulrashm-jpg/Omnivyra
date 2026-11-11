@@ -1,6 +1,6 @@
 -- =============================================================================
 -- ROLLBACK — PI-LDB-5 `lead_attribute_mapping` catalog rows
---            (forward: 20270201000004_pi_ldb_attribute_mapping_pricing.sql)
+--            (forward: 20270211000004_pi_ldb_attribute_mapping_pricing.sql)
 --
 -- WHAT THIS REFUSES, AND WHY
 -- --------------------------

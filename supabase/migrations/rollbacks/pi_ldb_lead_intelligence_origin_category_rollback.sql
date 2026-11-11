@@ -1,4 +1,4 @@
--- ROLLBACK for 20270201000005_pi_ldb_lead_intelligence_origin_category.sql
+-- ROLLBACK for 20270211000005_pi_ldb_lead_intelligence_origin_category.sql
 --
 -- ############################################################################
 -- #  DESTRUCTIVE ONCE ANY LEAD CARRIES AN ORIGIN CLASSIFICATION              #
@@ -52,6 +52,16 @@ DECLARE
 BEGIN
   IF to_regclass('public.lead_intelligence') IS NULL THEN
     RAISE NOTICE 'lead_intelligence is absent; nothing to roll back.';
+    RETURN;
+  END IF;
+
+  -- Idempotent (2026-11-11, found by the negative-control cycle): on a database
+  -- where 20270211000005 never landed, the guard must not query a column that
+  -- does not exist. The DROPs below are all IF EXISTS.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = 'public' AND table_name = 'lead_intelligence'
+                    AND column_name IN ('origin_category', 'origin_observed_at')) THEN
+    RAISE NOTICE 'the origin columns are absent; nothing to guard.';
     RETURN;
   END IF;
 

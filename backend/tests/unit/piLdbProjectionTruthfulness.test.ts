@@ -412,7 +412,7 @@ describe('NEGATIVE CONTROL — a refused write can never read as persisted', () 
     expect(timelinePayloads).toHaveLength(0);
   });
 
-  it('is the realistic 20270201000003-unapplied case, and it is loud', async () => {
+  it('is the realistic 20270211000003-unapplied case, and it is loud', async () => {
     // The composite the programme actually faces: the migration that adds
     // `lead_intelligence.display` is unapplied, `toRow` always supplies the
     // key, so the WHOLE upsert is refused — not "a row without a label".

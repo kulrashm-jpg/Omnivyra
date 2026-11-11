@@ -95,6 +95,42 @@
       "evidence": "PRODUCTION_CATALOG_VERIFIED",
       "status": "remediating",
       "note": "Agent D track 1 owns the remediation. CHECK name is PRODUCTION_CATALOG_VERIFIED; the column name reviewed_by_user_id is CODE_VERIFIED at supabase/migrations/20261030000000_pi_prospect_archive_recommendations.sql:63, which declares it REFERENCES public.users (id) ON DELETE SET NULL while :90 requires it IS NOT NULL for status in (confirmed, rejected) — the DEFECT-008 shape visible in the migration source itself. Not in baseline.sql."
+    },
+    {
+      "table": "source_mapping_profiles",
+      "column": "created_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": null,
+      "writer_validation": "backend/services/leadMapping/mappingProfileStore.ts:saveProfileVersion (caller pages/api/lead-ingestion/mapping-approval.ts verifies an ACTIVE tenant membership first)",
+      "evidence": "CODE_VERIFIED",
+      "status": "enforced",
+      "note": "20270211000000 (renumbered from 20270201000000, never applied; FK into users DROPPED per GOV-H, postcondition refuses an actor FK). mappingProfileStore is the SINGLE writer (coordinator ruling 2026-11-11). Platform-scope rows: Super Admin approval path not yet built (step E); until then no writer sets platform rows."
+    },
+    {
+      "table": "source_mapping_profile_entries",
+      "column": "approved_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "smpe_tenant_decision_has_provenance",
+      "writer_validation": "backend/services/leadMapping/mappingProfileStore.ts:saveProfileVersion (caller verifies an ACTIVE tenant membership first)",
+      "evidence": "CODE_VERIFIED",
+      "status": "enforced",
+      "note": "20270211000000; same writer and rule as source_mapping_profiles.created_by."
+    },
+    {
+      "table": "source_assertions",
+      "column": "approved_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "source_assertions_approval_coherent",
+      "writer_validation": "NOT YET WIRED (PI-LDB provenance writer)",
+      "evidence": "CODE_VERIFIED",
+      "status": "remediating",
+      "note": "Column added without an FK in 20270211000001 (renumbered, never applied). No writer sets it yet. SEQUENCING COMMITMENT: the provenance writer copies approved_by only from a server-RE-VERIFIED profile entry (tenant ownership, active version, pair equality), never from the request."
     }
   ],
   "pending_owner_decision": [

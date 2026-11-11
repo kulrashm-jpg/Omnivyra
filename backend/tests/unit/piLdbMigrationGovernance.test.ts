@@ -33,7 +33,7 @@ const DEFERRED = path.join(ROOT, 'supabase/deferred');
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const exists = (p: string) => fs.existsSync(path.join(ROOT, p));
 
-const MAPPING = 'supabase/migrations/20270201000000_pi_ldb_source_mapping_profiles.sql';
+const MAPPING = 'supabase/migrations/20270211000000_pi_ldb_source_mapping_profiles.sql';
 const SCORE_HISTORY = 'supabase/deferred/pi_ldb_lead_score_history.sql';
 const PRECEDENT_GLOB = '20270107000000';
 
@@ -114,7 +114,7 @@ describe('PI-LDB 2B · each migration now PROVES its own privilege claim', () =>
     // Not a class defect across the five. `000001`, `000003` and `000004` add
     // columns or insert rows, and a new column inherits its table's ACL, so
     // there is nothing to revoke. Asserted so the claim stays checkable.
-    for (const prefix of ['20270201000001', '20270201000003', '20270201000004']) {
+    for (const prefix of ['20270211000001', '20270211000003', '20270211000004']) {
       const file = fs.readdirSync(MIGRATIONS).find((f) => f.startsWith(prefix));
       if (!file) continue;
       const sql = fs.readFileSync(path.join(MIGRATIONS, file), 'utf8');
@@ -129,7 +129,7 @@ describe('PI-LDB 2B · the score-history migration is formally DEFERRED', () => 
       .filter((f) => f.endsWith('.sql'))
       .filter((f) => fs.readFileSync(path.join(MIGRATIONS, f), 'utf8').includes('lead_score_history'));
     expect(offenders).toEqual([]);
-    expect(exists('supabase/migrations/20270201000002_pi_ldb_lead_score_history.sql')).toBe(false);
+    expect(exists('supabase/migrations/20270211000002_pi_ldb_lead_score_history.sql')).toBe(false);
     expect(exists('supabase/migrations/rollbacks/pi_ldb_lead_score_history_rollback.sql')).toBe(false);
   });
 

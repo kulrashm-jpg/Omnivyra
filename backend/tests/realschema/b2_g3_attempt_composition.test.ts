@@ -588,6 +588,7 @@ describe('G-3 tenant isolation — every row in the composition belongs to one t
        WHERE con.contype = 'f'
          AND s.relname IN ('source_records', 'source_assertions',
                            'canonical_attribute_decisions', 'prospect_enrichment_attempts')
+         AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) AND a.attname = 'organization_id')
        GROUP BY s.relname ORDER BY s.relname`);
     const byTable = Object.fromEntries(
       (rows as Array<{ table_name: string; composite_tenant_fks: number }>)
@@ -599,7 +600,7 @@ describe('G-3 tenant isolation — every row in the composition belongs to one t
     // SET NULL (relationship_id) by 20261125000000_pi_relationship_evidence_detachment.sql).
     // 5, not 4: PI-LDB adds a FIFTH composite tenant leg,
     // `source_assertions_mapping_profile_tenant_fk`
-    // (20270201000001_pi_ldb_assertion_mapping_provenance), so an assertion can
+    // (20270211000001_pi_ldb_assertion_mapping_provenance), so an assertion can
     // cite the exact mapping profile version that decided its field. Like the
     // other four it is composite and tenant-second, so the invariant this test
     // exists for is unchanged and only the count moved.

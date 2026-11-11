@@ -2,7 +2,7 @@
  * PI-LDB-4 — real-schema acceptance of `lead_intelligence.display`.
  *
  * ─── WHAT THIS FILE IS FOR ────────────────────────────────────────────────────
- * Migration `20270201000003_pi_ldb_lead_intelligence_display.sql` ends with its
+ * Migration `20270211000003_pi_ldb_lead_intelligence_display.sql` ends with its
  * own `DO $verify$` block, and that block runs inside the migration's own
  * transaction. It therefore proves one thing only: that the statements the
  * migration just issued took effect in the session that issued them. It cannot
@@ -546,7 +546,7 @@ describe('PI-LDB-4 — the real repository and the real read service', () => {
   });
 });
 
-describe('PI-LDB-4 — the column MISSING (migration 20270201000003 unapplied)', () => {
+describe('PI-LDB-4 — the column MISSING (migration 20270211000003 unapplied)', () => {
   it('at the database level, a write naming display raises 42703', async () => {
     await inRollback(async () => {
       await seedTenants();

@@ -320,7 +320,7 @@ GRANT SELECT, INSERT ON TABLE public.lead_score_history TO service_role;
 REVOKE ALL ON FUNCTION public.trg_lead_score_history_append_only()
   FROM PUBLIC, anon, authenticated, authenticator, service_role;
 
--- Asserted AFTER the grants, for the reason given in 20270201000000.
+-- Asserted AFTER the grants, for the reason given in 20270211000000.
 DO $privs$
 BEGIN
   IF has_table_privilege('service_role', 'public.lead_score_history', 'INSERT') IS NOT TRUE THEN

@@ -220,7 +220,7 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
     // Token-priced, like master content: the hold comes from
     // estimateLlmHoldCredits(provider, model, maxTokens) and is partially
     // confirmed against actual counts, so the flat credit_cost_config value is
-    // only the resolver fallback. Catalog rows: migration 20270201000004.
+    // only the resolver fallback. Catalog rows: migration 20270211000004.
     feature_key: 'intelligence.lead_attribute_mapping',
     category: 'intelligence',
     display_name: 'Lead Attribute Mapping',

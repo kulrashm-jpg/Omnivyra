@@ -81,7 +81,7 @@ export type CreditAction =
   // AI semantic attribute mapping of an imported prospect schema (PI-LDB-5).
   // Token-priced via llm_model_pricing: the HOLD comes from
   // estimateLlmHoldCredits, so getCreditCost is only the resolver fallback.
-  // Catalog rows ship in migration 20270201000004 (unapplied).
+  // Catalog rows ship in migration 20270211000004 (unapplied).
   | 'lead_attribute_mapping'
   // Asset / image / video generation (Phase 10D — activity-economy catalog
   // coverage). Settled via per-asset cost profiles (creator/costProfiles.ts),

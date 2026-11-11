@@ -164,10 +164,11 @@ describe('PI-LDB-1 · the tables are shaped the way the store assumes', () => {
     expect(rows.every((r: { relrowsecurity: boolean }) => r.relrowsecurity)).toBe(true);
   });
 
-  it('keeps the actor foreign keys UNARMED, so a user stays deletable', async () => {
-    // The governance review found 19 tables where a refusal trigger makes the
-    // parent row permanently undeletable. These two must not join that list:
-    // integrity here comes from versioning, not from freezing rows.
+  it('GOV-H: the actor columns carry NO foreign key into users at all', async () => {
+    // Renumbered 20270211000000 (2026-11-11) dropped the users FKs on
+    // created_by / approved_by: immutable actor attribution carries no FK
+    // (an ON DELETE SET NULL FK rewrites history when a user is deleted).
+    // Writer-validated instead (mappingProfileStore, active-member check).
     for (const name of ['source_mapping_profiles', 'source_mapping_profile_entries']) {
       const { rows } = await db.query(
         `SELECT pg_get_constraintdef(c.oid) d
@@ -176,9 +177,36 @@ describe('PI-LDB-1 · the tables are shaped the way the store assumes', () => {
             AND pg_get_constraintdef(c.oid) LIKE '%users(id)%'`,
         [name],
       );
-      expect(rows.length).toBeGreaterThan(0);
-      for (const r of rows) expect(r.d).toMatch(/ON DELETE SET NULL/);
+      expect(rows).toEqual([]);
     }
+  });
+
+  it('scope: a platform profile has NO tenant and an entry cannot attach to the other scope', async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const fp = 'b'.repeat(64);
+      // platform profile with a tenant -> refused by the coherence CHECK
+      expect(await attempt(
+        `INSERT INTO public.source_mapping_profiles (scope, organization_id, source, schema_fingerprint, version, status, header_count, headers)
+         VALUES ('platform', $1, 'apollo', $2, 1, 'active', 1, '["x"]'::jsonb)`, [ORG_A, fp])).toBe('23514');
+      // a valid platform profile
+      const { rows } = await db.query(
+        `INSERT INTO public.source_mapping_profiles (scope, organization_id, source, schema_fingerprint, version, status, header_count, headers)
+         VALUES ('platform', NULL, 'apollo', $1, 1, 'active', 1, '["x"]'::jsonb) RETURNING id`, [fp]);
+      const pid = rows[0].id;
+      // a second ACTIVE platform profile for the same shape -> refused (NULL org must not defeat uniqueness)
+      expect(await attempt(
+        `INSERT INTO public.source_mapping_profiles (scope, organization_id, source, schema_fingerprint, version, status, header_count, headers)
+         VALUES ('platform', NULL, 'apollo', $1, 2, 'active', 1, '["x"]'::jsonb)`, [fp])).toBe('23505');
+      // a TENANT entry pointing at the PLATFORM profile -> refused by the scope FK
+      expect(await attempt(
+        `INSERT INTO public.source_mapping_profile_entries (scope, organization_id, profile_id, source_field, source_field_normalized, target_field, decision, mapping_method)
+         VALUES ('tenant', $1, $2, 'x', 'x', 'jobTitle', 'approved', 'high_confidence_suggestion')`, [ORG_A, pid])).toBe('23503');
+      // NEGATIVE CONTROL: a platform entry on the platform profile is admitted
+      expect(await attempt(
+        `INSERT INTO public.source_mapping_profile_entries (scope, organization_id, profile_id, source_field, source_field_normalized, target_field, decision, mapping_method)
+         VALUES ('platform', NULL, $1, 'x', 'x', 'jobTitle', 'approved', 'high_confidence_suggestion')`, [pid])).toBe('ok');
+    });
   });
 });
 
@@ -579,7 +607,7 @@ describe('PI-LDB · the destinations the engine proposes exist as columns', () =
 /**
  * PI-LDB 2F / requirement 11 — the privilege assertions are no longer vacuous.
  *
- * THE PROBLEM THESE TESTS EXIST FOR. 20270201000000 ends with a DO block
+ * THE PROBLEM THESE TESTS EXIST FOR. 20270211000000 ends with a DO block
  * asserting that `service_role` does NOT hold DELETE or TRUNCATE on the two
  * mapping tables. On a stock postgres image that assertion cannot fail:
  * `pg_default_acl` is empty, so the surplus the REVOKE exists to remove never

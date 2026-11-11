@@ -1,4 +1,11 @@
--- PI-LDB-1 — tenant mapping profiles for AI-assisted semantic attribute mapping.
+-- PI-LDB-1 — tenant AND platform mapping profiles for AI-assisted semantic attribute mapping.
+--
+-- ─── VERSION AND APPLIED STATUS ─────────────────────────────────────────────
+-- Renumbered from 20270201000000 (virality-83 ruling, 2026-11-11, reserved in
+-- registry commit 996b6552d). The 20270201* version was NEVER applied anywhere:
+-- C6 (production catalogue, owner-approved) found none of its objects, and no
+-- apply record exists. Content was edited in the same change, before any first
+-- apply: platform/tenant scope added; users FKs dropped (GOV-H).
 --
 -- ─── WHY THIS EXISTS ────────────────────────────────────────────────────────
 -- Every external ingestion path must pass through one common semantic mapping
@@ -19,15 +26,25 @@
 -- (PI-LDB-2) points at the exact version that decided a field, which is what
 -- makes a historical mapping auditable rather than merely current.
 --
--- ─── WHY THE ENTRIES ARE *NOT* APPEND-ONLY ──────────────────────────────────
--- Deliberate, and the reason is specific. `approved_by` follows this
--- repository's actor pattern, `REFERENCES users(id) ON DELETE SET NULL`.
--- Pairing that with an append-only UPDATE trigger would mean deleting a user
--- requires a SET NULL that the trigger refuses — which is exactly the armed
--- foreign key the governance review found on 19 existing tables, where a
--- refusal trigger makes the parent row permanently undeletable. Integrity here
--- comes from profile VERSIONING, not from freezing rows, so no such trigger is
--- created and the actor FK stays safe.
+-- ─── ACTORS: NO FOREIGN KEY INTO users (GOV-H) ──────────────────────────────
+-- `created_by` and `approved_by` are immutable actor attribution. Per the
+-- repository's actor-field rule they carry NO foreign key into users (an
+-- `ON DELETE SET NULL` FK rewrites history when a user is deleted, and an
+-- append-only guard would then make the user undeletable). They are nullable
+-- and WRITER-VALIDATED: the single writer, mappingProfileStore, is called only
+-- with a verified principal who is an active member of the tenant (tenant
+-- profiles) or a Super Admin (platform profiles). Integrity comes from profile
+-- VERSIONING, not from freezing rows.
+--
+-- ─── SCOPE: TENANT OR PLATFORM ─────────────────────────────────────────────
+-- `scope = 'tenant'`: one organisation's mapping for its own files
+--   (organization_id NOT NULL; approved by a member).
+-- `scope = 'platform'`: a data VENDOR's mapping (e.g. Apollo's response shape),
+--   shared by every tenant (organization_id NULL; approved by Super Admin only,
+--   never writable by a client role). Coordinator ruling, 2026-11-11.
+-- Entries carry the same scope as their profile, enforced by a composite FK on
+-- (profile_id, scope), so an entry can never attach to the other scope's
+-- profile; tenant entries additionally keep the composite tenant FK.
 --
 -- Creates no data. No existing table, column, index, constraint or policy is
 -- modified.
@@ -39,7 +56,9 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.source_mapping_profiles (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id     uuid NOT NULL REFERENCES public.companies (id) ON DELETE CASCADE,
+  -- 'tenant' (organization_id set) or 'platform' (organization_id NULL).
+  scope               text NOT NULL DEFAULT 'tenant',
+  organization_id     uuid NULL REFERENCES public.companies (id) ON DELETE CASCADE,
   -- Free text, matching `source_records.provider`: the ingestion contract
   -- declares `source` as a free-text provider key on purpose, and constraining
   -- it here would make this table refuse a source the contract accepts. The
@@ -68,10 +87,16 @@ CREATE TABLE IF NOT EXISTS public.source_mapping_profiles (
   -- error would surface as "5 columns appeared" on the very next import of an
   -- unchanged file. No default: every insert must say what the shape was.
   headers             jsonb NOT NULL,
-  created_by          uuid NULL REFERENCES public.users (id) ON DELETE SET NULL,
+  -- GOV-H actor: no FK into users; writer-validated (see header).
+  created_by          uuid NULL,
   created_at          timestamptz NOT NULL DEFAULT now(),
   superseded_at       timestamptz,
 
+  CONSTRAINT source_mapping_profiles_scope_valid
+    CHECK (scope IN ('tenant', 'platform')),
+  -- A tenant profile names its tenant; a platform profile names none.
+  CONSTRAINT source_mapping_profiles_scope_org_coherent
+    CHECK ((scope = 'platform') = (organization_id IS NULL)),
   CONSTRAINT source_mapping_profiles_source_not_blank
     CHECK (length(btrim(source)) > 0),
   CONSTRAINT source_mapping_profiles_fingerprint_shape
@@ -108,12 +133,28 @@ CREATE TABLE IF NOT EXISTS public.source_mapping_profiles (
 -- At most ONE active profile per file shape. This is the constraint that makes
 -- "reuse the tenant's approved mapping" a deterministic lookup rather than a
 -- choice between candidates.
+-- Partial per scope: organization_id is NULL on platform rows, and NULLs are
+-- distinct in a unique index, so one index over (organization_id, ...) would
+-- allow any number of active platform profiles for one shape.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_source_mapping_profiles_active
   ON public.source_mapping_profiles (organization_id, source, schema_fingerprint)
-  WHERE status = 'active';
+  WHERE status = 'active' AND scope = 'tenant';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_source_mapping_profiles_version
-  ON public.source_mapping_profiles (organization_id, source, schema_fingerprint, version);
+  ON public.source_mapping_profiles (organization_id, source, schema_fingerprint, version)
+  WHERE scope = 'tenant';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_source_mapping_profiles_platform_active
+  ON public.source_mapping_profiles (source, schema_fingerprint)
+  WHERE status = 'active' AND scope = 'platform';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_source_mapping_profiles_platform_version
+  ON public.source_mapping_profiles (source, schema_fingerprint, version)
+  WHERE scope = 'platform';
+
+-- Parent key for the scope-safe composite foreign key on entries.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_source_mapping_profiles_id_scope
+  ON public.source_mapping_profiles (id, scope);
 
 -- Parent key for the tenant-safe composite foreign keys below and in PI-LDB-2.
 -- A child referencing only `id` could point at another tenant's profile.
@@ -124,14 +165,16 @@ CREATE INDEX IF NOT EXISTS idx_source_mapping_profiles_org_source
   ON public.source_mapping_profiles (organization_id, source, created_at DESC);
 
 COMMENT ON TABLE public.source_mapping_profiles IS
-  'Versioned, tenant-scoped semantic mapping decisions keyed on the header-set fingerprint of a source file. Superseded, never edited.';
+  'Versioned semantic mapping decisions keyed on the header-set fingerprint of a source: tenant-scoped (a tenant''s own files) or platform-scoped (a data vendor''s shape, Super Admin approved). Superseded, never edited.';
 
 -- ---------------------------------------------------------------------------
 -- source_mapping_profile_entries — the per-column decisions inside a profile.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.source_mapping_profile_entries (
   id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id         uuid NOT NULL REFERENCES public.companies (id) ON DELETE CASCADE,
+  -- The profile's scope, repeated so the composite FK can bind it.
+  scope                   text NOT NULL DEFAULT 'tenant',
+  organization_id         uuid NULL REFERENCES public.companies (id) ON DELETE CASCADE,
   profile_id              uuid NOT NULL,
   -- The header EXACTLY as the source wrote it. Preserved because a mapping
   -- report that cannot quote the tenant's own column name is unreadable.
@@ -162,10 +205,15 @@ CREATE TABLE IF NOT EXISTS public.source_mapping_profile_entries (
   score                   numeric,
   -- The evidence list the scorer produced, verbatim.
   evidence                jsonb NOT NULL DEFAULT '[]'::jsonb,
-  approved_by             uuid NULL REFERENCES public.users (id) ON DELETE SET NULL,
+  -- GOV-H actor: no FK into users; writer-validated (see header).
+  approved_by             uuid NULL,
   approved_at             timestamptz,
   created_at              timestamptz NOT NULL DEFAULT now(),
 
+  CONSTRAINT smpe_scope_valid
+    CHECK (scope IN ('tenant', 'platform')),
+  CONSTRAINT smpe_scope_org_coherent
+    CHECK ((scope = 'platform') = (organization_id IS NULL)),
   CONSTRAINT smpe_source_field_not_blank
     CHECK (length(btrim(source_field)) > 0),
   CONSTRAINT smpe_normalized_not_blank
@@ -228,11 +276,24 @@ COMMENT ON TABLE public.source_mapping_profile_entries IS
 -- ---------------------------------------------------------------------------
 DO $fk$
 BEGIN
+  -- Tenant rows: the tenant is part of the key. (MATCH SIMPLE skips this check
+  -- when organization_id is NULL, i.e. on platform rows - which is why the
+  -- scope FK below exists.)
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'smpe_profile_tenant_fk') THEN
     ALTER TABLE public.source_mapping_profile_entries
       ADD CONSTRAINT smpe_profile_tenant_fk
       FOREIGN KEY (profile_id, organization_id)
       REFERENCES public.source_mapping_profiles (id, organization_id)
+      ON DELETE CASCADE;
+  END IF;
+  -- Every row: the entry's scope must be its profile's scope. Both columns are
+  -- NOT NULL, so this is always checked, and a platform entry cannot attach to
+  -- a tenant profile (or the reverse).
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'smpe_profile_scope_fk') THEN
+    ALTER TABLE public.source_mapping_profile_entries
+      ADD CONSTRAINT smpe_profile_scope_fk
+      FOREIGN KEY (profile_id, scope)
+      REFERENCES public.source_mapping_profiles (id, scope)
       ON DELETE CASCADE;
   END IF;
 END
@@ -282,21 +343,33 @@ BEGIN
      AND indexname IN (
        'uq_source_mapping_profiles_active',
        'uq_source_mapping_profiles_version',
+       'uq_source_mapping_profiles_platform_active',
+       'uq_source_mapping_profiles_platform_version',
        'uq_source_mapping_profiles_id_org',
+       'uq_source_mapping_profiles_id_scope',
        'uq_smpe_approved_per_field',
        'uq_smpe_ignored_per_field',
        'uq_smpe_rejected_per_target');
-  IF v_idx <> 6 THEN
-    RAISE EXCEPTION 'PI-LDB-1 postcondition: expected 6 named unique indexes, found %', v_idx;
+  IF v_idx <> 9 THEN
+    RAISE EXCEPTION 'PI-LDB-1 postcondition: expected 9 named unique indexes, found %', v_idx;
   END IF;
 
   SELECT count(*) INTO v_fk
     FROM pg_constraint
-   WHERE conname = 'smpe_profile_tenant_fk'
+   WHERE conrelid = 'public.source_mapping_profile_entries'::regclass
+     AND conname IN ('smpe_profile_tenant_fk', 'smpe_profile_scope_fk')
      AND contype = 'f'
      AND array_length(conkey, 1) = 2;
-  IF v_fk <> 1 THEN
-    RAISE EXCEPTION 'PI-LDB-1 postcondition: composite tenant FK on profile entries is missing';
+  IF v_fk <> 2 THEN
+    RAISE EXCEPTION 'PI-LDB-1 postcondition: the composite tenant FK or scope FK on profile entries is missing';
+  END IF;
+
+  -- GOV-H: the actor columns carry NO foreign key (a later edit re-adding one
+  -- trips here).
+  IF EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+              WHERE c.contype = 'f' AND a.attname IN ('created_by', 'approved_by')
+                AND c.conrelid IN ('public.source_mapping_profiles'::regclass, 'public.source_mapping_profile_entries'::regclass)) THEN
+    RAISE EXCEPTION 'PI-LDB-1 postcondition: an actor column (created_by/approved_by) carries a foreign key (GOV-H)';
   END IF;
 
   IF (SELECT count(*) FROM public.source_mapping_profiles) <> 0
@@ -304,7 +377,7 @@ BEGIN
     RAISE EXCEPTION 'PI-LDB-1 postcondition: mapping profile tables must be empty on arrival';
   END IF;
 
-  RAISE NOTICE 'PI-LDB-1: source_mapping_profiles + entries created, 6 unique indexes, 1 composite tenant FK, 0 rows.';
+  RAISE NOTICE 'PI-LDB-1: source_mapping_profiles + entries created (tenant + platform scope), 9 unique indexes, tenant + scope FKs, no actor FK, 0 rows.';
 END
 $verify$;
 

@@ -1,4 +1,9 @@
 -- PI-LDB 2F / D2+D3 — the durable, authoritative origin classification.
+-- Renumbered from 20270201* (virality-83 ruling, 2026-11-11; never applied, per C6).
+-- CHECKs on this live table are added NOT VALID (no row scan under the ACCESS
+-- EXCLUSIVE lock ADD COLUMN takes); new rows are enforced immediately and the
+-- VALIDATE runs in a separate migration under SHARE UPDATE EXCLUSIVE.
+--
 --
 -- ─── THE GAP THIS CLOSES ────────────────────────────────────────────────────
 -- `origin.category` decides `lead_captured` (+15, "Submitted a lead form") and
@@ -98,7 +103,7 @@ BEGIN
       CHECK (origin_category IS NULL OR origin_category IN (
         'marketpulse', 'social_listening', 'community', 'engagement',
         'inbound_form', 'inbound_webhook', 'manual', 'crm', 'csv',
-        'pi_discovery', 'pi_enrichment', 'website'));
+        'pi_discovery', 'pi_enrichment', 'website')) NOT VALID;
   END IF;
 
   -- An observation with nothing observed is not a fact about anything. The
@@ -108,7 +113,7 @@ BEGIN
                   WHERE conname = 'lead_intelligence_origin_observed_needs_category') THEN
     ALTER TABLE public.lead_intelligence
       ADD CONSTRAINT lead_intelligence_origin_observed_needs_category
-      CHECK (origin_category IS NOT NULL OR origin_observed_at IS NULL);
+      CHECK (origin_category IS NOT NULL OR origin_observed_at IS NULL) NOT VALID;
   END IF;
 END
 $checks$;
@@ -171,9 +176,7 @@ CREATE TRIGGER trg_lead_intelligence_origin_evidence
 -- Tenant-leading, like every other index on this table (20260629000000:32-34),
 -- because computeLeadStats aggregates per tenant. Partial: a NULL category is
 -- the normal state for a pre-2F row and indexing it buys nothing.
-CREATE INDEX IF NOT EXISTS idx_lead_intelligence_company_origin_category
-  ON public.lead_intelligence (company_id, origin_category)
-  WHERE origin_category IS NOT NULL;
+-- idx_lead_intelligence_company_origin_category: built CONCURRENTLY in 20270211000007 (live table; a plain build blocks writes).
 
 COMMENT ON COLUMN public.lead_intelligence.origin_category IS
   'D2: the AUTHORITATIVE durable origin classification used by scoring and journey presentation (not a cache). One of lib/prospectProvenance/contract.ts SOURCE_CATEGORIES. Written only from an explicitly asserted ingestion-contract category, never inferred from a display source, provider name or source label. NULL = nobody recorded evidence, and stays fail-closed.';

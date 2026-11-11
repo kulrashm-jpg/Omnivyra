@@ -1,4 +1,9 @@
 -- PI-LDB-4 — a human-readable label on the durable lead store.
+-- Renumbered from 20270201* (virality-83 ruling, 2026-11-11; never applied, per C6).
+-- CHECKs on this live table are added NOT VALID (no row scan under the ACCESS
+-- EXCLUSIVE lock ADD COLUMN takes); new rows are enforced immediately and the
+-- VALIDATE runs in a separate migration under SHARE UPDATE EXCLUSIVE.
+--
 --
 -- ─── THE GAP THIS CLOSES ────────────────────────────────────────────────────
 -- `CanonicalLeadInput.display` has always existed, and `assemble()` in
@@ -54,7 +59,7 @@ BEGIN
                   WHERE conname = 'lead_intelligence_display_is_object') THEN
     ALTER TABLE public.lead_intelligence
       ADD CONSTRAINT lead_intelligence_display_is_object
-      CHECK (display IS NULL OR jsonb_typeof(display) = 'object');
+      CHECK (display IS NULL OR jsonb_typeof(display) = 'object') NOT VALID;
   END IF;
 END
 $checks$;
@@ -63,9 +68,7 @@ $checks$;
 -- substring search better, but pg_trgm is not guaranteed present in every
 -- environment this schema is built in, and a btree on the extracted name
 -- already serves the exact-match and prefix cases the list view issues.
-CREATE INDEX IF NOT EXISTS idx_lead_intelligence_display_name
-  ON public.lead_intelligence ((display ->> 'name'))
-  WHERE display ? 'name';
+-- idx_lead_intelligence_display_name: built CONCURRENTLY in 20270211000007 (live table; a plain build blocks writes).
 
 COMMENT ON COLUMN public.lead_intelligence.display IS
   'How a human recognises this lead: { name, title, contentText }. Mirrors CanonicalLeadInput.display. Kept OUT of metadata so synthesised labels stay separable from the provider''s verbatim raw fields.';

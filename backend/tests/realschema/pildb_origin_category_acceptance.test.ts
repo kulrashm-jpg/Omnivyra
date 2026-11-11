@@ -6,7 +6,7 @@
  * database and must not be reported as production verification.
  *
  * WHY THIS SUITE EXISTS RATHER THAN A UNIT TEST. The D3 invariant is a property
- * of the TABLE, not of a writer: migration 20270201000005 installs a
+ * of the TABLE, not of a writer: migration 20270211000005 installs a
  * BEFORE INSERT OR UPDATE trigger, because the canonical write is a full-row
  * `resolution=merge-duplicates` upsert that assigns every key in its body and
  * this store has four write paths. Nothing but a real database can show that

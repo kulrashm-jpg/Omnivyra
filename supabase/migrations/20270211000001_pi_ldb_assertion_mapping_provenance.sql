@@ -1,5 +1,21 @@
 -- PI-LDB-2 — field-level mapping provenance on source_assertions.
 --
+-- ─── VERSION AND APPLIED STATUS ─────────────────────────────────────────────
+-- Renumbered from 20270201000001 (virality-83 ruling, 2026-11-11; never applied
+-- anywhere, per C6). Edited before first apply:
+--   * PLATFORM profiles: a tenant's assertion may be mapped by a platform
+--     (vendor) profile, which has no organization_id, so it cannot satisfy the
+--     tenant composite FK. It is referenced separately, via
+--     platform_mapping_profile_id + platform_mapping_profile_scope with a
+--     composite FK to (id, scope); the two references are mutually exclusive.
+--   * The tenant FK's ON DELETE SET NULL now names its column. A bare SET NULL
+--     on (mapping_profile_id, organization_id) would null organization_id too
+--     (NOT NULL here), so a profile delete would FAIL instead of detaching.
+--   * Every new CHECK/FK on this live, growing table is added NOT VALID, so
+--     this transaction (ACCESS EXCLUSIVE from ADD COLUMN, held to COMMIT) scans
+--     no rows. New rows are enforced immediately; the VALIDATE runs in a
+--     separate migration under SHARE UPDATE EXCLUSIVE.
+--
 -- ─── THE GAP THIS CLOSES ────────────────────────────────────────────────────
 -- `source_assertions` already records, per field, what a provider said
 -- (`raw_value`), what our normalisers made of it (`normalized_value`), which
@@ -46,8 +62,15 @@ ALTER TABLE public.source_assertions
   -- Who approved the mapping, when a human did. Distinct from
   -- `source_mapping_profile_entries.approved_by`, which records the approval of
   -- the PROFILE; this records the approval in force for THIS assertion.
+  -- GOV-H actor: no FK into users; writer-validated.
   ADD COLUMN IF NOT EXISTS approved_by        uuid,
-  ADD COLUMN IF NOT EXISTS approved_at        timestamptz;
+  ADD COLUMN IF NOT EXISTS approved_at        timestamptz,
+  -- A PLATFORM (vendor) profile version that decided this field. Exclusive
+  -- with mapping_profile_id (a tenant profile).
+  ADD COLUMN IF NOT EXISTS platform_mapping_profile_id    uuid,
+  -- Always 'platform' when the id is set, NULL otherwise. Exists so the FK can
+  -- bind the referenced profile's scope.
+  ADD COLUMN IF NOT EXISTS platform_mapping_profile_scope text;
 
 -- ---------------------------------------------------------------------------
 -- Value constraints. All NULL-tolerant: see the header.
@@ -55,10 +78,24 @@ ALTER TABLE public.source_assertions
 DO $checks$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conname = 'source_assertions_platform_profile_scope') THEN
+    ALTER TABLE public.source_assertions
+      ADD CONSTRAINT source_assertions_platform_profile_scope
+      -- set-null-ok: the FK's SET NULL nulls BOTH columns together, and the first branch admits (NULL, NULL), so a profile delete always leaves a valid row.
+      CHECK ((platform_mapping_profile_id IS NULL AND platform_mapping_profile_scope IS NULL)
+          OR (platform_mapping_profile_id IS NOT NULL AND platform_mapping_profile_scope = 'platform')) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conname = 'source_assertions_one_mapping_profile') THEN
+    ALTER TABLE public.source_assertions
+      ADD CONSTRAINT source_assertions_one_mapping_profile
+      CHECK (mapping_profile_id IS NULL OR platform_mapping_profile_id IS NULL) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
                   WHERE conname = 'source_assertions_source_field_not_blank') THEN
     ALTER TABLE public.source_assertions
       ADD CONSTRAINT source_assertions_source_field_not_blank
-      CHECK (source_field IS NULL OR length(btrim(source_field)) > 0);
+      CHECK (source_field IS NULL OR length(btrim(source_field)) > 0) NOT VALID;
   END IF;
 
   -- Mirrors `MappingStatus` in the engine's contract. Listed rather than free
@@ -78,7 +115,7 @@ BEGIN
         -- Named explicitly so that "no mapping" is a recorded fact rather than
         -- an absent column that could equally mean "we forgot to write it".
         'no_mapping_layer'
-      ));
+      )) NOT VALID;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
@@ -94,7 +131,7 @@ BEGIN
         'invalid',
         -- The column was empty for this record.
         'empty'
-      ));
+      )) NOT VALID;
   END IF;
 
   -- An approval with no timestamp cannot be audited, and a timestamp with no
@@ -103,7 +140,7 @@ BEGIN
                   WHERE conname = 'source_assertions_approval_coherent') THEN
     ALTER TABLE public.source_assertions
       ADD CONSTRAINT source_assertions_approval_coherent
-      CHECK ((approved_by IS NULL) = (approved_at IS NULL));
+      CHECK ((approved_by IS NULL) = (approved_at IS NULL)) NOT VALID;
   END IF;
 
   -- An `invalid` value must never have been applied to a canonical column.
@@ -114,7 +151,7 @@ BEGIN
     ALTER TABLE public.source_assertions
       ADD CONSTRAINT source_assertions_invalid_not_applied
       CHECK (validation_state IS DISTINCT FROM 'invalid'
-             OR applied_to_canonical_at IS NULL);
+             OR applied_to_canonical_at IS NULL) NOT VALID;
   END IF;
 END
 $checks$;
@@ -143,7 +180,7 @@ $checks$;
 DO $fk$
 BEGIN
   IF to_regclass('public.source_mapping_profiles') IS NULL THEN
-    RAISE EXCEPTION 'PI-LDB-2 precondition: source_mapping_profiles is missing. Apply 20270201000000 first.';
+    RAISE EXCEPTION 'PI-LDB-2 precondition: source_mapping_profiles is missing. Apply 20270211000000 first.';
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
@@ -152,7 +189,15 @@ BEGIN
       ADD CONSTRAINT source_assertions_mapping_profile_tenant_fk
       FOREIGN KEY (mapping_profile_id, organization_id)
       REFERENCES public.source_mapping_profiles (id, organization_id)
-      ON DELETE SET NULL;
+      ON DELETE SET NULL (mapping_profile_id) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conname = 'source_assertions_platform_mapping_profile_fk') THEN
+    ALTER TABLE public.source_assertions
+      ADD CONSTRAINT source_assertions_platform_mapping_profile_fk
+      FOREIGN KEY (platform_mapping_profile_id, platform_mapping_profile_scope)
+      REFERENCES public.source_mapping_profiles (id, scope)
+      ON DELETE SET NULL (platform_mapping_profile_id, platform_mapping_profile_scope) NOT VALID;
   END IF;
 END
 $fk$;
@@ -163,20 +208,14 @@ $fk$;
 -- ---------------------------------------------------------------------------
 
 -- "Which of my columns fed this attribute?" — the mapping-audit query.
-CREATE INDEX IF NOT EXISTS idx_source_assertions_source_field
-  ON public.source_assertions (organization_id, source_field, attribute)
-  WHERE source_field IS NOT NULL;
+-- idx_source_assertions_source_field: built CONCURRENTLY in 20270211000007 (live table; a plain build blocks writes).
 
 -- "What did this profile version decide?" — the drift and correction query.
-CREATE INDEX IF NOT EXISTS idx_source_assertions_mapping_profile
-  ON public.source_assertions (mapping_profile_id)
-  WHERE mapping_profile_id IS NOT NULL;
+-- idx_source_assertions_mapping_profile: built CONCURRENTLY in 20270211000007 (live table; a plain build blocks writes).
 
 -- "What arrived with no mapping layer, or failed validation?" — the honesty
 -- query behind any claim that a channel is operational.
-CREATE INDEX IF NOT EXISTS idx_source_assertions_unmapped
-  ON public.source_assertions (organization_id, mapping_method)
-  WHERE mapping_method IS NULL OR mapping_method = 'no_mapping_layer';
+-- idx_source_assertions_unmapped: built CONCURRENTLY in 20270211000007 (live table; a plain build blocks writes).
 
 COMMENT ON COLUMN public.source_assertions.source_field IS
   'The source field name verbatim, e.g. Designation. Without it, a mis-mapping is undetectable after the fact.';
@@ -197,9 +236,10 @@ BEGIN
   SELECT count(*) INTO v_cols FROM information_schema.columns
    WHERE table_schema = 'public' AND table_name = 'source_assertions'
      AND column_name IN ('source_field', 'mapping_profile_id', 'mapping_method',
-                         'validation_state', 'approved_by', 'approved_at');
-  IF v_cols <> 6 THEN
-    RAISE EXCEPTION 'PI-LDB-2 postcondition: expected 6 mapping provenance columns, found %', v_cols;
+                         'validation_state', 'approved_by', 'approved_at',
+                         'platform_mapping_profile_id', 'platform_mapping_profile_scope');
+  IF v_cols <> 8 THEN
+    RAISE EXCEPTION 'PI-LDB-2 postcondition: expected 8 mapping provenance columns, found %', v_cols;
   END IF;
 
   -- Every one of these columns must be NULLABLE. A NOT NULL here would have
@@ -207,26 +247,45 @@ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
               WHERE table_schema = 'public' AND table_name = 'source_assertions'
                 AND column_name IN ('source_field', 'mapping_profile_id', 'mapping_method',
-                                    'validation_state', 'approved_by', 'approved_at')
+                                    'validation_state', 'approved_by', 'approved_at',
+                                    'platform_mapping_profile_id', 'platform_mapping_profile_scope')
                 AND is_nullable = 'NO') THEN
     RAISE EXCEPTION 'PI-LDB-2 postcondition: a mapping provenance column is NOT NULL; it must be additive and nullable';
   END IF;
 
+  -- Existence only: the checks are NOT VALID here and validated by the
+  -- follow-on VALIDATE migration, whose postcondition checks convalidated.
   SELECT count(*) INTO v_chk FROM pg_constraint
-   WHERE conname IN ('source_assertions_source_field_not_blank',
+   WHERE conrelid = 'public.source_assertions'::regclass
+     AND conname IN ('source_assertions_source_field_not_blank',
                      'source_assertions_mapping_method_valid',
                      'source_assertions_validation_state_valid',
                      'source_assertions_approval_coherent',
-                     'source_assertions_invalid_not_applied');
-  IF v_chk <> 5 THEN
-    RAISE EXCEPTION 'PI-LDB-2 postcondition: expected 5 named checks, found %', v_chk;
+                     'source_assertions_invalid_not_applied',
+                     'source_assertions_platform_profile_scope',
+                     'source_assertions_one_mapping_profile');
+  IF v_chk <> 7 THEN
+    RAISE EXCEPTION 'PI-LDB-2 postcondition: expected 7 named checks, found %', v_chk;
   END IF;
 
   SELECT count(*) INTO v_fk FROM pg_constraint
-   WHERE conname = 'source_assertions_mapping_profile_tenant_fk'
+   WHERE conrelid = 'public.source_assertions'::regclass
+     AND conname IN ('source_assertions_mapping_profile_tenant_fk', 'source_assertions_platform_mapping_profile_fk')
      AND contype = 'f' AND array_length(conkey, 1) = 2;
-  IF v_fk <> 1 THEN
-    RAISE EXCEPTION 'PI-LDB-2 postcondition: tenant-safe mapping profile FK is missing or not composite';
+  IF v_fk <> 2 THEN
+    RAISE EXCEPTION 'PI-LDB-2 postcondition: the tenant or platform mapping profile FK is missing or not composite';
+  END IF;
+  -- SET NULL must name only the profile column(s), never organization_id.
+  IF EXISTS (SELECT 1 FROM pg_constraint
+              WHERE conrelid = 'public.source_assertions'::regclass
+                AND conname = 'source_assertions_mapping_profile_tenant_fk'
+                AND (confdelsetcols IS NULL OR array_length(confdelsetcols, 1) <> 1)) THEN
+    RAISE EXCEPTION 'PI-LDB-2 postcondition: source_assertions_mapping_profile_tenant_fk uses a plain ON DELETE SET NULL (it must be SET NULL (mapping_profile_id)); the plain form nulls organization_id (NOT NULL) and makes every profile delete fail';
+  END IF;
+  -- GOV-H: approved_by carries no FK.
+  IF EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+              WHERE c.contype = 'f' AND c.conrelid = 'public.source_assertions'::regclass AND a.attname = 'approved_by') THEN
+    RAISE EXCEPTION 'PI-LDB-2 postcondition: source_assertions.approved_by carries a foreign key (GOV-H)';
   END IF;
 
   -- The LI-2 dedupe key must be exactly as it was. This migration must not have
@@ -237,7 +296,7 @@ BEGIN
     RAISE EXCEPTION 'PI-LDB-2 postcondition: the LI-2 dedupe index is missing';
   END IF;
 
-  RAISE NOTICE 'PI-LDB-2: 6 nullable mapping provenance columns, 5 checks, 1 composite tenant FK, dedupe key intact.';
+  RAISE NOTICE 'PI-LDB-2: 8 nullable mapping provenance columns, 7 checks + tenant/platform FKs (NOT VALID, validated separately), dedupe key intact.';
 END
 $verify$;
 

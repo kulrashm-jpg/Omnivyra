@@ -1,4 +1,4 @@
--- ROLLBACK for 20270201000001_pi_ldb_assertion_mapping_provenance.sql
+-- ROLLBACK for 20270211000001_pi_ldb_assertion_mapping_provenance.sql
 --
 -- ############################################################################
 -- #  DESTRUCTIVE ONCE ANY ASSERTION CARRIES MAPPING PROVENANCE               #
@@ -51,7 +51,8 @@ BEGIN
       OR mapping_profile_id IS NOT NULL
       OR mapping_method IS NOT NULL
       OR validation_state IS NOT NULL
-      OR approved_by IS NOT NULL;
+      OR approved_by IS NOT NULL
+      OR platform_mapping_profile_id IS NOT NULL;
 
   IF v_rows <> 0 THEN
     RAISE EXCEPTION
@@ -74,7 +75,10 @@ ALTER TABLE public.source_assertions
   DROP CONSTRAINT IF EXISTS source_assertions_validation_state_valid,
   DROP CONSTRAINT IF EXISTS source_assertions_approval_coherent,
   DROP CONSTRAINT IF EXISTS source_assertions_invalid_not_applied,
-  DROP CONSTRAINT IF EXISTS source_assertions_mapping_profile_tenant_fk;
+  DROP CONSTRAINT IF EXISTS source_assertions_mapping_profile_tenant_fk,
+  DROP CONSTRAINT IF EXISTS source_assertions_platform_mapping_profile_fk,
+  DROP CONSTRAINT IF EXISTS source_assertions_platform_profile_scope,
+  DROP CONSTRAINT IF EXISTS source_assertions_one_mapping_profile;
 
 ALTER TABLE public.source_assertions
   DROP COLUMN IF EXISTS source_field,
@@ -82,7 +86,9 @@ ALTER TABLE public.source_assertions
   DROP COLUMN IF EXISTS mapping_method,
   DROP COLUMN IF EXISTS validation_state,
   DROP COLUMN IF EXISTS approved_by,
-  DROP COLUMN IF EXISTS approved_at;
+  DROP COLUMN IF EXISTS approved_at,
+  DROP COLUMN IF EXISTS platform_mapping_profile_id,
+  DROP COLUMN IF EXISTS platform_mapping_profile_scope;
 
 DO $verify$
 DECLARE
@@ -91,7 +97,8 @@ BEGIN
   SELECT count(*) INTO v_cols FROM information_schema.columns
    WHERE table_schema = 'public' AND table_name = 'source_assertions'
      AND column_name IN ('source_field', 'mapping_profile_id', 'mapping_method',
-                         'validation_state', 'approved_by', 'approved_at');
+                         'validation_state', 'approved_by', 'approved_at',
+                         'platform_mapping_profile_id', 'platform_mapping_profile_scope');
   IF v_cols <> 0 THEN
     RAISE EXCEPTION 'PI-LDB-2 rollback postcondition: % mapping provenance column(s) survived', v_cols;
   END IF;

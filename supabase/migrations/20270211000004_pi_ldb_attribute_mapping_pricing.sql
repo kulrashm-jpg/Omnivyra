@@ -55,6 +55,17 @@
 --     never bulk-pushed.
 -- =============================================================================
 
+-- ONE TRANSACTION (2026-11-11): the snapshot below is ON COMMIT DROP, and the
+-- two seeds plus their postconditions must land together or not at all.
+BEGIN;
+
+-- ── 0. Snapshot any PRE-EXISTING billing row (GOV-SECURITY, 2026-11-11) ─────
+-- A re-applied seed must NEVER overwrite a live billing row. The insert below is
+-- DO NOTHING on conflict, and the postcondition proves an existing row's
+-- credits are unchanged against this snapshot.
+CREATE TEMP TABLE pi_ldb_m04_prior ON COMMIT DROP AS
+  SELECT credits FROM credit_cost_config WHERE action_type = 'lead_attribute_mapping';
+
 -- ── 1. Resolver fallback (flat) ─────────────────────────────────────────────
 INSERT INTO credit_cost_config (action_type, credits, category, description, smart_dedup_seconds)
 VALUES (
@@ -69,12 +80,7 @@ VALUES (
   -- same file within the window.
   0
 )
-ON CONFLICT (action_type) DO UPDATE SET
-  credits             = EXCLUDED.credits,
-  category            = EXCLUDED.category,
-  description         = EXCLUDED.description,
-  smart_dedup_seconds = EXCLUDED.smart_dedup_seconds,
-  updated_at          = NOW();
+ON CONFLICT (action_type) DO NOTHING;
 
 -- ── 2. Token pricing layer ──────────────────────────────────────────────────
 INSERT INTO action_pricing_config (
@@ -125,6 +131,14 @@ BEGIN
     RAISE EXCEPTION 'PI-LDB-5 postcondition: expected exactly 1 credit_cost_config row for lead_attribute_mapping, found %. getCreditCost() is the resolver fallback and would have nothing to fall back to.', v_credit;
   END IF;
 
+  -- A row that existed before this file ran keeps its credits EXACTLY (the
+  -- seed is DO NOTHING; this pins it).
+  IF EXISTS (SELECT 1 FROM pi_ldb_m04_prior p
+              WHERE p.credits IS DISTINCT FROM
+                    (SELECT credits FROM credit_cost_config WHERE action_type = 'lead_attribute_mapping')) THEN
+    RAISE EXCEPTION 'PI-LDB-5 postcondition: the PRE-EXISTING credit_cost_config row for lead_attribute_mapping had its credits changed by this seed (a replay must never overwrite a live billing row)';
+  END IF;
+
   SELECT count(*) INTO v_pricing
     FROM action_pricing_config
    WHERE action_key = 'lead_attribute_mapping' AND is_active = true;
@@ -159,3 +173,5 @@ BEGIN
   RAISE NOTICE 'PI-LDB-5: lead_attribute_mapping catalog rows present (multiplier %, ceiling % USD).', v_mult, v_ceiling;
 END
 $$;
+
+COMMIT;
