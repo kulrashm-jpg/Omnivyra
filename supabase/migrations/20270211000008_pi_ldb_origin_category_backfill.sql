@@ -92,12 +92,19 @@ BEGIN
         FROM pick
        WHERE li.id = pick.id AND li.origin_category IS NULL
       RETURNING li.id, li.company_id, li.origin_category
+    ), snap AS (
+      -- DO UPDATE, not DO NOTHING: the snapshot must hold what THIS run wrote
+      -- (a stale row left by an earlier apply + rollback is replaced).
+      INSERT INTO public.pi_ldb_origin_backfill_snapshot (lead_intelligence_id, company_id, category, basis, backfilled_at)
+      SELECT upd.id, upd.company_id, upd.origin_category, pick.basis, now()
+        FROM upd JOIN pick ON pick.id = upd.id
+      ON CONFLICT (lead_intelligence_id) DO UPDATE
+        SET company_id = EXCLUDED.company_id, category = EXCLUDED.category,
+            basis = EXCLUDED.basis, backfilled_at = EXCLUDED.backfilled_at
     )
-    INSERT INTO public.pi_ldb_origin_backfill_snapshot (lead_intelligence_id, company_id, category, basis, backfilled_at)
-    SELECT upd.id, upd.company_id, upd.origin_category, pick.basis, now()
-      FROM upd JOIN pick ON pick.id = upd.id
-    ON CONFLICT (lead_intelligence_id) DO NOTHING;
-    GET DIAGNOSTICS n = ROW_COUNT;
+    -- The loop counts the UPDATE (rows classified), never the snapshot INSERT:
+    -- an INSERT count of 0 must not end the loop while rows were still written.
+    SELECT count(*) INTO n FROM upd;
     EXIT WHEN n = 0;
     COMMIT;
   END LOOP;
