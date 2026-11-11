@@ -10,7 +10,7 @@
  * A stateful in-memory store that ENFORCES the real UNIQUE keys (not a call recorder), so a collision
  * is a collision and a refusal is observable as "zero provider calls".
  */
-import { processQueuedRenderJob, createRenderProviderRegistry } from '../../services/creator/rendering';
+import { processQueuedRenderJob, createRenderProviderRegistry, executeRenderJob } from '../../services/creator/rendering';
 import type { RenderProvider } from '../../services/creator/rendering';
 import { renderAttemptExecutionHash } from '../../services/creator/rendering/renderAttemptKeys';
 import { makeStore, NOW, type Row } from '../helpers/renderStateStore';
@@ -322,5 +322,42 @@ describe('the queue retry cap is a real bound (05 finding 5)', () => {
     expect(r).toMatchObject({ status: 'failed', reason: 'render_in_progress' });
     expect(queue(s, jobId).queue_state).toBe('failed');
     expect(state(s, jobId).current_state).toBe('rendering'); // the sync path's job is left alone
+  });
+});
+
+describe('sync and async share attempt numbers and ONE key implementation (05 finding 4)', () => {
+  const TASK = {
+    asset_family: 'image',
+    production_context: {
+      asset_family: 'image',
+      storyboard: [{ subject: 'a calm modern office, data dashboard on screen' }],
+      overlays: ['Turn data into decisions'],
+      pacing_guidance: '', scene_direction: 'clean corporate photography, soft light',
+    },
+    packaging_context: { caption: 'From data to decisions' },
+  };
+  const WIDE = () => ({ modalities: ['image'], max_duration_sec: 0, resolutions: [{ w: 1024, h: 1024 }, { w: 1080, h: 1080 }, { w: 1080, h: 1350 }], aspect_ratios: ['1:1', '4:5', '9:16', '16:9'], supports_seed: false, supports_audio: false, supports_overlay_text: false, supports_batch: false, max_concurrent: 2 }) as any;
+  const FLAG = 'ENABLE_CREATOR_RENDERING';
+  const O = process.env[FLAG];
+  beforeEach(() => { process.env[FLAG] = '1'; });
+  afterEach(() => { if (O === undefined) delete process.env[FLAG]; else process.env[FLAG] = O; });
+
+  it('a SYNC attempt-1 provider failure, then the ASYNC worker runs attempt 2 on the same job under the shared key: no collision, one charge', async () => {
+    const s = makeStore();
+    let fail = true;
+    const { p, calls } = provider({
+      capabilities: WIDE,
+      poll: async (h) => { if (fail) { fail = false; throw new Error('provider timeout'); } return { handle: h, state: 'succeeded', progress: 1 }; },
+    });
+    const r1 = await executeRenderJob(deps(s, p), { workspaceTaskLike: TASK, platform: 'instagram', organizationId: 'org-a', contentCoreId: 'core-a', createdBy: 'u1' });
+    expect(r1).toMatchObject({ ok: false, reason: 'provider_failed', retryable: true });
+    const job = s.rows('creator_render_job')[0]!;
+    s.rows('creator_render_queue_job').push({ id: 'q-x', render_job_id: job.id, provider_key: 'openai', retry_count: 0, queue_state: 'queued', next_retry_at: null, created_at: NOW });
+    const r2 = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(r2.status).toBe('completed');
+    expect(calls.submit).toBe(2);
+    const H = (n: number) => renderAttemptExecutionHash('org-a', String(job.deterministic_input_hash), n);
+    expect(s.rows('creator_render_attempt').map((a) => [a.attempt_number, a.execution_hash])).toEqual([[1, H(1)], [2, H(2)]]);
+    expect(s.rows('billing_operations').filter((b) => b.status === 'confirmed')).toHaveLength(1);
   });
 });
