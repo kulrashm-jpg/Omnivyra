@@ -35,12 +35,19 @@ export type AlertType =
 const CONSUMED_ALERT_BY_THRESHOLD: Record<number, AlertType> = { 80: 'consumed_80', 90: 'consumed_90', 95: 'consumed_95' };
 
 /** Which consumed_80/90/95 alerts have already fired for this org since `sinceIso` (cycle start). */
+// CORRECT SENDING (2026-11-12): every dedup read in this file fails toward
+// "already sent" (SUPPRESS) - an unread dedup check used to answer "not sent"
+// and re-send the alert. Suppressing writes nothing, so the next run retries.
 export async function getFiredConsumptionThresholds(orgId: string, sinceIso: string): Promise<number[]> {
-  const { data } = await ownedDbTable('credit_alert_log')
+  const { data, error } = await ownedDbTable('credit_alert_log')
     .select('alert_type')
     .eq('organization_id', orgId)
     .in('alert_type', ['consumed_80', 'consumed_90', 'consumed_95'])
     .gte('notified_at', sinceIso);
+  if (error) {
+    console.warn(`[creditAlert] dedup read failed for org ${orgId} - consumption alerts suppressed this run`, error.message);
+    return [80, 90, 95];
+  }
   const fired = new Set((data ?? []).map((r: any) => r.alert_type));
   return [80, 90, 95].filter((t) => fired.has(CONSUMED_ALERT_BY_THRESHOLD[t]));
 }
@@ -49,7 +56,13 @@ export async function getFiredConsumptionThresholds(orgId: string, sinceIso: str
 export async function emitConsumptionAlert(orgId: string, threshold: number, consumedPct: number): Promise<void> {
   const type = CONSUMED_ALERT_BY_THRESHOLD[threshold];
   if (!type) return;
-  await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: type, balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  // Record BEFORE sending; if the record cannot be written, do not send (an
+  // unrecorded alert is re-sent next run).
+  const { error: logErr } = await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: type, balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  if (logErr) {
+    console.warn(`[creditAlert] alert log write failed for org ${orgId} / ${type} - not sent`, logErr.message);
+    return;
+  }
   try {
     await ownedDbTable('notifications').insert({
       organization_id: orgId, type: 'credit_alert', category: type,
@@ -60,14 +73,20 @@ export async function emitConsumptionAlert(orgId: string, threshold: number, con
 
 /** Whether the low-credit forecast email already went out this cycle. */
 export async function wasForecastEmailSent(orgId: string, sinceIso: string): Promise<boolean> {
-  const { data } = await ownedDbTable('credit_alert_log')
+  const { data, error } = await ownedDbTable('credit_alert_log')
     .select('id').eq('organization_id', orgId).eq('alert_type', 'forecast_insufficient_85').gte('notified_at', sinceIso).limit(1).maybeSingle();
+  if (error) {
+    console.warn(`[creditAlert] forecast dedup read failed for org ${orgId} - email suppressed this run`, error.message);
+    return true;
+  }
   return !!data;
 }
 
 /** Record that the forecast email fired (per-cycle dedup). */
 export async function recordForecastEmail(orgId: string, consumedPct: number): Promise<void> {
-  await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: 'forecast_insufficient_85', balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  // The caller records BEFORE sending: throw so an unrecorded email is not sent.
+  const { error } = await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: 'forecast_insufficient_85', balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  if (error) throw new Error(`[creditAlert] forecast email record failed for org ${orgId}: ${error.message}`);
 }
 
 export type CreditAlertResult = {
@@ -114,10 +133,14 @@ const VELOCITY_DEDUP_HOURS = 7 * 24;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getBalance(orgId: string): Promise<number | null> {
-  const { data } = await ownedDbTable('organization_credits')
+  const { data, error } = await ownedDbTable('organization_credits')
     .select('free_balance, paid_balance, incentive_balance')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) {
+    console.warn(`[creditAlert] balance read failed for org ${orgId} - no alerts this run`, error.message);
+    return null;
+  }
   if (!data) return null;
   const d = data as any;
   return (d.free_balance ?? 0) + (d.paid_balance ?? 0) + (d.incentive_balance ?? 0);
@@ -125,42 +148,57 @@ async function getBalance(orgId: string): Promise<number | null> {
 
 async function wasAlertRecentlySent(orgId: string, alertType: AlertType, dedupHours = DEDUP_HOURS): Promise<boolean> {
   const since = new Date(Date.now() - dedupHours * 3600_000).toISOString();
-  const { data } = await ownedDbTable('credit_alert_log')
+  const { data, error } = await ownedDbTable('credit_alert_log')
     .select('id')
     .eq('organization_id', orgId)
     .eq('alert_type', alertType)
     .gte('notified_at', since)
     .limit(1)
     .maybeSingle();
+  if (error) {
+    console.warn(`[creditAlert] dedup read failed for org ${orgId} / ${alertType} - treated as sent`, error.message);
+    return true;
+  }
   return !!data;
 }
 
 /** Company-admin email (oldest owner/admin role; same resolution as the forecast email). */
 async function resolveAdminEmail(orgId: string): Promise<string | null> {
-  const { data: roles } = await ownedDbTable('user_company_roles')
+  const { data: roles, error: rolesErr } = await ownedDbTable('user_company_roles')
     .select('user_id, role, created_at')
     .eq('company_id', orgId)
     .eq('status', 'active');
+  if (rolesErr) {
+    console.warn(`[creditAlert] admin lookup failed for org ${orgId} - no email`, rolesErr.message);
+    return null;
+  }
   const list = (roles ?? []) as Array<{ user_id: string; role: string; created_at: string }>;
   if (list.length === 0) return null;
   const sorted = list.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   const admin = sorted.find((r) => /owner|admin/i.test(String(r.role ?? ''))) ?? sorted[0];
   if (!admin?.user_id) return null;
-  const { data: u } = await ownedDbTable('users')
+  const { data: u, error: userErr } = await ownedDbTable('users')
     .select('email')
     .eq('id', admin.user_id)
     .maybeSingle();
+  if (userErr) {
+    console.warn(`[creditAlert] admin email read failed for org ${orgId} - no email`, userErr.message);
+    return null;
+  }
   return (u as { email?: string } | null)?.email ?? null;
 }
 
 /** Actual credits consumed in the past 7 days (settled amounts: confirm-phase rows). */
 async function getWeeklyConsumption(orgId: string): Promise<number> {
   const since = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
-  const { data } = await ownedDbTable('credit_transactions')
+  // Throw on a failed read: the velocity email (gated on this number) is then
+  // not sent; the ladder email's caller substitutes 0 for its copy only.
+  const { data, error } = await ownedDbTable('credit_transactions')
     .select('credits_delta, free_delta, paid_delta, incentive_delta')
     .eq('organization_id', orgId)
     .eq('execution_phase', 'confirm')
     .gte('created_at', since);
+  if (error) throw new Error(`[creditAlert] weekly consumption read failed for org ${orgId}: ${error.message}`);
   let total = 0;
   for (const row of (data ?? []) as Array<Record<string, number | null>>) {
     // Confirm rows record the ACTUAL settled cost; bucket deltas are the
@@ -194,13 +232,19 @@ async function sendAlertEmail(orgId: string, alertType: AlertType, balance: numb
   }
 }
 
-async function recordAlert(orgId: string, alertType: AlertType, balance: number): Promise<void> {
-  await ownedDbTable('credit_alert_log').insert({
+/** Record the alert (the dedup row). Returns false when it could not be written - the caller must then NOT send. */
+async function recordAlert(orgId: string, alertType: AlertType, balance: number): Promise<boolean> {
+  const { error } = await ownedDbTable('credit_alert_log').insert({
     organization_id: orgId,
     alert_type:      alertType,
     balance_at_alert: balance,
     notified_at:     new Date().toISOString(),
   });
+  if (error) {
+    console.warn(`[creditAlert] alert log write failed for org ${orgId} / ${alertType} - not sent`, error.message);
+    return false;
+  }
+  return true;
 }
 
 /** Send an in-app notification for a credit alert. */
@@ -251,7 +295,11 @@ export async function checkCreditAlerts(
       break;
     }
 
-    await recordAlert(orgId, type, balance);
+    if (!(await recordAlert(orgId, type, balance))) {
+      // Unrecorded = would be re-sent next run: do not send now.
+      suppressed.push(type);
+      break;
+    }
     await sendAlert(orgId, type, message);
     // Escalation levels (below 20 / depleted) ALSO email the company admin.
     if (EMAIL_LEVELS.has(type)) {
@@ -273,9 +321,10 @@ export async function checkCreditAlerts(
       if (!alreadySent) {
         const weeklyConsumed = await getWeeklyConsumption(orgId);
         if (weeklyConsumed >= VELOCITY_WEEKLY_CONSUMPTION) {
-          await recordAlert(orgId, 'velocity_200', balance); // dedup BEFORE send
-          await sendAlertEmail(orgId, 'velocity_200', balance, weeklyConsumed);
-          fired.push('velocity_200');
+          if (await recordAlert(orgId, 'velocity_200', balance)) { // dedup BEFORE send
+            await sendAlertEmail(orgId, 'velocity_200', balance, weeklyConsumed);
+            fired.push('velocity_200');
+          }
         }
       }
     } catch (err) {
@@ -290,6 +339,6 @@ export async function checkCreditAlerts(
  * Fire an auto_topup alert (called by billing service when purchase is triggered).
  */
 export async function recordAutoTopup(orgId: string, balance: number): Promise<void> {
-  await recordAlert(orgId, 'auto_topup', balance);
+  if (!(await recordAlert(orgId, 'auto_topup', balance))) return;
   await sendAlert(orgId, 'auto_topup', 'Credits auto-topped up successfully.');
 }
