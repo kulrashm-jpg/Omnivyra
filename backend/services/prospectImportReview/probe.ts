@@ -10,6 +10,9 @@
  *    and NOT imported: a first + last name match (`name_match`), a role-shaped
  *    address such as info@ (`role_contact`), or a phone match whose names do
  *    not agree, which looks like a shared or switchboard number (`shared_phone`);
+ *    The PHONE RULE is OWNER-RATIFIED (2026-11-11, relayed by virality-e9):
+ *    same phone + same name = duplicate, skipped; same phone + different name
+ *    = held for review. Never imported or merged automatically.
  *  - a probe that cannot answer is `probe_unknown`: neither imported nor
  *    called a duplicate, reported per record, and reconsidered on the next run.
  *  - anything else is imported normally.

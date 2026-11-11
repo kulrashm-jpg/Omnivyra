@@ -78,6 +78,22 @@ Branch `feat/pi-salesnav-apollo-20261110` from `origin/main` 50136d58a. Local on
   - **Vanity share is a floor.** An all-lower-case id-shaped slug classifies as `vanity`, so yield figures under-count opaque keys.
 - **Value unproven.** Sales Navigator list cards likely expose only `/sales/lead/…` URLs, which are never stored. The owner-provided redacted captures will record which URL forms are visible, as a classification enum only, never the URL. D7(iii), human-confirmed name + company candidates, follows R3.
 
+## 3b. R3: pre-import duplicate review (BLOCK or PARK, never merge)
+
+Implemented in `backend/services/prospectImportReview/` (probe, screen, repository, display) with the staging table `prospect_import_review_items` (20270206000000).
+
+| Match | Verdict |
+|---|---|
+| Provider record already in the tenant | skipped (`already_imported`) |
+| Same personal email (case-folded whole) | duplicate, skipped |
+| Same E.164 phone AND the names agree | duplicate, skipped |
+| Same E.164 phone, names DIFFER | held for review (`shared_phone`) |
+| First + last name only | held for review (`name_match`) |
+| Role address (info@, sales@ ...) | held for review (`role_contact`) |
+| Probe could not read | `probe_unknown`: not imported, retried next run |
+
+**Phone rule: OWNER-RATIFIED (2026-11-11, relayed by virality-e9)**: same phone + same name = duplicate, skipped; same phone + different name = held for review. Never imported or merged automatically. (Previously recorded as a deviation pending owner decision.)
+
 ## 4. Decision D7 (taken: (i) now, (iii) after R3). Background: captured leads cannot yet be Apollo-matched
 
 A captured lead has no email and no Apollo id, and its account has no domain. The profile URL, which Apollo matches on, is not a canonical selector, because `external_profile` claims are deferred (LI-5C Q-3).
