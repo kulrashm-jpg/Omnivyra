@@ -66,7 +66,8 @@ async function notifyOrgAdmin(
   grantId: string,
 ): Promise<void> {
   // Find the COMPANY_ADMIN for this org to notify
-  const { data: adminRole } = await sb
+  // best-effort (notification only; the grant is already done): logged.
+  const { data: adminRole, error: adminErr } = await sb
     .from('user_company_roles')
     .select('user_id')
     .eq('company_id', orgId)
@@ -74,11 +75,15 @@ async function notifyOrgAdmin(
     .eq('status', 'active')
     .limit(1)
     .maybeSingle();
+  if (adminErr) {
+    console.error('[super-admin/credits/grant] admin lookup failed - no notification:', orgId, adminErr.message);
+    return;
+  }
 
   const role = adminRole as any;
   if (!role?.user_id) return;
 
-  await (sb as any).from('notifications').insert({
+  const { error: noteErr } = await (sb as any).from('notifications').insert({
     user_id:  role.user_id,
     type:     'credit_granted',
     title:    'Credits added to your account',
@@ -86,6 +91,7 @@ async function notifyOrgAdmin(
     metadata: { grant_id: grantId, credits_added: credits, reason },
     is_read:  false,
   });
+  if (noteErr) console.error('[super-admin/credits/grant] notification write failed:', orgId, noteErr.message);
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -119,11 +125,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // Verify the org exists before logging a grant against it
-  const { data: org } = await sb
+  // A failed read is not "no such organization" (a 404 sends the operator
+  // hunting for a typo in a valid id). 503, nothing granted.
+  const { data: org, error: orgErr } = await sb
     .from('companies')
     .select('id')
     .eq('id', organization_id)
     .maybeSingle();
+  if (orgErr) {
+    return res.status(503).json({ error: 'organization lookup unavailable', retryable: true });
+  }
 
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 

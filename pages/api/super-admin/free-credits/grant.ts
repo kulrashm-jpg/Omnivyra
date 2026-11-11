@@ -102,21 +102,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ── 3. If a specific user is tagged, ensure they are COMPANY_ADMIN ─────────
+  // The credits are granted at this point. A MEMBERSHIP is created only on a
+  // clean "no existing role" read: an unread error used to look like "no role"
+  // and inserted a COMPANY_ADMIN row for a user who may already hold another
+  // role (a privilege change made on an unread answer). On any failure the role
+  // is NOT ensured and the response says so.
+  let roleEnsured = true;
+  let roleWarning: string | undefined;
   if (userId) {
-    const { data: existingRole } = await sb
+    const { data: existingRole, error: roleReadErr } = await sb
       .from('user_company_roles')
       .select('id, role')
       .eq('user_id', userId)
       .eq('company_id', organizationId)
       .maybeSingle();
 
-    if (!existingRole) {
-      await sb.from('user_company_roles').insert({
+    if (roleReadErr) {
+      roleEnsured = false;
+      roleWarning = 'credits granted; company-admin membership NOT ensured (membership read failed) - retry the role step';
+      console.error('[free-credits/grant] role read failed - membership not changed:', organizationId, roleReadErr.message);
+    } else if (!existingRole) {
+      const { error: roleInsertErr } = await sb.from('user_company_roles').insert({
         user_id:    userId,
         company_id: organizationId,
         role:       'COMPANY_ADMIN',
         status:     'active',
       });
+      if (roleInsertErr) {
+        roleEnsured = false;
+        roleWarning = 'credits granted; company-admin membership NOT created - retry the role step';
+        console.error('[free-credits/grant] role insert failed:', organizationId, roleInsertErr.message);
+      }
     }
     // Closure-015J (R-6): an existing SUPER_ADMIN membership is left untouched — it
     // already exceeds COMPANY_ADMIN, and platform super-admin authority changes only
@@ -126,7 +142,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // likewise left as is.
   }
 
-  return res.status(200).json({ success: true, grantId: grant.id });
+  return res.status(200).json({
+    success: true,
+    grantId: grant.id,
+    ...(userId ? { roleEnsured } : {}),
+    ...(roleWarning ? { warning: roleWarning } : {}),
+  });
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
