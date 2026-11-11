@@ -27,7 +27,8 @@ export type RenderEvent =
   | 'render_started' | 'render_completed' | 'render_failed'
   | 'moderation_blocked' | 'duplicate_render_reused' | 'provider_rejected'
   | 'billing_hold_created' | 'billing_confirmed' | 'billing_released'
-  | 'render_skipped_disabled' | 'media_lineage_attached';
+  | 'render_skipped_disabled' | 'media_lineage_attached'
+  | 'execution_registry_unavailable' | 'execution_registry_advance_failed' | 'billing_hold_failed';
 
 export interface RenderDeps {
   supabase: any;
@@ -54,7 +55,17 @@ export interface ExecuteRenderResult {
   output?: { output_id: string; storage_ref: string; content_sha256: string } | null;
   attached?: boolean;
   reason?: string;
+  /** Set on a failure that may succeed if retried as is (a transient store error). */
+  retryable?: boolean;
 }
+
+/** The PostgREST client returns `{ data, error }` and does NOT throw on a database error. */
+type RpcResult = { data?: unknown; error?: { code?: string; message?: string } | null };
+const rpcFailure = (r: RpcResult | undefined, thrown: unknown): string | null => {
+  if (thrown) return thrown instanceof Error ? thrown.message : String(thrown);
+  if (r?.error) return `${r.error.code ?? 'error'}: ${r.error.message ?? 'rpc failed'}`;
+  return null;
+};
 
 function skip(reason: string): ExecuteRenderResult {
   return { ok: false, status: 'skipped', events: ['render_skipped_disabled'], reason };
@@ -108,6 +119,21 @@ export async function executeRenderJob(
     events.push('render_started');
     const specHash = spec.deterministic_input_hash;
 
+    /** Record the registry transition; checked (the client does not throw), never fatal. */
+    const advanceRegistry = async (status: 'completed' | 'released', error: string | null): Promise<void> => {
+      let res: RpcResult | undefined; let thrown: unknown = null;
+      try {
+        res = await supabase.rpc('advance_job_execution', {
+          p_execution_hash: specHash, p_status: status, p_billing_operation_id: billingId, p_error: error,
+        });
+      } catch (e) { thrown = e ?? 'rpc threw'; }
+      const failed = rpcFailure(res, thrown);
+      if (failed !== null) {
+        console.error('[creator-render] execution registry advance failed', { spec_id: spec.spec_id, status, error: failed });
+        events.push('execution_registry_advance_failed');
+      }
+    };
+
     // 2) pre-render moderation (fail-closed)
     const pre = preRenderModeration(spec, specHash);
     if (pre.decision !== 'allowed') {
@@ -149,26 +175,53 @@ export async function executeRenderJob(
       return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'no_capable_provider' };
     }
 
-    // 5) exactly-once claim (reuse job_execution_registry)
-    try {
-      await supabase.rpc('claim_job_execution', {
-        p_job_id: spec.spec_id, p_queue_name: 'creator_render_sync',
-        p_execution_hash: specHash, p_correlation_id: args.contentCoreId,
-        p_idempotency_key: spec.spec_id, p_organization_id: args.organizationId,
-        p_metadata: {},
-      });
-    } catch { /* registry is advisory here; dedupe above is authoritative */ }
+    // 5) exactly-once claim (reuse job_execution_registry). FAIL CLOSED (e9 ruling, 2026-11-11):
+    //    the client does not throw on a database error, so the result is checked. An unavailable
+    //    registry stops the render BEFORE any billing hold or provider call (nothing to undo; the
+    //    caller may retry). A terminal registry entry for this hash means it already ran: reuse.
+    {
+      let claim: RpcResult | undefined; let thrown: unknown = null;
+      try {
+        claim = await supabase.rpc('claim_job_execution', {
+          p_job_id: spec.spec_id, p_queue_name: 'creator_render_sync',
+          p_execution_hash: specHash, p_correlation_id: args.contentCoreId,
+          p_idempotency_key: spec.spec_id, p_organization_id: args.organizationId,
+          p_metadata: {},
+        });
+      } catch (e) { thrown = e ?? 'rpc threw'; }
+      const failed = rpcFailure(claim, thrown);
+      if (failed !== null) {
+        console.error('[creator-render] execution registry claim failed; render refused', { spec_id: spec.spec_id, error: failed });
+        events.push('execution_registry_unavailable', 'render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'execution_registry_unavailable', retryable: true };
+      }
+      if ((claim?.data as { is_terminal?: unknown } | null | undefined)?.is_terminal === true) {
+        events.push('duplicate_render_reused');
+        return { ok: true, status: 'reused', events, spec_id: spec.spec_id, output: null, attached: false };
+      }
+    }
 
     // 6) billing HOLD (reuse billing_operations; NO parallel ledger)
     const estimate = provider.estimateCost(spec);
-    const { data: bo } = await ownedDbTable('billing_operations').insert({
+    const { data: bo, error: boError } = await ownedDbTable('billing_operations').insert({
       correlation_id: args.contentCoreId, module: 'creator_render', action: 'render_image',
       organization_id: args.organizationId, actor_user_id: args.createdBy ?? null,
       idempotency_key: `render:${spec.spec_id}`, amount_estimated: estimate.estimated_credits,
       status: 'held', metadata: { provider: provider.key },
     }).select('id').single();
     billingId = bo?.id ?? null;
-    if (billingId) events.push('billing_hold_created');
+    if (!billingId) {
+      // FAIL CLOSED (e9 ruling, 2026-11-11): a render without a billing hold would run UNBILLED.
+      // The provider is never called. A unique-key conflict (an earlier attempt's operation for this
+      // spec already exists) is not retryable as is; any other store error is.
+      const conflict = (boError as { code?: string } | null | undefined)?.code === '23505';
+      const reason = conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable';
+      console.error('[creator-render] billing hold not created; render refused', { spec_id: spec.spec_id, reason, error: (boError as { message?: string } | null)?.message ?? 'no row returned' });
+      await advanceRegistry('released', reason);
+      events.push('billing_hold_failed', 'render_failed');
+      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason, retryable: !conflict };
+    }
+    events.push('billing_hold_created');
 
     // 7) immutable job + state + variant + attempt
     const { data: job } = await ownedDbTable('creator_render_job').insert({
@@ -240,11 +293,9 @@ export async function executeRenderJob(
         .eq('id', billingId);
       events.push('billing_confirmed');
     }
-    try {
-      await supabase.rpc('advance_job_execution', {
-        p_execution_hash: specHash, p_status: 'completed', p_billing_operation_id: billingId, p_error: null,
-      });
-    } catch { /* advisory */ }
+    // The render is performed and billed; a registry failure must not fail it (e9 ruling), but it is
+    // no longer silent: an event on the result and an error log.
+    await advanceRegistry('completed', null);
 
     // attach to shared-media lineage (Step-15/16 auto-propagation)
     await attachToSharedMedia(deps, args, specHash, output.id, output.storage_ref, events);
