@@ -284,7 +284,9 @@ export async function executeRenderJob(
         // state write failed after the output landed (the final 'attached' write, or failAttempt's after an
         // unexpected throw). Resolve through THIS job's own variant -> attempt -> output (tenant-bounded:
         // the job row was tenant-filtered above), reuse it, and repair the state. No provider call and no
-        // billing write: the render that produced it was billed by its own attempt.
+        // billing write: the render that produced it was billed by its own attempt. It cannot be a render
+        // at a DIFFERENT projection: platform_projection is not a volatile key, so it is part of
+        // deterministic_input_hash, and one (org, hash) is one projection and one variant (05).
         const recovered = await recoverOwnOutput(supabase, String(existing.id));
         if (recovered.error) {
           console.error('[creator-render] output recovery read failed', { render_job_id: existing.id, error: recovered.error });
