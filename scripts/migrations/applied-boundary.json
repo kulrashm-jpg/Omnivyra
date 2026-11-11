@@ -34,9 +34,11 @@
     "FILE was applied: 56 version prefixes on origin/main are shared by 170 files,",
     "so for those versions the ledger cannot identify the file. This attestation",
     "pins the file CONTENT regardless, which is the property that matters here --",
-    "whatever ran, the repository text has not moved since."
+    "whatever ran, the repository text has not moved since.",
+    "",
+    "SCHEMA 2 (2026-11-10, owner decision #18): applied_above_boundary (rule 6b) holds out-of-band applications ABOVE ledger_max; never put those in digests, never raise ledger_max for them."
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "ledger_max": "20270111000003",
   "attested_at": "2026-11-01",
   "attested_from": "origin/main 5025f51d7bb1420e3d3c5ef4ed626c64b953b3b0",
@@ -502,5 +504,29 @@
     "20270111000001_pi_opportunity_trigger_fn_hardening.sql": "54c7aa8a32f2cb2b1a6fe77c80e09ea70e29e33b499cd5b77cf1824699bca312",
     "20270111000002_tenant_tables_client_privileges_revoked.sql": "616cec9904d779583d609fa0283c85cbabfa9cb6fa55df93e092bc4dca4658ff",
     "20270111000003_function_execute_classwide_hardening.sql": "f9e5c95a7498078c4c8234c1357eb9ffc314c629e76481a760221a2e195c1eca"
+  },
+  "applied_above_boundary": {
+    "20270205000000_public_default_privileges_no_client_roles.sql": {
+      "sha256": "14b86f222f20e542b4b43cba7c6b04491b9792beaa249f4aa61394591729814b",
+      "applied_at": "2026-11-10T09:08Z",
+      "operator": "virality-83 on the owner's direct instruction (session virality-83, 2026-11-10)",
+      "method": "management_api_database_query_read_only_false",
+      "project_ref": "klkiseupptzbecbxwrky",
+      "cluster_system_identifier": "7550817586112808987",
+      "ledger_row": false,
+      "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r23-apply-20261110/R23-EXECUTION-RECORD.json",
+      "evidence_class": "PRODUCTION_APPLIED_AND_VERIFIED: exact bytes of 97acfc66a; postgres public table default verified closed by catalogue read; supabase_admin residual returned and recorded (OPEN, owner)."
+    },
+    "20270205000001_public_schema_client_privileges_revoked.sql": {
+      "sha256": "480c64f286f0437364cf5a7420ec71f48736a6f12dac7f5f69571bf028071ae1",
+      "applied_at": "2026-11-10T09:08Z",
+      "operator": "virality-83 on the owner's direct instruction (session virality-83, 2026-11-10)",
+      "method": "management_api_database_query_read_only_false",
+      "project_ref": "klkiseupptzbecbxwrky",
+      "cluster_system_identifier": "7550817586112808987",
+      "ledger_row": false,
+      "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r23-apply-20261110/R23-EXECUTION-RECORD.json",
+      "evidence_class": "PRODUCTION_APPLIED_AND_VERIFIED: exact bytes of 97acfc66a; 811 target tables 13288 -> 0 client privileges; 53 excluded + views unchanged; REST 42501 on a former anon-readable target."
+    }
   }
 }
