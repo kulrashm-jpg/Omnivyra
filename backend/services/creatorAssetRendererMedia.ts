@@ -1,5 +1,5 @@
 /** Part 5/10 of creatorAssetRenderer.ts — verbatim split (barrel preserved; importers unchanged). */
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { config } from '../../config';
 import {
@@ -12,7 +12,7 @@ import { resolveBrand } from './brand/brandRuntime';
 import { brandRuntimeToCreatorBrandKit } from './brand/brandRuntimeAdapter';
 import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { recordAssetCredits } from './aiUsageCollector';
-import { resolveCostProfile } from './creator/costProfiles';
+import { reserveImageCredits, settleImageCredits, releaseImageCredits } from './billing/imageCredits';
 import { fitSlideArcToCount } from './creator/purposeStrategyRegistry';
 import { resolveTemplateStyle } from '../../lib/creator-outcomes/creatorVisualStyleRegistry';
 import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from './creator/rendering/providers/betaMockRenderProvider';
@@ -190,6 +190,39 @@ export async function generateProviderImage(input: {
   // reaches the renderer as such instead of only as free text in a log line.
   let providerFailureKind: ProviderFailureKind | undefined;
 
+  // ── Image credits (owner ruling 2026-11-11: charge BEFORE launch) ─────────
+  // Every paid provider call below is reserved first (fail closed: no credits,
+  // no price, no org => NO provider call), settled when it delivers an image,
+  // released when it does not. One reservation per provider call, so a failed
+  // call followed by a successful fallback charges exactly once.
+  const billingOrgId = input.attribution?.organizationId ?? null;
+  const billingInvocation = randomUUID();
+  let billingCallSeq = 0;
+  let billingRefusal: string | null = null;
+  const reserveCall = async (model: string, quality: string): Promise<string | null> => {
+    if (!billingOrgId) { billingRefusal = 'no_billing_org'; return null; }
+    const r = await reserveImageCredits({
+      organizationId: billingOrgId,
+      idempotencyKey: `creator-image:${billingOrgId}:${billingInvocation}:${++billingCallSeq}`,
+      actorUserId: input.attribution?.userId ?? null,
+      provider: 'openai',
+      model,
+      size: AI_IMAGE_SIZE,
+      quality,
+      metadata: { flow: 'creator_asset', campaignId: input.attribution?.campaignId ?? null },
+    });
+    if (r.ok === false) { billingRefusal = r.reason; return null; }
+    return r.billingOperationId;
+  };
+  const settleCall = async (opId: string): Promise<void> => {
+    const r = await settleImageCredits({ billingOperationId: opId });
+    if (r.ok === false) console.error('[creator-asset-renderer][image-credits-settle-failed]', { opId, reason: r.reason, detail: r.detail });
+  };
+  const releaseCall = async (opId: string, why: string): Promise<void> => {
+    const r = await releaseImageCredits({ billingOperationId: opId, reason: why });
+    if (r.ok === false) console.error('[creator-asset-renderer][image-credits-release-failed]', { opId, reason: r.reason, detail: r.detail });
+  };
+
   // ── img2img style reference (flag-gated) ──────────────────────────────────
   // When a curated-template reference image is supplied AND CREATOR_IMAGE_
   // REFERENCE_MODE='edit', condition generation on it via images.edit so the
@@ -256,9 +289,17 @@ export async function generateProviderImage(input: {
    */
   let conditionLatencyMs: number | null = null;
 
+  const billingRefused = (): ProviderImageResult => ({
+    image: null,
+    conditionDegradation,
+    conditionLatencyMs,
+    fallbackReason: `image credits: ${billingRefusal ?? 'unavailable'}`,
+  });
+
   if (canonicalRefs.length > 0) {
     const editModel = modelCandidates[0];
     const editStartedAt = Date.now();
+    let canonicalOp: string | null = null;
     try {
       const { toFile } = await import('openai');
       // Extension must match the actual bytes/type or the provider rejects the
@@ -268,6 +309,14 @@ export async function generateProviderImage(input: {
           : (r.mimeType.includes('jpeg') || r.mimeType.includes('jpg')) ? 'jpg' : 'webp';
         return toFile(r.bytes, `reference-${i}.${ext}`, { type: r.mimeType });
       }));
+      const canonicalEditParams = referenceEditParams({
+        // A style reference alone is ALWAYS standard fidelity.
+        fidelity: styleOnlyReference ? 'standard' : (input.referenceFidelity ?? 'standard'),
+        model: editModel,
+        configuredQuality: process.env.CREATOR_IMAGE_REFERENCE_QUALITY,
+      });
+      canonicalOp = await reserveCall(editModel, canonicalEditParams.quality);
+      if (!canonicalOp) return billingRefused();
       const editCall = new AbortController(); // SEC91-D5: cancel the SDK call (and its retries) when the budget wins
       const editResp = await Promise.race([
         client.images.edit(
@@ -282,12 +331,7 @@ export async function generateProviderImage(input: {
             // Fidelity by purpose: a main subject keeps its likeness
             // (input_fidelity 'high' + quality above 'low'); a background or
             // style reference keeps the provider defaults.
-            ...referenceEditParams({
-              // A style reference alone is ALWAYS standard fidelity.
-              fidelity: styleOnlyReference ? 'standard' : (input.referenceFidelity ?? 'standard'),
-              model: editModel,
-              configuredQuality: process.env.CREATOR_IMAGE_REFERENCE_QUALITY,
-            }),
+            ...canonicalEditParams,
           } as Parameters<typeof client.images.edit>[0],
           { timeout: AI_IMAGE_TIMEOUT_MS, signal: editCall.signal },
         ),
@@ -301,7 +345,11 @@ export async function generateProviderImage(input: {
       });
       const first = getFirstImageResult(editResp);
       if (first?.b64_json || first?.url) {
-        recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
+        await settleCall(canonicalOp); canonicalOp = null;
+        // The image is charged by the image-credits helper above; record 0 so
+        // the first-consumable trigger still fires but no second charge is
+        // folded into a content settlement (owner: one price source).
+        recordAssetCredits(0);
         console.log('[creator-asset-renderer][canonical-reference-edit-ok]', {
           model: editModel, references: files.length, ms: Date.now() - editStartedAt,
         });
@@ -331,6 +379,7 @@ export async function generateProviderImage(input: {
       // The call completed and returned nothing usable. This used to fall out
       // of the try with no log and no marker at all — the one path more silent
       // than the legacy showcase branch it replaced, which does record it.
+      await releaseCall(canonicalOp, 'edit returned no image'); canonicalOp = null;
       conditionDegradation = degradedBy('edit_no_image');
       conditionLatencyMs = Date.now() - editStartedAt;
       console.warn('[creator-asset-renderer][canonical-reference-edit-no-image]', { model: editModel });
@@ -339,6 +388,7 @@ export async function generateProviderImage(input: {
       // supported behaviour and is deliberately unchanged. What changes is that
       // "conditioning was attempted and did not happen" now survives the request
       // as durable metadata rather than only as a log line.
+      if (canonicalOp) { await releaseCall(canonicalOp, 'edit failed'); canonicalOp = null; }
       conditionDegradation = degradedBy('edit_failed');
       conditionLatencyMs = Date.now() - editStartedAt;
       providerFailureKind = worseProviderFailure(providerFailureKind, classifyProviderImageError(err));
@@ -349,6 +399,7 @@ export async function generateProviderImage(input: {
   if (referenceModeEnabled && typeof referenceUrl === 'string' && referenceUrl.trim()) {
     const editModel = modelCandidates[0];
     const editStartedAt = Date.now();
+    let showcaseOp: string | null = null;
     try {
       const { toFile } = await import('openai');
       // HARDEN-005: reference image URL is user/generated content — SSRF-safe download.
@@ -361,6 +412,8 @@ export async function generateProviderImage(input: {
       const refType = refResp.headers.get('content-type') || 'image/webp';
       const refExt = refType.includes('png') ? 'png' : (refType.includes('jpeg') || refType.includes('jpg')) ? 'jpg' : 'webp';
       const refFile = await toFile(refBuf, `reference.${refExt}`, { type: refType });
+      showcaseOp = await reserveCall(editModel, process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'low');
+      if (!showcaseOp) return billingRefused();
       const refEditCall = new AbortController(); // SEC91-D5: see the note at client construction
       const editResp = await Promise.race([
         client.images.edit(
@@ -384,6 +437,7 @@ export async function generateProviderImage(input: {
       });
       const firstEdit = getFirstImageResult(editResp);
       if (firstEdit?.b64_json || firstEdit?.url) {
+        await settleCall(showcaseOp); showcaseOp = null;
         if (input.attribution?.organizationId) {
           await captureImageProviderCost({
             organizationId: input.attribution.organizationId,
@@ -400,7 +454,7 @@ export async function generateProviderImage(input: {
             parentActivityId: input.attribution.campaignId ?? null,
           });
         }
-        recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
+        recordAssetCredits(0); // charged by the image-credits helper; see the canonical branch
         console.log('[creator-asset-renderer][provider-image-edit-ok]', { model: editModel, ms: Date.now() - editStartedAt });
         // Showcase success. `conditionApplied` is deliberately NOT set here —
         // this branch is not canonical CONDITION. It still forwards any earlier
@@ -408,8 +462,10 @@ export async function generateProviderImage(input: {
         if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` }, conditionDegradation, conditionLatencyMs };
         return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` }, conditionDegradation, conditionLatencyMs };
       }
+      await releaseCall(showcaseOp, 'edit returned no image'); showcaseOp = null;
       failures.push(`${editModel}:edit: no image returned`);
     } catch (error) {
+      if (showcaseOp) { await releaseCall(showcaseOp, 'edit failed'); showcaseOp = null; }
       const message = error instanceof Error ? error.message : String(error);
       failures.push(`${editModel}:edit: ${message}`);
       providerFailureKind = worseProviderFailure(providerFailureKind, classifyProviderImageError(error));
@@ -420,6 +476,7 @@ export async function generateProviderImage(input: {
 
   for (const model of modelCandidates) {
     const providerStartedAt = Date.now();
+    let generateOp: string | null = null;
     try {
       const request = model === 'dall-e-3'
         ? {
@@ -441,6 +498,8 @@ export async function generateProviderImage(input: {
             moderation: 'auto',
           };
 
+      generateOp = await reserveCall(model, String((request as { quality?: string }).quality ?? 'auto'));
+      if (!generateOp) return billingRefused();
       const generateCall = new AbortController(); // SEC91-D5: see the note at client construction
       const response = await Promise.race([
         client.images.generate(
@@ -457,6 +516,7 @@ export async function generateProviderImage(input: {
       });
       const first = getFirstImageResult(response);
       if (first?.b64_json || first?.url) {
+        await settleCall(generateOp); generateOp = null;
         // Phase 4.1 Task 1: best-effort image provider-cost capture
         // (telemetry only, never throws, no billing, no behavior change).
         if (input.attribution?.organizationId) {
@@ -481,14 +541,16 @@ export async function generateProviderImage(input: {
         // creator-content settlement scope (no-op outside one). Per-image actual
         // cost from the existing cost profile; the engine settles text + assets
         // together via the entry-consumption lifecycle (no new primitive).
-        recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
+        recordAssetCredits(0); // charged by the image-credits helper; see the canonical branch
         if (first.b64_json) {
           return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model }, conditionDegradation, conditionLatencyMs };
         }
         return { image: { buffer: await bufferFromRemoteImage(first.url as string), model }, conditionDegradation, conditionLatencyMs };
       }
+      await releaseCall(generateOp, 'generate returned no image'); generateOp = null;
       failures.push(`${model}: no image returned`);
     } catch (error) {
+      if (generateOp) { await releaseCall(generateOp, 'generate failed'); generateOp = null; }
       const message = error instanceof Error ? error.message : String(error);
       recordCreatorDuration('provider_image_failed', Date.now() - providerStartedAt, {
         model,

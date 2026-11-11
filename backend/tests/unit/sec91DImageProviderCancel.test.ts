@@ -13,6 +13,15 @@ export {};
 const generateOptions: Array<{ timeout?: number; signal?: AbortSignal }> = [];
 let generateBehaviour: 'hang' | 'ok' = 'hang';
 
+// Image credits (owner ruling 2026-11-11) are not under test here: every paid
+// call is admitted and charged by a stub, so this suite keeps testing what it
+// tested before. The billing contract itself: creatorImageCreditsWiring.test.ts.
+jest.mock('../../services/billing/imageCredits', () => ({
+  reserveImageCredits: async () => ({ ok: true, billingOperationId: 'op-test', creditsReserved: 2 }),
+  settleImageCredits: async () => ({ ok: true, creditsCharged: 2 }),
+  releaseImageCredits: async () => ({ ok: true }),
+}));
+const TEST_BILLING_ATTRIBUTION = { attribution: { organizationId: '00000000-0000-4000-8000-00000000b111' } };
 jest.mock('@/config', () => ({ config: { OPENAI_API_KEY: 'test-key' }, getValidatedConfig: () => ({}) }));
 jest.mock('../../../config', () => ({ config: { OPENAI_API_KEY: 'test-key' } }));
 jest.mock('openai', () => {
@@ -53,7 +62,7 @@ describe('SEC91-D5 generateProviderImage cancels the abandoned provider call', (
     generateBehaviour = 'hang';
     jest.useFakeTimers();
     try {
-      const pending = generateProviderImage({ prompt: 'a lighthouse at dawn' });
+      const pending = generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'a lighthouse at dawn' });
       await jest.advanceTimersByTimeAsync(AI_IMAGE_TIMEOUT_MS + 10);
       const result = await pending;
       expect(result.image).toBeNull();
@@ -68,7 +77,7 @@ describe('SEC91-D5 generateProviderImage cancels the abandoned provider call', (
 
   it('a successful generation is returned unchanged', async () => {
     generateBehaviour = 'ok';
-    const result = await generateProviderImage({ prompt: 'a lighthouse at dawn' });
+    const result = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'a lighthouse at dawn' });
     expect(result.image?.buffer.toString()).toBe('GENERATED');
     expect(generateOptions[0].timeout).toBe(AI_IMAGE_TIMEOUT_MS);
   });

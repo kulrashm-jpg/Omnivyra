@@ -250,14 +250,18 @@ describe('E — the user is told, in the existing pattern', () => {
 /* ── 6. Everything that must NOT change ───────────────────────────────────── */
 
 describe('F — untouched behaviour', () => {
-  it('credit charging is unchanged — still one per produced image', () => {
-    // recordAssetCredits lives inside each SUCCESS branch, so a failed edit
-    // followed by a successful generate charges exactly once.
-    expect((MEDIA.match(/recordAssetCredits\(resolveCostProfile\('image'\)\.expected_credits_per_asset\)/g) ?? []))
-      .toHaveLength(3);
+  it('credit charging is still one per produced image (owner ruling 2026-11-11: the image-credits helper)', () => {
+    // Each paid call is reserved first; the reservation is SETTLED only inside
+    // a SUCCESS branch, so a failed edit followed by a successful generate
+    // charges exactly once. The usage collector records 0 for images (the
+    // first-consumable trigger still fires) so no second charge is folded into
+    // a content settlement - one price source.
+    expect((MEDIA.match(/await settleCall\(/g) ?? [])).toHaveLength(3);
+    expect((MEDIA.match(/recordAssetCredits\(0\)/g) ?? [])).toHaveLength(3);
+    expect(MEDIA).not.toMatch(/recordAssetCredits\(resolveCostProfile/);
     const editBranch = MEDIA.slice(MEDIA.indexOf('if (canonicalRefs.length > 0)'), MEDIA.indexOf("degradedBy('edit_no_image')"));
     expect(editBranch).toContain('if (first?.b64_json || first?.url) {');
-    expect(editBranch.indexOf('recordAssetCredits')).toBeGreaterThan(editBranch.indexOf('if (first?.b64_json || first?.url) {'));
+    expect(editBranch.indexOf('settleCall')).toBeGreaterThan(editBranch.indexOf('if (first?.b64_json || first?.url) {'));
   });
 
   it('the endpoint gate and provider selection are unchanged', () => {

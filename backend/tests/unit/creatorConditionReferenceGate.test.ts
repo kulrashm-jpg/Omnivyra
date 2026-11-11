@@ -28,6 +28,15 @@
 const editCalls: Array<Record<string, unknown>> = [];
 const generateCalls: Array<Record<string, unknown>> = [];
 
+// Image credits (owner ruling 2026-11-11) are not under test here: every paid
+// call is admitted and charged by a stub, so this suite keeps testing what it
+// tested before. The billing contract itself: creatorImageCreditsWiring.test.ts.
+jest.mock('../../services/billing/imageCredits', () => ({
+  reserveImageCredits: async () => ({ ok: true, billingOperationId: 'op-test', creditsReserved: 2 }),
+  settleImageCredits: async () => ({ ok: true, creditsCharged: 2 }),
+  releaseImageCredits: async () => ({ ok: true }),
+}));
+const TEST_BILLING_ATTRIBUTION = { attribution: { organizationId: '00000000-0000-4000-8000-00000000b111' } };
 jest.mock('@/config', () => ({ config: { OPENAI_API_KEY: 'test-key' }, getValidatedConfig: () => ({}) }));
 jest.mock('../../../config', () => ({ config: { OPENAI_API_KEY: 'test-key' } }));
 
@@ -168,7 +177,7 @@ async function renderConditionLane(renderer: Awaited<ReturnType<typeof resolve>>
     // Exactly what the renderer passes: this lane only exists when the user attached a photo.
     endpoint: resolveCreatorImageEndpoint({ userReferenceAttached: true }),
   });
-  await generateProviderImage({
+  await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION,
     prompt: 'a prompt',
     referenceImages: resolved.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })),
   });
@@ -315,7 +324,7 @@ describe('C — gate OFF (kill switch): zero calls, zero bytes, zero reads', () 
   });
 
   it('gate OFF carries the text-only delivery status into the generated result', async () => {
-    const result = await generateProviderImage({
+    const result = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION,
       prompt: 'a prompt with a text-described reference',
       conditionDegradedToText: true,
     });
@@ -329,7 +338,7 @@ describe('C — gate OFF (kill switch): zero calls, zero bytes, zero reads', () 
   });
 
   it('DEFENCE IN DEPTH: bytes handed straight to the provider are still refused', async () => {
-    await generateProviderImage({
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION,
       prompt: 'p',
       referenceImages: [{ bytes: SOURCE_PNG, mimeType: 'image/png' }],
     });
@@ -416,7 +425,7 @@ describe('D2 — unset: a USER-attached photo is delivered via images.edit', () 
   });
 
   it('unset + no attachment → the text-to-image path (no cost change)', async () => {
-    await generateProviderImage({ prompt: 'p' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p' });
     expect(editCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(1);
   });
@@ -507,7 +516,7 @@ describe('E — the gate governs CONDITION only', () => {
 
 describe('F — the legacy showcase obeys the same gate', () => {
   it('CRITICAL: gate OFF — referenceImageUrl cannot reach images.edit', async () => {
-    await generateProviderImage({
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION,
       prompt: 'p',
       referenceImageUrl: 'https://www.omnivyra.com/creator-showcases/corporate/image.webp',
     });

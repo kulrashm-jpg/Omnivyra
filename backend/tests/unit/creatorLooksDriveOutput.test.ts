@@ -14,6 +14,15 @@ const editCalls: Array<Record<string, unknown>> = [];
 const generateCalls: Array<Record<string, unknown>> = [];
 let failEdit = false;
 
+// Image credits (owner ruling 2026-11-11) are not under test here: every paid
+// call is admitted and charged by a stub, so this suite keeps testing what it
+// tested before. The billing contract itself: creatorImageCreditsWiring.test.ts.
+jest.mock('../../services/billing/imageCredits', () => ({
+  reserveImageCredits: async () => ({ ok: true, billingOperationId: 'op-test', creditsReserved: 2 }),
+  settleImageCredits: async () => ({ ok: true, creditsCharged: 2 }),
+  releaseImageCredits: async () => ({ ok: true }),
+}));
+const TEST_BILLING_ATTRIBUTION = { attribution: { organizationId: '00000000-0000-4000-8000-00000000b111' } };
 jest.mock('@/config', () => ({ config: { OPENAI_API_KEY: 'test-key' }, getValidatedConfig: () => ({}) }));
 jest.mock('../../../config', () => ({ config: { OPENAI_API_KEY: 'test-key' } }));
 jest.mock('../../db/supabaseClient', () => ({ supabase: {} }));
@@ -401,7 +410,7 @@ describe('D — the look sample as a style reference', () => {
 
   it('CRITICAL: provider — the look sample alone goes to images.edit at standard fidelity', async () => {
     const bytes = fs.readFileSync(comicPath);
-    const r = await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes, mimeType: 'image/webp' }], referenceFidelity: 'high', referenceKind: 'look' });
+    const r = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes, mimeType: 'image/webp' }], referenceFidelity: 'high', referenceKind: 'look' });
     expect(editCalls).toHaveLength(1);
     expect(generateCalls).toHaveLength(0);
     // Even a (mistaken) 'high' request is forced to standard for a style-only reference.
@@ -414,7 +423,7 @@ describe('D — the look sample as a style reference', () => {
   it('CRITICAL: provider — the look sample never rides on input_fidelity high (user photo sent alone)', async () => {
     const user = { bytes: Buffer.from('USER'), mimeType: 'image/png' };
     const look = { bytes: fs.readFileSync(comicPath), mimeType: 'image/webp' };
-    await generateProviderImage({ prompt: 'p', referenceImages: [user, look], referenceFidelity: 'high', referenceKind: 'user+look' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [user, look], referenceFidelity: 'high', referenceKind: 'user+look' });
     expect(editCalls).toHaveLength(1);
     expect(editCalls[0].input_fidelity).toBe('high');
     expect((editCalls[0].image as { type: string }).type).toBe('image/png');
@@ -422,7 +431,7 @@ describe('D — the look sample as a style reference', () => {
 
   it('edit failure → text-to-image fallback with the conditionDegradation disclosure (look copy)', async () => {
     failEdit = true;
-    const r = await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: Buffer.from('x'), mimeType: 'image/webp' }], referenceKind: 'look' });
+    const r = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: Buffer.from('x'), mimeType: 'image/webp' }], referenceKind: 'look' });
     expect(generateCalls).toHaveLength(1);
     expect(r.conditionDegradation?.category).toBe('edit_failed');
     expect(r.conditionDegradation?.userMessage).toMatch(/look's sample could not be applied/);
@@ -430,12 +439,12 @@ describe('D — the look sample as a style reference', () => {
 
   it('kill switch at the provider: bytes handed in anyway are not sent; disclosed as switched off', async () => {
     process.env.CREATOR_IMAGE_REFERENCE_MODE = 'off';
-    const r = await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: Buffer.from('x'), mimeType: 'image/webp' }], referenceKind: 'look', conditionDegradedToText: true });
+    const r = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: Buffer.from('x'), mimeType: 'image/webp' }], referenceKind: 'look', conditionDegradedToText: true });
     expect(editCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(1);
     expect(r.conditionDegradation?.category).toBe('reference_mode_disabled');
     expect(r.conditionDegradation?.userMessage).toMatch(/Style references are switched off/);
-    const r2 = await generateProviderImage({ prompt: 'p', lookReferenceDisabled: true });
+    const r2 = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', lookReferenceDisabled: true });
     expect(r2.conditionDegradation?.category).toBe('reference_mode_disabled');
     expect(r2.conditionDegradation?.userMessage).toMatch(/Style references are switched off/);
   });

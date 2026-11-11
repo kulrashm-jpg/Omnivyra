@@ -14,6 +14,15 @@
 const editCalls: Array<Record<string, unknown>> = [];
 const generateCalls: Array<Record<string, unknown>> = [];
 
+// Image credits (owner ruling 2026-11-11) are not under test here: every paid
+// call is admitted and charged by a stub, so this suite keeps testing what it
+// tested before. The billing contract itself: creatorImageCreditsWiring.test.ts.
+jest.mock('../../services/billing/imageCredits', () => ({
+  reserveImageCredits: async () => ({ ok: true, billingOperationId: 'op-test', creditsReserved: 2 }),
+  settleImageCredits: async () => ({ ok: true, creditsCharged: 2 }),
+  releaseImageCredits: async () => ({ ok: true }),
+}));
+const TEST_BILLING_ATTRIBUTION = { attribution: { organizationId: '00000000-0000-4000-8000-00000000b111' } };
 jest.mock('@/config', () => ({ config: { OPENAI_API_KEY: 'test-key' }, getValidatedConfig: () => ({}) }));
 jest.mock('../../../config', () => ({ config: { OPENAI_API_KEY: 'test-key' } }));
 jest.mock('openai', () => {
@@ -126,7 +135,7 @@ describe('B — purpose → fidelity matrix', () => {
 
 describe('C — provider evidence (mocked SDK)', () => {
   it('CRITICAL: unset + attached MAIN SUBJECT → images.edit with input_fidelity high, quality medium', async () => {
-    const r = await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: PNG, mimeType: 'image/png' }], referenceFidelity: 'high' });
+    const r = await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: PNG, mimeType: 'image/png' }], referenceFidelity: 'high' });
     expect(editCalls).toHaveLength(1);
     expect(generateCalls).toHaveLength(0);
     expect(editCalls[0].input_fidelity).toBe('high');
@@ -135,7 +144,7 @@ describe('C — provider evidence (mocked SDK)', () => {
   });
 
   it('unset + attached BACKGROUND → images.edit without input_fidelity, quality low', async () => {
-    await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: PNG, mimeType: 'image/png' }], referenceFidelity: 'standard' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: PNG, mimeType: 'image/png' }], referenceFidelity: 'standard' });
     expect(editCalls).toHaveLength(1);
     expect(editCalls[0].input_fidelity).toBeUndefined();
     expect(editCalls[0].quality).toBe('low');
@@ -143,19 +152,19 @@ describe('C — provider evidence (mocked SDK)', () => {
 
   it('CRITICAL: kill switch (off) → no images.edit, text-to-image instead', async () => {
     process.env.CREATOR_IMAGE_REFERENCE_MODE = 'off';
-    await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: PNG, mimeType: 'image/png' }], referenceFidelity: 'high' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: PNG, mimeType: 'image/png' }], referenceFidelity: 'high' });
     expect(editCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(1);
   });
 
   it('CRITICAL: no reference → the unchanged text-to-image path', async () => {
-    await generateProviderImage({ prompt: 'p' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p' });
     expect(editCalls).toHaveLength(0);
     expect(generateCalls).toHaveLength(1);
   });
 
   it('the curated-template showcase still needs the global edit value (unset → no edit)', async () => {
-    await generateProviderImage({ prompt: 'p', referenceImageUrl: 'https://www.omnivyra.com/creator-showcases/x/image.webp' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImageUrl: 'https://www.omnivyra.com/creator-showcases/x/image.webp' });
     expect(editCalls).toHaveLength(0);
   });
 
