@@ -31,18 +31,23 @@ jest.mock('../../auth/oauthCredentialResolver', () => ({
 jest.mock('../../auth/tokenStore', () => ({
   getToken: async () => null, setToken: jest.fn(), markSocialAccountNeedsReauth: jest.fn(),
 }));
-let axiosMode: 'timeout' | '503' = 'timeout';
+let axiosMode: 'timeout' | '503' | 'x400-timeout-text' = 'timeout';
+jest.mock('../../auth/refreshLock', () => ({ withRefreshLock: (_k: string, fn: () => unknown) => fn() }));
+jest.mock('../../auth/refreshAccountResolver', () => ({ buildXRefreshLockKey: (id: string) => `x:${id}` }));
 jest.mock('axios', () => {
   const fail = () => {
     const e: any = axiosMode === 'timeout'
       ? Object.assign(new Error('timeout of 15000ms exceeded'), { code: 'ECONNABORTED' })
-      : Object.assign(new Error('Request failed with status code 503'), { response: { status: 503, data: {} } });
+      : axiosMode === 'x400-timeout-text'
+        ? Object.assign(new Error('Request failed with status code 400'), { response: { status: 400,
+            data: { error: 'invalid_request', error_description: 'upstream timeout of 30ms exceeded' } } })
+        : Object.assign(new Error('Request failed with status code 503'), { response: { status: 503, data: {} } });
     return Promise.reject(e);
   };
   return { __esModule: true, default: { post: fail, get: fail }, post: fail, get: fail };
 });
 
-import { recordRefreshOutcome, xPersistedRefreshError } from '../../auth/tokenRefreshCore';
+import { recordRefreshOutcome, xPersistedRefreshError, refreshTwitterTokenIfNeeded } from '../../auth/tokenRefreshCore';
 import { refreshPlatformToken } from '../../auth/tokenRefreshFlows';
 import { REFRESH_TIMEOUT_ERROR, isRefreshTimeoutError, takeRefreshTimedOut } from '../../auth/oauthRefreshTimeout';
 
@@ -132,5 +137,20 @@ describe('X persisted error (xPersistedRefreshError)', () => {
   it('a real X timeout, recorded, does NOT consume the ceiling', async () => {
     await recordRefreshOutcome('acc-1', 'failed', xPersistedRefreshError({ code: 'ECONNABORTED' }));
     expect(account).toMatchObject({ refresh_retry_count: 3, is_active: true });
+  });
+});
+
+describe('end to end through the X refresh (refreshTwitterTokenIfNeeded, its real catch)', () => {
+  const X = { account_id: 'acc-1', access_token: 'a', refresh_token: 'r', token_expires_at: '2000-01-01T00:00:00Z' } as any;
+  it('a real axios timeout is recorded as the constant: retry_count unchanged, not parked', async () => {
+    axiosMode = 'timeout';
+    await refreshTwitterTokenIfNeeded(X);
+    expect(account).toMatchObject({ refresh_retry_count: 3, last_refresh_error: REFRESH_TIMEOUT_ERROR, is_active: true });
+  });
+  it('GOV-SECURITY input through the real X catch: provider text mentioning a timeout counts and parks at 4', async () => {
+    axiosMode = 'x400-timeout-text';
+    await refreshTwitterTokenIfNeeded(X);
+    expect(account).toMatchObject({ refresh_retry_count: 4, refresh_status: 'PROVIDER_REAUTH_REQUIRED', is_active: false,
+      last_refresh_error: 'invalid_request: upstream timeout of 30ms exceeded' });
   });
 });
