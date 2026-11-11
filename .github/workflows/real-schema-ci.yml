@@ -43,6 +43,11 @@ on:
       - 'backend/tests/realschema/pi_prov_*'
       - 'jest.realschema.config.js'
       - '.github/workflows/real-schema-ci.yml'
+      # The actor-FK acknowledgement list and registry: a PR touching only these
+      # must run the --db gate, the only one that can judge a column-level entry
+      # (a bounded baseline reports it NOT JUDGED).
+      - 'scripts/migrations/set-null-known-defects.json'
+      - 'scripts/migrations/actor-field-registry.json'
   push:
     branches: [main]
     paths:
@@ -50,6 +55,11 @@ on:
       - 'supabase/_schema/**'
       - 'scripts/ci/**'
       - 'backend/tests/realschema/**'
+      # The actor-FK acknowledgement list and registry: a PR touching only these
+      # must run the --db gate, the only one that can judge a column-level entry
+      # (a bounded baseline reports it NOT JUDGED).
+      - 'scripts/migrations/set-null-known-defects.json'
+      - 'scripts/migrations/actor-field-registry.json'
   workflow_dispatch:
 
 concurrency:
