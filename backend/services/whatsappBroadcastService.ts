@@ -1393,8 +1393,10 @@ export async function processBatch(
       const errCode    = result?.error?.code ?? res.status;
       const errMessage = result?.error?.message ?? 'Unknown error';
       // retry_count comes from the batch read: a separate re-read whose failure read as 0 reset
-      // the count and let a recipient be retried without end (unread-error census). The claim
-      // changed only `status`, so the batch read's value is current.
+      // the count and let a recipient be retried without end (unread-error census). The batch
+      // value cannot be stale (05): the row is CLAIMED ('sending') from the CAS above until this
+      // outcome write, and the only other retry_count writer, retryRun, filters on status
+      // 'failed' - no concurrent path can touch a claimed row's retry_count.
       await resolveClaimedSend(recipient.id, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (Number(recipient.retry_count) || 0) + 1 });
       failedCount++;
     }
