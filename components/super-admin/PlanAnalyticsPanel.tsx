@@ -35,7 +35,8 @@ interface PlanAnalytics {
   avg_cost_per_org: number;
   monthly_price: number | null;
   monthly_credits: number | null;
-  feature_adoption: Record<string, number>;
+  /** null = not available (no canonical source); never rendered as a number. */
+  feature_adoption: Record<string, number> | null;
   usage_health: 'low' | 'medium' | 'high';
 }
 
@@ -287,7 +288,12 @@ export default function PlanAnalyticsPanel() {
             <div key={plan.plan_id} className={`border rounded-lg p-4 ${healthBg(plan.usage_health)}`}>
               <div className="font-semibold text-white mb-3">{plan.plan_name}</div>
               <div className="space-y-2 text-xs">
-                {Object.entries(plan.feature_adoption).map(([feature, adoption]) => (
+                {plan.feature_adoption === null && (
+                  <div className="text-gray-500" data-testid="feature-adoption-unavailable">
+                    Not available: no adoption data source yet.
+                  </div>
+                )}
+                {Object.entries(plan.feature_adoption ?? {}).map(([feature, adoption]) => (
                   <div key={feature} className="flex items-center justify-between">
                     <span className="text-gray-400">
                       {feature

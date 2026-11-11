@@ -31,7 +31,13 @@ interface PlanAnalytics {
   avg_cost_per_org: number;
   monthly_price: number | null;
   monthly_credits: number | null;
-  feature_adoption: Record<string, number>;
+  /**
+   * NOT AVAILABLE (null). There is no canonical per-plan adoption source for
+   * these features; the values used to be RANDOM - invented numbers on
+   * an admin screen (C10, 2026-11-11). Never fill this with a guess: add a real
+   * source first (a reviewed definition of "adopted" per feature).
+   */
+  feature_adoption: Record<string, number> | null;
   usage_health: 'low' | 'medium' | 'high';
 }
 
@@ -233,13 +239,8 @@ async function handler(
       const totalCost = tokenCost + apiCost;
       const avgCostPerOrg = orgs.length > 0 ? totalCost / orgs.length : 0;
 
-      // Feature adoption (mock)
-      const featureAdoption: Record<string, number> = {
-        campaigns_created: orgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-        ai_content_generated: orgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-        engagement_ai: orgs.length > 0 ? Math.round(Math.random() * 80) : 0,
-        automation_enabled: orgs.length > 0 ? Math.round(Math.random() * 60) : 0,
-      };
+      // Feature adoption: NOT AVAILABLE - no canonical source (see the type).
+      const featureAdoption = null;
 
       // Health indicator based on usage
       let usageHealth: 'low' | 'medium' | 'high' = 'low';
@@ -286,12 +287,7 @@ async function handler(
     const freeCreditsTotalCost = freeCreditsTokenCost + freeCreditsApiCost;
     const freeCreditsAvgCostPerOrg = freeCreditsOrgs.length > 0 ? freeCreditsTotalCost / freeCreditsOrgs.length : 0;
 
-    const freeCreditsFeatureAdoption: Record<string, number> = {
-      campaigns_created: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-      ai_content_generated: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 100) : 0,
-      engagement_ai: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 80) : 0,
-      automation_enabled: freeCreditsOrgs.length > 0 ? Math.round(Math.random() * 60) : 0,
-    };
+    const freeCreditsFeatureAdoption = null; // NOT AVAILABLE - no canonical source
 
     let freeCreditsHealth: 'low' | 'medium' | 'high' = 'low';
     if (freeCreditsAvgTokens > 50000) freeCreditsHealth = 'high';
