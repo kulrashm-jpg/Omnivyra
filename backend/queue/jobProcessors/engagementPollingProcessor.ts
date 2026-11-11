@@ -13,7 +13,7 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
-import { ingestComments } from '../../services/engagementIngestionService';
+import { ingestComments, createRefreshBudget } from '../../services/engagementIngestionService';
 import { runJob } from '../../services/jobRunner';
 
 const BATCH_SIZE = 50;
@@ -117,9 +117,13 @@ export async function processEngagementPollingJob(): Promise<EngagementPollingRe
       async () => {
         let ingested = 0;
         let failures = 0;
+        // D2b: one refresh budget per org job (and the timeout backoff), as in the
+        // ingest timer: a provider whose refresh times out cannot make one job spend
+        // more than the budget on refreshes; past it, refreshes are deferred.
+        const refreshBudget = createRefreshBudget();
         for (const postId of postIds) {
           try {
-            const result = await ingestComments(postId);
+            const result = await ingestComments(postId, { refreshBudget });
             if (result.success) {
               ingested += result.ingested;
             } else {

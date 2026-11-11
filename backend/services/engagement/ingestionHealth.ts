@@ -33,6 +33,8 @@
 
 import type { IngestFailureKind } from '../engagementIngestionService';
 
+const UNKNOWN_PROVIDER = 'unknown';
+
 /**
  * Cycle verdict.
  *
@@ -71,9 +73,84 @@ export interface IngestionCycleSummary {
    * that should page anyone. Deliberately false for an idle cycle.
    */
   actionable: boolean;
+  /**
+   * D2b: providers that failed EVERY attempted post for at least
+   * providerFailingCycles() consecutive cycles. Set by the cycle runner (it needs
+   * the cross-cycle streaks); absent from a bare summarizeIngestionCycle result.
+   */
+  failingProviders?: FailingProvider[];
 }
 
-const UNKNOWN_PROVIDER = 'unknown';
+/**
+ * D2b — one provider failing on its own.
+ *
+ * `failing` above needs EVERY post of the cycle to fail, across all providers, so
+ * one provider that fails every one of its posts while the others succeed is only
+ * `degraded` and logged at info - visible, but nothing pages. Since a refresh
+ * timeout no longer parks an account (D2 option B), such a provider can stay
+ * "connected" and silently collect nothing. This tracks it per provider across
+ * cycles.
+ */
+export interface FailingProvider {
+  provider: string;
+  /** Consecutive cycles in which this provider attempted posts and none succeeded. */
+  consecutiveCycles: number;
+  /** Posts attempted for this provider in the latest cycle. */
+  attempted: number;
+  /** That provider's failures in the latest cycle by typed reason, e.g. { timeout: 3 }. */
+  byFailureKind: Record<string, number>;
+}
+
+/** Cycles of total failure before a provider is reported failing (D2b; N=3). */
+export const DEFAULT_PROVIDER_FAILING_CYCLES = 3;
+
+/** INGEST_PROVIDER_FAILING_CYCLES (a positive integer), else the default. */
+export function providerFailingCycles(env: Record<string, string | undefined> = process.env): number {
+  const n = Number.parseInt(String(env.INGEST_PROVIDER_FAILING_CYCLES ?? ''), 10);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_PROVIDER_FAILING_CYCLES;
+}
+
+/**
+ * Update the per-provider streaks with one cycle's outcomes and return the
+ * providers at or over the threshold.
+ *
+ *   attempted > 0, none succeeded  -> streak + 1
+ *   attempted > 0, any succeeded   -> streak reset (deleted)
+ *   not attempted this cycle       -> unchanged (no evidence either way; an idle
+ *                                     provider neither recovers nor fails)
+ *
+ * The streaks live in the caller (process-local in the cycle runner). A restart, or
+ * the timer's lease moving to another replica, resets them: the FAILING alert is then
+ * delayed by at most N cycles, and is never raised falsely.
+ */
+export function updateProviderStreaks(
+  streaks: Map<string, number>,
+  outcomes: readonly IngestOutcome[],
+  threshold: number,
+): FailingProvider[] {
+  const perProvider = new Map<string, { attempted: number; succeeded: number; kinds: Record<string, number> }>();
+  for (const o of outcomes) {
+    const provider = (o.platform || '').trim().toLowerCase() || UNKNOWN_PROVIDER;
+    const p = perProvider.get(provider) ?? { attempted: 0, succeeded: 0, kinds: {} };
+    p.attempted += 1;
+    if (o.success) p.succeeded += 1;
+    else {
+      const kind = o.failure ?? 'provider';
+      p.kinds[kind] = (p.kinds[kind] ?? 0) + 1;
+    }
+    perProvider.set(provider, p);
+  }
+  const failing: FailingProvider[] = [];
+  for (const [provider, p] of perProvider) {
+    if (p.succeeded > 0) { streaks.delete(provider); continue; }
+    const streak = (streaks.get(provider) ?? 0) + 1;
+    streaks.set(provider, streak);
+    if (streak >= threshold) {
+      failing.push({ provider, consecutiveCycles: streak, attempted: p.attempted, byFailureKind: p.kinds });
+    }
+  }
+  return failing.sort((a, b) => a.provider.localeCompare(b.provider));
+}
 
 function classify(processed: number, succeeded: number, failed: number): IngestionCycleHealth {
   // No eligible work is not a fault. Production sits here whenever nothing has
@@ -145,5 +222,9 @@ export function ingestionCycleLogPayload(summary: IngestionCycleSummary): Record
     needs_reauth: summary.needsReauth,
     by_provider: summary.byProvider,
     by_failure_kind: summary.byFailureKind,
+    // D2b: providers only, with counts and typed reasons - no ids.
+    failing_providers: (summary.failingProviders ?? []).map((f) => ({
+      provider: f.provider, consecutive_cycles: f.consecutiveCycles, attempted: f.attempted, by_failure_kind: f.byFailureKind,
+    })),
   };
 }

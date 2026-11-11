@@ -13,7 +13,7 @@ import type {
   PublishResult,
   ConnectionTestResult,
 } from './baseAdapter';
-import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer, COMMENT_FETCH_TIMEOUT_MS } from './baseAdapter';
 import { providerErrorFromResponse } from '../engagement/providerRequestError';
 import { buildXConversationSearchUrl } from '../engagement/xReplyQuery';
 
@@ -128,6 +128,8 @@ export const twitterAdapter: IPlatformAdapter = {
           Authorization: `Bearer ${params.accessToken}`,
           Accept: 'application/json',
         },
+        // Also covers reading the body.
+        signal: AbortSignal.timeout(params.timeoutMs ?? COMMENT_FETCH_TIMEOUT_MS),
       }
     );
     if (!response.ok) {
