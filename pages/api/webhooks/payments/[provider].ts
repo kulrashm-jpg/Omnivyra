@@ -165,6 +165,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             { amountSubunits: success.amountSubunits, currency: success.currency },
           );
           allocated = fulfillment.ok;
+          if (!fulfillment.ok && fulfillment.code === 'UNAVAILABLE') {
+            // Transient read failure inside fulfilment: never answer 200 (that
+            // tells the provider the delivery was handled). 500 -> redelivery.
+            logger.error('payment_webhook_fulfillment_unavailable', {
+              provider, eventId: result.eventId, purchaseId: (purchase as any).id, detail: fulfillment.detail ?? null,
+            });
+            return res.status(500).json({ ok: false, error: 'fulfillment_unavailable', retryable: true });
+          }
           if (!fulfillment.ok) {
             logger.error('payment_webhook_fulfillment_blocked', {
               provider, eventId: result.eventId, purchaseId: (purchase as any).id,

@@ -54,8 +54,9 @@ jest.mock('../../services/payments/stripeWebhookService', () => ({
 jest.mock('../../services/payments/orchestrator', () => ({
   handleWebhook: async () => ({ verified: true, eventId: 'e1', eventType: 'payment.captured', recorded: true }),
 }));
+let mockFulfillResult: { ok: boolean; code?: string; detail?: string } = { ok: true };
 jest.mock('../../services/billing/purchaseClosureService', () => ({
-  fulfillProviderConfirmedPurchase: async () => { mockSinks.push('fulfill'); return { ok: true }; },
+  fulfillProviderConfirmedPurchase: async () => { mockSinks.push('fulfill'); return mockFulfillResult; },
 }));
 jest.mock('pdfkit', () => jest.fn().mockImplementation(() => { mockSinks.push('pdf'); throw new Error('stop: pdf rendered'); }));
 
@@ -80,7 +81,7 @@ function mockRes() {
 const prevSecret = process.env.STRIPE_WEBHOOK_SECRET;
 beforeAll(() => { process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_only'; });
 afterAll(() => { if (prevSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = prevSecret; });
-beforeEach(() => { mockScript = {}; mockSinks.length = 0; mockLogs.length = 0; });
+beforeEach(() => { mockScript = {}; mockSinks.length = 0; mockLogs.length = 0; mockFulfillResult = { ok: true }; });
 
 const STRIPE_EVENT = JSON.stringify({
   id: 'evt_1', type: 'payment_intent.succeeded',
@@ -124,6 +125,24 @@ describe('webhooks/payments/[provider]', () => {
     expect(mockSinks).toEqual([]);
     expect(mockLogs).toContain('payment_webhook_purchase_lookup_failed');
     expect(mockLogs).not.toContain('payment_webhook_unmatched_order');
+  });
+
+  it('fulfilment UNAVAILABLE (transient read failure inside the chokepoint) -> 500, never a 200 "handled"', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: { id: 'p1', status: 'pending', fulfillment_status: 'pending' }, error: null });
+    mockFulfillResult = { ok: false, code: 'UNAVAILABLE', detail: 'purchase_read_failed' };
+    const res = mockRes();
+    await providerWebhook(rawReq(CAPTURED, { query: { provider: 'razorpay' } }), res);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toMatchObject({ error: 'fulfillment_unavailable', retryable: true });
+  });
+
+  it('control: a non-transient fulfilment refusal keeps the existing 200 + logged block', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: { id: 'p1', status: 'pending', fulfillment_status: 'pending' }, error: null });
+    mockFulfillResult = { ok: false, code: 'UNKNOWN', detail: 'provider_unpaid' };
+    const res = mockRes();
+    await providerWebhook(rawReq(CAPTURED, { query: { provider: 'razorpay' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(mockLogs).toContain('payment_webhook_fulfillment_blocked');
   });
 
   it('control: a matched pending purchase is still fulfilled (unchanged)', async () => {

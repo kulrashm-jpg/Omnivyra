@@ -99,12 +99,21 @@ export async function fulfillProviderConfirmedPurchase(
   //
   // `provider says PAID` is not sufficient on its own: we also require that the
   // amount and currency the provider reports match what the purchase was for.
-  const { data: purchaseRow } = await supabase
+  // MONEY: a failed read is NOT "purchase_not_found". Every settlement path
+  // funnels through here; answering not-found made a paid webhook delivery look
+  // handled. UNAVAILABLE is retryable: the webhook answers 500 (provider
+  // redelivers), the expiry sweep defers (row stays pending), reconciliation
+  // skips and retries next run.
+  const { data: purchaseRow, error: purchaseErr } = await supabase
     .from('credit_purchases')
     .select('id, amount_paid, currency, provider, provider_order_id')
     .eq('id', purchaseId)
     .maybeSingle();
 
+  if (purchaseErr) {
+    logger.error('payment_fulfillment_read_failed', { purchaseId, message: purchaseErr.message });
+    return { ok: false, detail: 'purchase_read_failed', code: 'UNAVAILABLE' };
+  }
   if (!purchaseRow) {
     logger.warn('payment_fulfillment_blocked', { purchaseId, reason: 'purchase_not_found' });
     return { ok: false, detail: 'purchase_not_found', code: 'UNKNOWN' };
@@ -292,11 +301,14 @@ export async function closePurchaseFromClient(args: {
   organizationId: string;
   reason: Extract<ClosureReason, 'client_reported_failure' | 'client_cancelled'>;
 }): Promise<ClosureOutcome> {
-  const { data } = await supabase
+  // A failed read is not "not_found" (which the routes answer as 404 to a
+  // payer). Throw: both callers are routes, which answer 5xx.
+  const { data, error } = await supabase
     .from('credit_purchases')
     .select(PURCHASE_COLUMNS)
     .eq('id', args.purchaseId)
     .maybeSingle();
+  if (error) throw new Error(`[purchaseClosure] purchase read failed for ${args.purchaseId}: ${error.message}`);
 
   const row = data as PurchaseRow | null;
   if (!row || row.organization_id !== args.organizationId) {
