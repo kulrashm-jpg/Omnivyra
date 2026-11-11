@@ -29,6 +29,8 @@ const db = {
   governance: [] as Row[],
   updates: [] as Array<{ table: string; patch: Row }>,
   failTable: null as string | null,
+  /** Fail an UPDATE of this table whose patch sets this status (one write, not the table). */
+  failStatusWrite: null as null | { table: string; status: string },
 };
 
 const fetchCalls: string[] = [];
@@ -46,6 +48,9 @@ jest.mock('../../db/writeOwner', () => ({
     const run = async () => {
       if (db.failTable === table) return { data: null, error: { message: 'governance store unreadable' } };
       if (st.op === 'update') {
+        if (db.failStatusWrite && db.failStatusWrite.table === table && (st.patch as Row).status === db.failStatusWrite.status) {
+          return { data: null, error: { message: 'write refused' } };
+        }
         // Like Postgres: `whatsapp_broadcast_recipients.error_code` is INTEGER
         // (supabase/_schema/baseline.sql), so a non-integer value fails the whole
         // statement with 22P02 and no column of the row changes.
@@ -133,7 +138,7 @@ const recipient = (): Row => db.recipients.find((r) => r.id === 'r1')!;
 
 beforeEach(() => {
   db.broadcasts = []; db.accounts = []; db.recipients = []; db.governance = [];
-  db.updates = []; db.failTable = null;
+  db.updates = []; db.failTable = null; db.failStatusWrite = null;
   fetchCalls.length = 0;
   (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
     fetchCalls.push(String(url));
@@ -498,5 +503,24 @@ describe('processBatch is idempotent under re-entry: only PENDING recipients are
     await processBatch('b1', ['r1']);
     expect(fetchCalls).toHaveLength(1);
     expect(status('r1')).toBe('sent');
+  });
+});
+
+describe('the governance refusal is RECORDED or the batch stops (05)', () => {
+  it('a failed blocked_governance write throws: nothing is sent and the recipient stays pending', async () => {
+    seed();
+    restrict();
+    db.failStatusWrite = { table: 'whatsapp_broadcast_recipients', status: 'blocked_governance' };
+    await expect(processBatch('b1', ['r1'])).rejects.toThrow('governance block could not be recorded');
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('pending');
+  });
+
+  it('NEGATIVE CONTROL: the same refusal with the write succeeding records it and does not throw', async () => {
+    seed();
+    restrict();
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('blocked_governance');
   });
 });

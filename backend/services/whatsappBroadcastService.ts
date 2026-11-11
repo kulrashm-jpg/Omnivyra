@@ -727,9 +727,10 @@ type GovernanceRead = Awaited<ReturnType<typeof loadTenantGovernanceRecords>>;
  * reads are indeterminate (rows without a read instant, an inconsistent producer); the
  * caller refuses, and `refusal` says which.
  *
- * The third argument (records produced) is VACUOUS for the tenant loader: its `records`
- * and `reads[0].records` are the same array, so the consistency check it feeds cannot
- * fire. It is passed because the signature requires it (05, A2).
+ * The third argument is the producer's REAL flat record count. The consistency GUARD it
+ * feeds cannot fire for the tenant loader, by construction: `records` and `reads[0].records`
+ * are the same array. Passing the real value costs nothing and stays correct if the loader
+ * ever changes (05, A2).
  */
 interface RecipientGovernance {
   verdict: MayContactResult | null;
@@ -767,6 +768,10 @@ function governanceRefusalReason(decided: RecipientGovernance): string {
  * broadcast is not started and no quota is consumed.
  */
 async function screenPendingRecipients(companyId: string, broadcastId: string): Promise<void> {
+  // The channel list is a HARD-CODED literal, and that is what keeps this safe: the loader adds
+  // the all-channels wildcard to it, so ['whatsapp'] always makes a request. A blank channel or
+  // the wildcard alone would make NO request (reads: []), which the evaluator reads as "nothing
+  // applies" -> every recipient ALLOWED. Never pass a channel taken from data here (05).
   const governance = await loadTenantGovernanceRecords(companyId, ['whatsapp']);
   if (!governance.ok) throw new Error(`contact governance unreadable: ${governance.error ?? 'unknown'}`);
 
@@ -926,6 +931,10 @@ export async function processBatch(
   console.debug('[whatsappBroadcast] governance re-read schedule', { broadcast_id: broadcastId, reread_ms: rereadMs, reread_every: rereadEvery });
   // Taken BEFORE the read, so the re-read schedule errs early, never late.
   let readStartedAt = Date.now();
+  // The channel list is a HARD-CODED literal, and that is what keeps this safe: the loader adds
+  // the all-channels wildcard to it, so ['whatsapp'] always makes a request. A blank channel or
+  // the wildcard alone would make NO request (reads: []), which the evaluator reads as "nothing
+  // applies" -> every recipient ALLOWED. Never pass a channel taken from data here (05).
   let governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
   let decidedSinceRead = 0;
   // A2 — THE DEFECT THIS CLOSES: the decision instant was `new Date()` on this
@@ -948,6 +957,7 @@ export async function processBatch(
     // A2b — re-read governance for the REMAINING recipients when due.
     if (decidedSinceRead >= rereadEvery || Date.now() - readStartedAt >= rereadMs) {
       readStartedAt = Date.now();
+      // Same hard-coded ['whatsapp'] as the first read above (never a channel from data).
       const fresh = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
       if (!fresh.ok) {
         // FAIL CLOSED by stopping: nothing more is sent from this batch, and the
@@ -999,10 +1009,16 @@ export async function processBatch(
       // `error_code` is an INTEGER column (Meta's numeric code); the governance
       // cause is text and goes in `error_message`. Writing the text code into the
       // integer column failed the whole update, leaving the recipient `pending`.
-      await ownedDbTable('whatsapp_broadcast_recipients')
+      //
+      // The write's error is READ (05, 2026-11-11): this exact write once failed silently
+      // and left the recipient `pending` while the loop counted it refused. A failure
+      // throws, like the send-control block below: nothing is sent to this recipient, the
+      // row stays `pending`, and the job retries and re-reads governance.
+      const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
         .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${reason}` })
         .eq('id', recipient.id)
         .eq('status', 'pending');
+      if (blockError) throw new Error(`governance block could not be recorded: ${blockError.message}`);
       failedCount++;
       continue;
     }
