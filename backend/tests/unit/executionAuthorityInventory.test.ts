@@ -17,8 +17,11 @@
  *              .authorizePostPublish before backend/adapters/platformAdapter
  *              .publishToPlatform, the only importer of the platform adapters.
  *   whatsapp   whatsappBroadcastService.processBatch — contact governance read
- *              fail-closed, per-recipient mayContact, compare-and-set claim, all
- *              before the Meta send. Enqueuers are gated by that consumer.
+ *              fail-closed, per-recipient verdict via evaluateGovernanceReads (A2:
+ *              mayContact at each read's database instant), the send-fitness gate
+ *              (kill switches, owned + connected account, unshared number),
+ *              compare-and-set claim, all before the Meta send. Enqueuers are gated
+ *              by that consumer.
  *   email_ws3  leadOutreachExecution/dispatch — evaluateTaskGovernance before the
  *              only transport.send.
  *
@@ -127,7 +130,11 @@ const CHANNELS: Record<Channel, ChannelDef> = {
     evidence: [
       [WA, [
         /loadTenantGovernanceRecords\(/,
-        /mayContact\(/,
+        // A2 (S-WA port): the verdict is evaluateGovernanceReads, which applies
+        // mayContact at each read's own database instant - never a host clock.
+        /evaluateGovernanceReads\(/,
+        // Owner rulings 2026-11-11: kill switches, connected + unshared sender.
+        /assertSenderMaySend\(/,
         /\.update\(\{\s*status:\s*'sending'[^}]*\}\)\s*\.eq\('id',\s*recipient\.id\)\s*\.eq\('status',\s*'pending'\)/,
       ]],
       // The queue consumer of every enqueued batch is processBatch.
