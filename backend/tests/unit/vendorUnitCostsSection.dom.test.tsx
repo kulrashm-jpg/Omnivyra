@@ -63,7 +63,8 @@ describe('exact price round-trip', () => {
     expect(toPerThousand('12')).toBe(12000);
     expect(toPerThousand('0.123456')).toBe(123.456);
   });
-  it.each(['', '0', '0.000', '-1', 'abc', '1e3', '.5'])('rejects %p', (v) => {
+  it('accepts a leading dot (.05 = 0.05)', () => { expect(toPerThousand('.05')).toBe(50); });
+  it.each(['', '.', '0', '0.000', '-1', 'abc', '1e3', '1.'])('rejects %p', (v) => {
     expect(toPerThousand(v)).toBeNull();
   });
 });
