@@ -17,7 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
-import { OAUTH_REFRESH_TIMEOUT_MS, noteRefreshFailure, takeRefreshTimedOut, REFRESH_TIMEOUT_ERROR } from './oauthRefreshTimeout';
+import { OAUTH_REFRESH_TIMEOUT_MS, noteRefreshFailure, runWithRefreshNote, REFRESH_TIMEOUT_ERROR } from './oauthRefreshTimeout';
 import { getToken, setToken, markSocialAccountNeedsReauth, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
@@ -406,9 +406,9 @@ export async function refreshPlatformToken(
   }
 
   try {
-    const refreshed = await refresher(socialAccountId, currentToken);
-    // Taken on every path, so a note can never leak into a later refresh.
-    const timedOut = takeRefreshTimedOut(socialAccountId);
+    // This call's own note (AsyncLocalStorage): an overlapping refresh of the same
+    // account can neither read nor set it.
+    const { result: refreshed, timedOut } = await runWithRefreshNote(() => refresher(socialAccountId, currentToken));
     if (refreshed) {
       await safeRecord(socialAccountId, 'success', null);
       return refreshed;

@@ -49,7 +49,7 @@ jest.mock('axios', () => {
 
 import { recordRefreshOutcome, xPersistedRefreshError, refreshTwitterTokenIfNeeded } from '../../auth/tokenRefreshCore';
 import { refreshPlatformToken } from '../../auth/tokenRefreshFlows';
-import { REFRESH_TIMEOUT_ERROR, isRefreshTimeoutError, takeRefreshTimedOut } from '../../auth/oauthRefreshTimeout';
+import { REFRESH_TIMEOUT_ERROR, isRefreshTimeoutError, noteRefreshFailure } from '../../auth/oauthRefreshTimeout';
 
 beforeEach(() => { account = { id: 'acc-1', refresh_retry_count: 3, is_active: true }; });
 
@@ -105,7 +105,8 @@ describe('end to end through refreshPlatformToken (refreshers return null)', () 
     axiosMode = 'timeout';
     expect(await refreshPlatformToken('linkedin', 'acc-1', TOKEN)).toBeNull();
     expect(account).toMatchObject({ refresh_retry_count: 3, last_refresh_error: REFRESH_TIMEOUT_ERROR, is_active: true });
-    expect(takeRefreshTimedOut('acc-1')).toBe(false); // the note was taken, nothing leaks
+    // A note outside any wrapper call is a no-op (no store): it can never leak into a later refresh.
+    noteRefreshFailure('acc-1', { code: 'ECONNABORTED' });
   });
 
   it('a refresh that fails with 503 still counts (and at 3 of 4, parks)', async () => {

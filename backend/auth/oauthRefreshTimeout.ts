@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'async_hooks';
+
 /**
  * Per-request timeout for OAuth token-refresh calls (ms).
  *
@@ -41,15 +43,23 @@ export function isRefreshTimeoutText(text: string | null | undefined): boolean {
 /**
  * The per-platform refreshers swallow their error and return null, so the wrapper
  * (refreshPlatformToken) cannot see WHY a refresh failed. Each refresher's catch
- * notes a timeout here; the wrapper takes the note for that account once. Process-
- * local and keyed by account: the refresh of one account is a single awaited call.
+ * notes a timeout into the note of the CURRENT refresh call, which the wrapper
+ * creates with runWithRefreshNote (AsyncLocalStorage). Scoped per call, not per
+ * account (Orchestration review): non-X refreshes take no lock, so two refreshes of
+ * one account can overlap, and a shared note would let one call's timeout classify
+ * the other's 5xx. Outside a wrapper call there is no store and noting is a no-op.
  */
-const timedOutAccounts = new Set<string>();
-export function noteRefreshFailure(accountId: string, error: unknown): void {
-  if (isRefreshTimeoutError(error)) timedOutAccounts.add(accountId);
+type RefreshNote = { timedOut: boolean };
+const refreshNoteStore = new AsyncLocalStorage<RefreshNote>();
+
+export function noteRefreshFailure(_accountId: string, error: unknown): void {
+  const note = refreshNoteStore.getStore();
+  if (note && isRefreshTimeoutError(error)) note.timedOut = true;
 }
-export function takeRefreshTimedOut(accountId: string): boolean {
-  const had = timedOutAccounts.has(accountId);
-  timedOutAccounts.delete(accountId);
-  return had;
+
+/** Run one refresh with its own note; returns its result and whether IT timed out. */
+export async function runWithRefreshNote<T>(fn: () => Promise<T>): Promise<{ result: T; timedOut: boolean }> {
+  const note: RefreshNote = { timedOut: false };
+  const result = await refreshNoteStore.run(note, fn);
+  return { result, timedOut: note.timedOut };
 }
