@@ -109,7 +109,10 @@ function idempotencyViolations(sql) {
     const l = line.replace(/--.*$/, ''); // strip line comments
     if (/\bCREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i.test(l))
       v.push({ line: i + 1, rule: 'CREATE TABLE must use IF NOT EXISTS', text: line.trim() });
-    if (/\bCREATE\s+(UNIQUE\s+)?INDEX\s+(CONCURRENTLY\s+)?(?!IF\s+NOT\s+EXISTS)/i.test(l))
+    // The optional CONCURRENTLY sits INSIDE the negative lookahead (virality-e1, 2026-11-11): written as
+    // `(CONCURRENTLY\s+)?(?!IF\s+NOT\s+EXISTS)` the engine backtracked the group to empty, so a correct
+    // `CREATE INDEX CONCURRENTLY IF NOT EXISTS` was flagged.
+    if (/\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?!(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS)/i.test(l))
       v.push({ line: i + 1, rule: 'CREATE INDEX must use IF NOT EXISTS', text: line.trim() });
     if (/\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)/i.test(l))
       v.push({ line: i + 1, rule: 'ADD COLUMN must use IF NOT EXISTS', text: line.trim() });
