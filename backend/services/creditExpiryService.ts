@@ -221,10 +221,28 @@ async function expireOrgFreeCredits(
  * Only called when incentive_expiry config is active.
  * Paid balance is never touched — guarded at DB level by phase='expire_incentive'.
  */
+/** See expireOrgIncentiveCredits: flip to false only together with FIFO lot accounting. */
+const INCENTIVE_EXPIRY_REFUSED_UNTIL_FIFO = true;
+
 async function expireOrgIncentiveCredits(
   orgId:      string,
   expiryDays: number,
 ): Promise<number> {
+  // REFUSED BY DESIGN (2026-11-12, e1/05) until FIFO lot accounting lands.
+  // The amount below is the sum of ALL incentive grants older than the window,
+  // with nothing subtracted for credits already consumed or expired; capped by
+  // the current balance, a later day's run expires credits YOUNGER than the
+  // window (grant 100 long ago, spend 60, expire 40; receive 30 today; tomorrow
+  // the cap expires the new 30). The only thing keeping it off was the
+  // free_credit_config 'incentive_expiry' row (is_active=false), which any
+  // direct DB write can flip - so the refusal lives HERE. Remove it in the same
+  // change that lands FIFO accounting.
+  if (INCENTIVE_EXPIRY_REFUSED_UNTIL_FIFO) throw new Error(
+    'INCENTIVE_EXPIRY_REFUSED: incentive expiry would expire credits younger than its window '
+    + '(grants are not netted against consumption / prior expiry - FIFO lot accounting required). '
+    + `Not expiring incentive credits for org ${orgId} (window ${expiryDays}d).`,
+  );
+
   const dayKey = new Date().toISOString().slice(0, 10);
   const idempotencyKey = createHash('sha256')
     .update(`expire:incentive:${orgId}:${dayKey}`)

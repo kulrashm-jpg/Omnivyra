@@ -94,11 +94,11 @@ it('incentive config read error -> incentive expiry OFF this run (customer-safe)
   expect(errSpy.mock.calls.some((c) => String(c[0]).includes('incentive_expiry config read failed'))).toBe(true);
 });
 
-it('incentive grants read error -> per-org error, no incentive expiry', async () => {
+it('incentive expiry ENABLED by config -> REFUSED in code (FIFO accounting missing): counted as an error, nothing incentive-expired, free expiry unaffected', async () => {
   mockScript['free_credit_config:select'] = () => ({ data: { is_active: true, expiry_days: 30 }, error: null });
-  // first credit_transactions read = free idempotency (clean), second = incentive idempotency (clean), third = grants (down)
-  mockScript['credit_transactions:select'] = (n) => (n >= 3 ? DOWN() : { data: null, error: null });
   const r = await runExpiryCheck();
   expect(mockRpc).toEqual(['expire']);
+  expect(r.incentive_expired).toBe(0);
   expect(r.errors).toBe(1);
+  expect(errSpy.mock.calls.some((c) => String(c[1] ?? '').includes('INCENTIVE_EXPIRY_REFUSED'))).toBe(true);
 });
