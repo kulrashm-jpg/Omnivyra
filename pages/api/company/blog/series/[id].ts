@@ -29,7 +29,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const postIds = (data.company_blog_series_posts as { blog_id: string; position: number }[]).map(p => p.blog_id);
     let blogDetails: { id: string; title: string; slug: string; status: string }[] = [];
     if (postIds.length > 0) {
-      const { data: blogs } = await supabase.from('blogs').select('id, title, slug, status').in('id', postIds);
+      // Company-scoped (SECURITY, 2026-11-11): a series row may reference another
+      // tenant's blog id (it used to be insertable via PATCH), and this lookup
+      // returned that blog's title/slug/status. Only this company's blogs now.
+      const { data: blogs, error: blogsErr } = await supabase
+        .from('blogs')
+        .select('id, title, slug, status')
+        .eq('company_id', company_id)
+        .in('id', postIds);
+      if (blogsErr) return res.status(500).json({ error: blogsErr.message });
       blogDetails = blogs ?? [];
     }
 
@@ -46,6 +54,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // PATCH — update metadata + replace post list
   if (req.method === 'PATCH') {
     const body = req.body ?? {};
+
+    // Tenant isolation (SECURITY, 2026-11-11): prove the series is THIS
+    // company's before any write. The scoped metadata update below matches 0
+    // rows on a foreign id WITHOUT failing, and the post-list replace used to
+    // run anyway - a member of any company could wipe and rewrite another
+    // tenant's series posts by id.
+    const { data: owned, error: ownErr } = await supabase
+      .from('company_blog_series')
+      .select('id')
+      .eq('id', id)
+      .eq('company_id', company_id)
+      .maybeSingle();
+    if (ownErr) return res.status(500).json({ error: ownErr.message });
+    if (!owned) return res.status(404).json({ error: 'Not found' });
+
+    // Every referenced blog must be this company's own: a foreign blog id would
+    // otherwise be readable back through the GET above.
+    if (Array.isArray(body.posts) && body.posts.length > 0) {
+      const wanted = [...new Set((body.posts as { blog_id?: unknown }[]).map((p) => p?.blog_id))];
+      if (!wanted.every((b) => typeof b === 'string' && b.trim() !== '')) {
+        return res.status(400).json({ error: 'every post needs a blog_id' });
+      }
+      const { data: mine, error: mineErr } = await supabase
+        .from('blogs')
+        .select('id')
+        .eq('company_id', company_id)
+        .in('id', wanted as string[]);
+      if (mineErr || !Array.isArray(mine)) return res.status(500).json({ error: mineErr?.message ?? 'blog lookup failed' });
+      if (mine.length !== wanted.length) {
+        return res.status(400).json({ error: "a post references a blog that is not this company's" });
+      }
+    }
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
     if (body.title !== undefined)       updates.title       = body.title?.trim() ?? '';
@@ -61,7 +101,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (updateErr) return res.status(500).json({ error: updateErr.message });
 
     if (Array.isArray(body.posts)) {
-      await supabase.from('company_blog_series_posts').delete().eq('series_id', id);
+      // The delete's error used to be ignored; a failed clear must not be followed
+      // by an insert that silently duplicates or half-replaces the list.
+      const { error: clearErr } = await supabase.from('company_blog_series_posts').delete().eq('series_id', id);
+      if (clearErr) return res.status(500).json({ error: clearErr.message });
       const rows = (body.posts as { blog_id: string; position: number }[]).map(p => ({
         series_id: id, blog_id: p.blog_id, position: p.position ?? 0,
       }));
