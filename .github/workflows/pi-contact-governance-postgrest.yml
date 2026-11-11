@@ -77,7 +77,10 @@ permissions:
 
 concurrency:
   group: pi-cg-postgrest-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel ONLY superseded PR runs (each PR has its own refs/pull/N/merge group). Pushes to main
+  # all share refs/heads/main, so cancelling there would drop the earlier of two quick merges, and
+  # a cancelled run is neither green nor red: the detector would go quiet on a busy day (05).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   postgrest-proof:
