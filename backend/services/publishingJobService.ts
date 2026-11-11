@@ -60,6 +60,11 @@ export interface PublishingJob {
   scheduled_for: string | null;
   run_after: string;
   attempt_count: number;
+  /**
+   * PER-JOB and MUTABLE: a manual retry of a dead-lettered job raises it (requeueDeadLetteredPublishingJob),
+   * so it is not a constant per job type. Nothing should reason about it as one - compare it only with
+   * this job's own attempt_count (05).
+   */
   max_attempts: number;
   request_payload: Record<string, unknown>;
   provider_response: Record<string, unknown>;
@@ -444,6 +449,8 @@ export async function requeueDeadLetteredPublishingJob(input: {
       status: 'queued', run_after: now, next_retry_at: null, dead_letter_at: null, failure_category: null,
       last_error: null, locked_by: null, locked_at: null, lock_expires_at: null,
       // One more attempt beyond what it has used, so a manual retry is never refused by the ceiling.
+      // This makes max_attempts per-job MUTABLE state (N manual retries move it N times): readers must
+      // compare it with this job's attempt_count only, never treat it as the job type's constant (05).
       max_attempts: Math.max(Number(j.max_attempts) || 0, (Number(j.attempt_count) || 0) + 1),
       updated_at: now,
     })
