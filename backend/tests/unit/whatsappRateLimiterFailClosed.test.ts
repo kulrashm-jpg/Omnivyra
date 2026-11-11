@@ -55,7 +55,7 @@ jest.mock('../../queue/bullmqClient', () => ({
   }),
 }));
 
-import { checkAndConsume } from '../../services/whatsappRateLimiter';
+import { checkAndConsume, FAIL_CLOSED_REASON } from '../../services/whatsappRateLimiter';
 
 const params = (over: Partial<Parameters<typeof checkAndConsume>[0]> = {}) => ({
   social_account_id: 'sa-1', phone_number_id: 'sa-1', company_id: 'co-a', plan: 'free', count: 10, ...over,
@@ -75,7 +75,7 @@ describe('WhatsApp daily limit - database fallback fails CLOSED', () => {
     rpcImpl = async () => ({ data: null, error: { message: 'function does not exist' } });
     const r = await checkAndConsume(params());
     expect(r).toMatchObject({ allowed: false, remaining: 0, source: 'db' });
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('fail closed'), expect.objectContaining({ social_account_id: 'sa-1' }));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining(FAIL_CLOSED_REASON), expect.objectContaining({ social_account_id: 'sa-1' }));
   });
 
   it('a THROWN call refuses the send', async () => {

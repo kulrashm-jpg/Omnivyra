@@ -98,7 +98,15 @@ async function redisIncrBy(key: string, count: number, ttlSeconds: number): Prom
  * statement (it writes only when the new total stays within the limit). FAIL CLOSED:
  * an error, a thrown call, or an answer without a boolean `allowed` and a numeric
  * `used` is a refusal - never "allowed" - and is logged at ERROR.
+ *
+ * AVAILABILITY TRADE (intended): this layer is reached only when Redis is unavailable,
+ * so WhatsApp sends now STOP when Redis AND the database quota store are both
+ * unavailable, where before they continued unmetered. That is the correct behaviour
+ * for a send limit; a refused send logged with FAIL_CLOSED_REASON is this design
+ * working, not a defect.
  */
+export const FAIL_CLOSED_REASON =
+  'fail-closed by design: the WhatsApp daily limit cannot be checked (Redis and the quota store unavailable), so sends stop until it can';
 const INT_MAX = 2_147_483_647;
 
 async function dbConsume(
@@ -115,7 +123,7 @@ async function dbConsume(
       p_limit:             limit,
     });
     if (error) {
-      console.error('[whatsappRateLimiter] daily quota check failed; send refused (fail closed)', {
+      console.error('[whatsappRateLimiter] daily quota check failed; send refused (fail closed) - ' + FAIL_CLOSED_REASON, {
         social_account_id: socialAccountId, error: error.message,
       });
       return null;
@@ -124,14 +132,14 @@ async function dbConsume(
     if (!row || typeof row.allowed !== 'boolean' || typeof row.used !== 'number') {
       // No answer is not an answer: a missing or malformed row refuses (a blank
       // response can arrive as {error:null} with no data).
-      console.error('[whatsappRateLimiter] daily quota check returned no answer; send refused (fail closed)', {
+      console.error('[whatsappRateLimiter] daily quota check returned no answer; send refused (fail closed) - ' + FAIL_CLOSED_REASON, {
         social_account_id: socialAccountId,
       });
       return null;
     }
     return { allowed: row.allowed, used: row.used };
   } catch (err) {
-    console.error('[whatsappRateLimiter] daily quota check threw; send refused (fail closed)', {
+    console.error('[whatsappRateLimiter] daily quota check threw; send refused (fail closed) - ' + FAIL_CLOSED_REASON, {
       social_account_id: socialAccountId, error: err instanceof Error ? err.message : String(err),
     });
     return null;
