@@ -33,6 +33,8 @@ type TerminalRow = {
 export type ReconciliationDecision = 'confirm' | 'release' | 'quarantine' | 'skip';
 
 export interface ReservationReconciliationResult {
+  /** true when computed in report-only mode: counts are WOULD-confirm / WOULD-release. */
+  dryRun?: boolean;
   scanned: number;
   confirmed: number;
   released: number;
@@ -122,19 +124,24 @@ function buildHandle(row: HoldRow): CreditReservationHandle | null {
 async function hasTerminalSibling(row: HoldRow): Promise<TerminalRow | null> {
   const baseKey = stripHoldSuffix(row.idempotency_key);
   if (!baseKey) return null;
-  const { data } = await ownedDbTable('credit_transactions')
+  // MONEY: a failed read is NOT "no terminal sibling" - answering null let the
+  // reconciler confirm (charge) or release a hold that was already settled.
+  // Throw: the caller's per-hold catch records it as failed and stamps nothing.
+  const { data, error } = await ownedDbTable('credit_transactions')
     .select('id, parent_transaction_id, execution_phase, idempotency_key')
     .eq('parent_transaction_id', row.id)
     .in('execution_phase', ['confirm', 'release'])
     .limit(1)
     .maybeSingle();
+  if (error) throw new Error(`terminal_sibling_read_failed: ${error.message}`);
   if (data) return data as TerminalRow;
 
-  const { data: keyed } = await ownedDbTable('credit_transactions')
+  const { data: keyed, error: keyedErr } = await ownedDbTable('credit_transactions')
     .select('id, parent_transaction_id, execution_phase, idempotency_key')
     .in('idempotency_key', [`${baseKey}:confirm`, `${baseKey}:release`])
     .limit(1)
     .maybeSingle();
+  if (keyedErr) throw new Error(`terminal_sibling_read_failed: ${keyedErr.message}`);
   return (keyed as TerminalRow | null) ?? null;
 }
 
@@ -179,11 +186,14 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
 
   if (referenceType?.startsWith('reports.')) {
     if (!referenceId) return { decision: 'quarantine', reason: 'report_hold_missing_reference_id' };
-    const { data: report } = await ownedDbTable('reports')
+    // A failed read is not "artifact missing" (which quarantine-STAMPS the hold,
+    // and the reaper then skips it forever). Throw -> per-hold failure, no stamp.
+    const { data: report, error: reportErr } = await ownedDbTable('reports')
       .select('id, status, data, metadata')
       .eq('id', referenceId)
       .eq('company_id', row.organization_id)
       .maybeSingle();
+    if (reportErr) throw new Error(`classify_report_read_failed: ${reportErr.message}`);
     if (!report) return { decision: 'quarantine', reason: 'report_artifact_missing' };
     const status = String((report as any).status ?? '');
     if (status === 'completed' && (report as any).data) return { decision: 'confirm', reason: 'completed_report_artifact_has_pending_hold' };
@@ -192,7 +202,7 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
   }
 
   if (referenceType === 'autonomous_campaign_generation') {
-    const { data: log } = await ownedDbTable('autonomous_decision_logs')
+    const { data: log, error: logErr } = await ownedDbTable('autonomous_decision_logs')
       .select('id, created_at')
       .eq('company_id', row.organization_id)
       .eq('decision_type', 'generate')
@@ -200,6 +210,7 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
+    if (logErr) throw new Error(`classify_decision_log_read_failed: ${logErr.message}`);
     if (log) return { decision: 'confirm', reason: 'autonomous_generation_decision_log_exists' };
     return { decision: 'quarantine', reason: 'autonomous_generation_output_not_proven' };
   }
@@ -207,10 +218,11 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
   if (referenceType === 'master_content' || referenceType === 'activity_platform_variants' || referenceType === 'activity_content_improvement') {
     const activityId = String(referenceId ?? '').split(':')[0];
     if (!activityId || activityId.startsWith('workspace-')) return { decision: 'quarantine', reason: 'content_artifact_not_persisted' };
-    const { data: activity } = await ownedDbTable('daily_content_plans')
+    const { data: activity, error: activityErr } = await ownedDbTable('daily_content_plans')
       .select('id, content')
       .eq('id', activityId)
       .maybeSingle();
+    if (activityErr) throw new Error(`classify_content_read_failed: ${activityErr.message}`);
     if (!activity) return { decision: 'quarantine', reason: 'content_activity_missing' };
     const content = contentObject((activity as any).content);
     if (contentHasDurableOutput(content, referenceType)) return { decision: 'confirm', reason: 'content_artifact_exists' };
@@ -225,7 +237,11 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
 }
 
 async function stampHold(row: HoldRow, fields: Record<string, unknown>): Promise<void> {
-  await ownedDbTable('credit_transactions')
+  // best-effort: the stamp is bookkeeping on the hold row; the settlement itself
+  // is the confirm/release ledger row. NOTE: 20260663 puts an immutability
+  // trigger on credit_transactions UPDATE - if it is live in prod this write
+  // ALWAYS fails (prod fact pending with 83). Logged, never silent.
+  const { error } = await ownedDbTable('credit_transactions')
     .update({
       metadata: {
         ...(row.metadata ?? {}),
@@ -233,6 +249,7 @@ async function stampHold(row: HoldRow, fields: Record<string, unknown>): Promise
       },
     })
     .eq('id', row.id);
+  if (error) logger.error('reservation_reconciliation_stamp_failed', { holdId: row.id, message: error.message });
 }
 
 async function stampReportArtifact(row: HoldRow, reason: string, reconciledBy: string): Promise<void> {
@@ -266,7 +283,16 @@ export async function reconcileDurableMonetizationReservations(input?: {
   batchLimit?: number;
   orgId?: string;
   reconciledBy?: string;
+  /**
+   * REPORT-ONLY (2026-11-12, e9): compute every decision (confirm = a CHARGE,
+   * release, quarantine, skip) and return it in `actions`, but write NOTHING -
+   * no confirm, no release, no stamp, no report artifact, no ops event. The
+   * first run of this job must be a dry run, reviewed before the owner enables
+   * the mutation.
+   */
+  dryRun?: boolean;
 }): Promise<ReservationReconciliationResult> {
+  const dryRun = input?.dryRun === true;
   const minAgeSeconds = input?.minAgeSeconds ?? DEFAULT_MIN_AGE_SECONDS;
   const cutoff = new Date(Date.now() - minAgeSeconds * 1000).toISOString();
   const reconciledBy = input?.reconciledBy ?? 'system:monetization-reservation-reconciler';
@@ -291,6 +317,33 @@ export async function reconcileDurableMonetizationReservations(input?: {
     failed: 0,
     actions: [],
   };
+
+  if (dryRun) {
+    for (const row of (data ?? []) as HoldRow[]) {
+      try {
+        const sibling = await hasTerminalSibling(row);
+        if (sibling) {
+          result.skippedTerminal += 1;
+          result.actions.push({ holdId: row.id, decision: 'skip', reason: `already_${sibling.execution_phase}`, terminalTransactionId: sibling.id });
+          continue;
+        }
+        const classification = await classifyHold(row);
+        const decision: ReconciliationDecision = buildHandle(row) ? classification.decision : 'quarantine';
+        if (decision === 'confirm') result.confirmed += 1;
+        else if (decision === 'release') result.released += 1;
+        else result.quarantined += 1;
+        result.actions.push({ holdId: row.id, decision, reason: classification.reason });
+      } catch (err) {
+        result.failed += 1;
+        result.actions.push({ holdId: row.id, decision: 'quarantine', reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    logger.info('reservation_reconciliation_dry_run', {
+      scanned: result.scanned, wouldConfirm: result.confirmed, wouldRelease: result.released,
+      wouldQuarantine: result.quarantined, skippedTerminal: result.skippedTerminal, failed: result.failed,
+    });
+    return { ...result, dryRun: true };
+  }
 
   await recordMonetizationOperationalEvent({
     eventName: 'monetization.reservation_reconciliation_started',

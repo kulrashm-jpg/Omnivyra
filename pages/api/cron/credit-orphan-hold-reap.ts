@@ -44,6 +44,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const maxAgeSeconds = numberFromQuery(req.query.maxAgeSeconds);
   const batchLimit    = numberFromQuery(req.query.batchLimit);
   const orgId         = typeof req.query.orgId === 'string' ? req.query.orgId : undefined;
+  // ?dryRun=true: REPORT-ONLY - what would be released, and what the preflight
+  // reconciler would CONFIRM (charge) or release; nothing is written. Its own
+  // idempotency key, so a dry run never collapses a real run in the same hour.
+  const dryRun        = req.query.dryRun === 'true';
+  const dryTag        = dryRun ? ':dry' : '';
 
   // Run through the canonical jobRunner so this cron gets execution
   // attribution + deterministic idempotency (per hour bucket) + DLQ on
@@ -59,14 +64,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       principalKind: triggeredByCronSecret ? 'cron-secret' : 'super-admin',
       // Hourly bucket idempotency for platform-wide runs; per-org for triage.
       idempotencyKey: orgId
-        ? `cron:credit-orphan-hold-reap:${orgId}:${Math.floor(Date.now() / 3_600_000)}`
-        : `cron:credit-orphan-hold-reap:${Math.floor(Date.now() / 3_600_000)}`,
+        ? `cron:credit-orphan-hold-reap${dryTag}:${orgId}:${Math.floor(Date.now() / 3_600_000)}`
+        : `cron:credit-orphan-hold-reap${dryTag}:${Math.floor(Date.now() / 3_600_000)}`,
     },
     async () => reapOrphanHolds({
       minAgeSeconds: minAgeSeconds ?? undefined,
       maxAgeSeconds: maxAgeSeconds ?? undefined,
       batchLimit:    batchLimit    ?? undefined,
       orgId,
+      dryRun,
     }),
   );
 
