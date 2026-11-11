@@ -51,6 +51,10 @@ jest.mock('../../services/billing/exports/billingForensicsService', () => ({
 }));
 jest.mock('../../services/actionPricingApplyService', () => ({ applyActionPricingChange: async () => ({ id: 'price-row-2' }) }));
 jest.mock('../../services/adminAuditService', () => ({ recordAdminAudit: async () => undefined }));
+const mockOpsEvents: Array<{ alertKey?: string; alertReady?: boolean; severity?: string }> = [];
+jest.mock('../../services/monetizationOpsService', () => ({
+  recordMonetizationOperationalEvent: async (e: { alertKey?: string; alertReady?: boolean; severity?: string }) => { mockOpsEvents.push(e); },
+}));
 jest.mock('../../services/pricingService', () => ({
   refreshPricingCache: async () => undefined,
   getActionPricing: async () => { throw new Error('no override'); },
@@ -136,13 +140,15 @@ describe('admin credits forensics', () => {
 describe('pricing admin', () => {
   const PENDING = { id: 'q1', action_key: 'blog_generation', model_name: null, current_multiplier: 1, proposed_multiplier: 1.2, margin_percent: 10, reason: 'r', status: 'pending', source_week: null };
 
-  it('apply: supersede fails -> still 200 (the price IS written) but the admin is WARNED, and it is logged', async () => {
+  it('apply: supersede fails -> still 200 (the price IS written); warned in the response AND raised as an alert-ready ops event (05: no UI reads the response)', async () => {
+    mockOpsEvents.length = 0;
     mockScript['pricing_adjustment_queue:select'] = () => ({ data: PENDING, error: null });
     mockScript['pricing_adjustment_queue:update'] = (n) => (n === 2 ? DOWN() : { data: null, error: null });
     const res = await call(pricingApply, 'POST', {}, { adjustment_id: 'q1' });
     expect(res.statusCode).toBe(200);
     expect(res.body.warnings?.[0]).toMatch(/roll the price back/);
     expect(mockLogs).toContain('admin_pricing_apply_supersede_failed');
+    expect(mockOpsEvents).toEqual([expect.objectContaining({ alertKey: 'pricing_stale_proposals_pending', alertReady: true, severity: 'ERROR' })]);
   });
 
   it('apply control: a clean apply carries no warnings', async () => {

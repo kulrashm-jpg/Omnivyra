@@ -27,6 +27,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { applyActionPricingChange } from '../../../../backend/services/actionPricingApplyService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { logger } from '../../../../backend/services/logger';
+import { recordMonetizationOperationalEvent } from '../../../../backend/services/monetizationOpsService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -112,8 +113,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── 4. Supersede any other pending proposals for same (action, model) ──
   // MONEY: if this fails, OLDER proposals for the same (action, model) stay
   // 'pending' - applying one later would silently roll the price back. The new
-  // price is already written, so a 500 would mislead; the failure is logged and
-  // returned to the admin as a warning naming what is left pending.
+  // price is already written, so a 500 would mislead. No UI in this repo reads
+  // this route's response (05), so the warning is ALSO raised as an
+  // alert-ready operational event (monetization_operational_events, listed in
+  // the super-admin operations view) - a response field alone may reach nobody.
   const { error: supersedeErr } = await supabase
     .from('pricing_adjustment_queue')
     .update({
@@ -129,6 +132,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (supersedeErr) {
     logger.error('admin_pricing_apply_supersede_failed', { id: queueRow.id, action_key: queueRow.action_key, message: supersedeErr.message });
     warnings.push('older pending proposals for this action/model could not be superseded - do NOT apply them; they would roll the price back');
+    await recordMonetizationOperationalEvent({
+      eventName: 'monetization.pricing_supersede_failed',
+      severity: 'ERROR',
+      alertKey: 'pricing_stale_proposals_pending',
+      alertReady: true,
+      metadata: { queue_id: queueRow.id, action_key: queueRow.action_key, model_name: queueRow.model_name, message: supersedeErr.message },
+    }).catch((e: unknown) => logger.error('admin_pricing_apply_alert_failed', { id: queueRow.id, message: e instanceof Error ? e.message : String(e) }));
   }
   if (markErr) warnings.push('this proposal could not be marked applied');
 
