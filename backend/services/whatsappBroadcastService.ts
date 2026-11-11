@@ -442,7 +442,14 @@ export async function processBatch(
         // nothing auto-resumes a paused broadcast, so a persistent read failure
         // cannot loop. whatsapp_broadcasts has no reason column: this ERROR log is
         // the only record of WHY it paused (rate limit vs governance re-read).
-        console.error('[whatsappBroadcast] governance re-read failed; batch stopped, broadcast paused, remaining recipients left pending', {
+        //
+        // KNOWN DEFECT, NOT FIXED HERE (item "WhatsApp broadcast resume is a no-op
+        // within 24 h", e9 decision (a), branch fix/whatsapp-broadcast-resume):
+        // enqueueBroadcast reuses jobId wa-batch-<id>-<n> and completed jobs are
+        // kept 24 h, so until that fix lands a resume within 24 h of the batch's
+        // completion ADDS NOTHING while the route reports enqueued:true.
+        console.error('[whatsappBroadcast] governance re-read failed; batch stopped, broadcast paused, remaining recipients left pending. '
+          + 'Resume is manual (?action=enqueue) and is currently a NO-OP within 24 h of this batch completing (reused jobId; fix pending)', {
           broadcast_id: broadcastId,
           remaining: recipients.length - i,
           error: fresh.error ?? 'unknown',
