@@ -191,8 +191,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           // list call the caller did not ask for, so an unauthorized (or
           // unverifiable) company leaves the stored preference unmoved and the
           // list still answers. Do not turn this into a 403.
-          const { role: activeRole, error: activeRoleError } = await getUserRole(user.id, resolvedActiveCompanyId);
-          if (activeRole && !activeRoleError) {
+          // NOTE: getUserRole does not distinguish "no active role" from a failed
+          // lookup (it swallows DB errors into { role: null, error: null }), so
+          // the log below names both possibilities rather than asserting one.
+          const { role: activeRole } = await getUserRole(user.id, resolvedActiveCompanyId);
+          if (activeRole) {
             await supabase
               .from('users')
               .update({ active_company_id: resolvedActiveCompanyId, updated_at: new Date().toISOString() })
@@ -201,7 +204,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             console.warn('[company-profile:list] active company preference NOT updated', {
               userId: user.id,
               companyId: resolvedActiveCompanyId,
-              reason: activeRoleError ? `role lookup: ${activeRoleError}` : 'no active role',
+              reason: 'no active role in that company, OR the role lookup failed (getUserRole does not distinguish them)',
             });
           }
         }
