@@ -64,6 +64,7 @@ jest.mock('../../db/writeOwner', () => ({
     };
     const exec = async () => {
       const params: unknown[] = [];
+      const sel = await (require('./helpers/computedFields') as typeof import('./helpers/computedFields')).selectList(client, table, st.cols);
       let sql: string;
       if (st.op === 'insert') {
         const row = st.payload ?? {};
@@ -74,7 +75,7 @@ jest.mock('../../db/writeOwner', () => ({
             ? JSON.stringify(row[k]) : row[k]);
           return `$${params.length}`;
         }).join(', ');
-        sql = `INSERT INTO public."${table}" (${cols}) VALUES (${vals}) RETURNING ${st.cols}`;
+        sql = `INSERT INTO public."${table}" (${cols}) VALUES (${vals}) RETURNING ${sel}`;
       } else if (st.op === 'update') {
         const row = st.payload ?? {};
         const sets = Object.keys(row).map((k) => {
@@ -82,11 +83,11 @@ jest.mock('../../db/writeOwner', () => ({
             ? JSON.stringify(row[k]) : row[k]);
           return `"${k}" = $${params.length}`;
         }).join(', ');
-        sql = `UPDATE public."${table}" SET ${sets}${where(params)} RETURNING ${st.cols}`;
+        sql = `UPDATE public."${table}" SET ${sets}${where(params)} RETURNING ${sel}`;
       } else if (st.op === 'delete') {
-        sql = `DELETE FROM public."${table}"${where(params)} RETURNING ${st.cols}`;
+        sql = `DELETE FROM public."${table}"${where(params)} RETURNING ${sel}`;
       } else {
-        sql = `SELECT ${st.cols} FROM public."${table}"${where(params)}`;
+        sql = `SELECT ${sel} FROM public."${table}"${where(params)}`;
         if (st.order) sql += ` ORDER BY "${st.order.col}" ${st.order.asc ? 'ASC' : 'DESC'}`;
         if (st.limit !== null) sql += ` LIMIT ${st.limit}`;
       }
