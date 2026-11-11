@@ -38,6 +38,14 @@ function capturingResponse(): NextApiResponse & { captured: { status: number | n
   return r;
 }
 
+/** Per-route options; every default reproduces the original behaviour. */
+export type AuthorizedPlanRowOptions = {
+  /** Also bind the row's campaign to the company in enforceCompanyAccess (ROUTE-AUTH-001). */
+  bindCampaign?: boolean;
+  /** The answer to a campaign-company lookup ERROR (default 500 'load failed'), e.g. a retryable 503. */
+  campaignLookupError?: { status: number; body: unknown };
+};
+
 /**
  * Returns the authorized row, or null after answering the request itself (401, uniform 404, 500 on a
  * store error, or whatever enforceCompanyAccess answered other than a denial).
@@ -47,6 +55,7 @@ export async function loadAuthorizedPlanRow(
   res: NextApiResponse,
   id: string,
   columns: string,
+  options: AuthorizedPlanRowOptions = {},
 ): Promise<AuthorizedPlanRow | null> {
   const user = await resolveUserContext(req);
   if (user.authenticated === false) {
@@ -65,12 +74,19 @@ export async function loadAuthorizedPlanRow(
   let companyId: string | null = null;
   const { data: c, error: cError } = await supabase.from('campaigns').select('company_id')
     .eq('id', row.campaign_id as string).maybeSingle();
-  if (cError) { res.status(500).json({ error: 'load failed' }); return null; }
+  if (cError) {
+    const answer = options.campaignLookupError ?? { status: 500, body: { error: 'load failed' } };
+    res.status(answer.status).json(answer.body);
+    return null;
+  }
   companyId = (c as { company_id?: string } | null)?.company_id ?? null;
   if (!companyId) { res.status(404).json(NOT_FOUND_BODY); return null; }
 
   const probe = capturingResponse();
-  const access = await enforceCompanyAccess({ req, res: probe, companyId });
+  const access = await enforceCompanyAccess({
+    req, res: probe, companyId,
+    ...(options.bindCampaign ? { campaignId: String(row.campaign_id) } : {}),
+  });
   if (!access) {
     const status = probe.captured.status ?? 403;
     if (status === 403 || status === 404) { res.status(404).json(NOT_FOUND_BODY); return null; }
