@@ -94,3 +94,58 @@ export function makeStore() {
   return { t, rows, faults, supabase, ownedDbTable };
 }
 export type RenderStore = ReturnType<typeof makeStore>;
+
+/**
+ * A store-backed fake of e1's image-credits helper (backend/services/billing/imageCredits), with its
+ * agreed semantics. It OWNS one billing_operations row per idempotency key:
+ *  - reserve: same key while held -> the same row; a refused key leaves nothing held; a settled or
+ *    released key -> key_spent. `prices` maps `${model}:${size}:${quality}` to credits; an unpriced
+ *    SKU -> not_priced, the production default until pricing exists.
+ *  - settle / release: move exactly the one held row (by id); release is idempotent and never
+ *    un-confirms.
+ * Faults: `faults['billing_operations.insert']` -> reserve 'unavailable';
+ * `faults['billing_operations.update']` -> settle / release 'unavailable'.
+ */
+export function storeImageCredits(s: RenderStore, opts: { prices?: Record<string, number>; refuse?: string } = {}) {
+  const prices = opts.prices ?? { 'gpt-image-1.5:1024x1024:medium': 5, 'gpt-image-1.5:1024x1536:medium': 5, 'gpt-image-1.5:1536x1024:medium': 5 };
+  const calls = { reserve: [] as any[], settle: [] as any[], release: [] as any[] };
+  let seq = 0;
+  const port = {
+    reserve: async (input: any) => {
+      calls.reserve.push(input);
+      if (opts.refuse) return { ok: false, reason: opts.refuse };
+      if (s.faults['billing_operations.insert']) return { ok: false, reason: 'unavailable', detail: 'fault' };
+      const unit = `${input.model}:${input.size}:${input.quality}`;
+      const price = prices[unit];
+      const existing = s.rows('billing_operations').find((r) => r.idempotency_key === input.idempotencyKey);
+      if (existing && existing.status === 'held') return { ok: true, billingOperationId: existing.id, creditsReserved: existing.amount_estimated };
+      if (existing && (existing.status === 'confirmed' || existing.status === 'released')) return { ok: false, reason: 'key_spent' };
+      if (price === undefined) return { ok: false, reason: 'not_priced' };
+      const row = {
+        id: `ic-${++seq}`, idempotency_key: input.idempotencyKey, organization_id: input.organizationId,
+        status: 'held', amount_estimated: price, metadata: { helper: 'image_credits_v1', unit, ...(input.metadata ?? {}) },
+      };
+      s.rows('billing_operations').push(row);
+      return { ok: true, billingOperationId: row.id, creditsReserved: price };
+    },
+    settle: async ({ billingOperationId }: any) => {
+      calls.settle.push(billingOperationId);
+      if (s.faults['billing_operations.update']) return { ok: false, reason: 'unavailable', detail: 'fault' };
+      const row = s.rows('billing_operations').find((r) => r.id === billingOperationId);
+      if (!row || row.status !== 'held') return { ok: false, reason: 'not_held' };
+      row.status = 'confirmed'; row.amount_charged = row.amount_estimated;
+      return { ok: true, creditsCharged: row.amount_charged };
+    },
+    release: async ({ billingOperationId }: any) => {
+      calls.release.push(billingOperationId);
+      if (s.faults['billing_operations.update']) return { ok: false, reason: 'unavailable', detail: 'fault' };
+      const row = s.rows('billing_operations').find((r) => r.id === billingOperationId);
+      if (!row) return { ok: false, reason: 'not_held' };
+      if (row.status === 'released') return { ok: true };
+      if (row.status !== 'held') return { ok: false, reason: 'not_held' };
+      row.status = 'released';
+      return { ok: true };
+    },
+  };
+  return { port, calls };
+}

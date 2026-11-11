@@ -44,6 +44,7 @@ function mockProvider(over: Partial<RenderProvider> = {}): RenderProvider {
     }),
     supports: () => true,
     estimateCost: () => ({ estimated_credits: 5, currency: 'CREDITS' }),
+    billingSku: () => ({ provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium' }),
     submit: async () => ({ provider: 'openai', external_job_id: 'x', provider_metadata: { url: 'https://cdn/rendered.png' } }),
     poll: async (h) => ({ handle: h, state: 'succeeded', progress: 1 }),
     fetchOutput: async (h) => ({
@@ -69,6 +70,8 @@ function mockDeps(opts: {
   /** creator_render_attempt rows that exist before this request (default: jobState.retry_count). */
   priorProviderCalls?: number; countError?: boolean; noStateRow?: boolean; variantReadError?: any;
   insertErrors?: Record<string, any>; upsertErrors?: Record<string, any>; updateErrors?: Record<string, any>;
+  /** Overrides the fake image-credits reserve answer (e.g. a refusal). */
+  reserveResult?: any;
 } = {}) {
   const tables: Record<string, any[]> = {};
   const writes: { table: string; op: string; row?: any }[] = [];
@@ -145,8 +148,50 @@ function mockDeps(opts: {
     return q;
   };
   const supabase = { from: reader, rpc: async () => ({ data: {} }) };
+  /**
+   * A fake of e1's image-credits helper (it OWNS the billing_operations row). It records into the same
+   * `tables` / `writes` the assertions read, in the shape the old direct writes had (insert held; update
+   * confirmed | released), so existing billing assertions keep their meaning. Faults: a billing_operations
+   * insertError -> reserve 'unavailable'; an updateError -> settle / release 'unavailable'.
+   */
+  const reserves: any[] = [];
+  let boSeq = 0;
+  const imageCredits = {
+    reserve: async (input: any) => {
+      reserves.push(input);
+      if (opts.reserveResult) return opts.reserveResult;
+      if (opts.insertErrors?.billing_operations) return { ok: false, reason: 'unavailable', detail: 'fault' };
+      const held = (tables.billing_operations ?? []).find((r: any) => r.idempotency_key === input.idempotencyKey);
+      if (held && held.status === 'held') return { ok: true, billingOperationId: held.id, creditsReserved: held.amount_estimated };
+      if (held) return { ok: false, reason: 'key_spent' };
+      const row = { id: `bo-${++boSeq}`, idempotency_key: input.idempotencyKey, status: 'held', amount_estimated: 5, organization_id: input.organizationId,
+        sku: { provider: input.provider, model: input.model, size: input.size, quality: input.quality } };
+      (tables.billing_operations ||= []).push(row);
+      writes.push({ table: 'billing_operations', op: 'insert', row: { ...row } }); // a snapshot: later settles mutate the stored row
+      return { ok: true, billingOperationId: row.id, creditsReserved: 5 };
+    },
+    settle: async ({ billingOperationId }: any) => {
+      if (opts.updateErrors?.billing_operations) return { ok: false, reason: 'unavailable', detail: 'fault' };
+      const row = (tables.billing_operations ?? []).find((r: any) => r.id === billingOperationId);
+      if (!row || row.status !== 'held') return { ok: false, reason: 'not_held' };
+      row.status = 'confirmed'; row.amount_charged = row.amount_estimated;
+      writes.push({ table: 'billing_operations', op: 'update', row: { status: 'confirmed', amount_charged: row.amount_charged }, filters: { id: billingOperationId } } as any);
+      return { ok: true, creditsCharged: row.amount_charged };
+    },
+    release: async ({ billingOperationId, reason }: any) => {
+      if (opts.updateErrors?.billing_operations) return { ok: false, reason: 'unavailable', detail: 'fault' };
+      const row = (tables.billing_operations ?? []).find((r: any) => r.id === billingOperationId);
+      if (!row) return { ok: false, reason: 'not_held' };
+      if (row.status === 'released') return { ok: true };
+      if (row.status !== 'held') return { ok: false, reason: 'not_held' };
+      row.status = 'released';
+      writes.push({ table: 'billing_operations', op: 'update', row: { status: 'released', failure_reason: reason }, filters: { id: billingOperationId } } as any);
+      return { ok: true };
+    },
+  };
   return {
-    deps: { supabase, ownedDbTable: writer, providerRegistry: registryOf(mockProvider()), now: () => '2026-05-16T00:00:00Z' },
+    reserves,
+    deps: { supabase, ownedDbTable: writer, providerRegistry: registryOf(mockProvider()), now: () => '2026-05-16T00:00:00Z', imageCredits },
     tables, writes,
     setProvider(p: RenderProvider | null) { (this.deps as any).providerRegistry = registryOf(p); },
   };
@@ -301,34 +346,61 @@ describe('control RPCs and billing hold fail closed', () => {
   const withRpc = (m: ReturnType<typeof mockDeps>, rpc: (name: string, args: any) => Promise<any>) => {
     (m.deps as any).supabase = { ...(m.deps as any).supabase, rpc };
   };
-  const withBillingInsert = (m: ReturnType<typeof mockDeps>, result: { data: any; error: any }) => {
-    const orig = (m.deps as any).ownedDbTable;
-    (m.deps as any).ownedDbTable = (t: string) => {
-      const q = orig(t);
-      if (t === 'billing_operations') q.insert = () => ({ select: () => ({ single: async () => result }) });
-      return q;
-    };
-  };
+  const stateUpdatesOf = (m: ReturnType<typeof mockDeps>) => m.writes.filter((x) => x.table === 'creator_render_job_state' && x.op === 'update').map((x) => x.row);
 
-  it('billing hold insert ERROR: the provider is never called; retryable failure', async () => {
-    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
-    withBillingInsert(m, { data: null, error: { code: '08006', message: 'connection lost' } });
+  // CHANGED DELIBERATELY (R3-credits): the credit reservation comes from e1's helper, BEFORE the claim,
+  // and an unavailable reservation spends NOTHING (the same attempt and key are retried).
+  it('credit reservation UNAVAILABLE: the provider is never called; retryable; nothing claimed or consumed', async () => {
+    const m = mockDeps({ reserveResult: { ok: false, reason: 'unavailable', detail: 'timeout' } }); const w = watched(); m.setProvider(w.p);
+    const rpcs: string[] = [];
+    withRpc(m, async (name) => { rpcs.push(name); return { data: {}, error: null }; });
     const r = await executeRenderJob(m.deps as any, ARGS);
-    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'billing_hold_unavailable', retryable: true });
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'billing_unavailable', retryable: true });
     expect(r.events).toEqual(expect.arrayContaining(['billing_hold_failed', 'render_failed']));
     expect(w.calls.submit).toBe(0);
-    // The job exists first now, so the failure consumes attempt 1 and the next request retries as attempt 2.
-    expect(m.writes.filter((x) => x.table === 'creator_render_job_state' && x.op === 'update').map((x) => x.row))
-      .toEqual(expect.arrayContaining([expect.objectContaining({ current_state: 'retry_scheduled', retry_count: 1 })]));
+    expect(rpcs).not.toContain('claim_job_execution');
+    expect(stateUpdatesOf(m)).toEqual(expect.arrayContaining([expect.objectContaining({ current_state: 'retry_scheduled' })]));
+    expect(stateUpdatesOf(m).some((x) => 'retry_count' in x)).toBe(false);
   });
 
-  it('billing hold unique CONFLICT (23505): refused, not retryable as is, provider never called', async () => {
-    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
-    withBillingInsert(m, { data: null, error: { code: '23505', message: 'duplicate key' } });
+  it.each(['insufficient_credits', 'org_blocked', 'not_priced'])('credit reservation refused (%s): NOT retryable as is, provider never called, nothing claimed, the attempt and key stay reusable', async (why) => {
+    const m = mockDeps({ reserveResult: { ok: false, reason: why } }); const w = watched(); m.setProvider(w.p);
+    const rpcs: string[] = [];
+    withRpc(m, async (name) => { rpcs.push(name); return { data: {}, error: null }; });
     const r = await executeRenderJob(m.deps as any, ARGS);
-    // The key is tenant- AND attempt-scoped, so a conflict consumes this attempt; the retry uses attempt 2's key.
-    expect(r).toMatchObject({ ok: false, reason: 'billing_hold_conflict', retryable: true });
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: why, retryable: false });
     expect(w.calls.submit).toBe(0);
+    expect(rpcs).not.toContain('claim_job_execution');
+    expect(stateUpdatesOf(m).some((x) => 'retry_count' in x)).toBe(false);
+  });
+
+  it('credit reservation key_spent: an ANOMALY, never retried as-is (the attempt number is consumed), provider never called', async () => {
+    const m = mockDeps({ reserveResult: { ok: false, reason: 'key_spent' } }); const w = watched(); m.setProvider(w.p);
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, reason: 'billing_key_spent' });
+    expect(w.calls.submit).toBe(0);
+    expect(stateUpdatesOf(m)).toEqual(expect.arrayContaining([expect.objectContaining({ current_state: 'retry_scheduled', retry_count: 1 })]));
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('ANOMALY'), expect.anything());
+    err.mockRestore();
+  });
+
+  it('a provider WITHOUT a billing SKU is refused before anything is reserved or claimed (fail closed)', async () => {
+    const m = mockDeps(); const w = watched();
+    const p = { ...w.p }; delete (p as any).billingSku; m.setProvider(p);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, reason: 'provider_not_billable', retryable: false });
+    expect(m.reserves).toHaveLength(0);
+    expect(w.calls.submit).toBe(0);
+  });
+
+  it('the reservation is for the SKU the provider will send, under the attempt key', async () => {
+    const m = mockDeps();
+    await executeRenderJob(m.deps as any, ARGS);
+    expect(m.reserves).toHaveLength(1);
+    expect(m.reserves[0]).toMatchObject({ organizationId: 'org-1', provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium', correlationId: 'core-1', actorUserId: 'u1' });
+    expect(m.reserves[0].idempotencyKey).toMatch(/^render:org-1:render:[0-9a-f]{64}$/);
+    expect(m.reserves[0]).not.toHaveProperty('amount');
   });
 
   it('CONTROL: a created billing hold lets the render reach the provider (the refusal above is the hold, not the harness)', async () => {
@@ -341,12 +413,15 @@ describe('control RPCs and billing hold fail closed', () => {
   it.each([
     ['returns an error', async () => ({ data: null, error: { code: '57014', message: 'canceling statement' } })],
     ['throws', async () => { throw new Error('network'); }],
-  ])('claim_job_execution %s: refused BEFORE any billing hold or provider call; retryable', async (_l, claim) => {
+  ])('claim_job_execution %s: the reservation (made first) is RELEASED, the provider is never called; retryable', async (_l, claim) => {
+    // CHANGED DELIBERATELY (R3-credits): the reservation now precedes the claim, so a claim failure has a
+    // hold to give back. It is released (never charged), and the attempt number is consumed.
     const m = mockDeps(); const w = watched(); m.setProvider(w.p);
     withRpc(m, async (name) => (name === 'claim_job_execution' ? claim() : { data: {}, error: null }));
     const r = await executeRenderJob(m.deps as any, ARGS);
     expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'execution_registry_unavailable', retryable: true });
-    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    const bo = m.writes.filter((x) => x.table === 'billing_operations');
+    expect(bo.map((x) => x.row.status)).toEqual(['held', 'released']);
     expect(w.calls.submit).toBe(0);
   });
 
@@ -358,7 +433,8 @@ describe('control RPCs and billing hold fail closed', () => {
     const r = await executeRenderJob(m.deps as any, ARGS);
     err.mockRestore();
     expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'execution_already_terminal', retryable: true });
-    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    // Reserved first (R3-credits), then released: nothing charged.
+    expect(m.writes.filter((x) => x.table === 'billing_operations').map((x) => x.row.status)).toEqual(['held', 'released']);
     expect(w.calls.submit).toBe(0);
     expect(m.writes.filter((x) => x.table === 'creator_render_job_state' && x.op === 'update').map((x) => x.row))
       .toEqual(expect.arrayContaining([expect.objectContaining({ current_state: 'retry_scheduled', retry_count: 1 })]));
@@ -615,11 +691,16 @@ describe('05 review of eebd5e261: no freeze after the provider, a provider-only 
 
   // ── Finding B ──────────────────────────────────────────────────────────────────────────────────
   it('B: failures that never reach the provider do NOT spend the budget (attempt 3 after two infra failures is not exhausted)', async () => {
-    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 2 }, existingVariant: { id: 'var-1' }, priorProviderCalls: 0, insertErrors: { billing_operations: { code: 'XX000', message: 'down' } } });
+    // CHANGED (R3-credits): an unavailable reservation now spends nothing at all, not even the attempt
+    // number; the attempt that DOES consume without a provider call is the claim's 'already terminal'.
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 2 }, existingVariant: { id: 'var-1' }, priorProviderCalls: 0 });
+    (m.deps as any).supabase = { ...(m.deps as any).supabase, rpc: async (name: string) => (name === 'claim_job_execution' ? { data: { is_terminal: true }, error: null } : { data: {}, error: null }) };
     const w = watched(); m.setProvider(w.p);
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const r = await executeRenderJob(m.deps as any, ARGS);
+    err.mockRestore();
     expect(w.calls.submit).toBe(0);
-    expect(r).toMatchObject({ reason: 'billing_hold_unavailable', retryable: true });
+    expect(r).toMatchObject({ reason: 'execution_already_terminal', retryable: true });
     expect(lastState(m)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 3 });
   });
 

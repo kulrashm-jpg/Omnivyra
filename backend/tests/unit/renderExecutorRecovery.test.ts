@@ -5,7 +5,7 @@
  */
 import { executeRenderJob, createRenderProviderRegistry } from '../../services/creator/rendering';
 import type { RenderProvider } from '../../services/creator/rendering';
-import { makeStore, NOW, type RenderStore } from '../helpers/renderStateStore';
+import { makeStore, NOW, storeImageCredits, type RenderStore } from '../helpers/renderStateStore';
 
 const FLAG = 'ENABLE_CREATOR_RENDERING';
 const TASK = {
@@ -27,6 +27,7 @@ function provider() {
     capabilities: () => ({ modalities: ['image'], max_duration_sec: 0, resolutions: [{ w: 1024, h: 1024 }, { w: 1080, h: 1080 }, { w: 1080, h: 1350 }], aspect_ratios: ['1:1', '4:5', '9:16', '16:9'], supports_seed: false, supports_audio: false, supports_overlay_text: false, supports_batch: false, max_concurrent: 2 }),
     supports: () => true,
     estimateCost: () => ({ estimated_credits: 5, currency: 'CREDITS' }),
+    billingSku: (spec: any) => ({ provider: 'openai', model: 'gpt-image-1.5', size: spec.platform_projection.resolution.h > spec.platform_projection.resolution.w * 1.2 ? '1024x1536' : spec.platform_projection.resolution.w > spec.platform_projection.resolution.h * 1.2 ? '1536x1024' : '1024x1024', quality: 'medium' }),
     submit: async () => { calls.submit += 1; return { provider: 'openai', external_job_id: `x${calls.submit}`, provider_metadata: { url: `https://cdn/r${calls.submit}.png` } }; },
     poll: async (h) => ({ handle: h, state: 'succeeded', progress: 1 }),
     fetchOutput: async (h) => ({ output_id: 'o', content_sha256: '', storage_ref: String((h.provider_metadata as any).url), modality: 'image', mime_type: 'image/png', byte_size: 0, version: 1, derived_from_output_id: null }),
@@ -34,7 +35,7 @@ function provider() {
   };
   return { p, calls };
 }
-const deps = (s: RenderStore, p: RenderProvider) => ({ supabase: s.supabase, ownedDbTable: s.ownedDbTable, now: () => NOW, providerRegistry: createRenderProviderRegistry([p]) }) as any;
+const deps = (s: RenderStore, p: RenderProvider) => ({ supabase: s.supabase, ownedDbTable: s.ownedDbTable, now: () => NOW, providerRegistry: createRenderProviderRegistry([p]), imageCredits: storeImageCredits(s).port }) as any;
 const jobOf = (s: RenderStore, org: string) => s.rows('creator_render_job').find((r) => r.organization_id === org)!;
 const stateOf = (s: RenderStore, jobId: string) => s.rows('creator_render_job_state').find((r) => r.render_job_id === jobId)!;
 
