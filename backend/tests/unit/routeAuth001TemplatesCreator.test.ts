@@ -303,9 +303,13 @@ describe('creator-templates/campaign-design-system/[campaignId]', () => {
     expect(r.status).toBe(403);
     expect(mockAttach).not.toHaveBeenCalled();
   });
-  it('own campaign with another tenant\'s collection → 403', async () => {
+  it('own campaign with another tenant\'s collection → 404, identical to a missing collection (no existence oracle)', async () => {
+    // 2026-11-11: this was a 403 "cross-tenant attachment denied", which
+    // confirmed that the other tenant's collection id exists.
     const r = await invoke(designSystem, { method: 'PUT', as: 'A', query: { campaignId: CAMPAIGN_A }, body: { collection_id: 'coll-b' } });
-    expect(r.status).toBe(403);
+    const missing = await invoke(designSystem, { method: 'PUT', as: 'A', query: { campaignId: CAMPAIGN_A }, body: { collection_id: 'coll-does-not-exist' } });
+    expect(r.status).toBe(404);
+    expect([r.status, r.body]).toEqual([missing.status, missing.body]);
     expect(mockAttach).not.toHaveBeenCalled();
   });
   it('own campaign + own collection → attached under the CAMPAIGN\'s company', async () => {

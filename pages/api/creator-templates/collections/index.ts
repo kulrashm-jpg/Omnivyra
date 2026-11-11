@@ -32,7 +32,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // The source collection must belong to the authorized company (no cross-tenant copy).
       const sourceCompanyId = await getCollectionCompanyId(body.duplicate_of);
       if (!sourceCompanyId) return res.status(404).json({ error: 'source collection not found' });
-      if (sourceCompanyId !== companyId) return res.status(403).json({ error: 'cross-tenant duplication denied' });
+      // Another tenant's collection is indistinguishable from a missing one: a 403
+      // here confirmed that the id exists (existence oracle, 2026-11-11).
+      if (sourceCompanyId !== companyId) return res.status(404).json({ error: 'source collection not found' });
       const dup = await duplicateCollectionRecord({ id: body.duplicate_of, companyId, ownerUserId: user.userId });
       if (!dup) return res.status(503).json({ error: 'Could not duplicate collection.' });
       return res.status(201).json({ collection: dup });

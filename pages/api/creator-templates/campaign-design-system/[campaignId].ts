@@ -69,7 +69,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // design system is created in that same tenant.
     const collectionCompanyId = await getCollectionCompanyId(collectionId);
     if (!collectionCompanyId) return res.status(404).json({ error: 'collection not found' });
-    if (collectionCompanyId !== campaignCompanyId) return res.status(403).json({ error: 'cross-tenant attachment denied' });
+    // Another tenant's collection is indistinguishable from a missing one: a 403
+    // here confirmed that the id exists (existence oracle, 2026-11-11).
+    if (collectionCompanyId !== campaignCompanyId) return res.status(404).json({ error: 'collection not found' });
     if (existingCompanyId && existingCompanyId !== collectionCompanyId) return res.status(403).json({ error: 'cross-tenant attachment denied' });
     const requiredFamilies = Array.isArray(body.required_families)
       ? body.required_families.map((f) => (typeof f === 'string' ? familyForCreatorType(f) : null)).filter((f): f is NonNullable<typeof f> => !!f)
