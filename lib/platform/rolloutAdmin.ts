@@ -58,7 +58,11 @@ async function loadAdminConfigStatus(): Promise<{ data: RolloutAdminConfig | nul
     // F-06: access goes through the canonical Redis layer.
     const { redisConfigured, getStandaloneRedis } = await import('../redis/canonicalClient');
     if (process.env.NODE_ENV !== 'test' && redisConfigured()) {
-      readable = false; // the layer IS configured: unreadable until the read completes
+      // LOAD-BEARING ORDER (05): set BEFORE the client is obtained, so a throw from the client
+      // factory lands in the catch as UNREADABLE (fail safe for a stop flag) rather than as
+      // "no admin layer" (null, env only). If a refactor moves this below getStandaloneRedis,
+      // rolloutAdminReadable.test.ts "client cannot be obtained" fails - fix the code, not the test.
+      readable = false;
       const client = await getStandaloneRedis('rate_limit');
       const raw = await Promise.race<string | null | typeof READ_TIMED_OUT>([
         client.get(ROLLOUT_CONFIG_KEY),
