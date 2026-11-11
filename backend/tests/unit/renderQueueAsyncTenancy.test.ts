@@ -44,12 +44,16 @@ function provider(over: Partial<RenderProvider> = {}) {
   return { p, calls };
 }
 
-/** What the enqueue route writes (render-image.ts, async branch) for one tenant's job. */
-function enqueue(s: ReturnType<typeof makeStore>, org: string, opts: { spec?: any; state?: Row } = {}) {
+/**
+ * What the enqueue route writes (render-image.ts, async branch) for one tenant's job. `legacyHold` adds
+ * the job-level `render:<jobId>` hold the route wrote BEFORE holds became per attempt (a job in flight
+ * across the deploy).
+ */
+function enqueue(s: ReturnType<typeof makeStore>, org: string, opts: { spec?: any; state?: Row; legacyHold?: boolean } = {}) {
   const jobId = `job-${org}`;
   s.rows('creator_render_job').push({ id: jobId, organization_id: org, deterministic_input_hash: HASH, render_spec_snapshot: opts.spec ?? SPEC, task_id: `core-${org}` });
   s.rows('creator_render_job_state').push({ render_job_id: jobId, current_state: 'queued', retry_count: 0, attached_output_id: null, ...(opts.state ?? {}) });
-  s.rows('billing_operations').push({ id: `bo-${org}`, organization_id: org, idempotency_key: `render:${jobId}`, status: 'held', amount_estimated: 5 });
+  if (opts.legacyHold) s.rows('billing_operations').push({ id: `bo-legacy-${org}`, organization_id: org, idempotency_key: `render:${jobId}`, status: 'held', amount_estimated: 5 });
   s.rows('creator_render_queue_job').push({ id: `q-${org}`, render_job_id: jobId, provider_key: 'openai', retry_count: 0, queue_state: 'queued', next_retry_at: null, created_at: NOW });
   return jobId;
 }
@@ -59,7 +63,11 @@ function deps(s: ReturnType<typeof makeStore>, p: RenderProvider) {
 }
 const state = (s: ReturnType<typeof makeStore>, jobId: string) => s.rows('creator_render_job_state').find((r) => r.render_job_id === jobId)!;
 const queue = (s: ReturnType<typeof makeStore>, jobId: string) => s.rows('creator_render_queue_job').find((r) => r.render_job_id === jobId)!;
-const bill = (s: ReturnType<typeof makeStore>, jobId: string) => s.rows('billing_operations').filter((r) => r.idempotency_key === `render:${jobId}`);
+/** Every hold of this job: the legacy job-level one and the per-attempt ones (`render:<jobId>:a<N>`). */
+const bill = (s: ReturnType<typeof makeStore>, jobId: string) => s.rows('billing_operations')
+  .filter((r) => r.idempotency_key === `render:${jobId}` || String(r.idempotency_key).startsWith(`render:${jobId}:a`));
+const charged = (s: ReturnType<typeof makeStore>, jobId: string) => bill(s, jobId).filter((r) => r.status === 'confirmed');
+const stillHeld = (s: ReturnType<typeof makeStore>, jobId: string) => bill(s, jobId).filter((r) => r.status === 'held');
 /** Make a retry_scheduled queue job due now (backoff elapsed). */
 const due = (s: ReturnType<typeof makeStore>, jobId: string) => { queue(s, jobId).next_retry_at = NOW; };
 
@@ -71,7 +79,7 @@ describe('attempt-insert failure: refused BEFORE any paid provider call', () => 
   it.each([
     ['a 23505 collision', { code: '23505', message: 'duplicate key value violates unique constraint' }],
     ['a transient store error', { code: '08006', message: 'connection failure' }],
-  ])('%s -> zero provider calls, hold kept for the retry, job_state gets an exit (queued, number spent)', async (_l, fault) => {
+  ])('%s -> zero provider calls, the attempt hold released (never charged), job_state gets an exit (queued, number spent)', async (_l, fault) => {
     const s = makeStore(); const { p, calls } = provider();
     const jobId = enqueue(s, 'org-a');
     s.faults['creator_render_attempt.insert'] = fault;
@@ -80,7 +88,7 @@ describe('attempt-insert failure: refused BEFORE any paid provider call', () => 
     expect(r).toMatchObject({ status: 'retry_scheduled', reason: 'attempt_insert_failed' });
     expect(state(s, jobId)).toMatchObject({ current_state: 'queued', retry_count: 1 });
     expect(queue(s, jobId).queue_state).toBe('retry_scheduled');
-    expect(bill(s, jobId)[0]!.status).toBe('held');
+    expect(bill(s, jobId).map((x) => [x.idempotency_key, x.status])).toEqual([[`render:${jobId}:a1`, 'released']]);
     expect(s.rows('creator_render_output')).toHaveLength(0);
   });
 });
@@ -95,7 +103,8 @@ describe('two tenants, IDENTICAL content', () => {
     expect(calls.submit).toBe(2);
     for (const j of [a, b]) {
       expect(bill(s, j)).toHaveLength(1);
-      expect(bill(s, j)[0]).toMatchObject({ status: 'confirmed', amount_charged: 5 });
+      expect(charged(s, j)).toHaveLength(1);
+      expect(charged(s, j)[0]).toMatchObject({ idempotency_key: `render:${j}:a1`, amount_estimated: 5, amount_charged: 5 });
       expect(state(s, j)).toMatchObject({ current_state: 'attached' });
     }
     const hashes = s.rows('creator_render_attempt').map((x) => x.execution_hash).sort();
@@ -109,7 +118,7 @@ describe('two tenants, IDENTICAL content', () => {
     const r = await processQueuedRenderJob(deps(s, p), 'w1');
     expect(r.status).toBe('completed');
     expect(calls.submit).toBe(1);
-    expect(bill(s, b)[0]!.status).toBe('confirmed');
+    expect(charged(s, b)).toHaveLength(1);
   });
 });
 
@@ -129,8 +138,11 @@ describe('a retry tick re-uses the variant and calls the provider', () => {
     expect(s.rows('creator_render_variant')).toHaveLength(1);
     expect(s.rows('creator_render_attempt').map((x) => x.attempt_number)).toEqual([1, 2]);
     expect(s.rows('creator_render_attempt')[1]!.execution_hash).toBe(renderAttemptExecutionHash('org-a', HASH, 2));
-    expect(bill(s, jobId)).toHaveLength(1);
-    expect(bill(s, jobId)[0]!.status).toBe('confirmed');
+    // One hold PER ATTEMPT: attempt 1's released, attempt 2's confirmed. Two paid calls, and the
+    // failed one is never charged; nothing goes released -> confirmed.
+    expect(bill(s, jobId).map((x) => [x.idempotency_key, x.status])).toEqual([
+      [`render:${jobId}:a1`, 'released'], [`render:${jobId}:a2`, 'confirmed'],
+    ]);
   });
 });
 
@@ -155,7 +167,7 @@ describe('a terminal failure never leaves job_state at queued', () => {
 
   it('no capable provider -> queue job failed, but the render job gets a NON-terminal exit (retry_scheduled), not queued', async () => {
     const s = makeStore(); const { p, calls } = provider({ supports: () => false });
-    const jobId = enqueue(s, 'org-a');
+    const jobId = enqueue(s, 'org-a', { legacyHold: true });
     const r = await processQueuedRenderJob(deps(s, p), 'w1');
     expect(r).toMatchObject({ status: 'failed', reason: 'no_capable_provider' });
     expect(calls.submit).toBe(0);
@@ -203,7 +215,7 @@ describe('ownership against the sync path', () => {
 
   it('a job already attached (rendered by the sync path) completes with no provider call, and its async hold is released', async () => {
     const s = makeStore(); const { p, calls } = provider();
-    const jobId = enqueue(s, 'org-a', { state: { current_state: 'attached', attached_output_id: 'out-x' } });
+    const jobId = enqueue(s, 'org-a', { legacyHold: true, state: { current_state: 'attached', attached_output_id: 'out-x' } });
     const r = await processQueuedRenderJob(deps(s, p), 'w1');
     expect(calls.submit).toBe(0);
     expect(r).toMatchObject({ ok: true, status: 'completed', reason: 'already_attached' });
@@ -235,5 +247,67 @@ describe('renderAttemptExecutionHash', () => {
   it('matches the sync executor key shape: unsuffixed for attempt 1, :a<N> after', () => {
     expect(renderAttemptExecutionHash('org', HASH, 1)).toBe(`org:${HASH}`);
     expect(renderAttemptExecutionHash('org', HASH, 3)).toBe(`org:${HASH}:a3`);
+  });
+});
+
+describe('billing: a hold per attempt, confirmed by its own id (05 findings 1-3)', () => {
+  it('a LEGACY job-level hold (in flight across the deploy) is released when the worker takes the job; exactly one charge', async () => {
+    const s = makeStore(); const { p } = provider();
+    const jobId = enqueue(s, 'org-a', { legacyHold: true });
+    const r = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(r.status).toBe('completed');
+    expect(bill(s, jobId).map((x) => [x.idempotency_key, x.status])).toEqual([
+      [`render:${jobId}`, 'released'], [`render:${jobId}:a1`, 'confirmed'],
+    ]);
+    expect(charged(s, jobId)).toHaveLength(1);
+  });
+
+  it('a released hold is NEVER resurrected: a later confirm cannot touch a non-held row', async () => {
+    const s = makeStore(); const { p } = provider();
+    const jobId = enqueue(s, 'org-a', { legacyHold: true });
+    s.rows('billing_operations')[0]!.status = 'released';
+    await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(s.rows('billing_operations').find((x) => x.idempotency_key === `render:${jobId}`)!.status).toBe('released');
+  });
+
+  it('a confirm that updates NO row is reported as billing_confirm_failed, never billing_confirmed (05 finding 2)', async () => {
+    const s = makeStore();
+    // The hold disappears from "held" between the insert and the confirm (e.g. a concurrent release).
+    const { p } = provider({ fetchOutput: async (h) => {
+      for (const r of s.rows('billing_operations')) r.status = 'released';
+      return { output_id: 'o', content_sha256: '', storage_ref: String((h.provider_metadata as any).url), modality: 'image', mime_type: 'image/png', byte_size: 0, version: 1, derived_from_output_id: null };
+    } });
+    enqueue(s, 'org-a');
+    const r = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(r.status).toBe('completed');
+    expect(r.events).toContain('billing_confirm_failed');
+    expect(r.events).not.toContain('billing_confirmed');
+  });
+
+  it('a hold that cannot be created refuses the attempt BEFORE the provider', async () => {
+    const s = makeStore(); const { p, calls } = provider();
+    const jobId = enqueue(s, 'org-a');
+    s.faults['billing_operations.insert'] = { code: 'XX000', message: 'down' };
+    const r = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(calls.submit).toBe(0);
+    expect(r).toMatchObject({ status: 'retry_scheduled', reason: 'billing_hold_unavailable' });
+    expect(state(s, jobId)).toMatchObject({ current_state: 'queued', retry_count: 1 });
+    expect(s.rows('creator_render_attempt')).toHaveLength(0);
+  });
+
+  it('the hold estimate and the charge come from the SAME provider estimate (05 finding 3)', async () => {
+    const s = makeStore(); const { p } = provider({ estimateCost: () => ({ estimated_credits: 7, currency: 'CREDITS' }) });
+    const jobId = enqueue(s, 'org-a');
+    await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(charged(s, jobId)[0]).toMatchObject({ amount_estimated: 7, amount_charged: 7 });
+  });
+
+  it('each attempt hold is linked from its attempt row', async () => {
+    const s = makeStore(); const { p } = provider();
+    const jobId = enqueue(s, 'org-a');
+    await processQueuedRenderJob(deps(s, p), 'w1');
+    const hold = bill(s, jobId)[0]!;
+    expect(s.rows('creator_render_attempt')[0]!.billing_operation_id).toBe(hold.id);
+    expect(stillHeld(s, jobId)).toHaveLength(0);
   });
 });
