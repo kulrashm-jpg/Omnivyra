@@ -31,6 +31,22 @@ import { recordSuggestionAccepted } from '../../../backend/services/aiSuggestion
 import { isDmMessageType } from '../../../lib/engagement/messageRoles';
 import { recordThreadEvent } from '../../../backend/services/engagementThreadEventService';
 import { isThreadActionable } from '../../../backend/services/engagementThreadService';
+import {
+  readClientIdempotencyKey,
+  computeRequestFingerprint,
+  requestActorId,
+  inspectEngagementRequest,
+  reserveEngagementRequest,
+  classifyExecutionOutcome,
+  finalizeEngagementRequest,
+  replayAnswer,
+} from '../../../backend/services/engagementRequestIdempotency';
+import {
+  dmSendRefusal,
+  INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED,
+  DM_BLOCKED_MESSAGE,
+  INSTAGRAM_DM_BLOCKED_MESSAGE,
+} from '../../../backend/services/dmDispatchSafety';
 
 type ReplyBody = {
   organization_id?: string;
@@ -313,6 +329,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!replyText) {
       return res.status(400).json({ error: 'reply_text required' });
     }
+    const clientIdempotency = readClientIdempotencyKey(req);
+    if (clientIdempotency.ok === false) {
+      return res.status(400).json({
+        error: 'Idempotency-Key must be 8-200 characters of [A-Za-z0-9._:-]',
+        code: clientIdempotency.error,
+      });
+    }
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
@@ -324,6 +347,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       allowedRoles: [...COMMUNITY_AI_CAPABILITIES.EXECUTE_ACTIONS],
     });
     if (!roleGate) return;
+
+    // ── Request-level idempotency (durable; engagementRequestIdempotency) ──
+    //    Read-only check FIRST, before any gate mutates state (e.g. the AI
+    //    draft approval below): a replay / key-reuse / in-progress / uncertain
+    //    request is answered from the record and nothing is sent.
+    const idem = {
+      db: supabase,
+      organizationId,
+      actorId: requestActorId(roleGate.userId),
+      scope: 'reply' as const,
+      clientKey: clientIdempotency.key,
+      fingerprint: computeRequestFingerprint({
+        scope: 'reply',
+        platform,
+        messageId: messageId ?? null,
+        signalId: messageId ? null : signalId || null,
+        threadId: threadId ?? null,
+        text: replyText,
+        aiDraftId: body.ai_generated === true ? body.ai_draft_id ?? null : null,
+        aiGenerated: body.ai_generated === true,
+        account: organizationId,
+      }),
+    };
+    const early = await inspectEngagementRequest(idem);
+    if (early) return res.status(early.status).json(early.body);
 
     // ── Signal-based path: resolve the campaign signal into the target
     //    fields executeAction needs. Bypasses the engagement_messages
@@ -447,6 +495,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!recipientDisplayName && typeof msgRawPayload.sender_name === 'string') {
         recipientDisplayName = msgRawPayload.sender_name;
       }
+    }
+
+    // ── DM send policy (dmDispatchSafety) ─────────────────────────────────
+    //    No authoritative person -> thread mapping exists (DM thread ids are
+    //    DOM-scraped or synthesised; recipient identity is heuristic), and no
+    //    Instagram account tier is verified server-side. A DM reply is refused
+    //    HERE — before the AI draft is approved, before any reservation and
+    //    before any external call. The executor refuses again
+    //    (dmCommandChainRefusal) and so does /api/extension/commands.
+    if (isDmMessageType(message?.message_type)) {
+      const dmRefusal = dmSendRefusal({ platform, verifiedInstagramTier: null }) ?? 'DM_RECIPIENT_MAPPING_UNAVAILABLE';
+      void logAuditEvent({
+        operation: 'INSERT',
+        table: 'engagement_reply_rejected',
+        companyId: organizationId,
+        userId: roleGate.userId ?? 'unknown',
+        success: false,
+        errorMessage: 'DM send refused: no authoritative recipient mapping',
+        metadata: { platform, action: 'dm', code: dmRefusal, thread_id: message?.thread_id ?? null },
+      }).catch(() => {});
+      return res.status(409).json({
+        error: dmRefusal === INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED ? INSTAGRAM_DM_BLOCKED_MESSAGE : DM_BLOCKED_MESSAGE,
+        code: dmRefusal,
+        platform,
+        action: 'dm',
+      });
     }
 
     // ── AI safety hard guard ─────────────────────────────────────────────
@@ -611,8 +685,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // a persistent "pending" row on platform failure orphans state that no
     // consumer cleans up. The row is inserted only after the platform confirms.
 
-    const actionId = crypto.randomUUID();
-
     // ── Branch: DM reply vs comment reply ─────────────────────────────
     // DMs do NOT have an API path on LinkedIn — send dispatches through
     // the extension's continue_thread handler via the browser-mode
@@ -742,49 +814,82 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const callerCorrelationId = (body.correlation_id || '').toString().trim() || undefined;
 
-    const result = await executeAction(
-      {
-        id: actionId,
-        tenant_id: organizationId,
-        organization_id: organizationId,
-        platform,
-        action_type: isDm ? 'dm' : 'reply',
-        target_id: targetId,
-        suggested_text: replyText,
-        playbook_id: null,
-        // Attribution: the operator who initiated this reply/DM. Server-derived
-        // from the authenticated session (never trusted from the client).
-        acting_user_id: roleGate.userId ?? null,
-        // capability.mode tells us: 'api' for comment replies, 'browser'
-        // for DMs. The executor respects this and either calls the
-        // connector or persists a community_ai_actions row with
-        // execution_mode='browser' for the extension to claim.
-        execution_mode: capability.mode ?? (isDm ? 'browser' : 'api'),
-        metadata: isDm && isLinkedIn
-          ? {
-              dm_thread_ready: true,
-              dm_thread_id: linkedInDmDispatchTarget.threadId,
-              dm_thread_url: linkedInDmDispatchTarget.threadUrl,
-              dm_participant_name: linkedInDmParticipantName,
-              dm_last_message_preview: linkedInDmLastMessagePreview,
-            }
-          : null,
-        parent_comment_urn: parentCommentUrn,
-      },
-      true,
-      {
-        source: 'manual',
-        persist: true,
-        auto_insert: true,
-        idempotency_key: `engagement-reply:${actionId}`,
-        final_text: replyText,
-        correlation_id: callerCorrelationId,
-      }
-    );
+    // ── Atomic reservation BEFORE any external call ───────────────────────
+    //    Exactly one concurrent caller proceeds; the others are answered from
+    //    the record (replay / 409 / 422). The action id is per attempt.
+    const reservation = await reserveEngagementRequest({
+      ...idem,
+      platform,
+      actionType: isDm ? 'dm' : 'reply',
+      targetId: String(targetId),
+    });
+    if (reservation.kind === 'answer') {
+      return res.status(reservation.answer.status).json(reservation.answer.body);
+    }
+    const actionId = reservation.actionId;
+
+    let result: Awaited<ReturnType<typeof executeAction>>;
+    try {
+      result = await executeAction(
+        {
+          id: actionId,
+          tenant_id: organizationId,
+          organization_id: organizationId,
+          platform,
+          action_type: isDm ? 'dm' : 'reply',
+          target_id: targetId,
+          suggested_text: replyText,
+          playbook_id: null,
+          // Attribution: the operator who initiated this reply/DM. Server-derived
+          // from the authenticated session (never trusted from the client).
+          acting_user_id: roleGate.userId ?? null,
+          // capability.mode tells us: 'api' for comment replies, 'browser'
+          // for DMs. The executor respects this and either calls the
+          // connector or persists a community_ai_actions row with
+          // execution_mode='browser' for the extension to claim.
+          execution_mode: capability.mode ?? (isDm ? 'browser' : 'api'),
+          metadata: isDm && isLinkedIn
+            ? {
+                dm_thread_ready: true,
+                dm_thread_id: linkedInDmDispatchTarget.threadId,
+                dm_thread_url: linkedInDmDispatchTarget.threadUrl,
+                dm_participant_name: linkedInDmParticipantName,
+                dm_last_message_preview: linkedInDmLastMessagePreview,
+              }
+            : null,
+          parent_comment_urn: parentCommentUrn,
+        },
+        true,
+        {
+          source: 'manual',
+          persist: true,
+          auto_insert: true,
+          idempotency_key: `engagement-reply:${actionId}`,
+          final_text: replyText,
+          correlation_id: callerCorrelationId,
+        }
+      );
+    } catch (execErr) {
+      // A throw may follow a platform call: uncertain unless provably not acted.
+      await finalizeEngagementRequest(supabase, reservation.record, classifyExecutionOutcome(undefined, execErr));
+      throw execErr;
+    }
+    const outcome = classifyExecutionOutcome(result);
+    await finalizeEngagementRequest(supabase, reservation.record, outcome);
+
+    // The attempt's action row already existed (a reconciled/fenced attempt):
+    // nothing was sent again, and no side effect (timeline, mirror, counters,
+    // draft) runs a second time. Answer from the live row.
+    if ((result as { deduplicated?: boolean }).deduplicated === true) {
+      const replay = await replayAnswer(supabase, reservation.record);
+      return res.status(replay.status).json(replay.body);
+    }
+
+    const isReplayOfQueued = (result as { deduplicated?: boolean }).deduplicated === true;
 
     // Collaboration timeline: record who replied / DM'd. Attribution is
     // server-derived from the session.
-    if (result?.ok && body.thread_id) {
+    if (result?.ok && body.thread_id && !isReplayOfQueued) {
       // Timeline logging is best-effort: it must never fail a successful reply
       // (e.g. before the engagement_thread_events migration is applied).
       try {
@@ -831,6 +936,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         code: 'PLATFORM_EXECUTION_FAILED',
         status: result.status,
         response: result.response,
+        // failed_not_acted: provably never reached the platform — the SAME
+        // Idempotency-Key may be retried. uncertain: never resent.
+        request_state: outcome.state,
+        retry_with_same_key: outcome.state === 'failed_not_acted',
       });
     }
 

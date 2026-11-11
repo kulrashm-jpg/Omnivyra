@@ -26,6 +26,12 @@ const composerTextarea: ResolverCandidate[] = [
   { kind: 'role', role: 'textbox' },
 ];
 
+/**
+ * A reply's post-condition matches elements that can already exist on the page
+ * before the submit, so a match does NOT prove the new reply exists.
+ * No reply script extracts a platform id: on the page of the post being
+ * answered, nothing here tells the new reply's link from the target's.
+ */
 const replyScripts: Record<string, ScriptBuilder> = {
   linkedin: (task) => {
     if (!task.text) return { error: 'TEXT_REQUIRED' };
@@ -73,6 +79,7 @@ const replyScripts: Record<string, ScriptBuilder> = {
           { kind: 'role', role: 'button', name: /post|submit/i },
         ],
         timeout: 10_000,
+        commit: true,
       },
     ];
     return {
@@ -116,6 +123,7 @@ const replyScripts: Record<string, ScriptBuilder> = {
           kind: 'press',
           selectors: ['div[role="textbox"][contenteditable="true"]', 'textarea'],
           key: 'Enter',
+          commit: true,
         },
       ],
       postCondition: {
@@ -156,6 +164,7 @@ const replyScripts: Record<string, ScriptBuilder> = {
             { kind: 'role', role: 'button', name: /post/i },
           ],
           timeout: 10_000,
+          commit: true,
         },
       ],
       postCondition: {
@@ -194,11 +203,7 @@ const replyScripts: Record<string, ScriptBuilder> = {
             'button[data-testid="tweetButton"]',
           ],
           timeout: 10_000,
-        },
-        {
-          kind: 'extract_platform_id',
-          selectors: ['article[role="article"] a[href*="/status/"]'],
-          attribute: 'href',
+          commit: true,
         },
       ],
       postCondition: {
@@ -248,6 +253,7 @@ const replyScripts: Record<string, ScriptBuilder> = {
             'button[type="submit"]',
           ],
           timeout: 10_000,
+          commit: true,
         },
       ],
       postCondition: {
@@ -274,12 +280,15 @@ const likeScripts: Record<string, ScriptBuilder> = {
       },
       {
         kind: 'click',
+        // Every candidate is guarded against the already-liked state: a
+        // second run must never toggle the like off. Unguardable (i18n/role)
+        // candidates are deliberately absent from the click step.
         selectors: [
-          'button[aria-label*="Like" i]:not([aria-pressed="true"])',
-          'button.react-button__trigger',
-          { kind: 'i18n', semanticKey: 'like', role: 'button' },
+          'button[aria-label*="Like" i]:not([aria-pressed="true"]):not([aria-label*="Unlike" i])',
+          'button.react-button__trigger:not([aria-pressed="true"]):not(.active)',
         ],
         timeout: 8_000,
+        commit: true,
       },
     ],
     postCondition: {
@@ -307,12 +316,13 @@ const likeScripts: Record<string, ScriptBuilder> = {
       },
       {
         kind: 'click',
+        // Guarded against the already-liked state (see linkedin).
         selectors: [
-          'div[aria-label*="Like" i][role="button"]:not([aria-pressed="true"])',
-          'button[aria-label*="Like" i]',
-          { kind: 'i18n', semanticKey: 'like', role: 'button' },
+          'div[aria-label*="Like" i][role="button"]:not([aria-pressed="true"]):not([aria-label*="Unlike" i]):not([aria-label*="Liked" i])',
+          'button[aria-label*="Like" i]:not([aria-pressed="true"]):not([aria-label*="Unlike" i]):not([aria-label*="Liked" i])',
         ],
         timeout: 8_000,
+        commit: true,
       },
     ],
     postCondition: {
@@ -341,6 +351,7 @@ const likeScripts: Record<string, ScriptBuilder> = {
         kind: 'click',
         selectors: ['button svg[aria-label="Like"]'],
         timeout: 8_000,
+        commit: true,
       },
     ],
     postCondition: {
@@ -362,6 +373,7 @@ const likeScripts: Record<string, ScriptBuilder> = {
         kind: 'click',
         selectors: ['button[data-testid="like"]'],
         timeout: 8_000,
+        commit: true,
       },
     ],
     postCondition: {
@@ -384,8 +396,9 @@ const likeScripts: Record<string, ScriptBuilder> = {
       },
       {
         kind: 'click',
-        selectors: ['button[aria-label="upvote"]'],
+        selectors: ['button[aria-label="upvote"]:not([aria-pressed="true"]):not(.upvoted)'],
         timeout: 8_000,
+        commit: true,
       },
     ],
     postCondition: {

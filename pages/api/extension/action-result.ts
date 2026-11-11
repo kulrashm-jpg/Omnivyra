@@ -32,6 +32,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *     row leaks stale lease metadata.
  *   - Idempotency: the Idempotency-Key header (if present) dedupes repeated
  *     submissions of the SAME result payload from a retrying extension.
+ *   - Late results are never rejected-and-forgotten. A claimed command is
+ *     never re-offered, so the lease holder is the only session that can have
+ *     acted on it: its result is accepted after the lease lapsed while the row
+ *     is still claimed, and recorded as reconciliation evidence
+ *     (execution_result.late_results, status unchanged) once the reaper has
+ *     moved the row to 'uncertain'.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -53,6 +59,85 @@ type NormalizedResult = {
 };
 
 const TERMINAL_STATUSES = new Set(['executed', 'sent_unverified', 'failed', 'skipped', 'blocked']);
+/** States a claimed browser command can be closed FROM by its lease holder. */
+const IN_FLIGHT_STATUSES = ['pending', 'dispatched', 'acknowledged'];
+
+type LateResultInput = {
+  commandId: string;
+  organizationId: string;
+  leaseId: string;
+  holderId: string;
+  status: string;
+  result: NormalizedResult;
+  idempotencyKey: string | null;
+  chainIndex: number;
+};
+
+/**
+ * Append the lease holder's late report to an 'uncertain' row
+ * (record_community_ai_late_dispatch_result: one conditional UPDATE that
+ * re-checks status='uncertain', organization, lease id and holder). Never
+ * changes the status. Responds 200 when recorded, 409 otherwise.
+ */
+async function recordLateResult(res: NextApiResponse, input: LateResultInput) {
+  const report = {
+    source: 'extension_late_result',
+    reported_status: input.status,
+    confirmed: Boolean(input.result?.confirmed),
+    platform_id: input.result?.platform_id ?? null,
+    verified_at: input.result?.verified_at ?? null,
+    mode: input.result?.mode ?? null,
+    error_code: input.result?.error_code ?? null,
+    error_message: input.result?.error_message ?? null,
+    chain_index: input.chainIndex,
+    idempotency_key: input.idempotencyKey,
+  };
+  const { data, error } = await supabase.rpc('record_community_ai_late_dispatch_result', {
+    p_action_id: input.commandId,
+    p_organization_id: input.organizationId,
+    p_lease_id: input.leaseId,
+    p_holder_id: input.holderId,
+    p_report: report,
+  });
+  if (error) {
+    console.error('[extension/action-result] late result persist failed:', error.message);
+    return res.status(500).json({ success: false, error: 'LATE_RESULT_PERSIST_FAILED' });
+  }
+  const outcome = Array.isArray(data) ? data[0] : data;
+  if (outcome !== 'recorded') {
+    return res.status(409).json({ success: false, error: 'LATE_RESULT_NOT_RECORDED', current_status: 'uncertain' });
+  }
+  return res.status(200).json({
+    success: true,
+    status: 'uncertain',
+    reconciliation: 'recorded',
+    review_required: true,
+  });
+}
+
+/** After a compare-and-set miss: if the row is now 'uncertain', record the report as evidence. */
+/**
+ * True when the row was reaped to `uncertain` for this holder and the late
+ * result has been recorded AND ANSWERED; the caller must then send nothing more.
+ * (A boolean, not the response: Next's `res.json()` returns void, so returning it
+ * read as "not handled" and the caller sent a second response — 2026-10-28.)
+ */
+async function reconcileIfReaped(res: NextApiResponse, input: LateResultInput): Promise<boolean> {
+  const { data: current } = await supabase
+    .from('community_ai_actions')
+    .select('status, dispatch_lease_id, dispatch_lease_holder_id')
+    .eq('id', input.commandId)
+    .eq('organization_id', input.organizationId)
+    .maybeSingle();
+  const row = current as { status?: string | null; dispatch_lease_id?: string | null; dispatch_lease_holder_id?: string | null } | null;
+  if (row?.status === 'uncertain'
+    && row.dispatch_lease_id === input.leaseId
+    && row.dispatch_lease_holder_id === input.holderId) {
+    await recordLateResult(res, input);
+    return true;
+  }
+  return false;
+}
 
 function deriveHolderId(session: { userId: string; orgId: string; hmacNonce: string }): string {
   const basis = `${session.userId}:${session.orgId}:${session.hmacNonce}`;
@@ -109,7 +194,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { data: existing, error: fetchError } = await supabase
       .from('community_ai_actions')
-      .select('id, organization_id, status, platform, action_type, target_id, suggested_text, final_text, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at, idempotency_key, execution_result, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, organization_id, status, platform, action_type, target_id, suggested_text, final_text, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at, idempotency_key, execution_result, execution_correlation_id, command_chain, command_chain_index, submit_attempted_at')
       .eq('id', commandId)
       .maybeSingle();
 
@@ -133,7 +218,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // This deployment stores leased browser commands as `pending` because
     // the DB status constraint does not include the newer dispatched /
     // acknowledged intermediate states. The active lease is the claim signal.
-    if (existing.status !== 'pending' && existing.status !== 'dispatched' && existing.status !== 'acknowledged') {
+    // 'uncertain' = the lease lapsed and the reaper could not know whether the
+    // action ran; the holder's late result is recorded below, never dropped.
+    if (!IN_FLIGHT_STATUSES.includes(existing.status || '') && existing.status !== 'uncertain') {
       return res.status(409).json({ success: false, error: 'INVALID_STATE', current_status: existing.status });
     }
 
@@ -146,7 +233,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     const rowHolderId = (existing as any).dispatch_lease_holder_id as string | null;
     const rowLeaseId = (existing as any).dispatch_lease_id as string | null;
-    const rowLeaseExpiresAt = (existing as any).dispatch_lease_expires_at as string | null;
 
     if (!rowLeaseId || !rowHolderId) {
       return res.status(409).json({ success: false, error: 'NO_ACTIVE_LEASE' });
@@ -157,13 +243,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (submittedLeaseId && submittedLeaseId !== rowLeaseId) {
       return res.status(409).json({ success: false, error: 'LEASE_ID_MISMATCH' });
     }
-    if (rowLeaseExpiresAt && new Date(rowLeaseExpiresAt).getTime() < Date.now()) {
-      return res.status(409).json({ success: false, error: 'LEASE_EXPIRED' });
-    }
+    // An EXPIRED lease is no longer a rejection. A claimed command is never
+    // re-offered (claim_community_ai_browser_command requires
+    // dispatch_lease_id IS NULL), so this holder is the only session that can
+    // have performed it; refusing its result would only lose the evidence.
 
     const isConfirmed = status === 'success' && result?.confirmed === true;
-    const finalStatus: 'executed' | 'sent_unverified' | 'failed' =
-      status === 'success' ? (isConfirmed ? 'executed' : 'sent_unverified') : 'failed';
+    // Extension 1.5 (EXTENSION-1.5.0-CONTRACT.md §5.4, agreed with Orchestration):
+    // once authorize-submit wrote submit_attempted_at, the click may have happened,
+    // so a reported failure is 'uncertain' (a human reconciles; never retried),
+    // never 'failed'. Without submit_attempted_at (every 1.4 row) nothing changes.
+    const postSubmitFailure = status === 'failed' && Boolean((existing as { submit_attempted_at?: string | null }).submit_attempted_at);
+    const finalStatus: 'executed' | 'sent_unverified' | 'failed' | 'uncertain' =
+      status === 'success' ? (isConfirmed ? 'executed' : 'sent_unverified') : (postSubmitFailure ? 'uncertain' : 'failed');
 
     // Surface the row's existing correlation id if one was stamped earlier
     // in the lifecycle (at /execute or at extension dispatch). If not,
@@ -185,6 +277,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'CORRELATION_ID_MISMATCH',
         expected_correlation_id: rowCorrelationId,
       });
+    }
+
+    const chainIndexForResult = Number((existing as any).command_chain_index ?? 0);
+    const lateInput: LateResultInput = {
+      commandId,
+      organizationId: session.orgId,
+      leaseId: rowLeaseId,
+      holderId: rowHolderId,
+      status,
+      result,
+      idempotencyKey,
+      chainIndex: chainIndexForResult,
+    };
+
+    // ── Late result for a reaped ('uncertain') command ─────────────────────
+    //    The reaper already decided the outcome is unknown and routed the row
+    //    to human review. The holder's report is appended as evidence
+    //    (execution_result.late_results) by one conditional UPDATE that
+    //    re-checks status='uncertain' + lease id + holder. The status is NOT
+    //    changed and nothing downstream (mirror, chain advance) runs.
+    if (existing.status === 'uncertain') {
+      return recordLateResult(res, lateInput);
     }
 
     // ── Chain-aware dispatch ──────────────────────────────────────────────
@@ -214,11 +328,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           updated_at: new Date().toISOString(),
         })
         .eq('id', commandId)
+        // Never revive a reaped ('uncertain') or terminal row: the advance is
+        // compare-and-set from the in-flight states only.
+        .in('status', IN_FLIGHT_STATUSES)
         .eq('dispatch_lease_id', rowLeaseId)
         .eq('dispatch_lease_holder_id', rowHolderId)
         .select('id')
         .maybeSingle();
       if (!released) {
+        if (await reconcileIfReaped(res, lateInput)) return;
         return res.status(409).json({ success: false, error: 'LEASE_MISMATCH' });
       }
       // Metric event for the intermediate transition. Best-effort; the
@@ -251,14 +369,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       correlationId,
       idempotencyKey: idempotencyKey ?? existing.idempotency_key ?? null,
       leaseGuard: { expectedLeaseId: rowLeaseId, expectedHolderId: rowHolderId },
+      // Post-submit uncertain keeps the lease so a later report is recorded as evidence.
+      retainLeaseOnUncertain: postSubmitFailure,
+      // Compare-and-set from the in-flight states: if the reaper moved the row
+      // to 'uncertain' between our read and this write, the write matches zero
+      // rows and the result is recorded as reconciliation evidence instead.
+      expectedFromStatuses: IN_FLIGHT_STATUSES,
       rowHint: {
         platform: existing.platform ?? null,
         action_type: existing.action_type ?? null,
         target_id: (existing as any).target_id ?? null,
       },
       result: {
-        ok: finalStatus !== 'failed',
+        ok: finalStatus !== 'failed' && finalStatus !== 'uncertain',
         status: finalStatus,
+        // N1 (Orchestration): top-level error_code, the shape the reap guard writes and
+        // communityEngineAdapter reads (execution_result.error_code).
+        ...(postSubmitFailure ? { error_code: 'post_submit_failure' } : {}),
         platform_id: result?.platform_id ?? null,
         execution_mode: 'browser',
         response: {
@@ -267,16 +394,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           platform_id: result?.platform_id ?? null,
           verified_at: result?.verified_at ?? null,
           mode: result?.mode ?? null,
-          error_code: result?.error_code ?? null,
+          error_code: postSubmitFailure ? 'post_submit_failure' : (result?.error_code ?? null),
+          ...(postSubmitFailure ? { reported_error_code: result?.error_code ?? null } : {}),
           error_message: result?.error_message ?? null,
         },
-        error: finalStatus === 'failed'
-          ? (result?.error_code || result?.error_message || 'EXTENSION_REPORTED_FAILURE')
-          : undefined,
+        error: finalStatus === 'uncertain'
+          ? 'post_submit_failure'
+          : finalStatus === 'failed'
+            ? (result?.error_code || result?.error_message || 'EXTENSION_REPORTED_FAILURE')
+            : undefined,
       },
     });
 
-    if (!persistOutcome.ok) {
+    if (persistOutcome.ok === false) {
+      if (await reconcileIfReaped(res, lateInput)) return;
       return res.status(409).json({
         success: false,
         error: 'LEASE_MISMATCH',
@@ -312,7 +443,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       recordOutcome(
         String(existing.platform || ''),
         String(existing.action_type || ''),
-        isConfirmed ? 'confirmed' : status === 'success' ? 'unconfirmed' : 'failed',
+        // A post-submit failure may have acted: recorded as unconfirmed, not a clean failure.
+        // (Both lower the confirmation rate equally, so auto-disable behaves the same.)
+        isConfirmed ? 'confirmed' : status === 'success' || postSubmitFailure ? 'unconfirmed' : 'failed',
       );
     } catch (telemetryErr) {
       console.warn('[extension/action-result] reliability record failed:', (telemetryErr as Error)?.message);

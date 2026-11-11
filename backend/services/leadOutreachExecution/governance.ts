@@ -72,6 +72,24 @@ export interface TenantGovernanceConfig {
   restrictedRegions: string[];
   dailyLimitTenant: number | null;
   dailyLimitLead: number | null;
+  /** D-02 — may a journey's publisher approve its own steps? Absent = false. */
+  selfApprovalAllowed?: boolean;
+}
+
+/**
+ * D-02 — whether the approval of record still authorises this task, resolved by the
+ * caller (`approvalBinding.resolveApprovalAuthority`). Only `valid` authorises.
+ */
+export interface ApprovalAuthority {
+  /**
+   * `unverified`: the approval log or content could not be READ — refuses, never re-reviews.
+   * `recipient_mismatch`: the send would go to an address the approval does not bind —
+   * refuses and leaves the task as it is (a caller's address never sends a task to review).
+   */
+  verdict: 'valid' | 'stale' | 'expired' | 'revoked' | 'recipient_mismatch' | 'unverified';
+  reason: string;
+  decidedAt: string | null;
+  expiresAt: string | null;
 }
 
 /**
@@ -147,6 +165,18 @@ export interface GovernanceEvaluationInput {
   region: string | null;
   /** Injected instant — the evaluator never reads a clock. */
   evaluatedAt: string;
+  /**
+   * The latest recorded approval decision for the task, resolved by the caller
+   * from the append-only approval log. Consulted only for a `queued` task:
+   * `queued` is reachable without approval (pending → queued), so the status
+   * alone never proves a human approved it. Absent / null = no approval on record.
+   */
+  approvalOfRecord?: 'approved' | 'rejected' | null;
+  /**
+   * D-02 — the approval's binding, lifetime and revocation, resolved by the caller for an
+   * `approved` or `queued` task. Absent = not established, which REFUSES.
+   */
+  approvalAuthority?: ApprovalAuthority;
 }
 
 const allow = (
@@ -287,13 +317,32 @@ export function evaluateRegion(input: GovernanceEvaluationInput): GateEvaluation
   return allow('region', 'region.permitted', normalized ? `${normalized} is not restricted` : 'no regional restrictions configured', { region: normalized, restrictedRegions: restricted }, { scope: 'region' });
 }
 
-/** Task eligibility: only an APPROVED task may proceed. */
+/**
+ * Task eligibility: only an APPROVED task may proceed — either still in
+ * `approved`, or returned to `queued` by an earlier dispatch (quota deferral,
+ * transport failure) with an approval on record.
+ */
 export function evaluateEligibility(input: GovernanceEvaluationInput): GateEvaluation {
   const { task } = input;
   const evidence = { status: task.status, requiresApproval: task.requiresApproval };
 
+  // D-02 — an approved status proves only that someone approved SOMETHING. It authorises
+  // only while the approval of record is bound to this content and action, unrevoked and
+  // under seven days old. Anything not established refuses.
+  const authorisedStatus = task.status === 'approved' || (task.status === 'queued' && input.approvalOfRecord === 'approved');
+  const authority = input.approvalAuthority;
+  if (authorisedStatus && authority?.verdict !== 'valid') {
+    const verdict = authority?.verdict ?? 'stale';
+    return block('approval', `eligibility.approval_${verdict}`,
+      authority?.reason ?? 'the approval\'s content binding was not established; a fresh approval is required',
+      { ...evidence, approvalVerdict: verdict, approvalExpiresAt: authority?.expiresAt ?? null }, { scope: 'task' });
+  }
+
   if (task.status === 'approved') {
     return allow('approval', 'eligibility.approved', 'the task is approved and eligible to proceed', evidence, { scope: 'task' });
+  }
+  if (task.status === 'queued' && input.approvalOfRecord === 'approved') {
+    return allow('approval', 'eligibility.requeued_after_approval', 'the task was approved and returned to queued by an earlier dispatch; it may be dispatched again', { ...evidence, approvalOfRecord: 'approved' }, { scope: 'task' });
   }
   return block('approval', 'eligibility.not_approved', `a task in "${task.status}" is not eligible; only an approved task may proceed`, evidence, { scope: 'task' });
 }

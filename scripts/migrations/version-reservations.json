@@ -41,39 +41,826 @@
   "origin_main": "5025f51d7bb1420e3d3c5ef4ed626c64b953b3b0",
   "origin_main_max_version": "20270111000003",
   "reservations": [
-    { "version": "20270110000000", "slug": "pi_prospect_problem_actor_fk_removal", "status": "merged", "owner": "PI / DEFECT-008 (PR #364)", "evidence": "CODE_VERIFIED", "note": "On origin/main and applied in production. Immutable. Two other branches once claimed this version; both were renumbered." },
-    { "version": "20270111000000", "slug": "canonical_leads_users_client_privileges_revoked", "status": "merged", "owner": "SEC-A", "evidence": "CODE_VERIFIED", "note": "Renumbered from 20270110000000 to resolve the three-way collision." },
-    { "version": "20270111000001", "slug": "pi_opportunity_trigger_fn_hardening", "status": "merged", "owner": "SEC-A2", "evidence": "CODE_VERIFIED", "note": "Renumbered from 20270110000001." },
-    { "version": "20270111000002", "slug": "tenant_tables_client_privileges_revoked", "status": "merged", "owner": "SEC-A", "evidence": "CODE_VERIFIED", "note": "Renumbered from 20270110000002." },
-    { "version": "20270111000003", "slug": "function_execute_classwide_hardening", "status": "merged", "owner": "SEC-B", "evidence": "CODE_VERIFIED", "note": "Renumbered from 20270110000003. Equals the production ledger max and the origin/main max." },
-
-    { "version": "20270111000004", "slug": "media_h3_storage_quarantine_policies", "status": "merged", "owner": "release candidate 7bdd76ae (integration/release-candidate-5025f51d)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270112000000", "slug": "pi_erasure_authorizations", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270112000001", "slug": "leads_person_erasure_set_null", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270112000002", "slug": "prospect_score_evaluations_erasure_redaction", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270112000003", "slug": "person_erasure_requests", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270112000004", "slug": "erasure_legacy_lead_redaction", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure, owner-selectable)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270112000005", "slug": "outreach_decisions_erasure_person_ref", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure, owner-selectable)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-    { "version": "20270113000000", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (from privacy/a6-10-*)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block above every other claim (governance decision GD-4). Keep occupied until that rename lands, so nothing else reuses it." },
-    { "version": "20270115000000", "slug": "person_erasure_completion_verification", "status": "merged", "owner": "release candidate 7bdd76ae (person erasure)", "evidence": "CODE_VERIFIED", "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply." },
-
-    { "version": "20270116000000", "slug": "media_h3_storage_quarantine_policies", "status": "occupied_elsewhere", "owner": "media H-3 (STALE duplicate)", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED stale copies in worktrees C:/tmp/pi-actor-fk-migrations and C:/tmp/gov2-mig-collision. Superseded by the release candidate's 20270111000004: never apply. Kept occupied until those files are deleted, so the number is not reused while two H-3 files exist." },
-    { "version": "20270116000001", "slug": "pi_source_assertion_actor_fk_removal", "status": "occupied_elsewhere", "owner": "Agent B (source_assertions)", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations" },
-    { "version": "20270116000002", "slug": "pi_prospect_archive_rec_actor_fk_removal", "status": "occupied_elsewhere", "owner": "Agent D track 1 (prospect_archive_recommendations)", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations" },
-    { "version": "20270116000003", "slug": "pi_prospect_lifecycle_actor_fk_removal", "status": "occupied_elsewhere", "owner": "Agent C (prospect_lifecycle_transitions)", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations" },
-    { "version": "20270116000004", "slug": "reports_user_id_nullable", "status": "occupied_elsewhere", "owner": "Agent E (reports.user_id)", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations. A DRAFT presuming the nullable option, NOT a decision. Governance decision GD-5 (pending signature) recommends rejecting it in favour of 20270117000000." },
-
-    { "version": "20270117000000", "slug": "reports_user_id_restrict", "status": "reserved", "owner": "Agent E - alternative to the nullable design", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Drafted UNCOMMITTED in worktree C:/tmp/gov-e-reports. Recommended by GD-5 (pending signature). Usable only once 20270116000004 is rejected." },
-    { "version": "20270117000001", "slug": "capability_assignment_grantor_fk_removal", "status": "reserved", "owner": "Agent D track 2 - capability_assignments.granted_by", "evidence": "DESIGN_DECISION_REQUIRED", "note": "Drafted UNCOMMITTED in worktree C:/tmp/gov-d-reviewer-grantor. Parent default is still NO migration until the design decision is made." },
-    { "version": "20270117000002", "status": "reserved", "owner": "Agent H - schema-level governance control", "evidence": "CODE_VERIFIED", "note": "Parent-allocated to this track and DELIBERATELY UNUSED: every control shipped here is tooling and CI, so no schema change is required. Left reserved rather than released, so nothing else claims it while this programme is in flight." },
-
-    { "version": "20270118000000", "slug": "reports_update_policy_with_check", "status": "occupied_elsewhere", "owner": "GOV2 reports policy", "evidence": "CODE_VERIFIED", "note": "UNCOMMITTED on disk in worktree C:/tmp/gov2-reports-policy." },
-
-    { "version": "20270120000000", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (orchestration recovery)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
-    { "version": "20270120000001", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (orchestration recovery)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
-    { "version": "20270120000002", "slug": "whatsapp_broadcast_recipient_unique", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (WhatsApp send-once)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
-    { "version": "20270205000000", "slug": "public_default_privileges_no_client_roles", "status": "reserved", "owner": "Release-controls (#23 Part 1, owner-adopted 2026-11-10)", "evidence": "CODE_VERIFIED", "note": "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated, with pg_default_acl + born-closed probe postconditions. Sandbox-verified (closure-r21). Local only; not applied." },
-    { "version": "20270205000001", "slug": "public_schema_client_privileges_revoked", "status": "reserved", "owner": "Release-controls (#23 Part 3 targeted, owner-adopted 2026-11-10)", "evidence": "CODE_VERIFIED", "note": "Targeted client-role revoke on every public relation without a client-admitting policy (53 measured exclusions, drift-guarded), snapshot-based exact rollback. Sandbox-verified (closure-r21). Local only; not applied." }
+    {
+      "version": "20270110000000",
+      "slug": "pi_prospect_problem_actor_fk_removal",
+      "status": "merged",
+      "owner": "PI / DEFECT-008 (PR #364)",
+      "evidence": "CODE_VERIFIED",
+      "note": "On origin/main and applied in production. Immutable. Two other branches once claimed this version; both were renumbered."
+    },
+    {
+      "version": "20270111000000",
+      "slug": "canonical_leads_users_client_privileges_revoked",
+      "status": "merged",
+      "owner": "SEC-A",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20270110000000 to resolve the three-way collision."
+    },
+    {
+      "version": "20270111000001",
+      "slug": "pi_opportunity_trigger_fn_hardening",
+      "status": "merged",
+      "owner": "SEC-A2",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20270110000001."
+    },
+    {
+      "version": "20270111000002",
+      "slug": "tenant_tables_client_privileges_revoked",
+      "status": "merged",
+      "owner": "SEC-A",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20270110000002."
+    },
+    {
+      "version": "20270111000003",
+      "slug": "function_execute_classwide_hardening",
+      "status": "merged",
+      "owner": "SEC-B",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20270110000003. Equals the production ledger max and the origin/main max."
+    },
+    {
+      "version": "20270111000004",
+      "slug": "media_h3_storage_quarantine_policies",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (integration/release-candidate-5025f51d)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270112000000",
+      "slug": "pi_erasure_authorizations",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270112000001",
+      "slug": "leads_person_erasure_set_null",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270112000002",
+      "slug": "prospect_score_evaluations_erasure_redaction",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270112000003",
+      "slug": "person_erasure_requests",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270112000004",
+      "slug": "erasure_legacy_lead_redaction",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure, owner-selectable)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270112000005",
+      "slug": "outreach_decisions_erasure_person_ref",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure, owner-selectable)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270113000000",
+      "slug": "outreach_bridge_handoffs_person_erasure_set_null",
+      "status": "reserved",
+      "owner": "PI (erasure semantics) with Orchestration (outreach_bridge_handoffs); owner decision #5, 2026-11-10",
+      "evidence": "CODE_VERIFIED",
+      "note": "Canonical blob 67d3b85b1 (J1 A6-1; fails closed via pi_erasure_authorization_held). The other blob at this version, ae1f87206 (A6-10 option B, privacy/a6-10-bridge-setnull, from 1cea7cf2f), is RETIRED: it returned NEW unconditionally, so merge_unified_persons() would silently detach the losing person's handoffs. Not applied in production (D1, 2026-11-10)."
+    },
+    {
+      "version": "20270115000000",
+      "slug": "person_erasure_completion_verification",
+      "status": "merged",
+      "owner": "release candidate 7bdd76ae (person erasure)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Landed with the release candidate in this tree (integration/main-alignment-20261102). Not yet applied in production: the RC migration gates (L-1..L-10, P1/P4) still apply."
+    },
+    {
+      "version": "20270116000000",
+      "slug": "media_h3_storage_quarantine_policies",
+      "status": "occupied_elsewhere",
+      "owner": "media H-3 (STALE duplicate)",
+      "evidence": "CODE_VERIFIED",
+      "note": "UNCOMMITTED stale copies in worktrees C:/tmp/pi-actor-fk-migrations and C:/tmp/gov2-mig-collision. Superseded by the release candidate's 20270111000004: never apply. Kept occupied until those files are deleted, so the number is not reused while two H-3 files exist."
+    },
+    {
+      "version": "20270116000001",
+      "slug": "pi_source_assertion_actor_fk_removal",
+      "status": "occupied_elsewhere",
+      "owner": "Agent B (source_assertions)",
+      "evidence": "CODE_VERIFIED",
+      "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations"
+    },
+    {
+      "version": "20270116000002",
+      "slug": "pi_prospect_archive_rec_actor_fk_removal",
+      "status": "occupied_elsewhere",
+      "owner": "Agent D track 1 (prospect_archive_recommendations)",
+      "evidence": "CODE_VERIFIED",
+      "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations"
+    },
+    {
+      "version": "20270116000003",
+      "slug": "pi_prospect_lifecycle_actor_fk_removal",
+      "status": "occupied_elsewhere",
+      "owner": "Agent C (prospect_lifecycle_transitions)",
+      "evidence": "CODE_VERIFIED",
+      "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations"
+    },
+    {
+      "version": "20270116000004",
+      "slug": "reports_user_id_nullable",
+      "status": "occupied_elsewhere",
+      "owner": "Agent E (reports.user_id)",
+      "evidence": "CODE_VERIFIED",
+      "note": "UNCOMMITTED draft in worktree C:/tmp/pi-actor-fk-migrations. A DRAFT presuming the nullable option, NOT a decision. Governance decision GD-5 (pending signature) recommends rejecting it in favour of 20270117000000."
+    },
+    {
+      "version": "20270117000000",
+      "slug": "reports_user_id_restrict",
+      "status": "reserved",
+      "owner": "Agent E - alternative to the nullable design",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Drafted UNCOMMITTED in worktree C:/tmp/gov-e-reports. Recommended by GD-5 (pending signature). Usable only once 20270116000004 is rejected."
+    },
+    {
+      "version": "20270117000001",
+      "slug": "capability_assignment_grantor_fk_removal",
+      "status": "reserved",
+      "owner": "Agent D track 2 - capability_assignments.granted_by",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Drafted UNCOMMITTED in worktree C:/tmp/gov-d-reviewer-grantor. Parent default is still NO migration until the design decision is made."
+    },
+    {
+      "version": "20270117000002",
+      "status": "reserved",
+      "owner": "Agent H - schema-level governance control",
+      "evidence": "CODE_VERIFIED",
+      "note": "Parent-allocated to this track and DELIBERATELY UNUSED: every control shipped here is tooling and CI, so no schema change is required. Left reserved rather than released, so nothing else claims it while this programme is in flight."
+    },
+    {
+      "version": "20270118000000",
+      "slug": "reports_update_policy_with_check",
+      "status": "occupied_elsewhere",
+      "owner": "GOV2 reports policy",
+      "evidence": "CODE_VERIFIED",
+      "note": "UNCOMMITTED on disk in worktree C:/tmp/gov2-reports-policy."
+    },
+    {
+      "version": "20270120000000",
+      "status": "reserved",
+      "owner": "integration/outreach-engines-20261102 (orchestration recovery)",
+      "evidence": "CODE_VERIFIED",
+      "note": "GD-4 R-2 (owner GO 2026-11-10): the same blob carried forward from the integration branch, not a collision."
+    },
+    {
+      "version": "20270120000001",
+      "status": "reserved",
+      "owner": "integration/outreach-engines-20261102 (orchestration recovery)",
+      "evidence": "CODE_VERIFIED",
+      "note": "GD-4 R-2 (owner GO 2026-11-10): the same blob carried forward from the integration branch, not a collision."
+    },
+    {
+      "version": "20270120000002",
+      "slug": "whatsapp_broadcast_recipient_unique",
+      "status": "reserved",
+      "owner": "integration/outreach-engines-20261102 (WhatsApp send-once)",
+      "evidence": "CODE_VERIFIED",
+      "note": "GD-4 R-2 (owner GO 2026-11-10): the same blob carried forward from the integration branch, not a collision."
+    },
+    {
+      "version": "20270205000000",
+      "slug": "public_default_privileges_no_client_roles",
+      "status": "reserved",
+      "owner": "Release-controls (#23 Part 1, owner-adopted 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated, with pg_default_acl + born-closed probe postconditions. Sandbox-verified (closure-r21). Local only; not applied."
+    },
+    {
+      "version": "20270205000001",
+      "slug": "public_schema_client_privileges_revoked",
+      "status": "reserved",
+      "owner": "Release-controls (#23 Part 3 targeted, owner-adopted 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Targeted client-role revoke on every public relation without a client-admitting policy (53 measured exclusions, drift-guarded), snapshot-based exact rollback. Sandbox-verified (closure-r21). Local only; not applied."
+    },
+    {
+      "version": "20270127000000",
+      "slug": "execution_step_not_before",
+      "status": "reserved",
+      "owner": "Orchestration Prompt 4 (orch/c4-integration) - human-supplied retiming",
+      "evidence": "CODE_VERIFIED",
+      "note": "Nullable execution_plan_steps.not_before honoured by advance_execution_plan; written only by an operator resume with a structured return date. Unapplied anywhere."
+    },
+    {
+      "version": "20270127000001",
+      "slug": "contact_opt_out_reviews",
+      "status": "reserved",
+      "owner": "Orchestration G-11 (orch/c5-int) - opt-out hold company-admin review",
+      "evidence": "CODE_VERIFIED",
+      "note": "contact_opt_out_reviews: one pending review per contact anchor; adopted / pre-existing hold ids, locked channels, the COMPANY_ADMIN decision. RLS on, explicit REVOKE anon/authenticated, GRANT SELECT, INSERT, UPDATE to service_role. Unapplied anywhere. Outreach takes nothing in 20270127* (agreed 2026-11-05)."
+    },
+    {
+      "version": "20270127000002",
+      "slug": "opt_out_review_activity_days",
+      "status": "reserved",
+      "owner": "Orchestration G-11 (orch/c5-int) - admin activity days for the opt-out review window",
+      "evidence": "CODE_VERIFIED",
+      "note": "contact_opt_out_review_activity_days: one row per (company, local date) an admin opened the reviews; no personal data. RLS on, explicit REVOKE PUBLIC/anon/authenticated, GRANT SELECT, INSERT, UPDATE to service_role. Unapplied anywhere."
+    },
+    {
+      "version": "20270127000003",
+      "slug": "opt_out_review_reanchor",
+      "status": "reserved",
+      "owner": "Orchestration G-11 (orch/c5-int) - re-anchor pending person reviews at erasure (PI calls it)",
+      "evidence": "CODE_VERIFIED",
+      "note": "merged state + merged_into/merged_at; public.g11_reanchor_pending_opt_out_reviews (SECURITY DEFINER, search_path pinned, EXECUTE service_role only); ledger contact_opt_out_review_reanchors (person FK ON DELETE CASCADE). Unapplied anywhere."
+    },
+    {
+      "version": "20270127000004",
+      "slug": "contact_enrolment_closures",
+      "status": "reserved",
+      "owner": "Orchestration G-11 (orch/c5-int) - company admin manual closure of a prospect to new journeys",
+      "evidence": "CODE_VERIFIED",
+      "note": "contact_enrolment_closures: append-only, reopened once, one active per (org, prospect); composite FK to canonical_leads ON DELETE CASCADE. RLS on, explicit REVOKE PUBLIC/anon/authenticated, GRANT SELECT, INSERT, UPDATE to service_role. Unapplied anywhere."
+    },
+    {
+      "version": "20270127000005",
+      "slug": "opt_out_review_reanchor_same_case",
+      "status": "reserved",
+      "owner": "Orchestration G-11 (orch/c5-int) - re-anchor consolidates only the same governance case",
+      "evidence": "CODE_VERIFIED",
+      "note": "CREATE OR REPLACE g11_reanchor_pending_opt_out_reviews: merge only on a shared source_ref or a shared person-keyed governance row of that person; otherwise the next free target, else kept_distinct (ledger CHECK extended). Unapplied anywhere."
+    },
+    {
+      "version": "20270127000006",
+      "slug": "opt_out_review_reason_redaction",
+      "status": "reserved",
+      "owner": "Orchestration G-11 (orch/c5-int) - \"Wipe it\": a decided review's reason redacted at erasure",
+      "evidence": "CODE_VERIFIED",
+      "note": "CREATE OR REPLACE contact_opt_out_reviews_guard(): the transition-keyed tombstone branch also sets reason to '[redacted: subject erased]' when OLD.state = 'decided'. Unapplied anywhere."
+    },
+    {
+      "version": "20270127000007",
+      "status": "reserved",
+      "owner": "Orchestration Prompt 4 block 20270127000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270127000008",
+      "status": "reserved",
+      "owner": "Orchestration Prompt 4 block 20270127000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270127000009",
+      "status": "reserved",
+      "owner": "Orchestration Prompt 4 block 20270127000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270128000000",
+      "slug": "outreach_manual_outcome_once",
+      "status": "reserved",
+      "owner": "Outreach N-3 (owner GO 2026-11-06)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Partial unique index: one manual outcome per (company, task, type). Unapplied anywhere."
+    },
+    {
+      "version": "20270128000001",
+      "slug": "engagement_message_thread_arbiter",
+      "status": "reserved",
+      "owner": "Outreach N-5 (owner GO 2026-11-06)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Brings the baseline-only (thread_id, platform_message_id) upsert arbiter into the chain; no-op where it exists. Unapplied anywhere."
+    },
+    {
+      "version": "20270128000002",
+      "slug": "whatsapp_provider_event_ledger",
+      "status": "reserved",
+      "owner": "Outreach G-9b / N-2 (owner GO 2026-11-06)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Append-only WhatsApp status-event ledger, identity only. Unapplied anywhere."
+    },
+    {
+      "version": "20270128000003",
+      "slug": "message_content_retention",
+      "status": "reserved",
+      "owner": "Outreach N-4 (owner GO 2026-11-06)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Admin-approved clearing with a 3-day floor; operator notes table. Unapplied anywhere."
+    },
+    {
+      "version": "20270128000004",
+      "slug": "whatsapp_broadcast_recipient_person",
+      "status": "reserved",
+      "owner": "Outreach (owner GO 2026-11-08) - person-level restrictions at broadcast send time",
+      "evidence": "CODE_VERIFIED",
+      "note": "whatsapp_broadcast_recipients.person_id + derived person_company_id; composite FK to unified_persons (id, company_id) ON DELETE SET NULL (person_id); guard trigger: tenant derived from the broadcast, person immutable except the RI SET NULL. Journey recipients only (expandPersonRecipients). Unapplied anywhere."
+    },
+    {
+      "version": "20270128000005",
+      "status": "reserved",
+      "owner": "Outreach block 20270128000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270128000006",
+      "status": "reserved",
+      "owner": "Outreach block 20270128000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270128000007",
+      "slug": "whatsapp_unconfirmed_send_reconciliation",
+      "status": "reserved",
+      "owner": "Outreach (owner direction 2026-11-09, Follow-up A to Work Item 2) - unconfirmed-send reconciliation from provider evidence",
+      "evidence": "CODE_VERIFIED",
+      "note": "whatsapp_provider_events.verified_recipient_id (marker + number verified by the webhook job), whatsapp_broadcast_recipients.send_started_at, append-only whatsapp_send_reconciliations audit, and four tenant-scoped functions (candidates, attach, mark stale sending uncertain, flag). Never writes failed without a provider event; never sends. Unapplied anywhere."
+    },
+    {
+      "version": "20270128000008",
+      "status": "reserved",
+      "owner": "Outreach block 20270128000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270128000009",
+      "status": "reserved",
+      "owner": "Outreach block 20270128000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270129000000",
+      "slug": "opt_out_review_enforced_channels",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09 - G-11 enforced_channels on contact_opt_out_reviews",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Additive enforced_channels (CHECK subset of closed_channels): the channels a decision actually wrote a governance row for. Proposal under Outreach owner review; Orchestration implements. No migration file yet. Unapplied anywhere."
+    },
+    {
+      "version": "20270129000001",
+      "slug": "engine_request_frequency_claim",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09 - Follow-up D-2 atomic per-person frequency claim",
+      "evidence": "OWNER_GO_2026-11-09",
+      "note": "execution_engine_requests.queued_at (immutable, by trigger) + public.orch_claim_engine_request (advisory xact lock per tenant/subject, frequency gap, claim). Uncommitted D-2 worktree C:/tmp/orch-fu-d2. Production application NOT authorized."
+    },
+    {
+      "version": "20270129000002",
+      "slug": "uncertain_communication_acknowledgements",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09 - Follow-up E operator acknowledgement of uncertain communications",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "public.execution_uncertain_acknowledgements (append-only, UNIQUE per tenant and key; service_role SELECT+INSERT only). E implementation authorized 2026-11-10 for local build only; this migration awaits owner review. Uncommitted E worktree C:/tmp/orch-fu-e. Production application NOT authorized."
+    },
+    {
+      "version": "20270129000003",
+      "slug": "contact_enrolment_closures_reopen_db_clock",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09 - G-11 manual closure reopen time stamped by the database",
+      "evidence": "CODE_VERIFIED",
+      "note": "CREATE OR REPLACE contact_enrolment_closures_guard() (from 20270127000004): on the reopen transition the trigger sets reopened_at := clock_timestamp(), so the CHECK reopened_at >= closed_at compares two database-clock values; the service no longer sends reopened_at. Ships after 20270127000004; needs no other G-11 migration. Unapplied anywhere."
+    },
+    {
+      "version": "20270129000004",
+      "slug": "guard_functions_search_path",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09 - owner #12 step 7(a): search_path on three trigger guard functions",
+      "evidence": "OWNER_GO_2026-11-10",
+      "note": "ALTER FUNCTION ... SET search_path = public, pg_temp on execution_engine_requests_guard, prospect_campaigns_targeting_guard, prospect_campaign_targets_guard; bodies unchanged. PI review by virality-05 required. Local only; production application NOT authorized."
+    },
+    {
+      "version": "20270129000005",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270129000006",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270129000007",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270129000008",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270129000009",
+      "status": "reserved",
+      "owner": "Orchestration block 20270129000000-09",
+      "evidence": "DESIGN_DECISION_REQUIRED",
+      "note": "Block reserved; unused."
+    },
+    {
+      "version": "20270204000000",
+      "slug": "rpa_tables_client_privileges_revoked",
+      "status": "reserved",
+      "owner": "Outreach (owner-approved fix-forward, D1 security finding, 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "REVOKE ALL on rpa_sessions and rpa_retry_queue FROM anon, authenticated, with has_table_privilege postconditions. Local only; not applied."
+    },
+    {
+      "version": "20270111100000",
+      "slug": "pi_prospect_campaigns",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261226000000 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100001",
+      "slug": "pi_workflow_definitions",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261227000000 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100002",
+      "slug": "pi_execution_instances",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261228000000 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100003",
+      "slug": "pi_execution_plans",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261228000001 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100004",
+      "slug": "pi_execution_step_scheduling",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261228000002 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100005",
+      "slug": "pi_outreach_bridge",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261229000000 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100006",
+      "slug": "orchestration_engine_requests",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261230000000 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100007",
+      "slug": "orchestration_campaign_targeting",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000000 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100008",
+      "slug": "orchestration_engine_requests_engines",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000001 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100009",
+      "slug": "community_execution_safety",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000002 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100010",
+      "slug": "community_journey_link",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000003 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100011",
+      "slug": "social_publish_step_channel",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000004 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100012",
+      "slug": "extension_dispatch_safety",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000005 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100013",
+      "slug": "community_identity_link",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000006 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100014",
+      "slug": "identity_verification",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000007 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100015",
+      "slug": "engagement_request_idempotency",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000008 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20270111100016",
+      "slug": "migration_rerun_safety",
+      "status": "reserved",
+      "owner": "Orchestration (GD-4, owner GO 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Renumbered from 20261231000009 by GD-4 (band below 20270112000000, order kept). D1 2026-11-10: the old version was never applied in production."
+    },
+    {
+      "version": "20261226000000",
+      "slug": "pi_prospect_campaigns",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100000 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261227000000",
+      "slug": "pi_workflow_definitions",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100001 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261228000000",
+      "slug": "pi_execution_instances",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100002 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261228000001",
+      "slug": "pi_execution_plans",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100003 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261228000002",
+      "slug": "pi_execution_step_scheduling",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100004 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261229000000",
+      "slug": "pi_outreach_bridge",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100005 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261230000000",
+      "slug": "orchestration_engine_requests",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100006 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000000",
+      "slug": "orchestration_campaign_targeting",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100007 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000001",
+      "slug": "orchestration_engine_requests_engines",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100008 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000002",
+      "slug": "community_execution_safety",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100009 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000003",
+      "slug": "community_journey_link",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100010 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000004",
+      "slug": "social_publish_step_channel",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100011 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000005",
+      "slug": "extension_dispatch_safety",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100012 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000006",
+      "slug": "community_identity_link",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100013 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000007",
+      "slug": "identity_verification",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100014 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000008",
+      "slug": "engagement_request_idempotency",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100015 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000009",
+      "slug": "migration_rerun_safety",
+      "status": "retired",
+      "owner": "Orchestration",
+      "evidence": "PROD_VERIFIED",
+      "note": "Renumbered to 20270111100016 by GD-4; never applied in production (D1 2026-11-10). Do not reuse."
+    },
+    {
+      "version": "20261231000010",
+      "slug": "rpa_legacy_session_invalidation",
+      "status": "occupied_elsewhere",
+      "owner": "RPA (Outreach virality-6f)",
+      "evidence": "CODE_VERIFIED",
+      "note": "held out of S per virality-83 ruling 2026-11-11 (unapplied; deferred under #17 until RPA sealing ships to both runtimes). File lives on remediation/baseline-20261110 30410f11b and the preserve refs. When sealing ships: reserve a fresh version above the boundary and rename the file AND update its in-file version literals (the migration_version value and the COMMENT ON TABLE text) in the same change, settling D5; never apply the file under 20261231000010."
+    },
+    {
+      "version": "20270202000000",
+      "status": "reserved",
+      "owner": "PI contact governance (governance branch 144de096e)",
+      "evidence": "PROD_VERIFIED",
+      "production_applied": true,
+      "applied_slug": "pi_contact_governance_read_at",
+      "applied_sha256": "79fcaad274c54989e5d49bd1799d75b453d581c852fdb4def902b471a23539d2",
+      "applied_evidence": "Applied out-of-band 2026-11-09 via the Management API. applied_sha256 is the sha256 of the only committed blob (a6bd7171e, governance branch 144de096e), not a production byte comparison. DELIBERATELY NO LEDGER ROW (D1 2026-11-10: ledger 93 rows, max 20270111000003, no 20270202000000 row). Do not write a ledger row before the GD-4 band applies.",
+      "note": "Recorded as registry fields, never as a ledger row (owner, 2026-11-10)."
+    },
+    {
+      "version": "20270206000000",
+      "slug": "prospect_import_review_items",
+      "status": "reserved",
+      "owner": "PI build virality-e1 (feat/pi-salesnav-apollo-20261110; owner R3-A via virality-e9, 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Tenant-scoped staging table for Apollo-discovered name matches held for review. Service-role only; RLS on. Additive. Reserved by Release-controls (virality-83) after an all-refs and all-worktrees version scan (max real claim 20270205000001)."
+    },
+    {
+      "version": "20270207000000",
+      "slug": "extension_account_binding_and_submit_evidence",
+      "status": "reserved",
+      "owner": "Outreach virality-6f (outreach/ext-150 from remediation/baseline-20261110 @ 30410f11b; extension 1.5.0 E-1..E-4, owner-approved 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "NEW extension_account_bindings (service-role only, RLS, REVOKE PUBLIC/anon/authenticated, privilege postconditions) + additive columns on community_ai_actions. Reserved by Release-controls (virality-83) after an all-refs and all-worktrees rescan (claims at or above 20270205: 20270205000000/1 applied, 20270206000000 e1)."
+    },
+    {
+      "version": "20270207000001",
+      "slug": "extension_submit_gate",
+      "status": "reserved",
+      "owner": "Outreach virality-6f (outreach/ext-150; extension 1.5.0; reviewed PASS by virality-55 and virality-05)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Depends on 20270207000000. extension_commands CHECK widening (NOT VALID then VALIDATE) + SECURITY INVOKER authorize_extension_submit, service_role only. Reserved at the version 6f's draft already used (uncommitted in C:/tmp/omp-ext150), after an all-refs/all-worktrees rescan."
+    },
+    {
+      "version": "20270208000000",
+      "slug": "vendor_enrichment_pricing",
+      "status": "reserved",
+      "owner": "PI build virality-e1 (mode B billing; approved by virality-e9 under owner delegation, 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "BILLING area: widen llm_model_pricing.kind ('unit') and action_pricing_config.source_type ('vendor_unit'); seed the vendor_enrichment action row (+ plan_limits if the owner names plans). No table/view/function/grant change. Reviews: virality-83 (GOV-SECURITY, credits) + virality-05."
+    },
+    {
+      "version": "20270209000000",
+      "slug": "data_source_usage_ledger",
+      "status": "reserved",
+      "owner": "PI build virality-e1 (migration #3; approved by virality-e9; shape pre-reviewed by virality-05)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Additive nullable usage columns on prospect_enrichment_attempts and prospect_discovery_attempts + NEW service-role-only prospect_capture_runs. units_consumed and credits_charged must NEVER be tied by a CHECK (e9 constraint, 2026-11-10)."
+    },
+    {
+      "version": "20270210000000",
+      "slug": "action_pricing_versioned_apply",
+      "status": "reserved",
+      "owner": "Release-controls / GOV-SECURITY virality-83 (billing defect B-1; owner approved the fix via virality-e9, 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "SECURITY INVOKER function apply_action_pricing_change: FOR UPDATE on the action's active row, deactivate-then-insert in one transaction, source_type carried from the prior active row or required; EXECUTE service_role only; search_path pinned. Both admin writers move onto it."
+    },
+    {
+      "version": "20270210000001",
+      "slug": "model_pricing_versioned_apply",
+      "status": "reserved",
+      "owner": "Release-controls / GOV-SECURITY virality-83 (B-1 follow-up approved by virality-e9, 2026-11-10)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Same pattern as 20270210000000 for llm_model_pricing: apply_model_pricing_change locks the (provider, model_name, kind) active row, carries max_context_tokens/max_output_tokens from it when not supplied, deactivates-then-inserts in one transaction; service_role only; search_path pinned. Separate PR after B-1."
+    },
+    {
+      "version": "20270207000002",
+      "slug": "extension_v15_delivery_path",
+      "status": "reserved",
+      "owner": "Outreach virality-6f (outreach/ext-150-next, commit ba3fb5b20; U1 durable fix requested by virality-e9)",
+      "evidence": "CODE_VERIFIED",
+      "note": "Nullable community_ai_actions.delivery_path CHECK = 'extension_v15', BEFORE INSERT trigger (sticky on UPDATE), backfill of pending/unleased rows; SECURITY INVOKER, search_path pinned, EXECUTE revoked from PUBLIC/anon/authenticated. Does not touch 20270207000000/000001."
+    },
+    {
+      "version": "20270209000001",
+      "slug": "data_source_usage_validate",
+      "status": "reserved",
+      "owner": "PI build virality-e1 (second step of 20270209000000; virality-05 ACCESS EXCLUSIVE finding)",
+      "evidence": "CODE_VERIFIED",
+      "note": "VALIDATE CONSTRAINT x9 for the NOT VALID CHECKs added by 20270209000000, in its OWN transaction (SHARE UPDATE EXCLUSIVE, writes continue) + convalidated postcondition. Apply order: 06 -> 08 -> 09 -> 09-validate (separate apply)."
+    }
   ],
   "free_versions_note": "20270114000000 is free. 20270119* is free. The integration branch's renumbered block is claimed in the same change as its rename (GD-4); every version above that block is free. Claim one by adding it here in the same change as the migration."
 }

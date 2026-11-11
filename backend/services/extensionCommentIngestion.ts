@@ -1,0 +1,416 @@
+/**
+ * Comment ingestion into the canonical engagement store, shared by the browser
+ * routes: the 1.4 form (POST /api/extension/events/comments, still suspended by
+ * R-3) and the 1.5 command-bound form (POST /api/extension/v15/events/comments).
+ *
+ * Moved verbatim from pages/api/extension/events/comments.ts (behaviour
+ * unchanged): the route now authenticates and gates, then calls this.
+ */
+import { supabase } from '@/backend/db/supabaseClient';
+import { normalizeScrapedMessageContent } from '@/lib/engagement/extensionIngestion';
+import { derivePlatformThreadId, validateSyncRecord } from '@/lib/engagement/syncIngestion';
+
+export type IncomingPost = {
+  post_urn?: string;
+  /** 1.5 only: the post author's member URN, already checked equal to the bound member. */
+  post_author_urn?: string | null;
+  /** 1.5 only: provenance tag. */
+  ingested_via?: 'extension_v15';
+  post_url?: string | null;
+  post_text_preview?: string | null;
+  reaction_count?: number | null;
+  comment_count?: number | null;
+};
+
+export type IncomingComment = {
+  post_urn?: string;
+  comment_urn?: string;
+  platform_message_id?: string | null;
+  thread_id?: string | null;
+  parent_id?: string | null;
+  author_name?: string | null;
+  author_handle?: string | null;
+  actor_type?: string | null;
+  actor_id?: string | null;
+  author_avatar_url?: string | null;
+  author_self?: boolean;
+  content?: string | null;
+  created_at?: string | null;
+  raw_time?: string | null;
+  normalized_time?: string | null;
+  scraped_at?: string | null;
+  timestamp_confidence?: string | null;
+  parent_confidence?: string | null;
+  reaction_type?: string | null;
+  reaction_count?: number | null;
+  user_reaction?: string | null;
+  source?: string | null;
+  like_count?: number | null;
+  parent_comment_urn?: string | null;
+};
+
+export type Body = {
+  platform?: string;
+  posts?: IncomingPost[];
+  comments?: IncomingComment[];
+};
+
+function normalizeIso(v: unknown): string | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const parsed = Date.parse(s);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString();
+}
+
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function isSyncValidationError(err: unknown): boolean {
+  const message = (err as Error)?.message || '';
+  return /\b(required|must be|parent_id not found)\b/i.test(message);
+}
+
+export async function persistExtensionComments(
+  organizationId: string,
+  platform: string,
+  body: Body,
+): Promise<{ status: number; payload: Record<string, unknown> }> {
+  const incomingPosts = Array.isArray(body.posts) ? body.posts : [];
+  const incomingComments = Array.isArray(body.comments) ? body.comments : [];
+  console.info('[extension/events/comments] received', {
+    platform,
+    organizationId,
+    posts: incomingPosts.length,
+    comments: incomingComments.length,
+  });
+  if (incomingPosts.length === 0 && incomingComments.length === 0) {
+    return { status: 200, payload: { success: true, threads_upserted: 0, messages_upserted: 0 } };
+  }
+
+  try {
+    let sourceId: string | null = null;
+    try {
+      const { data: existingSource } = await supabase
+        .from('engagement_sources')
+        .select('id')
+        .eq('platform', platform)
+        .maybeSingle();
+      if (existingSource?.id) {
+        sourceId = existingSource.id as string;
+      } else {
+        const { data: insertedSource } = await supabase
+          .from('engagement_sources')
+          .insert({ platform, source_type: 'extension' })
+          .select('id')
+          .single();
+        sourceId = insertedSource?.id ?? null;
+      }
+    } catch {
+      /* non-fatal — FK is nullable */
+    }
+
+    // ── Threads (one per post URN) ─────────────────────────────────────────
+    const threadIdByPostUrn: Record<string, string> = {};
+    let threadsUpserted = 0;
+
+    for (const p of incomingPosts) {
+      const postUrn = (p.post_urn || '').toString().trim();
+      if (!postUrn) continue;
+
+      const { data: existing } = await supabase
+        .from('engagement_threads')
+        .select('id')
+        .eq('platform', platform)
+        .eq('platform_thread_id', postUrn)
+        .eq('organization_id', organizationId)
+        .maybeSingle();
+
+      const rawPayload = {
+        post_url: p.post_url ?? null,
+        post_text_preview: p.post_text_preview ?? null,
+        reaction_count: p.reaction_count ?? null,
+        comment_count: p.comment_count ?? null,
+        // 1.5 own-post collection records the post author and its provenance so the
+        // write path can fail closed on own content (authorize-submit). The 1.4 shape
+        // never carries them, so 1.4 rows are unchanged.
+        ...(p.post_author_urn ? { post_author_urn: p.post_author_urn } : {}),
+        ingested_via: p.ingested_via === 'extension_v15' ? 'extension_v15' : 'extension_comments',
+      };
+
+      if (existing?.id) {
+        threadIdByPostUrn[postUrn] = existing.id as string;
+        await supabase
+          .from('engagement_threads')
+          .update({
+            source_id: sourceId,
+            raw_payload: rawPayload,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+        threadsUpserted += 1;
+        continue;
+      }
+
+      const { data: inserted, error: insertErr } = await supabase
+        .from('engagement_threads')
+        .insert({
+          platform,
+          platform_thread_id: postUrn,
+          source_id: sourceId,
+          organization_id: organizationId,
+          raw_payload: rawPayload,
+        })
+        .select('id')
+        .single();
+      if (insertErr) {
+        console.warn('[extension/events/comments] thread insert failed:', {
+          message: insertErr.message,
+          platform,
+          organizationId,
+          postUrn,
+        });
+        continue;
+      }
+      if (inserted?.id) {
+        threadIdByPostUrn[postUrn] = inserted.id as string;
+        threadsUpserted += 1;
+      }
+    }
+
+    // ── Messages (one per comment) ────────────────────────────────────────
+    let messagesUpserted = 0;
+    let duplicatesUpdated = 0;
+    let duplicatesRejected = 0;
+    const insertedMessageIdByPlatformId = new Map<string, string>();
+    const touchedThreadIds = new Set<string>();
+    const sortedComments = [...incomingComments].sort((a, b) => {
+      const aParent = Boolean(a.parent_id ?? a.parent_comment_urn);
+      const bParent = Boolean(b.parent_id ?? b.parent_comment_urn);
+      return Number(aParent) - Number(bParent);
+    });
+
+    for (const c of sortedComments) {
+      const postUrn = (c.post_urn || '').toString().trim();
+      const commentUrn = (c.platform_message_id || c.comment_urn || '').toString().trim();
+      const content = (c.content ?? '').toString();
+      const parentId = (c.parent_id ?? c.parent_comment_urn ?? null) as string | null;
+      const scrapedAt = normalizeIso(c.scraped_at)
+        ?? normalizeIso(c.normalized_time)
+        ?? normalizeIso(c.created_at)
+        ?? new Date().toISOString();
+      const normalizedTime = firstText(c.normalized_time, c.created_at);
+      const timestampConfidence = firstText(c.timestamp_confidence)
+        ?? (normalizeIso(normalizedTime) ? null : 'low');
+      const rawTime = firstText(c.raw_time, c.normalized_time, c.created_at, scrapedAt);
+      const actorId = firstText(
+        c.actor_id,
+        c.author_handle,
+        c.author_name,
+        c.author_self ? `self:${organizationId}` : null,
+        commentUrn,
+      );
+      const syncRecord = validateSyncRecord({
+        platform_message_id: commentUrn,
+        thread_id: c.thread_id,
+        parent_id: parentId,
+        content,
+        actor_type: c.actor_type ?? (c.author_self ? 'company' : 'user'),
+        actor_id: actorId,
+        raw_time: rawTime,
+        normalized_time: normalizedTime,
+        scraped_at: scrapedAt,
+        timestamp_confidence: timestampConfidence,
+        source: c.source ?? 'platform_sync',
+      });
+      if (!postUrn) throw new Error('post_urn required');
+
+      let threadUuid = threadIdByPostUrn[postUrn];
+      if (!threadUuid) {
+        // Comment arrived without its post in the batch — backfill a minimal
+        // thread row so the comment has a home.
+        const { data: existing } = await supabase
+          .from('engagement_threads')
+          .select('id')
+          .eq('platform', platform)
+          .eq('platform_thread_id', postUrn)
+          .eq('organization_id', organizationId)
+          .maybeSingle();
+        if (existing?.id) {
+          threadUuid = existing.id as string;
+        } else {
+          const { data: inserted } = await supabase
+            .from('engagement_threads')
+            .insert({
+              platform,
+              platform_thread_id: postUrn,
+              source_id: sourceId,
+              organization_id: organizationId,
+            })
+            .select('id')
+            .single();
+          if (inserted?.id) threadUuid = inserted.id as string;
+        }
+      }
+      if (!threadUuid) continue;
+      touchedThreadIds.add(threadUuid);
+
+      const normalizedComment = normalizeScrapedMessageContent({
+        content: syncRecord.content,
+        author_self: c.author_self,
+      });
+
+      let parentMessageId: string | null = null;
+      if (syncRecord.parent_id) {
+        parentMessageId = insertedMessageIdByPlatformId.get(syncRecord.parent_id) ?? null;
+        if (!parentMessageId) {
+          // ENG-004/G-04: tenant-scoped. `syncRecord.parent_id` is scraped
+          // from the page, so this pointer is externally influenced — exactly the
+          // case §9 of the hardening brief names. Without the predicate a crafted
+          // parent id could attach this tenant's message to another tenant's.
+          // `organizationId` is `session.orgId`, never a request field.
+          const { data: parentRow } = await supabase
+            .from('engagement_messages')
+            .select('id')
+            .eq('organization_id', organizationId)
+            .eq('platform', platform)
+            .eq('platform_message_id', syncRecord.parent_id)
+            .maybeSingle();
+          parentMessageId = parentRow?.id ?? null;
+        }
+        if (!parentMessageId) throw new Error(`parent_id not found: ${syncRecord.parent_id}`);
+      }
+
+      const row = {
+        thread_id: threadUuid,
+        source_id: sourceId,
+        platform,
+        platform_message_id: syncRecord.platform_message_id,
+        sync_thread_id: derivePlatformThreadId(syncRecord),
+        platform_parent_id: syncRecord.parent_id,
+        parent_message_id: parentMessageId,
+        post_comment_id: null,
+        message_type: 'comment',
+        content: normalizedComment.content,
+        platform_created_at: syncRecord.normalized_time,
+        raw_time: syncRecord.raw_time,
+        normalized_time: syncRecord.normalized_time,
+        scraped_at: syncRecord.scraped_at,
+        sync_source: syncRecord.source,
+        actor_type: syncRecord.actor_type,
+        actor_external_id: syncRecord.actor_id,
+        like_count: typeof c.like_count === 'number' ? c.like_count : null,
+        direction: normalizedComment.isSelf ? 'outgoing' : 'incoming',
+        raw_payload: {
+          author_name: c.author_name ?? null,
+          author_handle: c.author_handle ?? null,
+          author_avatar_url: c.author_avatar_url ?? null,
+          author_self: normalizedComment.isSelf,
+          you_prefix_detected: normalizedComment.prefixDetected,
+          parent_comment_urn: syncRecord.parent_id,
+          sync_thread_id: syncRecord.thread_id,
+          raw_time: syncRecord.raw_time,
+          normalized_time: syncRecord.normalized_time,
+          scraped_at: syncRecord.scraped_at,
+          timestamp_confidence: syncRecord.timestamp_confidence,
+          parent_confidence: c.parent_confidence ?? null,
+          reaction_type: c.reaction_type ?? null,
+          reaction_count: typeof c.reaction_count === 'number'
+            ? c.reaction_count
+            : typeof c.like_count === 'number'
+              ? c.like_count
+              : null,
+          user_reaction: c.user_reaction ?? null,
+          source: syncRecord.source,
+          ingested_via: 'platform_sync',
+        },
+      };
+
+      const { data: insertedMessage, error: insertErr } = await supabase
+        .from('engagement_messages')
+        .insert(row)
+        .select('id')
+        .single();
+      if (insertErr) {
+        if ((insertErr as { code?: string }).code === '23505') {
+          // ENG-004/G-04: explicit tenant predicate on the update path.
+          const { data: updatedRow, error: updateErr } = await supabase
+            .from('engagement_messages')
+            .update(row)
+            .eq('organization_id', organizationId)
+            .eq('platform', platform)
+            .eq('platform_message_id', syncRecord.platform_message_id)
+            .eq('thread_id', threadUuid)
+            .select('id')
+            .maybeSingle();
+          if (updateErr) {
+            console.warn('[extension/events/comments] duplicate message refresh failed:', {
+              message: updateErr.message,
+              platform,
+              organizationId,
+              postUrn,
+              platformMessageId: syncRecord.platform_message_id,
+            });
+            duplicatesRejected += 1;
+            continue;
+          }
+          if (updatedRow?.id) {
+            insertedMessageIdByPlatformId.set(syncRecord.platform_message_id, updatedRow.id as string);
+          }
+          duplicatesUpdated += 1;
+          continue;
+        }
+        console.warn('[extension/events/comments] message insert failed:', {
+          message: insertErr.message,
+          platform,
+          organizationId,
+          postUrn,
+          platformMessageId: syncRecord.platform_message_id,
+        });
+        continue;
+      }
+      if (insertedMessage?.id) {
+        insertedMessageIdByPlatformId.set(syncRecord.platform_message_id, insertedMessage.id as string);
+      }
+      messagesUpserted += 1;
+    }
+
+    if (touchedThreadIds.size > 0) {
+      await supabase
+        .from('engagement_threads')
+        .update({ updated_at: new Date().toISOString() })
+        .in('id', Array.from(touchedThreadIds));
+    }
+
+    const responsePayload = {
+      success: true,
+      platform,
+      threads_upserted: threadsUpserted,
+      messages_upserted: messagesUpserted,
+      duplicates_updated: duplicatesUpdated,
+      duplicates_rejected: duplicatesRejected,
+    };
+    console.info('[extension/events/comments] persisted', {
+      platform,
+      organizationId,
+      ...responsePayload,
+    });
+    return { status: 200, payload: responsePayload };
+  } catch (err) {
+    console.error('[extension/events/comments]', {
+      platform,
+      organizationId,
+      error: (err as Error)?.message || String(err),
+    });
+    return {
+      status: isSyncValidationError(err) ? 400 : 500,
+      payload: { success: false, error: (err as Error)?.message || 'comment sync failed' },
+    };
+  }
+}

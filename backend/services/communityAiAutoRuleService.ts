@@ -5,7 +5,7 @@ import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { getPlaybookById, listPlaybooks } from './playbooks/playbookService';
 import { evaluatePlaybookForEvent } from './playbooks/playbookEvaluator';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
-import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from './communityAiPlatformPolicyService';
 import { canExecuteAction } from './executionGuardrailService';
 import { ownedDbTable } from '../db/writeOwner';
 
@@ -202,7 +202,8 @@ const resolveActionRecord = async (
       tone: action?.tone ?? null,
       tone_used: action?.tone_used ?? action?.tone ?? null,
       risk_level: action?.risk_level ?? null,
-      requires_human_approval: action?.requires_human_approval ?? true,
+      // D-01: the AI suggestion's requires_human_approval never waives approval.
+      requires_human_approval: true,
       requires_approval: action?.requires_approval ?? null,
       execution_mode: action?.execution_mode ?? 'manual',
       execution_modes_config: action?.execution_modes_config ?? null,
@@ -224,10 +225,19 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
     return { actions: input.suggested_actions || [], autoExecuted: 0 };
   }
 
-  const policy = await getCommunityAiPlatformPolicy();
-  if (!policy.auto_rules_enabled) {
+  // Prompt 3 (OD-1): this tenant's policy, fail closed. Auto rules run only when
+  // the tenant's execution is allowed AND auto_rules_enabled === true. No action
+  // has been evaluated yet, so this is a security audit row, not a per-action
+  // governance refusal (those are written by the executor and the claim).
+  const decision = await getCommunityExecutionPolicy({
+    organizationId: input.organization_id,
+    tenantId: input.tenant_id,
+  });
+  const autoRulesAllowed = decision.ok && decision.policy.auto_rules_enabled === true;
+  if (!autoRulesAllowed) {
+    const code = decision.ok === true ? 'POLICY_AUTO_RULES_DISABLED' : decision.code;
     console.debug('COMMUNITY_AI_PLATFORM_POLICY_BLOCK', {
-      reason: 'auto_rules_enabled=false',
+      reason: code,
       source: 'auto_rules',
     });
     await ownedDbTable('audit_logs').insert({
@@ -235,6 +245,8 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
       metadata: {
         policy_flag: 'auto_rules_enabled',
+        code,
+        organization_id: input.organization_id,
         source: 'auto_rules',
       },
       created_at: new Date().toISOString(),
@@ -416,6 +428,8 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return action;
       }
 
+      // Read paths (no explicit autoExecute) never act: the match is only
+      // recorded as pending.
       if (input.autoExecute !== true) {
         await resolveActionRecord(
           input.tenant_id,
@@ -427,11 +441,14 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return { ...action, auto_execution_deferred: true };
       }
 
+      // D-01: a matching auto-rule no longer approves. The action is recorded
+      // as 'pending' for a human, and executes only once a human approval
+      // (approved_at) exists on the row.
       const record = await resolveActionRecord(
         input.tenant_id,
         input.organization_id,
         normalizedAction,
-        'approved',
+        'pending',
         { allowAnyStatus: true }
       );
 
@@ -439,6 +456,23 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return {
           ...action,
           blocked_reason: 'No applicable playbook',
+        };
+      }
+
+      if (!record.approved_at) {
+        return {
+          ...action,
+          blocked_reason: 'Human approval required',
+        };
+      }
+
+      // D-01: an existing row of any other status (executed, uncertain,
+      // failed, executing, ...) is never acted on again from here; only a
+      // human-approved row still awaiting execution is.
+      if (record.status !== 'approved') {
+        return {
+          ...action,
+          blocked_reason: 'Action is not awaiting execution',
         };
       }
 
@@ -451,6 +485,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         );
       } catch (error: any) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: record.id,
           organizationId: input.organization_id,
           correlationId: randomUUID(),
@@ -482,6 +519,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       );
       if (!recordValidation.allowed) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: record.id,
           organizationId: input.organization_id,
           correlationId: randomUUID(),
@@ -520,6 +560,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       );
       if (!guardrail.allowed) {
         await persistExecutionResult({
+          // Pre-claim write: only while the row is still 'approved' (never
+          // overwrites a row another claimant is executing).
+          expectedFromStatuses: ['approved'],
           actionId: record.id,
           organizationId: input.organization_id,
           correlationId: randomUUID(),
@@ -534,7 +577,10 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return { ...action, blocked_reason: guardrail.reason ?? 'guardrail' };
       }
 
-      // Executor handles the terminal row write via persist:true.
+      // Executor handles the terminal row write via persist:true. It also takes
+      // the atomic approved -> executing claim (this call names no claim of its
+      // own), so a concurrent rule run, scheduler, retry flush or manual
+      // execute on the same row cannot both reach the connector.
       const execution = await executeAction(
         {
           id: record.id,
@@ -546,8 +592,9 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
           suggested_text: record.suggested_text,
           playbook_id: record.playbook_id,
           execution_mode: record.execution_mode,
-          requires_human_approval: false,
+          requires_human_approval: record.requires_human_approval ?? null,
           risk_level: record.risk_level,
+          approved_at: record.approved_at,
         },
         true,
         { source: 'auto', persist: true }
@@ -556,6 +603,23 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         return {
           ...action,
           blocked_reason: 'Human approval required by platform policy',
+        };
+      }
+      if (execution.status === 'skipped' && execution.reason === 'CLAIM_LOST') {
+        // Another worker claimed (or already finished) this row: nothing was
+        // done here, so nothing is logged or counted.
+        return {
+          ...action,
+          blocked_reason: 'Action is not awaiting execution',
+        };
+      }
+      if (execution.status === 'skipped' && execution.response?.pre_claim_refusal === true) {
+        // Prompt 3: refused before the claim (policy, expiry, evidence). The row
+        // is untouched and the executor already wrote the one refusal record;
+        // this was not an auto-execution, so nothing is logged or counted.
+        return {
+          ...action,
+          blocked_reason: `Refused: ${String(execution.error ?? execution.reason ?? 'PLATFORM_POLICY')}`,
         };
       }
 

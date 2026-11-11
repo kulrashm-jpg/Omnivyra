@@ -81,6 +81,7 @@ import {
   classifyThreadOutcome,
 } from '../../../lib/thread/threadPublishStates';
 import { logger } from '../logger';
+import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 
 export type ThreadPublishResult = {
   status: 'PUBLISHED' | 'FAILED';
@@ -668,7 +669,9 @@ export async function publishThread(input: {
  */
 export type ResumeThreadResult =
   | ThreadPublishResult
-  | { status: 'NOT_FOUND'; root_id: string; message: string; timestamp: string };
+  | { status: 'NOT_FOUND'; root_id: string; message: string; timestamp: string }
+  /** The root fails the engine's publish authorization predicate; nothing was published. */
+  | { status: 'NOT_AUTHORIZED'; root_id: string; code: string; message: string; timestamp: string };
 
 export async function resumeThreadPublish(input: {
   root_scheduled_post_id: string;
@@ -694,6 +697,45 @@ export async function resumeThreadPublish(input: {
       failed_count: 0,
       blocked_count: 0,
       message: 'Thread root is missing social_account_id or user_id; cannot resume',
+      timestamp,
+    };
+  }
+  // The same publish authorization predicate the scheduler, the worker and the cron apply
+  // (lib/campaign/publishAuthorization.ts): a resume never publishes a thread whose campaign
+  // is not active or whose root was never released. A campaign that cannot be read refuses.
+  const campaignId = typeof (root as any).campaign_id === 'string' ? ((root as any).campaign_id as string) : null;
+  let campaignStatus: string | null = null;
+  if (campaignId) {
+    const { data: campaign, error } = await supabase.from('campaigns').select('status').eq('id', campaignId).maybeSingle();
+    if (error) {
+      return {
+        status: 'NOT_AUTHORIZED',
+        root_id: input.root_scheduled_post_id,
+        code: 'PUBLISH_BLOCKED_CAMPAIGN_UNREADABLE',
+        message: `the thread's campaign could not be read (${error.message}); nothing was published`,
+        timestamp,
+      };
+    }
+    campaignStatus = campaign ? String((campaign as { status?: unknown }).status ?? '') : null;
+  }
+  const authorization = authorizePostPublish({
+    campaign_id: campaignId,
+    campaign_status: campaignStatus,
+    post_status: (root as any).status ?? null,
+    platform_post_id: (root as any).platform_post_id ?? null,
+    is_thread_start: true,
+    has_content: Boolean((root as any).content && String((root as any).content).trim().length > 0),
+  });
+  // A root that already landed WAS released: its own release gate is for a post not yet
+  // published, so for a partly published thread "not released (status published)" is not a
+  // refusal. Every other verdict stands, the campaign gate first among them.
+  const rootLanded = String((root as any).status ?? '').trim().toLowerCase() === 'published';
+  if (!authorization.authorized && !(authorization.code === 'PUBLISH_BLOCKED_POST_NOT_RELEASED' && rootLanded)) {
+    return {
+      status: 'NOT_AUTHORIZED',
+      root_id: input.root_scheduled_post_id,
+      code: authorization.code,
+      message: `${authorization.reason}; nothing was published`,
       timestamp,
     };
   }

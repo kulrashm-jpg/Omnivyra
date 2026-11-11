@@ -58,9 +58,21 @@ async function getRedis(): Promise<any | null> {
   }
 }
 
+/**
+ * Whether the shared client can take a command now. It is the BullMQ client
+ * (maxRetriesPerRequest null, offline queue, endless reconnect): while it is not
+ * connected a command is queued and never rejected, so awaiting it would hang the
+ * send until Redis returns and the DB fallback below would never run. Any status
+ * other than 'ready' is skipped; a client without a status field is used.
+ */
+function redisUsable(redis: unknown): boolean {
+  const status = (redis as { status?: unknown } | null)?.status;
+  return typeof status !== 'string' || status === 'ready';
+}
+
 async function redisGetCount(key: string): Promise<number | null> {
   const redis = await getRedis();
-  if (!redis) return null;
+  if (!redis || !redisUsable(redis)) return null;
   try {
     const val = await redis.get(key);
     return val === null ? 0 : parseInt(val, 10);
@@ -71,7 +83,7 @@ async function redisGetCount(key: string): Promise<number | null> {
 
 async function redisIncrBy(key: string, count: number, ttlSeconds: number): Promise<number | null> {
   const redis = await getRedis();
-  if (!redis) return null;
+  if (!redis || !redisUsable(redis)) return null;
   try {
     const newVal = await redis.incrby(key, count);
     if (newVal === count) {

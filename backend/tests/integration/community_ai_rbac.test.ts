@@ -18,6 +18,11 @@ import {
   socialAccountStore,
   tokenStore,
   webhookStore,
+  communityRpc,
+  seedExecutionPolicy,
+  executionPolicyStore,
+  refusalStore,
+  withApprovalEvidence,
 } from './communityAiTestHarness';
 
 jest.mock('../../services/userContextService', () => ({
@@ -33,6 +38,15 @@ jest.mock('../../services/userContextService', () => ({
     companyIds: ['tenant-1'],
     defaultCompanyId: 'tenant-1',
   }),
+}));
+
+// L-3: these suites exercise other mechanics with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement. Here every
+// recipient is allowed (the production gate is unchanged).
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -77,6 +91,10 @@ const { supabase } = jest.requireMock('../../db/supabaseClient');
 describe('Community-AI RBAC', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
+    (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+    executionPolicyStore.clear();
+    refusalStore.length = 0;
+    seedExecutionPolicy({ tenantId: 'tenant-1' });
     actionStore.clear();
     actionLogStore.length = 0;
     roleStore.length = 0;
@@ -160,7 +178,7 @@ describe('Community-AI RBAC', () => {
   it('executor can execute', async () => {
     setRole('CONTENT_PUBLISHER');
     seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
-    actionStore.set('rbac-3', {
+    actionStore.set('rbac-3', withApprovalEvidence({
       id: 'rbac-3',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -171,7 +189,7 @@ describe('Community-AI RBAC', () => {
       playbook_id: 'playbook-1',
       status: 'approved',
       requires_human_approval: false,
-    });
+    }));
     const execReq = {
       method: 'POST',
       headers: {},
@@ -190,7 +208,7 @@ describe('Community-AI RBAC', () => {
     // approved_at to be set when requires_human_approval is true. The test's
     // intent is to verify the admin's ability to schedule + execute, not the
     // approval handler itself, so we pre-stage the approval state.
-    actionStore.set('rbac-4', {
+    actionStore.set('rbac-4', withApprovalEvidence({
       id: 'rbac-4',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -202,7 +220,7 @@ describe('Community-AI RBAC', () => {
       status: 'approved',
       approved_at: new Date().toISOString(),
       requires_human_approval: true,
-    });
+    }));
     const approveReq = {
       method: 'POST',
       headers: {},

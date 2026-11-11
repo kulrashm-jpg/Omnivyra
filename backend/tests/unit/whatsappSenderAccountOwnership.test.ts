@@ -39,13 +39,10 @@ const templateSubmits: Row[] = [];
 const fetchCalls: string[] = [];
 
 function table(name: string) {
-  const st = {
-    op: 'select' as 'select' | 'update' | 'insert', patch: null as Row | null, eq: [] as Array<[string, unknown]>, ins: [] as Array<[string, unknown[]]>,
-    gts: [] as Array<[string, string]>, limit: null as number | null,
-  };
+  const st = { op: 'select' as 'select' | 'update' | 'insert', patch: null as Row | null, eq: [] as Array<[string, unknown]>, ins: [] as Array<[string, unknown[]]>, gt: [] as Array<[string, unknown]>, limit: Infinity };
   const rows = (): Row[] => ((db as unknown as Record<string, Row[]>)[name] ?? []);
   const match = (r: Row) => st.eq.every(([c, v]) => r[c] === v) && st.ins.every(([c, vs]) => vs.includes(r[c]))
-    && st.gts.every(([c, v]) => String(r[c]) > v);
+    && st.gt.every(([c, v]) => String(r[c]) > String(v));
   const run = async (): Promise<{ data: unknown; error: unknown; count?: number }> => {
     if (db.failTable === name) return { data: null, error: { message: `${name} unreadable` } };
     if (st.op === 'insert') {
@@ -58,10 +55,9 @@ function table(name: string) {
       rows().filter(match).forEach((r) => Object.assign(r, st.patch));
       return { data: null, error: null };
     }
-    const found = rows().filter(match);
-    // Keyset enqueue paging (order by id, limit, id > last).
-    const page = st.limit === null ? found : found.slice(0, st.limit);
-    return { data: page, error: null, count: found.length };
+    // W1's paged recipient read: keyset paging on id (gt + order + limit).
+    const found = rows().filter(match).sort((a, b) => String(a.id).localeCompare(String(b.id))).slice(0, st.limit);
+    return { data: found, error: null, count: found.length };
   };
   const first = async () => {
     const r = await run();
@@ -76,9 +72,9 @@ function table(name: string) {
     is: (c: string, v: unknown) => { st.eq.push([c, v]); return api; },
     in: (c: string, vs: unknown[]) => { st.ins.push([c, vs]); return api; },
     range: () => api,
-    order: () => api,
-    gt: (c: string, v: string) => { st.gts.push([c, v]); return api; },
+    gt: (c: string, v: unknown) => { st.gt.push([c, v]); return api; },
     limit: (n: number) => { st.limit = n; return api; },
+    order: () => api,
     single: first,
     maybeSingle: first,
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => run().then(res, rej),

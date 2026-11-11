@@ -26,13 +26,20 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * authority (an ACTIVE platform SUPER_ADMIN role on a canonical principal, so a
  * direct capability_assignments grant alone is refused). All of it runs before
  * the task is read or anything is written.
+ *
+ * D-02: this is the PLATFORM OVERRIDE, not the routine approver (that is the tenant route
+ * /api/outreach/journey-approval). Its rows are labelled `platform`. `{ phase: 'begin' }`
+ * returns the content hash and, for an external channel, a passkey ceremony bound to this
+ * one approval; the approval then carries `passkey` (and optionally `expectedContentHash`)
+ * and is refused without a fresh, matching, unused verification.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { requirePlatformWriteAuthority } from '../../../../backend/security/platformWriteAuthority';
+import { authRequestIpOrNull } from '../../../../backend/auth/requestClientIp';
 import { OUTREACH_PLATFORM_MANAGE } from '../../../../shared/contracts/security/SecurityCapabilities';
-import { approveOutreachTaskForOperator } from '../../../../backend/services/leadOutreachActivation';
+import { approveOutreachTaskForOperator, beginOperatorApproval } from '../../../../backend/services/leadOutreachActivation';
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
@@ -53,7 +60,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = str(body.companyId);
   const taskId = str(body.taskId);
   const reason = str(body.reason);
-  if (!companyId || !taskId || !reason) {
+  const begin = body.phase === 'begin';
+  if (!companyId || !taskId || (!reason && !begin)) {
     return res.status(400).json({ error: 'companyId, taskId and reason are required' });
   }
 
@@ -66,15 +74,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'no attributable approver identity on the request' });
   }
 
+  // Same platform-trusted client IP the tenant route records (never the first X-Forwarded-For hop).
+  const meta = { ip: authRequestIpOrNull(req), userAgent: typeof req.headers?.['user-agent'] === 'string' ? req.headers['user-agent'] : null };
+  if (begin) {
+    const started = await beginOperatorApproval(companyId, taskId, approverUserId, meta);
+    return res.status(started.ok ? 200 : 409).json(started);
+  }
+
   const result = await approveOutreachTaskForOperator(
     companyId,
     taskId,
     approverUserId,
-    reason,
+    reason as string,
     str(body.notes),
+    // D-02 — an external channel always needs the per-approval passkey; there is no opt-out.
+    { passkey: body.passkey ?? null, expectedContentHash: str(body.expectedContentHash), ...meta },
   );
 
-  return res.status(result.ok ? 200 : 409).json({ ok: result.ok, status: result.status, reason: result.reason });
+  // The decision took effect and its audit record did not. Not a success and not
+  // a conflict: the operator is told both facts, not the database's error text.
+  if (result.auditFailed) {
+    return res.status(500).json({
+      ok: false,
+      status: result.status,
+      auditFailed: true,
+      reason: 'the task moved to approved but the approval record could not be written',
+    });
+  }
+
+  const passkeyRefused = typeof result.reason === 'string' && result.reason.startsWith('passkey_');
+  return res.status(result.ok ? 200 : passkeyRefused ? 401 : 409).json({ ok: result.ok, status: result.status, reason: result.reason });
 }
 
 export default __createApiRoute(handler, { route: '/api/super-admin/outreach/approve' });

@@ -737,9 +737,13 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   );
 
   // ── Community AI lease reaper (every 30s) ─────────────────────────────────
-  // Cleans up dispatch leases that expired before the extension acked, stuck
-  // `executing` rows from dead API/RPA workers, and terminal rows still
-  // carrying lease metadata. RPC contract: returns a jsonb counter struct.
+  // Lapsed browser-dispatch claims and stuck `executing` rows MAY have reached
+  // the platform, so the reaper (20270111100012_extension_dispatch_safety)
+  // moves them to 'uncertain' — terminal, human review, never retried — and
+  // keeps the lease id/holder so the claimant's late result is still
+  // recorded. It also clears lease metadata from other terminal rows.
+  // RPC contract: returns a jsonb counter struct (reaped_* rows are now
+  // 'uncertain', reported as reaped_status).
   scheduleWorker(
     async () => {
       const { supabase: db } = await import('../db/supabaseClient');

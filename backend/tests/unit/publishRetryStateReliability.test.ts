@@ -314,7 +314,7 @@ jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () => ({ user: { id: '00000000-0000-4000-8000-0000000000a1' }, error: null })),
 }));
 
-import type { Job } from 'bullmq';
+import { UnrecoverableError, type Job } from 'bullmq';
 import { processPublishJob } from '../../queue/jobProcessors/publishProcessor';
 import {
   cancelScheduledPostQueueEntry,
@@ -1136,6 +1136,87 @@ function expectUncertain(postId: string, jobId: string): void {
   expect(qjob(jobId)).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
   if (schema.migrated) expect(qjob(jobId).retry_state).toBe('exhausted');
 }
+
+describe('G-4 — a confirmed rejection marked retryable:false is not retried', () => {
+  const rejected = { success: false, error: { code: 'LINKEDIN_VALIDATION', message: 'rejected by the provider', retryable: false } };
+
+  test('the first delivery ends unrecoverable: failed, exhausted, no stale next_retry_at', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult(rejected);
+
+    const error = await processPublishJob(delivery('qj-1', 'sp-1', 0)).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnrecoverableError);
+    expect((error as Error).message).toBe('rejected by the provider');
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'LINKEDIN_VALIDATION', platform_post_id: null });
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', retry_state: 'exhausted' });
+    expect(qjob('qj-1').next_retry_at ?? null).toBeNull();
+  });
+
+  test('a stalled re-delivery of it does not call the platform again', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult(rejected);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0)).catch(() => undefined);
+
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+  });
+
+  test('the person is told at once: this delivery is the last one', async () => {
+    const { createUserNotification } = jest.requireMock('../../services/userNotificationService') as { createUserNotification: jest.Mock };
+    createUserNotification.mockClear();
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult(rejected);
+    await processPublishJob(delivery('qj-1', 'sp-1', 0)).catch(() => undefined);
+
+    expect(createUserNotification).toHaveBeenCalledTimes(1);
+  });
+
+  test('retryable:false on an unrecognised code stays uncertain, not a definite failure', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'SOMETHING_NEW', message: '?', retryable: false } });
+    await expect(processPublishJob(delivery('qj-1', 'sp-1', 0))).resolves.toBeUndefined();
+    expectUncertain('sp-1', 'qj-1');
+  });
+
+  test('a pre-send failure marked retryable:true is still an ordinary retry', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    nextPlatformResult({ success: false, error: { code: 'PUBLISH_ERROR', message: 'db blip', retryable: true, delivery: 'not_sent' } });
+
+    const error = await processPublishJob(delivery('qj-1', 'sp-1', 0)).catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
+    expect(qjob('qj-1').retry_state).toBe('awaiting_retry');
+    expect(qjob('qj-1').next_retry_at).toBeTruthy();
+  });
+});
+
+describe('G-11 — the worker applies the publish capability the button applies', () => {
+  test.each(['reddit', 'threads', 'spotify'])('%s is refused before any platform call, not retried, and the post is failed', async (platform) => {
+    seedPost('sp-1', { platform });
+    seedJob('qj-1', 'sp-1');
+
+    const error = await processPublishJob(delivery('qj-1', 'sp-1', 0)).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnrecoverableError);
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'ACTION_NOT_SUPPORTED', platform_post_id: null });
+    expect(qjob('qj-1')).toMatchObject({ status: 'failed', error_code: 'ACTION_NOT_SUPPORTED', retry_state: 'exhausted' });
+  });
+
+  test.each(['linkedin', 'facebook', 'instagram', 'twitter', 'x', 'youtube', 'tiktok', 'pinterest'])('%s is not refused', async (platform) => {
+    seedPost('sp-1', { platform });
+    seedJob('qj-1', 'sp-1');
+    await processPublishJob(delivery('qj-1', 'sp-1', 0));
+    expect(publishesFor('sp-1')).toBe(1);
+    expect(post('sp-1').status).toBe('published');
+  });
+});
 
 describe('Closure-002 R5 — confirmed failures still retry', () => {
   test('a pre-send failure (delivery: not_sent) is retryable: failed + awaiting_retry, and the backoff delivery publishes', async () => {

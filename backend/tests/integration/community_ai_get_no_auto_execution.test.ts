@@ -48,13 +48,16 @@ jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: 
 // Policy explicitly allows auto rules, so the only thing that can stop the
 // GET from executing is the GET path itself.
 jest.mock('../../services/communityAiPlatformPolicyService', () => ({
-  getCommunityAiPlatformPolicy: jest.fn(async () => ({
+  ...jest.requireActual('../../services/communityAiPlatformPolicyService'),
+  // Prompt 3: the legacy knobs below, read as the tenant execution decision.
+  getCommunityExecutionPolicy: ((legacy: any) => jest.fn((..._a: any[]) =>
+    require('../helpers/communityPolicyDecisionShim').asExecutionDecision(legacy())))(jest.fn(async () => ({
     execution_enabled: true,
     auto_rules_enabled: true,
     require_human_approval: false,
     updated_at: '2026-11-01T00:00:00Z',
     updated_by: null,
-  })),
+  }))),
 }));
 
 const playbook = {
@@ -146,7 +149,23 @@ describe('community AI GET routes never auto-execute (P-8)', () => {
     expect(rows.every((row) => row.status === 'pending')).toBe(true);
   });
 
-  it('positive control: the ingestion worker path (autoExecute: true) still runs the matching rule', async () => {
+  it('CR-X-01 (W1 D-01): the ingestion worker path records the match as pending and executes nothing without a human approval', async () => {
+    await evaluateEngagement(
+      { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', context: { source: 'engagement_evaluation' } } as any,
+      { autoExecute: true },
+    );
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(Array.from(actionStore.values()).every((row) => row.status === 'pending')).toBe(true);
+  });
+
+  it('positive control: the ingestion worker path (autoExecute: true) runs the matching rule on a human-approved row', async () => {
+    // What pages/api/community-ai/actions/approve.ts leaves behind (W1: a rule never approves).
+    actionStore.set('act-approved', {
+      id: 'act-approved', tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin',
+      action_type: 'reply', target_id: 'comment-1', suggested_text: 'Thanks for sharing!', status: 'approved',
+      approved_at: '2026-11-01T00:00:00Z', approved_by: 'user-1', requires_human_approval: true,
+      execution_mode: 'api', playbook_id: 'pb-1', risk_level: 'low',
+    });
     await evaluateEngagement(
       { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', context: { source: 'engagement_evaluation' } } as any,
       { autoExecute: true },

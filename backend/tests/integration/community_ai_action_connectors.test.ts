@@ -1,6 +1,6 @@
 import type { NextApiRequest } from 'next';
 import executeHandler from '../../../pages/api/community-ai/actions/execute';
-import { executeAction as executeCommunityAction } from '../../services/communityAiActionExecutor';
+import { executeAction as realExecuteCommunityAction } from '../../services/communityAiActionExecutor';
 import { executeAction as executeLinkedinAction } from '../../services/platformConnectors/linkedinConnector';
 import {
   actionLogStore,
@@ -21,7 +21,21 @@ import {
   socialAccountStore,
   tokenStore,
   webhookStore,
+  communityRpc,
+  seedExecutionPolicy,
+  executionPolicyStore,
+  refusalStore,
+  withApprovalEvidence,
 } from './communityAiTestHarness';
+
+/**
+ * SEC3-F3: an external-mode execution needs a held claim. These direct calls let
+ * the executor take it itself (persist: true → the single claim RPC), exactly as
+ * an unclaimed persisting caller does in production; nothing is bypassed.
+ */
+const executeCommunityAction: typeof realExecuteCommunityAction = (action, approved, options) =>
+  realExecuteCommunityAction(action, approved, { persist: true, ...(options || {}) });
+
 
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn().mockResolvedValue({
@@ -36,6 +50,15 @@ jest.mock('../../services/userContextService', () => ({
     companyIds: ['tenant-1'],
     defaultCompanyId: 'tenant-1',
   }),
+}));
+
+// L-3: these suites exercise the connectors with fixtures that carry no
+// resolvable recipient; the recipient recheck itself is proven in
+// communityL3RecipientRecheck / communityL3RecheckEnforcement. Here every
+// recipient is allowed (the production gate is unchanged).
+jest.mock('../../services/communityRecipientRecheck', () => ({
+  ...jest.requireActual('../../services/communityRecipientRecheck'),
+  recheckCommunityRecipient: async () => ({ ok: true, basis: 'recipient_allowed', recipient: null }),
 }));
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -87,6 +110,27 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
 
 const { supabase } = jest.requireMock('../../db/supabaseClient');
 
+// Prompt 3 (OD-1): an executable action carries a complete human approval of
+// record (approver, content binding, passkey, < 7 days) as approve.ts leaves it,
+// and its tenant has an open execution policy. Nothing here waives a gate.
+const approveStored = (id: string) => {
+  const r = withApprovalEvidence({ ...actionStore.get(id), status: 'approved' });
+  actionStore.set(id, r);
+  return r;
+};
+const approveInline = (row: Record<string, any>) => {
+  const r = withApprovalEvidence({ status: 'approved', ...row } as Record<string, any>);
+  actionStore.set(r.id, r);
+  // The executor's own row type: the evidence fields are added to an untyped fixture row.
+  return r as unknown as Parameters<typeof realExecuteCommunityAction>[0];
+};
+const installPrompt3 = () => {
+  (supabase.rpc as jest.Mock).mockImplementation(communityRpc);
+  executionPolicyStore.clear();
+  refusalStore.length = 0;
+  seedExecutionPolicy({ tenantId: 'tenant-1' });
+};
+
 describe('Community-AI Action Execution', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
@@ -103,6 +147,7 @@ describe('Community-AI Action Execution', () => {
     autoRuleStore.length = 0;
     (executeLinkedinAction as jest.Mock).mockClear();
     seedPlaybook();
+    installPrompt3();
   });
 
   it('cannot execute without approval', async () => {
@@ -167,6 +212,7 @@ describe('Community-AI Action Execution', () => {
       requires_human_approval: false,
       status: 'pending',
     });
+    approveStored('action-3');
     seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     const req = {
       method: 'POST',
@@ -198,6 +244,7 @@ describe('Community-AI Connectors', () => {
     autoRuleStore.length = 0;
     (executeLinkedinAction as jest.Mock).mockClear();
     seedPlaybook();
+    installPrompt3();
   });
 
   afterEach(() => {
@@ -224,7 +271,7 @@ describe('Community-AI Connectors', () => {
       status: 'approved',
       requires_human_approval: false,
     });
-    const result = await executeCommunityAction(actionStore.get('token-1'), true);
+    const result = await executeCommunityAction(approveStored('token-1'), true);
     expect(result.ok).toBe(true);
     expect(result.execution_mode).toBe('browser');
     expect(result.status).toBe('dispatched');
@@ -247,7 +294,7 @@ describe('Community-AI Connectors', () => {
       status: 'approved',
       requires_human_approval: false,
     });
-    await executeCommunityAction(actionStore.get('token-2'), true);
+    await executeCommunityAction(approveStored('token-2'), true);
     expect(executeLinkedinAction).toHaveBeenCalledWith(expect.objectContaining({ id: 'token-2' }), 'token-1');
     // Post-consolidation: tokens are read from social_accounts, not from
     // community_ai_platform_tokens (which now holds metadata only).
@@ -274,7 +321,7 @@ describe('Community-AI Connectors', () => {
       status: 'approved',
       requires_human_approval: false,
     });
-    const result = await executeCommunityAction(actionStore.get('token-3'), true);
+    const result = await executeCommunityAction(approveStored('token-3'), true);
     expect(result.execution_mode).toBe('browser');
     expect((result.response as any)?.fallback_from).toBe('api');
     expect((result.response as any)?.api_error).toBe('PLATFORM_NOT_CONNECTED');
@@ -283,7 +330,7 @@ describe('Community-AI Connectors', () => {
   it('executes facebook connector with valid token', async () => {
     seedConnectedAccount({ platform: 'facebook', accessToken: 'token-1' });
     (global as any).fetch = jest.fn().mockResolvedValue(mockJsonResponse({ id: 'c1' }));
-    const result = await executeCommunityAction({
+    const result = await executeCommunityAction(approveInline({
       id: 'fb-1',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -294,14 +341,14 @@ describe('Community-AI Connectors', () => {
       playbook_id: 'playbook-1',
       requires_human_approval: false,
       execution_mode: 'api',
-    }, true);
+    }), true);
     expect(result.ok).toBe(true);
   });
 
   it('executes instagram connector with valid token', async () => {
     seedConnectedAccount({ platform: 'instagram', accessToken: 'token-1' });
     (global as any).fetch = jest.fn().mockResolvedValue(mockJsonResponse({ id: 'r1' }));
-    const result = await executeCommunityAction({
+    const result = await executeCommunityAction(approveInline({
       id: 'ig-1',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -312,7 +359,7 @@ describe('Community-AI Connectors', () => {
       playbook_id: 'playbook-1',
       requires_human_approval: false,
       execution_mode: 'api',
-    }, true);
+    }), true);
     expect(result.ok).toBe(true);
   });
 
@@ -324,7 +371,7 @@ describe('Community-AI Connectors', () => {
       }
       return mockJsonResponse({ data: { id: 'tweet-1' } });
     });
-    const result = await executeCommunityAction({
+    const result = await executeCommunityAction(approveInline({
       id: 'tw-1',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -335,14 +382,14 @@ describe('Community-AI Connectors', () => {
       playbook_id: 'playbook-1',
       requires_human_approval: false,
       execution_mode: 'api',
-    }, true);
+    }), true);
     expect(result.ok).toBe(true);
   });
 
   it('executes reddit connector with valid token', async () => {
     seedConnectedAccount({ platform: 'reddit', accessToken: 'token-1' });
     (global as any).fetch = jest.fn().mockResolvedValue(mockJsonResponse({ json: { data: {} } }));
-    const result = await executeCommunityAction({
+    const result = await executeCommunityAction(approveInline({
       id: 'rd-1',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -353,7 +400,7 @@ describe('Community-AI Connectors', () => {
       playbook_id: 'playbook-1',
       requires_human_approval: false,
       execution_mode: 'api',
-    }, true);
+    }), true);
     expect(result.ok).toBe(true);
   });
 
@@ -364,7 +411,7 @@ describe('Community-AI Connectors', () => {
       action_rules: { ...defaultPlaybook.action_rules, allow_reply: false },
     });
     seedConnectedAccount({ platform: 'facebook', accessToken: 'token-1' });
-    const result = await executeCommunityAction({
+    const result = await executeCommunityAction(approveInline({
       id: 'fb-3',
       tenant_id: 'tenant-1',
       organization_id: 'tenant-1',
@@ -375,7 +422,7 @@ describe('Community-AI Connectors', () => {
       playbook_id: 'playbook-block',
       requires_human_approval: false,
       execution_mode: 'api',
-    }, true);
+    }), true);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('not allowed');
   });

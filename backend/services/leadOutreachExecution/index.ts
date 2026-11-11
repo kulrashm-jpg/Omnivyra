@@ -228,6 +228,7 @@ export {
 export {
   dispatchInternalOutreachTask,
   dispatchInternalBatch,
+  requeuedDispatchProblem,
   type DispatchOutcome,
   type DispatchOptions,
   type DispatchResult,
@@ -246,6 +247,16 @@ export {
   type ApprovalStateView,
   type DecisionInput,
 } from './approval';
+export { revokeOutreachApproval } from './approvalRevocation';
+export {
+  APPROVAL_LIFETIME_DAYS,
+  APPROVAL_LIFETIME_MS,
+  computeApprovalBinding,
+  resolveApprovalAuthority,
+  requestFreshApproval,
+  isJourneyTask,
+  type ApprovalBinding,
+} from './approvalBinding';
 export {
   OUTREACH_TASKS_TABLE,
   OUTREACH_APPROVALS_TABLE,
@@ -257,7 +268,10 @@ export {
   getOutreachTask,
   getOutreachTaskById,
   listOutreachTasksForLead,
+  listQueuedOutreachTasks,
+  listStaleDispatchingOutreachTasks,
   setOutreachTaskState,
+  advanceOutreachTaskDeliveryStatus,
   setOutreachTaskPersonId,
   transitionOutreachTaskState,
   appendApproval,
@@ -270,6 +284,7 @@ export {
   listDeliveryEvidence,
   listOutcomes,
   listDecisions,
+  readAttemptHistory,
   outcomeTypesFor,
   rowToOutreachTask,
   type WriteResult,

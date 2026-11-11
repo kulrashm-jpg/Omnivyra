@@ -8,13 +8,14 @@ import { supabase } from '../db/supabaseClient';
 import { getPlaybookById } from './playbooks/playbookService';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
-import { executeRpaTask } from './rpaWorker/rpaWorkerService';
+import { executeRpaTask, rpaResultMayHaveActed } from './rpaWorker/rpaWorkerService';
+import { hostMatchesDomains, RPA_PLATFORM_URL_POLICY } from './rpaWorker/rpaTargetUrlPolicy';
 import { logCommunityAiActionEvent } from './communityAiActionLogService';
-import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
 import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
 import { ownedDbTable } from '../db/writeOwner';
+import { dmSendRefusal, isDmActionType } from './dmDispatchSafety';
 
 import type { CommandChainStep } from './communityAiActionExecutorRuntime';
 
@@ -61,7 +62,19 @@ export type ResultStatus =
   | 'dispatched'
   | 'failed'
   | 'skipped'
-  | 'blocked';
+  | 'blocked'
+  /**
+   * The platform MAY have received the action (timeout, lost response,
+   * throw after the request was sent, failure after the submit interaction).
+   * Terminal; requires human review; NEVER executed automatically again and
+   * never re-routed to another channel.
+   */
+  | 'uncertain'
+  /**
+   * Executor-internal: provably not acted, durably queued for retry in
+   * rpa_retry_queue. Persisted on the row as 'approved' (awaiting a claim).
+   */
+  | 'deferred';
 
 export type ExecutionResult = {
   ok: boolean;
@@ -84,6 +97,12 @@ export type ExecutionResult = {
    *  collision). Status mirrors the prior row, not the second run attempt. */
   deduplicated?: boolean;
   prior_action_id?: string | null;
+  /**
+   * Consequence classification of a non-success result. `false` = provably
+   * not acted (safe to retry / fall back). `true` or absent on a failure =
+   * may have acted.
+   */
+  may_have_acted?: boolean;
 };
 
 export type MetricEventType =
@@ -268,6 +287,7 @@ export const TERMINAL_ROW_STATUSES = new Set([
   'failed',
   'skipped',
   'blocked',
+  'uncertain',
 ]);
 
 const allowedActions = new Set(['like', 'reply', 'share', 'follow', 'schedule', 'dm']);
@@ -291,22 +311,12 @@ export const validateAction = (action: CommunityAiAction) => {
  * Approval gate. Returns true IFF a human must still approve before the
  * executor may proceed.
  *
- *   - requires_human_approval=true  → must be approved
- *   - risk_level='high'             → must be approved
- *   - caller's `approved` flag is honoured only when the action has actually
- *     been persisted as approved (approved_at set), to prevent a racy caller
- *     from claiming approval the row does not carry.
+ * D-01: every action needs the caller's `approved` flag AND a persisted human
+ * approval (approved_at). `requires_human_approval` and `risk_level` are
+ * AI-produced classifications: they may add a requirement but never waive
+ * one, so a low risk or requires_human_approval=false no longer skips this.
  */
 export const requiresApproval = (action: CommunityAiAction, approved: boolean) => {
-  const highRisk = action.risk_level === 'high';
-  const humanRequired = action.requires_human_approval === true;
-  const mustApprove = humanRequired || highRisk;
-
-  if (!mustApprove) {
-    // Still require a caller-provided approval flag to avoid drive-by execution.
-    return approved !== true;
-  }
-  // Gated: must be both approved flag AND persisted approved_at.
   if (approved !== true) return true;
   if (!action.approved_at) return true;
   return false;
@@ -504,7 +514,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 export const runApiExecution = async (action: CommunityAiAction): Promise<ExecutionResult> => {
   const connector = await loadConnector(action.platform);
   if (!connector?.executeAction) {
-    return { ok: false, status: 'failed', error: 'PLATFORM_NOT_SUPPORTED', execution_mode: 'api' };
+    return { ok: false, status: 'failed', error: 'PLATFORM_NOT_SUPPORTED', execution_mode: 'api', may_have_acted: false };
   }
   let tokenRow: { access_token?: string | null } | null = null;
   try {
@@ -517,7 +527,7 @@ export const runApiExecution = async (action: CommunityAiAction): Promise<Execut
     tokenRow = null;
   }
   if (!tokenRow?.access_token) {
-    return { ok: false, status: 'failed', error: 'PLATFORM_NOT_CONNECTED', execution_mode: 'api' };
+    return { ok: false, status: 'failed', error: 'PLATFORM_NOT_CONNECTED', execution_mode: 'api', may_have_acted: false };
   }
   try {
     const response = await withTimeout(
@@ -528,12 +538,29 @@ export const runApiExecution = async (action: CommunityAiAction): Promise<Execut
     const normalized = normalizeConnectorResponse(response);
 
     if (normalized.outcome === 'failed') {
+      // Connectors do not classify failures (they fold transport errors and
+      // timeouts into `success:false`), so every connector failure is
+      // may-have-acted UNLESS the connector explicitly says otherwise.
+      const explicitlyNotActed =
+        normalized.raw && typeof normalized.raw === 'object' && (normalized.raw as any).may_have_acted === false;
+      if (explicitlyNotActed) {
+        return {
+          ok: false,
+          status: 'failed',
+          error: normalized.error || 'EXECUTION_FAILED',
+          response: normalized.raw,
+          execution_mode: 'api',
+          may_have_acted: false,
+        };
+      }
       return {
         ok: false,
-        status: 'failed',
+        status: 'uncertain',
         error: normalized.error || 'EXECUTION_FAILED',
+        reason: 'API_OUTCOME_UNKNOWN',
         response: normalized.raw,
         execution_mode: 'api',
+        may_have_acted: true,
       };
     }
     // verified → executed; permissive → sent_unverified (honest about the
@@ -546,11 +573,14 @@ export const runApiExecution = async (action: CommunityAiAction): Promise<Execut
       execution_mode: 'api',
     };
   } catch (error: any) {
+    // Timeout, lost response or throw after the request may have been sent.
     return {
       ok: false,
-      status: 'failed',
+      status: 'uncertain',
       error: error?.message || 'EXECUTION_FAILED',
+      reason: 'API_OUTCOME_UNKNOWN',
       execution_mode: 'api',
+      may_have_acted: true,
     };
   }
 };
@@ -561,7 +591,7 @@ export const runRpaExecution = async (action: CommunityAiAction): Promise<Execut
   // bug upstream — fail loud rather than silently dispatch to a
   // handler that can't perform the action.
   if (action.action_type === 'dm') {
-    return { ok: false, status: 'failed', error: 'RPA_DM_NOT_SUPPORTED', execution_mode: 'rpa' };
+    return { ok: false, status: 'failed', error: 'RPA_DM_NOT_SUPPORTED', execution_mode: 'rpa', may_have_acted: false };
   }
   try {
     const rpaResult = await withTimeout(
@@ -578,12 +608,36 @@ export const runRpaExecution = async (action: CommunityAiAction): Promise<Execut
       'RPA_EXECUTION',
     );
     if (!rpaResult?.success) {
+      if (rpaResult?.deferred === true) {
+        // Provably not acted and durably queued: the row goes back to
+        // 'approved' and the retry flush must claim it before running it.
+        return {
+          ok: false,
+          status: 'deferred',
+          error: rpaResult.error || 'RPA_DEFERRED',
+          response: { ...rpaResult, execution_mode: 'rpa' },
+          execution_mode: 'rpa',
+          may_have_acted: false,
+        };
+      }
+      if (rpaResultMayHaveActed(rpaResult)) {
+        return {
+          ok: false,
+          status: 'uncertain',
+          error: rpaResult?.error || 'RPA_EXECUTION_FAILED',
+          reason: 'RPA_OUTCOME_UNKNOWN',
+          response: { ...rpaResult, execution_mode: 'rpa' },
+          execution_mode: 'rpa',
+          may_have_acted: true,
+        };
+      }
       return {
         ok: false,
         status: 'failed',
         error: rpaResult?.error || 'RPA_EXECUTION_FAILED',
         response: { ...rpaResult, execution_mode: 'rpa' },
         execution_mode: 'rpa',
+        may_have_acted: false,
       };
     }
     return {
@@ -594,11 +648,15 @@ export const runRpaExecution = async (action: CommunityAiAction): Promise<Execut
       execution_mode: 'rpa',
     };
   } catch (error: any) {
+    // Timeout or throw: the browser run may still be in flight / may have
+    // submitted. Never retried, never re-routed.
     return {
       ok: false,
-      status: 'failed',
+      status: 'uncertain',
       error: error?.message || 'RPA_EXECUTION_FAILED',
+      reason: 'RPA_OUTCOME_UNKNOWN',
       execution_mode: 'rpa',
+      may_have_acted: true,
     };
   }
 };
@@ -645,7 +703,66 @@ export const prepareBrowserDispatch = (chain?: CommandChainStep[]): ExecutionRes
  * opened the thread can force an active-thread continue command by
  * setting action.metadata.dm_thread_ready = true.
  */
-export function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | null {
+/**
+ * DM thread URLs, per platform: exact host (or proper subdomain) of the
+ * platform's domains AND an anchored path prefix. Substring matches are never
+ * accepted (`https://evil.com/linkedin.com/messaging/thread/...` is refused).
+ */
+const DM_THREAD_URL_RULES: Record<string, Array<{ domains: readonly string[]; pathPrefix: string }>> = {
+  facebook: [
+    { domains: ['messenger.com'], pathPrefix: '/t/' },
+    { domains: ['facebook.com'], pathPrefix: '/messages/t/' },
+  ],
+  instagram: [{ domains: ['instagram.com'], pathPrefix: '/direct/t/' }],
+  linkedin: [{ domains: ['linkedin.com'], pathPrefix: '/messaging/thread/' }],
+  twitter: [{ domains: ['x.com', 'twitter.com'], pathPrefix: '/messages/' }],
+};
+
+function parseHttpsUrl(raw: string): URL | null {
+  if (!/^https:\/\//i.test(raw) || /[\s\\]/.test(raw)) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+    return u;
+  } catch {
+    return null;
+  }
+}
+
+/** True only for an https thread URL on the platform's own host with the anchored thread path. */
+export function isPlatformDmThreadUrl(platform: string, raw: string): boolean {
+  const rules = DM_THREAD_URL_RULES[platform];
+  const u = parseHttpsUrl(raw);
+  if (!rules || !u) return false;
+  return rules.some((r) => hostMatchesDomains(u.hostname, r.domains) && u.pathname.startsWith(r.pathPrefix) && u.pathname.length > r.pathPrefix.length);
+}
+
+/** True only for an https URL on the platform's own host (profile links). */
+function isPlatformProfileUrl(platform: string, raw: string): boolean {
+  const u = parseHttpsUrl(raw);
+  const domains = RPA_PLATFORM_URL_POLICY[platform]?.domains;
+  return !!u && hostMatchesDomains(u.hostname, domains);
+}
+
+type DmPlan = { chain?: CommandChainStep[]; refusal?: string };
+
+/**
+ * DM orchestration — synthesizes a multi-step command chain. FAILS CLOSED:
+ * a DM is only planned when it is addressed to an explicit thread (validated
+ * thread URL / thread id) or an explicit recipient (participant name with
+ * dm_thread_ready, handle, or platform-host profile URL). It is NEVER sent
+ * into "whatever conversation is open":
+ *
+ *   - target_id is a validated thread url / thread id -> (open_thread +)
+ *     continue_thread(text, threadUrl/threadId).
+ *   - metadata.dm_thread_ready with a validated thread url/id or a LinkedIn
+ *     participant name -> open_thread + continue_thread against it.
+ *   - non-LinkedIn handle / platform profile URL -> start_new_dm(recipient).
+ *   - LinkedIn display-name/profile targets with no resolved thread, a
+ *     thread-ready flag with no thread/participant, a URL on a foreign host
+ *     or a malformed thread URL -> REFUSED (DM_TARGET_UNRESOLVED).
+ */
+function planDmCommandChain(action: CommunityAiAction): DmPlan | null {
   const actionType = (action.action_type || '').toString().toLowerCase();
   if (actionType !== 'dm') return null;
 
@@ -659,6 +776,9 @@ export function buildDmCommandChain(action: CommunityAiAction): CommandChainStep
       typeof metadata.dm_thread_url === 'string' && metadata.dm_thread_url.trim()
         ? metadata.dm_thread_url.trim()
         : null;
+    if (metadataThreadUrl && !isPlatformDmThreadUrl(platform, metadataThreadUrl)) {
+      return { refusal: 'DM_THREAD_URL_INVALID' };
+    }
     const metadataThreadId =
       typeof metadata.dm_thread_id === 'string' && metadata.dm_thread_id.trim()
         ? metadata.dm_thread_id.trim()
@@ -667,7 +787,7 @@ export function buildDmCommandChain(action: CommunityAiAction): CommandChainStep
       ? { threadUrl: metadataThreadUrl }
       : metadataThreadId
         ? { threadId: metadataThreadId }
-        : {};
+        : null;
     const metadataParticipantName =
       typeof metadata.dm_participant_name === 'string' && metadata.dm_participant_name.trim()
         ? metadata.dm_participant_name.trim()
@@ -676,88 +796,115 @@ export function buildDmCommandChain(action: CommunityAiAction): CommandChainStep
       typeof metadata.dm_last_message_preview === 'string' && metadata.dm_last_message_preview.trim()
         ? metadata.dm_last_message_preview.trim()
         : null;
-    if (platform === 'linkedin' && (metadataThreadUrl || metadataThreadId)) {
-      return [
-        { action_type: 'open_thread', payload: threadPayload },
-        { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
-      ];
+    if (platform === 'linkedin' && threadPayload) {
+      return {
+        chain: [
+          { action_type: 'open_thread', payload: threadPayload },
+          { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
+        ],
+      };
     }
     if (platform === 'linkedin' && metadataParticipantName) {
       const participantPayload = {
         participantName: metadataParticipantName,
         ...(metadataLastMessagePreview ? { lastMessagePreview: metadataLastMessagePreview } : {}),
       };
-      return [
-        { action_type: 'open_thread', payload: participantPayload },
-        { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...participantPayload } },
-      ];
+      return {
+        chain: [
+          { action_type: 'open_thread', payload: participantPayload },
+          { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...participantPayload } },
+        ],
+      };
     }
-    return [
-      { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
-    ];
+    if (!threadPayload) {
+      // "Thread ready" with nothing that names the thread: refuse rather
+      // than type into whichever conversation happens to be open.
+      return { refusal: 'DM_TARGET_UNRESOLVED' };
+    }
+    return {
+      chain: [
+        { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
+      ],
+    };
   }
 
   const target = String(action.target_id || '').trim();
   if (!target) return null;
 
-  const threadUrlPatterns = [
-    /messenger\.com\/t\//i,
-    /facebook\.com\/messages\/t\//i,
-    /instagram\.com\/direct\/t\//i,
-    /linkedin\.com\/messaging\/thread\//i,
-    /x\.com\/messages\//i,
-    /twitter\.com\/messages\//i,
-  ];
-  const looksLikeThreadUrl = threadUrlPatterns.some((re) => re.test(target));
-  const looksLikeThreadId  =
-    (/^[a-zA-Z0-9:_\-=]{6,}$/.test(target) && !target.includes('.'))
-    || (platform === 'linkedin' && /^2-[A-Za-z0-9_\-=]{12,}/.test(target));
+  const isUrl = /^[a-z][a-z0-9+.-]*:/i.test(target);
+  const looksLikeThreadUrl = isUrl && isPlatformDmThreadUrl(platform, target);
+  const looksLikeThreadId =
+    !isUrl && (
+      (/^[a-zA-Z0-9:_\-=]{6,}$/.test(target) && !target.includes('.'))
+      || (platform === 'linkedin' && /^2-[A-Za-z0-9_\-=]{12,}$/.test(target))
+    );
 
   if (looksLikeThreadUrl || looksLikeThreadId) {
     const threadPayload = looksLikeThreadUrl ? { threadUrl: target } : { threadId: target };
     if (platform === 'linkedin') {
-      return [
-        {
-          action_type: 'open_thread',
-          payload: threadPayload,
-        },
-        {
-          action_type: 'continue_thread',
-          payload: {
-            text,
-            autoSubmit: true,
-            ...threadPayload,
-          },
-        },
-      ];
+      return {
+        chain: [
+          { action_type: 'open_thread', payload: threadPayload },
+          { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
+        ],
+      };
     }
-    return [
-      {
-        action_type: 'continue_thread',
-        payload: {
-          text,
-          autoSubmit: true,
-          ...threadPayload,
-        },
-      },
-    ];
+    return {
+      chain: [
+        { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
+      ],
+    };
   }
 
   if (platform === 'linkedin') {
-    return [
-      { action_type: 'continue_thread', payload: { text, autoSubmit: true } },
-    ];
+    // No resolved thread or recipient: the old behaviour sent the text into
+    // the currently open LinkedIn conversation. Fail closed.
+    return { refusal: 'DM_TARGET_UNRESOLVED' };
   }
 
-  // Handle / profile-URL → single-step start_new_dm (atomic).
-  const isProfileUrl = /^https?:\/\//i.test(target);
-  const recipientField = platform === 'linkedin' && isProfileUrl
-    ? { recipientProfileUrl: target }
-    : { recipientHandle: target };
+  if (isUrl) {
+    // A URL that is not a validated thread URL must at least be a profile
+    // link on the platform's own host.
+    if (!isPlatformProfileUrl(platform, target)) return { refusal: 'DM_TARGET_URL_NOT_ALLOWED' };
+    return {
+      chain: [
+        { action_type: 'start_new_dm', payload: { recipientHandle: target, text, autoSubmit: true } },
+      ],
+    };
+  }
 
-  return [
-    { action_type: 'start_new_dm', payload: { ...recipientField, text, autoSubmit: true } },
-  ];
+  // Handle -> single-step start_new_dm (atomic).
+  return {
+    chain: [
+      { action_type: 'start_new_dm', payload: { recipientHandle: target, text, autoSubmit: true } },
+    ],
+  };
+}
+
+/**
+ * The chain SHAPE a DM would be dispatched as, or null (not a DM / no text /
+ * shape refused). This is addressing validation only — it is NOT dispatch
+ * authority: every dispatch path must consult dmCommandChainRefusal, which
+ * also applies the DM send policy (dmDispatchSafety).
+ */
+export function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | null {
+  return planDmCommandChain(action)?.chain ?? null;
+}
+
+/**
+ * Non-null when a DM must NOT be dispatched: an unresolved / invalid target
+ * (shape), or the DM send policy — no authoritative person -> thread mapping
+ * exists, and Instagram has no server-verified account tier
+ * (see dmDispatchSafety). Applies to EVERY dm action, including one with no
+ * text or no target (those used to fall through to a bare single-step DM).
+ */
+export function dmCommandChainRefusal(action: CommunityAiAction): string | null {
+  const shapeRefusal = planDmCommandChain(action)?.refusal ?? null;
+  if (shapeRefusal) return shapeRefusal;
+  if (!isDmActionType(action.action_type)) return null;
+  // No verified tier is ever passed from here: the executor has no
+  // authoritative tier source, so Instagram DMs are always refused.
+  return dmSendRefusal({ platform: action.platform, verifiedInstagramTier: null });
 }
 
 /**

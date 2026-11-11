@@ -11,9 +11,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *  - Validation (capability + payload schema) runs BEFORE the CAS claim, so
  *    a permanently-invalid row does not get claimed-and-dropped on every
  *    90-second cycle.
- *  - On claim, the row transitions pending → dispatched and stamps
- *    dispatch_lease_id, dispatch_lease_expires_at, dispatch_lease_holder_id.
- *    Only the same holder (derived from session) may submit the result.
+ *  - On claim (claim_community_ai_browser_command, one atomic UPDATE) the
+ *    row stays pending and is stamped with dispatch_lease_id,
+ *    dispatch_lease_expires_at, dispatch_lease_holder_id. Only the same
+ *    holder (derived from session) may submit the result.
+ *  - A claimed command is never offered again, to any client. Cancellation,
+ *    the platform kill switch and approval are enforced at the claim.
  *
  * Response:
  *   { success: true, commands: Command[] }
@@ -27,18 +30,34 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { resolveEngagementCapability, CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
 import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityService';
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
+import { getActiveBinding, isUndefinedColumnError } from '@/backend/services/extension15';
+import { normalizePlatform } from '@/backend/constants/platforms';
 import { recordExecutionMetric } from '@/backend/services/communityAiExecutionResultService';
 import { resolveAccountTier } from '@/backend/services/rpaWorker/rpaAccountTier';
-import { getCommunityAiPlatformPolicy } from '@/backend/services/communityAiPlatformPolicyService';
+import { getCommunityExecutionPolicy } from '@/backend/services/communityAiPlatformPolicyService';
+import { recordCommunityExecutionRefusal } from '@/backend/services/communityExecutionRefusal';
+import { dmSendRefusal, wouldDispatchDm, INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED } from '@/backend/services/dmDispatchSafety';
+import { recheckCommunityRecipient, isRecipientRecheckRefusal } from '@/backend/services/communityRecipientRecheck';
 import { EXTENSION_BROWSER_INGESTION_SUSPENDED, SUSPENDED_COLLECTION_COMMANDS } from '@/backend/services/extensionIngestionSuspension';
+
+/** Narrowing helpers (the project is not strictNullChecks, so `!x.ok` does not narrow). */
+const refusedCode = (d: { ok: boolean }): string => (d as { code?: string }).code ?? 'POLICY_UNREADABLE';
 
 const LEASE_TTL_SECONDS = 90; // longer than the extension's 30s handler timeout + retries
 
 /**
  * Steps that only read the tenant's own inbox (queued by
  * /api/engagement/platform-sync). Every other step can send, like or post.
+ *
+ * RECORDED EXEMPTION (Prompt 3, OD-1): these two steps skip the tenant
+ * execution-policy and approval pre-check below, because they contact no one.
+ * They are NOT exempt from the claim: claim_community_ai_browser_command still
+ * requires the policy, a human approval of record and the 7-day lifetime, and
+ * platform-sync rows carry no approved_by, so today they are never handed out
+ * (and R-3 suspends collection commands anyway). Widening this set is an owner
+ * decision; extensionLeaseHandoutPolicyGate.test.ts pins its contents.
  */
-const READ_ONLY_EXTENSION_ACTIONS = new Set(['sync_dm_inbox', 'sync_comments_inbox']);
+const READ_ONLY_EXTENSION_ACTIONS: ReadonlySet<string> = new Set(['sync_dm_inbox', 'sync_comments_inbox']);
 
 const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
   reply: 'reply_comment',
@@ -151,44 +170,42 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   })();
 
   try {
-    const nowIso = new Date().toISOString();
-    // ── Re-offer rule, gated on proven client capability ──────────────────
+    // ── Offer rule: never re-offer a claimed command — to ANY client ───────
     //   A browser command is "queued" solely by this row, and the irreversible
     //   platform action happens outside any database transaction. Re-offering a
-    //   command whose lease lapsed therefore hands a second session a live claim
-    //   for work the first may still be performing — the duplicate-DM path.
-    //
-    //   A renewal-capable client keeps its lease alive for as long as it is
-    //   genuinely executing, so a lapsed lease from such a client means the
-    //   client is gone. We still must not re-offer: the platform action may
-    //   already have happened and no result was ever recorded. Those rows
-    //   become `claimed / delivery unknown` and go to operator recovery.
-    //
-    //   v1.3.9 cannot renew. Applying the strict rule to it would strand every
-    //   command 90s after claim, so it keeps the legacy behaviour until the
-    //   renewal-capable build is published. The capability is PROVEN by an
-    //   explicit request header, never inferred from the capability-map version
-    //   (which self-heals and therefore cannot identify a client build).
-    const supportsRenewal = String(req.headers['x-omnivyra-dispatch-renewal'] || '').trim() === '1';
+    //   command whose lease lapsed hands a second session a live claim for work
+    //   the first may still be performing (the duplicate-DM path; the extension
+    //   worst case is ~96s against a 90s lease). So ONLY never-claimed work is
+    //   offered, regardless of whether the client advertises
+    //   x-omnivyra-dispatch-renewal. A lapsed lease is reaped to 'uncertain'
+    //   (reap_community_ai_action_leases) and its late result is still
+    //   recorded by /api/extension/action-result. Cancelled rows are skipped
+    //   here as an optimisation; the claim RPC below is the authority for
+    //   cancellation, the platform kill switch and approval.
+    const pendingCommands = (columns: string, unmarkedOnly: boolean) => {
+      let q = supabase
+        .from('community_ai_actions')
+        .select(columns)
+        .eq('organization_id', session.orgId)
+        .eq('status', 'pending')
+        .eq('execution_mode', 'browser')
+        .is('dispatch_lease_id', null)
+        .is('cancel_requested_at', null);
+      if (unmarkedOnly) q = q.is('delivery_path', null);
+      return q.order('created_at', { ascending: false }).limit(10);
+    };
+    const COMMAND_COLUMNS = 'id, tenant_id, organization_id, platform, action_type, target_id, discovered_user_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at';
 
-    let query = supabase
-      .from('community_ai_actions')
-      .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index, approved_at')
-      .eq('organization_id', session.orgId)
-      .eq('status', 'pending')
-      .eq('execution_mode', 'browser');
-
-    if (supportsRenewal) {
-      // Strict: only work that has NEVER been claimed is offered.
-      query = query.is('dispatch_lease_id', null);
-    } else {
-      // Legacy (v1.3.9): unclaimed, or claimed with a lapsed lease.
-      query = query.or(`dispatch_lease_expires_at.is.null,dispatch_lease_expires_at.lt.${nowIso}`);
+    // U1: delivery_path is the v15-only mark (migration 20270207000002). Marked rows are
+    // filtered IN the query, before the limit, so ten pending marked rows can never fill
+    // every slot and starve this route (the in-loop skip below stays as defence in
+    // depth). Code deployed ahead of that migration gets "undefined column" and re-reads
+    // without the column or the filter: no row can carry the mark then, so 1.4
+    // behaviour is unchanged.
+    let { data, error } = (await pendingCommands(`${COMMAND_COLUMNS}, delivery_path`, true)) as { data: any[] | null; error: any };
+    if (error && isUndefinedColumnError(error)) {
+      ({ data, error } = (await pendingCommands(COMMAND_COLUMNS, false)) as { data: any[] | null; error: any });
     }
-
-    const { data, error } = await query
-      .order('created_at', { ascending: false })
-      .limit(10);
 
     if (error) {
       console.error('[extension/commands] supabase error:', error.message);
@@ -201,18 +218,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       hmacNonce: session.hmacNonce as string,
     });
     const leaseId = `lease-${randomBytes(8).toString('hex')}`;
-    const leaseExpiresAt = new Date(Date.now() + LEASE_TTL_SECONDS * 1000).toISOString();
     const commands: any[] = [];
 
     // Handing a command to the extension is the last point before the browser
-    // sends, so the executor's platform gates (runExecution) are applied again
-    // here: a row prepared before execution was switched off, or before human
-    // approval became required, must not go out. An unreadable policy is
-    // fail-closed (execution off, approval required). A gated row is left
-    // unclaimed, which is provably unsent; dispatch recovery releases it later.
-    const policy = await getCommunityAiPlatformPolicy();
+    // sends, so the executor's gates are applied again here: a row prepared
+    // before execution was switched off must not go out. The policy is the
+    // session tenant's own (OD-1; a community tenant is its organization):
+    // missing, unreadable, malformed or disabled all refuse. A gated row is left
+    // unclaimed, which is provably unsent, and one governance refusal record is
+    // written. The claim RPC re-applies all of it atomically and is authoritative.
+    const decision = await getCommunityExecutionPolicy({ organizationId: session.orgId, tenantId: session.orgId });
+
+    // Extension 1.5 (EXTENSION-1.5.0-CONTRACT.md §4): a session whose user has an active
+    // 1.5 account binding receives LinkedIn reply/like ONLY through
+    // /api/extension/v15/commands, where the own-content check applies before the claim.
+    // Offering them here too would race that claim, and a 1.5 extension refuses a write
+    // arriving on this route, so the approved action would end failed. A session with no
+    // binding (1.4.x) is unaffected. Only a POSITIVELY found binding skips them: an
+    // unreadable binding (e.g. code deployed before migration 20270207000000) must not
+    // take LinkedIn writes away from 1.4.x sessions; at worst the race returns, and its
+    // cost is a failed action with no click.
+    const v15Binding = await getActiveBinding(session.orgId, session.userId);
+    const skipLinkedInWrites = v15Binding.ok === true && v15Binding.urn !== null;
 
     for (const row of data || []) {
+      // U1: a row marked v15-only by the database at creation (it targets a thread
+      // collected by extension 1.5) is never offered here, to ANY session, so a 1.4.x
+      // extension of another user cannot claim it.
+      if (normalizePlatform(row.platform) === 'linkedin') {
+        const type = String(row.action_type ?? '').trim().toLowerCase();
+        if ((type === 'reply' || type === 'like') && (skipLinkedInWrites || row.delivery_path === 'extension_v15')) continue;
+      }
       // ── Chain-aware step selection ────────────────────────────────────────
       // When the row carries a command_chain, dispatch the step at
       // command_chain_index instead of the row's top-level action_type.
@@ -239,49 +275,78 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (isCurrentlyDisabled(row.platform, topAction)) continue;
 
       if (!READ_ONLY_EXTENSION_ACTIONS.has(capabilityAction)) {
-        if (!policy.execution_enabled) continue;
-        if (policy.require_human_approval && !(row as any).approved_at) continue;
-      }
-
-      // Instagram DM business-tier enforcement. Instagram Direct is only
-      // usable on business accounts via the browser runtime; dispatch a
-      // DM command to a non-business tier would guarantee failure at the
-      // composer. We short-circuit here so the command never gets claimed.
-      if (row.platform === 'instagram' && capabilityAction === 'dm') {
-        const tier = await resolveAccountTier({
-          organization_id: session.orgId,
-          platform: 'instagram',
-          action_metadata: null,
-        });
-        if (tier !== 'business') {
-          console.warn('[extension/commands] instagram DM rejected: tier=', tier, 'actionId=', row.id);
-          // Mark the row failed via the central pipeline so it doesn't
-          // keep getting considered. A correlation id is generated by
-          // the executor's persist helper to satisfy the audit trigger.
-          try {
-            const { persistExecutionResult } = await import('@/backend/services/communityAiExecutionResultService');
-            const { randomUUID } = await import('crypto');
-            await persistExecutionResult({
-              actionId: row.id,
-              organizationId: session.orgId,
-              correlationId: randomUUID(),
-              result: {
-                ok: false,
-                status: 'failed',
-                error: 'ACCOUNT_TYPE_NOT_SUPPORTED',
-                response: { source: 'executor', reason: 'instagram_dm_requires_business_tier', detected_tier: tier ?? 'unknown' },
-                execution_mode: 'browser',
-              },
-              rowHint: { platform: 'instagram', action_type: 'dm', target_id: row.target_id ?? null },
-            });
-          } catch (err: any) {
-            console.warn('[extension/commands] tier-rejection persist failed:', err?.message || err);
-          }
+        // D-01: a human approval is required whatever the policy says.
+        const gateCode = !decision.ok ? refusedCode(decision) : !(row as any).approved_at ? 'HUMAN_APPROVAL_REQUIRED' : null;
+        if (gateCode) {
+          // The refusal is recorded under the ROW's own scope (the record function
+          // refuses a scope that does not match the action).
+          await recordCommunityExecutionRefusal({
+            actionId: row.id,
+            organizationId: String((row as any).organization_id ?? session.orgId),
+            tenantId: String((row as any).tenant_id ?? ''),
+            claimPoint: 'browser',
+            code: gateCode,
+            payload: { route: '/api/extension/commands', step: capabilityAction },
+          });
           continue;
         }
       }
 
       const extensionAction = mapCapabilityActionToExtensionAction(capabilityAction);
+
+      // ── DM send policy (dmDispatchSafety) — BEFORE any claim ─────────────
+      //    Applies to the ROW (top action 'dm' / 'direct_message' with any
+      //    chain step except read-only sync_dm_inbox, or no chain at all — the
+      //    bare row would go out as continue_thread into the open thread) and
+      //    to a DM command smuggled onto a non-DM row. The old gate keyed on
+      //    the CURRENT chain step === 'dm', so every executor-built chain
+      //    (open_thread / continue_thread / start_new_dm) skipped the Instagram
+      //    tier check. No authoritative person -> thread mapping exists, so the
+      //    row is refused; Instagram additionally needs a SERVER-VERIFIED
+      //    business tier (resolveAccountTier; client-declared tiers are ignored).
+      if (wouldDispatchDm(topAction, extensionAction ?? capabilityAction)) {
+        const platformLc = String(row.platform || '').toLowerCase();
+        const verifiedTier = platformLc === 'instagram'
+          ? await resolveAccountTier({ organization_id: session.orgId, platform: 'instagram', action_metadata: null })
+          : null;
+        const dmRefusal = dmSendRefusal({ platform: platformLc, verifiedInstagramTier: verifiedTier });
+        if (dmRefusal) {
+          console.warn('[extension/commands] DM refused before claim:', dmRefusal, 'actionId=', row.id);
+          // Fail the still-unclaimed row via the central pipeline so it is not
+          // reconsidered. Never claimed => provably not acted.
+          try {
+            const { persistExecutionResult } = await import('@/backend/services/communityAiExecutionResultService');
+            await persistExecutionResult({
+              actionId: row.id,
+              organizationId: session.orgId,
+              correlationId: (row as any).execution_correlation_id ?? randomUUID(),
+              result: {
+                ok: false,
+                status: 'failed',
+                error: dmRefusal,
+                may_have_acted: false,
+                response: {
+                  source: 'executor',
+                  reason: dmRefusal === INSTAGRAM_DM_ACCOUNT_TIER_UNVERIFIED
+                    ? 'instagram_dm_requires_verified_business_tier'
+                    : 'dm_recipient_mapping_unavailable',
+                  detected_tier: platformLc === 'instagram' ? (verifiedTier ?? 'unknown') : undefined,
+                },
+                execution_mode: 'browser',
+              },
+              rowHint: { platform: row.platform ?? null, action_type: row.action_type ?? null, target_id: row.target_id ?? null },
+              // Only a still-unclaimed pending row may be failed here; a row
+              // another session claimed meanwhile is in flight and untouched.
+              expectedFromStatuses: ['pending'],
+              requireUnleased: true,
+            });
+          } catch (err: any) {
+            console.warn('[extension/commands] DM refusal persist failed:', err?.message || err);
+          }
+          continue;
+        }
+      }
+
       if (!extensionAction) continue;
 
       const platformSlug = row.platform === 'x' ? 'twitter' : row.platform;
@@ -321,6 +386,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               action_type: row.action_type ?? null,
               target_id: row.target_id ?? null,
             },
+            expectedFromStatuses: ['pending'],
+            requireUnleased: true,
           });
         } catch (persistErr: any) {
           console.warn('[extension/commands] payload validation failure persist failed:', persistErr?.message || persistErr);
@@ -328,28 +395,73 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         continue;
       }
 
-      // ── Claim via CAS on (id, prior lease expiry, status=pending) ────────
-      const priorExpiry = (row as any).dispatch_lease_expires_at as string | null;
-      let update = supabase
-        .from('community_ai_actions')
-        .update({
-          dispatch_lease_id: leaseId,
-          dispatch_lease_expires_at: leaseExpiresAt,
-          dispatch_lease_holder_id: holderId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', row.id)
-        .eq('status', 'pending');
-      update = priorExpiry == null
-        ? update.is('dispatch_lease_expires_at', null)
-        : update.eq('dispatch_lease_expires_at', priorExpiry);
-
-      const { data: claimed, error: claimErr } = await update.select('id').maybeSingle();
-      if (claimErr) {
-        console.warn('[extension/commands] claim update failed for', row.id, claimErr.message);
+      // ── L-3: recipient recheck before the claim ─────────────────────────
+      //    Browser dispatch and every command-chain step pass through here,
+      //    not through runExecution, so the recipient's consent, suppression
+      //    and opt-out are rechecked immediately before a command is handed
+      //    out. A deterministic refusal is recorded terminally and never
+      //    claimed; an unreadable consent state leaves the row unclaimed.
+      const recheck = await recheckCommunityRecipient({
+        id: row.id,
+        organization_id: session.orgId,
+        platform: row.platform,
+        action_type: row.action_type,
+        target_id: row.target_id ?? null,
+        discovered_user_id: (row as any).discovered_user_id ?? null,
+      });
+      if (isRecipientRecheckRefusal(recheck)) {
+        if (recheck.code !== 'RECIPIENT_STATE_UNREADABLE') {
+          try {
+            const { persistExecutionResult } = await import('@/backend/services/communityAiExecutionResultService');
+            await persistExecutionResult({
+              actionId: row.id,
+              organizationId: session.orgId,
+              correlationId: (row as any).execution_correlation_id ?? randomUUID(),
+              result: {
+                ok: false,
+                status: 'skipped',
+                error: recheck.code,
+                response: { source: 'extension_commands', reason: 'recipient_recheck', code: recheck.code, message: recheck.reason },
+                execution_mode: 'browser',
+                may_have_acted: false,
+              },
+              rowHint: { platform: row.platform ?? null, action_type: row.action_type ?? null, target_id: row.target_id ?? null },
+              expectedFromStatuses: ['pending'],
+              requireUnleased: true,
+            });
+          } catch (persistErr: any) {
+            console.warn('[extension/commands] recipient recheck refusal persist failed:', persistErr?.message || persistErr);
+          }
+        }
         continue;
       }
-      if (!claimed || !claimed.id) continue; // another worker won the claim
+
+      // ── Atomic claim (authoritative boundary) ───────────────────────────
+      //    One conditional UPDATE ... RETURNING inside
+      //    claim_community_ai_browser_command enforces tenant, status=pending,
+      //    execution_mode=browser, never-claimed (dispatch_lease_id IS NULL),
+      //    cancel_requested_at IS NULL, the platform kill switch
+      //    (community_ai_platform_policy.execution_enabled) and approval.
+      //    Zero rows ⇒ not claimed. An RPC error fails CLOSED (not offered).
+      const { data: claimedRows, error: claimErr } = await supabase.rpc('claim_community_ai_browser_command', {
+        p_action_id: row.id,
+        p_organization_id: session.orgId,
+        p_lease_id: leaseId,
+        p_holder_id: holderId,
+        p_lease_ttl_seconds: LEASE_TTL_SECONDS,
+      });
+      if (claimErr) {
+        console.warn('[extension/commands] claim rpc failed for', row.id, claimErr.message);
+        continue;
+      }
+      const claimed = (Array.isArray(claimedRows) ? claimedRows[0] : claimedRows) as
+        | { id?: string; dispatch_lease_expires_at?: string | null }
+        | null
+        | undefined;
+      if (!claimed || !claimed.id) continue; // not claimable now (claimed, cancelled, kill switch, approval)
+      const leaseExpiresAt = claimed.dispatch_lease_expires_at
+        ? new Date(claimed.dispatch_lease_expires_at).toISOString()
+        : new Date(Date.now() + LEASE_TTL_SECONDS * 1000).toISOString();
 
       commands.push({
         id: row.id,

@@ -1,4 +1,5 @@
 import type { PlaywrightStorageState } from './rpaSessionStore';
+import { hostMatchesDomains, RPA_PLATFORM_URL_POLICY } from './rpaTargetUrlPolicy';
 
 /**
  * Converts a raw cookie + localStorage payload captured by the Chrome
@@ -88,4 +89,31 @@ export function importSessionCapture(raw: RawSessionCapture): PlaywrightStorageS
     }));
 
   return { cookies: pwCookies, origins: pwOrigins };
+}
+
+/**
+ * Keep only the cookies that belong to the platform (same allowlist as the
+ * target-URL policy): a capture must not store another site's credentials.
+ * A cookie with no usable domain is dropped; an unknown platform keeps nothing.
+ */
+export function scopeStorageStateToPlatform(
+  state: PlaywrightStorageState,
+  platform: string,
+): PlaywrightStorageState {
+  const domains = RPA_PLATFORM_URL_POLICY[platform.trim().toLowerCase()]?.domains;
+  const cookies = (Array.isArray(state?.cookies) ? state.cookies : []).filter((c) => {
+    const domain = typeof c?.domain === 'string' ? c.domain.trim().replace(/^\./, '') : '';
+    return hostMatchesDomains(domain, domains);
+  });
+  return { ...state, cookies };
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/** Parse a client-supplied `expires_at`. Absent is fine; anything not an ISO date is refused. */
+export function parseSessionExpiresAt(value: unknown): { ok: true; value: string | null } | { ok: false } {
+  if (value === null || value === undefined) return { ok: true, value: null };
+  if (typeof value !== 'string' || !ISO_DATE_RE.test(value.trim())) return { ok: false };
+  const ms = new Date(value.trim()).getTime();
+  return Number.isFinite(ms) ? { ok: true, value: new Date(ms).toISOString() } : { ok: false };
 }

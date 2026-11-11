@@ -80,7 +80,10 @@ export interface EmailProviderResponse {
   messageId: string | null;
   /** Provider-side rejection reason, when it rejected. */
   rejectionReason?: string | null;
-  /** True when the provider recognised the idempotency key as a repeat. */
+  /**
+   * True when the provider recognised the idempotency key as a repeat. The
+   * default provider's function never does: it ignores the key.
+   */
   duplicate?: boolean;
   /** Structured provider response, already free of message content. */
   raw?: Record<string, unknown>;
@@ -91,6 +94,31 @@ export interface EmailProviderPort {
   readonly name: string;
   send(request: EmailProviderRequest): Promise<EmailProviderResponse>;
 }
+
+/** The shape of what `functions.invoke` returns as `error`. Read, never constructed. */
+interface EdgeInvokeError {
+  name?: string;
+  message?: string;
+  context?: { status?: unknown };
+}
+
+/**
+ * True only when the function answered with a refusal that proves nothing left
+ * for the recipient. `send-transactional-email` returns a 4xx only from checks
+ * that run before it calls SES (method, caller auth, body, template, link), so a
+ * `FunctionsHttpError` with a 4xx is a definitive no.
+ *
+ * Everything else may have acted: a network failure can lose the answer to a
+ * call SES accepted, a relay error does not say how far the call got, a 5xx can
+ * follow SES accepting, and a 408 is a gateway giving up on a call that may still
+ * be running. Those throw, so the transport classifies them `provider_error`,
+ * which `dispatch` never sends again.
+ */
+const isDefinitiveRefusal = (error: EdgeInvokeError): boolean => {
+  if (error.name !== 'FunctionsHttpError') return false;
+  const status = error.context?.status;
+  return typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
+};
 
 /**
  * Default provider: the platform's existing transactional-email Edge Function.
@@ -106,7 +134,7 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
   async send(request: EmailProviderRequest): Promise<EmailProviderResponse> {
     // Imported lazily so the module graph carries no client for a transport
     // that is disabled by default.
-    const { supabase } = (await import('../../db/supabaseClient')) as { supabase: { functions: { invoke: (fn: string, opts: unknown) => Promise<{ data?: unknown; error?: { message?: string } }> } } };
+    const { supabase } = (await import('../../db/supabaseClient')) as { supabase: { functions: { invoke: (fn: string, opts: unknown) => Promise<{ data?: unknown; error?: EdgeInvokeError | null }> } } };
 
     const res = await supabase.functions.invoke('send-transactional-email', {
       body: {
@@ -121,7 +149,10 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
     });
 
     if (res.error) {
-      return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
+      if (!isDefinitiveRefusal(res.error)) {
+        throw new Error(`edge function outcome unknown (${String(res.error.name ?? 'error')}, status ${String(res.error.context?.status ?? 'none')}): ${String(res.error.message ?? '')}`);
+      }
+      return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? ''), status: res.error.context?.status } };
     }
     const data = (res.data ?? {}) as { messageId?: string; id?: string; duplicate?: boolean };
     return {
@@ -150,7 +181,34 @@ const looksLikeEmail = (v: string | null): v is string =>
  */
 export function createEmailTransport(
   provider: EmailProviderPort = supabaseEdgeEmailProvider,
-  options: { timeoutMs?: number; enabled?: () => boolean; unsubscribeBaseUrl?: () => string | undefined } = {},
+  options: {
+    timeoutMs?: number;
+    enabled?: () => boolean;
+    unsubscribeBaseUrl?: () => string | undefined;
+    /**
+     * PI-041-A — the certified Email Engine's render. Omitted, the placeholder
+     * derivation below is unchanged. Invoked inside `send`, after the flag, recipient
+     * and unsubscribe gates, because the recorded strings must be the ones handed over.
+     */
+    content?: (request: TransportRequest) => Promise<{
+      subject: string;
+      body: string;
+      personalizationInputs: Record<string, unknown>;
+      contentSource: string;
+    }>;
+    /**
+     * PI-041-A — persist the exact rendered content against this attempt, BEFORE the
+     * provider. A failure aborts the send: what cannot be recorded must not be sent.
+     */
+    recordContent?: (evidence: {
+      organizationId: string;
+      outreachAttemptId: string;
+      renderedSubject: string;
+      renderedBody: string;
+      personalizationInputs: Record<string, unknown>;
+      contentSource: string;
+    }) => Promise<void>;
+  } = {},
 ): OutreachTransport {
   const timeoutMs = options.timeoutMs ?? EMAIL_TIMEOUT_MS;
   const enabled = options.enabled ?? isEmailTransportEnabled;
@@ -160,6 +218,7 @@ export function createEmailTransport(
     channel: 'email',
     provider: provider.name,
     external: true,
+    isAvailable: () => enabled(),
 
     async send(request: TransportRequest): Promise<TransportResult> {
       const base = { provider: provider.name, providerMessageId: null, duplicate: false } as const;
@@ -205,8 +264,51 @@ export function createEmailTransport(
         };
       }
 
-      const subject = trim(request.task.action, 200) || 'Following up';
-      const body = trim(request.task.explanation, 4000) || subject;
+      let subject = trim(request.task.action, 200) || 'Following up';
+      let body = trim(request.task.explanation, 4000) || subject;
+      let personalizationInputs: Record<string, unknown> = {};
+      let contentSource: string | null = null;
+
+      if (options.content) {
+        try {
+          const rendered = await options.content(request);
+          subject = rendered.subject;
+          body = rendered.body;
+          personalizationInputs = rendered.personalizationInputs ?? {};
+          contentSource = rendered.contentSource;
+        } catch (error) {
+          // Never a fallback to the placeholder: that would send text nobody authored.
+          return {
+            ...base, outcome: 'rejected', deliveryStatus: 'failed',
+            response: { reason: 'content_unavailable' },
+            error: error instanceof Error ? error.message : 'email content could not be rendered',
+          };
+        }
+      }
+
+      if (options.recordContent && request.attemptId !== null && contentSource !== null) {
+        try {
+          await options.recordContent({
+            organizationId: request.task.companyId,
+            outreachAttemptId: request.attemptId,
+            renderedSubject: subject,
+            renderedBody: body,
+            personalizationInputs,
+            contentSource,
+          });
+        } catch (error) {
+          // Evidence first, send second. Refusing here loses a send; the reverse would
+          // lose the only record of what a real person received.
+          return {
+            ...base, outcome: 'rejected', deliveryStatus: 'failed',
+            response: { reason: 'content_evidence_unrecorded' },
+            error: error instanceof Error
+              ? `content evidence could not be recorded: ${error.message}`
+              : 'content evidence could not be recorded',
+          };
+        }
+      }
+
       const startedMs = Date.now();
 
       try {

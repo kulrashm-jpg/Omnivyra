@@ -2,11 +2,12 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 /**
  * POST /api/rpa/auth/save-session
  *
- * Accepts a captured Playwright storageState blob and persists it to the
- * rpa_sessions table (DB canonical) + local fs (legacy fallback). The
- * caller MUST provide the session_token issued at /api/rpa/auth/start —
- * the token scopes the write to (organization_id, platform) and prevents
- * a cross-org save.
+ * Accepts a captured Playwright storageState blob and persists it, ENCRYPTED
+ * (AES-256-GCM, ENCRYPTION_KEY), to the rpa_sessions table. There is no
+ * filesystem copy. The caller MUST provide the single-use, user-bound
+ * session_token issued at /api/rpa/auth/start — the token scopes the write to
+ * (organization_id, platform) and prevents a cross-org save or a replay.
+ * `account_tier` is accepted for compatibility but ignored (never trusted).
  *
  * Body:
  *   {
@@ -22,8 +23,12 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { RPA_LOGIN_DISABLED, rejectRpaLogin } from '../../../../backend/services/rpaWorker/rpaLoginBlock';
 
-import { verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
+import { consumeRpaAuthToken, verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
 import { saveRpaSession } from '../../../../backend/services/rpaWorker/rpaSessionStore';
+import {
+  parseSessionExpiresAt,
+  scopeStorageStateToPlatform,
+} from '../../../../backend/services/rpaWorker/rpaSessionImporter';
 
 type SaveSessionBody = {
   session_token?: string;
@@ -50,37 +55,58 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const body = (req.body || {}) as SaveSessionBody;
     const token = (body.session_token ?? '').toString();
-    const storageState = body.storage_state;
+    const storageState = body.storage_state as Parameters<typeof saveRpaSession>[2];
 
     if (!token) return res.status(400).json({ error: 'session_token required' });
     if (!looksLikeStorageState(storageState)) {
       return res.status(400).json({ error: 'storage_state must be a Playwright storageState object' });
     }
+    const expiresAt = parseSessionExpiresAt(body.expires_at);
+    if (expiresAt.ok === false) {
+      return res.status(400).json({ error: 'expires_at must be an ISO 8601 date' });
+    }
+    // The platform lives in the token. A plain verify consumes nothing, so a
+    // blob with no cookie for that platform does not burn the token.
+    const peeked = verifyRpaAuthToken(token);
+    if (peeked.ok === true && !scopeStorageStateToPlatform(storageState, peeked.payload.platform).cookies?.length) {
+      return res.status(400).json({ error: 'storage_state has no cookies for this platform' });
+    }
 
-    const verified = verifyRpaAuthToken(token);
-    if (verified.ok !== true) {
-      return res.status(401).json({ error: 'INVALID_SESSION_TOKEN', reason: verified.reason });
+    // Single-use, user-bound redemption: signature + expiry, the issuing user
+    // must still hold the connector-management role for the organization, and
+    // the token nonce is consumed durably BEFORE anything is written. A replay
+    // (or a concurrent second submission) is refused.
+    const verified = await consumeRpaAuthToken(token);
+    if (verified.ok === false) {
+      return res.status(verified.status).json({
+        error: verified.status === 403 ? 'FORBIDDEN_ROLE' : verified.status === 503 ? 'TOKEN_REDEMPTION_UNAVAILABLE' : 'INVALID_SESSION_TOKEN',
+        reason: verified.reason,
+      });
     }
 
     const { organization_id, platform } = verified.payload;
-    const accountTier = body.account_tier != null ? String(body.account_tier) : null;
+    // A client-declared account_tier is NEVER stored or trusted: it gated the
+    // Instagram business-only DM path. The tier stays unknown (null) until a
+    // server-side verifier establishes it.
+    const declaredTierIgnored = body.account_tier != null;
 
-    await saveRpaSession(organization_id, platform, storageState as Parameters<typeof saveRpaSession>[2], {
-      account_tier: accountTier,
+    await saveRpaSession(organization_id, platform, scopeStorageStateToPlatform(storageState, platform), {
+      account_tier: null,
       last_login_at: new Date().toISOString(),
-      expires_at: body.expires_at ?? null,
-      last_verified_at: new Date().toISOString(),
+      expires_at: expiresAt.value,
     });
 
     return res.status(200).json({
       success: true,
       organization_id,
       platform,
-      account_tier: accountTier,
+      account_tier: null,
+      account_tier_status: 'unverified',
+      declared_account_tier_ignored: declaredTierIgnored,
     });
   } catch (err) {
     console.error('[rpa/auth/save-session]', err);
-    return res.status(500).json({ error: (err as Error)?.message || 'Failed to save RPA session' });
+    return res.status(500).json({ error: 'Failed to save RPA session' });
   }
 }
 

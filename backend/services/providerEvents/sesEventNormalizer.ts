@@ -14,6 +14,19 @@
  *                restriction on every channel (decision A). The outcome
  *                vocabulary has no `complaint`, and adding one needs a
  *                migration, so it is deliberately not invented here.
+ *                D7 — TRUTHFULNESS. The `delivered` row is an INFERENCE, not a
+ *                delivery receipt, and says so: its evidence carries
+ *                `deliveryInferredFrom: 'Complaint'`, a provider-neutral marker
+ *                a reader can filter on without knowing SES's vocabulary (its
+ *                observed_at is the complaint's time, not the delivery's). The
+ *                complaint ITSELF is preserved in two append-only places: this
+ *                evidence row (per message; the table rejects UPDATE/DELETE)
+ *                and the `complaint` governance record (per address/person;
+ *                only an operator release or an erasure can revoke it, and
+ *                revocation keeps the row). The business-axis record —
+ *                `outreach_outcomes.outcome_type = 'complained'`, which the
+ *                orchestration journey reader already maps — needs the CHECK
+ *                change reported in ENGINE-READINESS-D7.md.
  *   Reject     → evidence `bounced` (SES refused to send; never a restriction:
  *                it says nothing about the recipient's wishes).
  *   Anything else (Send, DeliveryDelay, Open, Click, Rendering Failure, …) is
@@ -175,6 +188,7 @@ export function normalizeSesEvent(payload: unknown, snsMessageId: string): SesNo
         ...(bounceType ? { bounceType } : {}),
         ...(bounceSubType ? { bounceSubType } : {}),
         ...(feedbackType ? { complaintFeedbackType: feedbackType } : {}),
+        ...(eventType === 'Complaint' ? { deliveryInferredFrom: 'Complaint' } : {}),
         snsMessageId,
       },
     },

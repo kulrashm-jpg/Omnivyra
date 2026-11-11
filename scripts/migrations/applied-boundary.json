@@ -36,7 +36,8 @@
     "pins the file CONTENT regardless, which is the property that matters here --",
     "whatever ran, the repository text has not moved since.",
     "",
-    "SCHEMA 2 (2026-11-10, owner decision #18): applied_above_boundary (rule 6b) holds out-of-band applications ABOVE ledger_max; never put those in digests, never raise ledger_max for them."
+    "SCHEMA 2 (2026-11-10, owner decision #18): applied_above_boundary (rule 6b) holds out-of-band applications ABOVE ledger_max; never put those in digests, never raise ledger_max for them.",
+    "SCHEMA 2 (2026-11-10, owner decision #18): digests_provenance carries per-entry provenance for any digest attested on evidence OTHER than the top-level 2026-11-01 ledger read. applied_above_boundary (rule 6b) holds out-of-band applications ABOVE ledger_max; never put those in digests, never raise ledger_max for them."
   ],
   "schema_version": 2,
   "ledger_max": "20270111000003",
@@ -44,7 +45,7 @@
   "attested_from": "origin/main 5025f51d7bb1420e3d3c5ef4ed626c64b953b3b0",
   "evidence_class": "PRODUCTION_CATALOG_VERIFIED for ledger_max (2026-11-01 production inventory: 93 rows, 93 distinct versions, no duplicates, max 20270111000003); CODE_VERIFIED for every digest (hashed from the origin/main worktree at 5025f51d).",
   "ledger_rows_at_attestation": 93,
-  "files_pinned": 457,
+  "files_pinned": 458,
   "files_above_boundary": 0,
   "digests": {
     "20260319_core_bootstrap_dependencies.sql": "102eaf189f37430ba0e08e2eb7923dbb91c55797006bb2b9e1dd5b13508611e8",
@@ -503,7 +504,8 @@
     "20270111000000_canonical_leads_users_client_privileges_revoked.sql": "c17701e11f528738636e82330da7d874183f94d3905a582a318e04b02fad1afb",
     "20270111000001_pi_opportunity_trigger_fn_hardening.sql": "54c7aa8a32f2cb2b1a6fe77c80e09ea70e29e33b499cd5b77cf1824699bca312",
     "20270111000002_tenant_tables_client_privileges_revoked.sql": "616cec9904d779583d609fa0283c85cbabfa9cb6fa55df93e092bc4dca4658ff",
-    "20270111000003_function_execute_classwide_hardening.sql": "f9e5c95a7498078c4c8234c1357eb9ffc314c629e76481a760221a2e195c1eca"
+    "20270111000003_function_execute_classwide_hardening.sql": "f9e5c95a7498078c4c8234c1357eb9ffc314c629e76481a760221a2e195c1eca",
+    "20261127000000_pi_prospect_lists.sql": "01315600d26291f7cc366982faef21e9bf0ba34505e2fb8ee0576fdf1462c734"
   },
   "applied_above_boundary": {
     "20270205000000_public_default_privileges_no_client_roles.sql": {
@@ -527,6 +529,30 @@
       "ledger_row": false,
       "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r23-apply-20261110/R23-EXECUTION-RECORD.json",
       "evidence_class": "PRODUCTION_APPLIED_AND_VERIFIED: exact bytes of 97acfc66a; 811 target tables 13288 -> 0 client privileges; 53 excluded + views unchanged; REST 42501 on a former anon-readable target."
+    },
+    "20270204000000_rpa_tables_client_privileges_revoked.sql": {
+      "sha256": "1f75df798a1f6161c5a740e1647fa667beccc99e7252e79fafbaaf20a45621e8",
+      "applied_at": "2026-11-10T08:15Z",
+      "operator": "virality-83 on the owner's direct instruction (session virality-83, 2026-11-10)",
+      "method": "management_api_database_query_read_only_false",
+      "project_ref": "klkiseupptzbecbxwrky",
+      "cluster_system_identifier": "7550817586112808987",
+      "ledger_row": false,
+      "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r19-r1-apply-20261110/R1-EXECUTION-RECORD.json (SHA256SUMS 9f4c26ca)",
+      "evidence_class": "PRODUCTION_APPLIED_AND_VERIFIED: exact bytes of commit 67d729818 applied in one call; postconditions verified by catalogue read (has_table_privilege + has_any_column_privilege false for anon/authenticated) and anon REST probe 42501. The sha256 is over the applied bytes (LF)."
+    }
+  },
+  "digests_provenance": {
+    "20261127000000_pi_prospect_lists.sql": {
+      "sha256": "01315600d26291f7cc366982faef21e9bf0ba34505e2fb8ee0576fdf1462c734",
+      "applied_at": "unknown (applied out of band; observed present 2026-11-09, verified complete 2026-11-10)",
+      "operator": "unknown (out of band; not via the ledger)",
+      "method": "unknown_out_of_band",
+      "project_ref": "klkiseupptzbecbxwrky",
+      "cluster_system_identifier": "7550817586112808987",
+      "ledger_row": false,
+      "record": "C:/omnivyra-archive/programme-20261103/completion-20261108/final-20261108/closure-r15-d1-pack-20261110/D1-EXECUTION-RECORD.json (q05/q07/q10/q12/q14/q15/q19; verified by virality-05)",
+      "evidence_class": "PRODUCTION_CATALOG_VERIFIED (2026-11-10 D1 catalogue read: every effect present) + CODE_VERIFIED digest (LF bytes at release/attest-20261127000000 base 67d729818). Distinct from the top-level evidence_class, which covers the 2026-11-01 ledger read only."
     }
   }
 }

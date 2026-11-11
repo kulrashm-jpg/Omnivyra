@@ -27,6 +27,15 @@ import type { NextApiResponse } from 'next';
  */
 export const EXTENSION_BROWSER_INGESTION_SUSPENDED = true;
 
+/**
+ * 1.5 command-bound ingestion (EXTENSION-1.5.0-CONTRACT.md §5.1), owner E-1..E-4.
+ * Separate from the 1.4 suspension above, and OFF until the owner lifts R-3 for
+ * 1.5 once 1.5.0 is the minimum installed version. While off, the server neither
+ * issues 1.5 collection commands nor stores a 1.5 collection result.
+ * A reviewed code change, not an environment flag, by the same reasoning as R-3.
+ */
+export const EXTENSION_V15_COMMAND_INGESTION_ENABLED = false;
+
 export const BROWSER_SYNC_SUSPENDED_CODE = 'BROWSER_SYNC_SUSPENDED';
 
 export const BROWSER_SYNC_SUSPENDED_MESSAGE =

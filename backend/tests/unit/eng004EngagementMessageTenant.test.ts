@@ -163,7 +163,7 @@ const HARDENED: ReadonlyArray<{ file: string; occurrence: number; what: string }
   { file: 'backend/services/engagementAiAssistantService.ts', occurrence: 0, what: 'direct id lookup' },
   { file: 'backend/services/engagementAiAssistantService.ts', occurrence: 1, what: 'parent_message_id lookup' },
   { file: 'backend/services/bulkEngagementService.ts', occurrence: 0, what: 'direct id lookup' },
-  { file: 'pages/api/extension/events/comments.ts', occurrence: 0, what: 'scraped parent platform-id lookup' },
+  { file: 'backend/services/extensionCommentIngestion.ts', occurrence: 0, what: 'scraped parent platform-id lookup' },
   { file: 'backend/workers/replyIntelligenceAggregationWorker.ts', occurrence: 0, what: 'parent sweep' },
   // ENG-004-CLOSE — the remaining reachable isolation surface
   { file: 'backend/services/engagementAiAssistantService.ts', occurrence: 2, what: 'thread self-attribution sweep' },
@@ -171,7 +171,8 @@ const HARDENED: ReadonlyArray<{ file: string; occurrence: number; what: string }
   { file: 'backend/services/insightIntelligenceService.ts', occurrence: 0, what: 'insight message sweep' },
   { file: 'backend/services/leadDetectionService.ts', occurrence: 0, what: 'lead detection sibling sweep' },
   { file: 'backend/services/leadDetectionService.ts', occurrence: 1, what: 'lead detection message read' },
-  { file: 'backend/services/responseOrchestrator.ts', occurrence: 0, what: 'orchestrator message read' },
+  // (responseOrchestrator.ts #0 'orchestrator message read' was REMOVED with the read itself: Agent C,
+  //  generation never executes. Its absence is asserted in the block below, which is stronger.)
   { file: 'backend/workers/responseStrategyLearningWorker.ts', occurrence: 0, what: 'strategy learning sweep' },
   { file: 'pages/api/engagement/generate-response.ts', occurrence: 0, what: 'signal -> thread resolution' },
   { file: 'pages/api/engagement/inbox.ts', occurrence: 0, what: 'inbox latest-message sweep' },
@@ -191,7 +192,14 @@ const HARDENED: ReadonlyArray<{ file: string; occurrence: number; what: string }
 
 describe('ENG-004 §B — every hardened site carries the tenant predicate', () => {
   it('the hardened set is non-empty and fully enumerated', () => {
-    expect(HARDENED).toHaveLength(26);
+    expect(HARDENED).toHaveLength(25);
+  });
+
+  it('responseOrchestrator no longer reads engagement_messages at all (Agent C: generation never executes)', () => {
+    // The site that was hardened here existed only to load the target of a send the
+    // orchestrator no longer makes. A site that does not exist cannot leak a tenant;
+    // if any engagement_messages access comes back, it must be re-added to HARDENED.
+    expect(() => chainAt('backend/services/responseOrchestrator.ts', 0)).toThrow(/no engagement_messages access/);
   });
 
   for (const { file, occurrence, what } of HARDENED) {
@@ -210,7 +218,7 @@ describe('ENG-004 §B — every hardened site carries the tenant predicate', () 
   });
 
   it('the extension update path is tenant-scoped (§13)', () => {
-    const src = code('pages/api/extension/events/comments.ts');
+    const src = code('backend/services/extensionCommentIngestion.ts');
     const upd = src.slice(src.indexOf('.update(row)'));
     expect(upd.slice(0, 300)).toContain(".eq('organization_id', organizationId)");
   });
@@ -218,6 +226,8 @@ describe('ENG-004 §B — every hardened site carries the tenant predicate', () 
   it('the extension tenant comes from the session, never a request field', () => {
     const src = code('pages/api/extension/events/comments.ts');
     expect(src).toContain('const organizationId = session.orgId');
+    // The data access moved to the shared ingestion service; the route must pass the session tenant to it.
+    expect(src).toContain('persistExtensionComments(organizationId, platform, body)');
     expect(src).not.toMatch(/organizationId\s*=\s*(req\.body|body)\./);
   });
 });
@@ -353,7 +363,7 @@ describe('ENG-004-CLOSE §B2 — the residual unscoped sites are exactly the cla
       'pages/api/engagement/suggestions.ts',
       'pages/api/engagement/thread/bulk-pattern-reply.ts',
       'pages/api/response/generate.ts',
-      'pages/api/extension/events/comments.ts',
+      'backend/services/extensionCommentIngestion.ts',
     ];
     const out = new Set<string>();
     for (const f of files) {
@@ -437,7 +447,7 @@ describe('ENG-004 §D — the gate stayed in scope', () => {
       'backend/services/engagementAiAssistantService.ts',
       'backend/services/bulkEngagementService.ts',
       'backend/workers/replyIntelligenceAggregationWorker.ts',
-      'pages/api/extension/events/comments.ts',
+      'backend/services/extensionCommentIngestion.ts',
     ];
     expect(touched).toHaveLength(4);
     for (const f of touched) {
