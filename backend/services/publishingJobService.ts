@@ -110,6 +110,8 @@ export async function claimDuePublishingJobs(input: {
       .in('status', ['queued', 'retrying', 'scheduled'])
       .select('*')
       .maybeSingle();
+    // An unwritten claim is not a claim: the job is not run (fail closed), and it is logged.
+    if (claim.error) { console.error('[publishingJob] claim not written; job not run this tick', { job_id: row.id, error: claim.error.message }); continue; }
     if (claim.data) claimed.push(claim.data as PublishingJob);
   }
   return claimed;
@@ -152,9 +154,12 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
     .single();
   if (attemptError) throw new Error(attemptError.message);
 
-  await ownedDbTable('publishing_jobs')
+  // The persisted attempt_count is what bounds retries (max_attempts): a silent failure here let
+  // a job retry without end. Thrown BEFORE the provider call, so nothing is published.
+  const { error: countError } = await ownedDbTable('publishing_jobs')
     .update({ attempt_count: attemptNumber, updated_at: new Date().toISOString() })
     .eq('id', job.id);
+  if (countError) throw new Error(`Publishing attempt not recorded: ${countError.message}`);
 
   try {
     const blog = await loadPublishingBlog(job);
@@ -215,7 +220,10 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
 
     const duration = Date.now() - started;
     const category = result.success ? null : categorizeFailure(result.message);
-    await ownedDbTable('publishing_attempts')
+    // LOAD-BEARING for stale recovery, which reads this row to decide whether a stuck job was
+    // published: if this write fails the attempt stays 'running' = outcome unknown, which recovery
+    // dead-letters for review (never republishes). Logged, not thrown: the provider already answered.
+    const { error: attemptResultError } = await ownedDbTable('publishing_attempts')
       .update({
         status: result.success ? 'succeeded' : 'failed',
         provider_response: result.providerResponse ?? {},
@@ -225,11 +233,16 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
         finished_at: new Date().toISOString(),
       })
       .eq('id', attempt.id);
+    if (attemptResultError) {
+      console.error('[publishingJob] attempt result NOT recorded; a stale job will be dead-lettered for review, never republished', {
+        job_id: job.id, attempt_id: attempt.id, success: result.success, external_id: result.externalId ?? null, error: attemptResultError.message,
+      });
+    }
 
     if (result.success) {
       await markJobPublished(job, result, duration);
       if (job.job_type === 'delete_post') {
-        await ownedDbTable('blogs')
+        const { error: blogError } = await ownedDbTable('blogs')
           .update({
             status: 'archived',
             external_id: null,
@@ -238,15 +251,17 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
           })
           .eq('id', job.blog_id)
           .eq('company_id', job.company_id);
+        if (blogError) logBlogNotUpdated(job, result, blogError.message);
       } else if (job.job_type === 'update_post') {
-        await ownedDbTable('blogs')
+        const { error: blogError } = await ownedDbTable('blogs')
           .update({
             updated_at: new Date().toISOString(),
           })
           .eq('id', job.blog_id)
           .eq('company_id', job.company_id);
+        if (blogError) logBlogNotUpdated(job, result, blogError.message);
       } else {
-        await ownedDbTable('blogs')
+        const { error: blogError } = await ownedDbTable('blogs')
           .update({
             status: 'published',
             published_at: new Date().toISOString(),
@@ -256,6 +271,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
           })
           .eq('id', job.blog_id)
           .eq('company_id', job.company_id);
+        if (blogError) logBlogNotUpdated(job, result, blogError.message);
       }
       return { success: true, message: result.message, external_id: result.externalId, external_url: result.externalUrl };
     }
@@ -266,7 +282,8 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
     const duration = Date.now() - started;
     const message = err instanceof Error ? err.message : 'Publishing job failed';
     const category = categorizeFailure(message);
-    await ownedDbTable('publishing_attempts')
+    // best-effort: the failure is recorded on the job by markJobFailure below; an unwritten attempt stays 'running' (recovery reviews it)
+    const { error: catchAttemptError } = await ownedDbTable('publishing_attempts')
       .update({
         status: 'failed',
         error_message: message,
@@ -275,6 +292,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
         finished_at: new Date().toISOString(),
       })
       .eq('id', attempt.id);
+    if (catchAttemptError) console.warn('[publishingJob] failed attempt not recorded', { job_id: job.id, attempt_id: attempt.id, error: catchAttemptError.message });
     await markJobFailure(job, message, category, attemptNumber, undefined, duration);
     return { success: false, message };
   }
@@ -290,7 +308,9 @@ export async function runPublishingWorker(input: { workerId?: string; limit?: nu
     const execution = await executeClaimedPublishingJob(job, workerId);
     if (execution.success) result.published += 1;
     else {
+      // best-effort: worker metrics only (published/retrying/failed counters); no job state depends on it
       const refreshed = await ownedDbTable('publishing_jobs').select('status').eq('id', job.id).maybeSingle();
+      if (refreshed.error) console.warn('[publishingJob] status for worker metrics unreadable', { job_id: job.id, error: refreshed.error.message });
       if ((refreshed.data as any)?.status === 'dead_letter') result.deadLettered += 1;
       else if ((refreshed.data as any)?.status === 'retrying') result.retrying += 1;
       else result.failed += 1;
@@ -380,11 +400,13 @@ async function loadPublishingBlog(job: PublishingJob): Promise<Blog> {
 }
 
 async function loadPublishingIntegration(job: PublishingJob) {
-  const { data } = await ownedDbTable('company_integrations')
+  const { data, error } = await ownedDbTable('company_integrations')
     .select('id')
     .eq('company_id', job.company_id)
     .eq('website_connection_id', job.connection_id)
     .maybeSingle();
+  // A failed read is not "integration not found": the job records the real cause.
+  if (error) throw new Error(`Publishing integration unreadable: ${error.message}`);
   if (!data?.id) throw new Error('Integration not found for publishing connection');
   const integration = await getIntegration(String(data.id), job.company_id);
   if (!integration) throw new Error('Integration not found for publishing connection');
@@ -393,7 +415,9 @@ async function loadPublishingIntegration(job: PublishingJob) {
 
 async function markJobPublished(job: PublishingJob, result: { providerResponse?: unknown; externalId?: string; externalUrl?: string; message: string }, duration: number): Promise<void> {
   const response = (result.providerResponse ?? {}) as Record<string, unknown>;
-  await ownedDbTable('publishing_jobs')
+  // The post is LIVE. If this write fails the job stays `processing`; stale recovery then reads the
+  // 'succeeded' attempt and marks it published - it is never republished. Logged at ERROR.
+  const { error: publishedError } = await ownedDbTable('publishing_jobs')
     .update({
       status: 'published',
       external_id: result.externalId ?? null,
@@ -410,6 +434,11 @@ async function markJobPublished(job: PublishingJob, result: { providerResponse?:
       updated_at: new Date().toISOString(),
     })
     .eq('id', job.id);
+  if (publishedError) {
+    console.error('[publishingJob] PUBLISHED but the job was not marked published; stale recovery will repair it from the succeeded attempt (no republish)', {
+      job_id: job.id, external_id: result.externalId ?? null, external_url: result.externalUrl ?? null, error: publishedError.message,
+    });
+  }
 
   await logPublishingEvent(job, 'publish_succeeded', 'info', result.message, {
     external_id: result.externalId,
@@ -429,7 +458,9 @@ async function markJobFailure(
   const exhausted = attemptNumber >= job.max_attempts || category === 'validation' || category === 'auth';
   const status: PublishingJobStatus = exhausted ? 'dead_letter' : 'retrying';
   const nextRetryAt = exhausted ? null : new Date(Date.now() + backoffMs(attemptNumber)).toISOString();
-  await ownedDbTable('publishing_jobs')
+  // Not silent: an unwritten failure leaves the job `processing`; stale recovery then reads the
+  // failed attempt and re-queues it (the retry bound is the persisted attempt_count).
+  const { error: failureWriteError } = await ownedDbTable('publishing_jobs')
     .update({
       status,
       provider_response: providerResponse ?? {},
@@ -446,6 +477,9 @@ async function markJobFailure(
       updated_at: new Date().toISOString(),
     })
     .eq('id', job.id);
+  if (failureWriteError) {
+    console.error('[publishingJob] job failure not recorded; stale recovery will re-decide it', { job_id: job.id, status, error: failureWriteError.message });
+  }
 
   await logPublishingEvent(job, exhausted ? 'publish_dead_lettered' : 'publish_retrying', 'error', message, {
     failure_category: category,
@@ -454,8 +488,17 @@ async function markJobFailure(
   });
 }
 
+function logBlogNotUpdated(job: PublishingJob, result: { externalId?: string; externalUrl?: string }, error: string): void {
+  // The post is live and the job is published; the blog row does not say so. Logged at ERROR with
+  // the external id so it can be restored (later update/delete jobs target it by external_id).
+  console.error('[publishingJob] published, but the blog row was NOT updated', {
+    job_id: job.id, blog_id: job.blog_id, job_type: job.job_type, external_id: result.externalId ?? null, external_url: result.externalUrl ?? null, error,
+  });
+}
+
 async function logPublishingEvent(job: PublishingJob, eventName: string, level: 'info' | 'warn' | 'error', message: string, metadata: Record<string, unknown>): Promise<void> {
-  await ownedDbTable('integration_logs').insert({
+  // best-effort: integration_logs is a log mirror; the job row and the attempt row hold the state
+  const { error } = await ownedDbTable('integration_logs').insert({
     company_id: job.company_id,
     website_id: job.website_id,
     connection_id: job.connection_id,
@@ -465,6 +508,7 @@ async function logPublishingEvent(job: PublishingJob, eventName: string, level: 
     message,
     metadata: { ...metadata, job_id: job.id },
   });
+  if (error) console.warn('[publishingJob] integration log not written', { job_id: job.id, event_name: eventName, error: error.message });
 }
 
 function backoffMs(attemptNumber: number): number {

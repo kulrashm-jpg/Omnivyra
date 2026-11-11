@@ -194,11 +194,13 @@ export async function enqueueEmailJob(opts: EnqueueOptions): Promise<EnqueueResu
 
   // Pre-flight: idempotency replay path.
   if (idempotencyKey) {
-    const { data: existing } = await supabase
+    // best-effort: a replay shortcut only; the unique idempotency_key constraint is the duplicate guard (23505 below)
+    const { data: existing, error: existingError } = await supabase
       .from('email_jobs')
       .select('id, status')
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
+    if (existingError) logger.warn('email_jobs_idempotency_precheck_failed', { message: existingError.message });
     if (existing) {
       return { jobId: (existing as any).id, status: 'queued', replayed: true };
     }
@@ -234,18 +236,21 @@ export async function enqueueEmailJob(opts: EnqueueOptions): Promise<EnqueueResu
     // 23505 = unique race on idempotency_key OR pending-payload uniqueness.
     if (insErr.code === '23505') {
       if (idempotencyKey) {
-        const { data: replay } = await supabase
+        // best-effort: identifies the existing job for the caller; the insert was already refused by the constraint, so nothing is sent twice
+        const { data: replay, error: replayError } = await supabase
           .from('email_jobs')
           .select('id')
           .eq('idempotency_key', idempotencyKey)
           .maybeSingle();
+        if (replayError) logger.warn('email_jobs_replay_lookup_failed', { message: replayError.message });
         if (replay) {
           return { jobId: (replay as any).id, status: 'queued', replayed: true };
         }
       }
       // Pending-payload collision: there is already an in-flight job for the
       // same (recipient, job_type, payload_hash). Return it as queued.
-      const { data: dupe } = await supabase
+      // best-effort: identifies the in-flight duplicate; if unreadable the enqueue fails loudly below (never a second send)
+      const { data: dupe, error: dupeError } = await supabase
         .from('email_jobs')
         .select('id')
         .eq('payload_hash', payloadHash)
@@ -255,6 +260,7 @@ export async function enqueueEmailJob(opts: EnqueueOptions): Promise<EnqueueResu
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (dupeError) logger.warn('email_jobs_duplicate_lookup_failed', { message: dupeError.message });
       if (dupe) {
         return { jobId: (dupe as any).id, status: 'queued', replayed: true };
       }

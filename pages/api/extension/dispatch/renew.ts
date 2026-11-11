@@ -108,12 +108,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!updated) {
       // Diagnose WITHOUT widening authority: this read is org-scoped and is
       // used only to return an actionable code. It never renews anything.
-      const { data: row } = await supabase
+      const { data: row, error: diagError } = await supabase
         .from('community_ai_actions')
         .select('id, status, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at')
         .eq('id', commandId)
         .eq('organization_id', session.orgId)
         .maybeSingle();
+      // A failed diagnosis read is not COMMAND_NOT_FOUND: the extension would drop a live command.
+      if (diagError) {
+        console.error('[extension/dispatch/renew] diagnosis read failed:', diagError.message);
+        return res.status(500).json({ success: false, error: 'RENEWAL_STATE_UNREADABLE' });
+      }
 
       if (!row) {
         // Covers both "no such command" and "belongs to another company".

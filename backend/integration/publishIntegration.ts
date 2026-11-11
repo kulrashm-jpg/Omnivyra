@@ -73,12 +73,15 @@ export async function integratePublishError(
 
   // Update scheduled_post with error code
   const { supabase } = await import('../db/supabaseClient');
-  await ownedDbTable('scheduled_posts')
+  // best-effort: a classification mirror; if it fails the post keeps its previous error_code (an
+  // uncertain marker stays uncertain), and the categorized error is still returned to the caller
+  const { error: codeError } = await ownedDbTable('scheduled_posts')
     .update({
       error_code: platformError.code,
       error_message: platformError.user_message,
     })
     .eq('id', scheduled_post_id);
+  if (codeError) console.warn('[publishIntegration] error code not written to the post', { scheduled_post_id, error: codeError.message });
 
   return {
     code: platformError.code,

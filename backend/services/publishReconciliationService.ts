@@ -155,7 +155,8 @@ async function executeReconciliationJob(job: ReconciliationClaim, workerId: stri
     snapshot = result.providerSnapshot;
     driftSummary = result.driftSummary;
     await upsertIntegrityStatus(job, context, status, snapshot, driftSummary);
-    await ownedDbTable('reconciliation_jobs')
+    // best-effort: an unwritten completion leaves the job locked; lock expiry re-runs this read-only verification
+    const { error: doneError } = await ownedDbTable('reconciliation_jobs')
       .update({
         status,
         attempt_count: attemptNumber,
@@ -166,10 +167,12 @@ async function executeReconciliationJob(job: ReconciliationClaim, workerId: stri
         updated_at: new Date().toISOString(),
       })
       .eq('id', job.id);
+    if (doneError) console.warn('[publishReconciliation] completion not recorded; the verification re-runs after the lock expires', { job_id: job.id, error: doneError.message });
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : 'Reconciliation failed';
     const dead = attemptNumber >= (job.max_attempts ?? 3);
-    await ownedDbTable('reconciliation_jobs')
+    // best-effort: an unwritten retry state leaves the job locked; lock expiry re-runs the same read-only verification
+    const { error: retryStateError } = await ownedDbTable('reconciliation_jobs')
       .update({
         status: dead ? 'dead_letter' : 'retrying',
         attempt_count: attemptNumber,
@@ -181,11 +184,13 @@ async function executeReconciliationJob(job: ReconciliationClaim, workerId: stri
         updated_at: new Date().toISOString(),
       })
       .eq('id', job.id);
+    if (retryStateError) console.warn('[publishReconciliation] retry state not recorded', { job_id: job.id, error: retryStateError.message });
     status = 'failed';
   }
 
   const durationMs = Date.now() - started;
-  await ownedDbTable('reconciliation_attempts').insert({
+  // best-effort: an attempt history row; the job row holds the state
+  const { error: attemptLogError } = await ownedDbTable('reconciliation_attempts').insert({
     reconciliation_job_id: job.id,
     attempt_number: attemptNumber,
     status,
@@ -195,6 +200,7 @@ async function executeReconciliationJob(job: ReconciliationClaim, workerId: stri
     finished_at: new Date().toISOString(),
     duration_ms: durationMs,
   });
+  if (attemptLogError) console.warn('[publishReconciliation] attempt row not written', { job_id: job.id, error: attemptLogError.message });
   await recordAuditEvent({
     companyId: job.company_id,
     websiteId: job.website_id,
@@ -209,16 +215,21 @@ async function executeReconciliationJob(job: ReconciliationClaim, workerId: stri
 }
 
 async function loadPublishingContext(job: ReconciliationClaim) {
-  const { data: publishingJob } = job.publishing_job_id
+  // Both reads THROW on error (the job takes its retry path): a failed read was taken as "no
+  // publishing job" / "no connection", and the verification then ran without its external id or
+  // config. (Missed by the census scanner: the awaits sit inside a ternary.)
+  const { data: publishingJob, error: publishingJobError } = job.publishing_job_id
     ? await ownedDbTable('publishing_jobs')
         .select('*, blogs(id, title, slug, updated_at)')
         .eq('id', job.publishing_job_id)
         .maybeSingle()
-    : { data: null };
+    : { data: null, error: null };
+  if (publishingJobError) throw new Error(`Publishing job unreadable: ${publishingJobError.message}`);
   const connectionId = (publishingJob as any)?.connection_id ?? (job.metadata?.connection_id as string | undefined);
-  const { data: connection } = connectionId
+  const { data: connection, error: connectionError } = connectionId
     ? await ownedDbTable('website_connections').select('*').eq('id', connectionId).maybeSingle()
-    : { data: null };
+    : { data: null, error: null };
+  if (connectionError) throw new Error(`Website connection unreadable: ${connectionError.message}`);
   const config = await mergeConnectionConfig(
     job.company_id,
     connectionId,
@@ -324,7 +335,9 @@ async function upsertIntegrityStatus(
   providerSnapshot: Record<string, unknown>,
   driftSummary: Record<string, unknown>,
 ) {
-  await ownedDbTable('publish_integrity_status').upsert({
+  // The tenant-visible integrity verdict: a silent failure let the job complete while the status
+  // shown stayed stale (unread-error census). Thrown, so the job takes its retry path.
+  const { error: integrityError } = await ownedDbTable('publish_integrity_status').upsert({
     company_id: job.company_id,
     website_id: job.website_id ?? null,
     publishing_job_id: job.publishing_job_id ?? null,
@@ -338,6 +351,7 @@ async function upsertIntegrityStatus(
     provider_snapshot: providerSnapshot,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'company_id,publishing_job_id' });
+  if (integrityError) throw new Error(`Publish integrity status not recorded: ${integrityError.message}`);
 }
 
 function backoffMs(attempt: number): number {

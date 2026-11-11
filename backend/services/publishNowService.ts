@@ -112,22 +112,26 @@ async function markAttachmentRowPublishFailed(input: {
     // pre-migration environments still get rollback coverage).
     let target: any = null;
     try {
-      const { data: fkRow } = await supabase
+      // best-effort: plan rollback lookup; an unreadable FK read falls back to the heuristic scan below
+      const { data: fkRow, error: fkError } = await supabase
         .from('daily_content_plans')
         .select('id, content')
         .eq('scheduled_post_id', input.scheduledPostId)
         .maybeSingle();
+      if (fkError) console.warn('[publishNow] plan rollback FK lookup failed; using the heuristic scan', { scheduled_post_id: input.scheduledPostId, error: fkError.message });
       if (fkRow) target = fkRow;
     } catch {
       /* fall through to heuristic */
     }
 
     if (!target) {
-      const { data: rows } = await supabase
+      // best-effort: plan rollback heuristic; an unreadable scan leaves the plan row as it is (no publish decision depends on it)
+      const { data: rows, error: scanError } = await supabase
         .from('daily_content_plans')
         .select('id, content')
         .eq('content_status', 'scheduled')
         .limit(50);
+      if (scanError) console.warn('[publishNow] plan rollback scan failed; plan row not rolled back', { scheduled_post_id: input.scheduledPostId, error: scanError.message });
       const rowsArr = Array.isArray(rows) ? rows : [];
       target = rowsArr.find((r: any) => {
         const c = typeof r.content === 'string'
@@ -510,7 +514,9 @@ export async function refreshScheduledPostMediaFromRefs(input: {
       const current = Array.isArray(post.media_urls) ? (post.media_urls as unknown[]).map(String) : [];
       const changed = current.length !== mediaUrls.length || mediaUrls.some((u, i) => u !== current[i]);
       if (changed) {
-        await ownedDbTable('scheduled_posts').update({ media_urls: mediaUrls }).eq('id', input.scheduledPostId);
+        // best-effort: a media snapshot refresh; the caller's in-memory row (below) is what this publish uses
+        const { error: mediaError } = await ownedDbTable('scheduled_posts').update({ media_urls: mediaUrls }).eq('id', input.scheduledPostId);
+        if (mediaError) console.warn('[publishNow] media_urls snapshot not persisted', { scheduled_post_id: input.scheduledPostId, error: mediaError.message });
       }
       post.media_urls = mediaUrls; // keep the in-memory row consistent for the caller
     }
@@ -769,13 +775,9 @@ async function runSingleRowPublish(
     };
     logger.warn(eventName, payload);
     const message = failure.message;
-    await updateScheduledPostOnFailure(scheduled_post_id, message);
-    await ownedDbTable('scheduled_posts')
-      .update({
-        error_code: failure.code,
-        error_message: message,
-      })
-      .eq('id', scheduled_post_id);
+    // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
+    // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
+    await updateScheduledPostOnFailure(scheduled_post_id, message, undefined, failure.code);
     return {
       status: 'FAILED',
       message,
@@ -811,13 +813,9 @@ async function runSingleRowPublish(
         source: input.publish_source ?? 'unknown',
       },
     });
-    await updateScheduledPostOnFailure(scheduled_post_id, message);
-    await ownedDbTable('scheduled_posts')
-      .update({
-        error_code: 'CREATOR_ATTACHMENT_PUBLISH_VALIDATION_FAILED',
-        error_message: message,
-      })
-      .eq('id', scheduled_post_id);
+    // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
+    // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
+    await updateScheduledPostOnFailure(scheduled_post_id, message, undefined, 'CREATOR_ATTACHMENT_PUBLISH_VALIDATION_FAILED');
     return {
       status: 'FAILED',
       message,
@@ -853,13 +851,9 @@ async function runSingleRowPublish(
       reason: failure.reason,
       errors: failure.errors,
     });
-    await updateScheduledPostOnFailure(scheduled_post_id, failure.reason);
-    await ownedDbTable('scheduled_posts')
-      .update({
-        error_code: 'PUBLISH_MEDIA_REVALIDATION_FAILED',
-        error_message: failure.reason,
-      })
-      .eq('id', scheduled_post_id);
+    // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
+    // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
+    await updateScheduledPostOnFailure(scheduled_post_id, failure.reason, undefined, 'PUBLISH_MEDIA_REVALIDATION_FAILED');
     await markAttachmentRowPublishFailed({
       scheduledPostId: scheduled_post_id,
       reason: failure.reason,
@@ -896,10 +890,9 @@ async function runSingleRowPublish(
       errorMessage: schedReadiness.message,
       attemptCount: 1,
     });
-    await updateScheduledPostOnFailure(scheduled_post_id, schedReadiness.message);
-    await ownedDbTable('scheduled_posts')
-      .update({ error_code: schedReadiness.code, error_message: schedReadiness.message })
-      .eq('id', scheduled_post_id);
+    // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
+    // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
+    await updateScheduledPostOnFailure(scheduled_post_id, schedReadiness.message, undefined, schedReadiness.code);
     return { status: 'FAILED', message: schedReadiness.message, timestamp };
   }
   if (schedReadiness.warnings.length > 0) {
@@ -1045,14 +1038,10 @@ async function runSingleRowPublish(
     ? `${PUBLISH_OUTCOME_UNCERTAIN_MESSAGE} Adapter said: ${categorizedDetail}`
     : categorizedDetail;
 
+  // Code and message already land in this one write (it throws on error); the separate, unread
+  // mirror of the same two columns is removed (unread-error census).
   await updateScheduledPostOnFailure(scheduled_post_id, errorDetail, undefined, platformError.code);
   attempt.platformCallInFlight = false;
-  await ownedDbTable('scheduled_posts')
-    .update({
-      error_code: platformError.code,
-      error_message: errorDetail,
-    })
-    .eq('id', scheduled_post_id);
 
   emitCreatorEvent({
     event: CREATOR_EVENTS.ATTACHMENT_PUBLISH_FAILURE,
