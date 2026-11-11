@@ -296,7 +296,9 @@ export class WhatsAppSendStoppedError extends Error {
 export class WhatsAppSharedNumberError extends Error {
   readonly code = 'WHATSAPP_NUMBER_SHARED';
   constructor(readonly otherAccounts: number) {
-    super('This WhatsApp number is connected to more than one account; resolve before sending.');
+    // Operator-facing: the other holder may be in a tenant this operator cannot see, so the
+    // text sends them to support (the account ids are logged server-side, never returned).
+    super('This WhatsApp number is connected to more than one account, so sending is blocked. Contact support to resolve it - retrying will not help.');
     this.name = 'WhatsAppSharedNumberError';
   }
 }
@@ -339,8 +341,14 @@ async function assertNumberNotShared(account: { id: string; phone_number_id: str
   if (!account.phone_number_id) return;
   let res: { data?: any; error?: unknown };
   try {
+    // DELIBERATELY CROSS-TENANT (05): the read has NO company_id filter, because a holder in
+    // ANOTHER tenant is exactly the case this check exists for. It goes through ownedDbTable,
+    // which today provides no tenant scoping; if ownedDbTable ever becomes a real tenant seam,
+    // this read MUST keep its cross-tenant reach (use the service client explicitly), or the
+    // check silently becomes per-tenant and stops detecting the only case it exists for.
+    // Pinned by whatsappKillSwitchSharedNumber.test.ts "held by another tenant".
     res = await ownedDbTable('social_accounts')
-      .select('id, is_active')
+      .select('id, company_id, is_active')
       .eq('platform', 'whatsapp')
       .eq('phone_number_id', account.phone_number_id);
   } catch {
@@ -348,7 +356,15 @@ async function assertNumberNotShared(account: { id: string; phone_number_id: str
   }
   if (res.error) throw new WhatsAppSenderAccountError('unreadable');
   const others = (Array.isArray(res.data) ? res.data : []).filter((r: any) => r.id !== account.id && r.is_active !== false);
-  if (others.length > 0) throw new WhatsAppSharedNumberError(others.length);
+  if (others.length > 0) {
+    // For support, server-side only: which accounts hold the number (never returned to the caller).
+    console.error('[whatsappBroadcast] sending refused: phone_number_id held by more than one live account', {
+      account_id: account.id,
+      other_account_ids: others.map((r: any) => r.id),
+      other_company_ids: [...new Set(others.map((r: any) => r.company_id))],
+    });
+    throw new WhatsAppSharedNumberError(others.length);
+  }
 }
 
 /**

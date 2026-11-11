@@ -177,6 +177,23 @@ describe('A. a kill switch stops every operator send path', () => {
     expect(broadcastStatus()).toBe('paused');
   });
 
+  it('WS-3 channel_not_enabled (enabled, kill switch off, channels [email]) does NOT stop an operator broadcast (e9 scope)', async () => {
+    seed();
+    Object.assign(fakeDb.tables.outreach_governance_config[0], { enabled: true, kill_switch: false, enabled_channels: ['email'] });
+    await enqueueBroadcast('b1', 'free');
+    expect(mockQueue).toHaveLength(1);
+    await processBatch('b1', mockQueue[0].ids);
+    expect(sends).toHaveLength(2);
+  });
+
+  it('WS-3 tenant_not_enabled (row present, enabled false, kill switch off) does NOT stop an operator broadcast (e9 scope)', async () => {
+    seed();
+    Object.assign(fakeDb.tables.outreach_governance_config[0], { enabled: false, kill_switch: false });
+    await enqueueBroadcast('b1', 'free');
+    await processBatch('b1', mockQueue[0].ids);
+    expect(sends).toHaveLength(2);
+  });
+
   it('NEGATIVE CONTROL: no switch on, no tenant config row at all (never configured): every path proceeds and sends', async () => {
     seed();
     fakeDb.tables.outreach_governance_config = [];
@@ -196,7 +213,11 @@ describe('B. a phone number held by another live account is refused (mirrors inb
       seed({ accounts: [other] });
       const create = await refusal(() => createBroadcast({ company_id: ORG, social_account_id: 'sa1', name: 'New', message_type: 'text', body: 'hi' }));
       expect(create).toBeInstanceOf(WhatsAppSharedNumberError);
-      expect(senderAccountRefusalResponse(create)).toMatchObject({ status: 409, code: 'WHATSAPP_NUMBER_SHARED', error: expect.stringContaining('connected to more than one account') });
+      expect(senderAccountRefusalResponse(create)).toMatchObject({ status: 409, code: 'WHATSAPP_NUMBER_SHARED', error: expect.stringContaining('Contact support') });
+      // The other holder's ids are logged for support, never returned to this operator.
+      expect(JSON.stringify(senderAccountRefusalResponse(create))).not.toContain(other.id);
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('held by more than one live account'),
+        expect.objectContaining({ other_account_ids: [other.id], other_company_ids: [other.company_id] }));
       expect(enqueueOutcomeResponse({ ok: false, error: await refusal(() => enqueueBroadcast('b1', 'free')) }).status).toBe(409);
       expect(mockQueue).toHaveLength(0);
       fakeDb.tables.whatsapp_broadcast_recipients.push(recipient(R3, '+15550100003', { status: 'failed', retry_count: 1 }));
