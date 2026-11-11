@@ -82,10 +82,39 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     : [String(content?.platform || 'linkedin')];
   const nowIso = new Date().toISOString();
 
+  // ── TENANT SCOPE of the content core (SECURITY, 2026-11-11) ─────────────
+  // contentCoreId comes from the row's OWN content JSON
+  // (creator_planning_source.card_id) and content_asset_attachment has NO
+  // organization column, so keying on it alone let a row that carries another
+  // tenant's core id update that tenant's attachment (policy), upsert its
+  // platform overrides, read them (finalize) and attach into its lineage.
+  // The core is now proven to be THIS company's from the two tables that DO
+  // record the organization. A row owned by another organization - or with a
+  // NULL organization (legacy; fail closed by coordinator ruling) - makes the
+  // core foreign: 404, indistinguishable from a missing row.
+  let coreOwnership: 'owned' | 'unclaimed' | 'foreign';
+  {
+    const [core, ev] = await Promise.all([
+      supabase.from('content_core_asset').select('organization_id').eq('content_core_id', contentCoreId),
+      supabase.from('content_external_video_asset').select('organization_id').eq('content_core_id', contentCoreId),
+    ]);
+    // A null error is not an answer: only an array body is.
+    if (core.error || ev.error || !Array.isArray(core.data) || !Array.isArray(ev.data)) {
+      return res.status(500).json({ error: 'shared media ownership could not be verified' });
+    }
+    const orgs = [...core.data, ...ev.data].map((r: any) => (r?.organization_id == null ? null : String(r.organization_id)));
+    coreOwnership = orgs.length === 0 ? 'unclaimed' : orgs.every((o) => o === companyId) ? 'owned' : 'foreign';
+  }
+  if (coreOwnership === 'foreign') return res.status(404).json({ error: `Row not found: ${id}` });
+
+  // An attachment is only ever this company's when its core is OWNED (the
+  // attach paths write the owned core row first). No owned core -> no attachment.
   const loadAttachment = async () => {
-    const { data: att } = await supabase
+    if (coreOwnership !== 'owned') return null;
+    const { data: att, error: attErr } = await supabase
       .from('content_asset_attachment').select('*')
       .eq('content_core_id', contentCoreId).limit(1).maybeSingle();
+    if (attErr) throw new Error(`content_asset_attachment read failed: ${attErr.message}`);
     return att as any;
   };
 
