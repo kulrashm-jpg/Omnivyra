@@ -81,6 +81,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const status =
       result.reason === 'INVALID_AMOUNT'        ? 400 :
       result.reason === 'NO_WALLET'             ? 404 :
+      result.reason === 'WALLET_READ_FAILED'    ? 503 :
       result.reason === 'INSUFFICIENT_BALANCE'  ? 409 :
       500;
     return res.status(status).json({ ok: false, code: result.reason, detail: result.detail });

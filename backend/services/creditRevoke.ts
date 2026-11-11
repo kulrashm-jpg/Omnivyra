@@ -65,7 +65,7 @@ export type RevokeCreditResult =
       idempotencyKey: string;
       transactionId:  string | null;
     }
-  | { success: false; reason: 'INVALID_AMOUNT' | 'NO_WALLET' | 'INSUFFICIENT_BALANCE' | 'RPC_FAILED'; detail?: string };
+  | { success: false; reason: 'INVALID_AMOUNT' | 'NO_WALLET' | 'WALLET_READ_FAILED' | 'INSUFFICIENT_BALANCE' | 'RPC_FAILED'; detail?: string };
 
 const REVOKE_BUCKET_SECONDS = 60;
 
@@ -76,10 +76,14 @@ export async function revokeCredit(input: RevokeCreditInput): Promise<RevokeCred
 
   // Fetch wallet to clamp the requested amount to the available balance.
   // Direct read is safe — we are NOT mutating outside the canonical RPC.
-  const { data: wallet } = await ownedDbTable('organization_credits')
+  // A failed read is not NO_WALLET: report it as what it is (nothing revoked).
+  const { data: wallet, error: walletErr } = await ownedDbTable('organization_credits')
     .select('free_balance, incentive_balance')
     .eq('organization_id', input.orgId)
     .maybeSingle();
+  if (walletErr) {
+    return { success: false, reason: 'WALLET_READ_FAILED', detail: walletErr.message };
+  }
 
   if (!wallet) {
     return { success: false, reason: 'NO_WALLET' };
