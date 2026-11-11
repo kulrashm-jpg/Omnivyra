@@ -110,7 +110,7 @@ export const durableIntelligencePort: IndividualIntelligencePort = {
       personId,
       targetNormalized: normalizeGovernanceTarget(channel, target),
       channel,
-    });
+    }, loaded.records.length);                    // A2 16d172974: the records the producer returned
     if (decided.ok === false) return null;        // indeterminate (no instant, failed read) → unknown → fail closed
     return decided.verdict.decision === 'allowed';
   },

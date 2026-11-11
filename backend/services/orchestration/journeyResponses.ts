@@ -45,6 +45,7 @@ import { listInstanceTasks } from '../executionPlans/executionPlanStore';
 import { normalizePhone } from '../identityResolutionService';
 import { detectWhatsAppOptOut } from '../whatsappOptOut';
 import { loadGovernanceRecords } from '../prospectIdentity/contactGovernanceRepository';
+import { indeterminacyReason } from '../prospectIdentity/contactGovernanceAggregation';
 import { ENGINE_REQUESTS_TABLE } from './whatsappEngineAdapter';
 
 /**
@@ -186,11 +187,14 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
       // aggregator; a new caller must re-check A's empty-reads branch.
       const loaded = await loadGovernanceRecords({ organizationId, personId, channel, target: typeof target === 'string' ? target : null });
       if (!loaded.ok || loaded.reads === undefined) throw unreadable('contact governance');
+      // The per-read indeterminacy rules come from ONE place (indeterminacyReason, A's aggregation
+      // module); only the unparseable-instant check is this caller's own, because it parses readAt
+      // itself (indeterminacyReason's doc states that exception).
       for (const read of loaded.reads) {
-        if (!read.ok) throw unreadable('contact governance');
+        const why = indeterminacyReason(read);
+        if (why !== null) throw unreadable(`contact governance (${why})`);
         if (read.records.length === 0) continue;
-        if (read.readAt === null) throw unreadable('contact governance (rows without a database read instant)');
-        const atMs = Date.parse(read.readAt);
+        const atMs = Date.parse(read.readAt as string);
         if (!Number.isFinite(atMs)) throw unreadable('contact governance (unparseable database read instant)');
         for (const r of read.records) {
           const from = Date.parse(r.effectiveFrom);
