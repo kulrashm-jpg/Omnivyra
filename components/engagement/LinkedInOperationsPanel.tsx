@@ -1,5 +1,6 @@
 import React from 'react';
 import PlatformIcon from '@/components/ui/PlatformIcon';
+import { TenantDataNoticeForSelectedCompany } from '@/components/compliance/TenantDataNotice';
 
 type LinkedInOverview = {
   connected: boolean;
@@ -202,6 +203,14 @@ export function LinkedInOperationsPanel({
             >
               {surfaceActionBusy === 'sales_navigator' ? 'Capturing leads...' : 'Capture Sales Navigator'}
             </button>
+          ) : null}
+          {onCaptureSalesNavigator ? (
+            // Owner requirement 2026-11-11: the tenant data-controller notice is shown wherever
+            // Sales Navigator capture is started (PI's component; an admin accepts here). The
+            // server refuses to issue the capture command until it is accepted.
+            <div className="basis-full" data-testid="salesnav-data-notice">
+              <TenantDataNoticeForSelectedCompany categories={['salesnav_capture']} />
+            </div>
           ) : null}
           {onCaptureRecruiter ? (
             <button
