@@ -316,7 +316,7 @@ export async function processBatch(
         personId: null,
         targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
         channel: 'whatsapp',
-      }, governance.records?.length ?? 0)
+      }, governance.records.length)
       : null;
     // The third argument (records produced) is VACUOUS here: for this producer
     // `records` and `reads[0].records` are the same array, so the consistency check
