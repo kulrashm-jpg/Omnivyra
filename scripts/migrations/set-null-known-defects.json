@@ -227,6 +227,16 @@
       "owner": "UNASSIGNED — cross-track finding, parent to route",
       "evidence": "CODE_VERIFIED (supabase/_schema/baseline.sql): unified_person_id uuid NOT NULL; FOREIGN KEY (unified_person_id, company_id) REFERENCES public.unified_persons(id, company_id) ON DELETE SET NULL (unified_person_id).",
       "detail": "The partial SET NULL column list correctly spares company_id, but names unified_person_id — which is itself NOT NULL. Deleting a unified_persons row therefore raises 23502. Forward fix: make the column nullable, or use RESTRICT/CASCADE as the ownership semantics require."
+    },
+    {
+      "key": "contact_opt_out_reviews.person_id",
+      "constraint": "contact_opt_out_reviews_person_tenant_fk",
+      "rule": "set_null_vs_check",
+      "check": "contact_opt_out_reviews_person_anchor_consistent",
+      "classification": "INTENTIONAL - trigger-repaired, not a defect",
+      "owner": "Orchestration (virality-55)",
+      "evidence": "CODE_VERIFIED + LOCAL_REPRODUCED; repair proven NECESSARY by a removal control (realschema g11_optout_review: 'NEGATIVE CONTROL' drops the trigger and the referential SET NULL then violates the CHECK, 23514 by constraint name); premise asserted on every real-schema run ('PREMISE': trigger enabled, BEFORE+ROW+UPDATE, bound to contact_opt_out_reviews_guard(), final body contains the tombstone line). Commit b6e975cdc on s/integration-20261111; 66/66 on a full S replay.",
+      "detail": "FK contact_opt_out_reviews_person_tenant_fk is ON DELETE SET NULL (person_id) (column list; organization_id is kept). The BEFORE UPDATE row trigger trg_contact_opt_out_reviews_guard -> public.contact_opt_out_reviews_guard() rewrites a person anchor's anchor_value to 'erased:' || id in the same row when person_id goes NULL, so contact_opt_out_reviews_person_anchor_consistent holds after the referential update (PG runs the SET NULL as an UPDATE on the referencing table, so row triggers fire; measured by virality-05 on PG 17.11). In-file annotation: set-null-ok, 20270127000001:80. If the PREMISE or NEGATIVE CONTROL test ever fails, remove this entry together with the fix. NOTE: the actor-FK detector matches catalog_known by table.column ONLY (rule/constraint are not checked), so this entry would also silence a different future finding on this column; any such finding must be judged on its own before this entry is kept. A NEW known_open fails t2-actor-fk-parity BY DESIGN: it lands only via a reviewed merge to main."
     }
   ]
 }
