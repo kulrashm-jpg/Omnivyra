@@ -136,13 +136,15 @@ const appQueries = () => queries.filter((q) => !['user_company_roles', 'companie
 // write passes only when the case sets mockStepUpOk.
 let mockStepUpOk = false;
 jest.mock('../../security/superAdminCrossTenantStepUp', () => ({
-  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, i: { userId: string; companyId?: string | null }) => {
+  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, _i: { companyId?: string | null }) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase()) || mockStepUpOk) return true;
-    // Membership is decided from the rows, as the real helper does.
-    if (i.companyId) {
+    // Membership of the AUTHENTICATED actor, from the rows - as the real helper does.
+    const { user } = await jest.requireMock('../../services/supabaseAuthService').getSupabaseUserFromRequest(req);
+    if (user?.id && _i.companyId) {
       const { getUserRole } = jest.requireActual('../../services/rbacService');
-      if ((await getUserRole(i.userId, i.companyId)).role) return true;
+      if ((await getUserRole(user.id, _i.companyId)).role) return true;
     }
+
     res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
     return false;
   },

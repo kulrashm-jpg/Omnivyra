@@ -26,24 +26,19 @@ export function isReadMethod(method: string | undefined): boolean {
  * STEP_UP_REQUIRED, or 401 when no principal resolves) is already written and
  * the caller MUST return.
  *
- * The membership decision is made HERE, from the membership rows (getUserRole
- * for userId in companyId), never supplied by the caller (05): a caller cannot
- * bypass step-up by asserting membership. getUserRole reports a failed lookup
+ * The membership decision is made HERE, from the membership rows, for the
+ * AUTHENTICATED principal (05): the caller supplies only the company - no
+ * identity and no membership flag - so no call site can make the helper judge
+ * the wrong person (e.g. the target user of an invite) and skip step-up. getUserRole reports a failed lookup
  * as "no role" (its error field never carries a failure), so `role` alone
  * decides, and an unverifiable membership falls into step-up.
  */
 export async function requireSuperAdminCrossTenantStepUp(
   req: NextApiRequest,
   res: NextApiResponse,
-  input: { userId: string; companyId: string | null | undefined },
+  input: { companyId: string | null | undefined },
 ): Promise<boolean> {
   if (isReadMethod(req.method)) return true;
-
-  if (input.companyId) {
-    const { getUserRole } = await import('../services/rbacService');
-    const { role } = await getUserRole(input.userId, input.companyId);
-    if (role) return true;          // an active role in this company: not cross-tenant
-  }
 
   const [{ resolvePrincipal }, { requireStepUp }, { getStepUpPolicy }, sec, { logSecurityEvent }] = await Promise.all([
     import('./IdentityResolver'),
@@ -52,10 +47,17 @@ export async function requireSuperAdminCrossTenantStepUp(
     import('../../shared/contracts/security'),
     import('./audit/SecurityAuditService'),
   ]);
+  // The ACTOR is the authenticated principal - resolved first, never passed in.
   const resolved = await resolvePrincipal(req);
   if (resolved.ok !== true) {
     res.status(401).json({ error: 'Authentication required', code: 'NOT_AUTHENTICATED' });
     return false;
+  }
+
+  if (input.companyId) {
+    const { getUserRole } = await import('../services/rbacService');
+    const { role } = await getUserRole(resolved.principal.userId, input.companyId);
+    if (role) return true;          // the actor holds an active role here: not cross-tenant
   }
   // The policy applied is the PLATFORM one, explicitly. If it cannot be
   // resolved, refuse here (05): never fall back to whatever another capability's

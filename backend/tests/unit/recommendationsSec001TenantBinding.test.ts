@@ -55,6 +55,27 @@ const planCalls: string[] = [];
 /** Reads/writes other than the authorization chain's own lookups. */
 const appQueries = () => queries.filter(q => !['user_company_roles', 'companies'].includes(q.table));
 
+// Owner principle 2026-11-12: a Super Admin WRITE into a company where they hold
+// no active role needs a step-up (superAdminCrossTenantStepUp, exercised for
+// real in superAdminCrossTenantStepUp.test.ts). Mirrored here so this suite
+// keeps testing tenant binding: reads and own-company pass; a cross-tenant
+// write passes only when the case sets mockStepUpOk.
+let mockStepUpOk = false;
+jest.mock('../../security/superAdminCrossTenantStepUp', () => ({
+  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, _i: { companyId?: string | null }) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase()) || mockStepUpOk) return true;
+    // Membership of the AUTHENTICATED actor, from the rows - as the real helper does.
+    const { user } = await jest.requireMock('../../services/supabaseAuthService').getSupabaseUserFromRequest(req);
+    if (user?.id && _i.companyId) {
+      const { getUserRole } = jest.requireActual('../../services/rbacService');
+      if ((await getUserRole(user.id, _i.companyId)).role) return true;
+    }
+
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () =>
     authUser ? { user: { id: authUser, email: 'u@e.com', emailVerified: true }, error: null }

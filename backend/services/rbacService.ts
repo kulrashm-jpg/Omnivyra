@@ -631,7 +631,7 @@ export const enforceRole = async (input: {
     // The helper decides membership itself from the membership rows (an
     // unverifiable lookup falls into step-up); callers never assert it.
     const { requireSuperAdminCrossTenantStepUp } = await import('../security/superAdminCrossTenantStepUp');
-    if (!(await requireSuperAdminCrossTenantStepUp(input.req, input.res, { userId: user.userId, companyId }))) return null;
+    if (!(await requireSuperAdminCrossTenantStepUp(input.req, input.res, { companyId }))) return null;
     return { userId: user.userId, role: Role.SUPER_ADMIN };
   }
 
