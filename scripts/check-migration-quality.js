@@ -107,14 +107,17 @@ function idempotencyViolations(sql) {
   const lines = sql.split('\n');
   lines.forEach((line, i) => {
     const l = line.replace(/--.*$/, ''); // strip line comments
-    if (/\bCREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/i.test(l))
+    // In all three rules every optional element AND the whitespace before the clause sit INSIDE the negative
+    // lookahead (virality-e1 / virality-05, 2026-11-11). A quantifier outside it can give back a character and
+    // move the lookahead's start onto whitespace, where it fails, so a correct line is flagged:
+    // `(CONCURRENTLY\s+)?(?!IF…)` flagged `CONCURRENTLY IF NOT EXISTS`; `INDEX\s+(?!…)` flagged a double space.
+    // `(?=\s)` keeps the old "keyword followed by whitespace" requirement without a quantifier: with a bare
+    // `\b`, the string literal 'CREATE UNIQUE INDEX%…' in 20261210000004:60 became a false positive.
+    if (/\bCREATE\s+TABLE(?=\s)(?!\s+IF\s+NOT\s+EXISTS)/i.test(l))
       v.push({ line: i + 1, rule: 'CREATE TABLE must use IF NOT EXISTS', text: line.trim() });
-    // The optional CONCURRENTLY sits INSIDE the negative lookahead (virality-e1, 2026-11-11): written as
-    // `(CONCURRENTLY\s+)?(?!IF\s+NOT\s+EXISTS)` the engine backtracked the group to empty, so a correct
-    // `CREATE INDEX CONCURRENTLY IF NOT EXISTS` was flagged.
-    if (/\bCREATE\s+(UNIQUE\s+)?INDEX\s+(?!(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS)/i.test(l))
+    if (/\bCREATE\s+(?:UNIQUE\s+)?INDEX(?=\s)(?!\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS)/i.test(l))
       v.push({ line: i + 1, rule: 'CREATE INDEX must use IF NOT EXISTS', text: line.trim() });
-    if (/\bADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)/i.test(l))
+    if (/\bADD\s+COLUMN(?=\s)(?!\s+IF\s+NOT\s+EXISTS)/i.test(l))
       v.push({ line: i + 1, rule: 'ADD COLUMN must use IF NOT EXISTS', text: line.trim() });
   });
   return v;
