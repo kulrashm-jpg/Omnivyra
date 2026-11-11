@@ -78,7 +78,17 @@ describe('unknown mode (no asserted mode, no structural signal)', () => {
     // A DEFECT, so it is on the failure channel, never the routine skipped bucket.
     const counters = getProvenanceIngestionCounters();
     expect(counters['inbound_lead:failed']).toBe(1);
+    expect(counters['inbound_lead:failed:mode_unknown']).toBe(1); // the defect is a LABEL on the metric
     expect(counters['inbound_lead:skipped']).toBeUndefined();
+  });
+
+  it('a genuine failure (thrown work) is NOT labelled mode_unknown, so the two are separable at alert time', async () => {
+    const { deps } = harness();
+    deps.upsertSourceRecord = jest.fn(async () => { throw new Error('provider down'); });
+    await scheduleInboundLeadProvenance(ORG_A, lead(), 'inbound_form', deps);
+    const counters = getProvenanceIngestionCounters();
+    expect(counters['inbound_lead:failed']).toBe(1);
+    expect(counters['inbound_lead:failed:mode_unknown']).toBeUndefined();
   });
 
   it('a routine skip (closed gate) stays in the skipped bucket, so the two are distinguishable', async () => {

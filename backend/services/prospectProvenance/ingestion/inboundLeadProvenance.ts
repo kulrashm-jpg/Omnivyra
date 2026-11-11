@@ -97,6 +97,9 @@ export async function recordInboundLeadProvenance(
       reason: 'mode_unknown', defect: 'createLead_caller_did_not_assert_provenance_mode',
       leadId: str(lead.id), organizationId,
     });
+    // Two vocabularies, both correct: the CALLER is told `skipped` (nothing was
+    // written - the honest contract); the OPERATOR channel says `failed` (the
+    // cause is a code defect, labelled inbound_lead:failed:mode_unknown).
     return { status: 'skipped', reason: 'mode_unknown' };
   }
 

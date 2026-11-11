@@ -36,6 +36,14 @@ export function recordProvenanceOutcome(
 ): void {
   const key = `${path}:${outcome}`;
   counters.set(key, (counters.get(key) ?? 0) + 1);
+  // A FAILURE that names its reason is also counted under that reason as a label
+  // (`<path>:failed:<reason>`), so an alert on the failure rate can tell a code
+  // defect (e.g. inbound_lead:failed:mode_unknown) from a provider outage; the two
+  // need opposite responses. The aggregate key above is unchanged.
+  if ((outcome === 'failed' || outcome === 'error') && typeof detail.reason === 'string' && detail.reason) {
+    const labelled = `${key}:${detail.reason}`;
+    counters.set(labelled, (counters.get(labelled) ?? 0) + 1);
+  }
   if (outcome === 'failed' || outcome === 'error') {
     try {
       logger.warn('prospect_provenance_side_effect_failed', { path, outcome, ...detail });
