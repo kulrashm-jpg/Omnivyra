@@ -26,29 +26,52 @@ export function isReadMethod(method: string | undefined): boolean {
  * STEP_UP_REQUIRED, or 401 when no principal resolves) is already written and
  * the caller MUST return.
  *
- * `hasMembership`: the Super Admin holds an ACTIVE role in `companyId`. When
- * unknown (a lookup that failed), pass false - that fails closed into step-up.
+ * The membership decision is made HERE, from the membership rows (getUserRole
+ * for userId in companyId), never supplied by the caller (05): a caller cannot
+ * bypass step-up by asserting membership. getUserRole reports a failed lookup
+ * as "no role" (its error field never carries a failure), so `role` alone
+ * decides, and an unverifiable membership falls into step-up.
  */
 export async function requireSuperAdminCrossTenantStepUp(
   req: NextApiRequest,
   res: NextApiResponse,
-  input: { companyId: string | null | undefined; hasMembership: boolean },
+  input: { userId: string; companyId: string | null | undefined },
 ): Promise<boolean> {
   if (isReadMethod(req.method)) return true;
-  if (input.hasMembership) return true;
 
-  const [{ resolvePrincipal }, { requireStepUp }, { getStepUpPolicy }, sec] = await Promise.all([
+  if (input.companyId) {
+    const { getUserRole } = await import('../services/rbacService');
+    const { role } = await getUserRole(input.userId, input.companyId);
+    if (role) return true;          // an active role in this company: not cross-tenant
+  }
+
+  const [{ resolvePrincipal }, { requireStepUp }, { getStepUpPolicy }, sec, { logSecurityEvent }] = await Promise.all([
     import('./IdentityResolver'),
     import('./requireStepUp'),
     import('./stepup/StepUpPolicyRegistry'),
     import('../../shared/contracts/security'),
+    import('./audit/SecurityAuditService'),
   ]);
   const resolved = await resolvePrincipal(req);
   if (resolved.ok !== true) {
     res.status(401).json({ error: 'Authentication required', code: 'NOT_AUTHENTICATED' });
     return false;
   }
+  // The policy applied is the PLATFORM one, explicitly. If it cannot be
+  // resolved, refuse here (05): never fall back to whatever another capability's
+  // policy may later say.
   const platformPolicy = getStepUpPolicy(sec.PLATFORM_CONTROLS_MANAGE);
+  if (!platformPolicy) {
+    await logSecurityEvent({
+      capability: sec.ORGANIZATION_MANAGE,
+      decision: 'stepup_required',
+      reason: `super admin cross-tenant write refused: platform step-up policy not registered | company=${input.companyId ?? '(none)'}`,
+      actorUserId: resolved.principal.userId,
+      principalUserId: resolved.principal.userId,
+    });
+    res.status(401).json({ error: 'Step-up authentication required (policy unavailable)', code: 'STEP_UP_REQUIRED' });
+    return false;
+  }
   // A principal missing its step-up / device / MFA state is treated as having
   // NO step-up (refused cleanly), never as a crash.
   const p = resolved.principal;
@@ -61,6 +84,6 @@ export async function requireSuperAdminCrossTenantStepUp(
   return requireStepUp(req, res, principal, {
     capability: sec.ORGANIZATION_MANAGE,
     reason: `super admin cross-tenant write into company ${input.companyId ?? '(none)'} (no membership)`,
-    ...(platformPolicy ? { policyOverride: { ...platformPolicy, capability: sec.ORGANIZATION_MANAGE } } : {}),
+    policyOverride: { ...platformPolicy, capability: sec.ORGANIZATION_MANAGE },
   });
 }

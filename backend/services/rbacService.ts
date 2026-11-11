@@ -628,11 +628,10 @@ export const enforceRole = async (input: {
     // Owner principle 2026-11-12: "only Super Admin crosses companies, WITH
     // step-up". A WRITE into a company where this Super Admin holds no active
     // role needs a valid step-up (the platform policy; reads never step up).
-    // getUserRole reports a failed lookup as "no role", so an unverifiable
-    // membership fails closed into step-up.
-    const hasMembership = Boolean(userRoleResult.role) && !userRoleResult.error;
+    // The helper decides membership itself from the membership rows (an
+    // unverifiable lookup falls into step-up); callers never assert it.
     const { requireSuperAdminCrossTenantStepUp } = await import('../security/superAdminCrossTenantStepUp');
-    if (!(await requireSuperAdminCrossTenantStepUp(input.req, input.res, { companyId, hasMembership }))) return null;
+    if (!(await requireSuperAdminCrossTenantStepUp(input.req, input.res, { userId: user.userId, companyId }))) return null;
     return { userId: user.userId, role: Role.SUPER_ADMIN };
   }
 
