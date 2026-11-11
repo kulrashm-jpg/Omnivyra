@@ -2,11 +2,10 @@
  * Tests for the queue concurrency lock + atomic cancel+enqueue helpers
  * in backend/scheduler/schedulerService.ts.
  *
- *   - tryAcquireScheduledPostQueueLock returns acquired:true under advisory lock
- *   - tryAcquireScheduledPostQueueLock returns acquired:false on contention
+ *   - the removed session advisory lock is never called (C11, 2026-11-11)
  *   - falls back to optimistic_check when RPC missing
  *   - atomicCancelAndReEnqueueScheduledPost rolls back when enqueue fails
- *   - returns ok:false on lock contention
+ *   - is not refused by the removed advisory lock
  *   - returns idempotency key derived from scheduledFor
  */
 
@@ -129,21 +128,21 @@ describe('queue concurrency lock + atomic re-enqueue', () => {
     resetState();
   });
 
-  test('tryAcquireScheduledPostQueueLock returns acquired:true when advisory RPC succeeds', async () => {
-    mockRpcResponses['try_scheduled_post_lock'] = true;
+  // The SESSION advisory-lock path was REMOVED (e9 ruling on C11, 2026-11-11): production has no
+  // try_/release_scheduled_post_lock, and a session lock cannot work through pooled PostgREST.
+  // Whatever the RPC would answer, it is never called and the optimistic check is used.
+  test.each([true, false])('the advisory RPC is never called (even if it would answer %s): optimistic check, acquired', async (answer) => {
+    mockRpcResponses['try_scheduled_post_lock'] = answer;
+    const { supabase } = await import('../../db/supabaseClient');
     const { tryAcquireScheduledPostQueueLock } = await import('../../scheduler/schedulerService');
     const lock = await tryAcquireScheduledPostQueueLock('00000000-0000-0000-0000-000000000001');
     expect(lock.acquired).toBe(true);
-    expect(lock.mode).toBe('advisory');
+    expect(lock.mode === 'optimistic_check' || lock.mode === 'none').toBe(true);
     await lock.release();
-  });
-
-  test('tryAcquireScheduledPostQueueLock returns acquired:false on advisory contention', async () => {
-    mockRpcResponses['try_scheduled_post_lock'] = false;
-    const { tryAcquireScheduledPostQueueLock } = await import('../../scheduler/schedulerService');
-    const lock = await tryAcquireScheduledPostQueueLock('00000000-0000-0000-0000-000000000002');
-    expect(lock.acquired).toBe(false);
-    expect(lock.mode).toBe('advisory');
+    const rpc = (supabase as unknown as { rpc: jest.Mock }).rpc;
+    const names = rpc.mock.calls.map((c: unknown[]) => c[0]);
+    expect(names).not.toContain('try_scheduled_post_lock');
+    expect(names).not.toContain('release_scheduled_post_lock');
   });
 
   test('falls back to optimistic_check when advisory RPC errors', async () => {
@@ -174,18 +173,25 @@ describe('queue concurrency lock + atomic re-enqueue', () => {
     expect(queueOps.add.length).toBeGreaterThanOrEqual(1);
   });
 
-  test('atomicCancelAndReEnqueueScheduledPost returns ok:false on lock contention without touching the queue', async () => {
+  // Previously: an advisory "contention" answer returned ok:false. That path never ran in production
+  // (C11: the lock functions are absent) and is removed; concurrent edits are serialised by the
+  // post-level compare-and-sets and the live-row unique index instead. A "contended" RPC answer
+  // therefore changes nothing: the RPC is not called and the re-enqueue proceeds.
+  test('atomicCancelAndReEnqueueScheduledPost is not refused by the removed advisory lock (the RPC is never called)', async () => {
     mockRpcResponses['try_scheduled_post_lock'] = false;
+    queueJobRows.push({ id: 'qj-1', scheduled_post_id: 'sp-1', status: 'pending' });
+    const { supabase } = await import('../../db/supabaseClient');
     const { atomicCancelAndReEnqueueScheduledPost } = await import('../../scheduler/schedulerService');
     const result = await atomicCancelAndReEnqueueScheduledPost({
       scheduledPostId: 'sp-1',
       userId: 'user-1',
       socialAccountId: 'sa-1',
       newScheduledFor: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      reason: 'test',
     });
-    expect(result.ok).toBe(false);
-    expect(result.locked).toBe(false);
-    expect(queueOps.add.length).toBe(0);
-    expect(queueOps.remove).toBe(0);
+    expect(result.ok).toBe(true);
+    expect(result.locked).toBe(true);
+    const names = (supabase as unknown as { rpc: jest.Mock }).rpc.mock.calls.map((c: unknown[]) => c[0]);
+    expect(names).not.toContain('try_scheduled_post_lock');
   });
 });

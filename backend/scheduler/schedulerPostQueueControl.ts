@@ -9,7 +9,6 @@ import { ownedDbTable } from '../db/writeOwner';
  * importers keep using '../scheduler/schedulerService'.
  */
 
-import { supabase } from '../db/supabaseClient';
 import { getQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { isLiveQueueJobDuplicateViolation } from '../services/boltScheduleIdempotency';
@@ -268,55 +267,20 @@ export async function enqueueScheduledPostAt(
  * publish claim, and atomicCancelAndReEnqueueScheduledPost's check that a
  * 'duplicate' live job is at the requested time.
  *
- * The lock is intentionally non-blocking: this is `pg_try_advisory_lock`
- * semantics, returning `acquired: false` immediately on contention so the
- * caller can surface a 409 instead of stalling the request.
- *
- * Returns `{ acquired, release }` so the caller can release in a finally
- * block. The fallback path's `release()` is a no-op.
+ * Since the advisory path's removal it never returns `acquired: false`: it always
+ * takes the optimistic-check path below, whose `release()` is a no-op. The
+ * `{ acquired, release }` shape is kept so callers need no change.
  */
 export async function tryAcquireScheduledPostQueueLock(
   scheduledPostId: string,
 ): Promise<{ acquired: boolean; release: () => Promise<void>; mode: 'advisory' | 'optimistic_check' | 'none' }> {
-  // Try the advisory-lock RPC first.
-  try {
-    const { data, error } = await supabase.rpc('try_scheduled_post_lock', {
-      p_scheduled_post_id: scheduledPostId,
-    });
-    if (!error && typeof data === 'boolean') {
-      if (!data) {
-        return { acquired: false, release: async () => undefined, mode: 'advisory' };
-      }
-      return {
-        acquired: true,
-        mode: 'advisory',
-        release: async () => {
-          // CHECKED (e9 ruling, 2026-11-11): supabase-js returns { data, error } and does not throw on a
-          // database error, and a SESSION advisory lock released through a different pooled PostgREST
-          // connection returns data=false (not an error). Either way the lock may still be held, so it
-          // is reported rather than silently assumed released. Interim visibility only; the lock design
-          // itself is pending C11 (see the NOT A MUTUAL-EXCLUSION GUARANTEE note above).
-          let res: { data?: unknown; error?: { code?: string; message?: string } | null } | undefined;
-          let thrown: unknown = null;
-          try {
-            res = await supabase.rpc('release_scheduled_post_lock', { p_scheduled_post_id: scheduledPostId });
-          } catch (releaseError) {
-            thrown = releaseError ?? 'rpc threw';
-          }
-          if (thrown !== null || res?.error || res?.data !== true) {
-            console.error('[scheduled-post-lock] lock not released', {
-              scheduledPostId,
-              reason: thrown !== null ? 'threw' : res?.error ? 'rpc_error' : 'not_held_by_this_session',
-              message: thrown !== null ? (thrown as Error)?.message ?? String(thrown) : res?.error?.message ?? null,
-            });
-          }
-        },
-      };
-    }
-  } catch (rpcError) {
-    // RPC missing or DB rejected — fall through to optimistic check.
-    void rpcError;
-  }
+  // The advisory-lock RPC path is REMOVED (e9 ruling on C11, 2026-11-11): production has no
+  // try_/release_scheduled_post_lock (C11 read-only catalogue, confirming 20261009000000), so it
+  // never ran; and as written it could not work through pooled PostgREST (a session lock released
+  // on another connection leaks, and a same-session re-acquire breaks exclusion). Callers are correct
+  // WITHOUT exclusion (see above). Adding real exclusion later is a product decision (it creates
+  // new 409s), and must not be a session advisory lock. 'advisory' stays in the return type only so
+  // existing test doubles still type-check; this function never produces it.
 
   // ── Optimistic-check fallback ────────────────────────────────────────
   // No advisory lock available. Capture the latest `updated_at` of the
