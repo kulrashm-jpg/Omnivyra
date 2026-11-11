@@ -10,6 +10,21 @@
  * or delete succeeds), not merely present.
  */
 import { db, inRollback, seedTenants, ORG_A } from './setup';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+/**
+ * The 20270209000002 postcondition block, read from the MIGRATION FILE itself
+ * (never a copy), so this suite exercises exactly what will run at apply.
+ */
+const POSTCONDITION = (() => {
+  const sql = readFileSync(join(__dirname, '..', '..', '..', 'supabase', 'migrations',
+    '20270209000002_consent_records_tenant_data_ack.sql'), 'utf8');
+  const start = sql.indexOf('DO $post$');
+  const end = sql.indexOf('$post$;', start + 'DO $post$'.length);
+  if (start < 0 || end < 0) throw new Error('postcondition block not found in 20270209000002');
+  return sql.slice(start, end + '$post$;'.length);
+})();
 
 async function one(sql: string, params: unknown[] = []): Promise<Record<string, unknown>> {
   const { rows } = await db.query(sql, params);
@@ -79,4 +94,16 @@ describe('consent ledger premise for tenant data acknowledgements', () => {
     expect(await probe(`UPDATE public.consent_records SET consent_version = 'forged' WHERE id = $1`, [id])).toBe('ok');
     expect(await probe(`DELETE FROM public.consent_records WHERE id = $1`, [id])).toBe('ok');
   }));
+
+  // PERMANENT (PI review): the allowed set is ('O','A'). A later edit that ADDS
+  // 'R' (replica-only, which does NOT fire on ordinary writes) would keep the
+  // 'D' control green while certifying a guard that never runs. This pins 'R'.
+  it.each(['consent_records_append_only', 'consent_records_no_delete'])(
+    'a trigger set to ENABLE REPLICA makes the 0002 postcondition RAISE, naming %s', (trg) => inRollback(async () => {
+      expect(await probe(POSTCONDITION)).toBe('ok');                       // baseline: the premise holds
+      await db.query(`ALTER TABLE public.consent_records ENABLE REPLICA TRIGGER ${trg}`);   // rolled back with the test
+      const msg = await probe(POSTCONDITION);
+      expect(msg).toContain('consent ack postcondition');
+      expect(msg).toContain(`trigger ${trg}`);
+    }));
 });
