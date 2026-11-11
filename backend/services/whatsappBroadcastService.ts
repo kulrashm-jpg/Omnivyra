@@ -23,9 +23,11 @@ import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimite
 import { getValidAccessToken } from '../auth/metaAuthService';
 import { requireEncryptionKey } from '../auth/credentialEncryption';
 
-// W0-C — the canonical contact-governance evaluator. `mayContact` is pure; the
-// tenant-scoped read is the only I/O this adds, and it happens once per batch.
-import { mayContact } from './prospectIdentity/contactGovernance';
+// W0-C — the canonical contact-governance evaluator, applied through
+// `evaluateGovernanceReads` (A2): each read's rows are judged at that read's own
+// DATABASE instant, never the host clock. The tenant-scoped read is the only I/O
+// this adds, and it happens once per batch.
+import { evaluateGovernanceReads } from './prospectIdentity/contactGovernanceAggregation';
 import {
   loadTenantGovernanceRecords,
   normalizeGovernanceTarget,
@@ -286,7 +288,13 @@ export async function processBatch(
   // One tenant-scoped read per batch, then the PURE evaluator per recipient.
   // FAIL CLOSED: if the store cannot be read, NOTHING in this batch is sent.
   const governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
-  const governanceNow = new Date().toISOString();
+  // A2 — THE DEFECT THIS CLOSES: the decision instant was `new Date()` on this
+  // HOST, taken after the read, for every recipient. A host clock running ahead
+  // ended an in-force restriction early (effective_until "passed") and let the
+  // broadcast reach a number the tenant had restricted. No instant is taken here:
+  // `evaluateGovernanceReads` judges the read's rows at the read's own `read_at`
+  // (the database's transaction instant), and anything without a usable instant is
+  // INDETERMINATE and fails closed, like an unreadable store.
 
   let sentCount = 0;
   let failedCount = 0;
@@ -296,21 +304,24 @@ export async function processBatch(
 
     // Evaluated BEFORE the message body is built and before `fetch`, so a
     // refusal cannot reach the provider.
-    const verdict = governance.ok
-      ? mayContact({
+    const decision = governance.ok
+      ? evaluateGovernanceReads(governance.reads, {
         organizationId: broadcast.company_id,
         personId: null,
         targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
         channel: 'whatsapp',
-        now: governanceNow,
-        records: governance.records,
-      })
+      }, governance.records?.length ?? 0)
       : null;
+    // `'verdict' in`, not the discriminant: this repo compiles with strict:false,
+    // where `decision.ok` does not narrow the union.
+    const verdict = decision && 'verdict' in decision ? decision.verdict : null;
 
     if (!verdict || verdict.decision !== 'allowed') {
       const reason = verdict
         ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
-        : `governance unreadable: ${governance.error ?? 'unknown'}`;
+        : decision && 'error' in decision
+          ? `governance indeterminate: ${decision.error}`
+          : `governance unreadable: ${governance.error ?? 'unknown'}`;
       await ownedDbTable('whatsapp_broadcast_recipients')
         .update({ status: 'blocked_governance', error_code: 'contact_governance', error_message: reason })
         .eq('id', recipient.id);
