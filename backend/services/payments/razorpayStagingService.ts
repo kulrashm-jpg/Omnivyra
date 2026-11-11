@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
+import { logger } from '../logger';
 import { completePurchase, failPurchase, recordPaymentProviderEvent } from '../purchaseService';
 import {
   assertMonetizationExposureModeConfigured,
@@ -317,12 +318,18 @@ async function markProviderEvent(input: {
 async function findPurchaseForPayment(payment: RazorpayPaymentEntity): Promise<any | null> {
   const orderId = payment.order_id;
   if (!orderId) return null;
-  const { data } = await ownedDbTable('credit_purchases')
+  // MONEY: a failed read is not "no purchase for this order". The webhook path
+  // calls this BEFORE the event is recorded, so answering null recorded a paid
+  // event against nothing (a retry is then a duplicate); the verify path told a
+  // payer "purchase_not_found_for_order". Throw: the webhook is retried, verify
+  // answers 5xx.
+  const { data, error } = await ownedDbTable('credit_purchases')
     .select('id, organization_id, credits, amount_paid, currency, status, fulfillment_status, provider_order_id, amount_subunits, provider_mode')
     .eq('provider', PROVIDER)
     .eq('provider_mode', PROVIDER_MODE)
     .eq('provider_order_id', orderId)
     .maybeSingle();
+  if (error) throw new Error(`[razorpayStaging] purchase lookup failed for order ${orderId}: ${error.message}`);
   return data ?? null;
 }
 
@@ -591,7 +598,10 @@ export async function handleRazorpayStagingWebhook(input: {
     return { status: 'failed', reason, eventId: providerEventId, purchaseId: String(purchase.id) };
   }
 
-  await ownedDbTable('credit_purchases')
+  // best-effort: credits are already granted (completePurchase succeeded) and
+  // reconciliation keys on provider_order_id, which is already stored; this only
+  // links the event/payment ids. A failure is logged, never silent.
+  const { error: linkErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_event_id: providerEventId,
       provider_payment_id: paymentId,
@@ -601,6 +611,7 @@ export async function handleRazorpayStagingWebhook(input: {
       updated_at: new Date().toISOString(),
     })
     .eq('id', result.purchaseId);
+  if (linkErr) logger.error('razorpay_staging_purchase_link_failed', { purchaseId: result.purchaseId, providerEventId, message: linkErr.message });
 
   if (event.id) await markProviderEvent({ eventId: event.id, status: 'processed' });
   await recordMonetizationOperationalEvent({
@@ -791,7 +802,9 @@ export async function verifyAndFulfillRazorpayStagingPayment(input: {
     return { status: 'failed', reason, purchaseId: String(purchase.id), paymentId: input.paymentId };
   }
 
-  await ownedDbTable('credit_purchases')
+  // best-effort: see the webhook path - credits granted, order id stored; this
+  // only links the event/payment ids. Logged on failure.
+  const { error: linkErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_event_id: providerEventId,
       provider_payment_id: input.paymentId,
@@ -801,6 +814,7 @@ export async function verifyAndFulfillRazorpayStagingPayment(input: {
       updated_at: new Date().toISOString(),
     })
     .eq('id', result.purchaseId);
+  if (linkErr) logger.error('razorpay_staging_purchase_link_failed', { purchaseId: result.purchaseId, providerEventId, message: linkErr.message });
 
   if (!event.duplicate && event.id) await markProviderEvent({ eventId: event.id, status: 'processed' });
   await recordMonetizationOperationalEvent({
