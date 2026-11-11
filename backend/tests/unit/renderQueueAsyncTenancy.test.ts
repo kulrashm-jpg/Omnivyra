@@ -311,3 +311,16 @@ describe('billing: a hold per attempt, confirmed by its own id (05 findings 1-3)
     expect(stillHeld(s, jobId)).toHaveLength(0);
   });
 });
+
+describe('the queue retry cap is a real bound (05 finding 5)', () => {
+  it('non-paid re-schedules stop at the fixed cap: a queue job already retried 5 times is failed, not re-scheduled again', async () => {
+    const s = makeStore(); const { p, calls } = provider();
+    const jobId = enqueue(s, 'org-a', { state: { current_state: 'rendering', retry_count: 0 } }); // the sync path holds it
+    queue(s, jobId).retry_count = 5;
+    const r = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(calls.submit).toBe(0);
+    expect(r).toMatchObject({ status: 'failed', reason: 'render_in_progress' });
+    expect(queue(s, jobId).queue_state).toBe('failed');
+    expect(state(s, jobId).current_state).toBe('rendering'); // the sync path's job is left alone
+  });
+});
