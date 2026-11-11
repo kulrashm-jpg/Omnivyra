@@ -112,7 +112,12 @@ export async function readReportSettingsChecked(
 export async function mergeReportSettingsKeys(
   companyId: string,
   patch: ReportSettingsPatch,
-  opts: { updatedAt?: string | null; client?: ReportSettingsClient } = {},
+  opts: {
+    updatedAt?: string | null;
+    client?: ReportSettingsClient;
+    /** Keys of `patch` written ONLY where the stored column lacks them, decided in the same UPDATE. */
+    ifAbsent?: ReportSettingsSystemKey[];
+  } = {},
 ): Promise<boolean> {
   const keys = Object.keys(patch);
   if (!companyId) throw new ReportSettingsWriteError(String(companyId), 'companyId is required');
@@ -121,11 +126,16 @@ export async function mergeReportSettingsKeys(
   if (unknown.length > 0) {
     throw new ReportSettingsWriteError(companyId, `not a system-owned key: ${unknown.sort().join(', ')}`);
   }
+  const strayIfAbsent = (opts.ifAbsent ?? []).filter((k) => !keys.includes(k));
+  if (strayIfAbsent.length > 0) {
+    throw new ReportSettingsWriteError(companyId, `ifAbsent keys not in the patch: ${strayIfAbsent.sort().join(', ')}`);
+  }
   const client = opts.client ?? (await defaultClient());
   const { data, error } = await client.rpc(MERGE_REPORT_SETTINGS_RPC, {
     p_company_id: companyId,
     p_patch: patch,
     p_updated_at: opts.updatedAt ?? null,
+    p_if_absent: opts.ifAbsent && opts.ifAbsent.length > 0 ? opts.ifAbsent : null,
   });
   if (error) throw new ReportSettingsWriteError(companyId, errorText(error));
   if (typeof data !== 'number') throw new ReportSettingsWriteError(companyId, `no row count returned (${JSON.stringify(data)})`);

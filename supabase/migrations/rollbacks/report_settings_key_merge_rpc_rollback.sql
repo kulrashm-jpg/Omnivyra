@@ -8,7 +8,7 @@
 
 BEGIN;
 
-DROP FUNCTION IF EXISTS public.merge_report_settings_keys(text, jsonb, timestamptz);
+DROP FUNCTION IF EXISTS public.merge_report_settings_keys(text, jsonb, timestamptz, text[]);
 
 DO $verify$
 BEGIN

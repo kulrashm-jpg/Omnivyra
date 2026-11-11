@@ -46,13 +46,19 @@ export function applyMerge(row: StoredProfile, args: Record<string, unknown>): M
   }
   const bad = Object.keys(patch).filter((k) => !allowed.includes(k)).sort();
   if (bad.length > 0) return fail('22023', `not a system-owned report_settings key: {${bad.join(',')}}`);
+  const ifAbsent = (args.p_if_absent as unknown[] | null | undefined) ?? [];
+  const badAbsent = ifAbsent.filter((k) => typeof k !== 'string' || !allowed.includes(k) || !(k in (patch as object)));
+  if (badAbsent.length > 0) return fail('22023', 'p_if_absent keys must be allow-listed keys of p_patch');
   if (!row) return { data: 0, error: null };
   const rs = row.report_settings;
   if (rs !== null && rs !== undefined && (typeof rs !== 'object' || Array.isArray(rs))) {
     return fail('22023', 'report_settings is not an object; refusing to merge');
   }
   // jsonb `||` on objects: right-hand keys replace, all others kept. A deep copy, like a jsonb value.
-  row.report_settings = JSON.parse(JSON.stringify({ ...((rs as Record<string, unknown> | null) ?? {}), ...(patch as object) }));
+  const current = (rs as Record<string, unknown> | null) ?? {};
+  const effective = Object.fromEntries(Object.entries(patch as object)
+    .filter(([k]) => !(rs !== null && rs !== undefined && ifAbsent.includes(k) && k in current)));
+  row.report_settings = JSON.parse(JSON.stringify({ ...current, ...effective }));
   if (args.p_updated_at) row.updated_at = args.p_updated_at as string;
   return { data: 1, error: null };
 }

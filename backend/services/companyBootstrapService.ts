@@ -434,6 +434,9 @@ export async function bootstrapCompanyProfile(
       keysWritten = await mergeReportSettingsKeys(companyId, ownKeys, {
         updatedAt: now,
         client: supabase as unknown as ReportSettingsClient,
+        // The backfill only ever fills a HOLE, decided server-side in the same UPDATE:
+        // incrementalMetadataStore stays the only writer that replaces discovered_metadata.
+        ifAbsent: 'discovered_metadata' in ownKeys ? ['discovered_metadata'] : undefined,
       });
     } catch {
       keysWritten = false;

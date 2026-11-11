@@ -20,6 +20,9 @@ const db = {
   readError: null as null | { code: string; message: string },
   wholeColumnWrites: 0,
   rpcPatches: [] as Array<Record<string, unknown>>,
+  /** When set, every company_profiles READ returns this snapshot (taken before a concurrent write),
+   *  while writes land on the live `row`: a real stale read, not a timing trick. */
+  staleRead: undefined as Row | null | undefined,
 };
 
 /** A chainable PostgREST-like builder over the single company_profiles row (other tables: one hit). */
@@ -36,7 +39,8 @@ function builder(table: string) {
     }
     if (table !== 'company_profiles') return { data: [{ id: 'x' }], error: null };
     if (db.readError) return { data: null, error: db.readError };
-    return { data: db.row ? JSON.parse(JSON.stringify(db.row)) : null, error: null };
+    const seen = db.staleRead !== undefined ? db.staleRead : db.row;
+    return { data: seen ? JSON.parse(JSON.stringify(seen)) : null, error: null };
   };
   const b: any = new Proxy({}, {
     get(_t, prop) {
@@ -86,6 +90,7 @@ beforeEach(() => {
   db.readError = null;
   db.wholeColumnWrites = 0;
   db.rpcPatches = [];
+  db.staleRead = undefined;
 });
 
 const settings = () => db.row!.report_settings as Record<string, unknown>;
@@ -139,16 +144,10 @@ describe.each(WRITERS)('%s', (_name, reads, run) => {
 
   it('a key landed by ANOTHER writer after this one read survives (no lost update)', async () => {
     // Every read returns the snapshot taken BEFORE the concurrent write lands...
-    const before = JSON.parse(JSON.stringify(db.row));
-    const realFrom = fakeClient.from;
-    fakeClient.from = (t: string) => {
-      if (t !== 'company_profiles') return realFrom(t);
-      const live = db.row; db.row = JSON.parse(JSON.stringify(before));
-      const b = realFrom(t); db.row = live; return b;
-    };
+    db.staleRead = JSON.parse(JSON.stringify(db.row));
     // ...while the stored row already carries the concurrent key.
     (db.row!.report_settings as Record<string, unknown>).concurrent_key = 'landed';
-    try { await run(); } finally { fakeClient.from = realFrom; }
+    await run();
     expect(settings().concurrent_key).toBe('landed');
     expectSiblingsIntact();
   });
@@ -157,25 +156,31 @@ describe.each(WRITERS)('%s', (_name, reads, run) => {
 describe('bootstrap (reads the profile CHECKED already; now writes its keys server-side)', () => {
   it('owned keys merge server-side; a concurrent key survives; columns written without report_settings', async () => {
     db.row = { ...(db.row as Row), company_id: 'co1', name: 'Acme', website_url: null, logo_url: null } as any;
-    const snapshot = JSON.parse(JSON.stringify(db.row));
-    const client = {
-      from: (t: string) => {
-        if (t !== 'company_profiles') return builder(t);
-        const live = db.row; db.row = JSON.parse(JSON.stringify(snapshot)); const b = builder(t); db.row = live;
-        // reads see the snapshot; the update lands on the live row
-        return new Proxy(b, { get(target, prop) {
-          if (prop === 'update') return (patch: Record<string, unknown>) => builder('company_profiles').update(patch);
-          return target[prop as keyof typeof target];
-        } });
-      },
-      rpc: fakeClient.rpc,
-    };
+    db.staleRead = JSON.parse(JSON.stringify(db.row)); // bootstrap's read predates the concurrent write
+    const client = fakeClient;
     (db.row!.report_settings as Record<string, unknown>).concurrent_key = 'landed';
     const r = await bootstrapCompanyProfile('co1', { supabase: client as never, verifiedWebsite: 'https://acme.com', now: NOW });
     expect(r.ok).toBe(true);
     expect(settings().concurrent_key).toBe('landed');
     expect(settings().bootstrap).toBeTruthy();
     expectSiblingsIntact();
+  });
+});
+
+describe('discovered_metadata has ONE replacer (e9 2026-11-12): bootstrap only fills a hole', () => {
+  it('a bundle landed by incrementalMetadataStore after bootstrap read "absent" is NOT overwritten', async () => {
+    db.row = { ...(db.row as Row), company_id: 'co1', name: 'Acme', website_url: 'https://acme.com' } as any;
+    db.staleRead = JSON.parse(JSON.stringify(db.row)); // bootstrap's read predates the concurrent write
+    const client = fakeClient;
+    (db.row!.report_settings as Record<string, unknown>).discovered_metadata = { from: 'incremental' };
+    const r = await bootstrapCompanyProfile('co1', { supabase: client as never, discovered: META, verifiedWebsite: 'https://acme.com', now: NOW });
+    expect(r.ok).toBe(true);
+    expect(settings().discovered_metadata).toEqual({ from: 'incremental' });
+    expect(settings().bootstrap).toBeTruthy();
+  });
+  it('ifAbsent naming a key outside the patch throws before any call', async () => {
+    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} }, { ifAbsent: ['discovered_metadata'] })).rejects.toThrow(/not in the patch/);
+    expect(db.rpcPatches).toHaveLength(0);
   });
 });
 

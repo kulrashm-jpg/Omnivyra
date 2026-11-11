@@ -14,7 +14,7 @@ import { db } from './setup';
 const url = process.env.W6_DB_URL as string;
 const CO = 'rsmerge-co-00000000-0000-4000-8000-0000000051a1';
 const CO_LEGACY = 'rsmerge-co-00000000-0000-4000-8000-0000000051a2';
-const FN = 'public.merge_report_settings_keys(text, jsonb, timestamptz)';
+const FN = 'public.merge_report_settings_keys(text, jsonb, timestamptz, text[])';
 
 type Outcome = { ok: true; rows: Record<string, unknown>[] } | { ok: false; code: string; message: string };
 
@@ -38,8 +38,8 @@ async function as(role: string | null, sql: string, params: unknown[] = []): Pro
   }
 }
 
-const merge = (role: string, company: string, patch: unknown, at: string | null = null) =>
-  as(role, `SELECT public.merge_report_settings_keys($1, $2::jsonb, $3) AS n`, [company, JSON.stringify(patch), at]);
+const merge = (role: string, company: string, patch: unknown, at: string | null = null, ifAbsent: string[] | null = null) =>
+  as(role, `SELECT public.merge_report_settings_keys($1, $2::jsonb, $3, $4::text[]) AS n`, [company, JSON.stringify(patch), at, ifAbsent]);
 const stored = async (company: string) =>
   (await db.query(`SELECT report_settings AS rs, updated_at FROM public.company_profiles WHERE company_id = $1`, [company])).rows[0];
 
@@ -111,6 +111,16 @@ describe('merge semantics on the real company_profiles', () => {
   });
   it('no row -> 0 rows (the caller reports "not written")', async () => {
     expect(await merge('service_role', 'rsmerge-absent', { bootstrap: 1 })).toMatchObject({ ok: true, rows: [{ n: 0 }] });
+  });
+  it('p_if_absent: a present key is kept, an absent one written, in the same call', async () => {
+    await merge('service_role', CO, { discovered_metadata: 'fresh' });
+    expect(await merge('service_role', CO, { discovered_metadata: 'stale', bootstrap: 'm' }, null, ['discovered_metadata']))
+      .toMatchObject({ ok: true, rows: [{ n: 1 }] });
+    expect((await stored(CO)).rs).toMatchObject({ discovered_metadata: 'fresh', bootstrap: 'm', brand_voice: { tone: 'warm' } });
+  });
+  it('p_if_absent names must be allow-listed keys of the patch (22023)', async () => {
+    expect(await merge('service_role', CO, { bootstrap: 1 }, null, ['discovered_metadata'])).toMatchObject({ ok: false, code: '22023' });
+    expect(await merge('service_role', CO, { bootstrap: 1 }, null, ['brand_voice'])).toMatchObject({ ok: false, code: '22023' });
   });
   it('anon and authenticated cannot call it (42501)', async () => {
     expect(await merge('anon', CO, { bootstrap: 1 })).toMatchObject({ ok: false, code: '42501' });
