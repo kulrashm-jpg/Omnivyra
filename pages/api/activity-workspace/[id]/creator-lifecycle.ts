@@ -27,7 +27,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { loadAuthorizedPlanRow } from '@/backend/services/creator/rendering/authorizedPlanRow';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 // Phase-2 Step-3: creator-lifecycle persistence reconciles through the ONE
 // canonical write engine (preserves non-creator enrichments / prevents
@@ -70,38 +70,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ── Load row ───────────────────────────────────────────────────────────
-  const { data: rowData, error: rowError } = await supabase
-    .from('daily_content_plans')
-    .select(
-      'id, campaign_id, execution_id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title',
-    )
-    .eq('id', id)
-    .maybeSingle();
-  if (rowError) {
-    return res.status(500).json({ error: 'Failed to load row.' });
-  }
-  if (!rowData) {
-    return res.status(404).json({ error: `Row not found: ${id}` });
-  }
-  const row = rowData as DailyContentPlanRow & { campaign_id: string };
-
-  // ── Auth via campaign company (same pattern as upload-media) ───────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) {
-    return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  }
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
+  // Authenticate and authorize BEFORE disclosing anything about the row (no existence oracle):
+  // unknown, company-unresolvable and foreign plan ids all answer the same 404, and nothing about
+  // the row (format, state, revision) is checked or echoed before access is proven
+  // (authorizedPlanRow.ts).
+  const authorized = await loadAuthorizedPlanRow(req, res, id,
+    'id, campaign_id, execution_id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title');
+  if (!authorized) return;
+  const row = authorized.row as unknown as DailyContentPlanRow & { campaign_id: string };
 
   const nowIso = new Date().toISOString();
 

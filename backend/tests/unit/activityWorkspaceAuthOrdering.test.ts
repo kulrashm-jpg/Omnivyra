@@ -77,11 +77,11 @@ describe.each(ROUTES)('%s — auth before any row is read or disclosed', (_name,
     expect(rowReads()).toEqual([]);
   });
 
-  it('cross-tenant on an existing plan: 403, nothing written', async () => {
+  it('cross-tenant on an existing plan: 404, nothing written', async () => {
     world();
     const before = JSON.parse(JSON.stringify(rows('scheduled_posts')));
     const r = await call(handler, PLAN, body, 'B');
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(rows('scheduled_posts')).toEqual(before);
   });
 
@@ -89,6 +89,18 @@ describe.each(ROUTES)('%s — auth before any row is read or disclosed', (_name,
     world();
     const r = await call(handler, UNKNOWN_ID, body, 'A');
     expect(r.status).toBe(404);
+  });
+
+  it('plan-row oracle fix: a NON-MEMBER gets a byte-identical answer for a foreign plan and a missing one', async () => {
+    // Changed deliberately (e9, 2026-11-11): before, a non-member got 403 for a foreign plan and 404
+    // "Row not found: <id>" for a missing one, so an authenticated outsider could probe plan ids.
+    world();
+    const foreign = await call(handler, PLAN, body, 'B');
+    const missing = await call(handler, UNKNOWN_ID, body, 'B');
+    expect(foreign.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(foreign.body).toEqual(missing.body);
+    expect(foreign.body).toEqual({ error: 'Not found', code: 'NOT_FOUND' });
   });
 
   it('a post that is being published: 409, nothing written', async () => {

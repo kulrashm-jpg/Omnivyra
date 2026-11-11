@@ -239,7 +239,7 @@ describe('upload-media-direct — prior-object cleanup is scoped to the authoriz
       accessGranted = false;
       setRow(`${PUBLIC_PREFIX}${COMPANY}/${ACTIVITY}/video/prior.mp4`);
       const res = await callHandler();
-      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.status).toHaveBeenCalledWith(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
       expect(storageCalls.upload).toEqual([]);
       expect(removedPaths()).toEqual([]);
     });

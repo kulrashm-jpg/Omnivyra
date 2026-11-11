@@ -92,11 +92,11 @@ describe('anonymous callers learn nothing', () => {
 });
 
 describe('authenticated non-members cannot read a row\'s format', () => {
-  it('a foreign row answers 403 without echoing content_type', async () => {
+  it('a foreign row answers 404 without echoing content_type', async () => {
     mockUser = { id: 'user-b' };
     mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'co-a' } };
     const out = await call('plan-1');
-    expect(out.status).toBe(403);
+    expect(out.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(JSON.stringify(out.body)).not.toContain('infographic');
   });
 });

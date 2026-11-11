@@ -29,7 +29,7 @@ import { withIdempotency } from '../../../../backend/middleware/withIdempotency'
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { loadAuthorizedPlanRow } from '@/backend/services/creator/rendering/authorizedPlanRow';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import {
   normalizeCreatorFormat,
@@ -80,17 +80,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     : null;
 
   // ── Load row + assert attachment-required + currently scheduled ──────
-  const { data: rowData, error: rowError } = await supabase
-    .from('daily_content_plans')
-    .select('id, campaign_id, content_type, content, content_status, platform')
-    .eq('id', id)
-    .maybeSingle();
-  if (rowError) {
-    console.warn('[unschedule] daily_content_plans lookup failed', { id, error: rowError.message });
-    return res.status(500).json({ error: 'Failed to load row.' });
-  }
-  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const row = rowData as {
+  // Authenticate and authorize BEFORE disclosing anything about the row (no existence oracle):
+  // unknown, company-unresolvable and foreign plan ids all answer the same 404, and nothing about
+  // the row (format, state, revision) is checked or echoed before access is proven
+  // (authorizedPlanRow.ts).
+  const authorized = await loadAuthorizedPlanRow(req, res, id,
+    'id, campaign_id, content_type, content, content_status, platform');
+  if (!authorized) return;
+  const { access } = authorized;
+  const row = authorized.row as unknown as {
     id: string;
     campaign_id: string;
     content_type: string;
@@ -98,23 +96,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     content_status: string | null;
     platform: string | null;
   };
-
-  // ── Resolve company + auth — BEFORE anything about the row's state is
-  // disclosed (format, lifecycle state, revision) ─────────────────────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {

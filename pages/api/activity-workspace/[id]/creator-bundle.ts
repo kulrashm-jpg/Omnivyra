@@ -23,7 +23,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { loadAuthorizedPlanRow } from '@/backend/services/creator/rendering/authorizedPlanRow';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import {
   isCreatorWorkspaceLifecycleEnabled,
@@ -49,25 +49,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!id) return res.status(400).json({ error: 'daily_content_plans id is required in the path' });
 
   // ── Anchor row ─────────────────────────────────────────────────────────
-  const { data: anchorData, error: anchorErr } = await supabase
-    .from('daily_content_plans')
-    .select('id, campaign_id, execution_id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title')
-    .eq('id', id)
-    .maybeSingle();
-  if (anchorErr) return res.status(500).json({ error: 'Failed to load row.' });
-  if (!anchorData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const anchor = anchorData as DailyContentPlanRow & { campaign_id: string };
-
-  // Auth via campaign company (same pattern as upload-media / creator-lifecycle)
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns').select('company_id').eq('id', anchor.campaign_id).maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch { /* fall through */ }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
+  // Authenticate and authorize BEFORE disclosing anything about the row (no existence oracle):
+  // unknown, company-unresolvable and foreign plan ids all answer the same 404, and nothing about
+  // the row (format, state, revision) is checked or echoed before access is proven
+  // (authorizedPlanRow.ts).
+  const authorized = await loadAuthorizedPlanRow(req, res, id,
+    'id, campaign_id, execution_id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title');
+  if (!authorized) return;
+  const anchor = authorized.row as unknown as DailyContentPlanRow & { campaign_id: string };
 
   const nowIso = new Date().toISOString();
 

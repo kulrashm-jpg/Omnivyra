@@ -141,7 +141,7 @@ describe('legitimate unschedules are unchanged', () => {
   it('another company\'s member cannot unschedule A\'s row at all', async () => {
     world(POST_A);
     const r = await call('B');
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(sideEffects()).toEqual([]);
     expect(post(POST_A).status).toBe('scheduled');
   });

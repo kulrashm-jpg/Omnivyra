@@ -52,6 +52,9 @@ jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () => ({ user: mockUser, error: null })),
 }));
 jest.mock('../../services/userContextService', () => ({
+  // loadAuthorizedPlanRow authenticates BEFORE the plan read (no existence oracle); the company
+  // decision stays with enforceCompanyAccess below, so an authenticated principal is all this needs.
+  resolveUserContext: async () => ({ authenticated: true, userId: 'test-user', role: 'user', companyIds: [], defaultCompanyId: '' }),
   enforceCompanyAccess: jest.fn(async ({ res }: any) => {
     if (!mockAuthorized) { res.status(403).json({ error: 'FORBIDDEN' }); return null; }
     return { userId: 'user-a', companyId: 'company-a' };
@@ -172,10 +175,10 @@ describe('authorization and scope (no storage access before both pass)', () => {
     expect((await finalize(body())).statusCode).toBe(401);
     expect(mockMem.events).toEqual([]);
   });
-  it('member of another company → 403, zero storage calls, object untouched', async () => {
+  it('member of another company → 404, zero storage calls, object untouched', async () => {
     mockAuthorized = false;
     mockMem.put(Q, KEY, MP4, 'video/mp4');
-    expect((await finalize(body())).statusCode).toBe(403);
+    expect((await finalize(body())).statusCode).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(mockMem.events).toEqual([]);
     expect(mockMem.has(Q, KEY)).toBe(true);
   });

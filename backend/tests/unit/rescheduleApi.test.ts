@@ -102,6 +102,9 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
+  // loadAuthorizedPlanRow authenticates BEFORE the plan read (no existence oracle); the company
+  // decision stays with enforceCompanyAccess below, so an authenticated principal is all this needs.
+  resolveUserContext: async () => ({ authenticated: true, userId: 'test-user', role: 'user', companyIds: [], defaultCompanyId: '' }),
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
 }));
 

@@ -24,7 +24,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { loadAuthorizedPlanRow } from '@/backend/services/creator/rendering/authorizedPlanRow';
 import { normalizeCreatorFormat, isAttachmentRequiredFormat } from '@/lib/shared/creatorGovernanceRegistry';
 import { resolveExpectedCategory } from '@/backend/services/mediaUploadValidationService';
 import { checkUploadAttemptAllowed } from '@/backend/services/creatorUploadAbuseGuardService';
@@ -61,30 +61,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!mime) return res.status(400).json({ error: 'mime_type is required.' });
   if (!sizeBytes || sizeBytes <= 0) return res.status(400).json({ error: 'size_bytes must be > 0.' });
 
-  const { data: rowData, error: rowError } = await supabase
-    .from('daily_content_plans')
-    .select('id, campaign_id, content_type')
-    .eq('id', id)
-    .maybeSingle();
-  if (rowError) return res.status(500).json({ error: 'Failed to load row.' });
-  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const row = rowData as { id: string; campaign_id: string; content_type: string };
-
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow, error: campaignError } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    if (campaignError) throw campaignError;
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    return res.status(503).json({ error: 'Campaign company lookup failed. Please retry.', code: 'COMPANY_LOOKUP_FAILED' });
-  }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
-  if (!access) return;
+  // Authenticate and authorize BEFORE disclosing anything about the row (no existence oracle):
+  // unknown, company-unresolvable and foreign plan ids all answer the same 404, and nothing about
+  // the row (format, state, revision) is checked or echoed before access is proven
+  // (authorizedPlanRow.ts).
+  const authorized = await loadAuthorizedPlanRow(req, res, id,
+    'id, campaign_id, content_type', { bindCampaign: true, campaignLookupError: { status: 503, body: { error: 'Campaign company lookup failed. Please retry.', code: 'COMPANY_LOOKUP_FAILED' } } });
+  if (!authorized) return;
+  const { companyId, access } = authorized;
+  const row = authorized.row as unknown as { id: string; campaign_id: string; content_type: string };
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   const expectedCategory = isAttachmentRequiredFormat(contentType) ? resolveExpectedCategory(contentType) : null;

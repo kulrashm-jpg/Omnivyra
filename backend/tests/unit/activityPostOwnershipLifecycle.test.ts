@@ -154,11 +154,11 @@ describe('ownership — identities and principals', () => {
     expect(post(POST).status).toBe('scheduled');
   });
 
-  it('another tenant: 403 from the company gate, nothing touched', async () => {
+  it('another tenant: 404 from the company gate, nothing touched', async () => {
     world();
     const before = { ...post(POST) };
-    expect((await unschedule('B')).status).toBe(403);
-    expect((await reschedule('B')).status).toBe(403);
+    expect((await unschedule('B')).status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
+    expect((await reschedule('B')).status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(post(POST)).toEqual(before);
     expect(queueEffects()).toEqual([]);
   });

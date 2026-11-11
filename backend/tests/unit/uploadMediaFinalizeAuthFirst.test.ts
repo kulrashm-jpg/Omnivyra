@@ -137,9 +137,9 @@ describe('authenticated member of another company', () => {
     ['plain', body()],
     ['oversize', body({ size_bytes: 5 * 1024 ** 3 })],
     ['MIME mismatch (a post-auth delete branch on main)', body({ mime_type: 'audio/mpeg' })],
-  ])('%s → 403, storage never touched', async (_n, b) => {
+  ])('%s → 404, storage never touched', async (_n, b) => {
     const r = await finalize(PLAN_A, b, 'B');
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(storageEvents()).toEqual([]);
     expect(mockEvents.filter((e) => e.startsWith('db:write'))).toEqual([]);
   });
@@ -201,16 +201,16 @@ describe('authenticated member of the owning company', () => {
 
 // ── 6–7. Caller-supplied ownership metadata is ignored ────────────────────────
 describe('caller-supplied company_id / user_id cannot authorize', () => {
-  it('member of B naming company A / user A for A\'s activity → 403, no storage', async () => {
+  it('member of B naming company A / user A for A\'s activity → 404, no storage', async () => {
     const r = await finalize(PLAN_A, body({ company_id: CO_A, companyId: CO_A, user_id: USER_A, userId: USER_A }), 'B');
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(storageEvents()).toEqual([]);
   });
-  it('member of B naming ITS OWN company for A\'s activity → 403, no storage', async () => {
+  it('member of B naming ITS OWN company for A\'s activity → 404, no storage', async () => {
     for (const b of [body({ company_id: CO_B }), body({ companyId: CO_B, size_bytes: 5 * 1024 ** 3 })]) {
       mockEvents.length = 0;
       const r = await finalize(PLAN_A, b, 'B');
-      expect(r.status).toBe(403);
+      expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
       expect(storageEvents()).toEqual([]);
     }
   });
@@ -286,10 +286,10 @@ describe('fail closed', () => {
     expect(r.status).toBe(status);
     expect(storageEvents()).toEqual([]);
   });
-  it('activity whose campaign has no company → 403, no storage call (the old code deleted)', async () => {
+  it('activity whose campaign has no company → 404, no storage call (the old code deleted)', async () => {
     seed({ campaigns: [{ id: 'camp-noco', company_id: null }], daily_content_plans: [plan('plan-noco', 'camp-noco')] });
     const r = await finalize('plan-noco', body({ storage_path: 'plan-noco/video/x.mp4', size_bytes: 5 * 1024 ** 3 }), 'A');
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(storageEvents()).toEqual([]);
   });
 });

@@ -248,7 +248,7 @@ describe('authorization happens before any deletion', () => {
   it('a member of another company cannot reschedule this row and deletes nothing', async () => {
     world(own(OWN_TUS_KEY));
     const r = await call({ media_url: NEW_MEDIA }, 'B');
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);  // uniform not-found: a foreign plan is indistinguishable from a missing one (plan-row oracle fix)
     expect(storageSideEffects()).toEqual([]);
     expect(mockEvents.filter((e) => e === 'media:validate')).toEqual([]);
   });
