@@ -219,13 +219,15 @@ export function decryptPhone(encrypted: string): string {
  * company's account" (the caller must not learn which); `unreadable` is a failed
  * lookup and also refuses (fail closed).
  */
-export type SenderAccountRefusal = 'not_found' | 'unreadable';
+export type SenderAccountRefusal = 'not_found' | 'unreadable' | 'disconnected';
 
 export class WhatsAppSenderAccountError extends Error {
   constructor(public readonly reason: SenderAccountRefusal) {
     super(reason === 'unreadable'
       ? 'WhatsApp sender account could not be verified'
-      : 'WhatsApp sender account not found');
+      : reason === 'disconnected'
+        ? 'WhatsApp sender account is disconnected; reconnect it before sending'
+        : 'WhatsApp sender account not found');
     this.name = 'WhatsAppSenderAccountError';
   }
 }
@@ -234,7 +236,7 @@ export async function loadOwnedSenderAccount(
   companyId: unknown,
   socialAccountId: unknown,
 ): Promise<
-  | { ok: true; account: { id: string; company_id: string; phone_number_id: string | null } }
+  | { ok: true; account: { id: string; company_id: string; phone_number_id: string | null; is_active?: boolean | null } }
   | { ok: false; reason: SenderAccountRefusal }
 > {
   if (typeof companyId !== 'string' || !companyId || typeof socialAccountId !== 'string' || !socialAccountId) {
@@ -243,7 +245,7 @@ export async function loadOwnedSenderAccount(
   let res: { data?: any; error?: unknown };
   try {
     res = await ownedDbTable('social_accounts')
-      .select('id, company_id, phone_number_id')
+      .select('id, company_id, phone_number_id, is_active')
       .eq('id', socialAccountId)
       .eq('company_id', companyId)
       .maybeSingle();
@@ -260,16 +262,28 @@ export async function loadOwnedSenderAccount(
  * HTTP mapping for routes, matching `pages/api/social/comments.ts`: an unknown
  * and a foreign account both get 404, a failed lookup 503. Null for any other error.
  */
-export function senderAccountRefusalResponse(err: unknown): { status: 404 | 503; error: string } | null {
+export function senderAccountRefusalResponse(err: unknown): { status: 404 | 409 | 503; error: string } | null {
   if (!(err instanceof WhatsAppSenderAccountError)) return null;
+  if (err.reason === 'disconnected') return { status: 409, error: err.message };
   return err.reason === 'unreadable'
     ? { status: 503, error: 'Social account lookup failed. Please try again.' }
     : { status: 404, error: 'Social account not found' };
 }
 
+/**
+ * The SEND paths' check (create, enqueue/resume, processBatch): owned AND connected.
+ * Disconnecting an account sets is_active=false but keeps its encrypted tokens
+ * (pages/api/social-accounts/disconnect.ts: "harmless - reconnect overwrites them"), and
+ * getValidAccessToken reads the token without looking at is_active, so before this a
+ * paused or failed broadcast on a disconnected account could still be resumed or retried,
+ * and its queued batches still sent (e9, 2026-11-11). Only an explicit false refuses: a
+ * row without the field is judged on ownership, as before. The template routes keep using
+ * loadOwnedSenderAccount (ownership only) - managing templates is not a send.
+ */
 async function assertOwnedSenderAccount(companyId: unknown, socialAccountId: unknown) {
   const check = await loadOwnedSenderAccount(companyId, socialAccountId);
   if (check.ok === false) throw new WhatsAppSenderAccountError(check.reason);
+  if (check.account.is_active === false) throw new WhatsAppSenderAccountError('disconnected');
   return check.account;
 }
 
@@ -497,13 +511,24 @@ export function enqueueOutcomeResponse(
 
 /** The HTTP answer for a retry: `retried: true` only when recipients were re-queued. */
 export function retryOutcomeResponse(
-  outcome: { ok: true; result: { retried: number } } | { ok: false; error: unknown },
+  outcome: { ok: true; result: RetryResult } | { ok: false; error: unknown },
 ): { status: number; body: Record<string, unknown> } {
   if (outcome.ok === true) {
-    const { result } = outcome as { ok: true; result: { retried: number } };
-    return result.retried > 0
-      ? { status: 200, body: { retried: true, recipients: result.retried } }
-      : { status: 409, body: { retried: false, error: 'Nothing to retry: no failed recipients with retries left.' } };
+    const { result } = outcome as { ok: true; result: RetryResult };
+    if (result.retried > 0) return { status: 200, body: { retried: true, recipients: result.retried } };
+    // WHY nothing is retryable, so the operator learns the recipients were REFUSED rather
+    // than that the button was pointless (05). Retry offers itself on failed_count > 0,
+    // which includes compliance refusals, so this sentence is the common answer.
+    const why: string[] = [];
+    if (result.refused) why.push(`${result.refused} were refused by contact governance or send controls and are not retried`);
+    if (result.exhausted) why.push(`${result.exhausted} failed and have used all their retries`);
+    return {
+      status: 409,
+      body: {
+        retried: false, refused: result.refused ?? 0, exhausted: result.exhausted ?? 0,
+        error: `No retryable recipients${why.length ? `: ${why.join('; ')}` : ''}.`,
+      },
+    };
   }
   const err = (outcome as { ok: false; error: unknown }).error;
   if (err instanceof BroadcastAlreadyRunningError) {
@@ -512,8 +537,13 @@ export function retryOutcomeResponse(
   if (err instanceof WhatsAppEnqueueUncertainError) {
     return { status: 500, body: { retried: false, uncertain: true, code: err.code, error: err.message } };
   }
+  const refused = senderAccountRefusalResponse(err);
+  if (refused) return { status: refused.status, body: { retried: false, error: refused.error } };
   return { status: 400, body: { retried: false, error: err instanceof Error ? err.message : String(err) } };
 }
+
+/** A retry's answer. `refused` / `exhausted` say why nothing was retryable when retried is 0. */
+export interface RetryResult { retried: number; refused?: number; exhausted?: number }
 
 /**
  * Validate template, check rate limits, chunk recipients, enqueue jobs.
@@ -1221,13 +1251,41 @@ function buildMessageBody(broadcast: any, toPhone: string, recipientId: string):
 // ── Retry failed recipients ───────────────────────────────────────────────────
 
 /** Retry failed recipients - under the SAME lease and live-job check as an enqueue. */
-export async function retryFailed(broadcastId: string): Promise<{ retried: number }> {
+export async function retryFailed(broadcastId: string): Promise<RetryResult> {
+  // The sender account must be owned AND connected before anything is reset or queued
+  // (e9): processBatch would refuse at send, but only after the failed rows were reset.
+  const { data: broadcast, error } = await ownedDbTable('whatsapp_broadcasts')
+    .select('company_id, social_account_id')
+    .eq('id', broadcastId)
+    .single();
+  if (error || !broadcast) throw new Error(`Broadcast not found: ${broadcastId}`);
+  await assertOwnedSenderAccount(broadcast.company_id, broadcast.social_account_id);
   return withBroadcastLease(broadcastId, () => retryRun(broadcastId),
     'Another enqueue or retry of this broadcast is in progress.');
 }
 
 /** One retry run. Called ONLY under the enqueue lease. */
-async function retryRun(broadcastId: string): Promise<{ retried: number }> {
+/** Why a retry found nothing: refusals (never retried) and failures out of retries. */
+async function unretryableCounts(broadcastId: string): Promise<{ refused: number; exhausted: number }> {
+  const count = async (build: (q: any) => any): Promise<number> => {
+    // Explanatory only - it never decides anything - so an unreadable count is reported as none.
+    try {
+      const { count: n, error } = await build(ownedDbTable('whatsapp_broadcast_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('broadcast_id', broadcastId));
+      return error ? 0 : n ?? 0;
+    } catch {
+      return 0;
+    }
+  };
+  const [refused, exhausted] = await Promise.all([
+    count((q) => q.in('status', ['blocked_governance', BLOCKED_SEND_CONTROL])),
+    count((q) => q.eq('status', 'failed').gte('retry_count', 3)),
+  ]);
+  return { refused, exhausted };
+}
+
+async function retryRun(broadcastId: string): Promise<RetryResult> {
   const { getContentQueue } = await import('../queue/contentGenerationQueues');
   const queue = getContentQueue('whatsapp-broadcast');
   const live = await liveBatchJobCount(queue as never, broadcastId);
@@ -1239,7 +1297,7 @@ async function retryRun(broadcastId: string): Promise<{ retried: number }> {
     .eq('status', 'failed')
     .lt('retry_count', 3);
 
-  if (!failed?.length) return { retried: 0 };
+  if (!failed?.length) return { retried: 0, ...(await unretryableCounts(broadcastId)) };
 
   // Reset to pending for re-enqueue: only rows that are STILL `failed` (compare-and-set).
   // A status webhook may have moved one to `delivered` since the read above; resetting it

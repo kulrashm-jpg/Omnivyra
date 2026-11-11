@@ -50,6 +50,8 @@ type Broadcast = {
   failed_count: number;
   /** Recipients still pending or sending (whatsapp_refresh_broadcast_counts). */
   open_count?: number | null;
+  /** NULL = counts never computed (open_count's 0 is then unknown). */
+  counts_refreshed_at?: string | null;
   created_at: string;
   scheduled_for?: string | null;
 };

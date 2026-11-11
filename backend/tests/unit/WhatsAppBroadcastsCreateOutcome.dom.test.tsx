@@ -85,7 +85,7 @@ describe('WhatsApp broadcasts page: the create outcome is told honestly', () => 
 const row = (over: Record<string, unknown>) => ({
   id: 'b9', name: 'Spring', message_type: 'template', template_name: 'tpl', total_recipients: 10,
   sent_count: 4, delivered_count: 0, read_count: 0, failed_count: 0, open_count: 6,
-  created_at: '2026-11-11T10:00:00.000Z', status: 'running', ...over,
+  created_at: '2026-11-11T10:00:00.000Z', counts_refreshed_at: '2026-11-11T10:05:00.000Z', status: 'running', ...over,
 });
 
 describe('WhatsApp broadcasts page: stranded recipients always have an action', () => {

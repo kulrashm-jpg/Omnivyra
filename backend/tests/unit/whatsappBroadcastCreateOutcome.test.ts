@@ -56,7 +56,7 @@ describe('describeBroadcastCreateOutcome', () => {
 
 describe('broadcastActions: an action exists wherever recipients are stranded', () => {
   it('a partial enqueue leaves the broadcast running with recipients not yet sent: Resume', () => {
-    expect(broadcastActions({ status: 'running', open_count: 12, failed_count: 0 })).toEqual({ canRetry: false, canResume: true });
+    expect(broadcastActions({ status: 'running', open_count: 12, failed_count: 0, counts_refreshed_at: '2026-11-11T10:00:00Z' })).toEqual({ canRetry: false, canResume: true });
   });
 
   it('a paused broadcast (rate limit, failed governance re-read): Resume', () => {
@@ -68,7 +68,11 @@ describe('broadcastActions: an action exists wherever recipients are stranded', 
   });
 
   it('NEGATIVE CONTROL: running with nothing left to queue, nothing failed: no action', () => {
-    expect(broadcastActions({ status: 'running', open_count: 0, failed_count: 0 })).toEqual({ canRetry: false, canResume: false });
+    expect(broadcastActions({ status: 'running', open_count: 0, failed_count: 0, counts_refreshed_at: '2026-11-11T10:00:00Z' })).toEqual({ canRetry: false, canResume: false });
+  });
+
+  it('running with counts NEVER computed (counts_refreshed_at NULL): open_count 0 is unknown, so Resume is offered (05)', () => {
+    expect(broadcastActions({ status: 'running', open_count: 0, failed_count: 0, counts_refreshed_at: null }).canResume).toBe(true);
   });
 
   it('a draft offers neither (it has not started)', () => {

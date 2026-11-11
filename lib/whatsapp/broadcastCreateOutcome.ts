@@ -64,6 +64,8 @@ export interface BroadcastActionInput {
   status: string;
   failed_count?: number | null;
   open_count?: number | null;
+  /** NULL = the counts were never computed, so open_count's 0 is not a measurement (05). */
+  counts_refreshed_at?: string | null;
 }
 
 /**
@@ -74,12 +76,14 @@ export interface BroadcastActionInput {
  * that answer - offering an action is never a claim it will do anything.
  *   - Retry:  some recipients failed (failed_count > 0), on a broadcast that has started.
  *   - Resume: paused, OR running with recipients not yet sent (open_count > 0) - the case a
- *             partial enqueue leaves, whose remaining recipients nothing else queues.
+ *             partial enqueue leaves, whose remaining recipients nothing else queues - OR
+ *             running with counts never computed: a 0 there is "unknown", not "none" (05).
  */
 export function broadcastActions(b: BroadcastActionInput): { canRetry: boolean; canResume: boolean } {
   const started = b.status !== 'draft';
   return {
     canRetry: started && (b.failed_count ?? 0) > 0,
-    canResume: b.status === 'paused' || (b.status === 'running' && (b.open_count ?? 0) > 0),
+    canResume: b.status === 'paused'
+      || (b.status === 'running' && (b.counts_refreshed_at == null || (b.open_count ?? 0) > 0)),
   };
 }
