@@ -37,7 +37,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!auth) return;
 
   try {
-    await deleteBlockTemplate(id);
+    // Scoped to the authorised company (SECURITY, 2026-11-11): the old call
+    // deleted by id alone, so this "ownership semantics" claim was not true.
+    const deleted = await deleteBlockTemplate(id, companyId);
+    if (!deleted) return res.status(404).json({ error: 'Template not found' });
     return res.status(200).json({ success: true, id });
   } catch (err) {
     return res.status(500).json({
