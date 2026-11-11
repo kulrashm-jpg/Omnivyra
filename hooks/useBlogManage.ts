@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
+import { retryPublishingIssue, type PublishingIssue } from '../components/blog/publishingIssues';
 
 export type ManagedBlog = {
   id: string;
@@ -39,6 +40,55 @@ export function useBlogManage() {
   } | null>(null);
 
   const canManage = ['COMPANY_ADMIN', 'SUPER_ADMIN'].includes((userRole || '').toUpperCase());
+
+  // Dead-lettered CMS publishes, keyed by blog id (e9). An unreadable queue is shown as an error,
+  // never as "no issues".
+  const [publishingIssues, setPublishingIssues] = useState<Record<string, PublishingIssue>>({});
+  const [publishingIssuesError, setPublishingIssuesError] = useState('');
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  const [retryMessage, setRetryMessage] = useState('');
+
+  const loadPublishingIssues = useCallback(async () => {
+    if (!selectedCompanyId) return;
+    setPublishingIssuesError('');
+    try {
+      const res = await fetch(`/api/blogs/publishing-issues?company_id=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Could not load publishing issues');
+      const byBlog: Record<string, PublishingIssue> = {};
+      for (const issue of (Array.isArray(data?.issues) ? data.issues : []) as PublishingIssue[]) {
+        if (issue.blog_id) byBlog[issue.blog_id] = issue;
+      }
+      setPublishingIssues(byBlog);
+    } catch (e) {
+      setPublishingIssuesError(e instanceof Error ? e.message : 'Could not load publishing issues');
+    }
+  }, [selectedCompanyId]);
+
+  useEffect(() => {
+    void loadPublishingIssues();
+  }, [loadPublishingIssues]);
+
+  const retryPublish = useCallback(async (blogId: string) => {
+    const issue = publishingIssues[blogId];
+    if (!issue || !selectedCompanyId) return;
+    setRetryingJobId(issue.job_id);
+    setRetryMessage('');
+    try {
+      const outcome = await retryPublishingIssue(issue, selectedCompanyId, {
+        fetch: (input, init) => fetch(input, init),
+        confirm: (text) => window.confirm(text),
+      });
+      if (outcome.ok === true) {
+        setRetryMessage('Publish re-queued.');
+        await loadPublishingIssues();
+      } else {
+        setRetryMessage((outcome as { message: string }).message);
+      }
+    } finally {
+      setRetryingJobId(null);
+    }
+  }, [publishingIssues, selectedCompanyId, loadPublishingIssues]);
 
   const loadBlogs = useCallback(async () => {
     if (!selectedCompanyId) return;
@@ -160,5 +210,10 @@ export function useBlogManage() {
     startEdit,
     confirmDelete,
     reload: loadBlogs,
+    publishingIssues,
+    publishingIssuesError,
+    retryingJobId,
+    retryMessage,
+    retryPublish,
   };
 }

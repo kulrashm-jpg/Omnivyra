@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { BarChart2, Edit2, FileText, Loader2, Plus, Trash2 } from 'lucide-react';
 import type { useBlogManage } from '../../hooks/useBlogManage';
 import EmptyState from '../shared/EmptyState';
+import { publishingIssueEvidence, publishingIssueTitle } from './publishingIssues';
 import ExamplePreview from '../shared/ExamplePreview';
 
 type Props = {
@@ -122,6 +123,16 @@ export default function BlogManageView({ d }: Props) {
             {d.error}
           </div>
         )}
+        {d.publishingIssuesError && (
+          <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Publishing status unavailable: {d.publishingIssuesError}
+          </div>
+        )}
+        {d.retryMessage && (
+          <div role="status" className="mb-4 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+            {d.retryMessage}
+          </div>
+        )}
 
         {d.loading ? (
           <div className="flex items-center justify-center py-20 text-gray-400">
@@ -202,6 +213,34 @@ export default function BlogManageView({ d }: Props) {
                     </span>
                   ))}
                 </div>
+
+                {d.publishingIssues?.[blog.id] && (() => {
+                  const issue = d.publishingIssues[blog.id];
+                  return (
+                    <div
+                      role="alert"
+                      data-testid={`publishing-issue-${blog.id}`}
+                      className={`mt-4 rounded-xl border px-3 py-3 text-sm ${issue.outcome_unknown ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-red-200 bg-red-50 text-red-800'}`}
+                    >
+                      <p className="font-semibold">{publishingIssueTitle(issue)}</p>
+                      <ul className="mt-1 space-y-0.5 text-xs">
+                        {publishingIssueEvidence(issue).map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                      {issue.outcome_unknown && (
+                        <p className="mt-1 text-xs font-medium">Check your site before retrying: a retry may publish it twice.</p>
+                      )}
+                      {d.canManage && (
+                        <button
+                          onClick={() => void d.retryPublish(blog.id)}
+                          disabled={d.retryingJobId === issue.job_id}
+                          className="mt-2 rounded-lg border border-current px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                        >
+                          {d.retryingJobId === issue.job_id ? 'Retrying...' : 'Retry publish'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div className="mt-5 flex items-center gap-2">
                   <button

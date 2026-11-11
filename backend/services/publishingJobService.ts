@@ -5,6 +5,7 @@ import { getIntegration } from './integrationService';
 import type { Blog } from './blogService';
 import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsService';
 import { runWorkerSnapshotShadowHook } from './workerSnapshotShadowHook';
+import { recordAuditEvent } from './auditEventService';
 
 export type PublishingJobStatus = 'queued' | 'processing' | 'published' | 'failed' | 'retrying' | 'cancelled' | 'dead_letter' | 'scheduled';
 export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown' | 'uncertain' | 'unsupported';
@@ -343,6 +344,131 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
   }
 }
 
+// ── Dead-letter visibility + manual retry (e9, pre-launch) ───────────────────
+
+/** One blog's stuck publish, with the EVIDENCE an operator needs to decide (05). */
+export interface PublishingIssue {
+  job_id: string;
+  blog_id: string | null;
+  provider: string;
+  job_type: string;
+  dead_letter_at: string;
+  last_error: string | null;
+  /** The post may be LIVE: a retry must be confirmed after checking the site. */
+  outcome_unknown: boolean;
+  last_attempt: { status: string; error_message: string | null; started_at: string | null; finished_at: string | null } | null;
+}
+
+/**
+ * The company's dead-lettered publishing jobs, ONE per blog (the blog's latest job, and only if
+ * that job is dead-lettered - a later publish supersedes it). Keyed on the PAIR status =
+ * 'dead_letter' AND dead_letter_at set, so a writer that sets one without the other cannot
+ * repopulate the queue (05). Reads THROW on error: an unreadable queue is never "no issues".
+ */
+export async function listPublishingIssues(companyId: string): Promise<PublishingIssue[]> {
+  const { data: jobs, error } = await ownedDbTable('publishing_jobs')
+    .select('id, blog_id, provider, job_type, status, dead_letter_at, last_error, failure_category, created_at')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (error) throw new Error(`Publishing jobs unreadable: ${error.message}`);
+  const latestPerBlog = new Map<string, any>();
+  for (const j of (jobs ?? []) as any[]) {
+    const key = String(j.blog_id ?? `job:${j.id}`);
+    if (!latestPerBlog.has(key)) latestPerBlog.set(key, j);
+  }
+  const stuck = [...latestPerBlog.values()].filter((j) => j.status === 'dead_letter' && j.dead_letter_at);
+  if (stuck.length === 0) return [];
+
+  const { data: attempts, error: attemptsError } = await ownedDbTable('publishing_attempts')
+    .select('job_id, attempt_number, status, error_message, started_at, finished_at')
+    .in('job_id', stuck.map((j) => j.id))
+    .order('attempt_number', { ascending: false });
+  if (attemptsError) throw new Error(`Publishing attempts unreadable: ${attemptsError.message}`);
+  const lastAttempt = new Map<string, any>();
+  for (const a of (attempts ?? []) as any[]) if (!lastAttempt.has(a.job_id)) lastAttempt.set(a.job_id, a);
+
+  return stuck.map((j) => {
+    const a = lastAttempt.get(j.id);
+    return {
+      job_id: j.id,
+      blog_id: j.blog_id ?? null,
+      provider: j.provider,
+      job_type: j.job_type,
+      dead_letter_at: j.dead_letter_at,
+      last_error: j.last_error ?? null,
+      outcome_unknown: j.failure_category === UNCERTAIN_PUBLISH_CATEGORY,
+      last_attempt: a ? { status: a.status, error_message: a.error_message ?? null, started_at: a.started_at ?? null, finished_at: a.finished_at ?? null } : null,
+    };
+  });
+}
+
+export type RequeueResult =
+  | { ok: true; outcome_unknown: boolean }
+  | { ok: false; code: 'NOT_FOUND' | 'NOT_DEAD_LETTER' | 'CONFIRM_OUTCOME_UNKNOWN'; message: string };
+
+/**
+ * Re-queue ONE dead-lettered job. Refused unless it is dead-lettered (status AND dead_letter_at).
+ * A job whose outcome is UNKNOWN (the post may be live) is re-queued ONLY with an explicit
+ * confirmation - enforced HERE, not only in the UI, because a retry may publish a duplicate.
+ * Compare-and-set on status = 'dead_letter', so two clicks re-queue it once. Audited.
+ */
+export async function requeueDeadLetteredPublishingJob(input: {
+  jobId: string;
+  companyId: string;
+  actorUserId: string | null;
+  confirmOutcomeUnknown?: boolean;
+}): Promise<RequeueResult> {
+  const { data: job, error } = await ownedDbTable('publishing_jobs')
+    .select('id, company_id, status, dead_letter_at, failure_category, last_error, attempt_count, max_attempts')
+    .eq('id', input.jobId)
+    .eq('company_id', input.companyId)
+    .maybeSingle();
+  if (error) throw new Error(`Publishing job unreadable: ${error.message}`);
+  if (!job) return { ok: false, code: 'NOT_FOUND', message: 'Publishing job not found.' };
+  const j = job as any;
+  if (j.status !== 'dead_letter' || !j.dead_letter_at) {
+    return { ok: false, code: 'NOT_DEAD_LETTER', message: 'Only a dead-lettered publishing job can be retried.' };
+  }
+  const outcomeUnknown = j.failure_category === UNCERTAIN_PUBLISH_CATEGORY;
+  if (outcomeUnknown && input.confirmOutcomeUnknown !== true) {
+    return {
+      ok: false,
+      code: 'CONFIRM_OUTCOME_UNKNOWN',
+      message: 'This post may already be live. Check the site first; retry only with confirmation, or you may publish a duplicate.',
+    };
+  }
+  const now = new Date().toISOString();
+  const { data: moved, error: moveError } = await ownedDbTable('publishing_jobs')
+    .update({
+      status: 'queued', run_after: now, next_retry_at: null, dead_letter_at: null, failure_category: null,
+      last_error: null, locked_by: null, locked_at: null, lock_expires_at: null,
+      // One more attempt beyond what it has used, so a manual retry is never refused by the ceiling.
+      max_attempts: Math.max(Number(j.max_attempts) || 0, (Number(j.attempt_count) || 0) + 1),
+      updated_at: now,
+    })
+    .eq('id', input.jobId)
+    .eq('company_id', input.companyId)
+    .eq('status', 'dead_letter')
+    .select('id');
+  if (moveError) throw new Error(`Publishing job not re-queued: ${moveError.message}`);
+  if (!Array.isArray(moved) || moved.length === 0) {
+    return { ok: false, code: 'NOT_DEAD_LETTER', message: 'This job is no longer dead-lettered (it may already have been retried).' };
+  }
+  try {
+    // best-effort: the re-queue already happened; an audit failure is logged, never undoes it
+    await recordAuditEvent({
+      companyId: input.companyId, actorUserId: input.actorUserId, actorType: 'user',
+      action: 'publishing_job.manual_retry', resourceType: 'publishing_job', resourceId: input.jobId,
+      severity: outcomeUnknown ? 'warning' : 'info',
+      metadata: { outcome_unknown: outcomeUnknown, confirmed_outcome_unknown: input.confirmOutcomeUnknown === true, previous_last_error: j.last_error ?? null },
+    });
+  } catch (err) {
+    console.error('[publishingJob] manual retry not audited', { job_id: input.jobId, error: err instanceof Error ? err.message : String(err) });
+  }
+  return { ok: true, outcome_unknown: outcomeUnknown };
+}
+
 export async function runPublishingWorker(input: { workerId?: string; limit?: number; lockMs?: number } = {}): Promise<WorkerRunResult> {
   const workerId = input.workerId ?? `publisher-${Date.now()}`;
   await recordWorkerHeartbeat({ workerId, workerType: 'publishing', queueName: 'publishing_jobs', status: 'healthy' });
@@ -415,7 +541,7 @@ export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): P
       Object.assign(patch, { status: 'published', last_error: null, completed_at: now,
         provider_response: (lastAttempt as { provider_response?: unknown }).provider_response ?? {} });
     } else if (lastStatus === 'running' || (lastStatus === 'failed' && lastCategory === UNCERTAIN_PUBLISH_CATEGORY)) {
-      Object.assign(patch, { status: 'dead_letter', dead_letter_at: now,
+      Object.assign(patch, { status: 'dead_letter', dead_letter_at: now, failure_category: UNCERTAIN_PUBLISH_CATEGORY,
         last_error: `Stale while publishing (recovered by ${workerId}): the post may or may not be live. Verify on the site before retrying.` });
     } else {
       // failed (a definite rejection) or NO attempt row. No attempt row means the provider was never
