@@ -225,7 +225,11 @@ CREATE TABLE IF NOT EXISTS public.source_mapping_profile_entries (
       'approved_profile_match',
       'high_confidence_suggestion',
       'tenant_confirmed',
-      'tenant_override'
+      'tenant_override',
+      -- Step E (2026-11-11, registry-owner GO): a Super Admin's approval of a
+      -- PLATFORM (vendor) profile entry. Never a tenant method (the store
+      -- refuses it for tenant profiles).
+      'platform_approved'
     )),
   -- An approval or a rejection is ABOUT a target; an ignore is the absence of
   -- one. Without this, `ignored` rows could carry a target and be mistaken for
@@ -243,7 +247,7 @@ CREATE TABLE IF NOT EXISTS public.source_mapping_profile_entries (
   -- A human decision with no timestamp cannot be audited.
   CONSTRAINT smpe_tenant_decision_has_provenance
     CHECK (
-      mapping_method NOT IN ('tenant_confirmed', 'tenant_override')
+      mapping_method NOT IN ('tenant_confirmed', 'tenant_override', 'platform_approved')
       OR approved_at IS NOT NULL
     )
 );

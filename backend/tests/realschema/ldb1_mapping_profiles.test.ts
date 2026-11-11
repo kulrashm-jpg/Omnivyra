@@ -238,6 +238,35 @@ describe('PI-LDB-1 · the tables are shaped the way the store assumes', () => {
   });
 });
 
+describe('PI-LDB-1 · step E: a Super Admin platform approval', () => {
+  it("'platform_approved' is admitted on a platform entry WITH a timestamp, refused without one", async () => {
+    await inRollback(async () => {
+      await seedTenants();
+      const fp = 'c'.repeat(64);
+      const { rows } = await db.query(
+        `INSERT INTO public.source_mapping_profiles (scope, organization_id, source, schema_fingerprint, version, status, header_count, headers)
+         VALUES ('platform', NULL, 'apollo', $1, 1, 'active', 1, '["x"]'::jsonb) RETURNING id`, [fp]);
+      const pid = rows[0].id;
+      const sql = `INSERT INTO public.source_mapping_profile_entries (scope, organization_id, profile_id, source_field, source_field_normalized, target_field, decision, mapping_method, approved_at)
+         VALUES ('platform', NULL, $1, $2, $2, 'jobTitle', 'approved', 'platform_approved', $3)`;
+      expect(await attempt(sql, [pid, 'x', null])).toBe('23514');                      // a human decision must be dated
+      expect(await attempt(sql, [pid, 'x', '2026-11-11T00:00:00Z'])).toBe('ok');
+      // NEGATIVE CONTROL on the vocabulary: an unknown method is still refused.
+      expect(await attempt(sql.replace("'platform_approved'", "'platform_guessed'"), [pid, 'y', '2026-11-11T00:00:00Z'])).toBe('23514');
+    });
+  });
+
+  it('service_role holds NO DELETE on either table (why the store never deletes a staged row)', async () => {
+    const { rows } = await db.query(
+      `SELECT t, has_table_privilege('service_role', t, 'DELETE') AS d, has_table_privilege('service_role', t, 'INSERT') AS i
+         FROM unnest(ARRAY['public.source_mapping_profiles', 'public.source_mapping_profile_entries']) AS t`);
+    for (const r of rows) {
+      expect(r.d).toBe(false);
+      expect(r.i).toBe(true);   // control: the role does hold its intended privileges
+    }
+  });
+});
+
 /* ── one active profile per shape ────────────────────────────────────────── */
 
 describe('PI-LDB-1 · exactly one active mapping per file shape', () => {
