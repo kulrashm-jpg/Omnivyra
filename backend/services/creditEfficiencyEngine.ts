@@ -52,10 +52,13 @@ export type EfficiencyReport = {
 };
 
 async function getContentTypeROI(companyId: string): Promise<ContentTypeROI[]> {
-  const { data } = await ownedDbTable('content_type_efficiency')
+  // A failed read is not "no ROI data". Throw (the efficiency route / cron
+  // reports the failure instead of an empty analysis).
+  const { data, error } = await ownedDbTable('content_type_efficiency')
     .select('content_type, avg_outcome_score, avg_credits_per_outcome, sample_count, recommendation')
     .eq('company_id', companyId)
     .order('avg_credits_per_outcome', { ascending: true });
+  if (error) throw new Error(`[creditEfficiency] content ROI read failed for ${companyId}: ${error.message}`);
 
   if (data?.length) return data as ContentTypeROI[];
 
@@ -77,7 +80,9 @@ async function upsertEfficiencyTier(
   totalOutcomes: number,
   creditsSaved: number,
 ): Promise<void> {
-  await ownedDbTable('credit_efficiency_scores').upsert(
+  // best-effort: the computed tier is still returned to the caller; a failed
+  // persist only leaves the stored score stale. Logged.
+  const { error: upsertErr } = await ownedDbTable('credit_efficiency_scores').upsert(
     {
       organization_id: orgId,
       efficiency_tier: tier,
@@ -89,6 +94,7 @@ async function upsertEfficiencyTier(
     },
     { onConflict: 'organization_id' },
   );
+  if (upsertErr) console.error('[creditEfficiency] score persist failed:', orgId, upsertErr.message);
 }
 
 function determineTier(avgCPO: number, totalOutcomes: number): { tier: string; discount: number } {
@@ -170,17 +176,22 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
 }
 
 export async function getEfficiencyDiscount(orgId: string): Promise<number> {
-  const { data } = await ownedDbTable('credit_efficiency_scores')
+  // A failed read is not "no discount" - throw. (2026-11-12: the only consumer,
+  // creditPriorityEngine.prioritizeActions, has no callers, so no charge uses
+  // this today; it must still never price on an unread multiplier.)
+  const { data, error } = await ownedDbTable('credit_efficiency_scores')
     .select('discount_multiplier')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[creditEfficiency] discount read failed for ${orgId}: ${error.message}`);
   return (data as any)?.discount_multiplier ?? 1.0;
 }
 
 export async function getEfficiencyTier(orgId: string): Promise<string> {
-  const { data } = await ownedDbTable('credit_efficiency_scores')
+  const { data, error } = await ownedDbTable('credit_efficiency_scores')
     .select('efficiency_tier')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[creditEfficiency] tier read failed for ${orgId}: ${error.message}`);
   return (data as any)?.efficiency_tier ?? 'standard';
 }
