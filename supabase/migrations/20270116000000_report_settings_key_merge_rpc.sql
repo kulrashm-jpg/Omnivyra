@@ -43,6 +43,14 @@
 --
 -- No table, column, policy, trigger or table grant is touched.
 -- Re-runnable: CREATE OR REPLACE + REVOKE/GRANT are idempotent; $verify$ re-proves on every replay.
+--
+-- EARLIER UNRELEASED DRAFTS (never applied to any shared environment by the author): the signature
+-- went through three shapes. The preflight REFUSES ("exists with another signature") rather than
+-- creating an overload, by design. A sandbox / CI database that applied an earlier draft is remediated
+-- by dropping the stale draft, then re-applying this file:
+--   DROP FUNCTION IF EXISTS public.merge_report_settings_keys(text, jsonb, timestamptz);
+--   DROP FUNCTION IF EXISTS public.merge_report_settings_keys(text, jsonb, timestamptz, text[]);
+--   (and the very first local draft, never committed: (uuid, jsonb, timestamptz))
 -- Rollback: supabase/migrations/rollbacks/report_settings_key_merge_rpc_rollback.sql
 
 BEGIN;
@@ -180,9 +188,13 @@ BEGIN
   --     sub-fields change). A stored value that is absent or JSON null counts as {}; any other
   --     non-object stored value is REFUSED (the WHERE excludes the row, then 22023 below);
   --   * every other key replaces the stored value wholesale.
-  -- The base is derived from cp ITSELF inside the SET subquery (never from a self-join: a joined
-  -- copy of the row is NOT re-fetched when READ COMMITTED re-evaluates the locked row, so a
-  -- concurrent writer would be lost).
+  -- CORRECTNESS-CRITICAL: the base MUST be derived from cp ITSELF inside the SET subquery. Do NOT
+  -- "tidy" it into a join (FROM public.company_profiles c2 ...). Under READ COMMITTED, an UPDATE whose
+  -- target row was changed by a concurrent transaction re-evaluates via EvalPlanQual: it re-fetches the
+  -- TARGET row (cp) but does NOT re-execute the rest of the plan, so a joined copy keeps its stale
+  -- snapshot, the WHERE re-check passes on the fresh row, and the value is computed from stale data and
+  -- COMMITS: the concurrent writer's key is silently lost (no error, no retry). Single-writer tests pass
+  -- either way; backend/tests/realschema/report_settings_key_merge.test.ts ("concurrency") is the guard.
   UPDATE public.company_profiles AS cp
      SET report_settings = (
            SELECT x.base || COALESCE((

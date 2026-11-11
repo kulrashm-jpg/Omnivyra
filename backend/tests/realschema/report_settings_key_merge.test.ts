@@ -157,6 +157,34 @@ describe('concurrency', () => {
     expect((await stored(CO)).rs.market_pulse).toEqual({ keep: 1, competitor_details: ['refine'], exclusions: ['ui'] });
   });
 
+  it('CONTROL: the same interleaving through a SELF-JOIN base LOSES a sub-field (why the base must be cp)', async () => {
+    // A session-local copy of the merge whose base comes from a join, the "tidy-up" the migration
+    // comment forbids. EvalPlanQual re-fetches only the target row, so the joined base stays stale and
+    // the first writer's sub-field is silently lost. This proves the test above can fail.
+    const JOINFN = `CREATE FUNCTION pg_temp.join_merge(p_company_id text, p_patch jsonb, p_nested text[]) RETURNS void LANGUAGE sql AS $f$
+      UPDATE public.company_profiles cp
+         SET report_settings = b.base || (SELECT jsonb_object_agg(e.key, CASE WHEN e.key = ANY (p_nested) THEN COALESCE(b.base -> e.key, '{}'::jsonb) || e.value ELSE e.value END) FROM jsonb_each(p_patch) e)
+        FROM (SELECT c2.company_id, COALESCE(c2.report_settings, '{}'::jsonb) AS base FROM public.company_profiles c2 WHERE c2.company_id = p_company_id) b
+       WHERE cp.company_id = p_company_id AND b.company_id = cp.company_id $f$`;
+    await merge('service_role', CO, { market_pulse: { keep: 1 } });
+    const c1 = new Client({ connectionString: url }); const c2 = new Client({ connectionString: url });
+    await c1.connect(); await c2.connect();
+    try {
+      await c1.query(JOINFN); await c2.query(JOINFN);
+      await c1.query('BEGIN'); await c2.query('BEGIN');
+      await c1.query(`SELECT pg_temp.join_merge($1, '{"market_pulse":{"competitor_details":["refine"]}}'::jsonb, ARRAY['market_pulse'])`, [CO]);
+      const second = c2.query(`SELECT pg_temp.join_merge($1, '{"market_pulse":{"exclusions":["ui"]}}'::jsonb, ARRAY['market_pulse'])`, [CO]);
+      await new Promise((r) => setTimeout(r, 250));
+      await c1.query('COMMIT');
+      await second;
+      await c2.query('COMMIT');
+    } finally {
+      await c1.end(); await c2.end();
+    }
+    const mp = (await stored(CO)).rs.market_pulse;
+    expect(mp.exclusions).toEqual(['ui']);
+    expect(mp).not.toHaveProperty('competitor_details'); // LOST
+  });
   it('two writers of DIFFERENT keys, interleaved on the same row: both keys survive', async () => {
     const c1 = new Client({ connectionString: url }); const c2 = new Client({ connectionString: url });
     await c1.connect(); await c2.connect();
