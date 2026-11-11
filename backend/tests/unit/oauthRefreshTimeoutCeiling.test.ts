@@ -42,22 +42,33 @@ jest.mock('axios', () => {
   return { __esModule: true, default: { post: fail, get: fail }, post: fail, get: fail };
 });
 
-import { recordRefreshOutcome } from '../../auth/tokenRefreshCore';
+import { recordRefreshOutcome, xPersistedRefreshError } from '../../auth/tokenRefreshCore';
 import { refreshPlatformToken } from '../../auth/tokenRefreshFlows';
 import { REFRESH_TIMEOUT_ERROR, isRefreshTimeoutError, takeRefreshTimedOut } from '../../auth/oauthRefreshTimeout';
 
 beforeEach(() => { account = { id: 'acc-1', refresh_retry_count: 3, is_active: true }; });
 
 describe('the recorder', () => {
-  it.each([
-    ['the wrapper\'s timeout marker', REFRESH_TIMEOUT_ERROR],
-    ['X\'s persisted axios message', 'timeout of 15000ms exceeded'],
-    ['an ECONNABORTED text', 'ECONNABORTED: socket hang'],
-  ])('a timeout (%s) leaves retry_count unchanged and never parks, even at count 3 of 4', async (_n, err) => {
-    await recordRefreshOutcome('acc-1', 'failed', err);
+  it('a timeout (the exact constant, written only after a STRUCTURAL check) leaves retry_count unchanged and never parks, even at 3 of 4', async () => {
+    await recordRefreshOutcome('acc-1', 'failed', REFRESH_TIMEOUT_ERROR);
     expect(account.refresh_retry_count).toBe(3);
     expect(account.refresh_status).toBe('REFRESH_FAILED_RETRYABLE');
     expect(account.is_active).toBe(true);
+  });
+
+  it.each([
+    ['an X provider description that merely mentions a timeout (GOV-SECURITY input)', 'invalid_request: upstream timeout of 30ms exceeded'],
+    ['provider text containing ECONNABORTED', 'invalid_request: ECONNABORTED upstream'],
+    ['axios-style text that is not the constant', 'timeout of 15000ms exceeded'],
+    ['the constant with a provider suffix', `${REFRESH_TIMEOUT_ERROR}: but from a provider`],
+  ])('NOT a timeout: %s consumes the ceiling and parks at 4', async (_n, err) => {
+    await recordRefreshOutcome('acc-1', 'failed', err);
+    expect(account).toMatchObject({ refresh_retry_count: 4, refresh_status: 'PROVIDER_REAUTH_REQUIRED', is_active: false });
+  });
+
+  it('invalid_client outranks a timeout-looking text: fatal-config, not retried as a timeout', async () => {
+    await recordRefreshOutcome('acc-1', 'failed', 'invalid_client: request timeout of 1ms exceeded');
+    expect(account.refresh_status).toBe('REFRESH_FAILED_FATAL');
   });
 
   it('a 5xx still increments the count, and at the ceiling still parks (PROVIDER_REAUTH_REQUIRED, is_active=false)', async () => {
@@ -99,9 +110,27 @@ describe('end to end through refreshPlatformToken (refreshers return null)', () 
   });
 });
 
-it('timeout classification: axios ECONNABORTED and TCP ETIMEDOUT yes; a 5xx no', () => {
+it('timeout classification is STRUCTURAL: axios ECONNABORTED / TCP ETIMEDOUT codes only, never message or body text', () => {
   expect(isRefreshTimeoutError({ code: 'ECONNABORTED' })).toBe(true);
   expect(isRefreshTimeoutError({ code: 'ETIMEDOUT' })).toBe(true);
-  expect(isRefreshTimeoutError({ message: 'timeout of 15000ms exceeded' })).toBe(true);
+  expect(isRefreshTimeoutError({ message: 'timeout of 15000ms exceeded' })).toBe(false);
+  expect(isRefreshTimeoutError({ message: 'x', response: { data: { error_description: 'timeout of 30ms exceeded' } } })).toBe(false);
   expect(isRefreshTimeoutError({ message: 'Request failed with status code 503', response: { status: 503 } })).toBe(false);
+});
+
+describe('X persisted error (xPersistedRefreshError)', () => {
+  it('a real axios timeout persists exactly the constant', () => {
+    expect(xPersistedRefreshError({ code: 'ECONNABORTED', message: 'timeout of 15000ms exceeded' })).toBe(REFRESH_TIMEOUT_ERROR);
+  });
+  it('GOV-SECURITY input: {error:invalid_request, error_description:"upstream timeout of 30ms exceeded"} (no axios timeout) persists the provider text and, from 3, parks at 4', async () => {
+    const persisted = xPersistedRefreshError({ message: 'Request failed with status code 400',
+      response: { status: 400, data: { error: 'invalid_request', error_description: 'upstream timeout of 30ms exceeded' } } });
+    expect(persisted).toBe('invalid_request: upstream timeout of 30ms exceeded');
+    await recordRefreshOutcome('acc-1', 'failed', persisted);
+    expect(account).toMatchObject({ refresh_retry_count: 4, refresh_status: 'PROVIDER_REAUTH_REQUIRED', is_active: false });
+  });
+  it('a real X timeout, recorded, does NOT consume the ceiling', async () => {
+    await recordRefreshOutcome('acc-1', 'failed', xPersistedRefreshError({ code: 'ECONNABORTED' }));
+    expect(account).toMatchObject({ refresh_retry_count: 3, is_active: true });
+  });
 });

@@ -17,18 +17,25 @@ export const OAUTH_REFRESH_TIMEOUT_MS = 15_000;
  */
 export const REFRESH_TIMEOUT_ERROR = 'refresh_timeout';
 
-/** axios timeout (ECONNABORTED / "timeout of Nms exceeded") or a TCP connect timeout. */
+/**
+ * STRUCTURAL only (GOV-SECURITY, virality-83): the axios error CODE of a request that
+ * timed out (ECONNABORTED; ETIMEDOUT for a TCP connect timeout). Never the message or
+ * the provider's response body - provider-influenced text must not be able to mark a
+ * failure as a timeout and so escape the reauth ceiling.
+ */
 export function isRefreshTimeoutError(error: unknown): boolean {
-  const e = error as { code?: unknown; message?: unknown } | null;
-  const code = String(e?.code ?? '');
-  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT') return true;
-  return /timeout of \d+ms exceeded/i.test(String(e?.message ?? ''));
+  const code = String((error as { code?: unknown } | null)?.code ?? '');
+  return code === 'ECONNABORTED' || code === 'ETIMEDOUT';
 }
 
-/** The persisted error text of a refresh failure that was a timeout. */
+/**
+ * The persisted error is EXACTLY the constant, which only this codebase writes, and
+ * only after isRefreshTimeoutError. No substring match: an X provider description
+ * that merely contains "timeout" or "ECONNABORTED" is NOT a timeout and still counts
+ * (that loop once reached refresh_retry_count 4104).
+ */
 export function isRefreshTimeoutText(text: string | null | undefined): boolean {
-  const t = String(text ?? '').toLowerCase();
-  return t.startsWith(REFRESH_TIMEOUT_ERROR) || t.includes('econnaborted') || /timeout of \d+ms exceeded/.test(t);
+  return String(text ?? '').trim() === REFRESH_TIMEOUT_ERROR;
 }
 
 /**

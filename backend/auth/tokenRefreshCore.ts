@@ -17,7 +17,9 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
-import { OAUTH_REFRESH_TIMEOUT_MS, noteRefreshFailure, isRefreshTimeoutText } from './oauthRefreshTimeout';
+import {
+  OAUTH_REFRESH_TIMEOUT_MS, noteRefreshFailure, isRefreshTimeoutText, isRefreshTimeoutError, REFRESH_TIMEOUT_ERROR,
+} from './oauthRefreshTimeout';
 import { getToken, setToken, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
@@ -229,6 +231,20 @@ export async function recordRefreshOutcome(
 }
 
 /**
+ * The text persisted for a failed X refresh. A STRUCTURAL timeout (axios error code)
+ * persists the constant REFRESH_TIMEOUT_ERROR - the only text the recorder treats as
+ * a timeout. Anything else persists the provider's class and description as before,
+ * so a provider description that merely mentions "timeout" still counts.
+ */
+export function xPersistedRefreshError(error: any): string {
+  if (isRefreshTimeoutError(error)) return REFRESH_TIMEOUT_ERROR;
+  const errorData = error?.response?.data;
+  const errorCode = errorData?.error || error?.message || 'unknown_error';
+  const errorDescription = errorData?.error_description || '';
+  return errorDescription ? `${errorCode}: ${errorDescription}` : errorCode;
+}
+
+/**
  * Three-state answer to "what is this account's current retry count?".
  *
  * The transient branch below must not conflate two different facts:
@@ -333,19 +349,20 @@ async function recordRefreshOutcomeInner(
       refreshStatus = 'PROVIDER_REAUTH_REQUIRED';
       connectionState = 'PROVIDER_REAUTH_REQUIRED';
       unreadableRetryStreaks.delete(accountId);
-    } else if (isRefreshTimeoutText(errText)) {
-      // D2 policy (virality-e9, option B): the provider did not answer in time. That
-      // says nothing about the token, so it is a retryable failure that does NOT
-      // consume the reauth ceiling: refresh_retry_count is left exactly as stored
-      // (not written) and the unreadable-counter streak is untouched. A 5xx still
-      // takes the transient branch below and still counts.
-      refreshStatus = 'REFRESH_FAILED_RETRYABLE';
-      connectionState = 'TOKEN_EXPIRED';
-      retryCountKnown = false;
     } else if (errText.includes('invalid_client')) {
       refreshStatus = 'REFRESH_FAILED_FATAL';   // app credentials wrong â€” operator alert
       connectionState = 'TOKEN_EXPIRED';
       unreadableRetryStreaks.delete(accountId);
+    } else if (isRefreshTimeoutText(error)) {
+      // D2 policy (virality-e9, option B): the provider did not answer in time. That
+      // says nothing about the token, so it is a retryable failure that does NOT
+      // consume the reauth ceiling: refresh_retry_count is left exactly as stored
+      // (not written) and the unreadable-counter streak is untouched. A 5xx still
+      // takes the transient branch below and still counts. Checked AFTER both fatal
+      // classes, and only on the exact constant (classified structurally upstream).
+      refreshStatus = 'REFRESH_FAILED_RETRYABLE';
+      connectionState = 'TOKEN_EXPIRED';
+      retryCountKnown = false;
     } else {
       // Transient (network / 5xx / unknown) â€” bounded retry.
       const retryState = await readRefreshRetryState(accountId);
@@ -525,9 +542,7 @@ async function doRefreshTwitterTokenInner(
     // credentials are wrong.
     const errorCode = errorData?.error || error.message || 'unknown_error';
     const errorDescription = errorData?.error_description || '';
-    const persistedError = errorDescription
-      ? `${errorCode}: ${errorDescription}`
-      : errorCode;
+    const persistedError = xPersistedRefreshError(error);
     console.error(
       `[tokenRefresh] X refresh failed for account ${account.account_id}:`,
       errorCode,
