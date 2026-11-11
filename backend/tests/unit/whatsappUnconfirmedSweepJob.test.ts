@@ -104,6 +104,52 @@ describe('3. the job runs: every tenant with unconfirmed sends is swept, failure
     expect(r).toMatchObject({ ok: false, tenants: 2, failedTenants: ['co-b'] });
   });
 
+  it('a HUNG tenant sweep is abandoned at its timeout; the next tenant is still swept (05: one hang must not freeze the cycle)', async () => {
+    const swept: string[] = [];
+    const r = await runWhatsAppUnconfirmedSendSweepJob({
+      listTenants: async () => ['co-a', 'co-b'],
+      sweep: ({ companyId }) => {
+        if (companyId === 'co-a') return new Promise<never>(() => undefined);
+        swept.push(companyId);
+        return Promise.resolve(result());
+      },
+      sweepTimeoutMs: 20,
+    });
+    expect(swept).toEqual(['co-b']);
+    expect(r).toMatchObject({ ok: false, tenants: 1, failedTenants: ['co-a'] });
+  });
+
+  it('a HUNG tenant scan is abandoned at its timeout; nothing is swept and the job returns', async () => {
+    const sweep = jest.fn();
+    const r = await runWhatsAppUnconfirmedSendSweepJob({ listTenants: () => new Promise<never>(() => undefined), sweep, scanTimeoutMs: 20 });
+    expect(r.ok).toBe(false);
+    expect(sweep).not.toHaveBeenCalled();
+  });
+
+  it('once the run budget is spent, the remaining tenants are DEFERRED (counted), not swept', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let t = 0;
+    const swept: string[] = [];
+    const r = await runWhatsAppUnconfirmedSendSweepJob({
+      listTenants: async () => ['co-a', 'co-b', 'co-c'],
+      sweep: async ({ companyId }) => { swept.push(companyId); t += 100; return result(); },
+      budgetMs: 150,
+      clock: () => t,
+    });
+    expect(swept).toEqual(['co-a', 'co-b']);
+    expect(r.deferredTenants).toBe(1);
+  });
+
+  it('NEGATIVE CONTROL: within the timeouts and budget every tenant is swept and nothing is deferred', async () => {
+    const r = await runWhatsAppUnconfirmedSendSweepJob({
+      listTenants: async () => ['co-a', 'co-b'],
+      sweep: async () => result(),
+      sweepTimeoutMs: 1000,
+      budgetMs: 10_000,
+    });
+    expect(r).toMatchObject({ ok: true, tenants: 2, deferredTenants: 0 });
+  });
+
   it('a failed tenant scan sweeps nothing and never throws', async () => {
     const sweep = jest.fn();
     const r = await runWhatsAppUnconfirmedSendSweepJob({ listTenants: async () => { throw new Error('db down'); }, sweep });
