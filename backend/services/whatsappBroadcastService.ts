@@ -44,6 +44,41 @@ export const isAmbiguousProviderStatus = (status: number): boolean => status >= 
 /** Recipient states whose send outcome is unknown; a status webhook's marker reconciles them. */
 const UNCONFIRMED_SEND_STATES = ['sending', 'send_uncertain'] as const;
 
+/**
+ * Leaving `sending` is CONDITIONAL (05 / e9, 2026-11-11). The claim into `sending` was
+ * a compare-and-set but every write OUT of it was keyed by id alone, so a worker that
+ * resolved late (a stall past the unconfirmed-send sweep's 5-minute floor) silently
+ * overwrote whatever the sweep or the marker reconcile had recorded. Now:
+ *   - the four INFERENCE outcomes (send_uncertain x3, failed) apply only while the row
+ *     is still `sending`;
+ *   - `sent` WITH the provider's message id - proof the send happened - applies while
+ *     the row is `sending` OR `send_uncertain` (the sweep's no-evidence inference) and
+ *     has no message id yet; it never overwrites an id another path attached.
+ * Zero rows moved means another path took the row while this worker held it: logged
+ * at ERROR (for `sent`, with this worker's message id and the row's current state, so
+ * two different ids for one recipient - near-proof of a duplicate - are on record).
+ * Neither the webhook's forward-only rule (updateRecipientDelivery, keyed by message
+ * id) nor any trigger governs these writes; this filter is the whole rule.
+ */
+async function resolveClaimedSend(
+  recipientId: string,
+  patch:       Record<string, unknown>,
+): Promise<{ moved: boolean; error: string | null }> {
+  const { data, error } = await ownedDbTable('whatsapp_broadcast_recipients')
+    .update(patch)
+    .eq('id', recipientId)
+    .eq('status', 'sending')
+    .select('id');
+  if (error) return { moved: false, error: error.message };
+  const moved = Array.isArray(data) && data.length > 0;
+  if (!moved) {
+    console.error('[wa-broadcast] send outcome NOT recorded: the row moved while this worker held it', {
+      recipient_id: recipientId, outcome: patch.status,
+    });
+  }
+  return { moved, error: null };
+}
+
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
 const RECIPIENT_ID_PAGE = 1000;
@@ -716,12 +751,10 @@ export async function processBatch(
       // connection, a lost response): the outcome is UNKNOWN, so it is recorded as
       // uncertain and is never re-queued by `retryFailed`, which would risk a duplicate
       // message. A status webhook carrying this recipient's marker reconciles it.
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({
-          status: 'send_uncertain',
-          error_message: controller.signal.aborted ? `provider call timed out after ${WHATSAPP_SEND_TIMEOUT_MS} ms` : (err instanceof Error ? err.message : 'Exception'),
-        })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, {
+        status: 'send_uncertain',
+        error_message: controller.signal.aborted ? `provider call timed out after ${WHATSAPP_SEND_TIMEOUT_MS} ms` : (err instanceof Error ? err.message : 'Exception'),
+      });
       failedCount++;
       continue;
     } finally {
@@ -730,25 +763,43 @@ export async function processBatch(
 
     const waMessageId = res.ok ? result?.messages?.[0]?.id : null;
     if (waMessageId) {
-      const { error: sentError } = await ownedDbTable('whatsapp_broadcast_recipients')
+      // Confirmed by the provider's id: may advance `sending` OR the sweep's inferred
+      // `send_uncertain`, but never a row that already carries an id (see
+      // resolveClaimedSend).
+      const { data: sentRows, error: sentError } = await ownedDbTable('whatsapp_broadcast_recipients')
         .update({ status: 'sent', wa_message_id: waMessageId, sent_at: new Date().toISOString() })
-        .eq('id', recipient.id);
+        .eq('id', recipient.id)
+        .in('status', [...UNCONFIRMED_SEND_STATES])
+        .is('wa_message_id', null)
+        .select('id');
       // Sent, but not recorded: the row stays `sending` (never re-sent) and the status
       // webhook's marker records the message id.
-      if (sentError) console.warn('[wa-broadcast] sent but not recorded; left sending for reconciliation', recipient.id);
+      if (sentError) {
+        console.warn('[wa-broadcast] sent but not recorded; left sending for reconciliation', recipient.id);
+      } else if (!Array.isArray(sentRows) || sentRows.length === 0) {
+        // Another path resolved the row first. Record this worker's proof alongside
+        // what the row now says: a DIFFERENT id there means the recipient was messaged twice.
+        const { data: now } = await ownedDbTable('whatsapp_broadcast_recipients')
+          .select('status, wa_message_id')
+          .eq('id', recipient.id)
+          .maybeSingle();
+        console.error('[wa-broadcast] SENT (provider id below) but the row had already been resolved by another path', {
+          recipient_id: recipient.id,
+          worker_wa_message_id: waMessageId,
+          row_status: now?.status ?? null,
+          row_wa_message_id: now?.wa_message_id ?? null,
+          conflicting_ids: !!now?.wa_message_id && now.wa_message_id !== waMessageId,
+        });
+      }
       sentCount++;
     } else if (res.ok) {
       // Accepted without a message id: Meta may have sent it. Never retried
       // automatically (`retryFailed` only re-queues `failed`).
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'send_uncertain', error_message: 'provider accepted the request without a message id' })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, { status: 'send_uncertain', error_message: 'provider accepted the request without a message id' });
       failedCount++;
     } else if (isAmbiguousProviderStatus(res.status)) {
       // A 5xx or a 408 does not say the message was refused: it may have been sent.
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, { status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` });
       failedCount++;
     } else {
       const errCode    = result?.error?.code ?? res.status;
@@ -758,9 +809,7 @@ export async function processBatch(
         .select('retry_count')
         .eq('id', recipient.id)
         .single();
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 });
       failedCount++;
     }
   }
