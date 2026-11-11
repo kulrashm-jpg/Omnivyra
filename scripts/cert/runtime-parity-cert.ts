@@ -17,6 +17,8 @@
  *   DOTENV_CONFIG_PATH=.env.cert BETA_AI_MODE=1 OMNIVYRA_ENV=beta CERT_ENV=1 \
  *     npx tsx -r dotenv/config -r tsconfig-paths/register scripts/cert/runtime-parity-cert.ts
  */
+// FIRST: refuse to run if this certification run could spend money (certSpendGuard.ts).
+import './certSpendGuard';
 import { randomUUID } from 'crypto';
 import { runPostGeneration } from '@/lib/post/runPostGeneration';
 import { runThreadGeneration } from '@/lib/thread/runThreadGeneration';
