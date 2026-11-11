@@ -34,6 +34,7 @@ import {
   type IngestOutcome,
 } from './engagement/ingestionHealth';
 import { markSocialAccountNeedsReauth } from '../auth/tokenStore';
+import { OAUTH_REFRESH_TIMEOUT_MS } from '../auth/oauthRefreshTimeout';
 
 /**
  * How far back scheduled ingestion looks for posts to poll. See the rationale
@@ -586,6 +587,7 @@ export type IngestFailureKind =
   | 'refresh_failed'  // refresh failed before the request; nothing was sent
   | 'auth'            // provider rejected the credential
   | 'not_found'       // endpoint/resource absent — no credential will fix this
+  | 'refresh_deferred' // D2: the cycle's refresh budget was spent; refresh tried next cycle
   | 'provider';       // any other provider or persistence failure
 
 export type IngestCommentsResult = {
@@ -596,10 +598,67 @@ export type IngestCommentsResult = {
 };
 
 /**
+ * D2 — per-cycle refresh TIME budget (decided by virality-e9).
+ *
+ * Since a refresh timeout no longer consumes the reauth ceiling (option B), an account
+ * whose provider always times out is refreshed on every cycle, each attempt costing up
+ * to OAUTH_REFRESH_TIMEOUT_MS. The ingest timer therefore gets a budget of total
+ * refresh-attempt time per cycle (INGEST_REFRESH_BUDGET_MS, default 120 s). It is
+ * checked BEFORE a refresh starts; once spent, the remaining refreshes in the cycle are
+ * DEFERRED: not attempted, nothing recorded (no retry count, no ceiling, no parking),
+ * logged as 'refresh_deferred', and attempted on the next cycle.
+ *
+ * Each refresh reserves `reserveMs` (default: one request timeout) when it starts and is
+ * charged its actual duration when it ends, so concurrent refreshes see each other's
+ * reservations. Overshoot is bounded by the refreshes already in flight when the budget
+ * runs out (scheduler concurrency x one refresh, a Facebook refresh being up to two
+ * requests).
+ */
+export type RefreshBudget = { remainingMs: number; reserveMs: number; deferred: number };
+export const DEFAULT_INGEST_REFRESH_BUDGET_MS = 120_000;
+
+export function ingestRefreshBudgetMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number.parseInt(String(env.INGEST_REFRESH_BUDGET_MS ?? ''), 10);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_INGEST_REFRESH_BUDGET_MS;
+}
+
+export function createRefreshBudget(
+  totalMs: number = ingestRefreshBudgetMs(),
+  reserveMs: number = OAUTH_REFRESH_TIMEOUT_MS,
+): RefreshBudget {
+  return { remainingMs: totalMs, reserveMs, deferred: 0 };
+}
+
+/** refreshPlatformToken, within the cycle budget when there is one (no budget = unchanged). */
+async function refreshWithinBudget(
+  budget: RefreshBudget | undefined,
+  platform: string,
+  socialAccountId: string,
+  token: Awaited<ReturnType<typeof getToken>>,
+): Promise<{ deferred: true } | { deferred: false; token: Awaited<ReturnType<typeof refreshPlatformToken>> }> {
+  if (!budget) return { deferred: false, token: await refreshPlatformToken(platform, socialAccountId, token as any) };
+  if (budget.remainingMs <= 0) {
+    budget.deferred += 1;
+    console.warn('[engagementIngestion] refresh_deferred: cycle refresh budget spent', { platform });
+    return { deferred: true };
+  }
+  budget.remainingMs -= budget.reserveMs;
+  const started = Date.now();
+  try {
+    return { deferred: false, token: await refreshPlatformToken(platform, socialAccountId, token as any) };
+  } finally {
+    budget.remainingMs += budget.reserveMs - (Date.now() - started);
+  }
+}
+
+/**
  * Ingest comments for a single scheduled post.
  * Loads post, resolves token (tokenStore / social_accounts), fetches from platform, normalizes, upserts into post_comments.
  */
-export async function ingestComments(scheduled_post_id: string): Promise<IngestCommentsResult> {
+export async function ingestComments(
+  scheduled_post_id: string,
+  opts: { refreshBudget?: RefreshBudget } = {},
+): Promise<IngestCommentsResult> {
   const post = await getScheduledPost(scheduled_post_id);
   if (!post) {
     return { success: false, ingested: 0, error: 'Scheduled post not found' };
@@ -623,8 +682,13 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
     };
   }
   if (isTokenExpiringSoon(token, 5)) {
-    const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, token);
-    if (refreshedToken?.access_token) {
+    const proactive = await refreshWithinBudget(opts.refreshBudget, post.platform, post.social_account_id, token);
+    const refreshedToken = proactive.deferred ? null : proactive.token;
+    if (proactive.deferred) {
+      // D2: the refresh is deferred to the next cycle; the fetch still runs with the
+      // existing token (expiring soon is not expired). If the provider rejects it, the
+      // auth-failure path below is deferred the same way.
+    } else if (refreshedToken?.access_token) {
       token = refreshedToken;
     } else {
       // Previously this fell through and called the provider with the stale
@@ -650,7 +714,17 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
       if (!isAuthFailure(firstErr)) throw firstErr;
       // The provider rejected the credential. Refresh ONCE and retry ONCE —
       // never a loop, and never a second attempt on the same token.
-      const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, token);
+      const onAuth = await refreshWithinBudget(opts.refreshBudget, post.platform, post.social_account_id, token);
+      if (onAuth.deferred) {
+        // D2: not attempted, so nothing is recorded and nothing is parked; next cycle.
+        return {
+          success: false,
+          ingested: 0,
+          error: 'Token refresh deferred: the cycle refresh budget is spent',
+          failure: 'refresh_deferred',
+        };
+      }
+      const refreshedToken = onAuth.token;
       if (!refreshedToken?.access_token) {
         await markSocialAccountNeedsReauth(
           post.social_account_id,
@@ -819,7 +893,8 @@ export async function ingestRecentPublishedPosts(): Promise<{
   // sequential loop. Results are aggregated in input order, so totals and the
   // errors array are identical to the sequential run.
   const { mapWithConcurrency, getSchedulerConcurrency } = await import('../scheduler/schedulerBatching');
-  const results = await mapWithConcurrency(list, getSchedulerConcurrency(), (p) => ingestComments(p.id));
+  const refreshBudget = createRefreshBudget();
+  const results = await mapWithConcurrency(list, getSchedulerConcurrency(), (p) => ingestComments(p.id, { refreshBudget }));
   const outcomes: IngestOutcome[] = [];
   for (let i = 0; i < results.length; i++) {
     const slot = results[i];
@@ -845,7 +920,7 @@ export async function ingestRecentPublishedPosts(): Promise<{
   // went unnoticed. Counts and typed reasons only — no ids, no URLs, no
   // provider bodies — so it is safe wherever logs are shipped.
   const summary = summarizeIngestionCycle(outcomes, totalIngested);
-  const payload = ingestionCycleLogPayload(summary);
+  const payload = { ...ingestionCycleLogPayload(summary), refresh_deferred: refreshBudget.deferred };
   if (summary.actionable) {
     // Eligible work existed and NOTHING succeeded. This is the only state
     // worth escalating; an idle cycle never reaches here.
