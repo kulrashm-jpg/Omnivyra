@@ -285,21 +285,25 @@ describe('billing: a hold per attempt, confirmed by its own id (05 findings 1-3)
     expect(r.events).not.toContain('billing_confirmed');
   });
 
-  it('a hold that cannot be created refuses the attempt BEFORE the provider', async () => {
+  it('a reservation that is UNAVAILABLE refuses the attempt BEFORE the provider and spends nothing (queue retry, same attempt)', async () => {
+    // CHANGED DELIBERATELY (R3-credits): an unavailable reservation no longer consumes the attempt number.
     const s = makeStore(); const { p, calls } = provider();
     const jobId = enqueue(s, 'org-a');
     s.faults['billing_operations.insert'] = { code: 'XX000', message: 'down' };
     const r = await processQueuedRenderJob(deps(s, p), 'w1');
     expect(calls.submit).toBe(0);
-    expect(r).toMatchObject({ status: 'retry_scheduled', reason: 'billing_hold_unavailable' });
-    expect(state(s, jobId)).toMatchObject({ current_state: 'queued', retry_count: 1 });
+    expect(r).toMatchObject({ status: 'retry_scheduled', reason: 'billing_unavailable' });
+    expect(state(s, jobId)).toMatchObject({ current_state: 'queued', retry_count: 0 });
     expect(s.rows('creator_render_attempt')).toHaveLength(0);
   });
 
-  it('the hold estimate and the charge come from the SAME provider estimate (05 finding 3)', async () => {
-    const s = makeStore(); const { p } = provider({ estimateCost: () => ({ estimated_credits: 7, currency: 'CREDITS' }) });
+  it('the reservation and the charge are the HELPER\'s price for the SKU, never the provider\'s estimateCost (R3-credits)', async () => {
+    // CHANGED DELIBERATELY: the price comes from the image-credits helper (vendor unit cost x multiplier,
+    // clamped to the catalog), and estimateCost only describes the request.
+    const s = makeStore(); const { p } = provider({ estimateCost: () => ({ estimated_credits: 99, currency: 'CREDITS' }) });
     const jobId = enqueue(s, 'org-a');
-    await processQueuedRenderJob(deps(s, p), 'w1');
+    const port = storeImageCredits(s, { prices: { 'gpt-image-1.5:1024x1024:medium': 7 } }).port;
+    await processQueuedRenderJob({ ...deps(s, p), imageCredits: port }, 'w1');
     expect(charged(s, jobId)[0]).toMatchObject({ amount_estimated: 7, amount_charged: 7 });
   });
 
@@ -360,5 +364,60 @@ describe('sync and async share attempt numbers and ONE key implementation (05 fi
     const H = (n: number) => renderAttemptExecutionHash('org-a', String(job.deterministic_input_hash), n);
     expect(s.rows('creator_render_attempt').map((a) => [a.attempt_number, a.execution_hash])).toEqual([[1, H(1)], [2, H(2)]]);
     expect(s.rows('billing_operations').filter((b) => b.status === 'confirmed')).toHaveLength(1);
+  });
+});
+
+describe('async credit refusals (R3-credits)', () => {
+  const portWith = (s: ReturnType<typeof makeStore>, o: Parameters<typeof storeImageCredits>[1]) => storeImageCredits(s, o).port;
+  it.each(['insufficient_credits', 'org_blocked', 'not_priced'])('%s: zero provider calls, the queue job is NOT retried, job_state gets a non-terminal exit with the SAME attempt', async (why) => {
+    const s = makeStore(); const { p, calls } = provider();
+    const jobId = enqueue(s, 'org-a');
+    const r = await processQueuedRenderJob({ ...deps(s, p), imageCredits: portWith(s, { refuse: why }) }, 'w1');
+    expect(calls.submit).toBe(0);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: why });
+    expect(queue(s, jobId).queue_state).toBe('failed');
+    expect(state(s, jobId)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 0 });
+    expect(s.rows('billing_operations')).toHaveLength(0);
+    expect(s.rows('creator_render_attempt')).toHaveLength(0);
+  });
+
+  it('an UNPRICED SKU (e.g. a non-default quality) is not_priced: refused, nothing held', async () => {
+    const s = makeStore();
+    const { p, calls } = provider({ billingSku: () => ({ provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'high' }) } as any);
+    const jobId = enqueue(s, 'org-a');
+    const r = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(calls.submit).toBe(0);
+    expect(r.reason).toBe('not_priced');
+    expect(state(s, jobId)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 0 });
+  });
+
+  it('a provider without billingSku is refused (fail closed), zero provider calls', async () => {
+    const s = makeStore(); const { p, calls } = provider();
+    delete (p as any).billingSku;
+    const jobId = enqueue(s, 'org-a');
+    const r = await processQueuedRenderJob(deps(s, p), 'w1');
+    expect(state(s, jobId)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 0 });
+    expect(calls.submit).toBe(0);
+    expect(r.reason).toBe('provider_not_billable');
+  });
+
+  it('key_spent is an anomaly: zero provider calls, the attempt number is consumed (fresh key on the queue retry)', async () => {
+    const s = makeStore(); const { p, calls } = provider();
+    const jobId = enqueue(s, 'org-a');
+    const r = await processQueuedRenderJob({ ...deps(s, p), imageCredits: portWith(s, { refuse: 'key_spent' }) }, 'w1');
+    expect(calls.submit).toBe(0);
+    expect(r).toMatchObject({ status: 'retry_scheduled', reason: 'billing_key_spent' });
+    expect(state(s, jobId)).toMatchObject({ current_state: 'queued', retry_count: 1 });
+  });
+
+  it('the reservation is for the SKU the provider sends, under the async attempt key, with no amount', async () => {
+    const s = makeStore(); const { p } = provider();
+    const ic = storeImageCredits(s);
+    const jobId = enqueue(s, 'org-a');
+    await processQueuedRenderJob({ ...deps(s, p), imageCredits: ic.port }, 'w1');
+    expect(ic.calls.reserve).toHaveLength(1);
+    expect(ic.calls.reserve[0]).toMatchObject({ organizationId: 'org-a', idempotencyKey: `render:${jobId}:a1`, provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium' });
+    expect(ic.calls.reserve[0]).not.toHaveProperty('amount');
+    expect(ic.calls.settle).toHaveLength(1);
   });
 });

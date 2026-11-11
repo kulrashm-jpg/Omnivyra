@@ -29,6 +29,7 @@ function provider(over: Partial<RenderProvider> = {}): RenderProvider {
     capabilities: () => ({ modalities: ['image'], max_duration_sec: 0, resolutions: [{ w: 1024, h: 1024 }], aspect_ratios: ['1:1'], supports_seed: false, supports_audio: false, supports_overlay_text: false, supports_batch: false, max_concurrent: 2 }),
     supports: () => true,
     estimateCost: () => ({ estimated_credits: 5, currency: 'CREDITS' }),
+    billingSku: () => ({ provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium' }),
     submit: async () => ({ provider: 'openai', external_job_id: 'x', provider_metadata: { url: 'https://cdn/r.png' } }),
     poll: async (h) => ({ handle: h, state: 'succeeded', progress: 1 }),
     fetchOutput: async (h) => ({ output_id: 'o', content_sha256: '', storage_ref: String((h.provider_metadata as any).url), modality: 'image', mime_type: 'image/png', byte_size: 0, version: 1, derived_from_output_id: null }),
@@ -95,7 +96,15 @@ function mockDeps(o: {
     return q;
   };
   return {
-    deps: { supabase: { from: reader, rpc: async () => ({ data: {} }) }, ownedDbTable: writer, now: () => '2026-05-16T00:00:00Z', providerRegistry: createRenderProviderRegistry([provider()]) },
+    deps: {
+      supabase: { from: reader, rpc: async () => ({ data: {} }) }, ownedDbTable: writer, now: () => '2026-05-16T00:00:00Z', providerRegistry: createRenderProviderRegistry([provider()]),
+      // A fake of e1's image-credits helper (R3-credits): records into writes in the old billing shape.
+      imageCredits: {
+        reserve: async (i: any) => { writes.push({ table: 'billing_operations', op: 'insert', row: { id: 'bo-1', idempotency_key: i.idempotencyKey, status: 'held' } }); return { ok: true, billingOperationId: 'bo-1', creditsReserved: 5 }; },
+        settle: async () => { writes.push({ table: 'billing_operations', op: 'update', row: { status: 'confirmed' } }); return { ok: true, creditsCharged: 5 }; },
+        release: async () => { writes.push({ table: 'billing_operations', op: 'update', row: { status: 'released' } }); return { ok: true }; },
+      },
+    },
     writes,
     setProvider(p: RenderProvider, health?: any) { (this.deps as any).providerRegistry = createRenderProviderRegistry([p], health); },
   };

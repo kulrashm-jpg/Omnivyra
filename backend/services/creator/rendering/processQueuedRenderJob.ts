@@ -31,10 +31,12 @@ import {
 } from './renderQueue';
 import { RENDER_TERMINAL_STATES } from './renderTerminalStates';
 import { renderAttemptExecutionHash } from './renderAttemptKeys';
-import { RENDER_MAX_ATTEMPTS } from './renderExecutor';
+import { RENDER_MAX_ATTEMPTS, productionImageCreditsPort, type ImageCreditsPort } from './renderExecutor';
 
 export interface ProcessRenderDeps extends RenderQueueDeps {
   providerRegistry: RenderProviderRegistry;
+  /** e1's image-credits helper (owns each attempt's billing row). Defaults to the production helper. */
+  imageCredits?: ImageCreditsPort;
 }
 
 export interface ProcessResult {
@@ -120,8 +122,9 @@ export async function processQueuedRenderJob(
   let claimed: Awaited<ReturnType<typeof claimRenderJob>> = null;
   /** Set once this worker holds the job (the conditional transition succeeded); cleared once delivered. */
   let held: { jobId: string; fromCount: number; attemptNumber: number; consumed: boolean } | null = null;
-  /** THIS attempt's own hold (billing_operations.id), once the worker has created it. */
+  /** THIS attempt's credit reservation (the helper's billing_operations row id), once reserved. */
   let holdId: string | null = null;
+  const credits = deps.imageCredits ?? productionImageCreditsPort;
   try {
     claimed = await claimRenderJob(deps, leaseOwner);
     if (!claimed) return { ok: true, status: 'idle', events };
@@ -135,7 +138,19 @@ export async function processQueuedRenderJob(
     const legacyHoldKey = `render:${jobId}`;
     /** Release this attempt's hold (if any): a retry creates its own, so a failed attempt is never billed. */
     const releaseAttemptHold = async (reason: string) => {
-      if (holdId) { const id = holdId; holdId = null; await releaseHold(deps, { id }, reason, events); }
+      if (!holdId) return;
+      const id = holdId; holdId = null;
+      let r: Awaited<ReturnType<ImageCreditsPort['release']>>;
+      try { r = await credits.release({ billingOperationId: id, reason }); } catch (e) {
+        r = { ok: false, reason: 'unavailable', detail: e instanceof Error ? e.message : String(e) } as typeof r;
+      }
+      if (!r.ok) {
+        const why = (r as { reason?: string }).reason;
+        console.error(why === 'not_held'
+          ? '[creator-render-async] ANOMALY: a reservation this attempt held was no longer held at release'
+          : '[creator-render-async] credit reservation NOT released (still held, not charged)', { billing_operation_id: id, reason, result: r });
+        events.push('billing_release_failed');
+      }
     };
 
     /**
@@ -319,27 +334,59 @@ export async function processQueuedRenderJob(
       }
     }
 
-    // A HOLD PER ATTEMPT, created by the worker (the same model as the sync path; 05, 2026-11-11).
-    // The old model had ONE job-level hold that every attempt re-used: attempt 1 failed -> released;
-    // attempt 2 -> the SAME row confirmed, i.e. held -> released -> confirmed, two paid provider calls
-    // for one charge. Now each attempt's hold is confirmed or released BY ITS OWN ID.
+    // A CREDIT RESERVATION PER ATTEMPT through e1's image-credits helper (R3-credits, 2026-11-12), for
+    // the SKU the provider WILL send (billingSku), under the attempt key. The helper owns the
+    // billing_operations row and prices it; the worker never writes billing rows. Confirmed or released
+    // BY ITS OWN ID (05, 2026-11-11: never one job-level hold re-used across attempts).
+    // Same-key safety: the job_state conditional transition above is held by THIS worker, so a repeated
+    // key is only a lost response of this attempt, never a second runner.
     const attemptKey = `render:${jobId}:a${attemptNumber}`;
-    const estimate = provider.estimateCost(spec).estimated_credits;
-    held.consumed = true; // from here this attempt number is spent: the next attempt uses fresh keys
     {
-      const { data: hold, error: holdError } = await deps.ownedDbTable('billing_operations').insert({
-        correlation_id: String(job.task_id), module: 'creator_render', action: 'render_image',
-        organization_id: job.organization_id, idempotency_key: attemptKey,
-        amount_estimated: estimate, status: 'held',
-        metadata: { provider: provider.key, attempt_number: attemptNumber, async: true },
-      }).select('id').single();
-      holdId = (hold as { id?: string } | null)?.id ?? null;
-      if (!holdId) {
-        const conflict = (holdError as { code?: string } | null)?.code === '23505';
-        console.error('[creator-render-async] billing hold not created; refused before the provider', { render_job_id: jobId, attempt: attemptNumber, conflict });
-        return settle('store_unavailable', conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable', { providerCalled: false });
+      const sku = typeof provider.billingSku === 'function' ? provider.billingSku(spec) : null;
+      /** Refused for now (no credits, blocked org, no price, unbillable provider): NOT a queue retry. */
+      const refuseUnconsumed = async (why: string): Promise<ProcessResult> => {
+        await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: why });
+        // Nothing reserved, nothing consumed: the SAME attempt number and key stay usable (a refused key
+        // is reusable), and job_state gets a non-terminal exit so a later request runs once the cause is
+        // fixed (a top-up, a price).
+        await writeJobState(deps, jobId, { current_state: 'retry_scheduled', retry_count: rc }, `credits_refused:${why}`, events);
+        held = null;
+        events.push('render_terminal_failure');
+        return { ok: false, status: 'failed', events, render_job_id: jobId, reason: why };
+      };
+      if (!sku) {
+        console.error('[creator-render-async] provider has no billing SKU; refused (fail closed)', { render_job_id: jobId, provider: provider.key });
+        return refuseUnconsumed('provider_not_billable');
       }
+      let r: Awaited<ReturnType<ImageCreditsPort['reserve']>>;
+      try {
+        r = await credits.reserve({
+          organizationId: String(job.organization_id), idempotencyKey: attemptKey, correlationId: String(job.task_id),
+          provider: sku.provider, model: sku.model, size: sku.size, quality: sku.quality,
+          metadata: { module: 'creator_render', render_job_id: jobId, attempt_number: attemptNumber, async: true },
+        });
+      } catch (e) {
+        r = { ok: false, reason: 'unavailable', detail: e instanceof Error ? e.message : String(e) } as typeof r;
+      }
+      if (!r.ok) {
+        const why = String((r as { reason?: string }).reason ?? 'unavailable');
+        if (why === 'insufficient_credits' || why === 'org_blocked' || why === 'not_priced') {
+          console.error('[creator-render-async] credit reservation refused; refused before the provider', { render_job_id: jobId, attempt: attemptNumber, reason: why });
+          return refuseUnconsumed(why);
+        }
+        if (why === 'key_spent') {
+          // A bug signal: consume the attempt number (fresh key next time) and retry under the queue.
+          console.error('[creator-render-async] ANOMALY: credit reservation key already spent for a running attempt', { render_job_id: jobId, attempt: attemptNumber, key: attemptKey });
+          held.consumed = true;
+          return settle('store_unavailable', 'billing_key_spent', { providerCalled: false });
+        }
+        // unavailable: nothing spent; a queue retry re-runs the SAME attempt and key (a timed-out reserve
+        // that did commit is found idempotently).
+        return settle('store_unavailable', 'billing_unavailable', { providerCalled: false });
+      }
+      holdId = r.billingOperationId;
     }
+    held.consumed = true; // reserved: from here this attempt number is spent (the next attempt uses fresh keys)
     const attemptHoldId: string = holdId;
 
     // Append-only attempt, CHECKED, BEFORE the provider. TENANT-SCOPED execution hash (GLOBAL UNIQUE).
@@ -402,22 +449,16 @@ export async function processQueuedRenderJob(
     // From here the render is delivered: nothing below releases the hold or retries.
     held = null;
 
-    // Billing CONFIRM of THIS attempt's hold, BY ITS ID and only while it is 'held', with a ROW COUNT:
-    // a 0-row UPDATE is not an error in PostgREST, so "no error" never proves a confirm (05 finding 2).
+    // SETTLE THIS attempt's reservation through the helper (it confirms exactly the one held row, by id,
+    // and reports a 0-row result as not_held, never as success).
     holdId = null; // delivered: no failure path below may release it
     {
-      let res: DbResult | undefined; let thrown: unknown = null;
-      try {
-        res = await deps.ownedDbTable('billing_operations')
-          .update({ status: 'confirmed', amount_charged: estimate, completed_at: deps.now() })
-          .eq('id', attemptHoldId)
-          .eq('status', 'held')
-          .select('id');
-      } catch (e) { thrown = e ?? 'update threw'; }
-      const failed = dbFailure(res, thrown)
-        ?? (Array.isArray(res?.data) && (res!.data as unknown[]).length === 1 ? null : 'no held row was confirmed');
-      if (failed !== null) {
-        console.error('[creator-render-async] billing confirm failed for a delivered render', { render_job_id: jobId, billing_operation_id: attemptHoldId, error: failed });
+      let r: Awaited<ReturnType<ImageCreditsPort['settle']>>;
+      try { r = await credits.settle({ billingOperationId: attemptHoldId }); } catch (e) {
+        r = { ok: false, reason: 'unavailable', detail: e instanceof Error ? e.message : String(e) } as typeof r;
+      }
+      if (!r.ok) {
+        console.error('[creator-render-async] credit settle failed for a delivered render', { render_job_id: jobId, billing_operation_id: attemptHoldId, result: r });
         events.push('billing_confirm_failed');
       } else {
         events.push('billing_confirmed');
@@ -455,7 +496,16 @@ export async function processQueuedRenderJob(
     console.error('[creator-render-async] unexpected error', { error: e instanceof Error ? e.message : String(e) });
     if (claimed) {
       await failRenderJob(deps, { id: claimed.id, retryCount: claimed.retry_count, maxRetries: 0, reason: 'unexpected' });
-      if (holdId) { const id = holdId; holdId = null; await releaseHold(deps, { id }, 'unexpected', events); }
+      if (holdId) {
+        const id = holdId; holdId = null;
+        try {
+          const r = await credits.release({ billingOperationId: id, reason: 'unexpected' });
+          if (!r.ok) { console.error('[creator-render-async] credit reservation NOT released after an unexpected error', { billing_operation_id: id, result: r }); events.push('billing_release_failed'); }
+        } catch (e) {
+          console.error('[creator-render-async] credit release threw after an unexpected error', { billing_operation_id: id, error: e instanceof Error ? e.message : String(e) });
+          events.push('billing_release_failed');
+        }
+      }
       await releaseHold(deps, { key: `render:${claimed.render_job_id}` }, 'unexpected', events);
       const h = held as { jobId: string; fromCount: number; attemptNumber: number; consumed: boolean } | null;
       if (h) {

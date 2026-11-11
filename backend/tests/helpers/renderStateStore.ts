@@ -109,7 +109,6 @@ export type RenderStore = ReturnType<typeof makeStore>;
 export function storeImageCredits(s: RenderStore, opts: { prices?: Record<string, number>; refuse?: string } = {}) {
   const prices = opts.prices ?? { 'gpt-image-1.5:1024x1024:medium': 5, 'gpt-image-1.5:1024x1536:medium': 5, 'gpt-image-1.5:1536x1024:medium': 5 };
   const calls = { reserve: [] as any[], settle: [] as any[], release: [] as any[] };
-  let seq = 0;
   const port = {
     reserve: async (input: any) => {
       calls.reserve.push(input);
@@ -122,7 +121,8 @@ export function storeImageCredits(s: RenderStore, opts: { prices?: Record<string
       if (existing && (existing.status === 'confirmed' || existing.status === 'released')) return { ok: false, reason: 'key_spent' };
       if (price === undefined) return { ok: false, reason: 'not_priced' };
       const row = {
-        id: `ic-${++seq}`, idempotency_key: input.idempotencyKey, organization_id: input.organizationId,
+        // Unique per STORE (a port is often created per call, so a per-port counter would repeat ids).
+        id: `ic-${s.rows('billing_operations').length + 1}`, idempotency_key: input.idempotencyKey, organization_id: input.organizationId,
         status: 'held', amount_estimated: price, metadata: { helper: 'image_credits_v1', unit, ...(input.metadata ?? {}) },
       };
       s.rows('billing_operations').push(row);
