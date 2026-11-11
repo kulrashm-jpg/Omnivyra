@@ -53,7 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const authorized = await loadAuthorizedPlanRow(req, res, id,
     'id, campaign_id, content, content_type, platform, intent_type, organization_id');
   if (!authorized) return;
-  const { row, companyId } = authorized;
+  const { row, companyId, access } = authorized;
   if ((row as any).intent_type !== 'creator') {
     return res.status(409).json({ error: 'Not a Creator row.', code: 'NOT_A_CREATOR_ROW' });
   }

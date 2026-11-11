@@ -12,7 +12,7 @@
  * In-memory harness: proves route ordering, not Postgres RLS.
  */
 import {
-  seed, invoke, calls, CAMPAIGN_A, UNKNOWN_ID,
+  seed, invoke, calls, CAMPAIGN_A, UNKNOWN_ID, USER_A,
 } from '../helpers/routeAuthHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
@@ -23,6 +23,7 @@ jest.mock('../../security/IdentityResolver', () => jest.requireActual('../helper
 
 import renderImageHandler from '../../../pages/api/activity-workspace/[id]/render-image';
 import renderStatusHandler from '../../../pages/api/activity-workspace/[id]/render-status';
+import { loadAuthorizedPlanRow } from '../../services/creator/rendering/authorizedPlanRow';
 
 const PLAN_CREATOR = 'plan-c-0-0000-0000-00000000000c';
 const PLAN_TEXT = 'plan-t-0-0000-0000-00000000000t';
@@ -111,5 +112,20 @@ describe.each(ROUTES)('%s: auth and access before anything about the row is disc
     const r = await call(PLAN_CREATOR, 'A');
     expect(r.status).toBe(500);
     expect(JSON.stringify(r.body)).not.toContain(PLAN_CREATOR);
+  });
+});
+
+describe('loadAuthorizedPlanRow returns the AUTHORIZED principal', () => {
+  it('a member gets the row, its company and the UserContext enforceCompanyAccess granted (render-image uses it as created_by)', async () => {
+    world();
+    let got: Awaited<ReturnType<typeof loadAuthorizedPlanRow>> = null;
+    const r = await invoke((async (req: any, res: any) => {
+      got = await loadAuthorizedPlanRow(req, res, PLAN_CREATOR, 'id, intent_type');
+      if (got) res.status(200).json({ ok: true });
+    }) as never, { method: 'GET', as: 'A' });
+    expect(r.status).toBe(200);
+    expect(got).not.toBeNull();
+    expect(got!.row).toMatchObject({ id: PLAN_CREATOR, intent_type: 'creator' });
+    expect(got!.access.userId).toBe(USER_A);
   });
 });
