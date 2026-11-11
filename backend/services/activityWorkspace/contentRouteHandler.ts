@@ -697,6 +697,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (admErr?.name === 'AdmissionBlockedError') {
           return res.status(402).json({ error: 'Insufficient credits to generate content', required: admErr.decision?.requiredCredits, balance: admErr.decision?.effectiveCredits, code: 'ADMISSION_BLOCKED' });
         }
+        // MUST rethrow everything that is not AdmissionBlockedError (05, 2026-11-12):
+        // an UNREADABLE wallet (getWalletSnapshot throws on a failed read) is not an
+        // ADMITTED one. Swallowing other errors here - e.g. "so the dark phase can't
+        // break the route" - would turn a wallet outage into a silent pass into billing.
         throw admErr;
       }
       const ecMode = await getCreditEconomyExecutionMode({ organizationId: resolvedOrgId, surface: 'route.activity-workspace-content' });
