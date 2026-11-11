@@ -243,3 +243,83 @@ liveDescribe('Validation-2 LIVE — render_job immutable', () => {
     expect(blocked).toBe(true);
   }, 30000);
 });
+
+// ── Control RPCs and the billing hold are CHECKED, not discarded (e9 rulings, 2026-11-11) ─────────
+// supabase-js returns { data, error } and does not throw on a database error, so the old
+// `try { await rpc() } catch {}` and the unchecked billing insert were silent.
+describe('control RPCs and billing hold fail closed', () => {
+  beforeEach(() => { process.env[FLAG] = '1'; });
+
+  /** The provider records whether it was ever called. */
+  const watched = () => { const calls = { submit: 0 }; return { calls, p: mockProvider({ submit: async (...a: any[]) => { calls.submit += 1; return mockProvider().submit(...(a as [any, any])); } }) }; };
+  const withRpc = (m: ReturnType<typeof mockDeps>, rpc: (name: string, args: any) => Promise<any>) => {
+    (m.deps as any).supabase = { ...(m.deps as any).supabase, rpc };
+  };
+  const withBillingInsert = (m: ReturnType<typeof mockDeps>, result: { data: any; error: any }) => {
+    const orig = (m.deps as any).ownedDbTable;
+    (m.deps as any).ownedDbTable = (t: string) => {
+      const q = orig(t);
+      if (t === 'billing_operations') q.insert = () => ({ select: () => ({ single: async () => result }) });
+      return q;
+    };
+  };
+
+  it('billing hold insert ERROR: the provider is never called; retryable failure', async () => {
+    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+    withBillingInsert(m, { data: null, error: { code: '08006', message: 'connection lost' } });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'billing_hold_unavailable', retryable: true });
+    expect(r.events).toEqual(expect.arrayContaining(['billing_hold_failed', 'render_failed']));
+    expect(w.calls.submit).toBe(0);
+    expect(m.writes.some((x) => x.table === 'creator_render_job')).toBe(false);
+  });
+
+  it('billing hold unique CONFLICT (23505): refused, not retryable as is, provider never called', async () => {
+    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+    withBillingInsert(m, { data: null, error: { code: '23505', message: 'duplicate key' } });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, reason: 'billing_hold_conflict', retryable: false });
+    expect(w.calls.submit).toBe(0);
+  });
+
+  it('CONTROL: a created billing hold lets the render reach the provider (the refusal above is the hold, not the harness)', async () => {
+    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('completed');
+    expect(w.calls.submit).toBe(1);
+  });
+
+  it.each([
+    ['returns an error', async () => ({ data: null, error: { code: '57014', message: 'canceling statement' } })],
+    ['throws', async () => { throw new Error('network'); }],
+  ])('claim_job_execution %s: refused BEFORE any billing hold or provider call; retryable', async (_l, claim) => {
+    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+    withRpc(m, async (name) => (name === 'claim_job_execution' ? claim() : { data: {}, error: null }));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'execution_registry_unavailable', retryable: true });
+    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    expect(w.calls.submit).toBe(0);
+  });
+
+  it('claim reports a TERMINAL entry for this hash: reused, nothing billed or rendered', async () => {
+    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+    withRpc(m, async (name) => (name === 'claim_job_execution'
+      ? { data: { status: 'completed', is_terminal: true }, error: null } : { data: {}, error: null }));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: true, status: 'reused' });
+    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    expect(w.calls.submit).toBe(0);
+  });
+
+  it('advance_job_execution error: the performed, billed render still COMPLETES, and the failure is reported', async () => {
+    const m = mockDeps();
+    withRpc(m, async (name) => (name === 'advance_job_execution'
+      ? { data: null, error: { code: 'P0001', message: 'JER_NOT_FOUND' } } : { data: {}, error: null }));
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('completed');
+    expect(r.events).toEqual(expect.arrayContaining(['billing_confirmed', 'execution_registry_advance_failed', 'render_completed']));
+    expect(err).toHaveBeenCalledWith('[creator-render] execution registry advance failed', expect.objectContaining({ status: 'completed' }));
+    err.mockRestore();
+  });
+});
