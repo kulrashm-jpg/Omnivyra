@@ -283,6 +283,22 @@ export interface ProspectDetailInput {
   readonly now: string;
   /** Caller freshness policy, forwarded verbatim. WS-10 invents none. */
   readonly stalenessDays?: number;
+  /**
+   * P0 — TRUE when the caller explicitly named a past instant, i.e. when the
+   * route saw an `asOf` query parameter.
+   *
+   * `now` cannot carry this: a live request and a replay both arrive as a
+   * timestamp, and the only honest difference is whether the caller asked for
+   * one. It exists because WS-8 must REFUSE to issue a governance verdict for a
+   * historical question — the store cannot reconstruct one — while still
+   * answering the scoring half at the requested instant.
+   *
+   * OPTIONAL here, unlike on `OutreachReadinessInput` where it is required.
+   * Absent means the literal truth for a caller that reads no query string: no
+   * `asOf` was supplied. It is forwarded, never inferred, and nothing
+   * downstream compares clocks to second-guess it.
+   */
+  readonly historicalAsOf?: boolean;
 }
 
 /**
@@ -437,7 +453,12 @@ export async function getProspectDetail(
       return section<never>('failed',
         contextError ?? 'the intelligence context could not be built');
     }
-    const readiness = await assessOutreachReadiness({ built, now: input.now });
+    // The flag is FORWARDED, not re-derived. This layer has no basis on which to
+    // decide whether a timestamp was a replay, and guessing is what Part 3A
+    // removed.
+    const readiness = await assessOutreachReadiness({
+      built, now: input.now, historicalAsOf: input.historicalAsOf === true,
+    });
     return section('available', readiness.reason, readiness as unknown);
   });
 

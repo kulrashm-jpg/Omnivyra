@@ -24,9 +24,12 @@ import { getValidAccessToken } from '../auth/metaAuthService';
 import { requireEncryptionKey } from '../auth/credentialEncryption';
 import { withLease } from '../../lib/platform/distributedLock';
 
-// W0-C — the canonical contact-governance evaluator. `mayContact` is pure; the
-// tenant-scoped read is the only I/O this adds, and it happens once per batch.
-import { mayContact } from './prospectIdentity/contactGovernance';
+// W0-C — the canonical contact-governance evaluator, applied through
+// `evaluateGovernanceReads` (A2): each read's rows are judged at that read's own
+// DATABASE instant, never the host clock. The tenant-scoped read is the only I/O
+// this adds, and it happens once per batch.
+import { evaluateGovernanceReads } from './prospectIdentity/contactGovernanceAggregation';
+import type { MayContactResult } from './prospectIdentity/contactGovernance';
 import { recordContactGovernance } from './prospectIdentity/contactGovernanceWriter';
 import {
   loadTenantGovernanceRecords,
@@ -78,6 +81,48 @@ async function resolveClaimedSend(
     });
   }
   return { moved, error: null };
+}
+
+/**
+ * A2b — governance re-read within a batch (decided by virality-e9). The batch reads
+ * governance once, then sends one message per recipient, so a restriction committed
+ * mid-batch (an unsubscribe) was not seen by the recipients still to go. Governance is
+ * re-read for the remaining recipients every WHATSAPP_GOVERNANCE_REREAD_MS (default
+ * 30 s) OR every WHATSAPP_GOVERNANCE_REREAD_EVERY recipients (default 50), whichever
+ * comes first, so an unsubscribe takes effect within about 30 s however long the batch
+ * runs. The host clock only SCHEDULES re-reads; every verdict still uses the read's
+ * own database instant (A2).
+ */
+export const DEFAULT_GOVERNANCE_REREAD_MS = 30_000;
+export const DEFAULT_GOVERNANCE_REREAD_EVERY = 50;
+/**
+ * Upper bounds on the two settings. These are a DAMAGE LIMIT ON MISCONFIGURATION,
+ * not policy: the defaults above (30 s / 50) are the policy. At the cap, up to
+ * 5 minutes or 500 messages can still go out after an unsubscribe; the cap only
+ * bounds how far a setting can drift without anyone noticing. A value above the
+ * cap is clamped (and logged), never refused, so a bad setting weakens the guard
+ * as little as possible instead of stopping sends.
+ */
+export const MAX_GOVERNANCE_REREAD_MS = 300_000;
+export const MAX_GOVERNANCE_REREAD_EVERY = 500;
+
+/**
+ * A positive integer from the environment, at most `cap`. Not a positive integer
+ * -> the default; above the cap -> the cap. Both are logged by variable name.
+ */
+function positiveIntEnv(name: string, fallback: number, cap: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw.trim());
+  if (!Number.isInteger(n) || n < 1) {
+    console.warn(`[whatsappBroadcast] ${name} is not a positive integer; using the default`, { value: raw.slice(0, 32), default: fallback });
+    return fallback;
+  }
+  if (n > cap) {
+    console.warn(`[whatsappBroadcast] ${name} is above its cap; using the cap`, { value: n, cap });
+    return cap;
+  }
+  return n;
 }
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
@@ -674,31 +719,46 @@ type GovernanceRead = Awaited<ReturnType<typeof loadTenantGovernanceRecords>>;
 /**
  * The canonical verdict for one recipient: the restrictions on its PERSON, when the journey
  * named one, AND on its number. The person comes only from the recipient row, never from a
- * phone lookup; a manual recipient has none and is judged on the number alone. null when
- * the store could not be read: the caller refuses.
+ * phone lookup; a manual recipient has none and is judged on the number alone.
+ *
+ * A2: judged through `evaluateGovernanceReads`, so each read's rows are judged at THAT
+ * read's own database instant, never this host's clock (a clock running ahead ended an
+ * in-force restriction early). `verdict` is null when the store could not be read OR the
+ * reads are indeterminate (rows without a read instant, an inconsistent producer); the
+ * caller refuses, and `refusal` says which.
+ *
+ * The third argument (records produced) is VACUOUS for the tenant loader: its `records`
+ * and `reads[0].records` are the same array, so the consistency check it feeds cannot
+ * fire. It is passed because the signature requires it (05, A2).
  */
+interface RecipientGovernance {
+  verdict: MayContactResult | null;
+  /** Why there is no verdict; null when there is one. */
+  refusal: string | null;
+}
+
 function recipientVerdict(
   companyId:  string,
   personId:   unknown,
   phone:      string,
   governance: GovernanceRead,
-  now:        string,
-): ReturnType<typeof mayContact> | null {
-  if (!governance.ok) return null;
-  return mayContact({
+): RecipientGovernance {
+  if (!governance.ok) return { verdict: null, refusal: `governance unreadable: ${governance.error ?? 'unknown'}` };
+  const decision = evaluateGovernanceReads(governance.reads, {
     organizationId:   companyId,
     personId:         typeof personId === 'string' && personId !== '' ? personId : null,
     targetNormalized: normalizeGovernanceTarget('whatsapp', phone),
     channel:          'whatsapp',
-    now,
-    records:          governance.records,
-  });
+  }, governance.records.length);
+  // `'verdict' in`, not the discriminant: this repo compiles with strict:false, where
+  // `decision.ok` does not narrow the union.
+  if ('verdict' in decision) return { verdict: decision.verdict, refusal: null };
+  return { verdict: null, refusal: `governance indeterminate: ${'error' in decision ? decision.error : 'unknown'}` };
 }
 
-function governanceRefusalReason(verdict: ReturnType<typeof mayContact> | null, governance: GovernanceRead): string {
-  return verdict
-    ? `${verdict.governanceType ?? verdict.decision}: ${verdict.reason}`
-    : `governance unreadable: ${governance.ok ? 'unknown' : governance.error ?? 'unknown'}`;
+function governanceRefusalReason(decided: RecipientGovernance): string {
+  const v = decided.verdict;
+  return v ? `${v.governanceType ?? v.decision}: ${v.reason}` : decided.refusal ?? 'governance unreadable: unknown';
 }
 
 /**
@@ -709,7 +769,6 @@ function governanceRefusalReason(verdict: ReturnType<typeof mayContact> | null, 
 async function screenPendingRecipients(companyId: string, broadcastId: string): Promise<void> {
   const governance = await loadTenantGovernanceRecords(companyId, ['whatsapp']);
   if (!governance.ok) throw new Error(`contact governance unreadable: ${governance.error ?? 'unknown'}`);
-  const now = new Date().toISOString();
 
   let after: string | null = null;
   for (;;) {
@@ -728,10 +787,10 @@ async function screenPendingRecipients(companyId: string, broadcastId: string): 
       // time, cannot read it either and sends nothing.
       let phone: string;
       try { phone = decryptPhone(r.encrypted_phone); } catch { continue; }
-      const verdict = recipientVerdict(companyId, r.person_id, phone, governance, now);
-      if (verdict && verdict.decision === 'allowed') continue;
+      const decided = recipientVerdict(companyId, r.person_id, phone, governance);
+      if (decided.verdict && decided.verdict.decision === 'allowed') continue;
       const { error: blockError } = await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${governanceRefusalReason(verdict, governance)}` })
+        .update({ status: 'blocked_governance', error_code: null, error_message: `contact_governance: ${governanceRefusalReason(decided)}` })
         .eq('id', r.id)
         .eq('status', 'pending');
       if (blockError) throw new Error(`governance block could not be recorded: ${blockError.message}`);
@@ -857,22 +916,81 @@ export async function processBatch(
   //
   // One tenant-scoped read per batch, then the PURE evaluator per recipient.
   // FAIL CLOSED: if the store cannot be read, NOTHING in this batch is sent.
-  const governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
-  const governanceNow = new Date().toISOString();
+  const rereadMs = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_MS', DEFAULT_GOVERNANCE_REREAD_MS, MAX_GOVERNANCE_REREAD_MS);
+  const rereadEvery = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_EVERY', DEFAULT_GOVERNANCE_REREAD_EVERY, MAX_GOVERNANCE_REREAD_EVERY);
+  console.debug('[whatsappBroadcast] governance re-read schedule', { broadcast_id: broadcastId, reread_ms: rereadMs, reread_every: rereadEvery });
+  // Taken BEFORE the read, so the re-read schedule errs early, never late.
+  let readStartedAt = Date.now();
+  let governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
+  let decidedSinceRead = 0;
+  // A2 — THE DEFECT THIS CLOSES: the decision instant was `new Date()` on this
+  // HOST, taken after the read, for every recipient. A host clock running ahead
+  // ended an in-force restriction early (effective_until "passed") and let the
+  // broadcast reach a number the tenant had restricted. No instant is taken here:
+  // `evaluateGovernanceReads` judges the read's rows at the read's own `read_at`
+  // (the database's transaction instant), and anything without a usable instant is
+  // INDETERMINATE and fails closed, like an unreadable store.
+  //
+  // LIMIT, stated: the verdict is current as of THIS BATCH'S single read, not as
+  // of each send. Batch staleness is bounded by the A2b re-read below: governance is
+  // re-read every rereadMs or rereadEvery recipients, whichever comes first.
 
   let sentCount = 0;
   let failedCount = 0;
 
-  for (const recipient of recipients) {
+  for (let i = 0; i < recipients.length; i += 1) {
+    const recipient = recipients[i];
+    // A2b — re-read governance for the REMAINING recipients when due.
+    if (decidedSinceRead >= rereadEvery || Date.now() - readStartedAt >= rereadMs) {
+      readStartedAt = Date.now();
+      const fresh = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
+      if (!fresh.ok) {
+        // FAIL CLOSED by stopping: nothing more is sent from this batch, and the
+        // remaining recipients are left untouched ('pending'), so they stay retryable
+        // (enqueueBroadcast re-queues every pending recipient). Marking them blocked
+        // would turn a transient read failure into a permanent refusal.
+        //
+        // The broadcast is marked 'paused' - the state the rate-limit stop already
+        // uses and the UI already shows - so an unfinished broadcast never looks
+        // finished or merely idle. Resumption is MANUAL only (POST ?action=enqueue);
+        // nothing auto-resumes a paused broadcast, so a persistent read failure
+        // cannot loop. whatsapp_broadcasts has no reason column: this ERROR log is
+        // the only record of WHY it paused (rate limit vs governance re-read).
+        //
+        // A resume works at any time: each enqueue run gives its batch jobs a fresh
+        // UUID jobId (the resume fix, e9 decision (a)), so a completed job kept 24 h
+        // by the queue no longer swallows the re-queue, and the run lease plus the
+        // live-job check refuse a resume while a batch of this broadcast is still
+        // queued or active.
+        console.error('[whatsappBroadcast] governance re-read failed; batch stopped, broadcast paused, remaining recipients left pending. '
+          + 'Resume is manual (?action=enqueue)', {
+          broadcast_id: broadcastId,
+          remaining: recipients.length - i,
+          error: fresh.error ?? 'unknown',
+        });
+        const { error: pauseErr } = await ownedDbTable('whatsapp_broadcasts')
+          .update({ status: 'paused', updated_at: new Date().toISOString() })
+          .eq('id', broadcastId);
+        if (pauseErr) {
+          console.error('[whatsappBroadcast] could not mark the broadcast paused', { broadcast_id: broadcastId, error: pauseErr.message });
+        }
+        break;
+      }
+      governance = fresh;
+      decidedSinceRead = 0;
+    }
+    decidedSinceRead += 1;
     const phone = decryptPhone(recipient.encrypted_phone);
 
     // Evaluated BEFORE the message body is built and before `fetch`, so a
     // refusal cannot reach the provider. The person's restrictions and the number's,
-    // on every run of every batch, retries included.
-    const verdict = recipientVerdict(broadcast.company_id, recipient.person_id, phone, governance, governanceNow);
+    // on every run of every batch, retries included, judged at the read's own
+    // database instant (A2) - never this host's clock.
+    const decided = recipientVerdict(broadcast.company_id, recipient.person_id, phone, governance);
+    const verdict = decided.verdict;
 
     if (!verdict || verdict.decision !== 'allowed') {
-      const reason = governanceRefusalReason(verdict, governance);
+      const reason = governanceRefusalReason(decided);
       // `error_code` is an INTEGER column (Meta's numeric code); the governance
       // cause is text and goes in `error_message`. Writing the text code into the
       // integer column failed the whole update, leaving the recipient `pending`.

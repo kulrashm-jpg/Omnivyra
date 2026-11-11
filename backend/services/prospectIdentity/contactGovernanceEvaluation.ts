@@ -135,9 +135,14 @@
  * Path A and `leadOutreachExecution/governanceService` for Path B.
  */
 
-import { mayContact, type MayContactResult } from './contactGovernance';
+import { type MayContactResult } from './contactGovernance';
 import { type ContactPurpose } from './contactPurpose';
 import { loadGovernanceRecords, normalizeGovernanceTarget } from './contactGovernanceRepository';
+// `mayContact` is no longer called from here directly. It is called ONCE PER
+// DATABASE READ by the aggregator, each time with the instant that read's rows
+// came back with — which is the whole point of P0 part 2. Importing it here as
+// well would make a second, clock-free-by-accident path to the authority.
+import { evaluateGovernanceReads, type GovernanceReadEvaluation } from './contactGovernanceAggregation';
 
 /**
  * PHASE 4C-2 — which governance scopes an evaluation ACTUALLY evaluated.
@@ -203,7 +208,21 @@ export interface CanonicalEvaluationRequest {
   personId: string | null;
   /** The RAW recipient. Normalisation happens here, with the reader's own function. */
   target: string | null;
-  /** Injected instant, so a caller that must be reproducible can be. */
+  /**
+   * RETAINED FOR CALLERS, AND NO LONGER USED FOR TEMPORAL EVALUATION (P0).
+   *
+   * The stored timestamps are database-stamped; this was a host clock, and
+   * comparing the two is a fail-open on a suppression check. Each read's rows
+   * are now judged against the `read_at` instant THAT read returned, so this
+   * value cannot decide anything.
+   *
+   * It is kept on the type rather than removed so that no caller has to change
+   * in this step, and because a replay/what-if caller passing a historical
+   * instant is a REAL requirement that this design does not yet serve — it
+   * would need a parameter on the database function, which is a separate owner
+   * decision. Until then, a caller that depends on overriding the instant must
+   * be told it no longer can, not left believing it still does.
+   */
   now: string;
   /**
    * PG-001 ATTEMPT PURPOSE — what the caller is about to do.
@@ -232,8 +251,22 @@ export type CanonicalEvaluationResult =
        * returns without reading and nothing was evaluated.
        */
       scopesEvaluated: readonly GovernanceScopeEvaluated[];
+      /**
+       * P0 — ONE ENTRY PER DATABASE READ, each with the instant it was judged
+       * at and the verdict it produced on its own.
+       *
+       * `verdict` above is the combined one, and combining keeps only the most
+       * restrictive. This is where the others survive: when both anchors
+       * returned a restriction, the one that did not win is still here with its
+       * own reason, so an operator is shown everything that was known rather
+       * than only the single record that happened to sort first.
+       */
+      reads: readonly GovernanceReadEvaluation[];
     }
-  /** The records could not be read. The caller MUST fail closed in its own vocabulary. */
+  /**
+   * The records could not be read, or could not be judged against a database
+   * instant. The caller MUST fail closed in its own vocabulary.
+   */
   | { ok: false; error: string };
 
 /**
@@ -246,7 +279,9 @@ export type CanonicalEvaluationResult =
 export async function evaluateCanonicalGovernance(
   request: CanonicalEvaluationRequest,
 ): Promise<CanonicalEvaluationResult> {
-  const { organizationId, channel, personId, target, now, attemptPurpose } = request;
+  // `request.now` is deliberately NOT destructured and NOT used. See its field
+  // comment: the decision instant now comes from the database, per read.
+  const { organizationId, channel, personId, target, attemptPurpose } = request;
 
   let loaded;
   try {
@@ -262,15 +297,26 @@ export async function evaluateCanonicalGovernance(
   // evaluator compares against.
   const targetNormalized = normalizeGovernanceTarget(channel, target);
 
-  const verdict = mayContact({
+  // ONE EVALUATION PER READ, each against the instant its own rows arrived
+  // with, combined in the restrictive direction only. `loaded.records` — the
+  // flat cross-read list — is deliberately NOT what is evaluated: it has no
+  // single instant, because its rows came from two transactions.
+  const aggregated = evaluateGovernanceReads(loaded.reads, {
     organizationId,
     personId,
     targetNormalized,
     channel,
-    now,
-    records: loaded.records,
     attemptPurpose,
-  });
+  }, loaded.records.length);
+  // Indeterminate is not a verdict. A failed read, or rows without a database
+  // instant, must not become "nobody is governed" — the caller's fail-closed
+  // path owns it, the same path an unreadable store already takes.
+  // `=== false`, NOT `!aggregated.ok`. This repository compiles with
+  // `strict: false`, under which truthiness does not narrow a discriminated
+  // union — the negated form leaves the whole union in scope and `.error`
+  // unreachable. The same note is on the sibling check in suppressionService.
+  if (aggregated.ok === false) return { ok: false, error: aggregated.error };
+  const verdict = aggregated.verdict;
 
   // PHASE 4C-2 — derived from what this call actually did, not from a static
   // list of what it could have done. The read has completed by this point
@@ -280,5 +326,5 @@ export async function evaluateCanonicalGovernance(
   if (personId) scopesEvaluated.push('canonical.person');
   if (targetNormalized) scopesEvaluated.push('canonical.target');
 
-  return { ok: true, verdict, targetNormalized, scopesEvaluated };
+  return { ok: true, verdict, targetNormalized, scopesEvaluated, reads: aggregated.reads };
 }

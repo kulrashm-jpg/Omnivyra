@@ -25,6 +25,19 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * so all sections of one response are anchored to the same moment — a detail
  * whose scoring and freshness disagreed about "now" would be internally
  * inconsistent. An optional `asOf` lets a caller reproduce an earlier answer.
+ *
+ * ─── AND WHETHER IT WAS ASKED FOR IS REPORTED SEPARATELY ──────────────────
+ * P0. This is the ONLY layer that can tell a replay from a live request: once
+ * `asOf ?? new Date().toISOString()` has been evaluated, both are just a
+ * timestamp. So the PRESENCE of the parameter travels on its own as
+ * `historicalAsOf`, and WS-8 refuses to issue a governance verdict when it is
+ * set — a suppression state that has since been revoked or deleted cannot be
+ * reconstructed, and an empty current result is not proof it was ever clean.
+ * Scoring and freshness still use the requested instant.
+ *
+ * The public contract is UNCHANGED: same parameter name, same validation, same
+ * response shape. `historicalAsOf` is internal and never appears in the query
+ * or the response.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
@@ -66,6 +79,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       organizationId: companyId,
       prospectId,
       now: asOf ?? new Date().toISOString(),
+      // Derived from PRESENCE, not from the value: `asOf` has already been
+      // validated above, and whether it happens to be close to the current time
+      // is irrelevant. A caller who names an instant is asking about that
+      // instant.
+      historicalAsOf: asOf !== null,
       stalenessDays,
     });
     if (!detail) return res.status(404).json({ error: 'prospect_not_found' });

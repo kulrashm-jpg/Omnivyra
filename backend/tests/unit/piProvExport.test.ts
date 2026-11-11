@@ -11,6 +11,12 @@
  */
 const governance: Array<Record<string, unknown>> = [];
 let governanceFails = false;
+/**
+ * P0 — the `read_at` computed field, served on every governance row exactly as
+ * PostgREST does. The export judges each read at this instant rather than at a
+ * host clock; a row arriving without it is indeterminate and withholds.
+ */
+const DB_READ_AT = '2026-10-05T00:00:00.000000+00:00';
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const chain: Record<string, unknown> = {};
@@ -18,7 +24,9 @@ jest.mock('../../db/writeOwner', () => ({
     chain.limit = async () => ({ data: [], error: null });
     (chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(
       table === 'contact_governance_records'
-        ? (governanceFails ? { data: null, error: { message: 'down' } } : { data: governance, error: null })
+        ? (governanceFails
+          ? { data: null, error: { message: 'down' } }
+          : { data: governance.map((r) => ({ read_at: DB_READ_AT, ...r })), error: null })
         : { data: [], error: null },
     );
     return chain;
@@ -196,6 +204,34 @@ describe('exportLeads — governed provenance URL', () => {
   it("another tenant's restriction does not affect this tenant", async () => {
     governance.push(record({ organization_id: 'other', person_id: 'up1', channel: '*', governance_type: 'dnc_permanent' }));
     expect(await urlCell()).toBe('url');
+  });
+
+  // ── P0 — the URL grant is decided at the DATABASE instant ───────────────
+  //
+  // `DB_READ_AT` is 2026-10-05; the host clock is always later than that when
+  // this suite runs. So a window that CLOSES between them is in force on the
+  // database clock and lapsed on the host's, and a window that OPENS between
+  // them is the reverse. One assertion each way names the clock that decided.
+  it('P0: a `*` restriction in force at the DATABASE instant withholds the URL, although it is lapsed at the host clock', async () => {
+    governance.push(record({
+      person_id: 'up1', channel: '*', governance_type: 'dnc_permanent',
+      effective_from: '2026-10-04T00:00:00+00:00',
+      effective_until: '2026-10-06T00:00:00+00:00',
+    }));
+    expect(await urlCell()).toBe('withheld');
+  });
+
+  it('P0: a `*` restriction that starts AFTER the database instant does not withhold it, although it is in force at the host clock', async () => {
+    governance.push(record({
+      person_id: 'up1', channel: '*', governance_type: 'dnc_permanent',
+      effective_from: '2026-10-20T00:00:00+00:00',
+    }));
+    expect(await urlCell()).toBe('url');
+  });
+
+  it('P0: a governance row with no read instant withholds the URL', async () => {
+    governance.push(record({ target_normalized: 'jane@acme.com', read_at: undefined }));
+    expect(await urlCell()).not.toBe('url');
   });
 });
 

@@ -24,9 +24,20 @@ export type PublishContentPayload = {
   template_name?: string;
 };
 
+/**
+ * Per-request abort for comment fetches (ms). recentPublishedPostsIngest re-arms only
+ * after its body returns and its lease keeps renewing while the body runs, so ONE
+ * provider request that never answers would stop comment ingestion for every tenant
+ * until a restart. Every comment fetch on that path is aborted after this long; an
+ * abort is an ordinary per-post failure.
+ */
+export const COMMENT_FETCH_TIMEOUT_MS = 15_000;
+
 export type FetchCommentsParams = {
   platformPostId: string;
   accessToken: string;
+  /** Override for COMMENT_FETCH_TIMEOUT_MS (tests). */
+  timeoutMs?: number;
 };
 
 export type PlatformCredentials = {

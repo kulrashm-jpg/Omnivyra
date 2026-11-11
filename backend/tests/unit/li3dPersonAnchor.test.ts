@@ -40,7 +40,12 @@ jest.mock('../../db/writeOwner', () => ({
         const rows = governanceRows.filter((r) =>
           (f.has('person_id') && r.person_id === f.get('person_id')) ||
           (f.has('target_normalized') && r.target_normalized === f.get('target_normalized')));
-        return resolve({ data: rows, error: null });
+        // PostgREST computed field `read_at` (migration 20270202000000): ONE
+        // transaction timestamp per REQUEST, on every row. Governance now judges
+        // each read against the instant that read returned, so a double that
+        // omits it reports an INDETERMINATE state instead of a verdict. `NOW` is
+        // the instant these tests already treat as the present.
+        return resolve({ data: rows.map((r) => ({ ...r, read_at: NOW })), error: null });
       }
       return resolve({ data: [], error: null });
     };
