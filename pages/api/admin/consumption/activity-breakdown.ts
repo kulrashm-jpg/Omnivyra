@@ -10,7 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *  - by_platform    : scheduled-post counts per social platform
  *  - by_platform_content: counts per platform × content_type
  *
- * Auth: super_admin_session cookie OR Supabase SUPER_ADMIN role
+ * Auth: requireCapability - CONSUMPTION_VIEW_AGGREGATE (canonical session; the legacy cookie was removed 2026-11-11)
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';

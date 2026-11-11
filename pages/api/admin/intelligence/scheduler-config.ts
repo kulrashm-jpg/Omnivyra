@@ -8,7 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   Body: { job_type, ...fields }
  *   Updates a single global config row.
  *
- * Auth: super_admin_session cookie (same as /api/admin/config/:type)
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (GET), INTELLIGENCE_OVERRIDE_MANAGE (PUT) (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

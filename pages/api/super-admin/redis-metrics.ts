@@ -10,7 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *                   (up to 1 hour of history). Snapshots are stored at
  *                   infra:metrics:redis:5min:{unix-ts}
  *
- * Auth: super_admin_session cookie  OR  Supabase SUPER_ADMIN role
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  *
  * Response shape:
  * {

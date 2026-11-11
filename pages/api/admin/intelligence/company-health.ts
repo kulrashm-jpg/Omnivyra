@@ -8,7 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   ?all=true            — all companies ranked by score (uses company_profiles table)
  *   ?all=true&limit=50   — paginated (default limit 20, max 100)
  *
- * Auth: super_admin_session cookie
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

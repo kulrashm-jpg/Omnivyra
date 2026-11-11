@@ -7,7 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * :type = decision_engine_config | content_validation_config |
  *         platform_rules_config | tone_config | experiment_config | prediction_config
  *
- * Auth: super_admin_session cookie OR Authorization Bearer (super admin JWT)
+ * Auth: requireCapability - INTELLIGENCE_OVERRIDE_MANAGE (canonical session; the legacy cookie was removed 2026-11-11)
  * Returns: { success, data } or { success, error }
  */
 

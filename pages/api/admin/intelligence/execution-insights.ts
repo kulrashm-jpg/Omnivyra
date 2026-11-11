@@ -10,7 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * - Per-job-type breakdown with avg duration
  * - Slowest 10 individual runs
  *
- * Auth: super_admin_session cookie
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

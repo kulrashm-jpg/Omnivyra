@@ -57,7 +57,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Rules:
  *   - NEVER auto-promote silently — every mode is an explicit operator action.
  *   - NEVER create users — env-credential mode requires a pre-existing users row.
- *   - Bridge principals (legacy super_admin_session cookie) cannot self-promote.
+ *   - Bridge principals could never self-promote (the legacy cookie bridge was
+ *     removed entirely on 2026-11-11).
  *   - Capability-based assignment only — direct DB writes are gated by this route.
  *   - Audit linkage mandatory.
  */

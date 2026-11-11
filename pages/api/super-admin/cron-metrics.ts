@@ -19,7 +19,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Returns 503 when the cron process has not written a report yet (not started,
  * or Redis unavailable).
  *
- * Auth: super_admin_session cookie  OR  Supabase SUPER_ADMIN role
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

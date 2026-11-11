@@ -28,7 +28,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   jobsPerCronCycle:         number | null   // if cron report also available
  * }
  *
- * Auth: super_admin_session cookie  OR  Supabase SUPER_ADMIN role
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

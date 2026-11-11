@@ -20,7 +20,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   total_credits_used — sum of credits_used from credit_usage_log
  *   last_active        — most recent credit usage event (proxy for activity)
  *
- * Auth: super_admin_session cookie OR Bearer + profiles.is_super_admin
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  *
  * Query params:
  *   type   — filter by 'influencer' | 'consultant' | 'all' (default: all)

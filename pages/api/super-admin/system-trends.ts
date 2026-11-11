@@ -12,7 +12,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   window  = '24h' (default) | '7d'
  *   limit   = max snapshots to return (default 288, max 2016)
  *
- * Auth: super_admin_session cookie  OR  Supabase SUPER_ADMIN role
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  *
  * Response shape:
  * {

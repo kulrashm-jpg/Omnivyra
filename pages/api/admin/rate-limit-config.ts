@@ -4,7 +4,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * GET  /api/admin/rate-limit-config  — read current overrides
  * POST /api/admin/rate-limit-config  — save new overrides
  *
- * Auth: super_admin_session cookie
+ * Auth: requireSuperAdminUser (active platform SUPER_ADMIN) (canonical session; the legacy cookie was removed 2026-11-11)
  *
  * POST body:
  * {

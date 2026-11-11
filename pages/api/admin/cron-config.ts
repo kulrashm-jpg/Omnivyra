@@ -4,7 +4,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * GET  /api/admin/cron-config  — read current cron overrides
  * POST /api/admin/cron-config  — save new overrides
  *
- * Auth: super_admin_session cookie
+ * Auth: requireCapability - CRON_CONFIG_MANAGE (canonical session; the legacy cookie was removed 2026-11-11)
  *
  * POST body:
  * {

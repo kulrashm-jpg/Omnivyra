@@ -16,7 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Supabase timeout, or any other connection error never blocks the response.
  * Partial data is always returned with an `errors` map.
  *
- * Auth: super_admin_session cookie  OR  Supabase SUPER_ADMIN role
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

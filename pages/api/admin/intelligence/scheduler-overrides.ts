@@ -12,7 +12,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   Body: { company_id, job_type }
  *   Removes the override (company falls back to global).
  *
- * Auth: super_admin_session cookie
+ * Auth: requireCapability - SUPER_ADMIN_DASHBOARD_VIEW (GET), INTELLIGENCE_OVERRIDE_MANAGE (writes) (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

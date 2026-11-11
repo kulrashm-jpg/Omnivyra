@@ -3,7 +3,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * GET /api/admin/cost-accounting
  * Comprehensive cost accounting dashboard combining usage costs, infrastructure costs, and trends
- * Auth: super_admin_session cookie OR Supabase SUPER_ADMIN role
+ * Auth: requireCapability - CONSUMPTION_VIEW_AGGREGATE (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

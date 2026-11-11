@@ -13,7 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   job_types?:      string[], // default = all job types
  * }
  *
- * Auth: super_admin_session cookie
+ * Auth: requireCapability - INTELLIGENCE_OVERRIDE_MANAGE (canonical session; the legacy cookie was removed 2026-11-11)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
