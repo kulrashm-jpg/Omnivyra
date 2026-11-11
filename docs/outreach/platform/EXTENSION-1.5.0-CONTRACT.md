@@ -124,6 +124,11 @@ This is the thin Outreach route; the contract was agreed with virality-e1 on 202
   - The one exception: PI succeeded but finishing the command failed, so the command is still `dispatched`, and a repeat reaches PI as a retry of the SAME batch, never a different one.
   - PI's usage ledger is therefore keyed on (organization_id, command_id) and replaces totals on conflict (agreed with virality-e1, 2026-11-10).
 - Profile-URL classification uses PI's shared `lib/linkedin/profileUrl.ts` and its fixtures (`classifyLinkedinProfile`).
+- **Refusals from PI** map to HTTP status and finish the command `refused` with PI's code: 403 for `capture_disabled`, `ingestion_not_enabled`, `capture_not_enabled_for_tenant` and `data_controller_ack_required`; 409 `organization_mismatch`; 503 `provider_unavailable`; 400 for the contract/payload refusals; any unknown code 422.
+- **Data-controller acknowledgement (owner requirement 2026-11-11; PI gate 4b, e1 54928556e).** PI refuses a batch with `data_controller_ack_required` (detail `salesnav_capture:<state>`) when the tenant has no current or in-grace acknowledgement covering Sales Navigator capture: never accepted, expired after the 14-day grace, wording edited, or ledger unreadable.
+  - **Capture UI requirement (not built yet; capture is dark):** wherever capture is connected or started, show the notice beside the toggle.
+  - Read `GET /api/compliance/tenant-data-ack?companyId=…` (no `category` parameter; it returns every category): state from `categories.salesnav_capture` = `{ state, allowed, acceptedVersion, acceptedAt, graceEndsAt }`, text from `notice.categories.salesnav_capture`.
+  - A tenant ADMIN accepts with `POST` to the same path, body `{ categories: ['salesnav_capture'], shownVersion: notice.version, shownTextSha256: notice.textSha256 }`. A non-admin gets 403 `not_company_admin`: show "an admin must accept" rather than an accept button.
 
 ### 5.4 Write outcome: `POST /api/extension/action-result` (1.5 form)
 **`POST /api/extension/authorize-submit`** must succeed before the click. It runs these rechecks:
