@@ -15,6 +15,16 @@ import { createFakeDb, type FakeDb } from './helpers/communityExecutionFakeDb';
 const KEY_A = 'a'.repeat(64);
 const KEY_B = 'b'.repeat(64);
 const mockConfig: { ENCRYPTION_KEY: string | undefined } = { ENCRYPTION_KEY: KEY_A };
+// Owner decision #17 (241394d16): /api/rpa/auth/start, /save-session and /complete answer
+// 410 RPA_DISABLED in production, before anything else runs. That block is proven by
+// rpaLoginBlock410.test.ts and re-asserted at the end of this file. The suites here test
+// the token, role, scope and encryption logic BEHIND the block, which comes back when the
+// sealing code ships (#17 is reverted then), so here - and only here - the block is
+// switched off with a module mock. No runtime flag exists or is added.
+jest.mock('../../services/rpaWorker/rpaLoginBlock', () => ({
+  ...jest.requireActual('../../services/rpaWorker/rpaLoginBlock'),
+  RPA_LOGIN_DISABLED: false,
+}));
 jest.mock('@/config', () => ({ config: mockConfig }));
 
 let mockDb: FakeDb = createFakeDb();
@@ -362,5 +372,11 @@ describe('D6 — no filesystem copy, no filesystem fallback', () => {
     await store.saveRpaSession(ORG_A, 'linkedin', STATE, { expires_at: new Date(Date.now() - 60_000).toISOString() });
     fs.writeFileSync(legacyFile(), JSON.stringify(STATE));
     expect(await store.loadRpaSession(ORG_A, 'linkedin')).toBeNull();
+  });
+});
+
+describe('owner decision #17 is still in force', () => {
+  it('the REAL rpaLoginBlock disables RPA logins (this file only mocks it off to test the logic behind it)', () => {
+    expect(jest.requireActual('../../services/rpaWorker/rpaLoginBlock').RPA_LOGIN_DISABLED).toBe(true);
   });
 });
