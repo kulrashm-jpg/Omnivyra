@@ -24,6 +24,7 @@ import {
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { getUserRole } from '../../../backend/services/rbacService';
 import { extractDomain, validatePublicWebsite } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
 import { buildUnifiedCompetitorIntelligence } from '../../../backend/services/unifiedCompetitorIntelligenceService';
@@ -179,10 +180,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           : unorderedCompanyIds;
         const resolvedActiveCompanyId = companyIds[0] || null;
         if (activeCompanyId && resolvedActiveCompanyId && activeCompanyId !== resolvedActiveCompanyId) {
-          await supabase
-            .from('users')
-            .update({ active_company_id: resolvedActiveCompanyId, updated_at: new Date().toISOString() })
-            .eq('id', user.id);
+          // Authorize the company being made active BEFORE writing the caller's
+          // preference: the caller must hold an ACTIVE role in it (getUserRole).
+          // The write is self-scoped (the caller's own users row), but it
+          // stores a company id, so it is tenant-authorized like any other.
+          // 2026-11-11 (83, R6-ORDER): this ordering was previously masked by
+          // the legacy cookie getter counting as platform authority.
+          const { role: activeRole } = await getUserRole(user.id, resolvedActiveCompanyId);
+          if (activeRole) {
+            await supabase
+              .from('users')
+              .update({ active_company_id: resolvedActiveCompanyId, updated_at: new Date().toISOString() })
+              .eq('id', user.id);
+          }
         }
         const normalizeListRole = (r: string) => (r?.toUpperCase() === 'ADMIN' ? 'COMPANY_ADMIN' : r);
         const rolesByCompany = rows.map((row: { company_id: string; role: string }) => ({
