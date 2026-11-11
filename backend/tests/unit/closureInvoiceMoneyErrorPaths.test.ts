@@ -94,7 +94,7 @@ describe('top-up invoice', () => {
 
   it('an existing DRAFT is RESUMED (line item added, then issued), never returned as if issued', async () => {
     mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
-    mockScript['invoices:select'] = () => ({ data: { id: 'inv1', invoice_number: 'x', status: 'draft' }, error: null });
+    mockScript['invoices:select'] = () => ({ data: { id: 'inv1', invoice_number: 'x', status: 'draft', organization_id: 'o1', metadata: { purchase_id: 'p1' } }, error: null });
     mockScript['invoice_line_items:select'] = () => ({ data: [], error: null });
     mockScript['invoices:update'] = () => ({ data: [{ id: 'inv1' }], error: null });
     const r = await generateTopupInvoice('p1');
@@ -105,9 +105,16 @@ describe('top-up invoice', () => {
 
   it('an existing ISSUED invoice is returned untouched', async () => {
     mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
-    mockScript['invoices:select'] = () => ({ data: { id: 'inv1', invoice_number: 'x', status: 'paid' }, error: null });
+    mockScript['invoices:select'] = () => ({ data: { id: 'inv1', invoice_number: 'x', status: 'paid', organization_id: 'o1', metadata: { purchase_id: 'p1' } }, error: null });
     const r = await generateTopupInvoice('p1');
     expect(r).toMatchObject({ invoiceId: 'inv1', created: false });
+    expect(mockWrites).toEqual([]);
+  });
+
+  it('invoice-number COLLISION (existing invoice belongs to another purchase) -> throws, never returned as this purchase's invoice', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:select'] = () => ({ data: { id: 'inv-other', invoice_number: 'x', status: 'paid', organization_id: 'o2', metadata: { purchase_id: 'p-other' } }, error: null });
+    await expect(generateTopupInvoice('p1')).rejects.toThrow(/invoice_number_collision/);
     expect(mockWrites).toEqual([]);
   });
 

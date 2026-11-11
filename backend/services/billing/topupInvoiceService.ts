@@ -27,6 +27,16 @@ interface PurchaseRow {
   created_at: string;
 }
 
+/**
+ * Deterministic, NOT sequential: a pure function of the purchase, so a retry or
+ * a resumed draft always gets the same number. 8 hex chars = 32 bits per month;
+ * two purchases in one month CAN collide (negligible at ~1e3/month, likely at
+ * tens of thousands). A collision is detected in generateTopupInvoice (the
+ * existing invoice belongs to another purchase) and refused loudly - never
+ * returned as this purchase's invoice. If 'invoice_number_collision' is ever
+ * seen, the fix is widening the hex slice, not retrying (a retry derives the
+ * same number).
+ */
 function invoiceNumberFor(purchase: PurchaseRow): string {
   const d = new Date(purchase.created_at);
   const ym = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
@@ -54,12 +64,17 @@ export async function generateTopupInvoice(purchaseId: string): Promise<TopupInv
   // Idempotency: invoice_number is deterministic + UNIQUE.
   const { data: existing, error: existingErr } = await supabase
     .from('invoices')
-    .select('id, invoice_number, status')
+    .select('id, invoice_number, status, organization_id, metadata')
     .eq('invoice_number', invoiceNumber)
     .maybeSingle();
   if (existingErr) throw new Error(`[topupInvoice] invoice lookup failed for ${invoiceNumber}: ${existingErr.message}`);
   if (existing) {
-    const ex = existing as { id: string; status: string | null };
+    const ex = existing as { id: string; status: string | null; organization_id?: string; metadata?: { purchase_id?: string } | null };
+    // The number is derived from the purchase id prefix: the invoice found may
+    // belong to ANOTHER purchase. Never hand that invoice out as this one's.
+    if (ex.metadata?.purchase_id !== p.id || ex.organization_id !== p.organization_id) {
+      throw new Error(`[topupInvoice] invoice_number_collision: ${invoiceNumber} belongs to purchase ${ex.metadata?.purchase_id ?? '(unknown)'}, not ${p.id}`);
+    }
     // A draft is an invoice an earlier attempt did not finish: finish it.
     if (ex.status === 'draft') {
       await finalizeTopupInvoice(ex.id, p, Number(p.amount_paid ?? 0), p.currency ?? 'INR');
