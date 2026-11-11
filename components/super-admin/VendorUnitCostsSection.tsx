@@ -38,9 +38,9 @@ const SAMPLE_CREDIT_RATE_USD = 0.02;
  */
 export function toPerThousand(usdPerUnit: string): number | null {
   const t = String(usdPerUnit ?? '').trim();
-  const m = /^(\d+)(?:\.(\d+))?$/.exec(t);
-  if (!m) return null;
-  const whole = m[1];
+  const m = /^(\d*)(?:\.(\d+))?$/.exec(t);
+  if (!m || (m[1] === '' && m[2] === undefined)) return null;
+  const whole = m[1] || '0';
   const frac = (m[2] ?? '').padEnd(3, '0');
   const shifted = `${whole}${frac.slice(0, 3)}${frac.length > 3 ? `.${frac.slice(3)}` : ''}`;
   const n = Number(shifted);
