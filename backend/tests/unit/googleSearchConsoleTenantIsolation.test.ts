@@ -177,17 +177,17 @@ describe('properties are scoped to the company’s own integration', () => {
 });
 
 describe('the OAuth callback is bound to the user who started it', () => {
-  it('rejects a state naming another user, even with a super-admin session', () => {
-    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: 'user-a', authUserId: 'user-b', hasSuperAdminSession: true })).toBe(true);
-    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: 'user-a', authUserId: null, hasSuperAdminSession: true })).toBe(true);
+  it('rejects a state naming another user, or no caller', () => {
+    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: 'user-a', authUserId: 'user-b' })).toBe(true);
+    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: 'user-a', authUserId: null })).toBe(true);
   });
-  it('accepts the starting user, and a user-less state only on a super-admin session', () => {
-    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: 'user-a', authUserId: 'user-a', hasSuperAdminSession: false })).toBe(false);
-    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: null, authUserId: null, hasSuperAdminSession: true })).toBe(false);
-    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: null, authUserId: 'user-a', hasSuperAdminSession: false })).toBe(true);
+  it('accepts only the starting user; a user-less state is NEVER accepted (bridge flow removed, e9 (C))', () => {
+    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: 'user-a', authUserId: 'user-a' })).toBe(false);
+    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: null, authUserId: null })).toBe(true);
+    expect(isCallbackStateInvalid({ stateValid: true, stateUserId: null, authUserId: 'user-a' })).toBe(true);
   });
-  it('rejects an invalid (unsigned, expired, tampered) state regardless of session', () => {
-    expect(isCallbackStateInvalid({ stateValid: false, stateUserId: 'user-a', authUserId: 'user-a', hasSuperAdminSession: true })).toBe(true);
+  it('rejects an invalid (unsigned, expired, tampered) state regardless of caller', () => {
+    expect(isCallbackStateInvalid({ stateValid: false, stateUserId: 'user-a', authUserId: 'user-a' })).toBe(true);
   });
 });
 

@@ -210,18 +210,17 @@ export function decodeOAuthState(state: string | undefined): OAuthStateParams {
 /**
  * Callback binding for the Google Analytics / Search Console connect flow.
  *
- * A state that names a user binds the callback to that user, whatever other session is present,
- * so a super-admin cookie can never complete another user's connect for another company. Only a
- * state minted WITHOUT a user (the super-admin bridge flow, `/api/super-admin/{ga,gsc}-connect`)
- * is accepted on the super-admin session alone.
+ * Every state names the user who started the connect (tenant flow: the Supabase user; super-admin
+ * flow `/api/super-admin/{ga,gsc}-connect`: the canonical principal), and the callback is bound to
+ * THAT user. A state minted without a user is never accepted: its only producer was the legacy
+ * super-admin cookie bridge, removed in e9 (C), 2026-11-11.
  */
 export function isCallbackStateInvalid(input: {
   stateValid: boolean;
   stateUserId: string | null;
   authUserId: string | null;
-  hasSuperAdminSession: boolean;
 }): boolean {
   if (!input.stateValid) return true;
-  if (input.stateUserId) return input.stateUserId !== input.authUserId;
-  return !input.hasSuperAdminSession;
+  if (!input.stateUserId) return true;
+  return input.stateUserId !== input.authUserId;
 }

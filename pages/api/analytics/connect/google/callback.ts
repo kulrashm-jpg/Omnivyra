@@ -4,6 +4,7 @@ import { getBaseUrl } from '../../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState, isCallbackStateInvalid } from '../../../../../backend/auth/oauthState';
 import { handleGoogleOAuthCallback } from '../../../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
+import { resolvePrincipal } from '../../../../../backend/security/IdentityResolver';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
 import { safeRelativeRedirectPath } from '../../../../../backend/auth/safeRedirect';
 
@@ -68,7 +69,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const state = typeof req.query.state === 'string' ? req.query.state : undefined;
   const providerError = typeof req.query.error === 'string' ? req.query.error : '';
   const decodedState = decodeOAuthState(state);
-  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  // The caller: a Supabase user (tenant connect), or - when there is no
+  // Supabase token - the canonical session (the super-admin connect flow; the
+  // env-credential super-admin login mints only that). Both yield users.id,
+  // the id the connect routes wrote into the state. e9 (C) d2, 2026-11-11.
+  let { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (!user && authError === 'MISSING_AUTH') {
+    const resolved = await resolvePrincipal(req);
+    if (resolved.ok === true) {
+      user = { id: resolved.principal.userId, email: resolved.principal.email, emailVerified: resolved.principal.emailVerified };
+      authError = null;
+    }
+  }
 
   console.log('[GA-OAUTH][callback] params', {
     code_present: Boolean(code),
@@ -111,13 +123,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: 'unauthorized' }));
   }
 
-  // A state that names a user binds the callback to THAT user. 2026-11-11: the legacy super-admin
-  // cookie path is removed, so a state minted without a user is never accepted here.
+  // A state names the user who started the connect; the callback is bound to THAT user. A state
+  // minted without a user is never accepted (its only producer, the cookie bridge, is gone).
   const invalidState = isCallbackStateInvalid({
     stateValid: decodedState.valid === true,
     stateUserId: decodedState.userId ?? null,
     authUserId: user?.id ?? null,
-    hasSuperAdminSession: false,
   });
 
   if (invalidState) {
