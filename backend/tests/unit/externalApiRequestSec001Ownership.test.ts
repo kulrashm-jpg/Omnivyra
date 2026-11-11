@@ -88,6 +88,20 @@ jest.mock('../../services/rbacService', () => ({
   hasPermission: jest.fn(async (role: string) => role === 'COMPANY_ADMIN' || role === 'SUPER_ADMIN'),
 }));
 
+// e9 (C) d1, 2026-11-11: a super admin reaches these routes only through the
+// capability gate (requireCapability; writes need step-up). Model it here:
+// the suite's own super-admin users hold the capability; step-up is a switch.
+const mockCapCalls: Array<Record<string, unknown>> = [];
+let mockStepUpSatisfied = true;
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: jest.fn(async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }, opts: Record<string, unknown>) => {
+    mockCapCalls.push(opts);
+    const admitted = authUser !== null && superAdmins.includes(authUser) && (opts.requireStepUp !== true || mockStepUpSatisfied);
+    if (admitted) return { ok: true, principal: { userId: authUser } };
+    res.status(authUser === null ? 401 : 403).json({ code: opts.requireStepUp === true && !mockStepUpSatisfied ? 'STEP_UP_REQUIRED' : 'CAPABILITY_NOT_HELD' });
+    return { ok: false, sent: true };
+  }),
+}));
 jest.mock('../../services/externalApiService', () => ({
   saveTenantPlatformConfig: jest.fn(async (cfg: Row) => {
     provisioned.push({ company_id: cfg.company_id, name: cfg.name });
@@ -143,6 +157,8 @@ async function act(opts: { as: string | null; id: string; action: string; compan
 const MUTATING_ACTIONS = ['approve', 'reject', 'approve_by_admin', 'send_to_super_admin'];
 
 beforeEach(() => {
+  mockCapCalls.length = 0;
+  mockStepUpSatisfied = true;
   authUser = ADMIN_A;
   superAdmins = [SUPER];
   updates.length = 0;
@@ -199,6 +215,14 @@ describe('F — a platform/super admin keeps full reach', () => {
     expect(res.statusCode).toBe(200);
     // Provisioning still targets the request's OWN company, not the caller's.
     expect(provisioned).toEqual([{ company_id: COMPANY_B, name: 'B private API' }]);
+  });
+
+  it('d1: WITHOUT step-up a super admin cannot approve (nothing provisioned)', async () => {
+    mockStepUpSatisfied = false;
+    const res = await act({ as: SUPER, id: REQUEST_OF_B.id, action: 'approve', companyId: COMPANY_A });
+    expect(res.statusCode).toBe(403);
+    expect(provisioned).toEqual([]);
+    expect(mockCapCalls.at(-1)).toMatchObject({ requireStepUp: true, requirePlatformAuthority: true });
   });
 
   it('may act on a request that has no owning company', async () => {

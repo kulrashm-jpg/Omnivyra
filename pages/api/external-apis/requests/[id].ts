@@ -8,9 +8,9 @@ import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
-  isSuperAdmin,
   isPlatformSuperAdmin,
 } from '../../../../backend/services/rbacService';
+import { requirePlatformAdmin } from '../../../../backend/apiHandlers/externalApis/indexShared';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -36,15 +36,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'companyId required' });
   }
   let canManageExternalApis = false;
+  // True only when the capability gate (with step-up) admitted a super admin.
+  let actingAsPlatformAdmin = false;
   {
-    // isPlatformSuperAdmin and isSuperAdmin are equivalent (both check SUPER_ADMIN)
-    if (await isSuperAdmin(user.id)) {
-      console.debug('SUPER_ADMIN_FALLBACK', {
-        path: req.url,
-        userId: user.id,
-        source: 'rbacService.isSuperAdmin',
-      });
+    // 2026-11-11 (e9 (C) d1): a super admin acts here only through the
+    // capability gate - INTEGRATION_PLATFORM_OAUTH_MANAGE on a platform
+    // SUPER_ADMIN principal WITH step-up (this route is PUT-only). The shared
+    // helper answers 401/403 itself. Tenant members keep the role path below.
+    if (await isPlatformSuperAdmin(user.id)) {
+      const platform = await requirePlatformAdmin(req, res);
+      if (!platform) return;
       canManageExternalApis = true;
+      actingAsPlatformAdmin = true;
     } else {
       if (!companyId) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
@@ -95,8 +98,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(404).json({ error: 'Request not found' });
   }
 
-  const isSuperAdminUser =
-    (await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id));
+  const isSuperAdminUser = actingAsPlatformAdmin;
 
   /*
    * EXTERNAL-API-REQUEST-SEC-001 — the permission was checked against a company

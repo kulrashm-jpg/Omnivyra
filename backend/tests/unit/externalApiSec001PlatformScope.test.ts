@@ -80,6 +80,20 @@ jest.mock('../../services/rbacService', () => ({
   hasPermission: jest.fn(async (role: string) => role === 'COMPANY_ADMIN' || role === 'SUPER_ADMIN'),
 }));
 
+// e9 (C) d1, 2026-11-11: a super admin reaches these routes only through the
+// capability gate (requireCapability; writes need step-up). Model it here:
+// the suite's own super-admin users hold the capability; step-up is a switch.
+const mockCapCalls: Array<Record<string, unknown>> = [];
+let mockStepUpSatisfied = true;
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: jest.fn(async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }, opts: Record<string, unknown>) => {
+    mockCapCalls.push(opts);
+    const admitted = authUser !== null && platformAdmins.includes(authUser) && (opts.requireStepUp !== true || mockStepUpSatisfied);
+    if (admitted) return { ok: true, principal: { userId: authUser } };
+    res.status(authUser === null ? 401 : 403).json({ code: opts.requireStepUp === true && !mockStepUpSatisfied ? 'STEP_UP_REQUIRED' : 'CAPABILITY_NOT_HELD' });
+    return { ok: false, sent: true };
+  }),
+}));
 jest.mock('../../services/externalApiService', () => ({
   validatePlatformConfig: jest.fn(() => ({ ok: true })),
   VALID_API_CATEGORIES: ['social', 'others'],
@@ -147,6 +161,8 @@ async function call(opts: {
 }
 
 beforeEach(() => {
+  mockCapCalls.length = 0;
+  mockStepUpSatisfied = true;
   authUser = ATTACKER;
   platformAdmins = [OWNER];
   writes.length = 0;
@@ -214,6 +230,25 @@ describe('A/B — legitimate access is unchanged', () => {
     // The admin's write is deliberately unfiltered by company — that is the
     // whole point of platform scope, and it is now privilege-gated.
     expect(writes[0].filters).not.toHaveProperty('company_id');
+  });
+
+  it('d1: a platform admin WITHOUT step-up cannot PUT a platform row (nothing written)', async () => {
+    mockStepUpSatisfied = false;
+    const res = await call({
+      as: OWNER, method: 'PUT', id: PLATFORM_ROW, scope: 'platform',
+      body: { name: 'renamed by admin', base_url: 'https://real.example' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(writes.filter((w) => w.op === 'update')).toHaveLength(0);
+    expect(mockCapCalls.at(-1)).toMatchObject({ capability: 'integration.platform.oauth.manage', requireStepUp: true, requirePlatformAuthority: true });
+  });
+
+  it('d1: a platform admin GET asks only for the VIEW capability (no step-up)', async () => {
+    mockStepUpSatisfied = false;
+    const res = await call({ as: OWNER, method: 'GET', id: PLATFORM_ROW, scope: 'platform' });
+    expect(res.statusCode).toBe(200);
+    expect(mockCapCalls.at(-1)).toMatchObject({ capability: 'super_admin.dashboard.view' });
+    expect(mockCapCalls.at(-1)?.requireStepUp).toBeUndefined();
   });
 
   it('a company member still reads their OWN company’s row', async () => {

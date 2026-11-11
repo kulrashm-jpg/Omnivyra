@@ -11,8 +11,8 @@ import {
   getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
 } from '../../../backend/services/rbacService';
+import { requirePlatformAdmin } from '../../../backend/apiHandlers/externalApis/indexShared';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -34,17 +34,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   let canManageExternalApis = false;
   let hasPlatformScope = false;
-  // 2026-11-11: the legacy super-admin cookie no longer grants anything here.
-  const platformAdmin = await isPlatformSuperAdmin(user.id);
-  if (platformAdmin) {
-    canManageExternalApis = true;
-    hasPlatformScope = true;
-  } else if (await isSuperAdmin(user.id)) {
-    console.debug('SUPER_ADMIN_FALLBACK', {
-      path: req.url,
-      userId: user.id,
-      source: 'rbacService.isSuperAdmin',
-    });
+  // 2026-11-11 (e9 (C) d1): super-admin authority here is a CAPABILITY
+  // decision, not a bare role check: reads need SUPER_ADMIN_DASHBOARD_VIEW,
+  // writes (PUT/DELETE) need INTEGRATION_PLATFORM_OAUTH_MANAGE on a platform
+  // SUPER_ADMIN principal WITH step-up (shared requirePlatformAdmin, which
+  // answers 401/403 itself). Tenant members keep the role path below.
+  if (await isPlatformSuperAdmin(user.id)) {
+    const platform = await requirePlatformAdmin(req, res);
+    if (!platform) return;
     canManageExternalApis = true;
     hasPlatformScope = true;
   } else {

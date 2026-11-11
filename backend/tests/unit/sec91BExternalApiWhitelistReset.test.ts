@@ -38,6 +38,20 @@ jest.mock('../../services/rbacService', () => ({
   getCompanyRoleIncludingInvited: jest.fn(async () => null),
   hasPermission: jest.fn(async (role: string) => role === 'COMPANY_ADMIN' || role === 'SUPER_ADMIN'),
 }));
+// e9 (C) d1, 2026-11-11: a super admin reaches these routes only through the
+// capability gate (requireCapability; writes need step-up). Model it here:
+// the suite's own super-admin users hold the capability; step-up is a switch.
+const mockCapCalls: Array<Record<string, unknown>> = [];
+let mockStepUpSatisfied = true;
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: jest.fn(async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }, opts: Record<string, unknown>) => {
+    mockCapCalls.push(opts);
+    const admitted = authUser !== null && ['user-platform-admin'].includes(authUser) && (opts.requireStepUp !== true || mockStepUpSatisfied);
+    if (admitted) return { ok: true, principal: { userId: authUser } };
+    res.status(authUser === null ? 401 : 403).json({ code: opts.requireStepUp === true && !mockStepUpSatisfied ? 'STEP_UP_REQUIRED' : 'CAPABILITY_NOT_HELD' });
+    return { ok: false, sent: true };
+  }),
+}));
 jest.mock('../../services/externalApiService', () => ({
   validatePlatformConfig: jest.fn(() => ({ ok: true })),
   VALID_API_CATEGORIES: ['social', 'others'],
@@ -94,6 +108,8 @@ async function put(body: Row, as: string = TENANT_ADMIN, query: Row = { companyI
 }
 
 beforeEach(() => {
+  mockCapCalls.length = 0;
+  mockStepUpSatisfied = true;
   stored = { ...APPROVED };
   updates.length = 0;
   jest.spyOn(console, 'warn').mockImplementation(() => {});
