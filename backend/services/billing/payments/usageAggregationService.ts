@@ -33,13 +33,19 @@ export interface UsageSnapshotResult {
 
 export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageSnapshotResult> {
   // 1. Idempotent: detect existing snapshot for this period.
-  const { data: existing } = await supabase
+  // MONEY: a snapshot is the frozen billing basis for its period. Every read
+  // that feeds it is checked; a failure returns ok:false and writes nothing.
+  const { data: existing, error: existingErr } = await supabase
     .from('usage_billing_snapshots')
     .select('id, total_credits, total_usd_equivalent, llm_input_tokens, llm_output_tokens, by_action')
     .eq('organization_id', args.organizationId)
     .eq('period_start', args.periodStart)
     .eq('period_end', args.periodEnd)
     .maybeSingle();
+  if (existingErr) {
+    logger.error('usage_snapshot_existing_read_failed', { org: args.organizationId, message: existingErr.message });
+    return { ok: false, totalCredits: 0, totalUsd: 0, llmInputTokens: 0, llmOutputTokens: 0, byAction: {}, error: existingErr.message };
+  }
 
   if (existing) {
     const e = existing as Record<string, unknown>;
@@ -90,13 +96,19 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
   try {
     const yearStart = Number(args.periodStart.slice(0, 4));
     const monthStart = Number(args.periodStart.slice(5, 7));
-    const { data: meter } = await supabase
+    const { data: meter, error: meterErr } = await supabase
       .from('usage_meter_monthly')
       .select('llm_input_tokens, llm_output_tokens')
       .eq('organization_id', args.organizationId)
       .eq('year', yearStart)
       .eq('month', monthStart)
       .maybeSingle();
+    // The meter table is optional (42P01 = not deployed here -> 0 tokens, as
+    // documented). Any OTHER failure must not freeze 0 tokens into the snapshot.
+    if (meterErr && (meterErr as { code?: string }).code !== '42P01') {
+      logger.error('usage_snapshot_token_rollup_failed', { org: args.organizationId, message: meterErr.message });
+      return { ok: false, totalCredits: 0, totalUsd: 0, llmInputTokens: 0, llmOutputTokens: 0, byAction: {}, error: meterErr.message };
+    }
     if (meter) {
       llmInputTokens  = Number((meter as { llm_input_tokens?: number }).llm_input_tokens ?? 0);
       llmOutputTokens = Number((meter as { llm_output_tokens?: number }).llm_output_tokens ?? 0);
@@ -124,13 +136,19 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
   if (insErr) {
     // Unique violation: another writer beat us — re-fetch
     if (/duplicate key/i.test(insErr.message) || (insErr as { code?: string }).code === '23505') {
-      const { data: again } = await supabase
+      const { data: again, error: againErr } = await supabase
         .from('usage_billing_snapshots')
         .select('id')
         .eq('organization_id', args.organizationId)
         .eq('period_start', args.periodStart)
         .eq('period_end', args.periodEnd)
         .maybeSingle();
+      if (againErr || !(again as { id?: string } | null)?.id) {
+        // The winner's snapshot exists but could not be read back: never report
+        // it with THIS writer's totals and no id.
+        logger.error('usage_snapshot_refetch_failed', { org: args.organizationId, message: againErr?.message ?? 'no row' });
+        return { ok: false, totalCredits: 0, totalUsd: 0, llmInputTokens: 0, llmOutputTokens: 0, byAction: {}, error: againErr?.message ?? 'snapshot_refetch_failed' };
+      }
       return {
         ok: true, snapshotId: (again as { id?: string } | null)?.id, totalCredits, totalUsd,
         llmInputTokens, llmOutputTokens, byAction, alreadyExists: true,
