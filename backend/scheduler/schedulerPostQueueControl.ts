@@ -291,10 +291,24 @@ export async function tryAcquireScheduledPostQueueLock(
         acquired: true,
         mode: 'advisory',
         release: async () => {
+          // CHECKED (e9 ruling, 2026-11-11): supabase-js returns { data, error } and does not throw on a
+          // database error, and a SESSION advisory lock released through a different pooled PostgREST
+          // connection returns data=false (not an error). Either way the lock may still be held, so it
+          // is reported rather than silently assumed released. Interim visibility only; the lock design
+          // itself is pending C11 (see the NOT A MUTUAL-EXCLUSION GUARANTEE note above).
+          let res: { data?: unknown; error?: { code?: string; message?: string } | null } | undefined;
+          let thrown: unknown = null;
           try {
-            await supabase.rpc('release_scheduled_post_lock', { p_scheduled_post_id: scheduledPostId });
+            res = await supabase.rpc('release_scheduled_post_lock', { p_scheduled_post_id: scheduledPostId });
           } catch (releaseError) {
-            console.warn('[scheduled-post-lock] release failed', { scheduledPostId, message: (releaseError as Error)?.message });
+            thrown = releaseError ?? 'rpc threw';
+          }
+          if (thrown !== null || res?.error || res?.data !== true) {
+            console.error('[scheduled-post-lock] lock not released', {
+              scheduledPostId,
+              reason: thrown !== null ? 'threw' : res?.error ? 'rpc_error' : 'not_held_by_this_session',
+              message: thrown !== null ? (thrown as Error)?.message ?? String(thrown) : res?.error?.message ?? null,
+            });
           }
         },
       };
