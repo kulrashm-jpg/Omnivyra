@@ -406,6 +406,7 @@ describe('mapping profiles', () => {
   function profileFor(hdrs: readonly string[]): StoredMappingProfile {
     return {
       profileId: 'prof-1',
+      scope: 'tenant',
       version: 3,
       sourceSchemaFingerprint: fingerprintSchema(hdrs),
       headers: hdrs,
@@ -483,6 +484,7 @@ describe('mapping profiles', () => {
     // is what stops a profile handed in by mistake from being applied.
     const foreign: StoredMappingProfile = {
       profileId: 'other-tenant-profile',
+      scope: 'tenant',
       version: 1,
       sourceSchemaFingerprint: 'deadbeef',
       headers: ['Totally Different'],

@@ -218,7 +218,7 @@ describe('PI-LDB-4 — what the emitted lead carries', () => {
       observedAt: INGESTED_AT,
       provenance: 'asserted',
     });
-    expect(emitted[0].origin!.observedAt).not.toBe('2026-11-02T10:00:00.000Z');
+    expect((emitted[0].origin as { observedAt?: string | null }).observedAt).not.toBe('2026-11-02T10:00:00.000Z');
     // And it agrees with what the provenance boundary was told.
     expect(ingested[0].sourceCategory).toBe('csv');
   });

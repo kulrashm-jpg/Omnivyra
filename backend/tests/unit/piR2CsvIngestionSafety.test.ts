@@ -109,7 +109,9 @@ describe('unmapped columns are reported, not dropped', () => {
   });
 
   it('the runtime vocabulary is exactly the declared field set', () => {
-    expect(MANUAL_INPUT_FIELDS).toHaveLength(29);
+    // 30: PI-LDB carries `description` end to end (manualAdapter key set).
+    expect(MANUAL_INPUT_FIELDS).toHaveLength(30);
+    expect(MANUAL_INPUT_FIELDS).toContain('description');
     expect(unmappedManualFields(Object.fromEntries(MANUAL_INPUT_FIELDS.map((f) => [f, 'x'])))).toEqual([]);
     expect(unmappedManualFields(null)).toEqual([]);
   });

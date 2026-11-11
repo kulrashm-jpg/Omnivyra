@@ -80,6 +80,23 @@ describe('LI-2 — schema shape', () => {
     });
   });
 
+  it('SCOPE GUARD for the catalog_known entry: both platform-profile columns stay NULLABLE', async () => {
+    // The entry in scripts/migrations/set-null-known-defects.json covers ONLY
+    // set_null_vs_check; the detector matches it by table.column, so if either
+    // column ever became NOT NULL (set_null_on_not_null - a REAL defect) the
+    // entry would silently suppress it. Assert the negation of that hypothetical
+    // here, so the cause fails, not a later gate run (virality-05, 2026-11-11).
+    const { rows } = await db.query(
+      `SELECT column_name, is_nullable FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'source_assertions'
+          AND column_name IN ('platform_mapping_profile_id', 'platform_mapping_profile_scope')
+        ORDER BY column_name`);
+    expect(rows).toEqual([
+      { column_name: 'platform_mapping_profile_id', is_nullable: 'YES' },
+      { column_name: 'platform_mapping_profile_scope', is_nullable: 'YES' },
+    ]);
+  });
+
   it('REMOVAL CONTROL: with a SET NULL that nulls only the id, the same delete is REFUSED by the CHECK', async () => {
     await inRollback(async () => {
       await seedTenants();
