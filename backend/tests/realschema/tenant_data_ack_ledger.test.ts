@@ -45,13 +45,15 @@ describe('consent ledger premise for tenant data acknowledgements', () => {
               (t.tgtype & 16) <> 0 AS on_update, p.oid = 'public.trg_consent_records_append_only_update()'::regprocedure AS bound
          FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
         WHERE t.tgrelid = 'public.consent_records'::regclass AND t.tgname = 'consent_records_append_only' AND NOT t.tgisinternal`);
-    expect(upd).toEqual({ enabled: 'O', is_row: true, is_before: true, on_update: true, bound: true });
+    expect(['O', 'A']).toContain(upd.enabled);   // fires on ordinary writes (origin or always)
+    expect(upd).toMatchObject({ is_row: true, is_before: true, on_update: true, bound: true });
     const del = await one(
       `SELECT t.tgenabled::text AS enabled, (t.tgtype & 1) <> 0 AS is_row, (t.tgtype & 2) <> 0 AS is_before,
               (t.tgtype & 8) <> 0 AS on_delete, p.oid = 'public.trg_consent_records_block_delete()'::regprocedure AS bound
          FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
         WHERE t.tgrelid = 'public.consent_records'::regclass AND t.tgname = 'consent_records_no_delete' AND NOT t.tgisinternal`);
-    expect(del).toEqual({ enabled: 'O', is_row: true, is_before: true, on_delete: true, bound: true });
+    expect(['O', 'A']).toContain(del.enabled);
+    expect(del).toMatchObject({ is_row: true, is_before: true, on_delete: true, bound: true });
     // Substring on the line that carries the premise, not md5(prosrc).
     expect(String((await one(`SELECT pg_get_functiondef('public.trg_consent_records_append_only_update()'::regprocedure) AS d`)).d))
       .toContain('consent_records is append-only; only revoked_at / revoked_by may be set after insert');

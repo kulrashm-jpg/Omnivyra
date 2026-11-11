@@ -68,7 +68,7 @@ BEGIN
   -- PREMISE (GOV-SECURITY + PI review; the reference shape of
   -- g11_optout_review.test.ts PREMISE): "one row per acceptance, no update
   -- path" is true only because these TRIGGERS are ON public.consent_records,
-  -- ENABLED ('O'), BEFORE + ROW + the right event, bound to the intended
+  -- ENABLED for ordinary writes ('O' origin or 'A' always; 'R' replica-only and 'D' disabled are refused), BEFORE + ROW + the right event, bound to the intended
   -- function, and that function STILL RAISES. Each is asserted; an object whose
   -- existence merely correlates with the behaviour is not. The body check is a
   -- SUBSTRING on the line that carries the premise (not md5): it survives benign
@@ -77,10 +77,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
                   WHERE t.tgrelid = 'public.consent_records'::regclass
                     AND t.tgname = 'consent_records_append_only' AND NOT t.tgisinternal
-                    AND t.tgenabled = 'O'
+                    AND t.tgenabled IN ('O', 'A')
                     AND (t.tgtype & 1) <> 0 AND (t.tgtype & 2) <> 0 AND (t.tgtype & 16) <> 0
                     AND p.oid = 'public.trg_consent_records_append_only_update()'::regprocedure) THEN
-    RAISE EXCEPTION 'consent ack postcondition: trigger consent_records_append_only is missing, not enabled (O), not BEFORE ROW UPDATE, or not bound to public.trg_consent_records_append_only_update()';
+    RAISE EXCEPTION 'consent ack postcondition: trigger consent_records_append_only is missing, not enabled for ordinary writes (O/A), not BEFORE ROW UPDATE, or not bound to public.trg_consent_records_append_only_update()';
   END IF;
   IF pg_get_functiondef('public.trg_consent_records_append_only_update()'::regprocedure)
        NOT LIKE '%consent_records is append-only; only revoked_at / revoked_by may be set after insert%' THEN
@@ -89,10 +89,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
                   WHERE t.tgrelid = 'public.consent_records'::regclass
                     AND t.tgname = 'consent_records_no_delete' AND NOT t.tgisinternal
-                    AND t.tgenabled = 'O'
+                    AND t.tgenabled IN ('O', 'A')
                     AND (t.tgtype & 1) <> 0 AND (t.tgtype & 2) <> 0 AND (t.tgtype & 8) <> 0
                     AND p.oid = 'public.trg_consent_records_block_delete()'::regprocedure) THEN
-    RAISE EXCEPTION 'consent ack postcondition: trigger consent_records_no_delete is missing, not enabled (O), not BEFORE ROW DELETE, or not bound to public.trg_consent_records_block_delete()';
+    RAISE EXCEPTION 'consent ack postcondition: trigger consent_records_no_delete is missing, not enabled for ordinary writes (O/A), not BEFORE ROW DELETE, or not bound to public.trg_consent_records_block_delete()';
   END IF;
   IF pg_get_functiondef('public.trg_consent_records_block_delete()'::regprocedure)
        NOT LIKE '%consent_records is append-only; deletes blocked%' THEN
