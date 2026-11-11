@@ -557,6 +557,153 @@ function immutabilityViolations(topLevelFiles, boundary, digestOf) {
 }
 
 /**
+ * RULE 6b — APPLIED-ABOVE-BOUNDARY IMMUTABILITY (design #18, 2026-11-10).
+ *
+ * Some migrations are applied in production OUT OF BAND (Management API, no
+ * ledger row) at versions ABOVE the attested ledger tip. They are as immutable
+ * as anything below the boundary, but they cannot go in `digests`: rule 6
+ * reports every `digests` key that is not at or below `ledger_max` as DELETED,
+ * so an above-boundary entry there would be reported deleted while present.
+ * And `ledger_max` must NOT be raised to cover them: it is the attested ledger
+ * tip, and raising it would assert that everything beneath it was applied.
+ *
+ * So they live in their own map, `applied_above_boundary`, keyed by filename,
+ * each entry carrying its own provenance. Four rules, all scoped to that map:
+ *   A1  the file's sha256 (over LF bytes) matches       -> APPLIED MIGRATION MODIFIED (above boundary)
+ *   A2  the file exists at exactly that path             -> APPLIED MIGRATION DELETED OR RENAMED (above boundary)
+ *   A3  every provenance field is present and non-empty  -> APPLIED-OUT-OF-BAND ENTRY INCOMPLETE
+ *   A4  not also in `digests`, and version > ledger_max   -> APPLIED RECORD INCONSISTENT
+ * A4 makes the record self-correcting: after a re-attestation raises the
+ * boundary past an entry, that entry must MOVE into `digests`.
+ *
+ * DIGEST BASIS. The database ran the file's LF text. A Windows checkout may
+ * carry CRLF (and a matching git blob id does NOT prove byte equality: eol=lf
+ * cleans before hashing), so A1 hashes the file with CRLF normalised to LF and
+ * the recorded sha256 must be computed over LF bytes
+ * (`git -c core.autocrlf=false show <commit>:<path> | sha256sum`).
+ *
+ * With no `applied_above_boundary` key (schema_version 1 files) this rule is
+ * silent, and rule 6 behaves exactly as before.
+ */
+const ABOVE_BOUNDARY_FIELDS = [
+  'sha256', 'applied_at', 'operator', 'method', 'project_ref',
+  'cluster_system_identifier', 'ledger_row', 'record', 'evidence_class',
+];
+const KNOWN_BOUNDARY_SCHEMAS = new Set([1, 2]);
+// CRLF pairs only are folded to LF, at the byte level: no UTF-8 round trip, so a
+// non-UTF-8 byte cannot be rewritten to U+FFFD, and a lone CR is preserved (fail-safe).
+const lfSha256 = (buf) => {
+  const out = Buffer.allocUnsafe(buf.length);
+  let n = 0;
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] === 0x0d && buf[i + 1] === 0x0a) continue;
+    out[n++] = buf[i];
+  }
+  return sha256(out.subarray(0, n));
+};
+
+function aboveBoundaryViolations(topLevelFiles, boundary, readBytes) {
+  const out = [];
+  if (!boundary || boundary.__parseError) return { violations: out, checked: 0 };
+  if (boundary.schema_version !== undefined && !KNOWN_BOUNDARY_SCHEMAS.has(boundary.schema_version)) {
+    out.push(`scripts/migrations/applied-boundary.json\n    ✗ unknown schema_version ${JSON.stringify(boundary.schema_version)} ` +
+      '(this gate understands 1 and 2). A gate that cannot interpret its attestation must fail, not pass.');
+    return { violations: out, checked: 0 };
+  }
+  const above = boundary.applied_above_boundary;
+  if (above === undefined) return { violations: out, checked: 0 };
+  if (!above || typeof above !== 'object' || Array.isArray(above)) {
+    out.push('scripts/migrations/applied-boundary.json\n    ✗ applied_above_boundary must be an object keyed by migration filename.');
+    return { violations: out, checked: 0 };
+  }
+  const max = String(boundary.ledger_max || '').padEnd(14, '0');
+  const digests = boundary.digests || {};
+  const present = new Set(topLevelFiles);
+  let checked = 0;
+  for (const [f, entry] of Object.entries(above)) {
+    // A4 — one record per file, on the correct side of the boundary.
+    if (Object.prototype.hasOwnProperty.call(digests, f)) {
+      out.push(`${f}\n    ✗ APPLIED RECORD INCONSISTENT. It is in both digests and applied_above_boundary; keep exactly one record.`);
+    }
+    const v = versionPrefix(f);
+    if (!v || v.padEnd(14, '0') <= max) {
+      out.push(`${f}\n    ✗ APPLIED RECORD INCONSISTENT. Version ${v || '(none)'} is not above the attested boundary ` +
+        `${boundary.ledger_max}; at or below the boundary it belongs in digests, not applied_above_boundary.`);
+    }
+    // A3 — provenance is mandatory: "applied" is never asserted without it.
+    const e = entry && typeof entry === 'object' ? entry : {};
+    const missing = ABOVE_BOUNDARY_FIELDS.filter((k) => {
+      const val = e[k];
+      if (k === 'ledger_row') return typeof val !== 'boolean';
+      if (k === 'sha256') return typeof val !== 'string' || !/^[0-9a-f]{64}$/.test(val);
+      return typeof val !== 'string' || val.trim() === '';
+    });
+    if (missing.length) {
+      out.push(`${f}\n    ✗ APPLIED-OUT-OF-BAND ENTRY INCOMPLETE. Missing or empty: ${missing.join(', ')}. ` +
+        'An out-of-band application is recorded with its full provenance or not at all.');
+    }
+    // A2 — exact path.
+    if (!present.has(f)) {
+      out.push(`${f}\n    ✗ APPLIED MIGRATION DELETED OR RENAMED (above boundary). It is recorded as applied in production ` +
+        'but is no longer at that path. Applied history is immutable; restore the file.');
+      continue;
+    }
+    // A1 — content, over LF bytes. Counted as verified only when A1 actually ran.
+    if (typeof e.sha256 === 'string' && /^[0-9a-f]{64}$/.test(e.sha256)) {
+      checked++;
+      const actual = lfSha256(readBytes(f));
+      if (actual !== e.sha256) {
+        out.push(`${f}\n    ✗ APPLIED MIGRATION MODIFIED (above boundary). Recorded ${e.sha256.slice(0, 12)}… (LF bytes), ` +
+          `now ${actual.slice(0, 12)}…. It has already run in production; remediate forward with a NEW migration.`);
+      }
+    }
+  }
+  return { violations: out, checked };
+}
+
+/**
+ * RULE 6c — BELOW-BOUNDARY PROVENANCE (virality-05 follow-up to #18).
+ *
+ * `digests_provenance` records, per file, why a digest was attested on
+ * evidence OTHER than the top-level ledger read (e.g. an out-of-band
+ * application found by a catalogue read). Rule 6b already refuses incomplete
+ * provenance above the boundary; the same honesty applies below it:
+ *   - every entry carries the same nine fields as rule 6b (A3-equivalent);
+ *   - an entry must describe a file that IS in `digests` (no orphan provenance);
+ *   - its sha256 must equal the pinned digest (one fact, recorded once).
+ * Absent `digests_provenance`: silent.
+ */
+function digestProvenanceViolations(boundary) {
+  const out = [];
+  if (!boundary || boundary.__parseError) return out;
+  const prov = boundary.digests_provenance;
+  if (prov === undefined) return out;
+  if (!prov || typeof prov !== 'object' || Array.isArray(prov)) {
+    out.push('scripts/migrations/applied-boundary.json\n    ✗ digests_provenance must be an object keyed by migration filename.');
+    return out;
+  }
+  const digests = boundary.digests || {};
+  for (const [f, entry] of Object.entries(prov)) {
+    const e = entry && typeof entry === 'object' ? entry : {};
+    const missing = ABOVE_BOUNDARY_FIELDS.filter((k) => {
+      const val = e[k];
+      if (k === 'ledger_row') return typeof val !== 'boolean';
+      if (k === 'sha256') return typeof val !== 'string' || !/^[0-9a-f]{64}$/.test(val);
+      return typeof val !== 'string' || val.trim() === '';
+    });
+    if (missing.length) {
+      out.push(`${f}\n    ✗ DIGEST PROVENANCE INCOMPLETE. Missing or empty: ${missing.join(', ')}.`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(digests, f)) {
+      out.push(`${f}\n    ✗ DIGEST PROVENANCE INCONSISTENT. It has provenance but no pinned digest; provenance describes a digest.`);
+    } else if (typeof e.sha256 === 'string' && e.sha256 !== digests[f]) {
+      out.push(`${f}\n    ✗ DIGEST PROVENANCE INCONSISTENT. Its sha256 differs from the pinned digest; one fact, recorded once.`);
+    }
+  }
+  return out;
+}
+
+/**
  * RULE 7 — ROLLBACK COMPANION NAMING.
  *
  * THE HAZARD, ANSWERED DIRECTLY. Rollbacks live at
@@ -882,9 +1029,22 @@ function main() {
   const immut = immutabilityViolations(
     topLevel,
     readJson(APPLIED_BOUNDARY, null),
-    (f) => sha256(fs.readFileSync(path.join(MIG_DIR, f))),
+    // LF basis, like rule 6b: the database ran LF text, and a CRLF checkout must not
+    // fail an unchanged applied migration. A no-op on a clean (0 CR) checkout.
+    (f) => lfSha256(fs.readFileSync(path.join(MIG_DIR, f))),
   );
   errors.push(...immut.violations);
+
+  // 6b. Applied-above-boundary immutability (design #18).
+  const aboveB = aboveBoundaryViolations(
+    topLevel,
+    readJson(APPLIED_BOUNDARY, null),
+    (f) => fs.readFileSync(path.join(MIG_DIR, f)),
+  );
+  errors.push(...aboveB.violations);
+
+  // 6c. Below-boundary provenance completeness (follow-up to #18).
+  errors.push(...digestProvenanceViolations(readJson(APPLIED_BOUNDARY, null)));
 
   // 7. Rollback companion naming (GOV-H).
   const rollbacks = fs.existsSync(ROLLBACK_DIR)
@@ -914,6 +1074,7 @@ function main() {
     applied_boundary: immut.boundary,
     applied_files_verified: immut.checked,
     versions_above_boundary: immut.staleVersions,
+    applied_above_boundary_verified: aboveB.checked,
     rollback_companions: rollbacks.length,
     set_null_known_open: knownSeen.size,
     violations: errors.length,
@@ -960,6 +1121,9 @@ module.exports = {
   // without a filesystem, a database or a git repository.
   reservationViolations,
   immutabilityViolations,
+  aboveBoundaryViolations,
+  digestProvenanceViolations,
+  lfSha256,
   rollbackViolations,
   setNullContradictions,
   scanRefs,
