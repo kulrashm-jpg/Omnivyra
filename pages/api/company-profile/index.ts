@@ -186,12 +186,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           // stores a company id, so it is tenant-authorized like any other.
           // 2026-11-11 (83, R6-ORDER): this ordering was previously masked by
           // the legacy cookie getter counting as platform authority.
-          const { role: activeRole } = await getUserRole(user.id, resolvedActiveCompanyId);
-          if (activeRole) {
+          //
+          // Skipping is DELIBERATE: this preference write is a side effect of a
+          // list call the caller did not ask for, so an unauthorized (or
+          // unverifiable) company leaves the stored preference unmoved and the
+          // list still answers. Do not turn this into a 403.
+          const { role: activeRole, error: activeRoleError } = await getUserRole(user.id, resolvedActiveCompanyId);
+          if (activeRole && !activeRoleError) {
             await supabase
               .from('users')
               .update({ active_company_id: resolvedActiveCompanyId, updated_at: new Date().toISOString() })
               .eq('id', user.id);
+          } else {
+            console.warn('[company-profile:list] active company preference NOT updated', {
+              userId: user.id,
+              companyId: resolvedActiveCompanyId,
+              reason: activeRoleError ? `role lookup: ${activeRoleError}` : 'no active role',
+            });
           }
         }
         const normalizeListRole = (r: string) => (r?.toUpperCase() === 'ADMIN' ? 'COMPANY_ADMIN' : r);
