@@ -59,6 +59,8 @@ function mockDeps(o: {
       if (table === 'creator_render_queue_job') return { data: o.claim ? null : null };
       if (table === 'creator_render_job') return { data: o.job ?? { id: 'job-1', render_spec_snapshot: o.specOverride ?? SPEC, organization_id: 'org', task_id: 'core-1', deterministic_input_hash: 'a'.repeat(64) } };
       if (table === 'billing_operations') return { data: { id: 'bo-1' } };
+      // The job state the enqueue route writes ('queued'): the worker takes it by a conditional transition.
+      if (table === 'creator_render_job_state') return { data: { current_state: 'queued', retry_count: 0, attached_output_id: null }, error: null };
       return { data: null };
     };
     // candidate scan returns one queued row
@@ -78,7 +80,11 @@ function mockDeps(o: {
       writes.push({ table, op: 'update', row: patch });
       const chain: any = {
         eq: () => chain, in: () => chain, lt: () => chain,
-        select: () => ({ maybeSingle: async () => ({ data: o.claimWins === false ? null : { id: 'q-1', render_job_id: 'job-1', provider_key: 'openai', retry_count: o.claim?.retry_count ?? 0 } }) }),
+        select: () => ({
+          maybeSingle: async () => ({ data: o.claimWins === false ? null : { id: 'q-1', render_job_id: 'job-1', provider_key: 'openai', retry_count: o.claim?.retry_count ?? 0 } }),
+          // The job-state conditional transition (.select(...) awaited directly) moved this one row.
+          then: (resolve: (v: unknown) => unknown) => resolve({ data: [{ render_job_id: 'job-1' }], error: null }),
+        }),
         then: undefined,
       };
       // terminal awaited update (no select)
