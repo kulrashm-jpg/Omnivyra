@@ -283,6 +283,12 @@ export function senderAccountRefusalResponse(err: unknown): { status: 404 | 409 
 async function assertOwnedSenderAccount(companyId: unknown, socialAccountId: unknown) {
   const check = await loadOwnedSenderAccount(companyId, socialAccountId);
   if (check.ok === false) throw new WhatsAppSenderAccountError(check.reason);
+  // `=== false`, NOT `!is_active`, and deliberately (05): social_accounts.is_active is
+  // `boolean DEFAULT true` and NULLABLE (baseline.sql). NULL arises only from an explicit
+  // null insert or a row written before the column mattered; those accounts could send
+  // before this guard, so refusing them would be a functional break, not a safety gain.
+  // "Tightening" this to `!is_active` changes WHICH LEGACY ACCOUNTS CAN SEND - decide that
+  // deliberately (measure `is_active IS NULL` first; if zero, SET NOT NULL retires it).
   if (check.account.is_active === false) throw new WhatsAppSenderAccountError('disconnected');
   return check.account;
 }
@@ -605,7 +611,11 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
   // Check rate limit for total recipient count
   const rateCheck = await checkAndConsume({
     social_account_id: broadcast.social_account_id,
-    phone_number_id:   broadcast.social_account_id, // resolved to phone_number_id in service
+    // NOT the phone number id: the limiter's Redis key (wa:usage:<this>:<day>) is per SENDER
+    // ACCOUNT, and the DB quota is keyed by social_account_id too. Never null here (the account
+    // was asserted above), so no two accounts can share a bucket (05). processBatch separately
+    // refuses an account without a phone_number_id before any send.
+    phone_number_id:   broadcast.social_account_id,
     company_id:        broadcast.company_id,
     plan,
     count:             totalCount,
