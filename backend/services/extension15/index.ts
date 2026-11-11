@@ -131,15 +131,35 @@ export function validateReadParams(action: ReadAction15, params: unknown): { ok:
   return { ok: true, params: { list_kind: kind, max_leads: max } };
 }
 
-export async function issueReadCommand(input: { orgId: string; userId: string; action: unknown; params?: unknown; now?: number }):
-  Promise<{ ok: true; commandId: string } | Refusal> {
+export type AckVerdict = (orgId: string) => Promise<{ allowed: boolean; state: string }>;
+
+export async function issueReadCommand(
+  input: { orgId: string; userId: string; action: unknown; params?: unknown; now?: number },
+  // Test seams only (production passes nothing): the capture switch is a code constant,
+  // and the acknowledgement verdict is PI's.
+  deps: { salesnavIssuable?: boolean; ackVerdict?: AckVerdict } = {},
+): Promise<{ ok: true; commandId: string } | Refusal> {
   if (!READ_ACTIONS15.includes(input.action as ReadAction15)) return refuse(400, 'UNKNOWN_ACTION');
   const action = input.action as ReadAction15;
   if (action !== 'li.salesnav.capture_saved_leads' && !EXTENSION_V15_COMMAND_INGESTION_ENABLED) {
     return refuse(403, 'BROWSER_SYNC_SUSPENDED');
   }
   if (action === 'li.collect.own_inbox' && !DM_COLLECTION_ISSUABLE) return refuse(403, 'DM_STORAGE_DISABLED');
-  if (action === 'li.salesnav.capture_saved_leads' && !SALESNAV_CAPTURE_ISSUABLE) return refuse(403, 'SALESNAV_CAPTURE_DISABLED');
+  if (action === 'li.salesnav.capture_saved_leads' && !(deps.salesnavIssuable ?? SALESNAV_CAPTURE_ISSUABLE)) {
+    return refuse(403, 'SALESNAV_CAPTURE_DISABLED');
+  }
+  // Owner requirement 2026-11-11 (tenant data-controller acknowledgement): READING the
+  // Sales Navigator page is the risky act (E-2), so the 'salesnav_capture'
+  // acknowledgement is checked BEFORE a capture command is issued, not only at PI's
+  // ingest gate 4b - with the SAME verdict (PI's salesNavCaptureAckVerdict: allowed =
+  // current or grace; never throws, an unreadable ledger is { allowed: false, state:
+  // 'unknown' }). Loaded lazily so the 1.4 route that imports this module does not
+  // load PI's capture module.
+  if (action === 'li.salesnav.capture_saved_leads') {
+    const verdict = deps.ackVerdict ?? (await import('../salesNavCapture')).salesNavCaptureAckVerdict;
+    const ack = await verdict(input.orgId).catch(() => ({ allowed: false, state: 'unknown' }));
+    if (!ack.allowed) return refuse(403, 'DATA_CONTROLLER_ACK_REQUIRED');
+  }
   const v = validateReadParams(action, input.params);
   if (v.ok !== true) return v;
   const binding = await getActiveBinding(input.orgId, input.userId);

@@ -105,6 +105,31 @@ describe('issuance gates (§4)', () => {
     expect(await issueReadCommand({ orgId: ORG, userId: USER, action: 'li.salesnav.capture_saved_leads' })).toMatchObject({ status: 403, code: 'SALESNAV_CAPTURE_DISABLED' });
     expect(tables.extension_commands ?? []).toHaveLength(0);
   });
+  describe('Sales Navigator capture: the data-controller acknowledgement is checked BEFORE issuing (owner 2026-11-11)', () => {
+    const cap = { orgId: ORG, userId: USER, action: 'li.salesnav.capture_saved_leads', params: { list_kind: 'saved_leads', max_leads: 25 } } as never;
+    it.each(['required', 'expired', 'text_changed', 'unknown'])('state %s: refused 403 DATA_CONTROLLER_ACK_REQUIRED, no command written, no binding read needed', async (state) => {
+      const verdict = jest.fn(async () => ({ allowed: false, state }));
+      expect(await issueReadCommand(cap, { salesnavIssuable: true, ackVerdict: verdict })).toMatchObject({ ok: false, status: 403, code: 'DATA_CONTROLLER_ACK_REQUIRED' });
+      expect(verdict).toHaveBeenCalledWith(ORG);
+      expect(tables.extension_commands ?? []).toHaveLength(0);
+    });
+    it('a verdict that throws is treated as unknown: refused', async () => {
+      const verdict = jest.fn(async () => { throw new Error('ledger down'); });
+      expect(await issueReadCommand(cap, { salesnavIssuable: true, ackVerdict: verdict })).toMatchObject({ status: 403, code: 'DATA_CONTROLLER_ACK_REQUIRED' });
+      expect(tables.extension_commands ?? []).toHaveLength(0);
+    });
+    it.each(['current', 'grace'])('state %s: the command is issued (the acknowledgement gate passes)', async (state) => {
+      const r = await issueReadCommand(cap, { salesnavIssuable: true, ackVerdict: async () => ({ allowed: true, state }) });
+      expect(r).toMatchObject({ ok: true });
+      expect(tables.extension_commands).toHaveLength(1);
+    });
+    it('while capture is dark (the default) the verdict is never even asked', async () => {
+      const verdict = jest.fn(async () => ({ allowed: true, state: 'current' }));
+      expect(await issueReadCommand(cap, { ackVerdict: verdict })).toMatchObject({ code: 'SALESNAV_CAPTURE_DISABLED' });
+      expect(verdict).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     ['unknown action', { action: 'li.comment.reply' }, 'UNKNOWN_ACTION'],
     ['unknown param', { action: 'li.collect.own_post_comments', params: { url: 'x' } }, 'UNKNOWN_PARAM'],
