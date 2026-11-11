@@ -97,6 +97,7 @@ describe('when enabled (test switch)', () => {
 
   it.each([
     ['capture_not_enabled_for_tenant', 403],
+    ['data_controller_ack_required', 403],
     ['ingestion_not_enabled', 403],
     ['organization_mismatch', 409],
     ['provider_unavailable', 503],

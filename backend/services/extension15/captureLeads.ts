@@ -48,6 +48,9 @@ export function refusalStatus(refusal: string | undefined): number {
     case 'capture_disabled':
     case 'ingestion_not_enabled':
     case 'capture_not_enabled_for_tenant':
+    // PI gate 4b (e1 54928556e, owner 2026-11-11): the tenant has no current or in-grace
+    // data-controller acknowledgement covering Sales Navigator capture.
+    case 'data_controller_ack_required':
       return 403;
     case 'organization_mismatch':
       return 409;
