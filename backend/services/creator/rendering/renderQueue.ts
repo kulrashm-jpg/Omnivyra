@@ -38,6 +38,9 @@ export function isTransientFailure(reason: string): boolean {
   return [
     'provider_timeout', 'provider_network', 'provider_5xx',
     'provider_unavailable', 'transient',
+    // Store / ownership refusals of an attempt BEFORE a paid provider call (or after one whose output
+    // could not be recorded): a later tick can succeed.
+    'store_unavailable', 'job_busy', 'attempt_insert_failed', 'output_insert_failed',
   ].includes(reason);
 }
 export function isTerminalFailure(reason: string): boolean {
