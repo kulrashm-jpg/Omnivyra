@@ -143,17 +143,20 @@ const moreRestrictive = (a: MayContactResult, b: MayContactResult): MayContactRe
  *
  * An EMPTY array is different, and is not indeterminate: the loaders return it
  * when they made no request at all because no anchor and no channel could have
- * matched anything. Nothing was read because nothing could apply, and the
- * verdict is the same "nothing applies" the evaluator already returned for that
- * case before this change.
+ * matched anything. Nothing was read because nothing could apply: a governance
+ * record is anchored to a person or a target, so with neither there is nothing a
+ * restriction could key to. That is WHY "nothing applies" is safe there.
  *
  * `producedRecordCount` is the number of rows the producer returned in its flat
  * `records` list. It NEVER decides a verdict (those rows have no single instant);
- * it is used for one thing only: detecting a producer that returned rows while
- * reporting NO read. `reads: []` with rows present is not "nothing applied" — it
- * is "rows exist and no read instant is known", the same state as `undefined`,
- * and it fails closed (virality-05, A2 review, 2026-11-11). REQUIRED, not
- * optional, so a new caller cannot omit it and inherit the permissive branch.
+ * it is used for one thing only: detecting an inconsistent producer. The
+ * invariant is "if the producer returned rows, some read reported rows", checked
+ * AFTER per-read failures (so a genuine read failure keeps its own message). It
+ * catches both `reads: []` and reads whose `records` arrays came back empty
+ * while the flat list did not (virality-05, A2 review, 2026-11-11). It is
+ * one-directional: the flat list may dedupe a row matched by both anchors, which
+ * only makes it SMALLER than the per-read sum, so it never raises a false
+ * indeterminate. REQUIRED, not optional, so a new caller cannot omit it.
  */
 export function evaluateGovernanceReads(
   reads: readonly GovernanceRead[] | undefined,
@@ -164,13 +167,6 @@ export function evaluateGovernanceReads(
     return {
       ok: false,
       error: 'governance reads were not reported, so no decision instant is known',
-      reads: [],
-    };
-  }
-  if (reads.length === 0 && producedRecordCount !== 0) {
-    return {
-      ok: false,
-      error: `governance producer returned ${producedRecordCount} record(s) but reported no read, so no decision instant is known`,
       reads: [],
     };
   }
@@ -217,6 +213,15 @@ export function evaluateGovernanceReads(
     // the other read was a restriction, its reason stays in `reads`, so an
     // operator still sees everything that was known.
     return { ok: false, error: `governance state is indeterminate — ${indeterminate.join('; ')}`, reads: evaluations };
+  }
+
+  const reportedRows = evaluations.reduce((n, e) => n + e.recordCount, 0);
+  if (reportedRows === 0 && producedRecordCount !== 0) {
+    return {
+      ok: false,
+      error: `governance producer returned ${producedRecordCount} record(s) but no read reported any, so no decision instant is known`,
+      reads: evaluations,
+    };
   }
 
   if (verdicts.length === 0) {

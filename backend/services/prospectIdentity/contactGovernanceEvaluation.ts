@@ -307,7 +307,7 @@ export async function evaluateCanonicalGovernance(
     targetNormalized,
     channel,
     attemptPurpose,
-  }, loaded.records?.length ?? 0);
+  }, loaded.records.length);
   // Indeterminate is not a verdict. A failed read, or rows without a database
   // instant, must not become "nobody is governed" — the caller's fail-closed
   // path owns it, the same path an unreadable store already takes.

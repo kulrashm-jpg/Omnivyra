@@ -654,7 +654,18 @@ describe('A2 (virality-05) — reads: [] is "nothing applied" ONLY when the prod
   it('reads: [] with producedRecordCount 3 → indeterminate (rows exist, no read instant reported)', () => {
     const r = evaluateGovernanceReadsRaw([], base, 3);
     expect(r.ok).toBe(false);
-    expect(r.ok === false && r.error).toMatch(/returned 3 record\(s\) but reported no read/);
+    expect(r.ok === false && r.error).toMatch(/returned 3 record\(s\) but no read reported any/);
+  });
+
+  it('SIDEWAYS (05): reads reported but their records empty, while the producer returned 3 → indeterminate', () => {
+    const r = evaluateGovernanceReadsRaw([read({ anchor: 'person', records: [], readAt: T1 })], base, 3);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.error).toMatch(/no read reported any/);
+  });
+
+  it('a genuine read failure keeps its own message (checked before the consistency rule)', () => {
+    const r = evaluateGovernanceReadsRaw([read({ anchor: 'person', ok: false, records: [], readAt: null, error: 'boom' })], base, 3);
+    expect(r.ok === false && r.error).toMatch(/indeterminate — person: boom/);
   });
 
   it('reads: undefined stays indeterminate whatever the count (unchanged)', () => {
@@ -662,9 +673,11 @@ describe('A2 (virality-05) — reads: [] is "nothing applied" ONLY when the prod
     expect(evaluateGovernanceReadsRaw(undefined, base, 5).ok).toBe(false);
   });
 
-  it('non-empty reads are judged on their own rows; the count never decides a verdict', () => {
-    const reads = [read({ anchor: 'person', records: [], readAt: T1 })];
-    // a count that disagrees with the reads does not change a non-empty evaluation
-    expect(evaluateGovernanceReadsRaw(reads, base, 0)).toEqual(evaluateGovernanceReadsRaw(reads, base, 7));
+  it('once some read reported rows, the count never decides a verdict (incl. a deduped, smaller flat list)', () => {
+    const reads = [read({ anchor: 'person', records: [notYet], readAt: T1 })];
+    const a = evaluateGovernanceReadsRaw(reads, base, 1);
+    expect(a.ok).toBe(true);
+    expect(evaluateGovernanceReadsRaw(reads, base, 7)).toEqual(a);
+    expect(evaluateGovernanceReadsRaw(reads, base, 0)).toEqual(a);   // flat list deduped/smaller: no false indeterminate
   });
 });
