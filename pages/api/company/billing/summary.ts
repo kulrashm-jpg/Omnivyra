@@ -15,6 +15,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { logger } from '../../../../backend/services/logger';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { assertOrgAccess } from '../../../../backend/services/requestAccessService';
 import { getBillingWalletSnapshot } from '../../../../backend/services/billing/payments/billingWalletService';
@@ -60,13 +61,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ]);
 
     // Top consuming modules — group recent CONFIRM rows by reference_type
-    const { data: confirmRows } = await supabase
+    // MONEY (customer billing view): a failed read is not "nothing consumed",
+    // "no holds" or "no recent events" - throw so the page shows an error
+    // rather than a confident zero.
+    const sideErr = reservationHealth.error ?? recentEvents.error;
+    if (sideErr) throw new Error(`billing summary read failed: ${sideErr.message}`);
+    const { data: confirmRows, error: confirmErr } = await supabase
       .from('credit_transactions')
       .select('reference_type, credits_delta')
       .eq('organization_id', companyId)
       .eq('execution_phase', 'confirm')
       .gte('created_at', periodStart)
       .limit(2000);
+    if (confirmErr) throw new Error(`billing summary consumption read failed: ${confirmErr.message}`);
     const byModule: Record<string, number> = {};
     for (const r of ((confirmRows ?? []) as Array<{ reference_type: string | null; credits_delta: number }>)) {
       const k = r.reference_type ?? 'unknown';
@@ -111,7 +118,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       recentEvents: recentEvents.data ?? [],
     });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    // Customer-facing route: the cause is logged, never returned.
+    logger.error('company_billing_summary_failed', { companyId, message: err instanceof Error ? err.message : String(err) });
+    return res.status(500).json({ error: 'billing_summary_unavailable' });
   }
 }
 

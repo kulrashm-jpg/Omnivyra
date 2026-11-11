@@ -170,11 +170,15 @@ async function handleActionUpdate(body: ActionUpdateBody, actorId: string, res: 
   } catch {
     viaOverride = false;
   }
-  const { data: legacyMatch } = await supabase
+  // A failed read is not "unknown action" - 503, not a misleading 400.
+  const { data: legacyMatch, error: legacyErr } = await supabase
     .from('credit_cost_config')
     .select('action_type')
     .eq('action_type', actionKey)
     .maybeSingle();
+  if (legacyErr) {
+    return res.status(503).json({ error: 'pricing catalog unavailable', code: 'CATALOG_UNAVAILABLE', retryable: true });
+  }
 
   if (!viaMapping && !viaOverride && !legacyMatch) {
     return res.status(400).json({

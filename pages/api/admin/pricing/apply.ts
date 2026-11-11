@@ -110,7 +110,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ── 4. Supersede any other pending proposals for same (action, model) ──
-  await supabase
+  // MONEY: if this fails, OLDER proposals for the same (action, model) stay
+  // 'pending' - applying one later would silently roll the price back. The new
+  // price is already written, so a 500 would mislead; the failure is logged and
+  // returned to the admin as a warning naming what is left pending.
+  const { error: supersedeErr } = await supabase
     .from('pricing_adjustment_queue')
     .update({
       status:              'superseded',
@@ -121,6 +125,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .is('model_name', queueRow.model_name)   // null-safe match
     .eq('status', 'pending')
     .neq('id', queueRow.id);
+  const warnings: string[] = [];
+  if (supersedeErr) {
+    logger.error('admin_pricing_apply_supersede_failed', { id: queueRow.id, action_key: queueRow.action_key, message: supersedeErr.message });
+    warnings.push('older pending proposals for this action/model could not be superseded - do NOT apply them; they would roll the price back');
+  }
+  if (markErr) warnings.push('this proposal could not be marked applied');
 
   // ── 5. Audit trail ─────────────────────────────────────────────────────
   await recordAdminAudit({
@@ -146,6 +156,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     action_key:         queueRow.action_key,
     model_name:         queueRow.model_name,
     new_multiplier:     queueRow.proposed_multiplier,
+    ...(warnings.length ? { warnings } : {}),
   });
 }
 

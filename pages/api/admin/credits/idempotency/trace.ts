@@ -44,11 +44,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const keyForMiddleware = idempotencyKey
       ?? (forensics.billingOperations[0]?.idempotency_key as string | undefined);
     if (keyForMiddleware) {
-      const { data } = await supabase
+      // A failed read is not "no middleware history" - the trace would look
+      // complete while missing the request that charged. Throw -> 500.
+      const { data, error } = await supabase
         .from('api_idempotency_keys')
         .select('scope, idempotency_key, status, request_id, response_status, locked_at, created_at, updated_at, last_error')
         .eq('idempotency_key', keyForMiddleware)
         .order('created_at', { ascending: true });
+      if (error) throw new Error(`idempotency history read failed: ${error.message}`);
       middlewareHistory = (data ?? []) as Array<Record<string, unknown>>;
     }
 
