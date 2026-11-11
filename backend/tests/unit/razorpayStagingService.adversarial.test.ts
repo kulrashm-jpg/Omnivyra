@@ -280,6 +280,32 @@ describe('razorpayStagingService adversarial safety', () => {
     expect(mockLoggerError).toHaveBeenCalledWith('razorpay_staging_purchase_link_failed', expect.anything());
   });
 
+  function attachRows(rows: unknown) {
+    mockOwnedDbTable.mockImplementation((table: string) => {
+      const chain = tableChain(table);
+      if (table === 'credit_purchases') {
+        let updating = false;
+        chain.update = jest.fn(() => { updating = true; return chain; });
+        chain.select = jest.fn(() => (updating ? Promise.resolve({ data: rows, error: null }) : chain));
+      }
+      return chain;
+    });
+  }
+
+  it('staging order: the order id must attach to exactly one pending purchase, else the order is NOT handed out', async () => {
+    attachRows([]);
+    const { createRazorpayStagingCreditOrder } = await import('../../services/payments/razorpayStagingService');
+    await expect(createRazorpayStagingCreditOrder({ organizationId: 'org-1', packageId: 'pkg-1', requestedBy: 'admin-1' }))
+      .rejects.toThrow(/credit_purchase_order_attach_failed:rows=0/);
+  });
+
+  it('staging order control: one attached row returns the order', async () => {
+    attachRows([{ id: 'inserted' }]);
+    const { createRazorpayStagingCreditOrder } = await import('../../services/payments/razorpayStagingService');
+    const r = await createRazorpayStagingCreditOrder({ organizationId: 'org-1', packageId: 'pkg-1', requestedBy: 'admin-1' });
+    expect(r).toMatchObject({ purchaseId: 'inserted', keyId: 'rzp_test_key' });
+  });
+
   it('rejects live keys in the staging order path', async () => {
     process.env.RAZORPAY_TEST_KEY_ID = 'rzp_live_bad';
     const { createRazorpayStagingCreditOrder } = await import('../../services/payments/razorpayStagingService');

@@ -259,7 +259,7 @@ export async function createRazorpayStagingCreditOrder(input: {
     },
   });
 
-  const { error: updateErr } = await ownedDbTable('credit_purchases')
+  const { data: attached, error: updateErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_order_id: order.id,
       provider_payload: {
@@ -272,8 +272,15 @@ export async function createRazorpayStagingCreditOrder(input: {
       updated_at: new Date().toISOString(),
     })
     .eq('id', purchaseId)
-    .eq('status', 'pending');
+    .eq('status', 'pending')
+    .select('id');
+  // MONEY: the order id is how a payment is matched back to this purchase. If
+  // it was not attached (error OR 0 rows - e.g. the purchase is no longer
+  // pending), never hand the order out: it could be paid and never matched.
   if (updateErr) throw new Error(`credit_purchase_order_attach_failed:${updateErr.message}`);
+  if (!Array.isArray(attached) || attached.length !== 1) {
+    throw new Error(`credit_purchase_order_attach_failed:rows=${Array.isArray(attached) ? attached.length : 'none'}`);
+  }
   await recordMonetizationOperationalEvent({
     eventName: 'monetization.razorpay_order_created',
     severity: 'INFO',
@@ -600,10 +607,8 @@ export async function handleRazorpayStagingWebhook(input: {
 
   // best-effort: credits are already granted (completePurchase succeeded) and
   // reconciliation keys on provider_order_id; this only links the event/payment
-  // ids. A failure is logged, never silent. DEPENDENCY: this is safe only while
-  // provider_order_id is present, which is guaranteed only for purchases
-  // created after the checkout create-order fix (the id write must move
-  // exactly one row). Pre-fix purchases may lack it - see the owed measurement.
+  // ids. A failure is logged, never silent. provider_order_id is present BY
+  // CONSTRUCTION here: findPurchaseForPayment found this purchase by it.
   const { error: linkErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_event_id: providerEventId,
@@ -806,8 +811,8 @@ export async function verifyAndFulfillRazorpayStagingPayment(input: {
   }
 
   // best-effort: see the webhook path - credits granted, order id stored; this
-  // only links the event/payment ids. Logged on failure. Same DEPENDENCY on
-  // provider_order_id being present (guaranteed only post create-order fix).
+  // only links the event/payment ids. Logged on failure. provider_order_id is
+  // present by construction (the purchase was found by it).
   const { error: linkErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_event_id: providerEventId,
