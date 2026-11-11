@@ -310,26 +310,60 @@ export async function runPublishingWorker(input: { workerId?: string; limit?: nu
   return result;
 }
 
+/**
+ * A job left `processing` past its lock. It used to go straight back to `retrying` - which
+ * PUBLISHED AGAIN whenever the post had gone out but the job was never marked published (a worker
+ * crash after the provider call, or a failed markJobPublished write). Its latest attempt decides:
+ *   succeeded        -> it WAS published: mark the job published (repair). Never republish.
+ *   running          -> outcome unknown: DEAD-LETTER for a person to verify on the site.
+ *   failed / none    -> retrying, as before.
+ *   attempt unreadable -> left as it is this tick (logged); the next run decides.
+ */
 export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): Promise<number> {
   const now = new Date().toISOString();
-  const { data } = await ownedDbTable('publishing_jobs')
+  // best-effort: an unreadable stale list only delays recovery to the next tick; nothing is re-queued without it
+  const { data, error: staleError } = await ownedDbTable('publishing_jobs')
     .select('id, attempt_count')
     .eq('status', 'processing')
     .lt('lock_expires_at', now)
     .limit(50);
+  if (staleError) console.warn('[publishingJob] stale processing jobs unreadable; recovery deferred', { error: staleError.message });
   let recovered = 0;
   for (const job of data || []) {
-    await ownedDbTable('publishing_jobs')
-      .update({
-        status: 'retrying',
-        locked_by: null,
-        locked_at: null,
-        lock_expires_at: null,
+    const { data: lastAttempt, error: attemptError } = await ownedDbTable('publishing_attempts')
+      .select('status, provider_response')
+      .eq('job_id', job.id)
+      .order('attempt_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (attemptError) {
+      console.error('[publishingJob] stale job left processing: its last attempt is unreadable, so whether it published is unknown', {
+        job_id: job.id, error: attemptError.message,
+      });
+      continue;
+    }
+    const lastStatus = (lastAttempt as { status?: string } | null)?.status ?? null;
+    const patch: Record<string, unknown> = { locked_by: null, locked_at: null, lock_expires_at: null, updated_at: now };
+    if (lastStatus === 'succeeded') {
+      Object.assign(patch, { status: 'published', last_error: null, completed_at: now,
+        provider_response: (lastAttempt as { provider_response?: unknown }).provider_response ?? {} });
+    } else if (lastStatus === 'running') {
+      Object.assign(patch, { status: 'dead_letter', dead_letter_at: now,
+        last_error: `Stale while publishing (recovered by ${workerId}): the post may or may not be live. Verify on the site before retrying.` });
+    } else {
+      Object.assign(patch, { status: 'retrying',
         run_after: new Date(Date.now() + backoffMs(Number((job as any).attempt_count || 0))).toISOString(),
-        last_error: `Recovered stale processing job by ${workerId}`,
-        updated_at: now,
-      })
-      .eq('id', job.id);
+        last_error: `Recovered stale processing job by ${workerId}` });
+    }
+    // best-effort: a failed recovery write leaves the job processing; the next tick retries the same decision
+    const { error: recoverError } = await ownedDbTable('publishing_jobs')
+      .update(patch)
+      .eq('id', job.id)
+      .eq('status', 'processing');
+    if (recoverError) {
+      console.warn('[publishingJob] stale job recovery not written; retried next tick', { job_id: job.id, error: recoverError.message });
+      continue;
+    }
     recovered += 1;
   }
   return recovered;
