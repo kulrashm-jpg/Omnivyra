@@ -29,10 +29,8 @@ jest.mock('../../services/rbacPrimitives', () => ({
   getCompanyRoleIncludingInvited: (...a: unknown[]) => getCompanyRoleIncludingInvited(...a),
 }));
 
-import { mintSignedBridgeCookieValue } from '../../security/bridgeCookie';
 import * as contentArchitectService from '../../services/contentArchitectService';
 const { resolveCompanyAccess } = contentArchitectService;
-import { LEGACY_BRIDGE_HARD_EXPIRY_AT } from '../../security/legacyCookieSuperAdminBridge';
 
 const req = (cookies: Record<string, string> = {}) =>
   ({ cookies, headers: { cookie: Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ') } } as never);
@@ -53,8 +51,9 @@ beforeEach(() => {
   for (const k of ENV_KEYS) saved[k] = process.env[k];
   process.env.BRIDGE_COOKIE_SECRET = BRIDGE_SECRET;
   delete process.env.LEGACY_BRIDGE_DRY_RUN;
-  // Keep the deprecated bridge inside its validity window for the compat tests.
-  nowSpy = jest.spyOn(Date, 'now').mockReturnValue(LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime() - 60_000);
+  // Pin the clock to the instant the bridge WOULD still have been valid
+  // (2026-08-05T00:00Z minus a minute): even then no cookie grants anything.
+  nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-05T00:00:00Z') - 60_000);
 });
 afterEach(() => {
   nowSpy?.mockRestore();
@@ -70,8 +69,7 @@ afterEach(() => {
 // The cookie-session matrix (forged / tampered / signed / expired / dry-run)
 // pinned isContentArchitectSession. e9 (C), 2026-11-11: that reader and its
 // pinned-company sibling are DELETED, so the property is now stronger and
-// simpler - NO cookie of any shape, even a validly signed one before the hard
-// expiry, grants content-architect access.
+// simpler - NO cookie of any shape grants content-architect access.
 describe('SEC-001A (after e9 (C)) - the content-architect cookie grants nothing', () => {
   test('the cookie readers are no longer exported', () => {
     const mod = contentArchitectService as Record<string, unknown>;
@@ -83,11 +81,9 @@ describe('SEC-001A (after e9 (C)) - the content-architect cookie grants nothing'
   test.each([
     ['legacy unsigned =1', () => '1'],
     ['arbitrary value', () => 'attacker'],
-    ['VALIDLY SIGNED, before the hard expiry', () => {
-      process.env.BRIDGE_COOKIE_SECRET = BRIDGE_SECRET;
-      const spy = jest.spyOn(Date, 'now').mockReturnValue(LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime() - 60_000);
-      try { return mintSignedBridgeCookieValue(); } finally { spy.mockRestore(); }
-    }],
+    // Nothing verifies a signature any more (the bridge is deleted), so a value
+    // shaped like a signed bridge cookie is just another unread string.
+    ['shaped like a signed bridge value', () => 'eyJpYXQiOjE3NjI4MDAwMDB9.c2lnbmF0dXJl'],
   ])('%s cookie + no session => 401, no access', async (_n, value) => {
     getSupabaseUserFromRequest.mockResolvedValue({ user: null, error: 'no session' });
     const res = { statusCode: 0, body: null as unknown, status(c: number) { this.statusCode = c; return this; }, json(b: unknown) { this.body = b; return this; } };

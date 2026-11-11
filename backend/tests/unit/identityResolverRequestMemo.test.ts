@@ -21,7 +21,6 @@ jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jes
 jest.mock('../../services/userColumnProjection', () => ({ tolerantUserSelect: jest.fn() }));
 jest.mock('../../security/SessionAuthorityService', () => ({ resolveSessionFromRequest: jest.fn(async () => ({ ok: false })), touchSession: jest.fn() }));
 jest.mock('../../security/CapabilityService', () => ({ resolveUserCapabilities: jest.fn(async () => []) }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({ resolveLegacyCookieSuperAdminPrincipal: jest.fn(async () => null) }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async () => undefined) }));
 jest.mock('../../security/platformCapabilities', () => ({}));
 

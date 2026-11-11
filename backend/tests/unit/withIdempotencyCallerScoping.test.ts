@@ -339,67 +339,32 @@ describe('D-1 — legacy (pre-OR-09) records', () => {
   });
 });
 
-describe('D-2 — legacy bridge principals do not share an identity', () => {
-  const asBridge = (cookie: string) => {
-    resolvePrincipalMock.mockResolvedValue({
-      ok: true,
-      principal: { userId: 'legacy:cookie-super-admin', legacyCookieSuperAdmin: true },
-    });
-    return cookie;
-  };
-
-  const bridgeReqRes = (cookie: string, key: string, body: unknown) => {
-    const { req, res } = makeReqRes(key, body);
-    req.headers.cookie = `super_admin_session=${cookie}`;
-    return { req, res };
-  };
-
-  it('two bridge operators cannot replay each other despite a shared userId', async () => {
-    const handler = jest.fn(async (_q: any, r: any) => r.status(200).json({ n: handler.mock.calls.length }));
-    const wrapped = withIdempotency(handler, { scope: 's' });
-
-    asBridge('cookie-operator-1');
-    const a = bridgeReqRes('cookie-operator-1', 'shared', { a: 1 });
-    await wrapped(a.req, a.res);
-
-    asBridge('cookie-operator-2');
-    const b = bridgeReqRes('cookie-operator-2', 'shared', { a: 1 });
-    await wrapped(b.req, b.res);
-
-    // Distinct scoping keys → the handler ran for both.
-    expect(handler).toHaveBeenCalledTimes(2);
-    const owners = store.rows.map((r) => r.caller_id);
-    expect(new Set(owners).size).toBe(2);
-    expect(owners.every((o: string) => o.startsWith('bridge:'))).toBe(true);
-    // The shared constant must never be used as a scoping key.
-    expect(owners).not.toContain('legacy:cookie-super-admin');
-  });
-
-  it('the same bridge session replays its own request', async () => {
-    const handler = jest.fn(async (_q: any, r: any) => r.status(201).json({ id: 'x' }));
-    const wrapped = withIdempotency(handler, { scope: 's' });
-
-    asBridge('cookie-operator-1');
-    const first = bridgeReqRes('cookie-operator-1', 'k', { a: 1 });
-    await wrapped(first.req, first.res);
-    const second = bridgeReqRes('cookie-operator-1', 'k', { a: 1 });
-    await wrapped(second.req, second.res);
-
-    expect(second.res.payload).toEqual({ id: 'x' });
-    expect(handler).toHaveBeenCalledTimes(1);
-  });
-
-  it('a bridge principal with no cookie fails closed', async () => {
-    asBridge('unused');
+describe('D-2 (after e9 (C)) — the legacy bridge is gone; a legacy cookie gives no caller id', () => {
+  // D-2 derived a per-cookie scoping key for bridge principals, which all shared
+  // one constant userId. e9 (C), 2026-11-11: the bridge principal can no longer
+  // be produced, and the cookie is never read. A request carrying ONLY a legacy
+  // cookie resolves to no principal, so withIdempotency fails CLOSED.
+  it('a request with only a legacy cookie: 401, handler not run, nothing stored', async () => {
+    resolvePrincipalMock.mockResolvedValue({ ok: false, reason: 'NO_AUTH' });
     const handler = jest.fn();
     const wrapped = withIdempotency(handler, { scope: 's' });
     const { req, res } = makeReqRes('k', { a: 1 });
-    req.headers.cookie = '';
+    req.headers.cookie = 'super_admin_session=legacy-opaque';
     await wrapped(req, res);
-
     expect(res.statusCode).toBe(401);
     expect(handler).not.toHaveBeenCalled();
     expect(store.rows).toHaveLength(0);
+  });
+
+  it('no cookie-derived scoping key exists any more: the caller id is the principal userId', async () => {
+    resolvePrincipalMock.mockResolvedValue({ ok: true, principal: { userId: 'user-Z', legacyCookieSuperAdmin: false } });
+    const handler = jest.fn(async (_q: any, r: any) => r.status(200).json({ ok: true }));
+    const wrapped = withIdempotency(handler, { scope: 's' });
+    const { req, res } = makeReqRes('k', { a: 1 });
+    req.headers.cookie = 'super_admin_session=legacy-opaque';
+    await wrapped(req, res);
+    expect(store.rows.map((r) => r.caller_id)).toEqual(['user-Z']);
+    expect(store.rows.some((r) => String(r.caller_id).startsWith('bridge:'))).toBe(false);
   });
 });
 

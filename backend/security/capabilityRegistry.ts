@@ -65,8 +65,6 @@ import {
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
   BILLING_GRANT_FREE_CREDITS,
-  // Bridge
-  SUPER_ADMIN_LEGACY_BRIDGE,
 } from '../../shared/contracts/security';
 
 /**
@@ -214,33 +212,6 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
 };
 
 /**
- * The legacy cookie super-admin bridge grants a narrow surface that PRESERVES
- * existing behavior of cookie-protected endpoints, but does NOT satisfy
- * step-up requirements. Wave 3 deletes this entirely once a DB-backed
- * SUPER_ADMIN principal exists.
- */
-export const LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES: ReadonlyArray<Capability> = [
-  SUPER_ADMIN_LEGACY_BRIDGE,
-  // These cover the read-mostly admin endpoints that historically accept the
-  // cookie. Mutation endpoints that should require step-up (e.g. billing,
-  // identity admin, api-key issuance) MUST gate on phishing-resistant
-  // step-up — the legacy bridge cannot satisfy that gate.
-  CAMPAIGN_VIEW,
-  BILLING_VIEW,
-  MFA_VIEW_FACTORS,
-  // Phase 2 — bridge compatibility expansion. These read capabilities are
-  // granted to bridge principals so admin routes migrated to
-  // `requireCapability(...)` continue to work for cookie-only operators
-  // until Wave 3 deletes the bridge.
-  // Mutation/elevated capabilities (INTEGRATION_PLATFORM_OAUTH_MANAGE,
-  // BLOG_PUBLISH_MANAGE write paths, INTELLIGENCE_OVERRIDE_MANAGE,
-  // CRON_CONFIG_MANAGE) are intentionally NOT in this list — bridge
-  // principals must upgrade to canonical session for those.
-  SUPER_ADMIN_DASHBOARD_VIEW,
-  CONSUMPTION_VIEW_AGGREGATE,
-];
-
-/**
  * Build a parent → children adjacency from CAPABILITY_HIERARCHY.
  */
 function buildHierarchyIndex(): Map<Capability, ReadonlyArray<Capability>> {
@@ -305,13 +276,6 @@ export function capabilitiesForRole(role: string | null | undefined): ReadonlyAr
 }
 
 /**
- * Resolve the legacy cookie super-admin bridge capability set.
- */
-export function legacyCookieSuperAdminCapabilities(): ReadonlyArray<Capability> {
-  return expandWithHierarchy(LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES);
-}
-
-/**
  * Validation helper for the migration safety report. Returns capabilities
  * that exist in ALL_CAPABILITIES but are not granted by ANY role and have
  * no hierarchy parent that IS granted. These are "orphan" capabilities —
@@ -322,6 +286,5 @@ export function orphanCapabilities(): ReadonlyArray<Capability> {
   for (const role of Object.keys(ROLE_CAPABILITIES) as CanonicalRole[]) {
     for (const cap of capabilitiesForRole(role)) reachable.add(cap);
   }
-  for (const cap of legacyCookieSuperAdminCapabilities()) reachable.add(cap);
   return ALL_CAPABILITIES.filter((c) => !reachable.has(c));
 }

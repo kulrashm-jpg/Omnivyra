@@ -30,10 +30,6 @@ import {
   type AuthSessionRow,
 } from './SessionAuthorityService';
 import { resolveUserCapabilities } from './CapabilityService';
-import {
-  resolveLegacyCookieSuperAdminPrincipal,
-} from './legacyCookieSuperAdminBridge';
-import { logSecurityEvent } from './audit/SecurityAuditService';
 // Side-effect import: triggers the platform/tenant capability isolation
 // invariant at module load. Throws if any tenant role accidentally holds a
 // platform-tier capability — fail-fast hard enforcement.
@@ -296,18 +292,6 @@ async function resolvePrincipalUncached(
   const auth = await resolveAuthenticatedUser(req);
   if (auth.error === null) {
     const principal = await buildPrincipalFromAuth(req, auth.user);
-    // Conflict telemetry: bridge cookie also present alongside canonical
-    // Supabase identity. Canonical wins (already chosen); audit the conflict.
-    if (hasBridgeCookie(req)) {
-      await logSecurityEvent({
-        capability: 'identity.resolve',
-        decision: 'trust_authority_conflict_detected',
-        actorUserId: principal.userId,
-        principalUserId: principal.userId,
-        principalSupabaseUid: principal.supabaseUid,
-        reason: 'supabase identity present alongside legacy cookie super-admin bridge cookie; supabase wins',
-      });
-    }
     return { ok: true, principal };
   }
 
@@ -320,27 +304,13 @@ async function resolvePrincipalUncached(
   if (auth.error === 'NO_TOKEN') {
     const principalFromSession = await tryResolvePrincipalFromCanonicalSession(req);
     if (principalFromSession) {
-      if (hasBridgeCookie(req)) {
-        await logSecurityEvent({
-          capability: 'identity.resolve',
-          decision: 'trust_authority_conflict_detected',
-          actorUserId: principalFromSession.userId,
-          principalUserId: principalFromSession.userId,
-          principalSupabaseUid: principalFromSession.supabaseUid,
-          reason: 'canonical session present alongside bridge cookie; canonical wins',
-        });
-      }
       return { ok: true, principal: principalFromSession };
     }
   }
 
-  // 3. Fall back to legacy cookie super-admin, IF the request carries the
-  //    bridge cookie. The bridge is mutually exclusive with Supabase
-  //    identity — if both are present, Supabase wins (handled above).
-  const bridge = await resolveLegacyCookieSuperAdminPrincipal(req);
-  if (bridge) {
-    return { ok: true, principal: bridge };
-  }
+  // 3. (removed e9 (C), 2026-11-11) The legacy cookie super-admin bridge
+  //    principal is GONE: no cookie other than the canonical session can
+  //    produce a principal.
 
   // 4. Map auth-failure codes to PrincipalUnresolvedReason.
   if (auth.error === 'ACCOUNT_DELETED') return { ok: false, reason: 'ACCOUNT_DELETED' };
@@ -413,23 +383,6 @@ async function tryResolvePrincipalFromCanonicalSession(
     // here; the canonical Supabase path overrides this on its branch.
     emailVerified: true,
   });
-}
-
-/**
- * True if request carries either bridge cookie. Cheap PRESENCE check only —
- * authority is still decided by resolveLegacyCookieSuperAdminPrincipal, which
- * verifies the signature.
- *
- * SEC-001A: both cookies are now signed values (`<payload>.<sig>`), not the
- * static `=1`. Matching only `=1` would have made this presence check blind to
- * every validly-issued cookie, silently skipping the bridge branch. It now
- * matches any non-empty value for either cookie so the presence signal is
- * correct for both the signed format and a stale legacy one (which the
- * resolver then rejects and audits).
- */
-function hasBridgeCookie(req: NextApiRequest): boolean {
-  const cookies = req.headers.cookie || '';
-  return /(?:^|; )(?:super_admin_session|content_architect_session)=[^;]+/.test(cookies);
 }
 
 /**

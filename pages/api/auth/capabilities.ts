@@ -22,7 +22,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { resolveUserCapabilities } from '../../../backend/security/CapabilityService';
-import { legacyCookieSuperAdminCapabilities } from '../../../backend/security/capabilityRegistry';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -36,15 +35,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const p = result.principal;
-
-  // Bridge principals don't have a real DB user; serve the static bridge set.
-  if (p.legacyCookieSuperAdmin) {
-    return res.status(200).json({
-      capabilities: legacyCookieSuperAdminCapabilities(),
-      byOrganization: {},
-      legacyCookieSuperAdmin: true,
-    });
-  }
 
   const caps = await resolveUserCapabilities(p.userId);
   const byOrganization: Record<string, ReadonlyArray<string>> = {};

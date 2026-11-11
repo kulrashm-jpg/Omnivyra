@@ -68,9 +68,6 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({
-  resolveLegacyCookieSuperAdminPrincipal: async () => null,
-}));
 const mockAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockAudit.push(e); },
@@ -145,7 +142,7 @@ jest.mock('../../services/monetizationIncidentOpsService', () => ({
 import * as fs from 'fs';
 import * as path from 'path';
 import { decideCapability } from '../../security/AuthorizationService';
-import { capabilitiesForRole, legacyCookieSuperAdminCapabilities } from '../../security/capabilityRegistry';
+import { capabilitiesForRole } from '../../security/capabilityRegistry';
 import { PLATFORM_TIER_CAPABILITIES, assertPlatformCapabilityIsolation } from '../../security/platformCapabilities';
 import { getStepUpPolicy } from '../../security/stepup/StepUpPolicyRegistry';
 import {
@@ -478,7 +475,9 @@ describe('legacy bridge semantics (decision level)', () => {
   const bridge = {
     userId: 'legacy:cookie-super-admin', supabaseUid: 'legacy:cookie-super-admin', email: null, emailVerified: false,
     sessionId: null, sessionAgeSeconds: 0, sessionStaleSeconds: 0, organizations: [], activeOrgId: null,
-    capabilities: legacyCookieSuperAdminCapabilities(), mfa: { enrolled: false, factors: [], lastVerifiedAt: null, phishingResistant: false },
+    // The bridge is deleted (e9 (C)); a bridge-flagged principal is built
+    // directly with its former read-only set to keep the decision-level check.
+    capabilities: ['super_admin.legacy', 'campaign.view', 'billing.view', 'mfa.view_factors', SUPER_ADMIN_DASHBOARD_VIEW, 'consumption.view.aggregate'], mfa: { enrolled: false, factors: [], lastVerifiedAt: null, phishingResistant: false },
     device: { deviceId: null, trusted: false, fingerprint: '' }, stepUp: { active: false, expiresAt: null, factor: null, sessionId: null },
     legacyCookieSuperAdmin: true,
   } as unknown as AuthenticatedPrincipal;
@@ -487,7 +486,7 @@ describe('legacy bridge semantics (decision level)', () => {
       await expect(decideCapability(bridge, { capability: c, reason: 't' })).resolves.toMatchObject({ allowed: false, reason: 'CAPABILITY_NOT_HELD' });
     }
   });
-  it('a bridge principal holds the read-only dashboard capability (runtime-inert: the bridge hard-expired 2026-08-05)', async () => {
+  it('a bridge-flagged principal holding a read capability is decided like any holder (no such principal can be produced since e9 (C))', async () => {
     await expect(decideCapability(bridge, { capability: SUPER_ADMIN_DASHBOARD_VIEW, reason: 't' })).resolves.toEqual({ allowed: true });
   });
 });

@@ -26,7 +26,6 @@ import gaConnect from '../pages/api/super-admin/ga-connect';
 import gaSelectProperty from '../pages/api/super-admin/ga-select-property';
 import gaAnalyticsSummary from '../pages/api/super-admin/ga-analytics-summary';
 import cronAnalyticsIngestion from '../pages/api/cron/analytics-ingestion';
-import { mintSignedBridgeCookieValue } from '../backend/security/bridgeCookie';
 
 type MockResult = { status: number; body: any; headers: Record<string, string> };
 
@@ -57,15 +56,12 @@ function makeReq(opts: { method?: string; cookies?: Record<string,string>; heade
 }
 
 /**
- * SEC-001B: this script used to present a static `super_admin_session` value
- * of "1" and assert a 200 — i.e. it pinned the FORGED-cookie path as
- * expected behaviour. Since
- * Phase 2 the bridge cookie is HMAC-signed and a static `=1` is rejected, so
- * the script must present a genuinely signed value to exercise the operator
- * path it is meant to verify.
+ * e9 (C), 2026-11-11: the legacy bridge (and its signer) is deleted - nothing
+ * parses this cookie any more, so any value proves the same thing: it must be
+ * refused. A signed-shaped opaque value keeps the case realistic.
  */
 function bridgeCookieValue(): string {
-  return mintSignedBridgeCookieValue();
+  return 'eyJpYXQiOjB9.legacy-signature';
 }
 
 async function call(handler: any, req: NextApiRequest): Promise<MockResult> {

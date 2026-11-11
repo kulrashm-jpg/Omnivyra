@@ -7,7 +7,7 @@
  * persist a snapshot. They were gated only on SUPER_ADMIN_DASHBOARD_VIEW,
  * which SecurityCapabilities documents as read-only ("NOT the destructive
  * admin actions") and which is also held by
- *   - legacy bridge principals (LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES), and
+ *   - legacy bridge principals (removed e9 (C), 2026-11-11), and
  *   - any user granted it directly through `capability_assignments`.
  * Holding a capability does not prove platform authority
  * (isPlatformSuperAdminPrincipal): `capability_assignments` can grant any

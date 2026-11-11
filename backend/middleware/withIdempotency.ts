@@ -105,26 +105,6 @@ async function resolveCallerId(req: NextApiRequest): Promise<string | null> {
     const result = await resolvePrincipal(req);
     if (result.ok !== true) return null;
 
-    // ── D-2: legacy bridge principals must NOT share one identity ───────────
-    // legacyCookieSuperAdminBridge.ts:110 assigns every bridge principal the
-    // SAME constant userId ('legacy:cookie-super-admin'), so scoping on it
-    // would let two bridge operators replay each other's requests — the very
-    // defect caller scoping exists to remove.
-    //
-    // The bridge credential is a shared env username/password, so no per-human
-    // identity exists at the identity layer. The signed cookie VALUE is however
-    // minted per login: stable for one operator's session, distinct between
-    // operators. Hashing it yields a stable, non-shared scoping key.
-    //
-    // This derives an idempotency scoping key ONLY. Authentication,
-    // authorization, and bridge behaviour are untouched — `principal.userId`
-    // is not modified and nothing here grants or denies access.
-    if (result.principal?.legacyCookieSuperAdmin === true) {
-      const raw = readBridgeCookieValue(req);
-      if (!raw) return null; // fail closed — no cookie, no stable identity
-      return `bridge:${createHash('sha256').update(raw).digest('hex').slice(0, 32)}`;
-    }
-
     const userId = result.principal?.userId;
     return typeof userId === 'string' && userId.length > 0 ? userId : null;
   } catch {
@@ -132,20 +112,6 @@ async function resolveCallerId(req: NextApiRequest): Promise<string | null> {
     // lookup — that is precisely the exposure this change closes.
     return null;
   }
-}
-
-/**
- * Read the raw signed bridge cookie for D-2 scoping-key derivation.
- *
- * Deliberately NOT an authentication step and NOT a second bridge
- * implementation: `resolvePrincipal` has already authenticated the caller by
- * the time this runs. This only extracts the opaque cookie value to derive a
- * per-session scoping key, and never parses, validates or trusts it.
- */
-function readBridgeCookieValue(req: NextApiRequest): string | null {
-  const cookies = req.headers?.cookie || '';
-  const m = cookies.match(/(?:^|; )super_admin_session=([^;]+)/);
-  return m?.[1] ?? null;
 }
 
 /**

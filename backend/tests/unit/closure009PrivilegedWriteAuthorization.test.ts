@@ -63,32 +63,8 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({
-  // A bridge principal for `x-test-bridge`. 'all-caps' additionally claims every
-  // capability, a SUPER_ADMIN membership and an active passkey step-up — the
-  // strongest bridge principal there could be — to prove the bridge itself is
-  // what is refused, not merely the capabilities it happens to hold.
-  resolveLegacyCookieSuperAdminPrincipal: async (req: { headers: Record<string, string> }) => {
-    const kind = req.headers['x-test-bridge'];
-    if (!kind) return null;
-    const sec = jest.requireActual('../../../shared/contracts/security');
-    const reg = jest.requireActual('../../security/capabilityRegistry');
-    const allCaps = kind === 'all-caps';
-    return {
-      userId: 'legacy:cookie-super-admin', supabaseUid: 'legacy:cookie-super-admin', email: '', emailVerified: false,
-      sessionId: null, sessionAgeSeconds: 0, sessionStaleSeconds: 0,
-      organizations: allCaps ? [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }] : [],
-      activeOrgId: null,
-      capabilities: allCaps ? [...sec.ALL_CAPABILITIES] : [...reg.legacyCookieSuperAdminCapabilities()],
-      mfa: { enrolled: allCaps, factors: allCaps ? ['webauthn'] : [], lastVerifiedAt: null, phishingResistant: allCaps },
-      device: { deviceId: null, trusted: allCaps, fingerprint: 'bridge' },
-      stepUp: allCaps
-        ? { active: true, expiresAt: new Date(Date.now() + 300_000), factor: 'webauthn', sessionId: 'su-bridge' }
-        : { active: false, expiresAt: null, factor: null, sessionId: null },
-      legacyCookieSuperAdmin: true,
-    };
-  },
-}));
+// e9 (C), 2026-11-11: the legacy cookie bridge module is DELETED; a request
+// carrying only the legacy cookie resolves to NO principal (asserted below).
 const mockSecurityAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockSecurityAudit.push(e); },
@@ -219,7 +195,7 @@ import customerActivationRoute from '../../../pages/api/super-admin/customer-act
 import integrationAuditRoute from '../../../pages/api/super-admin/integration-audit';
 import cacheRoute from '../../../pages/api/admin/cache-management';
 import baselineRoute from '../../../pages/api/super-admin/observability-baseline';
-import { capabilitiesForRole, legacyCookieSuperAdminCapabilities } from '../../security/capabilityRegistry';
+import { capabilitiesForRole } from '../../security/capabilityRegistry';
 import { PLATFORM_TIER_CAPABILITIES } from '../../security/platformCapabilities';
 import { getStepUpPolicy } from '../../security/stepup/StepUpPolicyRegistry';
 import {
@@ -337,7 +313,7 @@ const STEPUP = SURFACES.filter((s) => s.gate === 'stepup');
 async function call(s: Surface, who: { user?: string; bridge?: 'plain' | 'all-caps' } | null, body?: Record<string, unknown>) {
   const headers: Record<string, string> = {};
   if (who?.user) headers['x-test-user'] = who.user;
-  if (who?.bridge) headers['x-test-bridge'] = who.bridge;
+  if (who?.bridge) headers.cookie = 'super_admin_session=legacy-opaque; content_architect_session=legacy-opaque';
   const req = { headers, query: { ...(s.query ?? {}) }, body: { ...(body ?? s.body) }, method: 'POST', url: `/api/${s.name}`, socket: {}, cookies: {} };
   const res = fakeRes();
   await s.handler(req, res);
@@ -362,7 +338,6 @@ describe('capability model (the five-step recipe)', () => {
     for (const r of ['COMPANY_ADMIN', 'CONTENT_PUBLISHER', 'CONTENT_REVIEWER', 'CONTENT_CREATOR', 'VIEW_ONLY', 'CONTENT_ARCHITECT']) {
       expect(capabilitiesForRole(r)).not.toContain(cap);
     }
-    expect(legacyCookieSuperAdminCapabilities()).not.toContain(cap);
   });
 });
 
@@ -383,15 +358,16 @@ describe('a view-only grantee holding DIRECT grants of every write capability (v
   });
 });
 
-describe('legacy bridge principals', () => {
-  it.each(SURFACES.map((s) => [s.name, s] as const))('%s → a plain bridge principal is refused, nothing happens', async (_n, s) => {
+describe('legacy cookie requests (bridge removed)', () => {
+  // e9 (C): the bridge is deleted, so a legacy-cookie request has NO principal at all.
+  it.each(SURFACES.map((s) => [s.name, s] as const))('%s → a legacy-cookie request is 401 (no principal), nothing happens', async (_n, s) => {
     const r = await call(s, { bridge: 'plain' });
-    expect([401, 403]).toContain(r.statusCode);
+    expect(r.statusCode).toBe(401);
     expectNothingHappened(s);
   });
-  it.each(SURFACES.map((s) => [s.name, s] as const))('%s → a bridge principal claiming every capability, a SUPER_ADMIN row and a step-up is refused, nothing happens', async (_n, s) => {
+  it.each(SURFACES.map((s) => [s.name, s] as const))('%s → the same legacy cookie, however it was minted, still yields no principal: 401, nothing happens', async (_n, s) => {
     const r = await call(s, { bridge: 'all-caps' });
-    expect([401, 403]).toContain(r.statusCode);
+    expect(r.statusCode).toBe(401);
     expectNothingHappened(s);
   });
 });

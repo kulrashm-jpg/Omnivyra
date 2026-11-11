@@ -14,7 +14,6 @@
 
 import { ownedDbTable } from '../db/writeOwner';
 import { logger } from './logger';
-import { LEGACY_BRIDGE_HARD_EXPIRY_AT } from '../security/legacyCookieSuperAdminBridge';
 
 export interface BridgeUsageEntry {
   /** capability + reason form a unique-enough key for the user-facing rollup. */
@@ -46,7 +45,9 @@ const DEFAULT_WINDOW_HOURS = 24 * 30; // 30 days
 // hand-copied literal. The copy could not drift safely — bumping the real
 // expiry would have silently left this monitor reporting the old date, which
 // is precisely the number operators use to decide migration urgency.
-const HARD_EXPIRY_ISO = LEGACY_BRIDGE_HARD_EXPIRY_AT.toISOString();
+// The bridge itself is deleted (e9 (C), 2026-11-11); this report reads
+// HISTORICAL audit rows only. The expiry it reached is kept as a fact.
+const HARD_EXPIRY_ISO = new Date('2026-08-05T00:00:00Z').toISOString();
 
 interface AuditRow {
   occurred_at: string;

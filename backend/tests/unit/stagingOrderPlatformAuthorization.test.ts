@@ -82,7 +82,6 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({ resolveLegacyCookieSuperAdminPrincipal: async () => null }));
 const mockAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockAudit.push(e); },

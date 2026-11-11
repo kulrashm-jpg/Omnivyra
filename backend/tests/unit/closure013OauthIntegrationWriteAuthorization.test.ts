@@ -77,30 +77,8 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({
-  // 'all-caps' claims every capability, a SUPER_ADMIN membership and an active
-  // passkey step-up: the strongest bridge principal there could be.
-  resolveLegacyCookieSuperAdminPrincipal: async (req: { headers: Record<string, string> }) => {
-    const kind = req.headers['x-test-bridge'];
-    if (!kind) return null;
-    const sec = jest.requireActual('../../../shared/contracts/security');
-    const reg = jest.requireActual('../../security/capabilityRegistry');
-    const allCaps = kind === 'all-caps';
-    return {
-      userId: 'legacy:cookie-super-admin', supabaseUid: 'legacy:cookie-super-admin', email: '', emailVerified: false,
-      sessionId: null, sessionAgeSeconds: 0, sessionStaleSeconds: 0,
-      organizations: allCaps ? [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }] : [],
-      activeOrgId: null,
-      capabilities: allCaps ? [...sec.ALL_CAPABILITIES] : [...reg.legacyCookieSuperAdminCapabilities()],
-      mfa: { enrolled: allCaps, factors: allCaps ? ['webauthn'] : [], lastVerifiedAt: null, phishingResistant: allCaps },
-      device: { deviceId: null, trusted: allCaps, fingerprint: 'bridge' },
-      stepUp: allCaps
-        ? { active: true, expiresAt: new Date(Date.now() + 300_000), factor: 'webauthn', sessionId: 'su-bridge' }
-        : { active: false, expiresAt: null, factor: null, sessionId: null },
-      legacyCookieSuperAdmin: true,
-    };
-  },
-}));
+// e9 (C), 2026-11-11: the legacy cookie bridge module is DELETED; a request
+// carrying only the legacy cookie resolves to NO principal (asserted below).
 const mockSecurityAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockSecurityAudit.push(e); },
@@ -338,7 +316,7 @@ const BUSINESS_TABLES = new Set(['platform_oauth_configs', 'api_provider_account
 async function call(s: Surface, who: { user?: string; bridge?: 'plain' | 'all-caps' } | null, over?: { body?: Record<string, unknown>; query?: Record<string, unknown> }) {
   const headers: Record<string, string> = {};
   if (who?.user) headers['x-test-user'] = who.user;
-  if (who?.bridge) headers['x-test-bridge'] = who.bridge;
+  if (who?.bridge) headers.cookie = 'super_admin_session=legacy-opaque; content_architect_session=legacy-opaque';
   const req = {
     headers, method: s.method, url: `/api/${s.name}`, socket: {}, cookies: {},
     query: { ...(over?.query ?? s.query ?? {}) }, body: { ...(over?.body ?? s.body) },
@@ -396,15 +374,16 @@ describe('no authenticated principal', () => {
   });
 });
 
-describe('legacy bridge principals', () => {
-  it.each(each(SURFACES))('%s → a plain bridge principal is refused, nothing happens', async (_n, s) => {
+describe('legacy cookie requests (bridge removed)', () => {
+  // e9 (C): the bridge is deleted, so a legacy-cookie request has NO principal at all.
+  it.each(each(SURFACES))('%s → a legacy-cookie request is 401 (no principal), nothing happens', async (_n, s) => {
     const r = await call(s, { bridge: 'plain' });
-    expect([401, 403]).toContain(r.statusCode);
+    expect(r.statusCode).toBe(401);
     expectNothingHappened(s);
   });
-  it.each(each(SURFACES))('%s → a bridge principal claiming every capability, a SUPER_ADMIN row and a step-up is refused, nothing happens', async (_n, s) => {
+  it.each(each(SURFACES))('%s → the same legacy cookie, however it was minted, still yields no principal: 401, nothing happens', async (_n, s) => {
     const r = await call(s, { bridge: 'all-caps' });
-    expect([401, 403]).toContain(r.statusCode);
+    expect(r.statusCode).toBe(401);
     expectNothingHappened(s);
   });
 });

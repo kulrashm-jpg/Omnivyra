@@ -80,23 +80,8 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({
-  resolveLegacyCookieSuperAdminPrincipal: async (req: { headers: Record<string, string> }) => {
-    if (!req.headers['x-test-bridge']) return null;
-    const sec = jest.requireActual('../../../shared/contracts/security');
-    return {
-      userId: 'legacy:cookie-super-admin', supabaseUid: 'legacy:cookie-super-admin', email: '', emailVerified: false,
-      sessionId: null, sessionAgeSeconds: 0, sessionStaleSeconds: 0,
-      organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }],
-      activeOrgId: null,
-      capabilities: [...sec.ALL_CAPABILITIES],
-      mfa: { enrolled: true, factors: ['webauthn'], lastVerifiedAt: null, phishingResistant: true },
-      device: { deviceId: null, trusted: true, fingerprint: 'bridge' },
-      stepUp: { active: true, expiresAt: new Date(Date.now() + 300_000), factor: 'webauthn', sessionId: 'su-bridge' },
-      legacyCookieSuperAdmin: true,
-    };
-  },
-}));
+// e9 (C), 2026-11-11: the legacy cookie bridge module is DELETED; a request
+// carrying only the legacy cookie resolves to NO principal (asserted below).
 const mockSecurityAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockSecurityAudit.push(e); },
@@ -252,7 +237,7 @@ function load(route: string): Handler {
 async function call(route: string, method: string, who: { user?: string; bridge?: boolean } | null, opts: { emptyBody?: boolean } = {}) {
   const headers: Record<string, string> = { 'idempotency-key': `c13-${route}-${method}`, 'content-type': 'application/json' };
   if (who?.user) headers['x-test-user'] = who.user;
-  if (who?.bridge) headers['x-test-bridge'] = '1';
+  if (who?.bridge) headers.cookie = 'super_admin_session=legacy-opaque; content_architect_session=legacy-opaque';
   const req = {
     headers, method, url: `/api/${route}`, socket: {}, cookies: {},
     query: { id: 'x-1', type: 'x', invitationId: 'inv-1', threadId: 't-1' },
@@ -366,9 +351,10 @@ describe('other refused principals', () => {
     expect(r.statusCode).toBe(TOMBSTONES.has(route) ? 410 : 403);
     expectNothingHappened();
   });
-  it.each(PAIRS)('%s → a bridge principal claiming everything is denied, nothing happens', async (_n, route, method) => {
+  // e9 (C): the bridge is deleted, so a legacy-cookie request has NO principal at all.
+  it.each(PAIRS)('%s → a legacy-cookie request has no principal: 401 (410 tombstones), nothing happens', async (_n, route, method) => {
     const r = await call(route, method, { bridge: true });
-    expect(TOMBSTONES.has(route) ? [410] : [401, 403]).toContain(r.statusCode);
+    expect(r.statusCode).toBe(TOMBSTONES.has(route) ? 410 : 401);
     expectNothingHappened();
   });
   it.each(PAIRS)('%s → no principal → 401, nothing happens', async (_n, route, method) => {

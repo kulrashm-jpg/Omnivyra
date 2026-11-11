@@ -46,22 +46,8 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({
-  resolveLegacyCookieSuperAdminPrincipal: async (req: { headers: Record<string, string> }) => {
-    if (!req.headers['x-test-bridge']) return null;
-    const sec = jest.requireActual('../../../shared/contracts/security');
-    return {
-      userId: 'legacy:cookie-super-admin', supabaseUid: 'legacy:cookie-super-admin', email: '', emailVerified: false,
-      sessionId: null, sessionAgeSeconds: 0, sessionStaleSeconds: 0,
-      organizations: [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }], activeOrgId: null,
-      capabilities: [...sec.ALL_CAPABILITIES],
-      mfa: { enrolled: true, factors: ['webauthn'], lastVerifiedAt: null, phishingResistant: true },
-      device: { deviceId: null, trusted: true, fingerprint: 'bridge' },
-      stepUp: { active: true, expiresAt: new Date(Date.now() + 300_000), factor: 'webauthn', sessionId: 'su-bridge' },
-      legacyCookieSuperAdmin: true,
-    };
-  },
-}));
+// e9 (C), 2026-11-11: the legacy cookie bridge module is DELETED; a request
+// carrying only the legacy cookie resolves to NO principal (asserted below).
 const mockAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockAudit.push(e); },
@@ -101,7 +87,7 @@ function fakeRes() {
 async function gate(who: Who, capability: Capability, method = 'POST') {
   const headers: Record<string, string> = {};
   if (who?.user) headers['x-test-user'] = who.user;
-  if (who?.bridge) headers['x-test-bridge'] = '1';
+  if (who?.bridge) headers.cookie = 'super_admin_session=legacy-opaque; content_architect_session=legacy-opaque';
   const res = fakeRes();
   const out = await requireCapability({ headers, method, url: '/api/x', socket: {}, cookies: {}, query: {}, body: {} } as never, res as never, { capability, reason: 'closure-014 casing test' });
   return { ok: out.ok, status: res.statusCode, code: (res.body as { code?: string } | undefined)?.code };
@@ -175,10 +161,11 @@ describe('the real requireCapability chain — a platform-tier WRITE', () => {
     seed('u-x', [['COMPANY_ADMIN', 'active']], [W]);
     expect(await gate({ user: 'u-x' }, W)).toMatchObject({ ok: false, status: 403, code: 'PLATFORM_SUPER_ADMIN_REQUIRED' });
   });
-  it('a bridge principal claiming every capability → refused', async () => {
+  // e9 (C): the bridge is deleted, so a legacy-cookie request has NO principal at all.
+  it('a legacy-cookie request → 401 NOT_AUTHENTICATED (no principal)', async () => {
     const r = await gate({ bridge: true }, W);
     expect(r.ok).toBe(false);
-    expect([401, 403]).toContain(r.status);
+    expect(r).toMatchObject({ status: 401, code: 'NOT_AUTHENTICATED' });
   });
   it('no principal → 401 NOT_AUTHENTICATED', async () => {
     expect(await gate(null, W)).toMatchObject({ ok: false, status: 401, code: 'NOT_AUTHENTICATED' });

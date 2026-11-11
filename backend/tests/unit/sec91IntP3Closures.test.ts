@@ -34,10 +34,6 @@ jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jes
 jest.mock('../../security/SessionAuthorityService', () => ({ createSession: jest.fn(), attachSessionCookie: jest.fn() }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async () => undefined) }));
 jest.mock('../../security/startup/superAdminIdentityCheck', () => ({ checkSuperAdminIdentity: jest.fn(async () => ({ ok: false, reason: 'PRIMARY_USER_ID_UNSET', primaryUserId: null })) }));
-jest.mock('../../security/bridgeCookie', () => ({
-  mintSignedBridgeCookieValue: () => 'signed-bridge-placeholder',
-  buildBridgeSetCookieHeader: (v: string) => `super_admin_session=${v}; Path=/; HttpOnly`,
-}));
 const mockInserts: Array<{ table: string; row: unknown }> = [];
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (table: string) => ({ insert: async (row: unknown) => { mockInserts.push({ table, row }); return { error: null }; } }) },

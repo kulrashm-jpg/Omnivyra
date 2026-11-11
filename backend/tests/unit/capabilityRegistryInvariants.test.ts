@@ -19,31 +19,23 @@
  * This test makes that invariant a hard gate on every CI run.
  */
 
-import {
-  LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES,
-  legacyCookieSuperAdminCapabilities,
-} from '../../security/capabilityRegistry';
-import { STEP_UP_REQUIRED_CAPABILITIES } from '../../../shared/contracts/security';
+import * as registry from '../../security/capabilityRegistry';
+import { STEP_UP_REQUIRED_CAPABILITIES, SUPER_ADMIN_LEGACY_BRIDGE } from '../../../shared/contracts/security';
 
-describe('capability-set invariants — bridge ⊥ step-up', () => {
-  it('LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES is disjoint from STEP_UP_REQUIRED_CAPABILITIES', () => {
-    const stepUpSet = new Set<string>(STEP_UP_REQUIRED_CAPABILITIES);
-    const bridgeBase = LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES;
-    const overlap = bridgeBase.filter((cap) => stepUpSet.has(cap));
-    expect(overlap).toEqual([]);
+describe('capability-set invariants — the bridge set is gone (e9 (C), 2026-11-11)', () => {
+  // The bridge ⊥ step-up invariant pinned here had a subject until the legacy
+  // cookie bridge was deleted. What must now hold: no bridge capability set is
+  // exported, and NO role grants the bridge capability (it is an audit label).
+  it('no bridge capability set is exported any more', () => {
+    const mod = registry as Record<string, unknown>;
+    expect(mod.LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES).toBeUndefined();
+    expect(mod.legacyCookieSuperAdminCapabilities).toBeUndefined();
   });
 
-  it('hierarchy-expanded bridge cap set is also disjoint from step-up set', () => {
-    // Hierarchy expansion can add child caps. We need to make sure
-    // expanding the bridge base doesn't pull in any step-up child either.
-    const stepUpSet = new Set<string>(STEP_UP_REQUIRED_CAPABILITIES);
-    const expanded = legacyCookieSuperAdminCapabilities();
-    const overlap = expanded.filter((cap) => stepUpSet.has(cap));
-    expect(overlap).toEqual([]);
-  });
-
-  it('bridge cap list is non-empty (otherwise the bridge is dead-code)', () => {
-    expect(LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES.length).toBeGreaterThan(0);
+  it('no role grants the legacy bridge capability', () => {
+    for (const role of Object.keys(registry.ROLE_CAPABILITIES)) {
+      expect([role, registry.capabilitiesForRole(role).includes(SUPER_ADMIN_LEGACY_BRIDGE)]).toEqual([role, false]);
+    }
   });
 
   it('step-up cap list contains every elevated mutation Phase 2 migrated', () => {

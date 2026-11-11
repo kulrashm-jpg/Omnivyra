@@ -114,7 +114,6 @@ import { getTrustedClientIpOrNull } from '../../../lib/security/clientIp';
 import { requestIp } from '../../services/signupEventService';
 import { requireAdminRateLimit } from '../../services/requestAccessService';
 import { requireCapability } from '../../security/requireCapability';
-import { resolveLegacyCookieSuperAdminPrincipal } from '../../security/legacyCookieSuperAdminBridge';
 import { _resetEnvCredentialRateLimit } from '../../../pages/api/admin/bootstrap-super-admin';
 
 const SPOOFED = '198.51.100.7';
@@ -373,18 +372,6 @@ describe('backend helpers use the trusted client IP', () => {
     process.env.VERCEL = '1';
     await requireCapability(req(vercelEdge), res(), { capability: 'super_admin.legacy' as any, reason: 'fake-sec91-w2e-test' });
     expect(mockAudit.map((e) => e.ip)).toEqual([EDGE]);
-  });
-
-  it('legacyCookieSuperAdminBridge: a rejected bridge cookie is audited with the socket peer', async () => {
-    const r = await resolveLegacyCookieSuperAdminPrincipal(req({ ...spoofed, cookie: 'super_admin_session=fake-not-a-signed-cookie' }));
-    expect(r).toBeNull();
-    expect(mockAudit.length).toBeGreaterThan(0);
-    expect(new Set(mockAudit.map((e) => e.ip))).toEqual(new Set([PEER]));
-  });
-  it('COMPAT Vercel: the bridge audit carries the edge-set client address', async () => {
-    process.env.VERCEL = '1';
-    await resolveLegacyCookieSuperAdminPrincipal(req({ ...vercelEdge, cookie: 'super_admin_session=fake-not-a-signed-cookie' }));
-    expect(new Set(mockAudit.map((e) => e.ip))).toEqual(new Set([EDGE]));
   });
 });
 

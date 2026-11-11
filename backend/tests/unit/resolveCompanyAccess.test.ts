@@ -57,8 +57,7 @@ test('missing companyId: 400, null, no identity lookup', async () => {
 // UNSIGNED `content_architect_session=1` cookie granted access to ANY company
 // "without session auth". That is the escalation SEC-001A closes, so the
 // contract is inverted here: the unsigned cookie must NOT short-circuit
-// authorization, and a validly SIGNED cookie must still work until the bridge
-// hard-expires. Both directions are pinned.
+// authorization. Since e9 (C) no cookie value of any shape does (see below).
 test('content-architect session: an UNSIGNED cookie no longer bypasses authentication', async () => {
   const r = req();
   (r as any).cookies = { content_architect_session: '1' };
@@ -71,63 +70,22 @@ test('content-architect session: an UNSIGNED cookie no longer bypasses authentic
 });
 
 /**
- * SEC-001D: these two tests control LEGACY_BRIDGE_DRY_RUN explicitly instead of
- * inheriting whatever the ambient environment has. A bridge-removal rehearsal
- * is run by setting that flag and looking for failures, so a suite that changes
- * verdict with the flag produces a spurious signal in exactly the run that is
- * supposed to be trustworthy. Pinning both directions also proves the
- * content-architect consumer is VISIBLE to dry-run — i.e. not an invisible
- * bridge dependency.
+ * e9 (C), 2026-11-11: the content-architect cookie reader and the bridge
+ * lifecycle (signature, expiry, dry-run) are DELETED. A cookie of any value -
+ * including one shaped like a signed bridge cookie - is just an unread header:
+ * resolveCompanyAccess always authenticates the real session.
  */
-function withArchitectCookie(
-  dryRun: boolean,
-  assertion: (access: unknown, userWasCalled: () => boolean) => void,
-): () => Promise<void> {
-  return async () => {
-    const savedSecret = process.env.BRIDGE_COOKIE_SECRET;
-    const savedDryRun = process.env.LEGACY_BRIDGE_DRY_RUN;
-    process.env.BRIDGE_COOKIE_SECRET = 'sec001a-resolve-test-secret-thirty-two+';
-    if (dryRun) process.env.LEGACY_BRIDGE_DRY_RUN = '1';
-    else delete process.env.LEGACY_BRIDGE_DRY_RUN;
-
-    const { mintSignedBridgeCookieValue } = require('../../security/bridgeCookie') as
-      typeof import('../../security/bridgeCookie');
-    const { LEGACY_BRIDGE_HARD_EXPIRY_AT } = require('../../security/legacyCookieSuperAdminBridge') as
-      typeof import('../../security/legacyCookieSuperAdminBridge');
-    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime() - 60_000);
-    try {
-      const r = req();
-      (r as any).cookies = { content_architect_session: mintSignedBridgeCookieValue() };
-      const res = createMockRes();
-      const access = await resolveCompanyAccess(r, res, 'company-1');
-      assertion(access, () => userMock.mock.calls.length > 0);
-    } finally {
-      nowSpy.mockRestore();
-      if (savedSecret === undefined) delete process.env.BRIDGE_COOKIE_SECRET;
-      else process.env.BRIDGE_COOKIE_SECRET = savedSecret;
-      if (savedDryRun === undefined) delete process.env.LEGACY_BRIDGE_DRY_RUN;
-      else process.env.LEGACY_BRIDGE_DRY_RUN = savedDryRun;
-    }
-  };
-}
-
-test(
-  'content-architect cookie: even a SIGNED pre-expiry cookie grants nothing (reader removed, e9 (C))',
-  withArchitectCookie(false, (access, userWasCalled) => {
-    // Falls through to real authentication, which the mock denies.
-    expect(access).toBeNull();
-    expect(userWasCalled()).toBe(true);
-  }),
-);
-
-test(
-  'content-architect session: LEGACY_BRIDGE_DRY_RUN=1 kills the SAME signed cookie (consumer is visible)',
-  withArchitectCookie(true, (access, userWasCalled) => {
-    // Falls through to real authentication, which the mock denies.
-    expect(access).toBeNull();
-    expect(userWasCalled()).toBe(true);
-  }),
-);
+test.each([
+  ['legacy unsigned', '1'],
+  ['shaped like a signed bridge value', 'eyJpYXQiOjE3NjI4MDAwMDB9.c2lnbmF0dXJl'],
+])('content-architect cookie (%s) grants nothing: real authentication runs and denies', async (_n, value) => {
+  const r = req();
+  (r as any).cookies = { content_architect_session: value, content_architect_company_id: 'company-1' };
+  const res = createMockRes();
+  const access = await resolveCompanyAccess(r, res, 'company-1');
+  expect(access).toBeNull();
+  expect(userMock).toHaveBeenCalled();
+});
 
 test('no authenticated user: 401 UNAUTHORIZED, null', async () => {
   userMock.mockResolvedValue({ user: null, error: 'no session' });

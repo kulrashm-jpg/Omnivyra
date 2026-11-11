@@ -66,32 +66,8 @@ jest.mock('../../security/SessionAuthorityService', () => ({
   },
   touchSession: async () => undefined,
 }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({
-  // A bridge principal for `x-test-bridge`. 'all-caps' additionally claims every
-  // capability, a SUPER_ADMIN membership and an active passkey step-up — the
-  // strongest bridge principal there could be — to prove the bridge itself is
-  // what is refused, not merely the capabilities it happens to hold.
-  resolveLegacyCookieSuperAdminPrincipal: async (req: { headers: Record<string, string> }) => {
-    const kind = req.headers['x-test-bridge'];
-    if (!kind) return null;
-    const sec = jest.requireActual('../../../shared/contracts/security');
-    const reg = jest.requireActual('../../security/capabilityRegistry');
-    const allCaps = kind === 'all-caps';
-    return {
-      userId: 'legacy:cookie-super-admin', supabaseUid: 'legacy:cookie-super-admin', email: '', emailVerified: false,
-      sessionId: null, sessionAgeSeconds: 0, sessionStaleSeconds: 0,
-      organizations: allCaps ? [{ organizationId: 'platform', role: 'SUPER_ADMIN', status: 'active' }] : [],
-      activeOrgId: null,
-      capabilities: allCaps ? [...sec.ALL_CAPABILITIES] : [...reg.legacyCookieSuperAdminCapabilities()],
-      mfa: { enrolled: allCaps, factors: allCaps ? ['webauthn'] : [], lastVerifiedAt: null, phishingResistant: allCaps },
-      device: { deviceId: null, trusted: allCaps, fingerprint: 'bridge' },
-      stepUp: allCaps
-        ? { active: true, expiresAt: new Date(Date.now() + 300_000), factor: 'webauthn', sessionId: 'su-bridge' }
-        : { active: false, expiresAt: null, factor: null, sessionId: null },
-      legacyCookieSuperAdmin: true,
-    };
-  },
-}));
+// e9 (C), 2026-11-11: the legacy cookie bridge module is DELETED; a request
+// carrying only the legacy cookie resolves to NO principal (asserted below).
 const mockSecurityAudit: Record<string, unknown>[] = [];
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: async (e: Record<string, unknown>) => { mockSecurityAudit.push(e); },
@@ -287,7 +263,7 @@ type Who = { user?: string; bridge?: 'plain' | 'all-caps' } | null;
 async function call(handler: Handler, method: string, who: Who, body: Record<string, unknown> = {}, query: Record<string, unknown> = {}) {
   const headers: Record<string, string> = {};
   if (who?.user) headers['x-test-user'] = who.user;
-  if (who?.bridge) headers['x-test-bridge'] = who.bridge;
+  if (who?.bridge) headers.cookie = 'super_admin_session=legacy-opaque; content_architect_session=legacy-opaque';
   const req = { headers, query, body, method, url: '/api/x', socket: {}, cookies: {} };
   const res = fakeRes();
   await handler(req, res);
@@ -348,11 +324,12 @@ describe('Closure-015: dashboard-view WRITE routes need platform authority, refu
     expectNoEffects(s);
     expectAuditedRefusal(SUPER_ADMIN_DASHBOARD_VIEW, DEACT_GRANTED);
   });
-  it.each(eachWrite)('%s → bridge principals are refused and nothing reads as access', async (_n, s) => {
+  // e9 (C): the bridge is deleted, so a legacy-cookie request has NO principal at all.
+  it.each(eachWrite)('%s → legacy-cookie requests have no principal (401) and nothing reads as access', async (_n, s) => {
     for (const bridge of ['plain', 'all-caps'] as const) {
       mockSecurityAudit.length = 0;
       const r = await call(s.handler, 'POST', { bridge }, s.body);
-      expect([401, 403]).toContain(r.statusCode);
+      expect(r.statusCode).toBe(401);
       expectNoEffects(s);
       expect(decisions()).not.toContain('allowed');
       expect(decisions()).not.toContain('elevated_route_accessed');
@@ -482,13 +459,11 @@ const NON_CAPABILITY_WRITE_ROUTES: Record<string, string> = {
   'admin/rate-limit-config': 'role: requireSuperAdminUser',
   'admin/website-intelligence/alerts': 'role: enforceRole COMPANY_ADMIN|SUPER_ADMIN (tenant-scoped)',
   'admin/website-intelligence/queue-metrics': 'role: enforceRole COMPANY_ADMIN|SUPER_ADMIN (tenant-scoped)',
-  'super-admin/activity-control': 'role: isPlatformSuperAdmin',
   'super-admin/billing-exports/generate': 'finance auditor',
   'super-admin/billing-forensics/job-replay': 'finance auditor',
   'super-admin/billing-forensics/trace': 'finance auditor',
   'super-admin/content-architect-login': 'login endpoint (credential check)',
   'super-admin/creator-render-ops': 'role: isSuperAdmin',
-  'super-admin/credit-packages/index': 'role: requireSuperAdmin',
   'super-admin/financial-control': 'finance role (isFinanceAdmin)',
   'super-admin/ga-connect': 'requireSuperAdminGaWriteAccess → requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE) + central guard',
   'super-admin/ga-select-property': 'requireSuperAdminGaWriteAccess → requireCapability + central guard',
@@ -496,8 +471,6 @@ const NON_CAPABILITY_WRITE_ROUTES: Record<string, string> = {
   'super-admin/gsc-connect': 'requireSuperAdminGaWriteAccess → requireCapability + central guard',
   'super-admin/gsc-select-property': 'requireSuperAdminGaWriteAccess → requireCapability + central guard',
   'super-admin/gsc-sync': 'requireSuperAdminGaWriteAccess → requireCapability + central guard',
-  'super-admin/llm/models': 'role: requireSuperAdmin',
-  'super-admin/llm/providers': 'role: requireSuperAdmin',
   'super-admin/login': 'login endpoint (credential check)',
   'super-admin/logout': 'logout endpoint (session revoke)',
   'super-admin/serp-acquisition': 'requireSuperAdminGaWriteAccess → requireCapability + central guard',
@@ -520,6 +493,12 @@ const MIXED_CAPABILITY_ROUTES: Record<string, string> = {
   'admin/intelligence/throttle-status': 'GET view; PUT INTELLIGENCE_OVERRIDE_MANAGE; others 405',
   'super-admin/companies': 'GET view; POST/PATCH IDENTITY_ADMIN_ASSIGN; DELETE ORGANIZATION_DELETE',
   'super-admin/curated-industry-sources': 'GET view; writes INTEGRATION_PLATFORM_OAUTH_MANAGE',
+  // e9 (C), 2026-11-11: legacy cookie gate replaced; reads now name the VIEW capability,
+  // writes keep a platform-tier capability (platform authority is automatic for those).
+  'provider-accounts/index': 'GET view; POST INTEGRATION_PLATFORM_OAUTH_MANAGE',
+  'super-admin/analytics-provider-config': 'GET view; POST INTEGRATION_PLATFORM_OAUTH_MANAGE',
+  'super-admin/community-ai-policy': 'GET view; POST INTELLIGENCE_OVERRIDE_MANAGE',
+  'super-admin/pagespeed-config': 'GET/check view; save INTEGRATION_PLATFORM_OAUTH_MANAGE',
 };
 
 describe('Closure-015 static guard: no privileged write handler escapes review', () => {
