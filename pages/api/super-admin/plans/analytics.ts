@@ -37,6 +37,12 @@ interface PlanAnalytics {
 
 interface PlanAnalyticsResponse {
   plans: PlanAnalytics[];
+  /**
+   * 'ok' when this month's usage meter was read; 'unavailable' when the read
+   * failed, in which case every usage figure below is 0 because it is UNKNOWN,
+   * not because nothing was used. The UI must not present those zeros as real.
+   */
+  usage_status: 'ok' | 'unavailable';
   summary: {
     total_organizations: number;
     total_monthly_revenue: number;
@@ -68,6 +74,44 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
   }
 }
 
+interface MeterRow {
+  organization_id: string;
+  llm_total_tokens: number | null;
+  external_api_calls: number | null;
+  automation_executions: number | null;
+}
+
+const METER_PAGE = 1000;
+
+/**
+ * Every organisation's meter row for the CURRENT UTC month - the same month
+ * convention the meter's writer uses (usageMeterService.currentYearMonth).
+ * Paged, so a large tenant count is not silently truncated at the PostgREST row
+ * cap. A failed read is reported as not-ok, never as an empty month: a null
+ * error is not an answer, only an array body is.
+ */
+export async function readMonthlyUsage(now: Date = new Date()): Promise<{ rows: MeterRow[]; ok: boolean }> {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1;
+  const rows: MeterRow[] = [];
+  for (let from = 0; ; from += METER_PAGE) {
+    try {
+      const res = await supabase
+        .from('usage_meter_monthly')
+        .select('organization_id, llm_total_tokens, external_api_calls, automation_executions')
+        .eq('year', year)
+        .eq('month', month)
+        .order('organization_id', { ascending: true })
+        .range(from, from + METER_PAGE - 1);
+      if (res.error || !Array.isArray(res.data)) return { rows: [], ok: false };
+      rows.push(...(res.data as MeterRow[]));
+      if (res.data.length < METER_PAGE) return { rows, ok: true };
+    } catch {
+      return { rows: [], ok: false };
+    }
+  }
+}
+
 async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PlanAnalyticsResponse | { error: string }>
@@ -92,6 +136,7 @@ async function handler(
     if (!plans || plans.length === 0) {
       return res.status(200).json({
         plans: [],
+        usage_status: 'ok',
         summary: {
           total_organizations: 0,
           total_monthly_revenue: 0,
@@ -147,25 +192,20 @@ async function handler(
     // Track free credit orgs separately
     const freeCreditsOrgIds = new Set((freeCreditGrants || []).map(g => g.organization_id));
 
-    // Get usage metrics (mock data structure — in production, join with consumption logs)
-    let usageData: any[] = [];
-    try {
-      const result = await supabase.rpc('get_organization_monthly_usage', {
-        month: new Date().getMonth() + 1,
-        year: new Date().getFullYear(),
-      });
-      usageData = result.data || [];
-    } catch (e) {
-      // Fallback if RPC doesn't exist — use mock data
-      usageData = [];
-    }
+    // This month's usage, from the canonical meter (usage_meter_monthly, written
+    // by usageMeterService and read by usageEnforcementService/usageAlertService).
+    // C10 (2026-11-11): this used to call an RPC, get_organization_monthly_usage,
+    // that has never existed in any branch or in production, and swallowed the
+    // failure - so this page has always shown ZERO usage for every plan. It now
+    // reads the meter directly; no new database function is needed.
+    const { rows: usageData, ok: usageOk } = await readMonthlyUsage();
 
     const usageByOrg: Record<string, any> = {};
-    usageData?.forEach((u: any) => {
+    usageData.forEach((u) => {
       usageByOrg[u.organization_id] = {
-        llm_tokens: u.llm_tokens_used || 0,
-        api_calls: u.api_calls_used || 0,
-        automations: u.automation_executions || 0,
+        llm_tokens: Number(u.llm_total_tokens) || 0,
+        api_calls: Number(u.external_api_calls) || 0,
+        automations: Number(u.automation_executions) || 0,
       };
     });
 
@@ -297,6 +337,7 @@ async function handler(
     };
 
     return res.status(200).json({
+      usage_status: usageOk ? 'ok' : 'unavailable',
       plans: planAnalytics,
       summary,
     });

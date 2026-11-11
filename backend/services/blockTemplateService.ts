@@ -7,7 +7,6 @@ import { ownedDbTable } from '../db/writeOwner';
  * Follows the strategyTemplateService pattern.
  */
 
-import { supabase } from '../db/supabaseClient';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -418,17 +417,12 @@ export async function deleteBlockTemplate(id: string): Promise<void> {
   if (error) throw new Error(`Failed to delete block template: ${error.message}`);
 }
 
-// ── Increment usage ─────────────────────────────────────────────────────────
-
-export async function incrementTemplateUsage(id: string): Promise<void> {
-  const { error } = await supabase.rpc('increment_block_template_usage', { template_id: id });
-  if (error) {
-    // Fallback: manual increment
-    const tpl = await getBlockTemplate(id);
-    if (tpl) {
-      await ownedDbTable('block_templates')
-        .update({ usage_count: tpl.usage_count + 1 })
-        .eq('id', id);
-    }
-  }
-}
+// ── Usage count ─────────────────────────────────────────────────────────────
+// C10 (2026-11-11): an `incrementTemplateUsage` used to live here, calling an
+// RPC (increment_block_template_usage) that has never existed anywhere. It had
+// NO caller (the render route's increment is templateService's, a different
+// table), so it was removed rather than given a database function nothing
+// would call. Consequence, recorded: nothing increments
+// block_templates.usage_count, so its readers (sort order, "N uses" badges)
+// show the stored value - 0 unless set elsewhere. Wiring a real increment at
+// the point a block template is used is a separate product decision.
