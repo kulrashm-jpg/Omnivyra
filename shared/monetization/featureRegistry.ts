@@ -702,7 +702,70 @@ const simpleEntries = CREDIT_ACTIONS
     },
   }));
 
-export const MONETIZATION_FEATURE_REGISTRY = [...BASE_FEATURES, ...simpleEntries] as const;
+// MONEY 2026-11-12 (owner-accepted mapping via e9): billable actions that had
+// NO registry entry - backend CreditActions added after this registry's
+// CREDIT_ACTIONS list - and so resolved BY FALLBACK to the first report entry
+// (website_audit). Each now has its OWN entry: the display fields (category,
+// group, colour) come from the named family; every pricing key is the action
+// key itself, so each action is priced by its own credit_cost_config row and
+// no price moves. Flags are feature()'s defaults - identical to the
+// website_audit entry these actions resolved to before - so only display and
+// keys change. An action BASE_FEATURES registers itself (e.g. image_generation
+// once its vendor-priced entry lands) is skipped here: BASE always wins.
+// video_generation has no price row, so it stays refused (getCreditCost throws).
+const UNREGISTERED_ACTION_FAMILIES: Record<string, { family: string; display_name: string }> = {
+  creator_content: { family: 'creator_content.basic_generation', display_name: 'Creator Content' },
+  blog_brief_suggestions: { family: 'creator_content.basic_generation', display_name: 'Blog Brief Suggestions' },
+  blog_generation: { family: 'creator_content.basic_generation', display_name: 'Blog Article' },
+  content_suggestions: { family: 'creator_content.basic_generation', display_name: 'Content Suggestions' },
+  quick_platform_adapt: { family: 'creator_content.rewrite', display_name: 'Quick Platform Adapt' },
+  campaign_chat: { family: 'creator_content.rewrite', display_name: 'Campaign Chat' },
+  blog_rewrite_hook: { family: 'creator_content.rewrite', display_name: 'Blog Hook Rewrite' },
+  content_repurpose: { family: 'creator_content.rewrite', display_name: 'Content Repurpose' },
+  engagement_refine: { family: 'engagement.reply_generation', display_name: 'Engagement Refine' },
+  chat_theme_refine: { family: 'intelligence.strategy_evolution', display_name: 'Theme Chat Refine' },
+  campaign_preplanning: { family: 'intelligence.insight_generation', display_name: 'Campaign Pre-planning' },
+  campaign_suggest_duration: { family: 'intelligence.insight_generation', display_name: 'Campaign Duration Suggestion' },
+  recommendations_opportunities: { family: 'intelligence.insight_generation', display_name: 'Opportunity Detection' },
+  recommendations_preview_strategy: { family: 'intelligence.insight_generation', display_name: 'Recommendation Strategy Preview' },
+  recommendations_group_preview: { family: 'intelligence.insight_generation', display_name: 'Recommendation Group Preview' },
+  campaign_suggest_update: { family: 'campaigns.optimization', display_name: 'Campaign Update Suggestion' },
+  recommendations_generate: { family: 'campaigns.optimization', display_name: 'Recommendation Generation' },
+  skeleton_command: { family: 'campaigns.creation', display_name: 'Campaign Skeleton' },
+  async_campaign_planning: { family: 'campaigns.creation', display_name: 'Async Campaign Planning' },
+  image_generation: { family: 'creator_content.basic_generation', display_name: 'Image Generation' },
+};
+
+function familyEntry(actionKey: string, family: string, display_name: string): MonetizationFeatureRegistryEntry {
+  const fam = BASE_FEATURES.find((e) => e.feature_key === family);
+  if (!fam) throw new Error(`[featureRegistry] unknown display family '${family}' for '${actionKey}'`);
+  return {
+    ...feature(`${fam.category}.${actionKey}`, fam.category, display_name, fam.display_group, fam.display_color),
+    pricing_keys: {
+      action_key: actionKey,
+      credit_cost_config: actionKey,
+      action_pricing_config: actionKey,
+      usage_action_key: actionKey,
+    },
+  };
+}
+
+const familyEntries: MonetizationFeatureRegistryEntry[] = [
+  ...Object.entries(UNREGISTERED_ACTION_FAMILIES)
+    .filter(([actionKey]) => !BASE_FEATURES.some((entry) => entry.pricing_keys.action_key === actionKey))
+    .map(([actionKey, { family, display_name }]) => familyEntry(actionKey, family, display_name)),
+  {
+    ...feature('ai_generation.video_generation', 'ai_generation', 'Video Generation', 'Content Generation', 'bg-blue-400'),
+    pricing_keys: {
+      action_key: 'video_generation',
+      credit_cost_config: 'video_generation',
+      action_pricing_config: 'video_generation',
+      usage_action_key: 'video_generation',
+    },
+  },
+];
+
+export const MONETIZATION_FEATURE_REGISTRY = [...BASE_FEATURES, ...simpleEntries, ...familyEntries] as const;
 
 export interface FeatureResolutionInput {
   feature_key?: string | null;
@@ -763,6 +826,10 @@ export function resolveFeatureFromReport(input: {
   report_category?: string | null;
   report_type?: string | null;
 }): MonetizationFeatureRegistryEntry | null {
+  // Fail closed (MONEY 2026-11-12): with no report field every predicate below
+  // is vacuously true and the FIRST report entry (website_audit) would match -
+  // the fallback that priced 21 unregistered actions as a website audit.
+  if (!input.requested_type && !input.report_category && !input.report_type) return null;
   return MONETIZATION_FEATURE_REGISTRY.find((entry) => {
     const mapping = entry.report_type_mapping;
     if (!mapping) return false;
@@ -777,16 +844,21 @@ export function resolveFeatureFromReport(input: {
 }
 
 export function resolveMonetizationFeature(input: FeatureResolutionInput): FeatureResolution | null {
+  // Fail closed (MONEY 2026-11-12): an explicit identifier that names no entry
+  // resolves to NOTHING - never to whatever report entry happens to match. The
+  // callers' hard-fail guards (assertCanonicalCreditAction, contentRouteModel)
+  // only work if an unregistered action comes back null.
+  const named = Boolean(input.feature_key || input.action_key || input.pricing_key || input.process_type);
   const feature =
     (input.feature_key ? getFeatureByKey(input.feature_key) : null) ||
     (input.action_key ? resolveFeatureFromActionKey(input.action_key) : null) ||
     (input.pricing_key ? resolveFeatureFromActionKey(input.pricing_key) : null) ||
     (input.process_type ? resolveFeatureFromProcessType(input.process_type) : null) ||
-    resolveFeatureFromReport({
+    (named ? null : resolveFeatureFromReport({
       requested_type: input.requested_type,
       report_category: input.report_category,
       report_type: input.report_type,
-    });
+    }));
 
   if (!feature) return null;
   const actionKey = feature.pricing_keys.action_key ?? feature.pricing_keys.usage_action_key ?? null;

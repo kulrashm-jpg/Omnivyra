@@ -66,13 +66,10 @@ describe('A3B — the prospect enrichment action is not registered', () => {
     expect(CREDIT_ACTIONS as readonly string[]).not.toContain(PROSPECT_ENRICHMENT_ACTION);
   });
 
-  it('the registry does NOT answer null for an unregistered action — it falls back', () => {
-    // A live-registry finding, asserted so the gate can never rely on null.
-    // The last fallback resolves with no report inputs, so an unknown action
-    // silently becomes a different, credit-holding, customer-facing action.
-    const resolved = resolveMonetizationFeature({ action_key: PROSPECT_ENRICHMENT_ACTION });
-    expect(resolved).not.toBeNull();
-    expect(resolved?.action_key).not.toBe(PROSPECT_ENRICHMENT_ACTION);
+  it('the registry answers null for an unregistered action — it fails closed (MONEY 2026-11-12)', () => {
+    // It used to fall back to website_audit; the port's identity check (still
+    // tested below with an injected resolver) is now defence in depth.
+    expect(resolveMonetizationFeature({ action_key: PROSPECT_ENRICHMENT_ACTION })).toBeNull();
   });
 
   it('the default port therefore refuses, naming the action', async () => {
@@ -80,7 +77,7 @@ describe('A3B — the prospect enrichment action is not registered', () => {
     expect(d.authorized).toBe(false);
     if ('reason' in d) {
       expect(d.reason).toContain(PROSPECT_ENRICHMENT_ACTION);
-      expect(d.reason).toContain('not registered');
+      expect(d.reason).toContain('is registered');
       expect(d.reason).toContain('before any external call');
     }
   });

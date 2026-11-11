@@ -176,13 +176,11 @@ describe('A3X — 2. no unrelated monetization action can be billed', () => {
     expect(CREDIT_ACTIONS as readonly string[]).not.toContain(PROSPECT_ENRICHMENT_ACTION);
   });
 
-  it('the registry STILL resolves it by fallback to something else — the hazard is real', () => {
-    const resolved = resolveMonetizationFeature({ action_key: PROSPECT_ENRICHMENT_ACTION });
-    expect(resolved).not.toBeNull();
-    expect(resolved?.action_key).not.toBe(PROSPECT_ENRICHMENT_ACTION);
+  it('the registry no longer resolves it by fallback — it answers null (fails closed, MONEY 2026-11-12)', () => {
+    expect(resolveMonetizationFeature({ action_key: PROSPECT_ENRICHMENT_ACTION })).toBeNull();
   });
 
-  it('the credit port still refuses that fallback, naming the wrong cost centre', async () => {
+  it('the credit port still refuses the unregistered action, naming it', async () => {
     const d = await creditCostPort.authorizeCost(costInput);
     expect(d.authorized).toBe(false);
     if ('reason' in d) {

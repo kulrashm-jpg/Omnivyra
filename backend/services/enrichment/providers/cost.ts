@@ -105,15 +105,12 @@ export function makeCreditCostPort(
       }
 
       // ─── THE RESOLVED ACTION MUST BE THE ONE WE ASKED FOR ─────────────────
-      // `resolveMonetizationFeature` does NOT answer null for an unknown action.
-      // Its last fallback is `resolveFeatureFromReport`, which with no report
-      // inputs still resolves — today to `reports.snapshot` / `website_audit`,
-      // a 50-credit customer-facing action that holds credits. So an
-      // unregistered key does not fail; it silently becomes a website audit.
-      //
-      // That makes an identity check mandatory rather than defensive: without
-      // it, a typo'd or not-yet-registered enrichment action would authorise
-      // and bill a tenant for the wrong thing.
+      // Until 2026-11-12 `resolveMonetizationFeature` did NOT answer null for an
+      // unknown action: its last fallback resolved, with no report inputs, to
+      // `website_audit`. The registry now fails closed (an unknown action key
+      // resolves to null, refused above), so this identity check is defence in
+      // depth: no resolver - real or injected - may authorise spend under a
+      // different action than the one asked for.
       if (feature.action_key !== action) {
         return {
           authorized: false,

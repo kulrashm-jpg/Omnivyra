@@ -37,11 +37,11 @@ beforeEach(() => {
   });
 });
 
-it('the 19 seeded former-fallback keys are exactly the unregistered CreditActions with a flat row', () => {
+it('the 19 seeded former-fallback keys are CreditActions, each now priced by its own row', () => {
   expect(FORMER_FALLBACKS).toHaveLength(19);
   for (const k of FORMER_FALLBACKS) {
     expect(CREDIT_ACTIONS).toContain(k);
-    expect(resolveFeatureFromActionKey(k)).toBeNull();
+    expect(resolveCreditCostConfigKey(k)).toBe(k);
   }
 });
 
