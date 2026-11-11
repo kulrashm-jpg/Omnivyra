@@ -37,10 +37,21 @@ export const TENANT_SCAN_ROWS = 1000;
  * standing rule: one hang freezes the timer for every job after it, and the tick's lease
  * keeps renewing, so nothing else takes over). A try/catch bounds a throw, not a hang:
  *   - the tenant scan and each tenant's sweep are raced against a timeout; a timed-out
- *     sweep is abandoned (its writes are compare-and-set inside DB functions, so a late
- *     finish is harmless) and counted as failed;
- *   - the whole run has a time budget: tenants not started within it are DEFERRED to the
- *     next run (logged), so a slow tenant costs one run, never the cycle.
+ *     sweep is abandoned and counted as failed. The sweep's four DB functions also carry a
+ *     server-side statement_timeout of 10 s (migration whatsapp_sweep_statement_timeout):
+ *     the server CANCELS a hung statement (its transaction rolls back) and frees the
+ *     connection, so an abandoned call cannot later complete - the failure count is
+ *     accurate and the tenant is genuinely retried next run. (Before that timeout, an
+ *     abandoned call could complete afterwards, overstating failures, and two sweeps of a
+ *     tenant could overlap across runs; both are safe regardless, because every write is
+ *     a compare-and-set inside those functions - which is also what makes the retry safe.)
+ *     The scan's two plain reads have no function to carry the setting: they are LIMITed
+ *     reads on 0007's partial index, bounded server-side only by the role's timeout;
+ *   - the whole run has a time budget that gates STARTS, not finishes: tenants not
+ *     started within it are DEFERRED to the next run (logged), so a slow tenant costs one
+ *     run, never the cycle. WORST CASE per run is therefore scan 15 s + budget 120 s +
+ *     one tenant that started at the end 30 s = about 165 s, well inside the 10-minute
+ *     cadence.
  */
 export const TENANT_SCAN_TIMEOUT_MS = 15_000;
 export const TENANT_SWEEP_TIMEOUT_MS = 30_000;
