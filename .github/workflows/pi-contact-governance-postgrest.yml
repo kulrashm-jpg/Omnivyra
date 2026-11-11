@@ -43,23 +43,34 @@ name: PI Contact Governance — PostgREST computed field
 #     would give this job a credential it must never have.
 
 on:
-  # Branch-restricted, and deliberately NOT `workflow_dispatch`: this job exists
-  # to gate one change on one branch. It must not be startable against an
-  # arbitrary ref.
+  # REVERSED 2026-11-11 (virality-83, reviewed by virality-05; stage A2). This job
+  # used to be restricted to pushes on fix/pi-contact-governance-clock, "to gate
+  # one change on one branch". That made it go DARK the moment that change
+  # merged: it is the ONLY suite that proves `read_at` through a real PostgREST,
+  # and the whole-repo T2 run can only record it as `<suite failed to run>`
+  # (globalTeardown refuses a non-local SUPABASE_URL), which after the merge
+  # reads as a pre-existing failure forever. So it now runs on EVERY pull request
+  # and every push to main, with NO paths filter:
+  #   • A paths list cannot cover the surface. `public.read_at` can be redefined
+  #     by ANY later migration (CREATE OR REPLACE without a SET clause also drops
+  #     its search_path pin), and the shared jest setup (globalTeardown.ts,
+  #     setupEnv.ts, jest.config.js) has already broken this suite once.
+  #   • It is cheap: two containers, one migration, no replay, no secret.
+  #   • `pull_request` is the GATE; `push: main` only detects breakage after it lands.
+  # The original safety property SURVIVES: there is still no `workflow_dispatch`,
+  # and `pull_request` only ever runs the PR's own merge ref, so the job still
+  # cannot be started against an arbitrary ref. The old branch restriction was a
+  # stronger measure than that concern required.
+  # GATING: running is not gating. This job's check must be registered as a
+  # REQUIRED status check on main (Settings → Branches → main → Require status
+  # checks → "Computed field through real PostgREST"),
+  # following secret-scan.yml's convention. That is safe ONLY because there is no
+  # paths filter: required + paths would leave unrelated PRs blocked forever.
+  # Registration is a repository-settings change and needs the owner.
+  pull_request:
   push:
     branches:
-      - fix/pi-contact-governance-clock
-    paths:
-      - 'backend/services/prospectIdentity/contactGovernance.ts'
-      - 'backend/services/prospectIdentity/contactGovernanceRepository.ts'
-      - 'backend/services/prospectIdentity/contactGovernanceAggregation.ts'
-      - 'backend/services/prospectIdentity/contactGovernanceEvaluation.ts'
-      - 'backend/tests/integration/piP0ContactGovernanceReadAt.test.ts'
-      - 'supabase/migrations/20270202000000_pi_contact_governance_read_at.sql'
-      - 'scripts/ci/pi-contact-governance-postgrest-fixture.sql'
-      - 'scripts/ci/pi-cg-postgrest-gateway.js'
-      - 'scripts/ci/schema-bootstrap.sql'
-      - '.github/workflows/pi-contact-governance-postgrest.yml'
+      - main
 
 permissions:
   contents: read
