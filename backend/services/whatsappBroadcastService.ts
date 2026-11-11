@@ -22,6 +22,7 @@ import { getActiveTemplate } from './whatsappTemplateService';
 import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimiter';
 import { getValidAccessToken } from '../auth/metaAuthService';
 import { requireEncryptionKey } from '../auth/credentialEncryption';
+import { withLease } from '../../lib/platform/distributedLock';
 
 // W0-C — the canonical contact-governance evaluator. `mayContact` is pure; the
 // tenant-scoped read is the only I/O this adds, and it happens once per batch.
@@ -43,6 +44,41 @@ export const isAmbiguousProviderStatus = (status: number): boolean => status >= 
 
 /** Recipient states whose send outcome is unknown; a status webhook's marker reconciles them. */
 const UNCONFIRMED_SEND_STATES = ['sending', 'send_uncertain'] as const;
+
+/**
+ * Leaving `sending` is CONDITIONAL (05 / e9, 2026-11-11). The claim into `sending` was
+ * a compare-and-set but every write OUT of it was keyed by id alone, so a worker that
+ * resolved late (a stall past the unconfirmed-send sweep's 5-minute floor) silently
+ * overwrote whatever the sweep or the marker reconcile had recorded. Now:
+ *   - the four INFERENCE outcomes (send_uncertain x3, failed) apply only while the row
+ *     is still `sending`;
+ *   - `sent` WITH the provider's message id - proof the send happened - applies while
+ *     the row is `sending` OR `send_uncertain` (the sweep's no-evidence inference) and
+ *     has no message id yet; it never overwrites an id another path attached.
+ * Zero rows moved means another path took the row while this worker held it: logged
+ * at ERROR (for `sent`, with this worker's message id and the row's current state, so
+ * two different ids for one recipient - near-proof of a duplicate - are on record).
+ * Neither the webhook's forward-only rule (updateRecipientDelivery, keyed by message
+ * id) nor any trigger governs these writes; this filter is the whole rule.
+ */
+async function resolveClaimedSend(
+  recipientId: string,
+  patch:       Record<string, unknown>,
+): Promise<{ moved: boolean; error: string | null }> {
+  const { data, error } = await ownedDbTable('whatsapp_broadcast_recipients')
+    .update(patch)
+    .eq('id', recipientId)
+    .eq('status', 'sending')
+    .select('id');
+  if (error) return { moved: false, error: error.message };
+  const moved = Array.isArray(data) && data.length > 0;
+  if (!moved) {
+    console.error('[wa-broadcast] send outcome NOT recorded: the row moved while this worker held it', {
+      recipient_id: recipientId, outcome: patch.status,
+    });
+  }
+  return { moved, error: null };
+}
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
@@ -286,13 +322,162 @@ async function insertRecipients(
 // ── Enqueue broadcast ─────────────────────────────────────────────────────────
 
 /**
+ * Resume and one-run-at-a-time (e9 decision (a), 2026-11-11; S port).
+ *
+ * THE DEFECTS THIS CLOSES: batch jobs had a FIXED jobId `wa-batch-<id>-<n>` (retries:
+ * `wa-retry-<id>-<Date.now()>`), the whatsapp-broadcast queue keeps completed jobs for
+ * 24 h, and BullMQ ignores an add whose jobId exists. So a resume (POST
+ * ?action=enqueue on a paused broadcast) within 24 h of the first run added NO jobs
+ * while the route answered `enqueued: true`, and two retries in one millisecond shared
+ * an id. Every run now carries a random token (a UUID, never a timestamp).
+ *
+ *  - SAFETY: enqueue and retry run only under the distributed lease
+ *    `whatsapp-broadcast-enqueue:<id>` (lib/platform/distributedLock), so they exclude
+ *    each other and themselves. Inside the lease the run first checks for live jobs,
+ *    so by the time a lease is released its jobs EXIST and the next caller sees them.
+ *  - UX ONLY: the live-job check (409). It reads BullMQ, and a job can start or finish
+ *    right after the read, so it is a courtesy against the common mistake; concurrent
+ *    ENQUEUES are made safe by the lease, and two JOBS that already exist are made safe
+ *    by processBatch's pending -> sending claim, never by this check.
+ *  - A worker that died mid-job leaves its job 'active' until BullMQ's stall detection
+ *    (stalledInterval 30 min on this queue): until then a resume is refused with a 409
+ *    that says so. Nothing is lost meanwhile - the claimed rows are resolved by the
+ *    unconfirmed-send sweep, the rest stay pending for the next run.
+ *
+ * Lease unavailable (Redis down): refused, nothing enqueued - unless the platform
+ * switches DISTRIBUTED_LOCKS_FAIL_OPEN / DISTRIBUTED_LOCKS_KILL make every lease a
+ * pass-through by platform policy (single replica only).
+ */
+export class BroadcastAlreadyRunningError extends Error {
+  readonly code = 'BROADCAST_ALREADY_RUNNING';
+  constructor(message: string) {
+    super(message);
+    this.name = 'BroadcastAlreadyRunningError';
+  }
+}
+
+export interface EnqueueBroadcastResult {
+  run_id: string;
+  /** Batch jobs known to be in the queue from this run. */
+  batches: number;
+  /** Pending recipients covered by those jobs. */
+  recipients: number;
+}
+
+/**
+ * Some batches are in the queue, then an add failed (its recipients withdrawn by the
+ * L-4 settlement, or - `uncertain` - the withdrawal itself could not be written). The
+ * queued batches WILL run, so this is neither "enqueued" nor "nothing enqueued".
+ */
+export class BroadcastPartiallyEnqueuedError extends Error {
+  readonly code = 'BROADCAST_PARTIALLY_ENQUEUED';
+  readonly uncertain: boolean;
+  constructor(readonly result: EnqueueBroadcastResult, cause: unknown) {
+    super(`Enqueue stopped after ${result.batches} batch(es) covering ${result.recipients} recipient(s) were queued: `
+      + `${cause instanceof Error ? cause.message : String(cause)}. The queued batches will run.`);
+    this.name = 'BroadcastPartiallyEnqueuedError';
+    this.uncertain = cause instanceof WhatsAppEnqueueUncertainError;
+  }
+}
+
+/** Long enough for a large broadcast's pages; withLease renews it at half-TTL anyway. */
+const ENQUEUE_LEASE_TTL_SECONDS = 120;
+
+/** Job states in which a batch of this broadcast may still send. */
+const LIVE_JOB_STATES = ['active', 'waiting', 'delayed', 'prioritized', 'waiting-children'];
+
+async function liveBatchJobCount(
+  queue: { getJobs: (types: string[]) => Promise<Array<{ data?: { broadcast_id?: string } } | undefined>> },
+  broadcastId: string,
+): Promise<number> {
+  // A read failure throws: no new run starts when we cannot tell whether one is live.
+  const jobs = await queue.getJobs([...LIVE_JOB_STATES]);
+  return jobs.filter((j) => j?.data?.broadcast_id === broadcastId).length;
+}
+
+function alreadyRunning(live: number, action: 'resuming' | 'retrying'): BroadcastAlreadyRunningError {
+  return new BroadcastAlreadyRunningError(
+    `Broadcast is already running: ${live} batch job(s) queued or active. Wait for them to finish before ${action}. `
+    + 'If no batch is progressing, a worker may have stopped mid-batch; its job clears within 30 minutes and this broadcast can then be resumed.',
+  );
+}
+
+async function withBroadcastLease<T>(broadcastId: string, run: () => Promise<T>, busy: string): Promise<T> {
+  const leased = await withLease(`whatsapp-broadcast-enqueue:${broadcastId}`, ENQUEUE_LEASE_TTL_SECONDS, run);
+  if (!leased.ran) {
+    if (leased.reason === 'held') throw new BroadcastAlreadyRunningError(busy);
+    throw new Error('Could not take the broadcast enqueue lock; nothing was queued. Please try again.');
+  }
+  return leased.value as T;
+}
+
+/**
+ * The HTTP answer for an enqueue. `enqueued` means "at least one batch is KNOWN to be
+ * queued": true only when a job was added; `partial` / `uncertain` add detail and never
+ * flip it, so a truthy check and a strict === true check agree.
+ */
+export function enqueueOutcomeResponse(
+  outcome: { ok: true; result: EnqueueBroadcastResult } | { ok: false; error: unknown },
+): { status: number; body: Record<string, unknown> } {
+  if (outcome.ok === true) {
+    const { result } = outcome as { ok: true; result: EnqueueBroadcastResult };
+    if (result.batches > 0) {
+      return { status: 200, body: { enqueued: true, run_id: result.run_id, batches: result.batches, recipients: result.recipients } };
+    }
+    return { status: 409, body: { enqueued: false, error: 'Nothing was enqueued: no pending recipients remained.' } };
+  }
+  const err = (outcome as { ok: false; error: unknown }).error;
+  if (err instanceof BroadcastAlreadyRunningError) {
+    return { status: 409, body: { enqueued: false, code: err.code, error: err.message } };
+  }
+  if (err instanceof BroadcastPartiallyEnqueuedError) {
+    return {
+      status: 202,
+      body: {
+        enqueued: true, partial: true, uncertain: err.uncertain, code: err.code,
+        run_id: err.result.run_id, batches: err.result.batches, recipients: err.result.recipients, error: err.message,
+      },
+    };
+  }
+  if (err instanceof WhatsAppEnqueueUncertainError) {
+    // Nothing is KNOWN to be queued, but a batch may be: a person reviews before any resend.
+    return { status: 500, body: { enqueued: false, uncertain: true, code: err.code, error: err.message } };
+  }
+  // A draft naming another company's account (created before the ownership
+  // check) is refused like an unknown account.
+  const refused = senderAccountRefusalResponse(err);
+  if (refused) return { status: refused.status, body: { enqueued: false, error: refused.error } };
+  return { status: 400, body: { enqueued: false, error: err instanceof Error ? err.message : String(err) } };
+}
+
+/** The HTTP answer for a retry: `retried: true` only when recipients were re-queued. */
+export function retryOutcomeResponse(
+  outcome: { ok: true; result: { retried: number } } | { ok: false; error: unknown },
+): { status: number; body: Record<string, unknown> } {
+  if (outcome.ok === true) {
+    const { result } = outcome as { ok: true; result: { retried: number } };
+    return result.retried > 0
+      ? { status: 200, body: { retried: true, recipients: result.retried } }
+      : { status: 409, body: { retried: false, error: 'Nothing to retry: no failed recipients with retries left.' } };
+  }
+  const err = (outcome as { ok: false; error: unknown }).error;
+  if (err instanceof BroadcastAlreadyRunningError) {
+    return { status: 409, body: { retried: false, code: err.code, error: err.message } };
+  }
+  if (err instanceof WhatsAppEnqueueUncertainError) {
+    return { status: 500, body: { retried: false, uncertain: true, code: err.code, error: err.message } };
+  }
+  return { status: 400, body: { retried: false, error: err instanceof Error ? err.message : String(err) } };
+}
+
+/**
  * Validate template, check rate limits, chunk recipients, enqueue jobs.
  * Improvement 5 / Refinement 7: template check happens here — before any job creation.
  */
 export async function enqueueBroadcast(
   broadcastId: string,
   plan:        string,
-): Promise<void> {
+): Promise<EnqueueBroadcastResult> {
   const { data: broadcast, error } = await ownedDbTable('whatsapp_broadcasts')
     .select('*')
     .eq('id', broadcastId)
@@ -312,6 +497,22 @@ export async function enqueueBroadcast(
     // Throws if template is missing, not approved, or not active
     await getActiveTemplate(broadcast.company_id, broadcast.template_name);
   }
+
+  // Everything from here runs under the per-broadcast enqueue lease.
+  return withBroadcastLease(broadcastId, () => enqueueRun(broadcastId, broadcast, plan),
+    'Another enqueue or retry of this broadcast is in progress.');
+}
+
+/** One enqueue run of a broadcast. Called ONLY under the enqueue lease. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Promise<EnqueueBroadcastResult> {
+  const { getContentQueue } = await import('../queue/contentGenerationQueues');
+  const queue = getContentQueue('whatsapp-broadcast');
+
+  // UX (see above): refuse while a previous run can still send, before any screening
+  // write or quota is consumed.
+  const live = await liveBatchJobCount(queue as never, broadcastId);
+  if (live > 0) throw alreadyRunning(live, 'resuming');
 
   // A recipient already restricted is marked before the rate limit counts it, so a held
   // recipient consumes no quota. processBatch decides again at send time.
@@ -349,9 +550,6 @@ export async function enqueueBroadcast(
   const { batch_size, delay_ms } = getBroadcastChunkStrategy(rateCheck.tier);
 
   // Fetch recipient IDs in pages and add to queue
-  const { getContentQueue } = await import('../queue/contentGenerationQueues');
-  const queue = getContentQueue('whatsapp-broadcast');
-
   // Every id is read BEFORE the first job is queued, and paged by key. Batch 0 has no
   // delay, so a worker moves rows out of `pending` while this runs: an offset over that
   // shrinking set skips recipients, and they are never queued.
@@ -372,7 +570,12 @@ export async function enqueueBroadcast(
     pendingIds.push(...recipients.map((r) => r.id as string));
   }
 
+  const runId = crypto.randomUUID();
   let batchIndex = 0;
+  let enqueuedRecipients = 0;
+  const markRunning = () => ownedDbTable('whatsapp_broadcasts')
+    .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', broadcastId);
 
   for (let i = 0; i < pendingIds.length; i += batch_size) {
     const recipientIds = pendingIds.slice(i, i + batch_size);
@@ -384,7 +587,8 @@ export async function enqueueBroadcast(
         'wa-broadcast-batch',
         { broadcast_id: broadcastId, recipient_ids: recipientIds },
         {
-          jobId:    `wa-batch-${broadcastId}-${batchIndex}`,
+          // A fresh run token per run: a resume is never deduped against an old job.
+          jobId:    `wa-batch-${broadcastId}-${runId}-${batchIndex}`,
           delay:    batchIndex * delay_ms,
           priority: 6,
           attempts: 3,
@@ -393,15 +597,28 @@ export async function enqueueBroadcast(
       );
     } catch (enqueueError) {
       // L-4: the job may be in the queue even though the add threw.
-      if ((await settleUnconfirmedEnqueue(broadcastId, recipientIds)) === 'withdrawn') throw enqueueError;
+      let settled: 'withdrawn' | 'queued';
+      try {
+        settled = await settleUnconfirmedEnqueue(broadcastId, recipientIds);
+      } catch (uncertain) {
+        if (batchIndex === 0) throw uncertain;
+        await markRunning();
+        throw new BroadcastPartiallyEnqueuedError({ run_id: runId, batches: batchIndex, recipients: enqueuedRecipients }, uncertain);
+      }
+      if (settled === 'withdrawn') {
+        if (batchIndex === 0) throw enqueueError; // nothing of this run is queued: a plain failure
+        await markRunning();
+        throw new BroadcastPartiallyEnqueuedError({ run_id: runId, batches: batchIndex, recipients: enqueuedRecipients }, enqueueError);
+      }
+      // 'queued': the job exists and is running; count it.
     }
 
     batchIndex += 1;
+    enqueuedRecipients += recipientIds.length;
   }
 
-  await ownedDbTable('whatsapp_broadcasts')
-    .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', broadcastId);
+  if (batchIndex > 0) await markRunning();
+  return { run_id: runId, batches: batchIndex, recipients: enqueuedRecipients };
 }
 
 // ── L-4: an enqueue whose acknowledgement was lost ───────────────────────────
@@ -716,12 +933,10 @@ export async function processBatch(
       // connection, a lost response): the outcome is UNKNOWN, so it is recorded as
       // uncertain and is never re-queued by `retryFailed`, which would risk a duplicate
       // message. A status webhook carrying this recipient's marker reconciles it.
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({
-          status: 'send_uncertain',
-          error_message: controller.signal.aborted ? `provider call timed out after ${WHATSAPP_SEND_TIMEOUT_MS} ms` : (err instanceof Error ? err.message : 'Exception'),
-        })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, {
+        status: 'send_uncertain',
+        error_message: controller.signal.aborted ? `provider call timed out after ${WHATSAPP_SEND_TIMEOUT_MS} ms` : (err instanceof Error ? err.message : 'Exception'),
+      });
       failedCount++;
       continue;
     } finally {
@@ -730,25 +945,43 @@ export async function processBatch(
 
     const waMessageId = res.ok ? result?.messages?.[0]?.id : null;
     if (waMessageId) {
-      const { error: sentError } = await ownedDbTable('whatsapp_broadcast_recipients')
+      // Confirmed by the provider's id: may advance `sending` OR the sweep's inferred
+      // `send_uncertain`, but never a row that already carries an id (see
+      // resolveClaimedSend).
+      const { data: sentRows, error: sentError } = await ownedDbTable('whatsapp_broadcast_recipients')
         .update({ status: 'sent', wa_message_id: waMessageId, sent_at: new Date().toISOString() })
-        .eq('id', recipient.id);
+        .eq('id', recipient.id)
+        .in('status', [...UNCONFIRMED_SEND_STATES])
+        .is('wa_message_id', null)
+        .select('id');
       // Sent, but not recorded: the row stays `sending` (never re-sent) and the status
       // webhook's marker records the message id.
-      if (sentError) console.warn('[wa-broadcast] sent but not recorded; left sending for reconciliation', recipient.id);
+      if (sentError) {
+        console.warn('[wa-broadcast] sent but not recorded; left sending for reconciliation', recipient.id);
+      } else if (!Array.isArray(sentRows) || sentRows.length === 0) {
+        // Another path resolved the row first. Record this worker's proof alongside
+        // what the row now says: a DIFFERENT id there means the recipient was messaged twice.
+        const { data: now } = await ownedDbTable('whatsapp_broadcast_recipients')
+          .select('status, wa_message_id')
+          .eq('id', recipient.id)
+          .maybeSingle();
+        console.error('[wa-broadcast] SENT (provider id below) but the row had already been resolved by another path', {
+          recipient_id: recipient.id,
+          worker_wa_message_id: waMessageId,
+          row_status: now?.status ?? null,
+          row_wa_message_id: now?.wa_message_id ?? null,
+          conflicting_ids: !!now?.wa_message_id && now.wa_message_id !== waMessageId,
+        });
+      }
       sentCount++;
     } else if (res.ok) {
       // Accepted without a message id: Meta may have sent it. Never retried
       // automatically (`retryFailed` only re-queues `failed`).
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'send_uncertain', error_message: 'provider accepted the request without a message id' })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, { status: 'send_uncertain', error_message: 'provider accepted the request without a message id' });
       failedCount++;
     } else if (isAmbiguousProviderStatus(res.status)) {
       // A 5xx or a 408 does not say the message was refused: it may have been sent.
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, { status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` });
       failedCount++;
     } else {
       const errCode    = result?.error?.code ?? res.status;
@@ -758,9 +991,7 @@ export async function processBatch(
         .select('retry_count')
         .eq('id', recipient.id)
         .single();
-      await ownedDbTable('whatsapp_broadcast_recipients')
-        .update({ status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 })
-        .eq('id', recipient.id);
+      await resolveClaimedSend(recipient.id, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 });
       failedCount++;
     }
   }
@@ -801,14 +1032,26 @@ function buildMessageBody(broadcast: any, toPhone: string, recipientId: string):
 
 // ── Retry failed recipients ───────────────────────────────────────────────────
 
-export async function retryFailed(broadcastId: string): Promise<void> {
+/** Retry failed recipients - under the SAME lease and live-job check as an enqueue. */
+export async function retryFailed(broadcastId: string): Promise<{ retried: number }> {
+  return withBroadcastLease(broadcastId, () => retryRun(broadcastId),
+    'Another enqueue or retry of this broadcast is in progress.');
+}
+
+/** One retry run. Called ONLY under the enqueue lease. */
+async function retryRun(broadcastId: string): Promise<{ retried: number }> {
+  const { getContentQueue } = await import('../queue/contentGenerationQueues');
+  const queue = getContentQueue('whatsapp-broadcast');
+  const live = await liveBatchJobCount(queue as never, broadcastId);
+  if (live > 0) throw alreadyRunning(live, 'retrying');
+
   const { data: failed } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id')
     .eq('broadcast_id', broadcastId)
     .eq('status', 'failed')
     .lt('retry_count', 3);
 
-  if (!failed?.length) return;
+  if (!failed?.length) return { retried: 0 };
 
   // Reset to pending for re-enqueue: only rows that are STILL `failed` (compare-and-set).
   // A status webhook may have moved one to `delivered` since the read above; resetting it
@@ -820,17 +1063,17 @@ export async function retryFailed(broadcastId: string): Promise<void> {
     .select('id');
   if (resetError) throw new Error(`retry reset failed: ${resetError.message}`);
   const retryIds = (reset ?? []).map((r: { id: string }) => r.id);
-  if (retryIds.length === 0) return;
+  if (retryIds.length === 0) return { retried: 0 };
 
   // Re-enqueue as a single batch
-  const { getContentQueue } = await import('../queue/contentGenerationQueues');
-  const queue = getContentQueue('whatsapp-broadcast');
   try {
     await enqueueOrThrow(queue, 'whatsapp-broadcast', 'wa-broadcast-batch', {
       broadcast_id:  broadcastId,
       recipient_ids: retryIds,
     }, {
-      jobId:    `wa-retry-${broadcastId}-${Date.now()}`,
+      // A UUID, not Date.now(): two retries in one millisecond shared an id and the
+      // second was silently deduped.
+      jobId:    `wa-retry-${broadcastId}-${crypto.randomUUID()}`,
       priority: 7,
       attempts: 2,
       backoff:  { type: 'exponential', delay: 10000 },
@@ -839,6 +1082,7 @@ export async function retryFailed(broadcastId: string): Promise<void> {
     // L-4: as in enqueueBroadcast, the retry job may exist; withdraw what it has not claimed.
     if ((await settleUnconfirmedEnqueue(broadcastId, retryIds)) === 'withdrawn') throw enqueueError;
   }
+  return { retried: retryIds.length };
 }
 
 // ── Update delivery status (called by deliveryTracker) ───────────────────────

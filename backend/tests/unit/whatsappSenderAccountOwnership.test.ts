@@ -101,7 +101,13 @@ jest.mock('../../auth/credentialEncryption', () => ({ requireEncryptionKey: () =
 jest.mock('../../middleware/queueBackpressure', () => ({
   enqueueOrThrow: async (_q: unknown, _n: string, _j: string, data: Row) => { enqueued.push(data); },
 }));
-jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
+// No live batch jobs; the enqueue lease is a DELIBERATE NO-OP pass-through (always
+// acquired), so this suite does NOT cover lease or live-job behaviour -
+// whatsappBroadcastResume.test.ts does.
+jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
+jest.mock('../../../lib/platform/distributedLock', () => ({
+  withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
+}));
 jest.mock('../../services/whatsappTemplateService', () => ({
   getActiveTemplate: async () => ({ name: 'tpl' }),
   submitTemplate: async (input: Row) => { templateSubmits.push(input); return 'tpl-1'; },
@@ -199,7 +205,8 @@ describe('a broadcast stored before the check, naming a foreign account', () => 
   it('enqueue: 404, no rate limit consumed on the foreign account, nothing queued', async () => {
     const res = await call(idRoute, { method: 'POST', query: { id: 'legacy-1', action: 'enqueue' }, body: {} });
     expect(res.statusCode).toBe(404);
-    expect(res.body).toEqual({ error: 'Social account not found' });
+    // The enqueue route now states the outcome on every answer (enqueued:false).
+    expect(res.body).toEqual({ enqueued: false, error: 'Social account not found' });
     expect(rateChecks).toHaveLength(0);
     expect(enqueued).toHaveLength(0);
   });

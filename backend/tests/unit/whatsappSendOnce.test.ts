@@ -36,7 +36,13 @@ jest.mock('../../db/supabaseClient', () => ({
 jest.mock('../../auth/metaAuthService', () => ({ getValidAccessToken: async () => 'test-token' }));
 jest.mock('../../auth/credentialEncryption', () => ({ requireEncryptionKey: () => Buffer.from('11'.repeat(32), 'hex') }));
 jest.mock('../../services/whatsappTemplateService', () => ({ getActiveTemplate: async () => ({}), handleTemplateStatusWebhook: async () => undefined }));
-jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
+// No live batch jobs; the enqueue lease is a DELIBERATE NO-OP pass-through (always
+// acquired), so this suite does NOT cover lease or live-job behaviour -
+// whatsappBroadcastResume.test.ts does.
+jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
+jest.mock('../../../lib/platform/distributedLock', () => ({
+  withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
+}));
 const mockCheckAndConsume = jest.fn(async () => ({ allowed: true, tier: 'TIER_1' }));
 jest.mock('../../services/whatsappRateLimiter', () => ({
   checkAndConsume: (...a: unknown[]) => (mockCheckAndConsume as any)(...a),
@@ -236,7 +242,8 @@ describe('a lost queue acknowledgement (enqueueBroadcast)', () => {
   it('the job was stored and already ran before the error reached us: treated as queued, sent once, no error', async () => {
     seed();
     mockEnqueue = async (data, opts) => { await runNow(data, opts); throw new Error('Command timed out'); };
-    await expect(enqueueBroadcast('b1', 'free')).resolves.toBeUndefined();
+    // Treated as queued: the run reports the batch as in the queue (it ran), no error.
+    await expect(enqueueBroadcast('b1', 'free')).resolves.toMatchObject({ batches: 1, recipients: 1 });
     expect(sends).toHaveLength(1);
     expect(rec().status).toBe('sent');
     expect(fakeDb.tables.whatsapp_broadcasts[0].status).toBe('running');
@@ -345,5 +352,64 @@ describe('reconciliation through the existing status webhook and provider event 
     expect(sends).toHaveLength(1);
     await updateRecipientDelivery({ wa_message_id: 'wamid.ok.1', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001' });
     expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.ok.1' });
+  });
+});
+
+describe('leaving `sending` is conditional: a late worker never overwrites another path (05 / e9)', () => {
+  /** The provider answers AFTER `mutate` ran, as if the sweep or a webhook resolved the row mid-call. */
+  const answerAfter = (mutate: () => void, answer: () => Promise<unknown>): Provider => async () => { mutate(); return answer(); };
+  const errorLog = () => (console.error as jest.Mock).mock.calls;
+
+  it('the sweep inferred send_uncertain mid-call; the worker then gets the provider id -> sent with that id (proof beats inference)', async () => {
+    seed();
+    provider = answerAfter(() => Object.assign(rec(), { status: 'send_uncertain', error_message: 'swept' }), okWith('wamid.late').bind(null, '', {}));
+    await processBatch('b1', [R1]);
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.late' });
+  });
+
+  it('another path attached id X mid-call; the worker brings a DIFFERENT id Y -> the row keeps X, and the ERROR names both ids', async () => {
+    seed();
+    provider = answerAfter(() => Object.assign(rec(), { status: 'delivered', wa_message_id: 'wamid.X' }), okWith('wamid.Y').bind(null, '', {}));
+    await processBatch('b1', [R1]);
+    expect(rec()).toMatchObject({ status: 'delivered', wa_message_id: 'wamid.X' });
+    expect(errorLog()).toContainEqual([
+      expect.stringContaining('already been resolved by another path'),
+      expect.objectContaining({ worker_wa_message_id: 'wamid.Y', row_wa_message_id: 'wamid.X', row_status: 'delivered', conflicting_ids: true }),
+    ]);
+  });
+
+  it('the same id attached by the webhook first -> the row is unchanged and the log says not conflicting', async () => {
+    seed();
+    provider = answerAfter(() => Object.assign(rec(), { status: 'sent', wa_message_id: 'wamid.same' }), okWith('wamid.same').bind(null, '', {}));
+    await processBatch('b1', [R1]);
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.same' });
+    expect(errorLog()).toContainEqual([expect.any(String), expect.objectContaining({ conflicting_ids: false })]);
+  });
+
+  it.each([
+    ['a timeout (catch path)', () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }); }],
+    ['an id-less acceptance', async () => ({ ok: true, status: 200, json: async () => ({}) })],
+    ['an ambiguous 503', async () => ({ ok: false, status: 503, json: async () => ({}) })],
+    ['a definite 400 refusal', async () => ({ ok: false, status: 400, json: async () => ({ error: { code: 131008, message: 'bad' } }) })],
+  ])('evidence attached (sent, X) mid-call, then %s -> the row KEEPS sent X (never failed, never retried)', async (_l, answer) => {
+    seed();
+    provider = answerAfter(() => Object.assign(rec(), { status: 'sent', wa_message_id: 'wamid.X' }), answer as () => Promise<unknown>);
+    await processBatch('b1', [R1]);
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.X' });
+    expect(errorLog()).toContainEqual([expect.stringContaining('the row moved while this worker held it'), expect.objectContaining({ recipient_id: R1 })]);
+    await retryFailed('b1');
+    expect(sends).toHaveLength(1); // nothing re-queued
+  });
+
+  it('NEGATIVE CONTROL: an untouched row resolves normally on every outcome, and no "moved" ERROR is logged', async () => {
+    seed([recipient(R1, PHONE1), recipient(R2, PHONE2)]);
+    let n = 0;
+    provider = async () => (n++ === 0
+      ? { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.ok' }] }) }
+      : { ok: false, status: 400, json: async () => ({ error: { code: 131008, message: 'bad' } }) });
+    await processBatch('b1', [R1, R2]);
+    expect(rec(R1)).toMatchObject({ status: 'sent', wa_message_id: 'wamid.ok' });
+    expect(rec(R2)).toMatchObject({ status: 'failed', error_code: 131008 });
+    expect(errorLog().filter(([m]) => /moved while|another path/.test(String(m)))).toHaveLength(0);
   });
 });

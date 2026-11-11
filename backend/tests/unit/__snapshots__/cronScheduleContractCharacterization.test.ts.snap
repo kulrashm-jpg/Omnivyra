@@ -66,6 +66,7 @@ exports[`cron.ts scheduling contract (source characterization) locks every timin
   "STRATEGIC_THEME_INTERVAL_MS": "60 * 60 * 1000",
   "THREAD_ENGINE_INTERVAL_MS": "3 * 60 * 60 * 1000",
   "WEEKLY_PRICING_ANALYSIS_INTERVAL_MS": "7 * 24 * 60 * 60 * 1000",
+  "WHATSAPP_UNCONFIRMED_SWEEP_INTERVAL_MS": "10 * 60 * 1000",
 }
 `;
 
