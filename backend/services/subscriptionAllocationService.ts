@@ -75,14 +75,19 @@ export interface AllocationResult {
 }
 
 async function resolvePlanKey(orgId: string): Promise<string | null> {
-  const { data: assignment } = await supabase
+  // MONEY: a failed read is not "no plan" - a paying subscriber would silently
+  // get no monthly credits this run. Throw: the sweep counts it as a failure and
+  // the allocation (idempotent per cycle) is retried on the next run.
+  const { data: assignment, error: assignmentErr } = await supabase
     .from('organization_plan_assignments')
     .select('plan_id')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (assignmentErr) throw new Error(`[subscriptionAllocation] plan assignment read failed for ${orgId}: ${assignmentErr.message}`);
   const planId = (assignment as { plan_id?: string } | null)?.plan_id;
   if (!planId) return null;
-  const { data: plan } = await supabase.from('pricing_plans').select('plan_key').eq('id', planId).maybeSingle();
+  const { data: plan, error: planErr } = await supabase.from('pricing_plans').select('plan_key').eq('id', planId).maybeSingle();
+  if (planErr) throw new Error(`[subscriptionAllocation] pricing plan read failed for ${orgId}: ${planErr.message}`);
   return (plan as { plan_key?: string } | null)?.plan_key ?? null;
 }
 
@@ -159,20 +164,27 @@ export async function runMonthlyAllocationSweep(params?: {
 
   let orgIds = params?.orgIds;
   if (!orgIds) {
-    const { data } = await supabase.from('organization_plan_assignments').select('organization_id');
+    // A failed read is not "no subscribed orgs" (the whole sweep would silently
+    // allocate nothing). Throw.
+    const { data, error } = await supabase.from('organization_plan_assignments').select('organization_id');
+    if (error) throw new Error(`[subscriptionAllocation] org list read failed: ${error.message}`);
     orgIds = Array.from(new Set((data ?? []).map((r: { organization_id?: string }) => r.organization_id).filter(Boolean) as string[]));
   }
 
   const results: AllocationResult[] = [];
+  const failedOrgIds: string[] = [];
   for (const orgId of orgIds) {
     try {
       results.push(await allocateMonthlyCreditsForOrg({ orgId, now, dryRun }));
-    } catch {
-      /* per-org failure must not abort the sweep */
+    } catch (err) {
+      // per-org failure must not abort the sweep - but it must not be invisible
+      // either (a failed org got no monthly credits this run).
+      failedOrgIds.push(orgId);
+      console.error('[subscriptionAllocation] allocation failed for org', orgId, err instanceof Error ? err.message : String(err));
     }
   }
   const allocated = results.filter((r) => r.status === 'allocated' || r.status === 'dry_run').length;
-  return { processed: results.length, allocated, skipped: results.length - allocated, dryRun, results };
+  return { processed: results.length, allocated, skipped: results.length - allocated, failed: failedOrgIds.length, failedOrgIds, dryRun, results };
 }
 
 /** SECTION D/E — allocation history + cycle status for the Billing Center. */
@@ -197,7 +209,8 @@ export async function getAllocationStatus(orgId: string, now: Date = new Date())
   const monthlyCredits = getMonthlyCreditsForPlan(planKey);
   const periodStart = computePeriodStart(now);
 
-  const { data } = await supabase
+  // A failed read is not "nothing allocated this cycle". Throw (caller 5xx).
+  const { data, error } = await supabase
     .from('credit_transactions')
     .select('credits_delta, created_at, idempotency_key, reference_id')
     .eq('organization_id', orgId)
@@ -205,6 +218,7 @@ export async function getAllocationStatus(orgId: string, now: Date = new Date())
     .gt('credits_delta', 0)
     .order('created_at', { ascending: false })
     .limit(24);
+  if (error) throw new Error(`[subscriptionAllocation] allocation history read failed for ${orgId}: ${error.message}`);
 
   const rows = (data ?? []) as Array<{ credits_delta: number; created_at: string; idempotency_key: string | null; reference_id: string | null }>;
   const cycleOf = (key: string | null) => String(key ?? '').split(':').pop() ?? '';
