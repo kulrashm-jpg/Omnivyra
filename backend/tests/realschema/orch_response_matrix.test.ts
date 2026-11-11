@@ -173,8 +173,14 @@ describe('what each response does', () => {
   it('SES hard bounce, through the real ingestion: the address is restricted, the next email is skipped, never sent', async () => {
     await inRollback(async () => {
       const s = await firstSent();
+      // The bounce's own timestamp becomes the restriction's effective_from, and governance is judged
+      // at each read's DATABASE instant (A, 20270202000000). This whole test is ONE rolled-back
+      // transaction whose instant is frozen at its start, so an app-clock "now" would date the
+      // bounce AFTER every read and leave it "not yet in force". In production the bounce precedes
+      // the next sweep's read; stamp it at the database instant to model that ordering.
+      const bouncedAt = String((await one(`SELECT to_json(transaction_timestamp()) #>> '{}' AS t`)).t);
       const out = await ingestSesEvent(sesEvent('Bounce', s.messageId, {
-        bounce: { bounceType: 'Permanent', timestamp: NOW(), bouncedRecipients: [{ emailAddress: ADDRESS }] },
+        bounce: { bounceType: 'Permanent', timestamp: bouncedAt, bouncedRecipients: [{ emailAddress: ADDRESS }] },
       }), `sns-${rnd()}`);
       expect(out.status).toBe('processed');
       await sweep();

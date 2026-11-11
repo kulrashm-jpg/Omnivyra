@@ -6,7 +6,7 @@
  *
  *   person        resolveSubjectPersonId (leads / canonical_leads → unified_persons)
  *   contact       unified_persons.primary_email / primary_phone (presence only)
- *   permission    contact_governance_records through the pure `mayContact`
+ *   permission    contact_governance_records through evaluateGovernanceReads (the pure `mayContact` at each read's database instant)
  *   lead intel    lead_intelligence_profiles via getPersistedLeadIntelligence
  *   prospect intel the latest prospect_score_evaluations row
  *   prospect state readCurrentProspectState (PI's lifecycle ledger)
@@ -24,7 +24,7 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { resolveSubjectPersonId } from '../leadOutreachExecution/personAnchor';
 import { getPersistedLeadIntelligence } from '../leadIntelligenceOrchestration/readIntegration';
 import { loadTenantGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
-import { mayContact } from '../prospectIdentity/contactGovernance';
+import { evaluateGovernanceReads } from '../prospectIdentity/contactGovernanceAggregation';
 import { readCurrentProspectState } from '../prospectLifecycle/lifecycleReader';
 import type { SubjectRef } from '../executionSubject/subjectRef';
 import type { JourneyFacts } from './journeyPolicy';
@@ -95,18 +95,24 @@ export const durableIntelligencePort: IndividualIntelligencePort = {
     return { intent: num(row.score_intent), overall: num(row.score_overall), confidence: num(row.confidence) };
   },
 
-  async channelPermission(organizationId, personId, channel, target, now) {
+  // `now` is deliberately NOT used to decide what is in force (the P0 class A closed for PI):
+  // each governance read is judged at its OWN database instant, so an application clock that
+  // runs ahead of the database can never expire a restriction early and unlock contact.
+  async channelPermission(organizationId, personId, channel, target, _now) {
+    // Relies on asking for a real channel (the loader then reads [channel, '*'], wanted.length > 1).
+    // A's aggregator treats `reads: []` as "nothing applies" (allowed); the loader returns that only
+    // when no channel could match. Unreachable here BY THIS CALL SHAPE, not by the aggregator: a new
+    // caller with a different shape must re-check A's empty-reads branch.
     const loaded = await loadTenantGovernanceRecords(organizationId, [channel]);
     if (!loaded.ok) return null;                  // unreadable → unknown → fail closed
-    const verdict = mayContact({
+    const decided = evaluateGovernanceReads(loaded.reads, {
       organizationId,
       personId,
       targetNormalized: normalizeGovernanceTarget(channel, target),
       channel,
-      now,
-      records: loaded.records,
     });
-    return verdict.decision === 'allowed';
+    if (decided.ok === false) return null;        // indeterminate (no instant, failed read) → unknown → fail closed
+    return decided.verdict.decision === 'allowed';
   },
 
   async readProspectState(organizationId, prospectId) {
