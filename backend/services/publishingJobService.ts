@@ -7,7 +7,42 @@ import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsSer
 import { runWorkerSnapshotShadowHook } from './workerSnapshotShadowHook';
 
 export type PublishingJobStatus = 'queued' | 'processing' | 'published' | 'failed' | 'retrying' | 'cancelled' | 'dead_letter' | 'scheduled';
-export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown';
+export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown' | 'uncertain';
+
+/**
+ * A CREATE whose outcome is unknown: the provider call STARTED and did not come back as a clear
+ * rejection (a timeout, a 5xx, a socket error, an unrecognised failure, or a failure that still
+ * carried an external id). The post may be LIVE, so it is never retried automatically: the job is
+ * dead-lettered for a person to verify on the site (05, 2026-11-12).
+ * ONE constant, written by the attempt/job writers and read by stale recovery: failure_category is
+ * TEXT with no CHECK, so two literals that drift apart would silently turn "uncertain" into a
+ * retry - a double publish. Never spell this value out anywhere else.
+ */
+export const UNCERTAIN_PUBLISH_CATEGORY: PublishingFailureCategory = 'uncertain';
+
+/** Server-side REFUSALS: nothing was created, so a retry is safe. Everything else is uncertain. */
+const DEFINITE_REJECTIONS: readonly PublishingFailureCategory[] = ['validation', 'auth', 'not_found', 'rate_limit'];
+
+/** update/delete target an existing external id: a retry cannot create a second post. */
+const isCreateJob = (job: Pick<PublishingJob, 'job_type'>): boolean =>
+  job.job_type !== 'update_post' && job.job_type !== 'delete_post';
+
+export const UNCERTAIN_PUBLISH_MESSAGE =
+  'Publish outcome unknown: the CMS call started but did not return a clear answer, so the post may or may not be live. Verify on the site before retrying.';
+
+/**
+ * Classify a RETURNED failure. Exported so each CMS adapter's failure messages can be held to it
+ * (no transport failure may map into a definite rejection).
+ */
+export function classifyPublishFailure(
+  job: Pick<PublishingJob, 'job_type'>,
+  result: { message: string; externalId?: string },
+): PublishingFailureCategory {
+  const category = categorizeFailure(result.message);
+  if (!isCreateJob(job)) return category;
+  if (result.externalId) return UNCERTAIN_PUBLISH_CATEGORY; // something was created
+  return DEFINITE_REJECTIONS.includes(category) ? category : UNCERTAIN_PUBLISH_CATEGORY;
+}
 
 export interface PublishingJob {
   id: string;
@@ -142,6 +177,9 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
 
   const started = Date.now();
   const attemptNumber = job.attempt_count + 1;
+  // Set IMMEDIATELY before each adapter call: the only fact that separates "we never asked" (safe to
+  // retry) from "we asked and do not know" (may be live).
+  let providerCallStarted = false;
   const { data: attempt, error: attemptError } = await ownedDbTable('publishing_attempts')
     .insert({
       job_id: job.id,
@@ -195,6 +233,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
       if (!externalId) {
         result = { success: false, message: 'delete_post requires external_id on the blog row.' };
       } else {
+        providerCallStarted = true;
         const del = await adapter.deletePost(ctx, externalId);
         result = { success: del.success, message: del.message, providerResponse: del.providerResponse };
       }
@@ -202,6 +241,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
       if (!externalId) {
         result = { success: false, message: 'update_post requires external_id on the blog row.' };
       } else {
+        providerCallStarted = true;
         result = await adapter.updatePost(ctx, externalId, {
           blog,
           htmlContent: String(job.request_payload?.html_content ?? ''),
@@ -210,6 +250,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
         });
       }
     } else {
+      providerCallStarted = true;
       result = await adapter.publishPost(ctx, {
         blog,
         htmlContent: String(job.request_payload?.html_content ?? ''),
@@ -219,7 +260,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
     }
 
     const duration = Date.now() - started;
-    const category = result.success ? null : categorizeFailure(result.message);
+    const category = result.success ? null : classifyPublishFailure(job, result);
     // LOAD-BEARING for stale recovery, which reads this row to decide whether a stuck job was
     // published: if this write fails the attempt stays 'running' = outcome unknown, which recovery
     // dead-letters for review (never republishes). Logged, not thrown: the provider already answered.
@@ -281,7 +322,9 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
   } catch (err) {
     const duration = Date.now() - started;
     const message = err instanceof Error ? err.message : 'Publishing job failed';
-    const category = categorizeFailure(message);
+    // A throw AFTER the provider call started (timeout, socket, an adapter exception) is uncertain
+    // for a create; before it (blog / integration load) nothing was sent.
+    const category = providerCallStarted && isCreateJob(job) ? UNCERTAIN_PUBLISH_CATEGORY : categorizeFailure(message);
     // best-effort: the failure is recorded on the job by markJobFailure below; an unwritten attempt stays 'running' (recovery reviews it)
     const { error: catchAttemptError } = await ownedDbTable('publishing_attempts')
       .update({
@@ -336,7 +379,8 @@ export async function runPublishingWorker(input: { workerId?: string; limit?: nu
  * crash after the provider call, or a failed markJobPublished write). Its latest attempt decides:
  *   succeeded        -> it WAS published: mark the job published (repair). Never republish.
  *   running          -> outcome unknown: DEAD-LETTER for a person to verify on the site.
- *   failed / none    -> retrying, as before.
+ *   failed + uncertain (UNCERTAIN_PUBLISH_CATEGORY) -> the same dead-letter.
+ *   failed (definite rejection) / none -> retrying, as before.
  *   attempt unreadable -> left as it is this tick (logged); the next run decides.
  */
 export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): Promise<number> {
@@ -351,7 +395,7 @@ export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): P
   let recovered = 0;
   for (const job of data || []) {
     const { data: lastAttempt, error: attemptError } = await ownedDbTable('publishing_attempts')
-      .select('status, provider_response')
+      .select('status, provider_response, failure_category')
       .eq('job_id', job.id)
       .order('attempt_number', { ascending: false })
       .limit(1)
@@ -363,14 +407,19 @@ export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): P
       continue;
     }
     const lastStatus = (lastAttempt as { status?: string } | null)?.status ?? null;
+    const lastCategory = (lastAttempt as { failure_category?: string | null } | null)?.failure_category ?? null;
     const patch: Record<string, unknown> = { locked_by: null, locked_at: null, lock_expires_at: null, updated_at: now };
     if (lastStatus === 'succeeded') {
       Object.assign(patch, { status: 'published', last_error: null, completed_at: now,
         provider_response: (lastAttempt as { provider_response?: unknown }).provider_response ?? {} });
-    } else if (lastStatus === 'running') {
+    } else if (lastStatus === 'running' || (lastStatus === 'failed' && lastCategory === UNCERTAIN_PUBLISH_CATEGORY)) {
       Object.assign(patch, { status: 'dead_letter', dead_letter_at: now,
         last_error: `Stale while publishing (recovered by ${workerId}): the post may or may not be live. Verify on the site before retrying.` });
     } else {
+      // failed (a definite rejection) or NO attempt row. No attempt row means the provider was never
+      // called ONLY because the attempt row is inserted BEFORE the call and a failed insert aborts
+      // the run (executeClaimedPublishingJob). If that insert is ever made best-effort, "none"
+      // becomes ambiguous and this branch would double-publish (05).
       Object.assign(patch, { status: 'retrying',
         run_after: new Date(Date.now() + backoffMs(Number((job as any).attempt_count || 0))).toISOString(),
         last_error: `Recovered stale processing job by ${workerId}` });
@@ -455,7 +504,9 @@ async function markJobFailure(
   providerResponse?: unknown,
   duration?: number,
 ): Promise<void> {
-  const exhausted = attemptNumber >= job.max_attempts || category === 'validation' || category === 'auth';
+  const uncertain = category === UNCERTAIN_PUBLISH_CATEGORY;
+  if (uncertain) message = `${UNCERTAIN_PUBLISH_MESSAGE} (${message})`;
+  const exhausted = uncertain || attemptNumber >= job.max_attempts || category === 'validation' || category === 'auth';
   const status: PublishingJobStatus = exhausted ? 'dead_letter' : 'retrying';
   const nextRetryAt = exhausted ? null : new Date(Date.now() + backoffMs(attemptNumber)).toISOString();
   // Not silent: an unwritten failure leaves the job `processing`; stale recovery then reads the
