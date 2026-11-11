@@ -23,7 +23,7 @@ import {
 } from '../../../backend/services/companyContextIntelligenceService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
+import { resolveCompanyAccess, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { extractDomain, validatePublicWebsite } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
@@ -124,14 +124,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }));
           return res.status(200).json({ companies, rolesByCompany });
         }
-        const archCompanyId = getContentArchitectCompanyId(req);
-        if (archCompanyId) {
-          const profile = await getProfile(archCompanyId, { autoRefine: false, languageRefine: false });
-          return res.status(200).json({
-            companies: [{ company_id: archCompanyId, name: profile?.name || archCompanyId }],
-            rolesByCompany: [{ company_id: archCompanyId, role: 'CONTENT_ARCHITECT' }],
-          });
-        }
+        // SECURITY (2026-11-11): a branch here answered from the
+        // content-architect pinned-company cookie BEFORE any authentication
+        // (that cookie was never signed or session-bound), returning the named
+        // company's profile name to anyone who set it. Removed.
         if (isContentArchitectSession(req)) {
           const { data: rows } = await supabase.from('company_profiles').select('company_id, name');
           const companies = (rows || []).map((r: { company_id: string; name?: string }) => ({
