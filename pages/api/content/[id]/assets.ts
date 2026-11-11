@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '@/lib/platform/routeFactory'
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
-import { listAssets, associateAsset } from '@/backend/services/content/contentService';
+import { getContent, listAssets, associateAsset } from '@/backend/services/content/contentService';
 import { resolveCompanyId, firstQueryValue, respondServiceError } from '@/lib/content/contentApiHelpers';
 
 /**
@@ -32,6 +32,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'GET') {
     try {
+      // Same tenant pre-check as the sibling content routes (2026-11-11).
+      if (!(await getContent(id, scopedCompanyId))) return res.status(404).json({ error: 'Content not found' });
       const assets = await listAssets(id, scopedCompanyId);
       return res.status(200).json({ assets });
     } catch (error) {

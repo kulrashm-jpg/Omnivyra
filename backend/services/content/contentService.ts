@@ -597,6 +597,7 @@ export async function associateAsset(
   assertCanonicalPersistenceAllowed('associateAsset');
   const variantId = input.variantId ?? null;
   const version = input.version ?? 1;
+  await assertLinkTargetsOwned(contentId, companyId, input.assetId, variantId);
 
   let existingQuery = supabase
     .from(ASSET_TABLE)
@@ -628,6 +629,44 @@ export async function associateAsset(
     .single();
   if (error || !data) fail('associateAsset', error);
   return mapAssetRow(data);
+}
+
+/**
+ * Tenant integrity (2026-11-11): every id an asset link names must belong to the
+ * caller's company - the content, the asset (a soft ref to creator_assets.id)
+ * and, when given, the variant (of that same content). Without this a member of
+ * company A could create links pointing at company B's content or asset ids.
+ * (The legacy checkContentAssetOwnership checks the campaign `content_assets`
+ * table, NOT creator_assets, so it is not the right instrument here.) A miss is
+ * a 404 that does not distinguish "another tenant's" from "does not exist".
+ */
+async function assertLinkTargetsOwned(
+  contentId: string,
+  companyId: string,
+  assetId: string,
+  variantId: string | null,
+): Promise<void> {
+  const notFound = (what: string) => Object.assign(new Error(`${what} not found`), { status: 404, code: 'NOT_FOUND' });
+  if (!(await getContent(contentId, companyId))) throw notFound('content');
+  const { data: asset, error: assetErr } = await supabase
+    .from('creator_assets')
+    .select('id')
+    .eq('id', assetId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+  if (assetErr) fail('associateAsset(asset ownership)', assetErr);
+  if (!asset) throw notFound('asset');
+  if (variantId !== null) {
+    const { data: variant, error: variantErr } = await supabase
+      .from(VARIANT_TABLE)
+      .select('id')
+      .eq('id', variantId)
+      .eq('content_id', contentId)
+      .eq('company_id', companyId)
+      .maybeSingle();
+    if (variantErr) fail('associateAsset(variant ownership)', variantErr);
+    if (!variant) throw notFound('variant');
+  }
 }
 
 /** List all asset associations for a content row (company-scoped). */
