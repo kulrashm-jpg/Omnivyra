@@ -19,8 +19,18 @@
 -- DO NOT LOSE THIS: ALTER FUNCTION ... SET stores the setting in pg_proc.proconfig, and a
 -- later CREATE OR REPLACE FUNCTION without its own SET clauses DROPS proconfig entirely -
 -- this timeout AND the search_path pin 20270128000007 gave each function. Any future
--- replace of these functions must carry both SET clauses inline. The postcondition below
--- asserts both on every apply.
+-- replace of these functions must carry both SET clauses inline.
+--
+-- WHAT THE POSTCONDITION GUARANTEES - and what it does not (05). It asserts the exact
+-- statement_timeout and the PRESENCE of a search_path setting: it catches proconfig being
+-- DROPPED (the main risk), not a replace that writes a WEAKER path - this migration does
+-- not own 0007's search_path values, so it does not pin them. And a postcondition fires
+-- on apply and replay only, so the three protections divide cleanly:
+--   - this postcondition catches a dropped proconfig on the next full REPLAY (CI);
+--   - a review-time gate rule (a CREATE OR REPLACE over a non-empty proconfig with no
+--     SET clause of its own; proposed to 83) catches it where it is cheap to fix;
+--   - nothing catches it in a live database between applies - which is why the gate
+--     rule is the load-bearing one.
 --
 -- 20270128000007 is reviewed and on the apply list, so it is not edited; this is a new
 -- migration.
@@ -63,11 +73,11 @@ BEGIN
     IF r.cfg IS NULL
        OR NOT ('statement_timeout=10s' = ANY (r.cfg))
        OR NOT EXISTS (SELECT 1 FROM unnest(r.cfg) c WHERE c LIKE 'search_path=%') THEN
-      RAISE EXCEPTION 'WST postcondition: % must carry BOTH statement_timeout=10s and its search_path pin, found %',
+      RAISE EXCEPTION 'WST postcondition: % must carry statement_timeout=10s AND still carry a search_path setting, found %',
         r.fn, coalesce(r.cfg::text, '{}');
     END IF;
   END LOOP;
-  RAISE NOTICE 'WST: the four sweep functions carry statement_timeout=10s and keep their search_path pin.';
+  RAISE NOTICE 'WST: the four sweep functions carry statement_timeout=10s and still carry a search_path setting.';
 END
 $verify$;
 
