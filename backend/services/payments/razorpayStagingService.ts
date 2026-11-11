@@ -599,8 +599,11 @@ export async function handleRazorpayStagingWebhook(input: {
   }
 
   // best-effort: credits are already granted (completePurchase succeeded) and
-  // reconciliation keys on provider_order_id, which is already stored; this only
-  // links the event/payment ids. A failure is logged, never silent.
+  // reconciliation keys on provider_order_id; this only links the event/payment
+  // ids. A failure is logged, never silent. DEPENDENCY: this is safe only while
+  // provider_order_id is present, which is guaranteed only for purchases
+  // created after the checkout create-order fix (the id write must move
+  // exactly one row). Pre-fix purchases may lack it - see the owed measurement.
   const { error: linkErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_event_id: providerEventId,
@@ -803,7 +806,8 @@ export async function verifyAndFulfillRazorpayStagingPayment(input: {
   }
 
   // best-effort: see the webhook path - credits granted, order id stored; this
-  // only links the event/payment ids. Logged on failure.
+  // only links the event/payment ids. Logged on failure. Same DEPENDENCY on
+  // provider_order_id being present (guaranteed only post create-order fix).
   const { error: linkErr } = await ownedDbTable('credit_purchases')
     .update({
       provider_event_id: providerEventId,
