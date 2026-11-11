@@ -13,8 +13,8 @@
 import { processQueuedRenderJob, createRenderProviderRegistry } from '../../services/creator/rendering';
 import type { RenderProvider } from '../../services/creator/rendering';
 import { renderAttemptExecutionHash } from '../../services/creator/rendering/renderAttemptKeys';
+import { makeStore, NOW, type Row } from '../helpers/renderStateStore';
 
-type Row = Record<string, any>;
 const HASH = 'b'.repeat(64);
 const SPEC = {
   spec_id: 'render:' + HASH,
@@ -26,92 +26,7 @@ const SPEC = {
   moderation_context: { canonical_asset_key: 'image', is_text_like: false, moderated_text: ['a calm office'] },
   deterministic_input_hash: HASH,
 };
-const NOW = '2026-11-11T12:00:00.000Z';
 
-/** UNIQUE keys of the real schema (20260669 substrate + 20260663 billing + the queue table). */
-const UNIQUE: Record<string, string[][]> = {
-  creator_render_job: [['organization_id', 'deterministic_input_hash']],
-  creator_render_job_state: [['render_job_id']],
-  creator_render_variant: [['render_job_id', 'spec_fingerprint']],
-  creator_render_attempt: [['execution_hash'], ['variant_id', 'attempt_number']],
-  billing_operations: [['idempotency_key']],
-  creator_render_queue_job: [['render_job_id']],
-};
-
-function makeStore() {
-  const t: Record<string, Row[]> = {};
-  const faults: Record<string, { code: string; message: string } | undefined> = {};
-  let seq = 0;
-  const rows = (name: string) => (t[name] ||= []);
-  const violates = (name: string, rec: Row) => (UNIQUE[name] ?? []).some((cols) =>
-    rows(name).some((r) => cols.every((c) => r[c] !== undefined && r[c] === rec[c])));
-
-  function builder(name: string) {
-    const filters: ((r: Row) => boolean)[] = [];
-    let mode: 'select' | 'update' = 'select';
-    let patch: Row = {};
-    let head = false;
-    let returning = false;
-    let lim = Infinity;
-    const match = () => rows(name).filter((r) => filters.every((f) => f(r)));
-    const q: any = {
-      select: (_c?: string, opts?: { head?: boolean }) => { if (mode === 'update') returning = true; head = Boolean(opts?.head); return q; },
-      eq: (k: string, v: any) => { filters.push((r) => r[k] === v); return q; },
-      in: (k: string, vs: any[]) => { filters.push((r) => vs.includes(r[k])); return q; },
-      lt: (k: string, v: any) => { filters.push((r) => r[k] != null && r[k] < v); return q; },
-      order: () => q,
-      limit: (n: number) => { lim = n; return q; },
-      update: (p: Row) => { mode = 'update'; patch = p; return q; },
-      maybeSingle: async () => {
-        const res = await run();
-        const d = (res as any).data;
-        return { data: Array.isArray(d) ? (d[0] ?? null) : d, error: (res as any).error ?? null };
-      },
-      single: async () => q.maybeSingle(),
-      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => run().then(resolve, reject),
-    };
-    async function run() {
-      if (mode === 'update') {
-        const f = faults[`${name}.update`];
-        if (f) return { data: null, error: f };
-        const hit = match();
-        for (const r of hit) Object.assign(r, patch);
-        return { data: returning ? hit.map((r) => ({ ...r })) : null, error: null };
-      }
-      const f = faults[`${name}.select`];
-      if (f) return { data: null, error: f };
-      const hit = match().slice(0, lim);
-      if (head) return { count: hit.length, data: null, error: null };
-      return { data: hit.map((r) => ({ ...r })), error: null };
-    }
-    return q;
-  }
-
-  const insert = (name: string, row: Row) => {
-    const f = faults[`${name}.insert`];
-    const rec = { id: `${name}-${++seq}`, created_at: NOW, ...row };
-    let result: { data: Row | null; error: any };
-    if (f) result = { data: null, error: f };
-    else if (violates(name, rec)) result = { data: null, error: { code: '23505', message: `duplicate key on ${name}` } };
-    else { rows(name).push(rec); result = { data: { ...rec }, error: null }; }
-    return { select: () => ({ single: async () => result, maybeSingle: async () => result }), then: (resolve: (v: unknown) => unknown) => resolve(result) };
-  };
-  const upsert = (name: string, row: Row) => {
-    const f = faults[`${name}.upsert`];
-    if (f) return Promise.resolve({ data: null, error: f });
-    if (!violates(name, row)) rows(name).push({ ...row });
-    return Promise.resolve({ data: null, error: null });
-  };
-
-  const supabase = { from: (n: string) => builder(n), rpc: async () => ({ data: {}, error: null }) };
-  const ownedDbTable = (n: string) => ({
-    ...builder(n),
-    insert: (r: Row) => insert(n, Array.isArray(r) ? r[0] : r),
-    upsert: (r: Row) => upsert(n, r),
-    update: (p: Row) => builder(n).update(p),
-  });
-  return { t, rows, faults, supabase, ownedDbTable };
-}
 
 function provider(over: Partial<RenderProvider> = {}) {
   const calls = { submit: 0, keys: [] as string[] };
