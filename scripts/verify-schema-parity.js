@@ -1002,7 +1002,6 @@ const REQUIRED_COLUMN_TYPES = [
 /** Source migration for each group, cited in output and in the coverage test. */
 const STACK_MIGRATIONS = [
   '20261127000000_pi_prospect_lists.sql',
-  '20261231000010_rpa_legacy_session_invalidation.sql',
   '20270111100000_pi_prospect_campaigns.sql',
   '20270111100001_pi_workflow_definitions.sql',
   '20270111100002_pi_execution_instances.sql',
@@ -1092,9 +1091,6 @@ const STACK_TABLES = [
   { table: 'engagement_request_idempotency',     source: '20261231000008:55', revokesClientRoles: true,
     serviceRoleGrants: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
     columns: ['id', 'organization_id', 'actor_id', 'scope', 'idempotency_key', 'key_source', 'request_fingerprint', 'state', 'attempt', 'action_id', 'platform', 'action_type', 'target_id', 'outcome_status', 'outcome_error', 'reserved_at', 'finalized_at', 'expires_at', 'created_at', 'updated_at'] },
-  // 20261231000010_rpa_legacy_session_invalidation.sql:45 (RLS :55, REVOKE :56)
-  { table: 'rpa_session_invalidation_audit',     source: '20261231000010:45', revokesClientRoles: true,
-    columns: ['id', 'organization_id', 'platform', 'reason', 'rows_invalidated', 'migration_version', 'invalidated_at'] },
 ];
 
 /** Columns the stack ADDs to tables that pre-date it. */
@@ -1191,8 +1187,6 @@ const STACK_INDEXES = [
   { table: 'engagement_request_idempotency', index: 'uq_engagement_request_idempotency_action', unique: true, partial: false, keys: ['action_id'] },
   { table: 'engagement_request_idempotency', index: 'ix_engagement_request_idempotency_expiry', unique: false, partial: true, keys: ['organization_id', 'expires_at'], predicate: ["'completed'", "'failed_not_acted'"] },
   { table: 'engagement_request_idempotency', index: 'ix_engagement_request_idempotency_reserved', unique: false, partial: true, keys: ['reserved_at'], predicate: ["'reserved'"] },
-  // 20261231000010_rpa_legacy_session_invalidation.sql:58
-  { table: 'rpa_session_invalidation_audit', index: 'idx_rpa_session_invalidation_audit_org', unique: false, partial: false, keys: ['organization_id', 'platform'] },
 ];
 
 /** The closed channel vocabulary of publish_workflow_version (20261231000004:109-112). */

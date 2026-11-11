@@ -8,7 +8,7 @@
  *     tenant isolation; storage_state is never selected whole;
  *   - callback reports reauth_required + reason for the marker;
  *   - no cookie content reaches any console call;
- *   - migration 20261231000010 static contract + refusing rollback;
+ *   - (migration 20261231000010 static contract: held out of S with the migration);
  *   - filesystem purge never opens file contents or logs names.
  *
  * All fixtures are obviously fake. No database, no network, no browser.
@@ -282,72 +282,9 @@ describe('callback reports invalidated rows as reauth_required', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-describe('migration 20261231000010 static contract', () => {
-  const root = path.join(__dirname, '..', '..', '..');
-  const mig = fs.readFileSync(path.join(root, 'supabase', 'migrations', '20261231000010_rpa_legacy_session_invalidation.sql'), 'utf8');
-  const rb = fs.readFileSync(path.join(root, 'supabase', 'migrations', 'rollbacks', 'rpa_legacy_session_invalidation_rollback.sql'), 'utf8');
-  const code = (sql: string) => sql.replace(/--[^\n]*/g, '');
-  const m = code(mig);
+// The 'migration 20261231000010 static contract' block is held out of S with the migration
+// (83 ruling 2026-11-11); it returns with the migration when RPA sealing ships.
 
-  it('scrub predicate excludes exactly valid envelopes and existing markers', () => {
-    const scrub = m.slice(m.indexOf('$scrub$'), m.lastIndexOf('$scrub$'));
-    expect(scrub).toMatch(/WHERE NOT \(/);
-    expect(scrub).toContain("s.storage_state->>'format' = 'omnivyra.rpa_session.v1'");
-    expect(scrub).toContain("s.storage_state->>'alg' = 'aes-256-gcm'");
-    expect(scrub).toContain("jsonb_typeof(s.storage_state->'ciphertext') = 'string'");
-    // Same ciphertext shape the application enforces.
-    expect(scrub).toContain("~ '^[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$'");
-    expect(store.isEncryptedSessionEnvelope({ format: 'omnivyra.rpa_session.v1', alg: 'aes-256-gcm', ciphertext: `${'0'.repeat(24)}:${'0'.repeat(32)}:ab` })).toBe(true);
-    expect(scrub).toContain("s.storage_state->>'format' = 'omnivyra.rpa_session.invalidated'");
-    expect(scrub).toContain(store.RPA_SESSION_INVALIDATED_FORMAT);
-    expect(scrub).toContain(store.RPA_SESSION_ENVELOPE_FORMAT);
-  });
-
-  it('marker holds no source content; tier cleared; expiry clamped; bounded batches', () => {
-    const set = m.slice(m.indexOf('SET storage_state'), m.indexOf('FROM candidates'));
-    expect(set).toMatch(/jsonb_build_object\(\s*'format', 'omnivyra\.rpa_session\.invalidated',\s*'reason', 'legacy_plaintext',\s*'invalidated_at', now\(\)\)/);
-    expect(set).not.toMatch(/storage_state\s*(->|\|\||#>)/); // never derived from the old blob
-    expect(set).toContain('account_tier = NULL');
-    expect(set).toContain('LEAST(COALESCE(s.expires_at, now()), now())');
-    expect(m).toMatch(/LIMIT 500\s+FOR UPDATE/);
-    expect(m).toMatch(/IF v_iterations > 10000 THEN/);
-  });
-
-  it('audit records counts per org/platform only, never content', () => {
-    const create = m.slice(m.indexOf('CREATE TABLE IF NOT EXISTS public.rpa_session_invalidation_audit'), m.indexOf('ALTER TABLE public.rpa_session_invalidation_audit'));
-    expect(create).not.toMatch(/storage_state|jsonb|cookie/i);
-    expect(m).toContain('ALTER TABLE public.rpa_session_invalidation_audit ENABLE ROW LEVEL SECURITY');
-    expect(m).toContain('REVOKE ALL ON TABLE public.rpa_session_invalidation_audit FROM PUBLIC, anon, authenticated');
-    const ins = m.slice(m.indexOf('INSERT INTO public.rpa_session_invalidation_audit'), m.indexOf('RETURNING rows_invalidated'));
-    expect(ins).not.toContain('storage_state');
-    expect(ins).toContain('count(*)');
-    expect(m).toMatch(/RETURNING s\.organization_id, s\.platform\n/);
-  });
-
-  it('idempotent: guarded DDL; re-run matches no row (markers excluded); postcondition', () => {
-    expect(m).not.toMatch(/CREATE TABLE (?!IF NOT EXISTS)/);
-    expect(m).not.toMatch(/CREATE INDEX (?!IF NOT EXISTS)/);
-    expect(m).toContain('EXIT WHEN v_batch = 0');
-    expect(m).toContain('$post$');
-  });
-
-  it('no NOTICE/LOG/WARNING/INFO output; no DELETE, functions, triggers or schedules', () => {
-    expect(m).not.toMatch(/RAISE\s+(NOTICE|LOG|WARNING|INFO|DEBUG)/i);
-    const exceptions = m.match(/RAISE EXCEPTION[^;]*;/g) ?? [];
-    for (const e of exceptions) expect(e).not.toMatch(/storage_state|cookie/i);
-    expect(m).not.toMatch(/\bDELETE\b/i);
-    expect(m).not.toMatch(/CREATE (OR REPLACE )?FUNCTION|CREATE TRIGGER|cron\.schedule|pg_cron/i);
-    expect(m).not.toMatch(/\bCOPY\b|pg_notify|dblink/i);
-  });
-
-  it('rollback refuses unconditionally and restores nothing', () => {
-    const r = code(rb);
-    expect(r).toMatch(/RAISE EXCEPTION/);
-    expect(r).not.toMatch(/\bUPDATE\b|\bINSERT\b|\bDROP\b|\bDELETE\b|current_setting/i);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 describe('filesystem purge of legacy tmp/rpa-sessions copies', () => {
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rpa-purge-')); });

@@ -143,7 +143,6 @@ rel_objs(scope, name) AS (VALUES
     ('stack:revoked', 'rpa_auth_token_redemptions'),
     ('stack:revoked', 'identity_verification_attestations'),
     ('stack:revoked', 'engagement_request_idempotency'),
-    ('stack:revoked', 'rpa_session_invalidation_audit'),
     -- pr349
     ('pr349:table', 'customer_readiness_snapshots'),
     ('pr349:table', 'execution_approvals'),

@@ -156,7 +156,6 @@ const NEW_SAFETY_MARKERS = [
   'migration_rerun_safety_rollback',
   'orchestration_campaign_targeting_rollback',
   'orchestration_engine_requests_engines_rollback',
-  'rpa_legacy_session_invalidation_rollback',
   'social_publish_step_channel_rollback',
 ];
 

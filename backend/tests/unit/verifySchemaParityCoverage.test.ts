@@ -25,7 +25,7 @@ const inSeries = (f: string): boolean => {
   const m = f.match(/^(\d{14})_.*\.sql$/);
   if (!m) return false;
   const v = m[1];
-  return v === '20261127000000' || v === '20270120000000' || v === '20270120000001' || v === '20270120000002' || v === '20261231000010' || (v >= '20270111100000' && v <= '20270111100016');
+  return v === '20261127000000' || v === '20270120000000' || v === '20270120000001' || v === '20270120000002' || (v >= '20270111100000' && v <= '20270111100016');
 };
 
 const seriesFiles = fs.readdirSync(MIGRATIONS).filter(inSeries).sort();
@@ -88,13 +88,14 @@ function inventory(): Inventory {
 const inv = inventory();
 
 describe('ORCH-STACK — the migration series the manifest is checked against', () => {
-  it('is exactly the 22 release migrations, and the verifier names the same list', () => {
-    expect(seriesFiles).toHaveLength(22);
+  it('is exactly the 21 release migrations, and the verifier names the same list', () => {
+    // 21: 20261231000010 is held out of S per 83 ruling 2026-11-11 (restored with RPA sealing).
+    expect(seriesFiles).toHaveLength(21);
     expect(parity.STACK_MIGRATIONS).toEqual(seriesFiles);
   });
 
   it('parses a non-trivial inventory (an empty parse would pass every check below)', () => {
-    expect(inv.tables.size).toBe(20);
+    expect(inv.tables.size).toBe(19);
     expect(inv.indexes.length).toBeGreaterThanOrEqual(45);
     expect(inv.functions.length).toBeGreaterThanOrEqual(27);
     expect(inv.triggers.length).toBe(19);
@@ -169,8 +170,8 @@ describe('ORCH-STACK — every object the series creates is in the manifest', ()
       if (m && m.revokesClientRoles !== inv.revokedFromAuthenticated.has(table)) mismatch.push(table);
     }
     expect(mismatch).toEqual([]);
-    // 10 explicit-REVOKE tables; 10 rely on RLS only (authenticated → INFO).
-    expect(parity.STACK_TABLES.filter((t: any) => t.revokesClientRoles)).toHaveLength(10);
+    // 9 explicit-REVOKE tables (rpa_session_invalidation_audit held out of S); 10 rely on RLS only (authenticated → INFO).
+    expect(parity.STACK_TABLES.filter((t: any) => t.revokesClientRoles)).toHaveLength(9);
     expect(parity.STACK_TABLES.filter((t: any) => !t.revokesClientRoles)).toHaveLength(10);
   });
 });

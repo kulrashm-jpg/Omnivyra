@@ -73,8 +73,8 @@ const TYPES = manifestArray<TypeReq>('REQUIRED_COLUMN_TYPES');
 // A shrink of the literal provenance manifest and a shrink of the stack are
 // detected separately: checked_* must equal literal + these numbers.
 const ORCH_STACK_PIN = {
-  tables: 20, columns: 228 /* 221 table columns + 7 added */, types: 5,
-  indexes: 49, uniqueIndexes: 19, functions: 29, triggers: 19, checks: 7,
+  tables: 19, columns: 221 /* 214 table columns + 7 added */, types: 5,
+  indexes: 48, uniqueIndexes: 19, functions: 29, triggers: 19, checks: 7,
 } as const;
 const ORCH_STACK_TABLE_NAMES = [
   'prospect_lists', 'prospect_list_members', 'prospect_campaigns', 'workflows', 'workflow_versions',
@@ -82,7 +82,8 @@ const ORCH_STACK_TABLE_NAMES = [
   'outreach_bridge_handoffs', 'execution_engine_requests', 'email_outreach_content_evidence',
   'execution_journey_decisions', 'prospect_campaign_lists',
   'prospect_campaign_targets', 'community_action_journey_links', 'rpa_auth_token_redemptions',
-  'identity_verification_attestations', 'engagement_request_idempotency', 'rpa_session_invalidation_audit',
+  'identity_verification_attestations', 'engagement_request_idempotency',
+  // rpa_session_invalidation_audit (20261231000010) is held out of S per 83 ruling 2026-11-11; restored with RPA sealing.
 ];
 
 interface StackFn { name: string; args: string; secdef: boolean; exec?: string; bodyContains?: string[] }
