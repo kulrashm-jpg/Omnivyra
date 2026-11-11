@@ -15,6 +15,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useCompanyContext } from '@/components/CompanyContext';
+import { describeBroadcastCreateOutcome } from '@/lib/whatsapp/broadcastCreateOutcome';
 import {
   Send,
   RefreshCw,
@@ -98,6 +99,8 @@ export default function WhatsAppBroadcastsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A partial enqueue: some batches will send, the rest were not queued (not an error, not success).
+  const [notice, setNotice] = useState<string | null>(null);
   const [recipientErrors, setRecipientErrors] = useState<string[]>([]);
 
   // Form state
@@ -190,6 +193,7 @@ export default function WhatsAppBroadcastsPage() {
     if (!companyId || !form.social_account_id) return;
     setCreating(true);
     setError(null);
+    setNotice(null);
     setRecipientErrors([]);
 
     const { valid, errors: valErrors } = validateRecipients(form.recipients);
@@ -242,6 +246,11 @@ export default function WhatsAppBroadcastsPage() {
       setForm((f) => ({ ...f, name: '', body: '', recipients: '', template_params: '' }));
       setRecipientErrors([]);
       await fetchBroadcasts();
+      // A 2xx means the broadcast row exists, NOT that it is sending: read what was queued.
+      // Set AFTER the refresh, which clears `error` when it starts.
+      const outcome = describeBroadcastCreateOutcome(data);
+      if (outcome?.tone === 'error') setError(outcome.message);
+      if (outcome?.tone === 'warning') setNotice(outcome.message);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -252,6 +261,7 @@ export default function WhatsAppBroadcastsPage() {
   const handleRetry = async (broadcastId: string) => {
     setRetrying(broadcastId);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch(`/api/whatsapp/broadcasts/${broadcastId}?action=retry`, {
         method: 'POST',
@@ -303,7 +313,7 @@ export default function WhatsAppBroadcastsPage() {
               <RefreshCw className="h-4 w-4 text-gray-600" />
             </button>
             <button
-              onClick={() => { setShowForm((v) => !v); setError(null); }}
+              onClick={() => { setShowForm((v) => !v); setError(null); setNotice(null); }}
               disabled={noWaAccount}
               title={noWaAccount ? 'Connect a WhatsApp account first' : 'New broadcast'}
               className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50 flex items-center gap-1.5"
@@ -324,6 +334,9 @@ export default function WhatsAppBroadcastsPage() {
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">{error}</div>
+          )}
+          {notice && (
+            <div role="status" className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded text-sm">{notice}</div>
           )}
 
           {/* Create Broadcast Form */}
