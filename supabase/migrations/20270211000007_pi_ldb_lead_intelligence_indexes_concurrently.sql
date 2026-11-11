@@ -21,6 +21,16 @@
 -- only for the migration gate's rule; after the DROP it never skips. Cost: a
 -- re-apply rebuilds valid indexes, which only happens on an exceptional path.
 --
+-- WHY IF NOT EXISTS CANNOT SKIP HERE: if a DROP fails (e.g. a lock timeout) it
+-- RAISES - IF EXISTS suppresses only the not-found case - and with one
+-- statement per call the apply stops there, so a CREATE never runs after a
+-- failed DROP. The skip path is unreachable.
+--
+-- TARGETED RECOVERY: with one statement per call, an operator need not re-run
+-- the whole file. If the postcondition names one index as invalid, send only
+-- that index's DROP + CREATE pair, then the postcondition; the other valid
+-- indexes are never dropped (no transient sequential scans on them).
+--
 -- The postcondition (its own statement, last) asserts each index exists AND
 -- pg_index.indisvalid, so a build that failed in THIS run still fails loudly.
 
