@@ -137,6 +137,7 @@ export async function recordRefresh(input: RecordRefreshInput): Promise<RecordRe
     // On a FAILED read we never get here: minting from an unread `{}` would also reset the version to 1.
     const written = await mergeReportSettingsKeys(
       input.companyId,
+      'knowledge_version',
       { refresh_history: history, ...(nextVersion ? { knowledge_version: nextVersion } : {}) },
       { updatedAt: now },
     );

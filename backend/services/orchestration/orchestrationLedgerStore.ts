@@ -73,7 +73,7 @@ export async function upsertTasks(companyId: string, tasks: ExecutionTask[], now
         return activeA - activeB || a.priority - b.priority;
       })
       .slice(0, TASK_LIMIT);
-    const written = await mergeReportSettingsKeys(companyId, { [TASKS_KEY]: merged }, { updatedAt: now });
+    const written = await mergeReportSettingsKeys(companyId, 'orchestration_ledger', { [TASKS_KEY]: merged }, { updatedAt: now });
     if (!written) {
       logger.warn('orchestration_ledger_write_no_row', { companyId });
       return false;

@@ -34,6 +34,7 @@ export type {
 
 export {
   upsertCompanyProfileGovernanceSettings,
+  buildProfileUiReportSettingsPatch,
   getCompanyProfileReviewStatus,
   toLimitedCompanyProfile,
 } from './companyProfile/governance';

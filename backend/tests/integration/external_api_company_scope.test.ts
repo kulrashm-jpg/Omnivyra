@@ -10,7 +10,7 @@ import externalApisHandler from '../../../pages/api/external-apis/index';
 import * as externalApiService from '../../services/externalApiService';
 
 jest.mock('../../db/supabaseClient', () => ({
-  supabase: { from: jest.fn(), rpc: jest.fn() },
+  supabase: { from: jest.fn(), rpc: jest.fn(async (fn: string) => (fn === 'merge_report_settings_keys' ? { data: 1, error: null } : { data: null, error: null })) },
 }));
 
 jest.mock('../../services/userContextService', () => ({
@@ -84,6 +84,11 @@ const buildQuery = (table: string) => {
 };
 
 const resolveQuery = (table: string, state: any) => {
+  // report_settings unit 2: a real company_profiles row always carries company_id (NOT NULL); the
+  // refine write-back (merge_report_settings_keys) is keyed on it.
+  if (table === 'company_profiles') {
+    return { data: { company_id: state.filters.company_id ?? 'default' }, error: null };
+  }
   if (table === 'external_api_sources') {
     const rows = Array.from(sourcesStore.values());
     const companyId = state.filters.company_id;
@@ -115,7 +120,8 @@ const createMockRes = () => {
 describe('External API company scope', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
-    (supabase.rpc as jest.Mock).mockResolvedValue({ data: true, error: null });
+    // report_settings unit 2: merge_report_settings_keys answers a row count; other rpcs keep `true`.
+    (supabase.rpc as jest.Mock).mockImplementation(async (fn: string) => (fn === 'merge_report_settings_keys' ? { data: 1, error: null } : { data: true, error: null }));
     getSupabaseUserFromRequest.mockResolvedValue({ user: { id: 'user-1' }, error: null });
     isPlatformSuperAdmin.mockResolvedValue(false);
     isSuperAdmin.mockResolvedValue(false);

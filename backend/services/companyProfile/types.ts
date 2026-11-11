@@ -472,6 +472,13 @@ export type ProblemTransformationPromptResult = {
 export type SaveProfileOptions = {
   source?: 'user' | 'ai_refined';
   suppressUserLocks?: boolean;
+  /**
+   * report_settings unit 2 (e9 2026-11-12): saveProfile NEVER writes report_settings through its
+   * upsert (any `report_settings` in the input is ignored). A caller that owns keys passes them
+   * here; they are written AFTER the upsert through merge_report_settings_keys as the profile UI
+   * writer (backend/db/reportSettingsKeys.ts REPORT_SETTINGS_OWNERS.profile_ui).
+   */
+  profileUiReportSettings?: Record<string, unknown>;
 };
 
 // Inferred from zod schema; kept as a named type for internal use across sub-modules.

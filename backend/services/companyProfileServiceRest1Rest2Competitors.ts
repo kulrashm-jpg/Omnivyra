@@ -1,6 +1,7 @@
 /** Company profile — stored competitors, refinement, persistence — split from companyProfileServiceRest1Rest2.ts (barrel preserved; importers unchanged). */
 /** TEMP2 — split from companyProfileServiceRest1.ts (barrel preserved; importers unchanged). */
 /** TEMP1 — split from companyProfileService.ts (barrel preserved; importers unchanged). */
+import { mergeReportSettingsKeys, readReportSettingsChecked, type ReportSettingsPatchFor } from '../db/reportSettingsKeys';
 import { ownedDbTable } from '../db/writeOwner';
 // WAVE-1C-001 §C1
 import { parseModelOutputOr } from './ai/safety';
@@ -12,11 +13,6 @@ import { isSelfOrPlatformDomain } from './companyProfile/competitorDomainFilter'
  */
 
 import { randomUUID } from 'crypto';
-import {
-  isCompanyUnderstandingEnabled,
-  produceCanonicalIdentity,
-  writeInputsFromProfileAndExtraction,
-} from './companyIntelligence';
 import { runCompletionWithOperation } from './aiGateway';
 import { getReportDeadlineSignal } from './intelligence/reportDeadlineContext';
 import { refineLanguageOutput } from './languageRefinementService';
@@ -479,6 +475,12 @@ const runProfileRefinement = async (
   );
   if (error) throw new Error(`Failed to refine company profile: ${error.message}`);
   if (!data) throw new Error('Failed to refine company profile: no profile returned after save');
+  // report_settings unit 2: ONLY the refine-owned keys, server-side (market_pulse one level deep, so the
+  // UI's sub-fields and every other key survive this run's long crawl/LLM window).
+  const refineOwned = REFINE_OWNED_REPORT_SETTINGS.get(baseRefinedPayload);
+  if (!refineOwned) throw new Error('Failed to refine company profile: refine-owned report_settings missing');
+  await mergeReportSettingsKeys(workingProfile.company_id, 'profile_refine', refineOwned, { updatedAt: new Date().toISOString() });
+  data.report_settings = (await readReportSettingsChecked(workingProfile.company_id)).settings as CompanyProfile['report_settings'];
   if (omittedSchemaFields.length > 0) {
     console.warn('Company profile refine used non-persisted fields:', omittedSchemaFields.join(', '));
   }
@@ -710,9 +712,11 @@ async function buildRefinedPayload(
   // fabricated, so a thin/empty result is a real signal about available public data — surfaced
   // here so downstream consumers can explain it instead of silently padding.
   const competitorEvidenceStatus = deriveCompetitorEvidenceStatus(rankedCompetitorsClean.length);
-  const marketPulseWithAlternatives = marketPulseSettings || workingProfile.report_settings?.market_pulse
+  // The market_pulse sub-fields REFINE produces, and so owns (REPORT_SETTINGS_OWNERS.profile_refine,
+  // nested). Persisted as exactly these sub-fields; the in-memory payload still layers them over the
+  // read for downstream use in this run.
+  const refineOwnedMarketPulse = marketPulseSettings || workingProfile.report_settings?.market_pulse
     ? {
-        ...(workingProfile.report_settings?.market_pulse ?? {}),
         ...(marketPulseSettings ?? {}),
         business_model: businessClassification.business_classification.level_1,
         provider_type: businessClassification.business_classification.level_2,
@@ -722,6 +726,9 @@ async function buildRefinedPayload(
         market_alternatives: marketAlternatives,
         competitor_evidence_status: competitorEvidenceStatus,
       }
+    : null;
+  const marketPulseWithAlternatives = refineOwnedMarketPulse
+    ? { ...(workingProfile.report_settings?.market_pulse ?? {}), ...refineOwnedMarketPulse }
     : null;
 
   const mergedSourceUrls = Array.from(
@@ -746,7 +753,13 @@ async function buildRefinedPayload(
     },
   });
 
-  return {
+  const refineOwned: ReportSettingsPatchFor<'profile_refine'> = {
+    entity_archetype: entityArchetype ?? workingProfile.report_settings?.entity_archetype ?? null,
+    competitor_intelligence: competitorIntelligence.length > 0 ? competitorIntelligence : workingProfile.report_settings?.competitor_intelligence ?? null,
+    industry_review: industryReview,
+    market_pulse: refineOwnedMarketPulse ?? undefined,
+  };
+  const result = {
     company_id: workingProfile.company_id,
     name: pick(nameUpdate.value, workingProfile.name, 'name'),
     industry: finalIndustryList.join(', '),
@@ -805,21 +818,25 @@ async function buildRefinedPayload(
     brand_positioning: workingProfile.brand_positioning ?? null,
     competitive_advantages: workingProfile.competitive_advantages ?? null,
     growth_priorities: workingProfile.growth_priorities ?? null,
+    // In-memory only (downstream steps of this run read it, e.g. applyApprovedStrategicGuidance).
+    // NOT persisted: the profile upsert never writes report_settings; runProfileRefinement writes the
+    // refine-owned keys (REFINE_OWNED_REPORT_SETTINGS) through merge_report_settings_keys.
+    // canonical_understanding is NOT written here any more (e9 D4, 2026-11-12): the canonical shadow
+    // job is its sole writer. The flag-gated U4.5 write from refine was a second, whole-column writer.
     report_settings: {
       ...(workingProfile.report_settings ?? {}),
-      entity_archetype: entityArchetype ?? workingProfile.report_settings?.entity_archetype ?? null,
-      competitor_intelligence: competitorIntelligence.length > 0 ? competitorIntelligence : workingProfile.report_settings?.competitor_intelligence ?? null,
+      entity_archetype: refineOwned.entity_archetype,
+      competitor_intelligence: refineOwned.competitor_intelligence,
       industry_review: industryReview,
       market_pulse: marketPulseWithAlternatives,
-      // U4.5: produce + persist canonical evidence-derived identity (SHADOW — gated by
-      // COMPANY_UNDERSTANDING_ENABLED, default OFF). Legacy identity fields above are unchanged; this is the
-      // first canonical writer. When absent (flag OFF) the prior value is preserved by the spread above.
-      ...(isCompanyUnderstandingEnabled()
-        ? { canonical_understanding: produceCanonicalIdentity(writeInputsFromProfileAndExtraction(workingProfile as unknown as Parameters<typeof writeInputsFromProfileAndExtraction>[0], extraction as unknown as Record<string, { value?: unknown; values?: unknown } | undefined>, new Date().toISOString())).record }
-        : {}),
     },
   };
+  REFINE_OWNED_REPORT_SETTINGS.set(result, refineOwned);
+  return result;
 }
+
+/** The report_settings keys a refine run owns, keyed by the payload buildRefinedPayload returned. */
+const REFINE_OWNED_REPORT_SETTINGS = new WeakMap<object, ReportSettingsPatchFor<'profile_refine'>>();
 
 export async function refineProfileWithAI(
   profile: CompanyProfile,

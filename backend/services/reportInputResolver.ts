@@ -1,6 +1,7 @@
+import { mergeReportSettingsKeys, type ReportSettingsPatchFor } from '../db/reportSettingsKeys';
 import { supabase } from '../db/supabaseClient';
 import { getGoogleSearchConsoleReadiness } from './googleProviderReadinessService';
-import { saveProfile, upsertCompanyProfilePayload, type CompanyProfile } from './companyProfileService';
+import { saveProfile, type CompanyProfile } from './companyProfileService';
 import {
   assertReportObservationPayload,
   buildReportInputObservation,
@@ -609,6 +610,28 @@ function buildPersistedSocialProfiles(
  * Every sibling key already on the profile (`market_pulse`, `industry_review`, `entity_archetype`,
  * `company_facts`, …) is preserved verbatim by the spread.
  */
+/** The report_settings keys a report run owns (REPORT_SETTINGS_OWNERS.report_run). Nothing else. */
+function reportRunOwnedSettings(input: ResolvedReportInput, observation: unknown): ReportSettingsPatchFor<'report_run'> {
+  return {
+    default_inputs: {
+      company_name: input.resolved.companyName,
+      website_domain: input.resolved.websiteDomain,
+      business_type: input.resolved.businessType,
+      geography: input.resolved.geography,
+      social_links: input.resolved.socialLinks,
+      competitors: input.resolved.competitors,
+    },
+    integrations: Object.fromEntries(
+      (Object.keys(input.integrations) as ReportIntegrationKey[]).map((key) => [key, input.integrations[key].connected]),
+    ),
+    last_report_source: input.resolved.source,
+    last_uploaded_file_name: input.resolved.uploadedFileName,
+    updated_at: new Date().toISOString(),
+    // Proposal only. Nothing reads this to overwrite a durable field.
+    report_input_observation: observation,
+  };
+}
+
 function buildReportSettingsForRun(input: ResolvedReportInput) {
   return {
     ...(input.profile?.report_settings ?? {}),
@@ -660,19 +683,20 @@ export async function persistReportInputsWithoutProfileMutation(input: ResolvedR
     resolved: input.resolved,
   });
 
-  const payload: Record<string, unknown> = {
-    company_id: input.companyId,
-    report_settings: {
-      ...buildReportSettingsForRun(input),
-      // Proposal only. Nothing reads this to overwrite a durable field.
-      report_input_observation: observation,
-    },
-  };
-  assertReportObservationPayload(payload);
-
-  const { error } = await upsertCompanyProfilePayload(payload, input.profile, 'report_input_observation');
-  if (error) {
-    console.warn('[reportInputResolver] report settings write failed:', error.message);
+  // report_settings unit 2 (e9 2026-11-12, BLOCKING data loss): ONLY the report run's own keys, written
+  // server-side through merge_report_settings_keys as the report_run writer, and NO column at all.
+  // It used to upsert `{ ...input.profile.report_settings, ... }` over the WHOLE column. input.profile is
+  // a SANITIZED read (getProfile blanks competitor fields for display), so EVERY report run erased
+  // refine's market_pulse competitor_details/quality/alternatives, and replacing default_inputs whole
+  // dropped setup-company's default_inputs.industry and canonical_website_source. default_inputs is now
+  // merged one level deep: only the sub-fields a report resolves change.
+  const owned = reportRunOwnedSettings(input, observation);
+  assertReportObservationPayload({ company_id: input.companyId, report_settings: owned });
+  try {
+    const written = await mergeReportSettingsKeys(input.companyId, 'report_run', owned);
+    if (!written) console.warn('[reportInputResolver] report settings write matched no profile row');
+  } catch (error) {
+    console.warn('[reportInputResolver] report settings write failed:', (error as Error).message);
   }
 }
 

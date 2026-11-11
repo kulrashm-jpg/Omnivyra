@@ -45,19 +45,31 @@ export function applyMerge(row: StoredProfile, args: Record<string, unknown>): M
     return fail('22023', 'p_patch must be a non-empty JSON object');
   }
   const bad = Object.keys(patch).filter((k) => !allowed.includes(k)).sort();
-  if (bad.length > 0) return fail('22023', `not a system-owned report_settings key: {${bad.join(',')}}`);
+  if (bad.length > 0) return fail('22023', `not an owned report_settings key: {${bad.join(',')}}`);
   const ifAbsent = (args.p_if_absent as unknown[] | null | undefined) ?? [];
-  const badAbsent = ifAbsent.filter((k) => typeof k !== 'string' || !allowed.includes(k) || !(k in (patch as object)));
-  if (badAbsent.length > 0) return fail('22023', 'p_if_absent keys must be allow-listed keys of p_patch');
+  const nested = (args.p_merge_nested as unknown[] | null | undefined) ?? [];
+  if ([...ifAbsent, ...nested].some((k) => k === null || k === undefined)) return fail('22023', 'NULL element');
+  const badLists = [...ifAbsent, ...nested].filter((k) => typeof k !== 'string' || !allowed.includes(k) || !(k in (patch as object)));
+  if (badLists.length > 0) return fail('22023', 'p_if_absent / p_merge_nested keys must be allow-listed keys of p_patch');
+  if (ifAbsent.some((k) => nested.includes(k))) return fail('22023', 'a key cannot be both p_if_absent and p_merge_nested');
+  const p = patch as Record<string, unknown>;
+  if (nested.some((k) => !p[k as string] || typeof p[k as string] !== 'object' || Array.isArray(p[k as string]))) {
+    return fail('22023', 'p_merge_nested values must be JSON objects');
+  }
   if (!row) return { data: 0, error: null };
   const rs = row.report_settings;
   if (rs !== null && rs !== undefined && (typeof rs !== 'object' || Array.isArray(rs))) {
     return fail('22023', 'report_settings is not an object; refusing to merge');
   }
-  // jsonb `||` on objects: right-hand keys replace, all others kept. A deep copy, like a jsonb value.
   const current = (rs as Record<string, unknown> | null) ?? {};
-  const effective = Object.fromEntries(Object.entries(patch as object)
-    .filter(([k]) => !(rs !== null && rs !== undefined && ifAbsent.includes(k) && k in current)));
+  const isObj = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (nested.some((k) => current[k as string] !== undefined && current[k as string] !== null && !isObj(current[k as string]))) {
+    return fail('22023', 'a p_merge_nested key holds a non-object; refusing to merge');
+  }
+  // jsonb `||` on objects: right-hand keys replace, all others kept; nested keys merge one level deep.
+  const effective = Object.fromEntries(Object.entries(p)
+    .filter(([k]) => !(ifAbsent.includes(k) && k in current))
+    .map(([k, v]) => [k, nested.includes(k) ? { ...(isObj(current[k]) ? (current[k] as object) : {}), ...(v as object) } : v]));
   row.report_settings = JSON.parse(JSON.stringify({ ...current, ...effective }));
   if (args.p_updated_at) row.updated_at = args.p_updated_at as string;
   return { data: 1, error: null };

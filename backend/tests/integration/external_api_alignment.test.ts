@@ -15,7 +15,7 @@ import { setCachedResponse, getCacheStats, resetCacheStats, buildCacheKey } from
 import { updateApiHealth } from '../../services/externalApiHealthService';
 
 jest.mock('../../db/supabaseClient', () => ({
-  supabase: { from: jest.fn(), rpc: jest.fn() },
+  supabase: { from: jest.fn(), rpc: jest.fn(async (fn: string) => (fn === 'merge_report_settings_keys' ? { data: 1, error: null } : { data: null, error: null })) },
 }));
 
 jest.mock('../../services/externalApiHealthService', () => ({
@@ -70,6 +70,11 @@ const buildQuery = (table: string) => {
 };
 
 const resolveQuery = (table: string, state: any) => {
+  // report_settings unit 2: a real company_profiles row always carries company_id (NOT NULL); the
+  // refine write-back (merge_report_settings_keys) is keyed on it.
+  if (table === 'company_profiles') {
+    return { data: { company_id: state.filters.company_id ?? 'default' }, error: null };
+  }
   if (table === 'external_api_sources') {
     if (state.filters.is_active === true) {
       return { data: Array.from(sourcesStore.values()), error: null };

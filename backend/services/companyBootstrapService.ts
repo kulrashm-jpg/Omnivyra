@@ -32,7 +32,7 @@
  * authority.
  */
 
-import { mergeReportSettingsKeys, type ReportSettingsClient, type ReportSettingsPatch } from '../db/reportSettingsKeys';
+import { mergeReportSettingsKeys, type ReportSettingsClient, type ReportSettingsPatchFor } from '../db/reportSettingsKeys';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DiscoveredWebsiteMetadata } from './companyProfile/websiteMetadataExtractor';
 import {
@@ -408,7 +408,9 @@ export async function bootstrapCompanyProfile(
     // report_settings unit 1 (2026-11-12): the keys this service owns (bootstrap marker, and the
     // discovered bundle when absent) are merged SERVER-SIDE, one statement, never as a whole-column
     // write: `{ ...reportSettings, ... }` from this read would drop any key another writer set since.
-    const ownKeys: ReportSettingsPatch = {
+    // discovered_metadata is owned `ifAbsent` (REPORT_SETTINGS_OWNERS.company_bootstrap): the backfill only
+    // ever fills a HOLE, decided server-side in the same UPDATE; incremental stays its sole replacer.
+    const ownKeys: ReportSettingsPatchFor<'company_bootstrap'> = {
       // Backfill the discovered bundle only when absent (never clobber a richer
       // stored one).
       ...(needsBundle && derivation.discoveredBundle
@@ -431,12 +433,9 @@ export async function bootstrapCompanyProfile(
     // 2) the owned report_settings keys.
     let keysWritten = false;
     try {
-      keysWritten = await mergeReportSettingsKeys(companyId, ownKeys, {
+      keysWritten = await mergeReportSettingsKeys(companyId, 'company_bootstrap', ownKeys, {
         updatedAt: now,
         client: supabase as unknown as ReportSettingsClient,
-        // The backfill only ever fills a HOLE, decided server-side in the same UPDATE:
-        // incrementalMetadataStore stays the only writer that replaces discovered_metadata.
-        ifAbsent: 'discovered_metadata' in ownKeys ? ['discovered_metadata'] : undefined,
       });
     } catch {
       keysWritten = false;

@@ -95,7 +95,7 @@ export async function refreshDiscoveredMetadata(
     // 2) the bundle, as ONE key, server-side.
     const columnFields = [...fields];
     try {
-      const written = await mergeReportSettingsKeys(companyId, bundle, { updatedAt: now });
+      const written = await mergeReportSettingsKeys(companyId, 'incremental_metadata', bundle, { updatedAt: now });
       if (!written) {
         logger.warn('incremental_metadata_bundle_no_row', { companyId });
         return { updated: columnFields.length > 0, fields: columnFields };

@@ -228,7 +228,7 @@ export function makeSupabaseShadowDeps(sb: unknown): ShadowPersistDeps {
         throw new ReportSettingsWriteError(companyId, 'shadow write carries no canonical_understanding');
       }
       const written = await mergeReportSettingsKeys(
-        companyId, { canonical_understanding: reportSettings.canonical_understanding }, { client },
+        companyId, 'canonical_shadow', { canonical_understanding: reportSettings.canonical_understanding }, { client },
       );
       if (!written) throw new ReportSettingsWriteError(companyId, 'no company_profiles row');
     },

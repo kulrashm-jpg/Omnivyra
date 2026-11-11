@@ -43,7 +43,7 @@ export async function saveWebsiteFingerprint(companyId: string, fingerprint: Web
   try {
     // Replaces ONLY report_settings.website_fingerprint, server-side. There is no client-side read:
     // a failed read used to become `{}` and the write then wiped every sibling key.
-    const written = await mergeReportSettingsKeys(companyId, { [FINGERPRINT_KEY]: fingerprint }, { updatedAt: new Date().toISOString() });
+    const written = await mergeReportSettingsKeys(companyId, 'website_fingerprint', { [FINGERPRINT_KEY]: fingerprint }, { updatedAt: new Date().toISOString() });
     if (!written) {
       logger.warn('website_fingerprint_store_no_row', { companyId });
     }

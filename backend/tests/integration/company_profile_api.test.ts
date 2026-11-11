@@ -22,6 +22,8 @@ jest.mock('../../services/companyProfileService', () => ({
   upsertCompanyProfileGovernanceSettings: jest.fn(({ existingReportSettings, incomingReportSettings }) =>
     incomingReportSettings ?? existingReportSettings ?? null
   ),
+  // report_settings unit 2: POST builds the UI-owned report_settings patch with this (governance.ts).
+  buildProfileUiReportSettingsPatch: jest.fn(() => ({})),
   getCompanyProfileReviewStatus: jest.fn(() => ({
     status: 'ready',
     issues: [],

@@ -9,6 +9,25 @@ import {
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { normalizeCanonicalWebsite } from '../../../utils/companyProfileValidation';
+import { PROFILE_UI_SUBFIELDS, pickSubfields } from '../../../backend/db/reportSettingsKeys';
+
+/**
+ * report_settings unit 2 (e9 2026-11-12): the pre-refine save persists ONLY the UI-owned sub-fields a
+ * client posted (merged per sub-field server-side). The rest of a posted report_settings, including
+ * system keys and the competitor fields this route strips, is never written.
+ */
+function uiOwnedReportSettings(body: unknown): Record<string, unknown> | undefined {
+  const rs = (body as { report_settings?: unknown; profile?: { report_settings?: unknown } } | null)?.report_settings
+    ?? (body as { profile?: { report_settings?: unknown } } | null)?.profile?.report_settings;
+  if (!rs || typeof rs !== 'object' || Array.isArray(rs)) return undefined;
+  const r = rs as Record<string, unknown>;
+  const patch = Object.fromEntries(Object.entries({
+    market_pulse: pickSubfields(r.market_pulse, PROFILE_UI_SUBFIELDS.market_pulse),
+    intelligence: pickSubfields(r.intelligence, PROFILE_UI_SUBFIELDS.intelligence),
+    company_facts: pickSubfields(r.company_facts, PROFILE_UI_SUBFIELDS.company_facts),
+  }).filter(([, v]) => v !== undefined));
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
 
 function stripCompetitorInputs(value: unknown): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
@@ -82,7 +101,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         company_id: effectiveCompanyId,
         ...(canonicalWebsite ? { website_url: canonicalWebsite, user_locked_fields: ['website_url'] } : {}),
         source: 'user',
-      }, onboardingMode ? { source: 'user', suppressUserLocks: true } : undefined);
+      }, onboardingMode
+        ? { source: 'user', suppressUserLocks: true, profileUiReportSettings: uiOwnedReportSettings(req.body) }
+        : { profileUiReportSettings: uiOwnedReportSettings(req.body) });
       profile = seedProfile;
     } else if (!onboardingMode && req.body && Object.keys(req.body).length > 0) {
       const hasSeedData = Object.values(req.body).some(
@@ -100,7 +121,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               }
             : {}),
           source: profile.source || 'user',
-        });
+        }, { profileUiReportSettings: uiOwnedReportSettings(req.body) });
       }
     }
     if (canonicalWebsite) {

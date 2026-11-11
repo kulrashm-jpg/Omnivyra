@@ -104,7 +104,7 @@ async function persistActivationLatch(
 ): Promise<void> {
   try {
     // Replaces ONLY report_settings.activation_latch, server-side; sibling keys are never rewritten.
-    await mergeReportSettingsKeys(companyId, { activation_latch: nextLatch });
+    await mergeReportSettingsKeys(companyId, 'activation_latch', { activation_latch: nextLatch });
   } catch {
     // Latch persistence must never break the readiness read.
   }

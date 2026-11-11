@@ -7,7 +7,7 @@ import {
   saveProfile,
   calculateCompanyProfileCompleteness,
   toLimitedCompanyProfile,
-  upsertCompanyProfileGovernanceSettings,
+  buildProfileUiReportSettingsPatch,
   getCompanyProfileReviewStatus,
   type CompanyProfile,
 } from '../../../backend/services/companyProfileService';
@@ -505,19 +505,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }
         }
       }
+      // report_settings unit 2 (e9 2026-11-12): the posted report_settings is NEVER written as a whole.
+      // Only the UI-owned sub-fields (+ the governance-computed profile_review) are written, per key,
+      // server-side; system keys, response-only fields and sanitizer-blanked competitor fields are ignored.
+      const { report_settings: _postedReportSettings, ...bodyWithoutReportSettings } = body as Record<string, unknown>;
       const payload = {
-        ...body,
+        ...bodyWithoutReportSettings,
         company_id: resolvedCompanyId,
-        report_settings: upsertCompanyProfileGovernanceSettings({
-          existingReportSettings: existingProfile?.report_settings,
-          incomingReportSettings,
-          confirmedByRole:
-            normalizedRole === 'COMPANY_ADMIN' || normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'ADMIN'
-              ? normalizedRole
-              : null,
-        }),
       };
-      const profile = await saveProfile(payload);
+      const profileUiReportSettings = buildProfileUiReportSettingsPatch({
+        existingReportSettings: existingProfile?.report_settings,
+        incomingReportSettings,
+        confirmedByRole:
+          normalizedRole === 'COMPANY_ADMIN' || normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'ADMIN'
+            ? normalizedRole
+            : null,
+      });
+      const profile = await saveProfile(payload as Partial<CompanyProfile>, { profileUiReportSettings });
       const responseProfile =
         access.role === 'COMPANY_ADMIN' ? toLimitedCompanyProfile(profile) ?? profile : profile;
       return res.status(200).json({

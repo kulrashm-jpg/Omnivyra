@@ -13,7 +13,7 @@
  * Best-effort/fail-safe.
  */
 
-import { readReportSettingsChecked, mergeReportSettingsKeys, type ReportSettingsPatch } from '../../db/reportSettingsKeys';
+import { readReportSettingsChecked, mergeReportSettingsKeys, type ReportSettingsPatchFor } from '../../db/reportSettingsKeys';
 import { logger } from '../logger';
 import type { KnowledgeSnapshot } from './knowledgeDiffService';
 
@@ -36,8 +36,8 @@ async function readReportSettings(companyId: string): Promise<Record<string, unk
 }
 
 /** Replaces ONLY the patched keys, server-side; no client-side read of the column at all. */
-async function mergeReportSettings(companyId: string, patch: ReportSettingsPatch, now: string): Promise<boolean> {
-  const written = await mergeReportSettingsKeys(companyId, patch, { updatedAt: now });
+async function mergeReportSettings(companyId: string, patch: ReportSettingsPatchFor<'knowledge_snapshot'>, now: string): Promise<boolean> {
+  const written = await mergeReportSettingsKeys(companyId, 'knowledge_snapshot', patch, { updatedAt: now });
   if (!written) logger.warn('knowledge_snapshot_store_no_row', { companyId });
   return written;
 }

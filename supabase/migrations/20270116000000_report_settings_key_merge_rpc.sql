@@ -14,12 +14,15 @@
 --
 -- ─── WHAT THIS ADDS ───────────────────────────────────────────────────────
 -- public.merge_report_settings_keys(p_company_id text, p_patch jsonb, p_updated_at timestamptz,
---                                   p_if_absent text[])
+--                                   p_if_absent text[], p_merge_nested text[])
 --   * replaces ONLY the top-level keys named in p_patch, in one UPDATE statement
---     (report_settings || p_patch): sibling keys are never read by the client and never rewritten;
---   * p_patch keys must be in the SYSTEM-key allow-list below, else 22023 (the user-facing settings
---     are not writable through here);
+--     (report_settings || effective patch): other keys are never read by the client, never rewritten;
+--   * p_patch keys must be in the OWNED-key allow-list below (11 system keys + 14 profile keys,
+--     e9 2026-11-12 unit 2), else 22023; a patch with ANY unknown key writes nothing;
 --   * p_patch must be a non-empty object, else 22023;
+--   * p_merge_nested (unit 2): keys merged ONE LEVEL DEEP (stored->k || patch->k), so writers that
+--     share a key (market_pulse, default_inputs, company_facts) each change only their own
+--     sub-fields. The patched value must be an object; a stored non-object value is refused (22023);
 --   * a NULL / JSON-null column counts as `{}`; a column holding any other non-object (array,
 --     string, number) is REFUSED with 22023: `||` would otherwise concatenate into an array;
 --   * p_updated_at NULL leaves updated_at as it is (several writers never touched it);
@@ -80,7 +83,7 @@ BEGIN
               WHERE p.pronamespace = 'public'::regnamespace
                 AND p.proname = 'merge_report_settings_keys'
                 AND pg_get_function_identity_arguments(p.oid)
-                    <> 'p_company_id text, p_patch jsonb, p_updated_at timestamp with time zone, p_if_absent text[]') THEN
+                    <> 'p_company_id text, p_patch jsonb, p_updated_at timestamp with time zone, p_if_absent text[], p_merge_nested text[]') THEN
     RAISE EXCEPTION 'RS-MERGE preflight: public.merge_report_settings_keys exists with another signature';
   END IF;
 END
@@ -90,26 +93,42 @@ CREATE OR REPLACE FUNCTION public.merge_report_settings_keys(
   p_company_id text,
   p_patch      jsonb,
   p_updated_at timestamptz DEFAULT NULL,
-  p_if_absent  text[]      DEFAULT NULL
+  p_if_absent  text[]      DEFAULT NULL,
+  p_merge_nested text[]    DEFAULT NULL
 ) RETURNS integer
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
-  -- The SYSTEM-owned keys. Keep in step with backend/db/reportSettingsKeys.ts
-  -- (REPORT_SETTINGS_SYSTEM_KEYS); a unit test pins the two lists equal.
+  -- The OWNED keys: the 11 system keys plus the profile keys (e9 2026-11-12, unit 2). Keep in step
+  -- with backend/db/reportSettingsKeys.ts (REPORT_SETTINGS_KEYS); a unit test pins the two lists
+  -- equal, and the per-writer ownership map (which writer may touch which key, and how) lives there.
   c_allowed CONSTANT text[] := ARRAY[
     'activation_latch',
     'agent_checkpoints',
     'bootstrap',
     'canonical_understanding',
+    'company_facts',
+    'competitor_intelligence',
+    'default_inputs',
     'discovered_metadata',
+    'entity_archetype',
+    'industry_review',
+    'integrations',
+    'intelligence',
     'knowledge_rollbacks',
     'knowledge_snapshots',
     'knowledge_version',
+    'last_report_source',
+    'last_uploaded_file_name',
+    'market_pulse',
     'orchestration_tasks',
+    'profile_review',
     'refresh_history',
+    'report_input_observation',
+    'updated_at',
+    'user_guidance',
     'website_fingerprint'
   ];
   v_bad  text[];
@@ -126,33 +145,61 @@ BEGIN
     FROM jsonb_object_keys(p_patch) AS k
    WHERE NOT (k = ANY (c_allowed));
   IF v_bad IS NOT NULL THEN
-    RAISE EXCEPTION 'merge_report_settings_keys: not a system-owned report_settings key: %', v_bad
+    RAISE EXCEPTION 'merge_report_settings_keys: not an owned report_settings key: %', v_bad
       USING ERRCODE = '22023';
   END IF;
-  -- p_if_absent: every listed key must be allow-listed AND present in p_patch (a stray name is a
-  -- caller bug, refused rather than silently ignored). NULL elements are refused too.
+  -- p_if_absent / p_merge_nested: every listed key must be an allow-listed key OF p_patch (a stray
+  -- name is a caller bug, refused rather than ignored); NULL elements refused; a key may not be in both.
+  IF (p_if_absent IS NOT NULL AND array_position(p_if_absent, NULL) IS NOT NULL)
+     OR (p_merge_nested IS NOT NULL AND array_position(p_merge_nested, NULL) IS NOT NULL) THEN
+    RAISE EXCEPTION 'merge_report_settings_keys: p_if_absent / p_merge_nested may not contain NULL' USING ERRCODE = '22023';
+  END IF;
   SELECT array_agg(k ORDER BY k) INTO v_bad
-    FROM unnest(COALESCE(p_if_absent, ARRAY[]::text[])) AS k
-   WHERE k IS NULL OR NOT (k = ANY (c_allowed)) OR NOT (p_patch ? k);
-  IF v_bad IS NOT NULL OR (p_if_absent IS NOT NULL AND array_position(p_if_absent, NULL) IS NOT NULL) THEN
-    RAISE EXCEPTION 'merge_report_settings_keys: p_if_absent keys must be allow-listed keys of p_patch: %', v_bad
+    FROM unnest(COALESCE(p_if_absent, ARRAY[]::text[]) || COALESCE(p_merge_nested, ARRAY[]::text[])) AS k
+   WHERE NOT (k = ANY (c_allowed)) OR NOT (p_patch ? k);
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'merge_report_settings_keys: p_if_absent / p_merge_nested keys must be allow-listed keys of p_patch: %', v_bad
+      USING ERRCODE = '22023';
+  END IF;
+  IF COALESCE(p_if_absent, ARRAY[]::text[]) && COALESCE(p_merge_nested, ARRAY[]::text[]) THEN
+    RAISE EXCEPTION 'merge_report_settings_keys: a key cannot be both p_if_absent and p_merge_nested' USING ERRCODE = '22023';
+  END IF;
+  -- p_merge_nested: the PATCHED value must be an object (it is merged one level deep).
+  SELECT array_agg(k ORDER BY k) INTO v_bad
+    FROM unnest(COALESCE(p_merge_nested, ARRAY[]::text[])) AS k
+   WHERE jsonb_typeof(p_patch -> k) <> 'object';
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'merge_report_settings_keys: p_merge_nested values must be JSON objects: %', v_bad
       USING ERRCODE = '22023';
   END IF;
 
-  -- The effective patch drops each p_if_absent key the STORED row already has. It is computed from
-  -- cp.report_settings inside the UPDATE, so a concurrent writer is seen (READ COMMITTED re-evaluates
-  -- the row it waited on).
+  -- The effective patch, computed from the STORED row inside the UPDATE (READ COMMITTED re-evaluates
+  -- the row it waited on, so a concurrent writer is seen):
+  --   * a p_if_absent key the stored row already has is dropped;
+  --   * a p_merge_nested key becomes stored->k || patch->k (one level deep: only the patched
+  --     sub-fields change). A stored value that is absent or JSON null counts as {}; any other
+  --     non-object stored value is REFUSED (the WHERE excludes the row, then 22023 below);
+  --   * every other key replaces the stored value wholesale.
+  -- The base is derived from cp ITSELF inside the SET subquery (never from a self-join: a joined
+  -- copy of the row is NOT re-fetched when READ COMMITTED re-evaluates the locked row, so a
+  -- concurrent writer would be lost).
   UPDATE public.company_profiles AS cp
-     SET report_settings = CASE
-           WHEN cp.report_settings IS NULL OR jsonb_typeof(cp.report_settings) = 'null' THEN p_patch
-           ELSE cp.report_settings || (
-             SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
-               FROM jsonb_each(p_patch) AS e
-              WHERE NOT (e.key = ANY (COALESCE(p_if_absent, ARRAY[]::text[])) AND cp.report_settings ? e.key))
-         END,
+     SET report_settings = (
+           SELECT x.base || COALESCE((
+                    SELECT jsonb_object_agg(
+                             e.key,
+                             CASE WHEN e.key = ANY (COALESCE(p_merge_nested, ARRAY[]::text[]))
+                                  THEN (CASE WHEN jsonb_typeof(x.base -> e.key) = 'object' THEN x.base -> e.key ELSE '{}'::jsonb END) || e.value
+                                  ELSE e.value END)
+                      FROM jsonb_each(p_patch) AS e
+                     WHERE NOT (e.key = ANY (COALESCE(p_if_absent, ARRAY[]::text[])) AND x.base ? e.key)), '{}'::jsonb)
+             FROM (SELECT CASE WHEN cp.report_settings IS NULL OR jsonb_typeof(cp.report_settings) = 'null'
+                               THEN '{}'::jsonb ELSE cp.report_settings END AS base) AS x),
          updated_at = COALESCE(p_updated_at, cp.updated_at)
    WHERE cp.company_id = p_company_id
-     AND (cp.report_settings IS NULL OR jsonb_typeof(cp.report_settings) IN ('object', 'null'));
+     AND (cp.report_settings IS NULL OR jsonb_typeof(cp.report_settings) IN ('object', 'null'))
+     AND NOT EXISTS (SELECT 1 FROM unnest(COALESCE(p_merge_nested, ARRAY[]::text[])) AS n
+                      WHERE jsonb_typeof(cp.report_settings -> n) NOT IN ('object', 'null'));
   GET DIAGNOSTICS v_n = ROW_COUNT;
 
   IF v_n = 0 THEN
@@ -163,13 +210,17 @@ BEGIN
       RAISE EXCEPTION 'merge_report_settings_keys: report_settings of % is a JSON %, not an object; refusing to merge', p_company_id, v_kind
         USING ERRCODE = '22023';
     END IF;
+    IF FOUND THEN
+      RAISE EXCEPTION 'merge_report_settings_keys: a p_merge_nested key of % holds a non-object; refusing to merge', p_company_id
+        USING ERRCODE = '22023';
+    END IF;
   END IF;
   RETURN v_n;
 END
 $fn$;
 
-REVOKE ALL ON FUNCTION public.merge_report_settings_keys(text, jsonb, timestamptz, text[]) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.merge_report_settings_keys(text, jsonb, timestamptz, text[]) TO service_role;
+REVOKE ALL ON FUNCTION public.merge_report_settings_keys(text, jsonb, timestamptz, text[], text[]) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.merge_report_settings_keys(text, jsonb, timestamptz, text[], text[]) TO service_role;
 
 DO $verify$
 DECLARE
@@ -185,7 +236,7 @@ BEGIN
 
   SELECT p.oid, p.prosecdef, p.proconfig, p.proacl INTO r
     FROM pg_proc p
-   WHERE p.oid = 'public.merge_report_settings_keys(text, jsonb, timestamptz, text[])'::regprocedure;
+   WHERE p.oid = 'public.merge_report_settings_keys(text, jsonb, timestamptz, text[], text[])'::regprocedure;
 
   IF r.prosecdef THEN
     RAISE EXCEPTION 'RS-MERGE postcondition: must be SECURITY INVOKER';

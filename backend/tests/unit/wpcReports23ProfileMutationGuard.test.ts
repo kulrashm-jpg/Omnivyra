@@ -41,7 +41,16 @@ jest.mock('../../services/companyProfileService', () => ({
 
 // Only the persistence write is under test; the analytics/AI surface the resolver pulls in at
 // import time is stubbed (same pattern as wp11ReportProfileMutationGuard / g8SocialOwnershipProvenance).
-jest.mock('../../db/supabaseClient', () => ({ __esModule: true, supabase: { from: () => ({}) } }));
+// report_settings unit 2 (e9 2026-11-12): the report run's write is now ONE merge_report_settings_keys
+// call carrying only the report-owned keys; no profile upsert at all. The rpc is recorded here.
+const rpcCalls: Array<{ fn: string; args: Record<string, any> }> = [];
+jest.mock('../../db/supabaseClient', () => ({
+  __esModule: true,
+  supabase: {
+    from: () => ({}),
+    rpc: async (fn: string, args: Record<string, any>) => { rpcCalls.push({ fn, args }); return { data: 1, error: null }; },
+  },
+}));
 jest.mock('../../services/googleProviderReadinessService', () => ({
   __esModule: true,
   getGoogleSearchConsoleReadiness: async () => null,
@@ -128,10 +137,18 @@ const analyticsInput = (overrides?: Record<string, unknown>): never =>
     ...(overrides ?? {}),
   }) as never;
 
-const writtenPayload = (): Record<string, unknown> =>
-  (upsertMock.mock.calls[0] as unknown as Record<string, unknown>[])[0];
+/**
+ * What the run WROTE, in the shape the guard reasons about: the target row and the report_settings keys
+ * the merge replaces/merges. The merge function writes no other column (and only these keys), so
+ * every "never writes durable field X" assertion below holds against the real write.
+ */
+const writtenPayload = (): Record<string, unknown> => {
+  expect(rpcCalls).toHaveLength(1);
+  expect(rpcCalls[0].fn).toBe('merge_report_settings_keys');
+  return { company_id: rpcCalls[0].args.p_company_id, report_settings: rpcCalls[0].args.p_patch };
+};
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => { jest.clearAllMocks(); rpcCalls.length = 0; });
 
 describe('WP-C — Reports 2/3 generation performs no Company Profile mutation', () => {
   // -- A. the mutating writer is not reached at all ----------------------------
@@ -143,7 +160,8 @@ describe('WP-C — Reports 2/3 generation performs no Company Profile mutation',
 
     it.each(ANALYTICS_CATEGORIES)('writes the profile row exactly once for the %s report', async (reportCategory) => {
       await persistAnalyticsReportInputs(analyticsInput({ reportCategory }));
-      expect(upsertMock).toHaveBeenCalledTimes(1);
+      expect(rpcCalls).toHaveLength(1);           // one key merge
+      expect(upsertMock).not.toHaveBeenCalled();  // and no profile upsert at all (unit 2)
     });
   });
 
@@ -231,15 +249,19 @@ describe('WP-C — Reports 2/3 generation performs no Company Profile mutation',
       expect(settings.last_report_source).toBe('manual');
     });
 
-    it('preserves every unrelated report_settings key verbatim', async () => {
+    it('never SENDS an unrelated report_settings key: the server-side merge keeps them (unit 2)', async () => {
       await persistAnalyticsReportInputs(analyticsInput());
       const settings = writtenPayload().report_settings as Record<string, any>;
-      expect(settings.market_pulse).toEqual({ business_model: 'B2B' });
-      expect(settings.industry_review).toEqual({ conflict: false, user_industry: 'Industrial Automation' });
+      // Sending them back (from a sanitized read) is what erased refine's competitor data before.
+      expect(settings).not.toHaveProperty('market_pulse');
+      expect(settings).not.toHaveProperty('industry_review');
+      // default_inputs is merged one level deep, so onboarding's sub-fields survive server-side.
+      expect(rpcCalls[0].args.p_merge_nested).toEqual(['default_inputs']);
     });
 
     it('creates no profile row when the company has none', async () => {
       await persistAnalyticsReportInputs(analyticsInput({ profile: null }));
+      expect(rpcCalls).toHaveLength(0);
       expect(upsertMock).not.toHaveBeenCalled();
       expect(saveProfileMock).not.toHaveBeenCalled();
     });

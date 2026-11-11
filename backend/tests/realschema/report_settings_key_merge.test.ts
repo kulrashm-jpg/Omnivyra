@@ -14,7 +14,7 @@ import { db } from './setup';
 const url = process.env.W6_DB_URL as string;
 const CO = 'rsmerge-co-00000000-0000-4000-8000-0000000051a1';
 const CO_LEGACY = 'rsmerge-co-00000000-0000-4000-8000-0000000051a2';
-const FN = 'public.merge_report_settings_keys(text, jsonb, timestamptz, text[])';
+const FN = 'public.merge_report_settings_keys(text, jsonb, timestamptz, text[], text[])';
 
 type Outcome = { ok: true; rows: Record<string, unknown>[] } | { ok: false; code: string; message: string };
 
@@ -38,8 +38,8 @@ async function as(role: string | null, sql: string, params: unknown[] = []): Pro
   }
 }
 
-const merge = (role: string, company: string, patch: unknown, at: string | null = null, ifAbsent: string[] | null = null) =>
-  as(role, `SELECT public.merge_report_settings_keys($1, $2::jsonb, $3, $4::text[]) AS n`, [company, JSON.stringify(patch), at, ifAbsent]);
+const merge = (role: string, company: string, patch: unknown, at: string | null = null, ifAbsent: string[] | null = null, nested: string[] | null = null) =>
+  as(role, `SELECT public.merge_report_settings_keys($1, $2::jsonb, $3, $4::text[], $5::text[]) AS n`, [company, JSON.stringify(patch), at, ifAbsent, nested]);
 const stored = async (company: string) =>
   (await db.query(`SELECT report_settings AS rs, updated_at FROM public.company_profiles WHERE company_id = $1`, [company])).rows[0];
 
@@ -122,6 +122,15 @@ describe('merge semantics on the real company_profiles', () => {
     expect(await merge('service_role', CO, { bootstrap: 1 }, null, ['discovered_metadata'])).toMatchObject({ ok: false, code: '22023' });
     expect(await merge('service_role', CO, { bootstrap: 1 }, null, ['brand_voice'])).toMatchObject({ ok: false, code: '22023' });
   });
+  it('p_merge_nested: only the patched sub-fields change; a stored non-object is refused', async () => {
+    await merge('service_role', CO, { market_pulse: { business_model: 'b2b', competitor_details: [1] } });
+    expect(await merge('service_role', CO, { market_pulse: { exclusions: ['x'] } }, null, null, ['market_pulse']))
+      .toMatchObject({ ok: true, rows: [{ n: 1 }] });
+    expect((await stored(CO)).rs.market_pulse).toEqual({ business_model: 'b2b', competitor_details: [1], exclusions: ['x'] });
+    await merge('service_role', CO, { market_pulse: 'legacy' as unknown });
+    expect(await merge('service_role', CO, { market_pulse: { a: 1 } }, null, null, ['market_pulse'])).toMatchObject({ ok: false, code: '22023' });
+    expect((await stored(CO)).rs.market_pulse).toBe('legacy');
+  });
   it('anon and authenticated cannot call it (42501)', async () => {
     expect(await merge('anon', CO, { bootstrap: 1 })).toMatchObject({ ok: false, code: '42501' });
     expect(await merge('authenticated', CO, { bootstrap: 1 })).toMatchObject({ ok: false, code: '42501' });
@@ -129,6 +138,25 @@ describe('merge semantics on the real company_profiles', () => {
 });
 
 describe('concurrency', () => {
+  it('two NESTED writers of different market_pulse sub-fields, interleaved: both sub-fields survive', async () => {
+    await merge('service_role', CO, { market_pulse: { keep: 1 } });
+    const c1 = new Client({ connectionString: url }); const c2 = new Client({ connectionString: url });
+    await c1.connect(); await c2.connect();
+    try {
+      await c1.query('BEGIN'); await c1.query('SET LOCAL ROLE service_role');
+      await c2.query('BEGIN'); await c2.query('SET LOCAL ROLE service_role');
+      await c1.query(`SELECT public.merge_report_settings_keys($1, '{"market_pulse":{"competitor_details":["refine"]}}'::jsonb, NULL, NULL, ARRAY['market_pulse'])`, [CO]);
+      const second = c2.query(`SELECT public.merge_report_settings_keys($1, '{"market_pulse":{"exclusions":["ui"]}}'::jsonb, NULL, NULL, ARRAY['market_pulse'])`, [CO]);
+      await new Promise((r) => setTimeout(r, 250));
+      await c1.query('COMMIT');
+      await second;
+      await c2.query('COMMIT');
+    } finally {
+      await c1.end(); await c2.end();
+    }
+    expect((await stored(CO)).rs.market_pulse).toEqual({ keep: 1, competitor_details: ['refine'], exclusions: ['ui'] });
+  });
+
   it('two writers of DIFFERENT keys, interleaved on the same row: both keys survive', async () => {
     const c1 = new Client({ connectionString: url }); const c2 = new Client({ connectionString: url });
     await c1.connect(); await c2.connect();

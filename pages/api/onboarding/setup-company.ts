@@ -1,3 +1,4 @@
+import { mergeReportSettingsKeys, type ReportSettingsPatchFor } from '../../../backend/db/reportSettingsKeys';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
@@ -700,6 +701,58 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     // concurrent path (e.g. a profile read during the social crawl) gets the
     // validated canonical website instead of silently conflicting and leaving
     // website_url NULL. onConflict keeps a single source of truth at creation.
+    // report_settings unit 2 (e9 2026-11-12): the onboarding create's report_settings, written through
+    // merge_report_settings_keys as the onboarding_create writer, NOT inside the upsert. On a fresh row
+    // the result is exactly this object (the column starts as {}). On a row a concurrent path already
+    // created, the upsert used to REPLACE the whole column with this object, wiping every key that path
+    // wrote; now default_inputs / market_pulse / company_facts merge one level deep, and profile_review
+    // and discovered_metadata are only filled where absent (incremental metadata stays the sole replacer).
+    const onboardingReportSettings: ReportSettingsPatchFor<'onboarding_create'> = {
+      default_inputs: {
+        company_name: companyName.trim(),
+        website_domain: websiteDomain,
+        canonical_website_source: emailDerivedWebsite ? 'email_domain' : 'user_input',
+        business_type: businessTypeText || null,
+        industry: profileIndustry || null,
+      },
+      market_pulse: {
+        business_model: businessTypeText || null,
+        provider_type: businessTypeText || null,
+        updated_at: now,
+      },
+      company_facts: {
+        team_size: companySize.trim() || null,
+        updated_at: now,
+      },
+      profile_review: {
+        confirmation_interval_days: 183,
+        pending_confirmation: Boolean(companySize.trim()),
+        updated_at: now,
+      },
+      // §3/§7 — full system-discovered metadata bundle (description,
+      // language, brand colour, OpenGraph, SEO keywords, title/site name).
+      // Values without a dedicated column live here; all marked discovered.
+      ...(discoveredMetadata ? {
+        discovered_metadata: {
+          source: 'system_discovered',
+          discovered_at: now,
+          discovered_fields: systemDiscoveredFields,
+          // ONBOARD-001R §2 — per-field provenance (source/confidence/
+          // discoveredAt/lastVerified/verificationStatus/fieldOrigin).
+          provenance: buildDiscoveredProvenance(discoveredMetadata, now),
+          title: discoveredMetadata.title,
+          description: discoveredMetadata.description,
+          site_name: discoveredMetadata.siteName,
+          language: discoveredMetadata.language,
+          country: discoveredMetadata.country,
+          brand_color: discoveredMetadata.brandColor,
+          seo_keywords: discoveredMetadata.keywords,
+          open_graph: discoveredMetadata.openGraph,
+          logo_url: discoveredMetadata.logoUrl,
+          favicon_url: discoveredMetadata.faviconUrl,
+        },
+      } : {}),
+    };
     await supabase.from('company_profiles').upsert({
       company_id:  companyId,
       name:        companyName.trim(),
@@ -722,56 +775,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       whatsapp_url: discoveredSocialProfile.whatsapp_url ?? null,
       other_social_links: discoveredSocialProfile.other_social_links ?? null,
       social_profiles: discoveredSocialProfile.social_profiles ?? null,
-      report_settings: {
-        default_inputs: {
-          company_name: companyName.trim(),
-          website_domain: websiteDomain,
-          canonical_website_source: emailDerivedWebsite ? 'email_domain' : 'user_input',
-          business_type: businessTypeText || null,
-          industry: profileIndustry || null,
-        },
-        market_pulse: {
-          business_model: businessTypeText || null,
-          provider_type: businessTypeText || null,
-          updated_at: now,
-        },
-        company_facts: {
-          team_size: companySize.trim() || null,
-          updated_at: now,
-        },
-        profile_review: {
-          confirmation_interval_days: 183,
-          pending_confirmation: Boolean(companySize.trim()),
-          updated_at: now,
-        },
-        // §3/§7 — full system-discovered metadata bundle (description,
-        // language, brand colour, OpenGraph, SEO keywords, title/site name).
-        // Values without a dedicated column live here; all marked discovered.
-        ...(discoveredMetadata ? {
-          discovered_metadata: {
-            source: 'system_discovered',
-            discovered_at: now,
-            discovered_fields: systemDiscoveredFields,
-            // ONBOARD-001R §2 — per-field provenance (source/confidence/
-            // discoveredAt/lastVerified/verificationStatus/fieldOrigin).
-            provenance: buildDiscoveredProvenance(discoveredMetadata, now),
-            title: discoveredMetadata.title,
-            description: discoveredMetadata.description,
-            site_name: discoveredMetadata.siteName,
-            language: discoveredMetadata.language,
-            country: discoveredMetadata.country,
-            brand_color: discoveredMetadata.brandColor,
-            seo_keywords: discoveredMetadata.keywords,
-            open_graph: discoveredMetadata.openGraph,
-            logo_url: discoveredMetadata.logoUrl,
-            favicon_url: discoveredMetadata.faviconUrl,
-          },
-        } : {}),
-      },
       created_at:  now,
       updated_at:  now,
-    }, { onConflict: 'company_id' });
-    // Non-fatal if profile insert fails — company + role are sufficient
+    }, { onConflict: 'company_id' }).then(({ error }) => {
+      // Non-fatal if profile insert fails — company + role are sufficient (but never silent).
+      if (error) console.warn('[setup-company] company profile upsert failed (non-fatal):', error.message);
+    });
+    try {
+      await mergeReportSettingsKeys(companyId, 'onboarding_create', onboardingReportSettings, { updatedAt: now });
+    } catch (error) {
+      console.warn('[setup-company] onboarding report_settings write failed (non-fatal):', (error as Error)?.message ?? error);
+    }
 
     // ── 5·bootstrap. Canonical company profile bootstrap (ONBOARD-004) ────────
     // Immediately after company creation, run the ONE idempotent bootstrap

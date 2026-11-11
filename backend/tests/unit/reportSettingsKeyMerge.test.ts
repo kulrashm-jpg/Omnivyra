@@ -67,7 +67,7 @@ jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), error: je
 jest.mock('../../services/cms/registry', () => ({ listCmsProviders: () => ['wordpress'] }));
 
 import {
-  REPORT_SETTINGS_SYSTEM_KEYS, readReportSettingsChecked, mergeReportSettingsKeys,
+  REPORT_SETTINGS_SYSTEM_KEYS, REPORT_SETTINGS_KEYS, readReportSettingsChecked, mergeReportSettingsKeys,
   ReportSettingsUnreadableError, ReportSettingsWriteError,
 } from '../../db/reportSettingsKeys';
 import { upsertTasks } from '../../services/orchestration/orchestrationLedgerStore';
@@ -120,8 +120,8 @@ const WRITERS: Array<[string, boolean, () => Promise<unknown>]> = [
 ];
 
 describe('the allow-list is ONE contract across SQL and TS', () => {
-  it('REPORT_SETTINGS_SYSTEM_KEYS equals the migration c_allowed list', () => {
-    expect([...REPORT_SETTINGS_SYSTEM_KEYS]).toEqual(migrationAllowList());
+  it('REPORT_SETTINGS_KEYS (system + profile) equals the migration c_allowed list', () => {
+    expect([...REPORT_SETTINGS_KEYS]).toEqual(migrationAllowList());
   });
 });
 
@@ -178,9 +178,11 @@ describe('discovered_metadata has ONE replacer (e9 2026-11-12): bootstrap only f
     expect(settings().discovered_metadata).toEqual({ from: 'incremental' });
     expect(settings().bootstrap).toBeTruthy();
   });
-  it('ifAbsent naming a key outside the patch throws before any call', async () => {
-    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} }, { ifAbsent: ['discovered_metadata'] })).rejects.toThrow(/not in the patch/);
-    expect(db.rpcPatches).toHaveLength(0);
+  it('the MODE comes from the ownership map, not the caller: bootstrap sends discovered_metadata as ifAbsent', async () => {
+    const spy = jest.spyOn(fakeClient, 'rpc');
+    await mergeReportSettingsKeys('co1', 'company_bootstrap', { bootstrap: {}, discovered_metadata: { a: 1 } });
+    expect(spy.mock.calls[0][1]).toMatchObject({ p_if_absent: ['discovered_metadata'], p_merge_nested: null });
+    spy.mockRestore();
   });
 });
 
@@ -196,25 +198,25 @@ describe('the shared helper', () => {
     await expect(readReportSettingsChecked('co1')).resolves.toEqual({ exists: true, settings: {} });
   });
   it('a key outside the allow-list throws BEFORE any database call', async () => {
-    await expect(mergeReportSettingsKeys('co1', { brand_voice: 'x' } as never)).rejects.toBeInstanceOf(ReportSettingsWriteError);
+    await expect(mergeReportSettingsKeys('co1', 'agent_state', { brand_voice: 'x' } as never)).rejects.toBeInstanceOf(ReportSettingsWriteError);
     expect(db.rpcPatches).toHaveLength(0);
   });
   it('an empty patch throws; no row is false; a written row is true', async () => {
-    await expect(mergeReportSettingsKeys('co1', {})).rejects.toBeInstanceOf(ReportSettingsWriteError);
+    await expect(mergeReportSettingsKeys('co1', 'company_bootstrap', {})).rejects.toBeInstanceOf(ReportSettingsWriteError);
     db.row = null;
-    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} })).resolves.toBe(false);
+    await expect(mergeReportSettingsKeys('co1', 'company_bootstrap', { bootstrap: {} })).resolves.toBe(false);
     db.row = { report_settings: {} };
-    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} })).resolves.toBe(true);
+    await expect(mergeReportSettingsKeys('co1', 'company_bootstrap', { bootstrap: {} })).resolves.toBe(true);
   });
   it('a database refusal and a MISSING row count are both errors, never "written"', async () => {
     const refusing = { from: fakeClient.from, rpc: async () => ({ data: null, error: { code: '42501', message: 'permission denied' } }) };
-    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} }, { client: refusing })).rejects.toThrow(/42501/);
+    await expect(mergeReportSettingsKeys('co1', 'company_bootstrap', { bootstrap: {} }, { client: refusing })).rejects.toThrow(/42501/);
     const blank = { from: fakeClient.from, rpc: async () => ({ data: null, error: null }) }; // postgrest-js 204 rewrite
-    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} }, { client: blank })).rejects.toThrow(/no row count/);
+    await expect(mergeReportSettingsKeys('co1', 'company_bootstrap', { bootstrap: {} }, { client: blank })).rejects.toThrow(/no row count/);
   });
   it('a stored non-object report_settings is refused by the merge (22023), not concatenated', async () => {
     db.row = { report_settings: ['legacy'] };
-    await expect(mergeReportSettingsKeys('co1', { bootstrap: {} })).rejects.toThrow(/22023/);
+    await expect(mergeReportSettingsKeys('co1', 'company_bootstrap', { bootstrap: {} })).rejects.toThrow(/22023/);
     expect(db.row.report_settings).toEqual(['legacy']);
   });
 });

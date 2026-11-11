@@ -1,4 +1,5 @@
 import { CompanyProfile } from './types';
+import { PROFILE_UI_SUBFIELDS, pickSubfields } from '../../db/reportSettingsKeys';
 
 const COMPANY_PROFILE_REVIEW_INTERVAL_DAYS = 183;
 
@@ -91,6 +92,32 @@ export function upsertCompanyProfileGovernanceSettings(params: {
     company_facts: mergedFacts,
     profile_review,
   };
+}
+
+/**
+ * report_settings unit 2 (e9 2026-11-12): the keys POST /api/company-profile may write, as the
+ * profile_ui writer. It is a WHITELIST: market_pulse / intelligence / company_facts carry only the
+ * sub-fields the profile UI edits (PROFILE_UI_SUBFIELDS), merged one level deep server-side, plus the
+ * governance-computed profile_review. Everything else a client posts in report_settings (the 11
+ * system keys, user_guidance, response-only fields such as market_pulse.unified_competitor_intelligence,
+ * and the competitor fields the read sanitizer blanked) is IGNORED.
+ */
+export function buildProfileUiReportSettingsPatch(params: {
+  existingReportSettings?: CompanyProfile['report_settings'] | null;
+  incomingReportSettings?: CompanyProfile['report_settings'] | null;
+  confirmedByRole?: string | null;
+  now?: Date;
+}): Record<string, unknown> {
+  const governed = upsertCompanyProfileGovernanceSettings(params) ?? {};
+  const incoming = (params.incomingReportSettings ?? {}) as Record<string, unknown>;
+  const facts = pickSubfields((governed as Record<string, unknown>).company_facts, [...PROFILE_UI_SUBFIELDS.company_facts, 'updated_at']);
+  const patch: Record<string, unknown> = {
+    profile_review: (governed as Record<string, unknown>).profile_review,
+    company_facts: facts,
+    market_pulse: pickSubfields(incoming.market_pulse, PROFILE_UI_SUBFIELDS.market_pulse),
+    intelligence: pickSubfields(incoming.intelligence, PROFILE_UI_SUBFIELDS.intelligence),
+  };
+  return Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined && v !== null));
 }
 
 export function getCompanyProfileReviewStatus(profile: CompanyProfile | null): {

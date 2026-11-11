@@ -108,6 +108,7 @@ import {
 } from './companyProfile/userGuidance';
 import { classifyCompanyBusiness } from './companyProfile/businessClassification';
 import { buildSavePayload } from './companyProfile/savePayload';
+import { mergeReportSettingsKeys, readReportSettingsChecked } from '../db/reportSettingsKeys';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 import {
   findKnownCompetitorProfile,
@@ -367,6 +368,13 @@ export async function upsertCompanyProfilePayload(
   context: string,
 ): Promise<{ data: CompanyProfile | null; error: { message?: string } | null; omittedSchemaFields: string[] }> {
   const remainingPayload: Record<string, unknown> = { ...payload };
+  // report_settings unit 2 (e9 2026-11-12, BLOCKING data loss): this upsert NEVER writes
+  // report_settings. Every caller built it from an earlier (often sanitized, often minutes-old) read,
+  // so writing it back replaced the WHOLE column: other writers' keys, including the system keys,
+  // reverted to that read, and competitor fields blanked for display were persisted as blank.
+  // report_settings is written only through merge_report_settings_keys (backend/db/reportSettingsKeys.ts),
+  // by the writer that owns each key. The one whole-object write is setup-company's initial create.
+  delete remainingPayload.report_settings;
   const omittedSchemaFields: string[] = [];
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -591,6 +599,13 @@ export async function saveProfile(
   if (error) {
     console.warn('Profile save error:', error.message);
     return (existing ?? null) as CompanyProfile;
+  }
+  if (options?.profileUiReportSettings && data) {
+    // The UI-owned keys, server-side and per sub-field (throws ReportSettingsWriteError on failure:
+    // a user's settings save that did not happen must not be answered as saved).
+    await mergeReportSettingsKeys(companyId, 'profile_ui', options.profileUiReportSettings, { updatedAt: nowIso });
+    const fresh = await readReportSettingsChecked(companyId);
+    return { ...(data as CompanyProfile), report_settings: fresh.settings as CompanyProfile['report_settings'] };
   }
   return data ?? ((existing ?? null) as CompanyProfile);
 }

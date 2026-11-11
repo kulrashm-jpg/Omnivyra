@@ -139,9 +139,14 @@ jest.mock('../../db/supabaseClient', () => {
   });
   const from = jest.fn((table: string) => {
     if (table === 'campaign_versions') return chain([{ id: 'v1', company_id: 'comp-1', campaign_id: 'camp-1' }]);
+    // report_settings unit 2: a real company_profiles row always carries company_id; the refine
+    // write-back (merge_report_settings_keys) is keyed on it.
+    if (table === 'company_profiles') return chain({ company_id: 'comp-1' }); // .single() yields the row itself
     return chain([]);
   });
-  return { supabase: { from, rpc: jest.fn().mockResolvedValue({ data: null, error: null }) } };
+  // report_settings unit 2: refine's report_settings write-back is now ONE merge_report_settings_keys rpc
+  // that answers a row count (data: 1 = written); a null count is "no answer" and refine refuses it.
+  return { supabase: { from, rpc: jest.fn(async (fn: string) => (fn === 'merge_report_settings_keys' ? { data: 1, error: null } : { data: null, error: null })) } };
 });
 jest.mock('../../services/contentOverlapService', () => ({
   detectContentOverlap: jest.fn().mockResolvedValue({

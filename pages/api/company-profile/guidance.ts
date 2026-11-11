@@ -4,7 +4,7 @@ import {
   getProfile,
   toLimitedCompanyProfile,
 } from '../../../backend/services/companyProfileService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { mergeReportSettingsKeys, readReportSettingsChecked } from '../../../backend/db/reportSettingsKeys';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { normalizeUserGuidedIntelligence } from '../../../backend/services/companyProfile/userGuidance';
 import type { CompanyProfile } from '../../../backend/services/companyProfile/types';
@@ -27,24 +27,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     previous: existing.report_settings?.user_guidance ?? null,
   });
 
-  const reportSettings: CompanyProfile['report_settings'] = {
-    ...(existing.report_settings ?? {}),
-    user_guidance: normalizedGuidance,
-  };
-
-  const { data, error } = await supabase
-    .from('company_profiles')
-    .update({
-      report_settings: reportSettings,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('company_id', companyId)
-    .select('*')
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  const profile = (data as CompanyProfile | null) ?? {
+  // report_settings unit 2 (e9 2026-11-12): writes ONLY user_guidance, server-side. It used to write
+  // `{ ...existing.report_settings, user_guidance }` over the WHOLE column, and `existing` is a
+  // SANITIZED read (competitor fields blanked), so every guidance save erased refine's competitor data
+  // and reverted every other key to this read.
+  const written = await mergeReportSettingsKeys(companyId, 'profile_guidance', { user_guidance: normalizedGuidance }, {
+    updatedAt: new Date().toISOString(),
+  });
+  if (!written) return res.status(404).json({ error: 'Company profile not found' });
+  const fresh = await readReportSettingsChecked(companyId);
+  const profile: CompanyProfile = {
     ...existing,
-    report_settings: reportSettings,
+    report_settings: fresh.settings as CompanyProfile['report_settings'],
   };
 
   const responseProfile = access.role === 'COMPANY_ADMIN'

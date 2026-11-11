@@ -111,7 +111,9 @@ jest.mock('../../db/supabaseClient', () => {
     }
     return chain([]);
   });
-  return { supabase: { from, rpc: jest.fn().mockResolvedValue({ data: null, error: null }) } };
+  // report_settings unit 2: refine's report_settings write-back is now ONE merge_report_settings_keys rpc
+  // that answers a row count (data: 1 = written); a null count is "no answer" and refine refuses it.
+  return { supabase: { from, rpc: jest.fn(async (fn: string) => (fn === 'merge_report_settings_keys' ? { data: 1, error: null } : { data: null, error: null })) } };
 });
 jest.mock('../../services/omnivyraClientV1', () => ({
   isOmnivyraEnabled: jest.fn().mockReturnValue(true),

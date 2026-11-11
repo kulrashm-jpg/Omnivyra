@@ -58,7 +58,7 @@ export const reportSettingsAgentStore: AgentStore = {
         .sort((a, b) => active(a) - active(b) || b.executionMetadata.updatedAt.localeCompare(a.executionMetadata.updatedAt))
         .slice(0, LIMIT);
       // Replaces ONLY report_settings.agent_checkpoints, server-side; sibling keys are never rewritten.
-      const written = await mergeReportSettingsKeys(companyId, { [KEY]: merged });
+      const written = await mergeReportSettingsKeys(companyId, 'agent_state', { [KEY]: merged });
       if (!written) { logger.warn('agent_checkpoint_write_no_row', { companyId, runId: checkpoint.runId }); return false; }
       return true;
     } catch (err) {
