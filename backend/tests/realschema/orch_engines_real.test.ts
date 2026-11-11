@@ -59,6 +59,8 @@ jest.mock('../../middleware/queueBackpressure', () => ({
 // Nothing else this suite runs takes a distributed lease.
 jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
 jest.mock('../../../lib/platform/distributedLock', () => ({
+  // Every other export stays real; only the lease is a pass-through (55).
+  ...jest.requireActual('../../../lib/platform/distributedLock'),
   withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
 }));
 
