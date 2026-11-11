@@ -447,6 +447,45 @@ describe('F-1 (PI): erasure leaves no person key in the review store', () => {
     expect(await allowed(ORG_A, 'whatsapp', { target: PHONE })).toBe(false);
   }), 120_000);
 
+  // ── WHY THE ACTOR-FK FINDING ON contact_opt_out_reviews.person_id IS BENIGN, AND WHAT BREAKS IF IT STOPS BEING ──
+  // The catalog detector reports set_null_vs_check on contact_opt_out_reviews_person_tenant_fk vs
+  // contact_opt_out_reviews_person_anchor_consistent. It is acknowledged in
+  // scripts/migrations/set-null-known-defects.json (catalog_known) ONLY because the BEFORE UPDATE guard
+  // rewrites a person anchor to its tombstone in the same row. These two tests keep that suppression
+  // honest (PI / MIG-2R requirement, 2026-11-11): the premise is asserted, and the guard is shown to be
+  // NECESSARY, not merely present. If either fails, the catalog_known entry must be removed with the fix.
+  it('PREMISE: trg_contact_opt_out_reviews_guard exists, is enabled, BEFORE ROW UPDATE, bound to the guard that writes the tombstone', async () => {
+    const t = await one(
+      `SELECT t.tgenabled::text AS enabled, (t.tgtype & 1) <> 0 AS is_row, (t.tgtype & 2) <> 0 AS is_before,
+              (t.tgtype & 16) <> 0 AS on_update, p.oid = 'public.contact_opt_out_reviews_guard()'::regprocedure AS bound
+         FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+        WHERE t.tgrelid = 'public.contact_opt_out_reviews'::regclass AND t.tgname = 'trg_contact_opt_out_reviews_guard' AND NOT t.tgisinternal`);
+    expect(t).toEqual({ enabled: 'O', is_row: true, is_before: true, on_update: true, bound: true });
+    // The body (as finally defined after every CREATE OR REPLACE in the stack: 20270127000003 and
+    // 20270127000006 both replace it) still performs the repair. DELIBERATELY a substring on the one line
+    // that carries the premise, not md5(prosrc): an exact hash would break on every legitimate edit and
+    // invite loosening; this survives benign edits and fails only when the repair itself is removed.
+    const body = String((await one(`SELECT pg_get_functiondef('public.contact_opt_out_reviews_guard()'::regprocedure) AS d`)).d);
+    expect(body).toContain(`NEW.anchor_value := 'erased:' || NEW.id::text`);
+  });
+
+  it('NEGATIVE CONTROL: without the guard, the same erasure VIOLATES contact_opt_out_reviews_person_anchor_consistent (the repair is load-bearing)', () => inRollback(async () => {
+    const { person } = await setup();
+    await operatorOptOut(person, 'run-erase:nc');
+    await db.query(`UPDATE public.contact_governance_records SET revoked_at = now(), revoked_reason = 'erasure (test)'
+      WHERE person_id = $1 AND revoked_at IS NULL`, [person]);
+    await db.query('DROP TRIGGER trg_contact_opt_out_reviews_guard ON public.contact_opt_out_reviews'); // rolled back with the test
+    await db.query('SAVEPOINT nc');
+    let failure: { code?: string; constraint?: string } = {};
+    try {
+      await db.query('DELETE FROM public.unified_persons WHERE id = $1', [person]);
+    } catch (err: any) {
+      failure = { code: err.code, constraint: err.constraint };
+    }
+    await db.query('ROLLBACK TO SAVEPOINT nc');
+    expect(failure).toEqual({ code: '23514', constraint: 'contact_opt_out_reviews_person_anchor_consistent' });
+  }), 120_000);
+
   it('a TARGET review is untouched when its person is deleted (PI ruling: keep the canonical value)', () => inRollback(async () => {
     const { person } = await setup();
     const stop = await whatsappStop('wamid.erase');
