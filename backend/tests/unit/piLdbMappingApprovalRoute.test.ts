@@ -508,6 +508,8 @@ describe('VENDOR SOURCES ARE SUPER ADMIN ONLY (step E)', () => {
       const res = await call(req({ body: { source, schemaFingerprint: FINGERPRINT, headers: ['Email'], entries: [entry()] } }));
       expect(res._status).toBe(403);
       expect(res._json.code).toBe('PLATFORM_VENDOR_SOURCE');
+      expect(res._json.vendor).toBe('apollo');                       // says WHICH key matched
+      expect(String(res._json.error)).toContain('apollo');
       expect(saveProfileVersion).not.toHaveBeenCalled();
     },
   );

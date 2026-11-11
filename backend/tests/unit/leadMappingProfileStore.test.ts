@@ -19,6 +19,12 @@
  * A violation answers `{ code: '23505' }`, as Postgres would. That is what
  * lets the concurrency test be a real test rather than a story about one.
  *
+ * PRIVILEGES ARE MODELLED, not assumed (virality-05, 2026-11-11): the store runs
+ * as service_role, which 20270211000000 grants SELECT, INSERT, UPDATE only - the
+ * real-schema suite pins that (ldb1_mapping_profiles: "service_role holds NO
+ * DELETE"). So a DELETE here answers 42501, as production would. This fake once
+ * ALLOWED a delete, and a test passed against behaviour production never had.
+ *
  * It is a double, not Postgres, and it is only as good as the constraints
  * copied into it — so the real-schema suite is still where these tables get
  * exercised against the live DDL. What this file proves is the ordering logic,
@@ -142,6 +148,12 @@ class FakeDb {
   }
 }
 
+/** service_role's grants per 20270211000000 (pinned by the real-schema suite). */
+const FAKE_GRANTS: Record<string, readonly string[]> = {
+  source_mapping_profiles: ['SELECT', 'INSERT', 'UPDATE'],
+  source_mapping_profile_entries: ['SELECT', 'INSERT', 'UPDATE'],
+};
+
 class FakeQuery implements PromiseLike<PgResult> {
   private op: 'select' | 'insert' | 'update' | 'delete' = 'select';
   private filters: Array<[string, unknown]> = [];
@@ -236,6 +248,9 @@ class FakeQuery implements PromiseLike<PgResult> {
     }
 
     if (this.op === 'delete') {
+      if (FAKE_GRANTS[this.tableName] && !FAKE_GRANTS[this.tableName].includes('DELETE')) {
+        return { data: null, error: { code: '42501', message: `permission denied for table ${this.tableName}` } };
+      }
       const hits = new Set(this.matching());
       const rows = this.db._rows(this.tableName);
       for (let i = rows.length - 1; i >= 0; i -= 1) if (hits.has(rows[i])) rows.splice(i, 1);
@@ -286,6 +301,7 @@ import {
   loadActiveProfile,
   loadPlatformProfile,
   loadProfileContext,
+  MIN_PLATFORM_FALLBACK_HEADERS,
   savePlatformProfileVersion,
   saveProfileVersion,
   type SaveProfileEntry,
@@ -619,7 +635,7 @@ describe('mappingProfileStore · a rejection is not a destination', () => {
 
   it('answers an empty context for a tenant with no profile', async () => {
     const ctx = await loadProfileContext(key, HEADERS);
-    expect(ctx).toEqual({ profile: null, rejectedTargets: {} });
+    expect(ctx).toEqual({ profile: null, rejectedTargets: {}, rejectionSource: null });
   });
 });
 
@@ -858,6 +874,10 @@ describe('mappingProfileStore · tolerates rows it did not write', () => {
 
 describe('mappingProfileStore · platform (vendor) profiles, step E', () => {
   const SUPER = '00000000-0000-4000-8000-0000000000d1';
+  // A vendor-export-wide shape (>= MIN_PLATFORM_FALLBACK_HEADERS), containing HEADERS.
+  const WIDE = [...HEADERS, 'Seniority', 'Departments', 'Company Domain', 'Company Size', 'Country', 'Apollo Id'];
+  const WFP = 'e'.repeat(64);
+  const wideKey = { organizationId: ORG, source: 'csv', schemaFingerprint: WFP };
   const platformEntry = (over: Partial<SaveProfileEntry> = {}): SaveProfileEntry =>
     approve({ mappingMethod: 'platform_approved', ...over });
   const savePlatform = (over: Partial<Parameters<typeof savePlatformProfileVersion>[0]> = {}) =>
@@ -904,35 +924,64 @@ describe('mappingProfileStore · platform (vendor) profiles, step E', () => {
   });
 
   it("TENANT FIRST: a tenant's own csv profile answers before a platform profile for the same shape", async () => {
-    await savePlatform({ entries: [platformEntry({ target: 'department' })] });
-    await save(); // tenant csv, same FP, Designation -> jobTitle
-    const p = await loadActiveProfile(key);
+    await savePlatform({ schemaFingerprint: WFP, headers: WIDE, entries: [platformEntry({ target: 'department' })] });
+    await save({ schemaFingerprint: WFP, headers: WIDE }); // tenant csv, same shape, Designation -> jobTitle
+    const p = await loadActiveProfile(wideKey);
     expect(p!.scope).toBe('tenant');
     expect(p!.entries[0].target).toBe('jobTitle');
   });
 
   it('PLATFORM FALLBACK: a csv upload with no tenant profile is recognised by shape as the vendor\'s', async () => {
-    await savePlatform({ entries: [platformEntry({ target: 'department' })] });
-    const ctx = await loadProfileContext(key, HEADERS);
+    await savePlatform({ schemaFingerprint: WFP, headers: WIDE, entries: [platformEntry({ target: 'department' })] });
+    const ctx = await loadProfileContext(wideKey, WIDE);
     expect(ctx.profile!.scope).toBe('platform');
     expect(ctx.profile!.entries[0].target).toBe('department');
     // And another tenant gets the same vendor answer.
-    expect((await loadActiveProfile({ ...key, organizationId: OTHER_ORG }))!.scope).toBe('platform');
+    expect((await loadActiveProfile({ ...wideKey, organizationId: OTHER_ORG }))!.scope).toBe('platform');
+  });
+
+  it('UNDER-MATCH: a platform profile narrower than MIN_PLATFORM_FALLBACK_HEADERS never answers a csv upload by shape', async () => {
+    expect(HEADERS.length).toBeLessThan(MIN_PLATFORM_FALLBACK_HEADERS);
+    await savePlatform(); // 4 headers: a shape too common to identify a vendor
+    expect(await loadActiveProfile(key)).toBeNull();
+    // ...but the vendor source itself still reads it directly.
+    expect((await loadActiveProfile({ ...key, source: 'apollo' }))!.scope).toBe('platform');
   });
 
   it("the fallback NEVER returns another tenant's profile for the same shape", async () => {
-    await save({ organizationId: OTHER_ORG }); // OTHER_ORG's csv profile for FP
-    expect(await loadActiveProfile(key)).toBeNull(); // ORG has none; no platform row
+    await save({ organizationId: OTHER_ORG, schemaFingerprint: WFP, headers: WIDE }); // OTHER_ORG's csv profile
+    expect(await loadActiveProfile(wideKey)).toBeNull(); // ORG has none; no platform row
   });
 
   it('two vendors claiming one header set is AMBIGUOUS: the fallback answers nothing rather than guess', async () => {
-    await savePlatform();
+    await savePlatform({ schemaFingerprint: WFP, headers: WIDE });
     db.profiles.push({
       id: 'p-other-vendor', scope: 'platform', organization_id: null, source: 'othervendor',
-      schema_fingerprint: FP, version: 1, status: 'active', superseded_at: null,
-      header_count: HEADERS.length, headers: HEADERS, created_at: '2026-01-01T00:00:00.000Z',
+      schema_fingerprint: WFP, version: 1, status: 'active', superseded_at: null,
+      header_count: WIDE.length, headers: WIDE, created_at: '2026-01-01T00:00:00.000Z',
     });
-    expect(await loadActiveProfile(key)).toBeNull();
+    expect(await loadActiveProfile(wideKey)).toBeNull();
+  });
+
+  it("REJECTIONS carry WHOSE they are: a platform profile's refusals cite its id and scope 'platform'", async () => {
+    await savePlatform({
+      schemaFingerprint: WFP, headers: WIDE,
+      entries: [platformEntry(), platformEntry({ decision: 'rejected', target: 'department' })],
+    });
+    const ctx = await loadProfileContext(wideKey, WIDE);
+    expect(ctx.rejectedTargets).toEqual({ Designation: ['department'] });
+    expect(ctx.rejectionSource).toEqual({ profileId: ctx.profile!.profileId, scope: 'platform' });
+    // A tenant's own refusals cite scope 'tenant'; no refusals -> null.
+    await save({ organizationId: OTHER_ORG, schemaFingerprint: WFP, headers: WIDE,
+      entries: [approve(), approve({ decision: 'rejected', target: 'department' })] });
+    expect((await loadProfileContext({ ...wideKey, organizationId: OTHER_ORG }, WIDE)).rejectionSource?.scope).toBe('tenant');
+    await save({ organizationId: OTHER_ORG, source: 'csv', schemaFingerprint: FP });
+    expect((await loadProfileContext({ ...key, organizationId: OTHER_ORG }, HEADERS)).rejectionSource).toBeNull();
+  });
+
+  it('the fake MODELS the grants: a DELETE on either table answers 42501, as production does', async () => {
+    const r = await (db.table('source_mapping_profiles') as unknown as { delete: () => PromiseLike<{ error: { code?: string } | null }> }).delete();
+    expect(r.error?.code).toBe('42501');
   });
 
   it('a platform profile is versioned like a tenant one: a second approval supersedes the first', async () => {

@@ -141,10 +141,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // for every company (/api/super-admin/mapping-profiles). A tenant can never
   // create or approve one. Checked by name BEFORE the source allowlist, so the
   // refusal survives a later widening of that list.
-  if (platformVendorKey(body.source)) {
+  const vendorKey = platformVendorKey(body.source);
+  if (vendorKey) {
     return res.status(403).json({
-      error: 'Mappings for data vendors are approved by Omnivyra for every company, not per company.',
+      error: `'${String(body.source)}' is treated as the data vendor '${vendorKey}'. Mappings for data vendors are approved by Omnivyra for every company, not per company.`,
       code: 'PLATFORM_VENDOR_SOURCE',
+      vendor: vendorKey,
     });
   }
 

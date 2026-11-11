@@ -9,11 +9,17 @@
  * The vendor list is not a second registry. It is DERIVED from the PI adapter
  * profiles: every adapter with a non-null `platform` is a vendor. Registering a
  * new vendor adapter therefore makes its source platform-only here as well.
- * Matching is on a squashed form (lower-case alphanumerics), so 'Apollo',
- * 'apollo.io', 'APOLLO_export' and 'enrichment_apollo' all resolve to 'apollo'.
- * Over-matching (a tenant source that merely STARTS with a vendor key) is the
- * safe direction: such a source is refused for tenant approval, never silently
- * written as a tenant profile for a vendor.
+ * THE RULE, exactly: squash to lower-case alphanumerics, drop ONE leading
+ * 'enrichment', then the result must START WITH a vendor key. So 'Apollo',
+ * 'apollo.io', 'APOLLO_export' and 'enrichment_apollo' resolve to 'apollo';
+ * 'myapollo' does not.
+ *
+ * FAIL-SAFE DIRECTION: this matcher deliberately OVER-matches. Its only
+ * consequence is REFUSING a tenant approval (403 PLATFORM_VENDOR_SOURCE, naming
+ * the key that matched), never applying anyone's mapping. The OTHER vendor
+ * matcher - mappingProfileStore's fingerprint fallback - must UNDER-match,
+ * because its consequence is applying a vendor's mapping to a tenant's data.
+ * Do not make that one fuzzy to resemble this one (virality-05, 2026-11-11).
  */
 import { PI_ADAPTER_PROFILES } from '../prospectProvenance/ingestion/sourceProfiles';
 

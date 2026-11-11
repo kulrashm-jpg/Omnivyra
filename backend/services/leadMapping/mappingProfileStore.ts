@@ -158,6 +158,13 @@ export interface MappingProfileContext {
    * the normalised column — rather than in each caller.
    */
   rejectedTargets: Record<string, CanonicalFieldKey[]>;
+  /**
+   * WHOSE refusals those are: the answering profile's id and scope, or null when
+   * there are none. A refusal from a platform (vendor) profile came from a
+   * Super Admin, on a profile the tenant cannot see, so the UI must be able to
+   * say so rather than present it as the tenant's own rule.
+   */
+  rejectionSource: { profileId: string; scope: 'tenant' | 'platform' } | null;
 }
 
 /** A platform (vendor) profile is keyed by shape alone: no tenant. */
@@ -289,9 +296,29 @@ async function fetchActive(
 }
 
 /**
+ * Below this many headers a shape is too common to identify a vendor: a
+ * `name,email,company` file would collide with half the CSVs anywhere. A
+ * platform profile narrower than this never answers a tenant upload by shape
+ * (a vendor source still reads it directly).
+ */
+export const MIN_PLATFORM_FALLBACK_HEADERS = 8;
+
+/**
  * The platform profile for a FILE SHAPE, whichever vendor it belongs to: the
- * fallback for a tenant upload with no tenant profile. Exactly one active match
- * answers; none or several (two vendors claiming one header set) answer nothing.
+ * fallback for a tenant upload with no tenant profile.
+ *
+ * FAIL-SAFE DIRECTION: this matcher must UNDER-match, because a match applies a
+ * vendor's mapping semantics to a tenant's data. So: the fingerprint is the
+ * sha256 of the COMPLETE normalised header set (fingerprintSchema), matched
+ * EXACTLY - never fuzzy, never a subset; the shape must be at least
+ * MIN_PLATFORM_FALLBACK_HEADERS wide; exactly one active match answers, and
+ * none or several (two vendors claiming one header set) answer nothing.
+ * The vendor-KEY matcher (platformVendorSources) over-matches on purpose; its
+ * consequence is a refusal. Do not align the two (virality-05, 2026-11-11).
+ *
+ * "Nothing" downstream: the proposal route reports profileRead 'none', the
+ * engine proposes a mapping, and the tenant confirms each column in the import
+ * wizard. Data is never ingested unmapped because the fallback declined.
  */
 async function fetchActivePlatformByShape(
   schemaFingerprint: string,
@@ -314,6 +341,8 @@ async function fetchActivePlatformByShape(
   }
   const rows = data as unknown as ProfileRow[];
   if (rows.length !== 1) return null;
+  const width = Array.isArray(rows[0].headers) ? rows[0].headers.length : 0;
+  if (width < MIN_PLATFORM_FALLBACK_HEADERS) return null;
   return { row: rows[0], entries: await fetchEntries(platform, rows[0].id) };
 }
 
@@ -423,7 +452,7 @@ export async function loadProfileContext(
 ): Promise<MappingProfileContext> {
   assertKey(key);
   const found = await resolveActive(key);
-  if (!found) return { profile: null, rejectedTargets: {} };
+  if (!found) return { profile: null, rejectedTargets: {}, rejectionSource: null };
   // Refusals come from the ANSWERING profile only: a tenant's own, or (when a
   // platform profile answers) the Super Admin's refusals for that vendor shape.
 
@@ -447,7 +476,13 @@ export async function loadProfileContext(
     if (refusals && refusals.length) rejectedTargets[header] = [...refusals];
   }
 
-  return { profile: toStoredProfile(found.row, found.entries, found.scope), rejectedTargets };
+  return {
+    profile: toStoredProfile(found.row, found.entries, found.scope),
+    rejectedTargets,
+    rejectionSource: Object.keys(rejectedTargets).length
+      ? { profileId: found.row.id, scope: found.scope }
+      : null,
+  };
 }
 
 /* ── writing ──────────────────────────────────────────────────────────────── */

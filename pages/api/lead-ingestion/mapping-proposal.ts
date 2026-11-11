@@ -230,7 +230,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // import is not blocked by a reuse feature), but the response says
   // `profileRead: 'unavailable'` so the UI never tells a tenant they have no
   // saved mapping when it simply could not look.
-  let context: MappingProfileContext = { profile: null, rejectedTargets: {} };
+  let context: MappingProfileContext = { profile: null, rejectedTargets: {}, rejectionSource: null };
   let profileRead: 'loaded' | 'none' | 'unavailable' = 'none';
   try {
     context = await loadProfileContext({ organizationId: companyId, source, schemaFingerprint }, headers);
@@ -281,6 +281,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requiresReview: result.requiresReview,
       profile: result.profile,
       profileRead,
+      // Whose refusals were applied (step E): a platform source means a Super
+      // Admin's vendor rule, not the tenant's own.
+      rejectionSource: context.rejectionSource,
       degraded: result.degraded,
       allowedTargets: allowedTargets().map((t) => {
         const submittable = isSubmittableTarget(t.key);
