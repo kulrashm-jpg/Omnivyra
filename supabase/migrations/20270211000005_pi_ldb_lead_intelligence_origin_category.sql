@@ -74,10 +74,23 @@
 BEGIN;
 
 DO $pre$
+DECLARE
+  v_pre bigint := 0;
 BEGIN
   IF to_regclass('public.lead_intelligence') IS NULL THEN
     RAISE EXCEPTION 'PI-LDB 2F precondition: lead_intelligence is missing. This migration only widens the durable lead store.';
   END IF;
+  -- NO-BACKFILL BASELINE: how many rows carry a category BEFORE this run (0
+  -- when the column does not exist yet). The postcondition asserts the count
+  -- is unchanged, i.e. THIS run backfilled nothing. That keeps 0005 re-runnable
+  -- after write-time classification (or an owner-approved backfill) has set
+  -- categories. Transaction-local setting; this file is one transaction.
+  IF EXISTS (SELECT 1 FROM pg_attribute
+              WHERE attrelid = 'public.lead_intelligence'::regclass
+                AND attname = 'origin_category' AND NOT attisdropped) THEN
+    EXECUTE 'SELECT count(*) FROM public.lead_intelligence WHERE origin_category IS NOT NULL' INTO v_pre;
+  END IF;
+  PERFORM set_config('pi_ldb.origin_pre_count', v_pre::text, true);
 END
 $pre$;
 
@@ -224,10 +237,19 @@ BEGIN
     RAISE EXCEPTION 'PI-LDB 2F postcondition: the D3 origin-evidence trigger is missing';
   END IF;
 
-  -- NO BACKFILL. Asserted, because a later edit that added one would otherwise
-  -- pass every other check in this file.
-  IF EXISTS (SELECT 1 FROM public.lead_intelligence WHERE origin_category IS NOT NULL) THEN
-    RAISE EXCEPTION 'PI-LDB 2F postcondition: a row already carries an origin_category — this migration must not backfill';
+  -- NO BACKFILL BY THIS RUN. Asserted, because a later edit that added one
+  -- would otherwise pass every other check in this file. The premise is "this
+  -- run classified nothing" (count unchanged since $pre$), NOT "no row has a
+  -- category": rows classified at write time or by an approved backfill after
+  -- a first apply must not make a re-run fail.
+  IF current_setting('pi_ldb.origin_pre_count', true) IS NULL
+     OR current_setting('pi_ldb.origin_pre_count', true) = '' THEN
+    RAISE EXCEPTION 'PI-LDB 2F postcondition: the no-backfill baseline was not captured (run the whole file as one transaction)';
+  END IF;
+  IF (SELECT count(*) FROM public.lead_intelligence WHERE origin_category IS NOT NULL)
+       <> current_setting('pi_ldb.origin_pre_count')::bigint THEN
+    RAISE EXCEPTION 'PI-LDB 2F postcondition: this run changed how many rows carry an origin_category (before %) — this migration must not backfill',
+      current_setting('pi_ldb.origin_pre_count');
   END IF;
 
   -- The store's own identity key must be untouched.
