@@ -31,10 +31,8 @@ import {
   enqueueRenderJob,
   projectRenderRequest,
   RenderProjectionError,
-  evaluateRenderGovernance,
-  coerceGovernanceRow,
-  GLOBAL_GOVERNANCE_SENTINEL,
 } from '@/backend/services/creator/rendering';
+import { evaluateRenderGovernanceGate } from '@/backend/services/creator/rendering/governance/renderGovernanceGate';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -78,35 +76,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Step-R6: enterprise governance gate (fail-closed, pre-enqueue) ────
   // Evaluated OUTSIDE R3/R4/R5 cores. Blocks before any billing/lineage.
-  try {
-    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-    const [{ data: orgGovRow }, { data: globalGovRow }, { data: dailyJobs }] = await Promise.all([
-      supabase.from('creator_render_governance_state').select('*').eq('organization_id', orgId).maybeSingle(),
-      supabase.from('creator_render_governance_state').select('*').eq('organization_id', GLOBAL_GOVERNANCE_SENTINEL).maybeSingle(),
-      supabase.from('creator_render_job').select('id').eq('organization_id', orgId).gte('created_at', since).limit(1000),
-    ]);
-    const { data: activeStates } = await supabase
-      .from('creator_render_job_state').select('current_state')
-      .in('current_state', ['queued', 'rendering', 'processing', 'moderation']).limit(1000);
-    const decision = evaluateRenderGovernance(
-      orgGovRow ? coerceGovernanceRow(orgGovRow, orgId) : null,
-      globalGovRow ? coerceGovernanceRow(globalGovRow, GLOBAL_GOVERNANCE_SENTINEL) : null,
-      {
-        provider: 'openai', assetFamily: 'image',
-        dailyRenderCount: Array.isArray(dailyJobs) ? dailyJobs.length : 0,
-        concurrentRenderCount: Array.isArray(activeStates) ? activeStates.length : 0,
-      },
-    );
-    if (!decision.allowed) {
-      return res.status(429).json({
-        render: { ok: false, status: 'governance_blocked', reason: decision.reason, event: decision.event },
+  // Every read is CHECKED (renderGovernanceGate.ts): an unreadable kill switch or count refuses the
+  // render instead of being read as "no governance" / zero.
+  {
+    const gate = await evaluateRenderGovernanceGate(supabase, orgId, { provider: 'openai', assetFamily: 'image' });
+    if (gate.ok === false) {
+      console.error('[render-image] governance could not be evaluated; render refused', { organization_id: orgId, detail: gate.detail });
+      return res.status(503).json({
+        render: { ok: false, status: 'governance_blocked', reason: 'governance_unavailable' },
       });
     }
-  } catch {
-    // Fail-closed: if governance cannot be evaluated, do NOT render.
-    return res.status(503).json({
-      render: { ok: false, status: 'governance_blocked', reason: 'governance_unavailable' },
-    });
+    if (!gate.decision.allowed) {
+      return res.status(429).json({
+        render: { ok: false, status: 'governance_blocked', reason: gate.decision.reason, event: gate.decision.event },
+      });
+    }
   }
 
   // ── Step-R4: ASYNC path when the queue flag is ON ─────────────────────
