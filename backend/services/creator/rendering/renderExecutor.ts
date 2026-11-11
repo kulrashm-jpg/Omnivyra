@@ -67,6 +67,21 @@ const rpcFailure = (r: RpcResult | undefined, thrown: unknown): string | null =>
   return null;
 };
 
+/**
+ * Provider attempts per render job in the SYNC path (e9 ruling, K = 3). After the K-th provider failure
+ * the job is failed_provider_exhausted (terminal). Nothing in the async queue picks up a sync job's
+ * retry_scheduled state: the queue reads creator_render_queue_job, which the sync path never writes.
+ */
+export const RENDER_MAX_ATTEMPTS = 3;
+
+/** Job states that are final for a tenant + content (guard_render_state_monotonic's terminal set). */
+const RENDER_TERMINAL_STATES: ReadonlySet<string> = new Set([
+  'scheduling_ready', 'handed_to_human',
+  'failed_render', 'failed_moderation_pre', 'failed_moderation_post',
+  'failed_provider_exhausted', 'failed_timeout',
+  'cancelled_by_user', 'cancelled_superseded', 'cancelled_quota',
+]);
+
 function skip(reason: string): ExecuteRenderResult {
   return { ok: false, status: 'skipped', events: ['render_skipped_disabled'], reason };
 }
@@ -124,8 +139,8 @@ export async function executeRenderJob(
     // tenant rendering identical content would hit the first tenant's registry row and billing key.
     // Scoping both keys to the organization makes a registry entry or a key conflict mean "THIS
     // tenant, this spec" by construction (the creator_render_job dedupe is already per tenant).
-    const registryHash = `${args.organizationId}:${specHash}`;
-    const billingKey = `render:${args.organizationId}:${spec.spec_id}`;
+    let registryHash = `${args.organizationId}:${specHash}`;
+    let billingKey = `render:${args.organizationId}:${spec.spec_id}`;
 
     /** Record the registry transition; checked (the client does not throw), never fatal. */
     const advanceRegistry = async (status: 'completed' | 'released', error: string | null): Promise<void> => {
@@ -149,41 +164,68 @@ export async function executeRenderJob(
       return { ok: false, status: 'blocked', events, spec_id: spec.spec_id, reason: 'pre_moderation' };
     }
 
-    // 3) dedupe — reuse an existing completed render for the same org+hash
-    const { data: existing } = await supabase
+    // 3) dedupe, per tenant (creator_render_job UNIQUE (organization_id, deterministic_input_hash)).
+    //    An existing job is resolved through ITS OWN state (never "the newest output in the table"):
+    //      - attached output              -> reused (that output only);
+    //      - retry_scheduled              -> RETRY under the next attempt number (below);
+    //      - still in progress            -> refused render_in_progress (retryable);
+    //      - terminal failure             -> refused (not retryable), never an empty "reused".
+    let retryOf: { jobId: string; retryCount: number } | null = null;
+    const { data: existing, error: existingError } = await supabase
       .from('creator_render_job')
       .select('id')
       .eq('organization_id', args.organizationId)
       .eq('deterministic_input_hash', specHash)
       .maybeSingle();
+    if (existingError) {
+      events.push('render_failed');
+      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'render_state_unreadable', retryable: true };
+    }
     if (existing?.id) {
-      // SECURITY (cross-tenant): the reused output is THIS job's own attached output, never "the most
-      // recent output in the table". The previous query had no filter at all (job, attempt or tenant),
-      // so a re-render could attach ANOTHER tenant's image to this tenant's content. The job itself is
-      // tenant-filtered above; its state row names the output it attached.
-      const { data: state } = await supabase
+      const { data: state, error: stateError } = await supabase
         .from('creator_render_job_state')
-        .select('attached_output_id')
+        .select('attached_output_id, current_state, retry_count')
         .eq('render_job_id', existing.id)
         .maybeSingle();
-      const attachedOutputId = (state as { attached_output_id?: string | null } | null)?.attached_output_id ?? null;
-      const { data: doneOut } = attachedOutputId
-        ? await supabase
+      if (stateError) {
+        // CHECKED (83 GOV-SEC note): an unreadable state is refused (retryable), never read as "no output".
+        events.push('render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: existing.id, reason: 'render_state_unreadable', retryable: true };
+      }
+      const st = (state ?? null) as { attached_output_id?: string | null; current_state?: string; retry_count?: number } | null;
+      const attachedOutputId = st?.attached_output_id ?? null;
+      if (attachedOutputId) {
+        // SECURITY (cross-tenant): THIS job's attached output, never the newest output of any tenant.
+        const { data: doneOut, error: outError } = await supabase
           .from('creator_render_output')
           .select('id, storage_ref, content_sha256, attempt_id')
           .eq('id', attachedOutputId)
-          .maybeSingle()
-        : { data: null };
-      events.push('duplicate_render_reused');
-      if (doneOut?.id) {
+          .maybeSingle();
+        if (outError || !doneOut?.id) {
+          events.push('render_failed');
+          return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: existing.id, reason: 'render_output_unreadable', retryable: true };
+        }
+        events.push('duplicate_render_reused');
         await attachToSharedMedia(deps, args, specHash, doneOut.id, doneOut.storage_ref, events);
+        return {
+          ok: true, status: 'reused', events, spec_id: spec.spec_id, render_job_id: existing.id,
+          output: { output_id: doneOut.id, storage_ref: doneOut.storage_ref, content_sha256: doneOut.content_sha256 },
+          attached: true,
+        };
       }
-      return {
-        ok: true, status: 'reused', events, spec_id: spec.spec_id,
-        render_job_id: existing.id,
-        output: doneOut ? { output_id: doneOut.id, storage_ref: doneOut.storage_ref, content_sha256: doneOut.content_sha256 } : null,
-        attached: !!doneOut?.id,
-      };
+      const cs = String(st?.current_state ?? '');
+      if (cs === 'retry_scheduled') {
+        retryOf = { jobId: String(existing.id), retryCount: Number(st?.retry_count ?? 0) };
+      } else if (RENDER_TERMINAL_STATES.has(cs)) {
+        // A terminal failure (moderation, exhausted retries, or a pre-retry failed_render) is final for
+        // this tenant + content: refused with its state, never an empty "reused" (there is no output).
+        events.push('render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: existing.id, reason: `render_terminal:${cs || 'unknown'}`, retryable: false };
+      } else {
+        // queued / preparing / rendering / ... : another request is producing it right now.
+        events.push('render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: existing.id, reason: 'render_in_progress', retryable: true };
+      }
     }
 
     // 4) provider resolution (fail-closed: capability-filtered)
@@ -194,10 +236,82 @@ export async function executeRenderJob(
       return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'no_capable_provider' };
     }
 
-    // 5) exactly-once claim (reuse job_execution_registry). FAIL CLOSED (e9 ruling, 2026-11-11):
-    //    the client does not throw on a database error, so the result is checked. An unavailable
-    //    registry stops the render BEFORE any billing hold or provider call (nothing to undo; the
-    //    caller may retry). A terminal registry entry for this hash means it already ran: reuse.
+    // 5) the JOB first (before any claim, hold or provider call), so every later failure leaves a job
+    //    whose state can carry a retry. Creation is exactly-once per tenant + content by the UNIQUE job
+    //    key: a concurrent first render loses here, before anything is claimed or held.
+    let jobId: string;
+    let variantId: string | null = null;
+    if (retryOf) {
+      jobId = retryOf.jobId;
+      // One retry at a time: a conditional transition retry_scheduled -> preparing. A concurrent retry
+      // matches no row and is refused before any claim, hold or provider call.
+      const { data: moved, error: moveError } = await ownedDbTable('creator_render_job_state')
+        .update({ current_state: 'preparing', active_provider: provider.key, last_transition_at: now() })
+        .eq('render_job_id', jobId)
+        .eq('current_state', 'retry_scheduled')
+        .select('render_job_id');
+      if (moveError || !Array.isArray(moved) || moved.length === 0) {
+        events.push('render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: jobId, reason: 'retry_in_progress', retryable: true };
+      }
+      const { data: v } = await supabase
+        .from('creator_render_variant')
+        .select('id')
+        .eq('render_job_id', jobId)
+        .eq('spec_fingerprint', specHash)
+        .maybeSingle();
+      variantId = (v as { id?: string } | null)?.id ?? null;
+    } else {
+      const { data: job, error: jobError } = await ownedDbTable('creator_render_job').insert({
+        blueprint_id: null, task_id: args.contentCoreId, card_id: args.contentCoreId,
+        organization_id: args.organizationId, canonical_asset_family: 'image',
+        render_modality: 'image', deterministic_input_hash: specHash,
+        render_spec_snapshot: spec, created_by: args.createdBy ?? null,
+      }).select('id').single();
+      if (jobError || !job?.id) {
+        const concurrent = (jobError as { code?: string } | null | undefined)?.code === '23505';
+        events.push('render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: concurrent ? 'render_in_progress' : 'job_insert_failed', retryable: true };
+      }
+      jobId = String(job.id);
+      await ownedDbTable('creator_render_job_state').insert({
+        render_job_id: jobId, current_state: 'preparing', active_provider: provider.key,
+        moderation_state: 'pre_passed', last_transition_at: now(),
+      });
+      const { data: v } = await ownedDbTable('creator_render_variant').insert({
+        render_job_id: jobId, platform: args.platform,
+        aspect_ratio: spec.platform_projection.aspect_ratio,
+        resolution: spec.platform_projection.resolution,
+        spec_fingerprint: specHash, production_source: 'ai_render',
+      }).select('id').single();
+      variantId = (v as { id?: string } | null)?.id ?? null;
+    }
+
+    // The attempt number is part of every key below, so a retry never meets the failed attempt's
+    // registry row (whose 'released' is terminal) or its released billing key.
+    const attemptNumber = retryOf ? retryOf.retryCount + 1 : 1;
+    if (attemptNumber > 1) {
+      registryHash = `${registryHash}:a${attemptNumber}`;
+      billingKey = `${billingKey}:a${attemptNumber}`;
+    }
+
+    /**
+     * Every failure AFTER the job exists CONSUMES this attempt: the hold is released (never charged),
+     * the registry entry is released, and the job is retry_scheduled with retry_count = attempts so
+     * far, or failed_provider_exhausted at RENDER_MAX_ATTEMPTS. The next request runs attempt N+1.
+     */
+    const failAttempt = async (reason: string, opts: { consumeRegistry: boolean }): Promise<ExecuteRenderResult> => {
+      const exhausted = attemptNumber >= RENDER_MAX_ATTEMPTS;
+      await releaseBilling(reason);
+      if (opts.consumeRegistry) await advanceRegistry('released', reason);
+      await ownedDbTable('creator_render_job_state')
+        .update({ current_state: exhausted ? 'failed_provider_exhausted' : 'retry_scheduled', retry_count: attemptNumber, last_transition_at: now() })
+        .eq('render_job_id', jobId);
+      events.push('render_failed');
+      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: jobId, reason: exhausted ? `${reason}:attempts_exhausted` : reason, retryable: !exhausted };
+    };
+
+    // 6) claim (checked; the client does not throw on a database error).
     {
       let claim: RpcResult | undefined; let thrown: unknown = null;
       try {
@@ -205,115 +319,84 @@ export async function executeRenderJob(
           p_job_id: spec.spec_id, p_queue_name: 'creator_render_sync',
           p_execution_hash: registryHash, p_correlation_id: args.contentCoreId,
           p_idempotency_key: billingKey, p_organization_id: args.organizationId,
-          p_metadata: {},
+          p_metadata: { attempt_number: attemptNumber },
         });
       } catch (e) { thrown = e ?? 'rpc threw'; }
       const failed = rpcFailure(claim, thrown);
       if (failed !== null) {
+        // Nothing was registered, so this attempt is NOT consumed: back to retry_scheduled as it was.
         console.error('[creator-render] execution registry claim failed; render refused', { spec_id: spec.spec_id, error: failed });
+        await ownedDbTable('creator_render_job_state')
+          .update({ current_state: 'retry_scheduled', last_transition_at: now() })
+          .eq('render_job_id', jobId);
         events.push('execution_registry_unavailable', 'render_failed');
-        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'execution_registry_unavailable', retryable: true };
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: jobId, reason: 'execution_registry_unavailable', retryable: true };
       }
       if ((claim?.data as { is_terminal?: unknown } | null | undefined)?.is_terminal === true) {
-        // THIS tenant's registry says this spec already reached a terminal state, yet the per-tenant
-        // creator_render_job dedupe above found no job: an inconsistency, not a reusable render (there
-        // is no output to return). Refused, not retried as is; never an empty "reused".
-        console.error('[creator-render] execution registry is terminal but no render job exists; refused', { spec_id: spec.spec_id });
-        events.push('render_failed');
-        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'execution_already_terminal', retryable: false };
+        // This attempt's key already ended: consume it, so the next request runs a fresh attempt.
+        console.error('[creator-render] execution registry already terminal for this attempt', { spec_id: spec.spec_id, attempt: attemptNumber });
+        return failAttempt('execution_already_terminal', { consumeRegistry: false });
       }
     }
 
-    // 6) billing HOLD (reuse billing_operations; NO parallel ledger)
+    // 7) billing HOLD (checked). billing_operations UNIQUE (idempotency_key); the key is tenant- and
+    //    attempt-scoped, so a 23505 means this very attempt already holds one.
     const estimate = provider.estimateCost(spec);
     const { data: bo, error: boError } = await ownedDbTable('billing_operations').insert({
       correlation_id: args.contentCoreId, module: 'creator_render', action: 'render_image',
       organization_id: args.organizationId, actor_user_id: args.createdBy ?? null,
       idempotency_key: billingKey, amount_estimated: estimate.estimated_credits,
-      status: 'held', metadata: { provider: provider.key },
+      status: 'held', metadata: { provider: provider.key, attempt_number: attemptNumber },
     }).select('id').single();
     billingId = bo?.id ?? null;
     if (!billingId) {
-      // FAIL CLOSED (e9 ruling, 2026-11-11): a render without a billing hold would run UNBILLED.
-      // The provider is never called. A unique-key conflict (an earlier attempt's operation for this
-      // spec already exists) is not retryable as is; any other store error is.
-      // billing_operations UNIQUE (idempotency_key), and the key is tenant-scoped (billingKey above), so
-      // a 23505 provably means THIS tenant already holds an operation for this spec.
       const conflict = (boError as { code?: string } | null | undefined)?.code === '23505';
-      const reason = conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable';
-      console.error('[creator-render] billing hold not created; render refused', { spec_id: spec.spec_id, reason, error: (boError as { message?: string } | null)?.message ?? 'no row returned' });
-      await advanceRegistry('released', reason);
-      events.push('billing_hold_failed', 'render_failed');
-      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason, retryable: !conflict };
+      console.error('[creator-render] billing hold not created; render refused', { spec_id: spec.spec_id, conflict, error: (boError as { message?: string } | null)?.message ?? 'no row returned' });
+      events.push('billing_hold_failed');
+      return failAttempt(conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable', { consumeRegistry: true });
     }
     events.push('billing_hold_created');
 
-    // 7) immutable job + state + variant + attempt
-    const { data: job } = await ownedDbTable('creator_render_job').insert({
-      blueprint_id: null, task_id: args.contentCoreId, card_id: args.contentCoreId,
-      organization_id: args.organizationId, canonical_asset_family: 'image',
-      render_modality: 'image', deterministic_input_hash: specHash,
-      render_spec_snapshot: spec, created_by: args.createdBy ?? null,
-    }).select('id').single();
-    const jobId = job?.id;
-    if (!jobId) { await releaseBilling('job_insert_failed'); events.push('render_failed'); return { ok: false, status: 'failed', events, reason: 'job_insert_failed' }; }
-
-    await ownedDbTable('creator_render_job_state').insert({
-      render_job_id: jobId, current_state: 'rendering', active_provider: provider.key,
-      moderation_state: 'pre_passed', last_transition_at: now(),
-    });
-    const { data: variant } = await ownedDbTable('creator_render_variant').insert({
-      render_job_id: jobId, platform: args.platform,
-      aspect_ratio: spec.platform_projection.aspect_ratio,
-      resolution: spec.platform_projection.resolution,
-      spec_fingerprint: specHash, production_source: 'ai_render',
-    }).select('id').single();
-    // creator_render_attempt is UNIQUE (execution_hash), GLOBAL: the tenant-scoped registryHash, so a
-    // second tenant's identical content does not collide with the first tenant's attempt.
-    const { data: attempt } = await ownedDbTable('creator_render_attempt').insert({
-      variant_id: variant?.id, provider_key: provider.key, attempt_number: 1,
-      idempotency_key: billingKey, billing_operation_id: billingId,
-      execution_hash: registryHash, status: 'submitted',
-    }).select('id').single();
-    if (!variant?.id || !attempt?.id) {
-      // FAIL CLOSED BEFORE THE PROVIDER: without the attempt row the output cannot be recorded, so a
-      // provider call here would be spent (provider cost) on a render that then fails. Previously
-      // unchecked: the provider was called and the later output insert threw.
-      await ownedDbTable('creator_render_job_state')
-        .update({ current_state: 'failed_render', last_transition_at: now() })
-        .eq('render_job_id', jobId);
-      await releaseBilling('attempt_insert_failed');
-      await advanceRegistry('released', 'attempt_insert_failed');
-      events.push('render_failed');
-      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: jobId, reason: 'attempt_insert_failed', retryable: true };
+    // 8) attempt (checked; GLOBAL UNIQUE (execution_hash) -> the tenant + attempt scoped registryHash)
+    const { data: attempt, error: attemptError } = variantId
+      ? await ownedDbTable('creator_render_attempt').insert({
+        variant_id: variantId, provider_key: provider.key, attempt_number: attemptNumber,
+        idempotency_key: billingKey, billing_operation_id: billingId,
+        execution_hash: registryHash, status: 'submitted',
+      }).select('id').single()
+      : { data: null, error: { code: 'variant_missing', message: 'no variant row for this job' } };
+    if (!attempt?.id) {
+      // FAIL CLOSED BEFORE THE PROVIDER: without the attempt row the output cannot be recorded.
+      console.error('[creator-render] attempt not recorded; render refused before the provider', { spec_id: spec.spec_id, attempt: attemptNumber, code: (attemptError as { code?: string } | null)?.code ?? null, error: (attemptError as { message?: string } | null)?.message ?? 'no row returned' });
+      return failAttempt('attempt_insert_failed', { consumeRegistry: true });
     }
+    await ownedDbTable('creator_render_job_state')
+      .update({ current_state: 'rendering', last_transition_at: now() })
+      .eq('render_job_id', jobId);
 
-    // 8) provider submit → poll → fetch (synchronous)
+    // 9) provider submit -> poll -> fetch (synchronous). A provider failure consumes the attempt.
     let outRef;
     try {
-      const handle = await provider.submit(spec, `render:${spec.spec_id}`);
-      const st = await provider.poll(handle);
-      if (st.state !== 'succeeded') throw new Error(`provider state ${st.state}`);
+      const handle = await provider.submit(spec, billingKey);
+      const pst = await provider.poll(handle);
+      if (pst.state !== 'succeeded') throw new Error(`provider state ${pst.state}`);
       outRef = await provider.fetchOutput(handle);
     } catch (e) {
-      await ownedDbTable('creator_render_job_state')
-        .update({ current_state: 'failed_render', last_transition_at: now() })
-        .eq('render_job_id', jobId);
-      await releaseBilling('provider_failed');
-      events.push('provider_rejected', 'render_failed');
-      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: jobId, reason: 'provider_failed' };
+      events.push('provider_rejected');
+      return failAttempt('provider_failed', { consumeRegistry: true });
     }
 
-    // 9) deterministic content hash
+    // 10) deterministic content hash
     const contentSha = computeDeterministicInputHash({ ref: outRef.storage_ref, spec: specHash });
 
-    // 10) post-render moderation (fail-closed; unsafe NEVER attaches)
+    // 11) post-render moderation (fail-closed; unsafe NEVER attaches). TERMINAL: never retried.
     const post = postRenderModeration({ ...outRef, content_sha256: contentSha }, pre);
     if (post.decision !== 'allowed') {
       await ownedDbTable('creator_render_job_state')
         .update({ current_state: 'failed_moderation_post', moderation_state: 'blocked', last_transition_at: now() })
         .eq('render_job_id', jobId);
       await releaseBilling('post_moderation_blocked');
+      await advanceRegistry('released', 'post_moderation_blocked');
       events.push('moderation_blocked');
       return { ok: false, status: 'blocked', events, spec_id: spec.spec_id, render_job_id: jobId, reason: 'post_moderation' };
     }
