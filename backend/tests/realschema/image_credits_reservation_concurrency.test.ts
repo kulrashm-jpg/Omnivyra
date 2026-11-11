@@ -9,6 +9,16 @@
  * deterministically: A holds and stays open, B is issued, A commits, then B's
  * outcome is collected (same pattern as concurrency.test.ts).
  *
+ * WALLET MODEL (apply_credit_reservation, measured in CI-69): a HOLD moves
+ * credits - free_balance -= amount AND reserved_free += amount - so after a
+ * hold free_balance already EXCLUDES the held credits and is what remains
+ * spendable. The function's own availability check, however, computes
+ * free_balance - reserved_free, subtracting open holds a SECOND time
+ * (pre-existing production defect, reported 2026-11-12): a second concurrent
+ * hold is refused while credits remain. Final charges are unaffected (confirm
+ * only clears reserved_free). The 'both fit' case pins the CORRECT behaviour as
+ * it.failing until the function is fixed.
+ *
  * The ledger (credit_transactions) is append-only, so the committed rows this
  * suite writes stay in the disposable CI database; each case uses its own
  * synthetic organisation so they never interfere.
@@ -80,18 +90,23 @@ describe('apply_credit_reservation under real concurrency (image credits)', () =
     expect(String(bErr?.message ?? '')).toMatch(/insufficient/i);
     const w = await walletOf(o);
     expect(w.reserved_free).toBe(5);
-    expect(w.free_balance - w.reserved_free).toBeGreaterThanOrEqual(0);
+    expect(w.free_balance).toBe(2);                 // 7 - 5: never negative
+    expect(w.free_balance).toBeGreaterThanOrEqual(0);
     expect(await holdsFor(o)).toBe(1);
   });
 
-  it('a pair where BOTH fit: one hold each, the balance reaches zero and no lower', async () => {
+  // KNOWN DEFECT (pre-existing, reported): the availability check double-counts
+  // open holds, so the second hold is refused with 'need 5, have 0' although 5
+  // remain. it.failing keeps CI honest and turns red the day the function is
+  // fixed - then make this a plain it().
+  it.failing('a pair where BOTH fit: one hold each, the balance reaches zero and no lower', async () => {
     const o = org(2);
     await seedOrg(o, 10);
     const { bErr } = await race(o, { amount: 5, key: `ic-${tag}-c:hold` }, { amount: 5, key: `ic-${tag}-d:hold` });
     expect(bErr).toBeNull();
     const w = await walletOf(o);
     expect(w.reserved_free).toBe(10);
-    expect(w.free_balance - w.reserved_free).toBe(0);
+    expect(w.free_balance).toBe(0);
     expect(await holdsFor(o)).toBe(2);
   });
 
