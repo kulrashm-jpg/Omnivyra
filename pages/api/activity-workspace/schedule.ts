@@ -49,8 +49,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // Resolve current user — always use the real Supabase JWT user ID
-  // (resolveUserContext can return 'content_architect' for platform-level sessions,
-  // which has no social_accounts and cannot schedule posts on behalf of a real user)
+  // (a real user id is required: only a real user has social_accounts and can
+  // schedule posts)
   let userId: string;
   try {
     const { user, error } = await getSupabaseUserFromRequest(req);

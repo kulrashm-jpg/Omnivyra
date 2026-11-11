@@ -134,10 +134,9 @@ export function isExternalMemberForCompany(
  * runs through `TenantGuard.assertTenantAccess`; this helper preserves
  * two pre-existing fallbacks for behavior parity:
  *
- *   1. content-architect cookie principal — admin-tier global access
- *      established by /api/super-admin/content-architect-login. This
- *      principal has userId='content_architect', is NOT in user_company_roles,
- *      and would otherwise be rejected by the canonical guard.
+ *   1. (REMOVED e9 (C), 2026-11-11) content-architect cookie principal.
+ *      Its cookie is gone; a Content Architect is a real user authorized by
+ *      an active CONTENT_ARCHITECT membership, like any other member.
  *
  *   2. invited admin — formerly a user with role IN (COMPANY_ADMIN, ADMIN,
  *      SUPER_ADMIN) and status='invited' could administer the company before
@@ -286,16 +285,6 @@ export const enforceCompanyAccess = async (input: {
     });
     input.res.status(403).json({ error: 'Access denied to company' });
     return null;
-  }
-
-  // Legacy fallback (a): content-architect cookie principal.
-  if (user.userId === 'content_architect') {
-    if (input.requireCampaignId && !input.campaignId) {
-      input.res.status(400).json({ error: 'campaignId required' });
-      return null;
-    }
-    if (!(await campaignBound())) return null;
-    return allow();
   }
 
   // Legacy fallback (b): invited admin role.

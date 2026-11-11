@@ -81,9 +81,6 @@ const requireCompanyRole = async (
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  if (userId === 'content_architect') {
-    return { userId, role: Role.COMPANY_ADMIN };
-  }
   const platformAdmin = await isPlatformSuperAdmin(userId);
   if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
     return { userId, role: Role.SUPER_ADMIN };

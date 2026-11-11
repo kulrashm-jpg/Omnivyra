@@ -133,9 +133,8 @@ export async function requireCampaignAccess(
     return null;
   }
 
-  // Fast-path: content_architect or env-listed company — grant COMPANY_ADMIN access.
-  const isContentArchitect = userId === 'content_architect';
-  const hasEnvAccess = isContentArchitect || user.companyIds.includes(companyId);
+  // Fast-path: env-listed company — grant COMPANY_ADMIN access.
+  const hasEnvAccess = user.companyIds.includes(companyId);
 
   let role: (typeof Role)[keyof typeof Role] | null = null;
   if (hasEnvAccess) {
@@ -146,9 +145,8 @@ export async function requireCampaignAccess(
     // requireTenantAccess) denies an active member of a non-active company
     // (ORG_INACTIVE / ORG_NOT_FOUND → 403) unless they are a platform super
     // admin. Same decision here, same responses; a lookup failure is a
-    // retryable 503, never an allow. The content-architect principal keeps its
-    // documented legacy fallback (enforceCompanyAccess fallback (a)).
-    if (!isContentArchitect) {
+    // retryable 503, never an allow.
+    {
       const orgState = await companyOperationalState(companyId);
       if (orgState === 'lookup_error') {
         res.status(503).json({

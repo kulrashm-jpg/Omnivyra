@@ -11,7 +11,7 @@ Nothing in this phase touched production, credentials, the database (no row read
 | 1 — `PATCH /api/users/[userId]/role` bypass | **FIXED** (plus the same gate on `/api/users/invite`, whose existing-member branch was the same bypass) |
 | 2 — invited company-admin authority | **FIXED** |
 | 3 — invitation expiry | **FIXED** |
-| 4 — company status in `withRBAC` | **PARTIAL:** `withRBAC` FIXED; direct `enforceRole` callers and `resolveCompanyAccess` not changed (out of scope); content-architect exemption is an owner decision (E-4) |
+| 4 — company status in `withRBAC` | **PARTIAL:** `withRBAC` FIXED; direct `enforceRole` callers and `resolveCompanyAccess` not changed (out of scope); content-architect exemption REMOVED (E-4 RESOLVED by owner, 2026-11-11) |
 | 5 — route policy gate | **FIXED** for invited-role semantics; one documented divergence (company status) remains |
 
 **Correction to Closure-015D (its report is unchanged).** 015D §5.1 said four places granted invited-`SUPER_ADMIN` authority. That was incomplete. **20 route-local guards** (§3.1) call `getCompanyRoleIncludingInvited` and still admitted invited `SUPER_ADMIN` / `COMPANY_ADMIN` / `ADMIN` rows. Six of them admitted **any** invited role. `external-apis/presets` then treats `role === 'SUPER_ADMIN'` as cross-tenant. All 20 are closed in this phase at the shared primitive (§3).
@@ -171,7 +171,7 @@ After `enforceRole` succeeds, `withRBAC` checks `companyOperationalState(company
 
 Exempt:
 - the active platform super admin (`enforceRole`'s bypass, the only path that yields `SUPER_ADMIN` since 015D);
-- the **content-architect** principal. Before this phase `withRBAC` read company status for nobody, so this exemption **preserves** the architect's existing behaviour rather than broadening anything. Whether the architect should be subject to company status is undocumented: owner decision E-4.
+- ~~the **content-architect** principal~~ - **E-4 RESOLVED by owner, 2026-11-11:** a Content Architect is subject to company status like any member. The exemption covered only the synthetic `'content_architect'` principal, whose sole source (the content-architect bridge cookie, hard-expired 2026-08-05) was removed in e9 (C); the exemption and every synthetic-principal branch were deleted with it. A Content Architect is now a real user authorized by an active CONTENT_ARCHITECT membership.
 
 ### Not changed (out of scope)
 
@@ -299,7 +299,7 @@ The runner checks an unmutated baseline first and counts a mutant as **KILLED on
 | E-1 | Legacy `/api/users/invite` creates memberships with DB-default status `invited` and **no invitation**, so they can never be accepted, and since §3 they confer nothing. Should it create an invitation (as `admin/invite-user` does), write `active`, or be retired? Retiring was deferred by the brief. |
 | E-2 | Sibling **`PATCH /api/company/users/[userId]/role`**: same bypass class, not in this brief. Effectively active-platform-SA only. It rewrites **any** membership, including a `SUPER_ADMIN` row, to ADMIN or CONTENT_CREATOR (a SUPER_ADMIN revocation bypass) with no step-up. Same for **`DELETE /api/users/[userId]`** (`removeUser`), which can delete a SUPER_ADMIN row. |
 | E-3 | Company status for the 104 direct `enforceRole` callers and for `resolveCompanyAccess`. |
-| E-4 | Should the content-architect principal be subject to company status (in `withRBAC` and the legacy guards)? It is currently exempt, as before. |
+| E-4 | **RESOLVED by owner, 2026-11-11 (option 1):** the Content Architect is subject to company status like any member. The synthetic `'content_architect'` principal gets no special treatment; its branches (rbacService, userContextService, campaignAccessService, withRBAC, contentWriteAuthz, campaigns, recommendations, content) were removed in fix/remove-legacy-super-admin-session-20261111. |
 | E-5 | Before the policy gate starts enforcing: should it read company status, so it agrees with `withRBAC` / `TenantGuard`? |
 | E-6 | Rename `getCompanyRoleIncludingInvited` (now active-only) and collapse its 20 route-local fallbacks onto the canonical guards. |
 | 015D A-1, A-2 | Deferred by the brief: `rebuild-projection` / `refresh-slots` with no step-up; restore-snapshot capability and global-lock semantics. |

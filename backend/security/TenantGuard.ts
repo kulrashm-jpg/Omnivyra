@@ -126,9 +126,9 @@ type ReadError = { code?: string | null; message?: string | null } | null;
  * A DETERMINISTIC identity/query error — the query can never succeed for this
  * input no matter how many times it runs (e.g. a synthetic, non-uuid principal
  * such as 'content_architect' compared against a uuid column). This is NOT a
- * transient/infra failure: it must be treated as "no membership" so the
- * existing content-architect / invited-admin fallbacks run, and it must NOT be
- * retried.
+ * transient/infra failure: it must be treated as "no membership" (and it must
+ * NOT be retried). No such principal is produced any more (the content-architect
+ * cookie and bridge ids were removed 2026-11-11); this stays fail-closed.
  *
  * Postgres SQLSTATE: 22P02 invalid_text_representation (invalid uuid/int
  * syntax), 22023 invalid_parameter_value. Message regex is a defensive
@@ -355,11 +355,9 @@ async function assertTenantAccessSequential(input: TenantAccessInput): Promise<T
 
   if (roleErr) {
     if (isDeterministicIdentityError(roleErr)) {
-      // Synthetic / non-uuid principal (e.g. 'content_architect', bridge ids)
-      // compared against the uuid user_id column. The query can never match —
-      // this is NOT an infra failure. Treat it as "no membership" so the
-      // existing content-architect / invited-admin fallbacks run, exactly as
-      // before the tenant-hardening change.
+      // A non-uuid principal compared against the uuid user_id column. The
+      // query can never match - this is NOT an infra failure. Treat it as "no
+      // membership" (fail closed).
       logger.warn('tenant_guard_identity_mismatch', {
         userId,
         organizationId,

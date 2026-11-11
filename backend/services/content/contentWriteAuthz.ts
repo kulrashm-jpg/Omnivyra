@@ -20,8 +20,8 @@
  * enforceRole (rbacService) supplies the decision, with the role read for the
  * company the route has ALREADY authorized:
  *   - platform super admins bypass (unchanged);
- *   - the synthetic content_architect principal is admitted because the set
- *     contains COMPANY_ADMIN (unchanged: enforceCompanyAccess fallback (a));
+ *   - (removed 2026-11-11, E-4) no synthetic content_architect principal:
+ *     a Content Architect is authorized by its real membership role;
  *   - an invited COMPANY_ADMIN/ADMIN/SUPER_ADMIN row is admitted through
  *     getUserRole's invited-admin fallback (unchanged: fallback (b));
  *   - unknown role or lookup failure ⇒ 403 (fail closed).

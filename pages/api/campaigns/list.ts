@@ -29,9 +29,6 @@ const requireCompanyRole = async (
     return null;
   }
   const user = await resolveUserContext(req);
-  if (user.userId === 'content_architect') {
-    return { userId: user.userId, role: Role.COMPANY_ADMIN };
-  }
   const platformAdmin = await isPlatformSuperAdmin(user.userId);
   if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
     return { userId: user.userId, role: Role.SUPER_ADMIN };

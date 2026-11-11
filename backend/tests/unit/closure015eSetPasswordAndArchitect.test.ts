@@ -4,12 +4,11 @@
  *   1. auth/set-password: the invitation-activation step uses the shared
  *      isInvitationExpired predicate — expired AT expires_at, missing /
  *      malformed ⇒ expired — and refuses BEFORE activate_invitation_membership.
- *   2. withRBAC's company-status check exempts the content-architect principal
- *      (as it exempts the platform super admin): withRBAC never read company
- *      status before Closure-015E, so this PRESERVES the architect's existing
- *      behaviour. Whether the architect should be subject to company status is
- *      an open owner decision (report §8, decision E-4) — this pins today's
- *      behaviour so any change is deliberate.
+ *   2. withRBAC and a principal NAMED 'content_architect': owner decision E-4
+ *      is RESOLVED (2026-11-11) - a Content Architect is subject to company
+ *      status like any member, and the synthetic principal (whose only source,
+ *      the content-architect cookie, is removed) gets NO special treatment:
+ *      not admitted as COMPANY_ADMIN, not exempt from the status check.
  *
  * REAL: set-password route, invitationExpiry, withRBAC → enforceRole (content
  * architect branch), companyOperationalState — over the routeAuthHarness tables.
@@ -95,18 +94,18 @@ describe('auth/set-password — invitation expiry (shared predicate)', () => {
   });
 });
 
-describe('withRBAC — content-architect principal and company status (behaviour preserved; owner decision E-4)', () => {
+describe('withRBAC — a principal named content_architect gets no special treatment (E-4 RESOLVED, owner 2026-11-11)', () => {
   const route = withRBAC((async (_q: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => res.status(200).json({ ok: true })) as never, [Role.COMPANY_ADMIN]);
   const call = () => invoke(route as never, { method: 'GET', query: { companyId: CO_A }, headers: { 'x-test-architect': '1' } });
 
-  it('active company → 200 (unchanged)', async () => {
+  it('active company → refused: no membership, no synthetic COMPANY_ADMIN grant', async () => {
     seed();
-    expect((await call()).status).toBe(200);
+    expect([401, 403]).toContain((await call()).status);
   });
 
-  it('suspended company → 200: the architect is exempt from the new company-status check, exactly as before Closure-015E', async () => {
+  it('suspended company → refused: no exemption from the company-status check', async () => {
     seed();
     rows('companies').find((c) => c.id === CO_A)!.status = 'suspended';
-    expect((await call()).status).toBe(200);
+    expect([401, 403]).toContain((await call()).status);
   });
 });

@@ -71,11 +71,14 @@ export const withRBAC = (
      * read failure answers a retryable 503, never an allow. Platform principals
      * keep TenantGuard's bypass and never depend on the company read: the
      * active platform super admin (enforceRole's bypass, the only path that
-     * yields SUPER_ADMIN) and the content-architect principal. None of the
+     * yields SUPER_ADMIN). A Content Architect is a member like any other and
+     * IS subject to company status (owner decision E-4, RESOLVED 2026-11-11;
+     * the synthetic 'content_architect' principal it was about no longer
+     * exists). None of the
      * withRBAC routes is a billing / reactivation / export / recovery flow
      * (Closure-015E route inventory), so no tenant exception applies.
      */
-    if (result.role !== Role.SUPER_ADMIN && result.userId !== 'content_architect') {
+    if (result.role !== Role.SUPER_ADMIN) {
       const orgState = await companyOperationalState(companyId as string);
       if (orgState === 'lookup_error') {
         res.status(503).json({

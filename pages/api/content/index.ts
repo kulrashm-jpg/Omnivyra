@@ -69,7 +69,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         company_id: _c1, companyId: _c2, content_type: _c3, contentType: _c4,
         campaignId: _c5, campaign_id: _c6, createdBy: _c7, created_by: _c8, ...rest
       } = body;
-      const createdBy = access.userId && access.userId !== 'content_architect' ? access.userId : null;
+      const createdBy = access.userId || null;
       const content = await createContent({
         ...rest,
         companyId: scopedCompanyId,
