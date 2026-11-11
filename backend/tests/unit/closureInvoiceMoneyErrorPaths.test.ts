@@ -111,7 +111,7 @@ describe('top-up invoice', () => {
     expect(mockWrites).toEqual([]);
   });
 
-  it('invoice-number COLLISION (existing invoice belongs to another purchase) -> throws, never returned as this purchase's invoice', async () => {
+  it('invoice-number COLLISION (existing invoice belongs to another purchase) -> throws, never returned as this purchase invoice', async () => {
     mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
     mockScript['invoices:select'] = () => ({ data: { id: 'inv-other', invoice_number: 'x', status: 'paid', organization_id: 'o2', metadata: { purchase_id: 'p-other' } }, error: null });
     await expect(generateTopupInvoice('p1')).rejects.toThrow(/invoice_number_collision/);
