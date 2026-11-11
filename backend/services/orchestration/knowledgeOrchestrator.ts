@@ -149,7 +149,14 @@ export async function resumeOrchestration(companyId: string, now: string = new D
   if (!companyId) return { recovered: 0, runnable: 0 };
   const cid = await resolveOrchestrationCorrelationId(null, companyId);
   const nowMs = Date.parse(now);
-  const tasks = await readTasks(companyId);
+  let tasks: Awaited<ReturnType<typeof readTasks>>;
+  try {
+    tasks = await readTasks(companyId);
+  } catch (err) {
+    // An unreadable ledger is not an empty one: heal nothing, write nothing, and say so.
+    logger.warn('resume_orchestration_ledger_unreadable', { companyId, message: err instanceof Error ? err.message : String(err) });
+    return { recovered: 0, runnable: 0 };
+  }
   const healed = tasks.map((t) => (isStuck(t, Number.isFinite(nowMs) ? nowMs : 0) ? recoverStuck(t, now) : t));
   const changed = healed.filter((t, i) => t !== tasks[i]);
   if (changed.length) {

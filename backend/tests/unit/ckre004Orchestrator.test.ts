@@ -32,8 +32,21 @@ function stub(reportSettings: Record<string, unknown>) {
     select: jest.fn().mockReturnValue({
       eq: jest.fn().mockReturnValue({ maybeSingle: jest.fn().mockResolvedValue({ data: { report_settings: reportSettings } }) }),
     }),
-    update: jest.fn((u: any) => { updatedSettings = u.report_settings; return { eq: jest.fn().mockResolvedValue({ error: null }) }; }),
+    // The write reports the row it updated (orchestrationLedgerStore checks the row count).
+    update: jest.fn((u: any) => { updatedSettings = u.report_settings; return { eq: jest.fn().mockReturnValue({ select: jest.fn().mockResolvedValue({ data: [{ company_id: 'org1' }], error: null }) }) }; }),
   });
+}
+/** The company_profiles read FAILS (PostgREST: {data: null, error}, never a throw). */
+function stubReadError() {
+  updatedSettings = null;
+  const update = jest.fn((u: any) => { updatedSettings = u.report_settings; return { eq: jest.fn().mockReturnValue({ select: jest.fn().mockResolvedValue({ data: [{ company_id: 'org1' }], error: null }) }) }; });
+  mockFrom.mockReturnValue({
+    select: jest.fn().mockReturnValue({
+      eq: jest.fn().mockReturnValue({ maybeSingle: jest.fn().mockResolvedValue({ data: null, error: { code: '57014', message: 'statement timeout' } }) }),
+    }),
+    update,
+  });
+  return update;
 }
 
 function capabilities(): string[] {
@@ -117,5 +130,28 @@ describe('CKRE-004 §3 — dispatch consumes the subscription registry', () => {
     const out: any = await dispatch('KnowledgeRolledBack', { companyId: 'org1', targetVersion: 2, now: NOW });
     expect(rollbackKnowledge).toHaveBeenCalled();
     expect(out.ok).toBe(true);
+  });
+});
+
+describe('orchestration ledger: a FAILED read never wipes report_settings (2026-11-12, BLOCKING data loss)', () => {
+  test('orchestrateKnowledgeChange with an unreadable ledger writes NOTHING to report_settings', async () => {
+    const update = stubReadError();
+    await orchestrateKnowledgeChange({ companyId: 'org1', changedDomains: ['WEBSITE'], now: NOW });
+    expect(update).not.toHaveBeenCalled();
+    expect(updatedSettings).toBeNull();
+  });
+
+  test('resumeOrchestration with an unreadable ledger heals nothing and writes nothing (never throws)', async () => {
+    const update = stubReadError();
+    const out = await resumeOrchestration('org1', NOW);
+    expect(out).toEqual({ recovered: 0, runnable: 0 });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test('a readable ledger keeps every sibling report_settings key when it writes', async () => {
+    stub({ knowledge_version: { version: 5 }, brand_voice: { tone: 'warm' }, unrelated_setting: 42 });
+    await orchestrateKnowledgeChange({ companyId: 'org1', changedDomains: ['WEBSITE'], now: NOW });
+    expect(updatedSettings).toMatchObject({ brand_voice: { tone: 'warm' }, unrelated_setting: 42 });
+    expect(Array.isArray(updatedSettings.orchestration_tasks)).toBe(true);
   });
 });
