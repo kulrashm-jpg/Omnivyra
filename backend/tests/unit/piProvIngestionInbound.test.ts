@@ -7,6 +7,7 @@ jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jes
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: () => { throw new Error('unexpected direct db access'); } }));
 
 import {
+  classifyInboundLead,
   recordInboundLeadProvenance,
   scheduleInboundLeadProvenance,
   type InboundProvenanceDeps,
@@ -62,6 +63,25 @@ const lead = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => resetProvenanceIngestionCounters());
+
+describe('unknown mode (no asserted mode, no structural signal)', () => {
+  it('a caller with no mode and no signal gets UNKNOWN: skipped mode_unknown, gate not consulted, nothing read or written', async () => {
+    const { deps, calls } = harness();
+    const mode = classifyInboundLead({ form_id: null, integration_id: null, visitor_session_id: null });
+    expect(mode).toBeNull(); // never a guessed 'manual'
+    const r = await recordInboundLeadProvenance(ORG_A, lead({ form_id: null, visitor_session_id: null, source: 'manual' }), mode, deps);
+    expect(r).toEqual({ status: 'skipped', reason: 'mode_unknown' });
+    expect(deps.gate).not.toHaveBeenCalled();
+    expect(calls.upsert).toHaveLength(0);
+    expect(calls.resolve).toHaveLength(0);
+    expect(calls.contributions).toHaveLength(0); // no source_category is manufactured
+  });
+
+  it('the pre-739852a8e live mislabel is closed: a website capture without a session is website when asserted, unknown when not', () => {
+    expect(classifyInboundLead({ mode: 'website', visitor_session_id: null })).toBe('website');
+    expect(classifyInboundLead({ visitor_session_id: null })).toBeNull(); // was 'manual'
+  });
+});
 
 describe('gate', () => {
   it('closed gate ⇒ skipped, nothing read or written', async () => {

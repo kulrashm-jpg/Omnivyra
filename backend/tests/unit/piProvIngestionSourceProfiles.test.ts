@@ -98,7 +98,9 @@ describe('inbound mode is structural, never the free-text source', () => {
     [{ form_id: 'f1', integration_id: 'i1', visitor_session_id: 'v1' }, 'inbound_form'],
     [{ integration_id: 'i1', visitor_session_id: 'v1' }, 'inbound_webhook'],
     [{ visitor_session_id: 'v1' }, 'website'],
-    [{}, 'manual'],
+    [{}, null],                            // no mode, no signal => UNKNOWN, never a guessed 'manual'
+    [{ mode: 'bogus' }, null],
+    [{ mode: 'manual' }, 'manual'],        // manual only when ASSERTED
     [{ mode: 'website', form_id: 'f1' }, 'website'],
     [{ mode: 'bogus', form_id: 'f1' }, 'inbound_form'],
   ])('%j → %s', (input, expected) => {

@@ -33,18 +33,28 @@ const INBOUND_MODES = Object.keys(INBOUND_LEAD_PROFILES) as InboundLeadMode[];
  * The structural mode of a `createLead` call. Decided by WHICH entry point
  * produced the row (form / integration / tracked website session), never by the
  * free-text `source` the caller supplied. An explicit `mode` wins when given.
+ *
+ * NO SIGNAL => null (UNKNOWN), never a guessed 'manual' (2026-11-11, owner D3
+ * no-guessing rule, consistent with the 0008 (a) ruling). The old fallback
+ * produced false 'manual' labels on a live path before 739852a8e: a website
+ * capture whose visitor session did not resolve. Every production call site
+ * now asserts a mode (enforced by createLeadCallersAssertMode.test.ts), so no
+ * production call site reaches this branch today. That is a property of the
+ * callers, not of this function: removing that guard reopens the question.
+ * This branch decides what a FUTURE caller that forgets to assert gets, and
+ * NULL is the honest answer.
  */
 export function classifyInboundLead(input: {
   mode?: string | null;
   form_id?: string | null;
   integration_id?: string | null;
   visitor_session_id?: string | null;
-}): InboundLeadMode {
+}): InboundLeadMode | null {
   if (input.mode && (INBOUND_MODES as string[]).includes(input.mode)) return input.mode as InboundLeadMode;
   if (input.form_id) return 'inbound_form';
   if (input.integration_id) return 'inbound_webhook';
   if (input.visitor_session_id) return 'website';
-  return 'manual';
+  return null;
 }
 
 type LeadRow = Record<string, unknown>;
@@ -68,13 +78,16 @@ const obj = (v: unknown): Record<string, unknown> =>
 export async function recordInboundLeadProvenance(
   organizationId: string,
   lead: LeadRow,
-  mode: InboundLeadMode,
+  mode: InboundLeadMode | null,
   deps: InboundProvenanceDeps = {},
 ): Promise<InboundProvenanceOutcome> {
   const skip = (reason: string): InboundProvenanceOutcome => {
-    recordProvenanceOutcome('inbound_lead', 'skipped', { reason, mode });
+    recordProvenanceOutcome('inbound_lead', 'skipped', { reason, mode: mode ?? 'unknown' });
     return { status: 'skipped', reason };
   };
+  // UNKNOWN mode: no profile can be chosen without guessing, so no contribution
+  // (and no source_category) is written. Checked before the gate: no read at all.
+  if (mode === null) return skip('mode_unknown');
 
   const gate = deps.gate ?? (async (org: string) =>
     (await import('../../leadIngestion/orchestrator')).resolveLeadIngestionGate(org));
@@ -164,7 +177,7 @@ export async function recordInboundLeadProvenance(
 export function scheduleInboundLeadProvenance(
   organizationId: string,
   lead: LeadRow,
-  mode: InboundLeadMode,
+  mode: InboundLeadMode | null,
   deps: InboundProvenanceDeps = {},
 ): Promise<void> {
   return runDetached('inbound_lead', async () => {
