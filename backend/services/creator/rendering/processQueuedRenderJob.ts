@@ -97,6 +97,13 @@ async function writeJobState(
   return true;
 }
 
+/**
+ * Queue re-schedules for failures that never reached the provider (store errors, a job the sync path
+ * holds). A FIXED cap: the old `retry_count + 1 < 3 ? 3 : retry_count + 1` always admitted one more.
+ * Paid provider calls are bounded separately, by RENDER_MAX_ATTEMPTS inside settle().
+ */
+const ASYNC_QUEUE_MAX_RETRIES = 3;
+
 /** Job states the async worker may start an attempt from (anything else is owned or final). */
 const ASYNC_STARTABLE = new Set(['queued', 'retry_scheduled']);
 
@@ -122,7 +129,8 @@ export async function processQueuedRenderJob(
     const claim = claimed;
     const qId = claim.id;
     const jobId = claim.render_job_id;
-    const queueMax = claim.retry_count + 1 < 3 ? 3 : claim.retry_count + 1;
+    /** Set immediately before the provider is called: what settle() needs to judge the paid budget. */
+    let providerBudget: { variant: string; attemptNo: number } | null = null;
     /** The LEGACY job-level hold key (pre per-attempt holds); released, never confirmed, by this worker. */
     const legacyHoldKey = `render:${jobId}`;
     /** Release this attempt's hold (if any): a retry creates its own, so a failed attempt is never billed. */
@@ -131,14 +139,41 @@ export async function processQueuedRenderJob(
     };
 
     /**
-     * End this attempt through the queue's own retry policy, and give job_state an exit: a queue
-     * retry -> 'queued'; the queue gives up -> hold released and 'retry_scheduled' (non-terminal: the
-     * sync path or a manual retry can still run it). retry_count advances only when this attempt's
-     * keys were spent (its attempt row was written or refused).
+     * End this attempt, and give job_state an exit. THE PAID BUDGET IS IN THE SIGNATURE (05 finding 5):
+     * every caller states `providerCalled`, so no post-provider failure can reach the queue's retry path
+     * without passing the RENDER_MAX_ATTEMPTS check first.
+     *  - providerCalled: judged on PROVIDER CALLS, the same budget as the sync path (creator_render_attempt
+     *    rows for the variant, written by both paths). At the limit -> failed_provider_exhausted
+     *    (terminal). A failed count read falls back to the attempt number (>= calls): it errs toward
+     *    stopping a paid provider.
+     *  - otherwise (or under the budget): the queue's FIXED retry cap. A queue retry -> 'queued'; the
+     *    queue gives up -> 'retry_scheduled' (non-terminal: the sync path or a manual retry can still run
+     *    it).
+     * This attempt's hold is released either way (a retry creates its own). retry_count advances only
+     * when this attempt's keys were spent.
      */
-    const settle = async (reason: string, label: string): Promise<ProcessResult> => {
-      const r = await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: queueMax, reason });
+    const settle = async (reason: string, label: string, opts: { providerCalled: boolean }): Promise<ProcessResult> => {
       const h = held;
+      if (opts.providerCalled) {
+        let providerCalls = providerBudget?.attemptNo ?? RENDER_MAX_ATTEMPTS;
+        if (providerBudget) {
+          try {
+            const { count, error: countError } = await deps.supabase
+              .from('creator_render_attempt').select('id', { count: 'exact', head: true }).eq('variant_id', providerBudget.variant);
+            if (!countError && typeof count === 'number') providerCalls = count;
+          } catch { /* the attempt number stands: the conservative bound */ }
+        }
+        if (providerCalls >= RENDER_MAX_ATTEMPTS) {
+          held = null;
+          await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'provider_exhausted' });
+          await releaseAttemptHold(`${label}:attempts_exhausted`);
+          await releaseHold(deps, { key: legacyHoldKey }, `${label}:attempts_exhausted`, events);
+          await writeJobState(deps, jobId, { current_state: 'failed_provider_exhausted', retry_count: providerBudget?.attemptNo ?? h?.attemptNumber }, `exhausted:${label}`, events);
+          events.push('render_terminal_failure');
+          return { ok: false, status: 'failed', events, render_job_id: jobId, reason: `${label}:attempts_exhausted` };
+        }
+      }
+      const r = await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: ASYNC_QUEUE_MAX_RETRIES, reason });
       const nextCount = h ? (h.consumed ? h.attemptNumber : h.fromCount) : undefined;
       await releaseAttemptHold(label);
       if (r.event === 'render_retry_scheduled') {
@@ -151,29 +186,6 @@ export async function processQueuedRenderJob(
       held = null;
       events.push('render_terminal_failure');
       return { ok: false, status: 'failed', events, render_job_id: jobId, reason: label };
-    };
-    /**
-     * A failure AFTER the provider was called is judged on PROVIDER CALLS, the same budget as the sync
-     * path (creator_render_attempt rows for the variant, which both paths write). The queue's own cap
-     * (queueMax) always admitted one more retry, so a provider that kept failing was called, and paid
-     * for, forever. A failed count read falls back to the attempt number (>= calls): it errs toward
-     * stopping a paid provider.
-     */
-    const afterProviderCall = async (reason: string, label: string, variant: string, attemptNo: number): Promise<ProcessResult> => {
-      let providerCalls = attemptNo;
-      try {
-        const { count, error: countError } = await deps.supabase
-          .from('creator_render_attempt').select('id', { count: 'exact', head: true }).eq('variant_id', variant);
-        if (!countError && typeof count === 'number') providerCalls = count;
-      } catch { /* attemptNo stands: the conservative bound */ }
-      if (providerCalls < RENDER_MAX_ATTEMPTS) return settle(reason, label);
-      held = null;
-      await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'provider_exhausted' });
-      await releaseAttemptHold(`${label}:attempts_exhausted`);
-      await releaseHold(deps, { key: legacyHoldKey }, `${label}:attempts_exhausted`, events);
-      await writeJobState(deps, jobId, { current_state: 'failed_provider_exhausted', retry_count: attemptNo }, `exhausted:${label}`, events);
-      events.push('render_terminal_failure');
-      return { ok: false, status: 'failed', events, render_job_id: jobId, reason: `${label}:attempts_exhausted` };
     };
     /** A failure that can never succeed for this spec: terminal job state, conditional on what was read. */
     const finalFailure = async (reason: string, jobState: string, from: string, status: 'failed' | 'blocked' = 'failed'): Promise<ProcessResult> => {
@@ -189,7 +201,7 @@ export async function processQueuedRenderJob(
       .from('creator_render_job')
       .select('id, render_spec_snapshot, organization_id, task_id, deterministic_input_hash')
       .eq('id', jobId).maybeSingle();
-    if (jobError) return settle('store_unavailable', 'job_unreadable');
+    if (jobError) return settle('store_unavailable', 'job_unreadable', { providerCalled: false });
     if (!job?.id) {
       await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'invalid_spec' });
       events.push('render_terminal_failure');
@@ -201,14 +213,14 @@ export async function processQueuedRenderJob(
       .from('creator_render_job_state')
       .select('current_state, retry_count, attached_output_id')
       .eq('render_job_id', jobId).maybeSingle();
-    if (stError) return settle('store_unavailable', 'job_state_unreadable');
+    if (stError) return settle('store_unavailable', 'job_state_unreadable', { providerCalled: false });
     let st = stRow as { current_state?: string; retry_count?: number; attached_output_id?: string | null } | null;
     if (!st) {
       // No state row (enqueue's insert failed): create it as 'queued'; a racer loses at the PK.
       const { error: adoptError } = await deps.ownedDbTable('creator_render_job_state').insert({
         render_job_id: jobId, current_state: 'queued', retry_count: 0, last_transition_at: deps.now(),
       });
-      if (adoptError) return settle('store_unavailable', 'job_state_unavailable');
+      if (adoptError) return settle('store_unavailable', 'job_state_unavailable', { providerCalled: false });
       st = { current_state: 'queued', retry_count: 0, attached_output_id: null };
     }
     const cs = String(st.current_state ?? '');
@@ -228,7 +240,7 @@ export async function processQueuedRenderJob(
     }
     if (!ASYNC_STARTABLE.has(cs)) {
       // The sync path (or a stale run) holds it right now: try again later, no provider call.
-      return settle('job_busy', 'render_in_progress');
+      return settle('job_busy', 'render_in_progress', { providerCalled: false });
     }
 
     // Re-validate the frozen spec fail-closed (never trust a raw row). A bad spec can never render.
@@ -271,7 +283,7 @@ export async function processQueuedRenderJob(
         .eq('current_state', cs)
         .eq('retry_count', rc)
         .select('render_job_id');
-      if (moveError || !Array.isArray(moved) || moved.length === 0) return settle('job_busy', 'render_in_progress');
+      if (moveError || !Array.isArray(moved) || moved.length === 0) return settle('job_busy', 'render_in_progress', { providerCalled: false });
     }
     held = { jobId, fromCount: rc, attemptNumber: rc + 1, consumed: false };
     const attemptNumber = rc + 1;
@@ -287,7 +299,7 @@ export async function processQueuedRenderJob(
       const { data: v, error: vReadError } = await deps.supabase
         .from('creator_render_variant').select('id')
         .eq('render_job_id', jobId).eq('spec_fingerprint', spec.deterministic_input_hash).maybeSingle();
-      if (vReadError) return settle('store_unavailable', 'variant_unavailable');
+      if (vReadError) return settle('store_unavailable', 'variant_unavailable', { providerCalled: false });
       variantId = (v as { id?: string } | null)?.id ?? null;
       if (!variantId) {
         const { data: vIns, error: vInsError } = await deps.ownedDbTable('creator_render_variant').insert({
@@ -303,7 +315,7 @@ export async function processQueuedRenderJob(
             .eq('render_job_id', jobId).eq('spec_fingerprint', spec.deterministic_input_hash).maybeSingle();
           variantId = (v2 as { id?: string } | null)?.id ?? null;
         }
-        if (!variantId) return settle('store_unavailable', 'variant_unavailable');
+        if (!variantId) return settle('store_unavailable', 'variant_unavailable', { providerCalled: false });
       }
     }
 
@@ -325,7 +337,7 @@ export async function processQueuedRenderJob(
       if (!holdId) {
         const conflict = (holdError as { code?: string } | null)?.code === '23505';
         console.error('[creator-render-async] billing hold not created; refused before the provider', { render_job_id: jobId, attempt: attemptNumber, conflict });
-        return settle('store_unavailable', conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable');
+        return settle('store_unavailable', conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable', { providerCalled: false });
       }
     }
     const attemptHoldId: string = holdId;
@@ -343,10 +355,11 @@ export async function processQueuedRenderJob(
     if (!attemptId) {
       // FAIL CLOSED BEFORE THE PROVIDER: no paid call without the attempt row.
       console.error('[creator-render-async] attempt not recorded; refused before the provider', { render_job_id: jobId, attempt: attemptNumber, code: (attemptError as { code?: string } | null)?.code ?? null });
-      return settle('attempt_insert_failed', 'attempt_insert_failed');
+      return settle('attempt_insert_failed', 'attempt_insert_failed', { providerCalled: false });
     }
 
     // Provider execution — failures classified transient vs terminal.
+    providerBudget = { variant: variantId, attemptNo: attemptNumber };
     let outRef;
     try {
       const handle = await provider.submit(spec, attemptKey);
@@ -359,7 +372,7 @@ export async function processQueuedRenderJob(
         : /network|fetch|econn/i.test(msg) ? 'provider_network'
         : /5\d\d/.test(msg) ? 'provider_5xx' : 'transient';
       await advanceQueueState(deps, qId, 'processing');
-      return afterProviderCall(reason, reason, variantId, attemptNumber);
+      return settle(reason, reason, { providerCalled: true });
     }
 
     // Deterministic content hash + post-moderation (fail-closed).
@@ -384,7 +397,7 @@ export async function processQueuedRenderJob(
     const out = output as { id?: string; storage_ref?: string } | null;
     if (outputError || !out?.id) {
       console.error('[creator-render-async] output not recorded after the provider call', { render_job_id: jobId, attempt: attemptNumber, code: (outputError as { code?: string } | null)?.code ?? null });
-      return afterProviderCall('output_insert_failed', 'output_insert_failed', variantId, attemptNumber);
+      return settle('output_insert_failed', 'output_insert_failed', { providerCalled: true });
     }
     // From here the render is delivered: nothing below releases the hold or retries.
     held = null;
