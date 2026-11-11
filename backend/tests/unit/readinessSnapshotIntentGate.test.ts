@@ -70,11 +70,13 @@ describe('readinessSnapshot is exempt from the inactive-company gate', () => {
     expect(blocked).toHaveLength(7);
   });
 
-  test('the always-run set is exactly the previous ten jobs plus readinessSnapshot', () => {
+  test('the always-run set is exactly the previous ten jobs plus readinessSnapshot and whatsappUnconfirmedSendSweep', () => {
+    // whatsappUnconfirmedSendSweep: L-4 recovery job, owner approval 2026-11-11
+    // (whatsappUnconfirmedSweepJob.test.ts proves it is gated open and runs).
     expect([...ALWAYS_RUN_JOBS].sort()).toEqual([
       'confidenceCalibration', 'connectorTokenRefresh', 'conversationTriageWorker', 'engagementSignalArchive',
       'findDuePostsAndEnqueue', 'governanceAudit', 'intelligenceEventCleanup', 'leadThreadQueueCleanup',
-      'performanceAggregation', 'readinessSnapshot', 'staleExecutionSweep',
+      'performanceAggregation', 'readinessSnapshot', 'staleExecutionSweep', 'whatsappUnconfirmedSendSweep',
     ].sort());
   });
 });

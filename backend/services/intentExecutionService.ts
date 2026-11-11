@@ -176,6 +176,12 @@ const ALWAYS_RUN_JOBS = new Set([
   // inactive-company gate ONLY — the 24h interval, usage overlay and admin
   // override still apply.
   'readinessSnapshot',
+  // L-4 Follow-up A (owner approval 2026-11-11): resolves WhatsApp sends whose outcome
+  // is unknown. RECOVERY, not feature work - like staleExecutionSweep, it must not wait
+  // for recorded activity (the activity set has no writer). It never sends; it only
+  // attaches verified provider evidence or flags for an operator. Exempt from the
+  // inactive-company gate ONLY - interval, usage overlay and admin override still apply.
+  'whatsappUnconfirmedSendSweep',
 ]);
 
 // Frequency tier → milliseconds

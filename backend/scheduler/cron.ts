@@ -132,6 +132,7 @@ import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefre
 import { runScheduledAnalyticsSync } from '../services/scheduledAnalyticsSync';
 import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
 import { runReadinessSnapshotJob } from '../jobs/readinessSnapshotJob';
+import { runWhatsAppUnconfirmedSendSweepJob } from '../jobs/whatsappUnconfirmedSendSweepJob';
 import { runHealthSnapshotJob } from '../jobs/healthSnapshotJob';
 import { runLifecycleSnapshotJob } from '../jobs/lifecycleSnapshotJob';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
@@ -181,6 +182,11 @@ const LIFECYCLE_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // recovery. Sweep itself is idempotent (only flips started/running→failed).
 const STALE_EXECUTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 let lastStaleExecutionSweepRun = 0;
+// L-4 Follow-up A: resolve WhatsApp sends whose outcome is unknown, from provider
+// evidence only (never a resend). The sweep's own age floor is 5 min (default 30), so
+// a live send is never touched; running every 10 minutes keeps resolution prompt.
+const WHATSAPP_UNCONFIRMED_SWEEP_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
+let lastWhatsAppUnconfirmedSweepRun = 0;
 // Lightweight detect-first reconciliation (orphan pending / expired media /
 // unresolved deps). Single-instance via CronGuard; no destructive auto-fix.
 const RECONCILIATION_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
@@ -1234,6 +1240,22 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
       await sweepStaleExecutions();
     } catch (error: unknown) {
       console.error('❌ Stale execution sweep error:', formatCaughtError(error));
+    }
+  }
+
+  // WhatsApp unconfirmed-send sweep (L-4 Follow-up A; owner approval 2026-11-11).
+  // Single-instance via CronGuard; per-tenant isolation inside; never throws.
+  if (shouldRunCronJob("whatsappUnconfirmedSendSweep", WHATSAPP_UNCONFIRMED_SWEEP_INTERVAL_MS, lastWhatsAppUnconfirmedSweepRun)) {
+    lastWhatsAppUnconfirmedSweepRun = Date.now();
+    try {
+      const sweep = await runWhatsAppUnconfirmedSendSweepJob();
+      console.log(
+        `✅ WhatsApp unconfirmed-send sweep: tenants ${sweep.tenants}, examined ${sweep.examined}, attached ${sweep.attached}, ` +
+        `marked uncertain ${sweep.markedUncertain}, flagged ${sweep.flaggedForReview}, conflicting ${sweep.conflicting}` +
+        (sweep.ok ? '' : ` (FAILED tenants: ${sweep.failedTenants.length})`)
+      );
+    } catch (error: unknown) {
+      console.error('❌ WhatsApp unconfirmed-send sweep error:', formatCaughtError(error));
     }
   }
 
