@@ -57,6 +57,7 @@ function attemptStore() {
   const rows: { org: string; entity: string; provider: string; n: number; id: string }[] = [];
   return {
     rows,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     nextNumber: async (i: { organizationId: string; entityId: string; providerId: string }) => {
       const mine = rows.filter((r) => r.org === i.organizationId
         && r.entity === i.entityId && r.provider === i.providerId);
@@ -166,7 +167,7 @@ describe('A4J/B1 — an unrecorded execution cannot reach a provider', () => {
   it('a plain recording failure also fails closed when required', async () => {
     const calls: unknown[] = [];
     const recorder = {
-      now: () => NOW, nextNumber: async () => 1,
+      now: () => NOW, nextNumber: async () => 1, latest: async () => null,
       record: async () => { throw new Error('attempt insert exploded'); },
       complete: async () => { /* unreachable */ },
     };
@@ -181,7 +182,7 @@ describe('A4J/B1 — an unrecorded execution cannot reach a provider', () => {
     let credentialAsked = false;
     let costAsked = false;
     const recorder = {
-      now: () => NOW, nextNumber: async () => 1,
+      now: () => NOW, nextNumber: async () => 1, latest: async () => null,
       record: async () => { throw new Error('insert failed'); },
       complete: async () => { /* unreachable */ },
     };
@@ -199,7 +200,7 @@ describe('A4J/B1 — an unrecorded execution cannot reach a provider', () => {
   it('A4A behaviour is UNCHANGED when the caller does not require a record', async () => {
     const calls: unknown[] = [];
     const recorder = {
-      now: () => NOW, nextNumber: async () => 1,
+      now: () => NOW, nextNumber: async () => 1, latest: async () => null,
       record: async () => { throw new Error('attempt insert exploded'); },
       complete: async () => { /* nothing was opened */ },
     };
@@ -371,7 +372,7 @@ describe('A4J — a provider call requires BOTH no evidence AND a recorded attem
   it('CASE C: no evidence + recording fails ⇒ provider MUST NOT execute', async () => {
     const calls: unknown[] = [];
     const recorder = {
-      now: () => NOW, nextNumber: async () => 1,
+      now: () => NOW, nextNumber: async () => 1, latest: async () => null,
       record: async () => { throw new Error('insert failed'); },
       complete: async () => { /* unreachable */ },
     };

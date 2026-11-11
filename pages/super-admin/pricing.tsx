@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
 import { apiFetch } from '@/lib/apiFetch';
+import VendorUnitCostsSection from '@/components/super-admin/VendorUnitCostsSection';
 
 const CURRENCIES = ['USD', 'INR', 'EUR'] as const;
 interface Fx { rates: Record<string, number>; overrides?: Record<string, Record<string, number>>; updatedAt?: string }
@@ -115,6 +116,7 @@ export default function SuperAdminPricingPage() {
               </ul>
             )}
           </section>
+          <VendorUnitCostsSection />
         </div>
       </main>
     </>

@@ -62,6 +62,11 @@ export interface ProspectSnapshot {
   readonly person: Readonly<Record<string, unknown>> | null;
   /** `prospect_accounts` row, or null when no employer resolved. */
   readonly account: Readonly<Record<string, unknown>> | null;
+  /**
+   * D7(i): NON-MERGING locators for the person, read from their own source
+   * evidence (never identity). Optional and additive: absent means none.
+   */
+  readonly personLocators?: Readonly<{ linkedinProfileUrl: string | null }> | null;
 }
 
 /** One attribute LI-2 withheld because sources disagreed. */

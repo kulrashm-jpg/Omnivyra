@@ -2,6 +2,10 @@ import React from 'react';
 import Link from 'next/link';
 import IntegrationHubNav from '../../components/integrations/IntegrationHubNav';
 import LeadSourcesSection from '../../components/prospects/LeadSourcesSection';
+import ApolloFieldGroupsPanel from '../../components/prospects/ApolloFieldGroupsPanel';
+import CentralVendorAccessPanel from '../../components/billing/CentralVendorAccessPanel';
+import { TenantDataNoticeForSelectedCompany } from '../../components/compliance/TenantDataNotice';
+import DataSourceUsagePanel from '../../components/prospects/DataSourceUsagePanel';
 import {
   buildCapabilityCards,
   credentialFormProviderIds,
@@ -175,6 +179,12 @@ export default function EnrichmentProvidersPage() {
             <LeadSourcesSection providerIds={ENRICHMENT_PROVIDER_IDS} />
           </section>
         )}
+
+        {/* Owner requirement 2026-11-11: the data-controller notice, shown before connecting data vendors or enabling contact data. */}
+        <TenantDataNoticeForSelectedCompany categories={['vendor_data', 'contact_data']} />
+        <ApolloFieldGroupsPanel />
+        <CentralVendorAccessPanel />
+        <DataSourceUsagePanel />
 
         {PLANNED_CARDS.length > 0 && (
           <section className="mb-8">

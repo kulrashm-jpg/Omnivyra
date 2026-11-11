@@ -61,6 +61,7 @@ function store(opts: { markThrows?: boolean } = {}) {
   return {
     row, closes, marks,
     nextNumber: async () => 1,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     record: async () => ({ attemptId: 'attempt-1' }),
     // A4N's atomic claim. Stubbed so the leased path never reaches the real
     // writer — without it the executor falls through to the live database.

@@ -1,0 +1,14 @@
+{
+  "$comment": "Tenant data-controller notice (owner requirement, 2026-11-11). PLACEHOLDER WORDING - PENDING COUNSEL REVIEW. Counsel edits this file (no code change). Bumping `version` (with a new `publishedAt`) requires every tenant admin to re-accept: a NEW category blocks until accepted; a CHANGED version keeps fetches working for `graceDays`, then blocks. An acceptance records the version AND a sha256 of the text it was shown; it stays current only while both match, so editing the wording WITHOUT bumping the version invalidates acceptances immediately (no grace) - always bump the version.",
+  "version": "2026-11-11.draft-1",
+  "status": "PENDING COUNSEL REVIEW",
+  "publishedAt": "2026-11-11T00:00:00.000Z",
+  "graceDays": 14,
+  "title": "Your data, your responsibility",
+  "intro": "[PLACEHOLDER - PENDING COUNSEL REVIEW] Data you bring into Omnivyra from the sources below is stored in your workspace. You (your organisation) are the data controller for it; Omnivyra processes it on your behalf. You are responsible for meeting the data-protection laws that apply to you, including the GDPR, the CCPA and India's DPDP Act: having a lawful basis, honouring opt-outs and deletion requests, and setting retention.",
+  "categories": {
+    "vendor_data": "[PLACEHOLDER] Data vendors (for example Apollo), whether you connect your own key or use Omnivyra's centralized access: the people and company records they return are stored in your workspace under your responsibility.",
+    "salesnav_capture": "[PLACEHOLDER] LinkedIn Sales Navigator capture: the saved-lead details captured by the Omnivyra extension are stored in your workspace under your responsibility.",
+    "contact_data": "[PLACEHOLDER] Contact data (work email; phone later): personal contact details carry additional obligations. Only fetch them where you have a lawful basis to contact the person, and honour opt-outs and deletion requests."
+  }
+}

@@ -31,6 +31,7 @@
  */
 
 import React from 'react';
+import IcpDiscoveryPanel from './IcpDiscoveryPanel';
 import useSWR from 'swr';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { apiFetch } from '@/lib/apiFetch';
@@ -330,6 +331,9 @@ export default function IcpWorkspace({ icpKey = 'first-cut' }: { icpKey?: string
           Ratified ICP: version {ratified.version} (ratified {ratified.ratifiedAt}). This is the
           authoritative profile the evaluator uses.
         </p>
+      ) : null}
+      {ratified ? (
+        <IcpDiscoveryPanel companyId={companyId} versionId={ratified.id} version={ratified.version} />
       ) : (
         <p data-testid="no-ratified-banner">
           No ratified ICP yet. Nothing is being used for scoring.

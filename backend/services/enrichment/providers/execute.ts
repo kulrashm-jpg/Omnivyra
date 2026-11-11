@@ -45,6 +45,34 @@ export const ENRICHMENT_EXECUTOR_VERSION = 'a3.1';
 /** How long an equivalent observation stays fresh enough to reuse. */
 export const DEFAULT_FRESHNESS_DAYS = 30;
 
+/**
+ * MODE B (owner, 2026-11-10): who pays the vendor for a call.
+ *   'tenant'   the tenant's OWN vendor key; the vendor bills the tenant; no
+ *              Omnivyra credits (the A3X economics, unchanged).
+ *   'platform' Omnivyra's central vendor key, opted into by the tenant; charged
+ *              in Omnivyra credits at vendor cost x 1.5.
+ */
+export type CredentialFunding = 'tenant' | 'platform';
+
+/**
+ * What `resolveCredential` may answer. A bare string is the original contract
+ * and means TENANT-funded, so every existing port keeps its meaning.
+ */
+export type ResolvedCredential = string | { readonly value: string; readonly funding: CredentialFunding };
+
+/** Normalise a resolved credential. Anything unusable is null. */
+export function readResolvedCredential(r: ResolvedCredential | null | undefined): { value: string; funding: CredentialFunding } | null {
+  if (typeof r === 'string') return r.trim() ? { value: r, funding: 'tenant' } : null;
+  if (r && typeof r === 'object' && typeof r.value === 'string' && r.value.trim()
+    && (r.funding === 'tenant' || r.funding === 'platform')) {
+    return { value: r.value, funding: r.funding };
+  }
+  return null;
+}
+
+/** Outcomes where the vendor ANSWERED, and so billed the call (misses included: the owner's rule). */
+export const BILLABLE_OUTCOMES: readonly EnrichmentOutcome[] = ['enriched', 'no_match', 'field_not_found'];
+
 /** Outcome of a cost decision. `denied` must stop the call. */
 export type CostDecision =
   | { readonly authorized: true; readonly holdId: string | null; readonly cost: SourceCost }
@@ -60,10 +88,30 @@ export interface ExecuteEnrichmentPorts {
     providerId: string;
     attributes: readonly string[];
     correlationId: string;
+    /** Mode B. Who pays the vendor for this call. Absent from older callers means 'tenant'. */
+    funding?: CredentialFunding;
+    /** Mode B. Which subject the call is about, for per-call vendor unit pricing. */
+    subject?: 'person' | 'account';
+    entityId?: string;
   }): Promise<CostDecision>;
 
   /** Release a reservation when the call produced nothing billable. */
   releaseCost(holdId: string | null, reason: string): Promise<void>;
+
+  /**
+   * MODE B, OPTIONAL. Settle a reservation after the vendor call: confirm it
+   * when the vendor answered (`billable`, see BILLABLE_OUTCOMES) and release it
+   * otherwise. When ABSENT the executor behaves exactly as before: release on a
+   * provider error or an empty answer, nothing on success.
+   */
+  settleCost?(input: {
+    holdId: string | null;
+    funding: CredentialFunding;
+    billable: boolean;
+    outcome: EnrichmentOutcome;
+    correlationId: string;
+    reason: string;
+  }): Promise<number | void>;
 
   /**
    * A3M — resolve THIS TENANT's credential for this provider.
@@ -87,7 +135,7 @@ export interface ExecuteEnrichmentPorts {
   resolveCredential(input: {
     organizationId: string;
     providerId: string;
-  }): Promise<string | null>;
+  }): Promise<ResolvedCredential | null>;
 
   /**
    * The most recent equivalent observation, for duplicate suppression.
@@ -169,6 +217,10 @@ export interface ExecuteEnrichmentResult {
   readonly providerError?: unknown;
   /** The vendor's request-rate quota from its own headers. Null when it stated none. */
   readonly providerUsage?: unknown;
+  /** Mode B: who paid the vendor for this call. Absent when no credential was resolved. */
+  readonly funding?: CredentialFunding;
+  /** Mode B: Omnivyra credits confirmed for this call (0 for own key or a released hold). */
+  readonly creditsCharged?: number;
 }
 
 const outcomeResult = (
@@ -232,10 +284,10 @@ export async function executeEnrichment(
   // let Tenant A spend a key Tenant A never supplied. They are gone from the
   // execution path on purpose; `listProviderStatus` still uses `isAvailable`
   // to describe an adapter, which is a display concern, not an authorisation.
-  const credential = await ports.resolveCredential({
+  const resolvedCredential = readResolvedCredential(await ports.resolveCredential({
     organizationId, providerId: adapter.id,
-  });
-  if (!credential) {
+  }));
+  if (!resolvedCredential) {
     return outcomeResult('credential_missing', request, adapter.id,
       `no credential is configured for '${adapter.id}' by this tenant`);
   }
@@ -260,14 +312,32 @@ export async function executeEnrichment(
   }
 
   // ── cost, BEFORE the call ────────────────────────────────────────────────
+  const { value: credential, funding } = resolvedCredential;
   const decision = await ports.authorizeCost({
     organizationId, providerId: adapter.id, attributes: supported, correlationId: request.correlationId,
+    funding, subject: request.subject, entityId: request.entityId,
   });
   // `'reason' in decision`, not `!decision.authorized`: the root tsconfig sets
   // `strict: false`, which disables union narrowing on a negated discriminant.
   if ('reason' in decision) {
     return outcomeResult('cost_denied', request, adapter.id, decision.reason);
   }
+
+  // Settlement after the call. Without a `settleCost` port this is EXACTLY the
+  // original behaviour: release when nothing billable came back, nothing on
+  // success. With one (mode B) the port confirms or releases.
+  let creditsCharged = 0;
+  const settle = async (outcome: EnrichmentOutcome, reason: string): Promise<void> => {
+    const billable = BILLABLE_OUTCOMES.includes(outcome);
+    if (ports.settleCost) {
+      const charged = await ports.settleCost({ holdId: decision.holdId, funding, billable, outcome, correlationId: request.correlationId, reason });
+      // Only a PLATFORM-funded call can cost Omnivyra credits: an own key is
+      // never charged, whatever a port returns (the ledger CHECK says the same).
+      creditsCharged = funding === 'platform' && typeof charged === 'number' && charged > 0 ? charged : 0;
+    } else if (outcome !== 'enriched') {
+      await ports.releaseCost(decision.holdId, reason);
+    }
+  };
 
   // ── the single call ──────────────────────────────────────────────────────
   let response: ProviderResponse;
@@ -279,17 +349,20 @@ export async function executeEnrichment(
     // One call, one classification, no retry. An unrecognised error becomes
     // `provider_unavailable`, never `no_match`.
     const outcome = classifyEnrichmentError(err);
-    await ports.releaseCost(decision.holdId, `provider error: ${outcome}`);
-    return outcomeResult(outcome, request, adapter.id,
-      err instanceof Error ? err.message : String(err), true);
+    await settle(outcome, `provider error: ${outcome}`);
+    return { ...outcomeResult(outcome, request, adapter.id,
+      err instanceof Error ? err.message : String(err), true), funding, creditsCharged };
   }
 
   const usable = response.fields.filter((f) => f.value !== null && f.value !== undefined && f.value !== '');
   if (!usable.length) {
     // The provider answered and had nothing. That is a fact worth keeping, but
     // there is no observation to persist and nothing billable to confirm.
-    await ports.releaseCost(decision.holdId, `no usable field: ${response.outcome}`);
+    const finalOutcome = response.outcome === 'enriched' ? 'field_not_found' : response.outcome;
+    await settle(finalOutcome, `no usable field: ${response.outcome}`);
     return {
+      funding,
+      creditsCharged,
       ...outcomeResult(response.outcome === 'enriched' ? 'field_not_found' : response.outcome,
         request, adapter.id, response.detail ?? 'the provider returned no usable field', true),
       attributesNotReturned: response.notReturned.length ? response.notReturned : supported,
@@ -303,7 +376,23 @@ export async function executeEnrichment(
   }
 
   // ── persist as an observation ────────────────────────────────────────────
-  const persisted = await ports.persistObservation({
+  // A persistence failure AFTER a paid answer gives the tenant nothing, so the
+  // reservation is released (never confirmed) before the error propagates.
+  const persistOrRelease = async <T>(fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (ports.settleCost) {
+        await ports.settleCost({ holdId: decision.holdId, funding, billable: false, outcome: 'enriched',
+          correlationId: request.correlationId, reason: 'persistence failed after the vendor answered' });
+      }
+      // The recorder closes this attempt from the thrown error; tell it who paid
+      // the vendor, so a paid-not-stored row still reports its funding.
+      if (err && typeof err === 'object') (err as { funding?: CredentialFunding }).funding = funding;
+      throw err;
+    }
+  };
+  const persisted = await persistOrRelease(() => ports.persistObservation({
     organizationId,
     providerId: adapter.id,
     subject: request.subject,
@@ -316,7 +405,7 @@ export async function executeEnrichment(
     observedAt: usable.find((f) => f.observedAt)?.observedAt ?? null,
     correlationId: request.correlationId,
     prospectId: request.prospectId ?? null,
-  });
+  }));
 
   const normalized = normalizeEnrichmentResult({
     organizationId,
@@ -331,8 +420,12 @@ export async function executeEnrichment(
     now: ports.now(),
   });
 
+  await settle('enriched', 'enriched');
+
   return {
     outcome: 'enriched',
+    funding,
+    creditsCharged,
     retryAfterAt: null,          // A6A: a successful call imposes no wait
     providerError: null,
     providerUsage: response.providerUsage ?? null,

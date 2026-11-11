@@ -224,9 +224,12 @@ describe('Phase 4 — request serialisation is an ALLOWLIST', () => {
   });
 
   it('the six-key allowlist is unchanged by this batch', () => {
+    // R2-a (owner, 2026-11-10): industryKeywords (q_organization_keyword_tags) added,
+    // used only as the APPROXIMATE stand-in for an ICP industry criterion.
     expect(Object.keys(APOLLO_DISCOVERY_FILTERS).sort()).toEqual([
-      'companyDomains', 'companyHeadcount', 'locations', 'nameQuery', 'seniorities', 'titles',
+      'companyDomains', 'companyHeadcount', 'industryKeywords', 'locations', 'nameQuery', 'seniorities', 'titles',
     ]);
+    expect(APOLLO_DISCOVERY_FILTERS.industryKeywords).toBe('q_organization_keyword_tags');
   });
 
   it('refuses a request with no supported filter — that would be unbounded', () => {

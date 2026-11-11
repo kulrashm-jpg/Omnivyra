@@ -50,6 +50,7 @@ jest.mock('../../services/enrichment/providers/credentials', () => ({
 import {
   db, inRollback, seedTenants, ORG_A, ORG_B, attempt, constraintDef, uniqueIndexColumns,
 } from './setup';
+import { passThroughScreen } from '../../services/prospectImportReview/screen';
 
 jest.mock('../../db/writeOwner', () => ({
   __esModule: true,
@@ -187,6 +188,8 @@ const okPorts = (over: Record<string, unknown> = {}) => ({
   credential: { resolveCredential: async () => 'tenant-key' },
   authorizeCost: async () => ({ authorized: true, holdId: null, cost: { kind: 'unknown' } }),
   ingest: async ({ records }: any) => ({ succeeded: records.length, failed: 0 }),
+  // Explicit, greppable bypass: this suite tests the executor ledger, not R3 screening.
+  screen: passThroughScreen,
   now: () => NOW,
   ...over,
 });

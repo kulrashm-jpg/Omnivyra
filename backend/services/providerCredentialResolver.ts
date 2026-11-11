@@ -80,6 +80,19 @@ export const PROVIDER_CREDENTIALS: Record<string, ProviderCredentialDescriptor> 
     honourSourceToggle: true,
     rationale: 'One application-level Google API key, shared by every tenant report: PageSpeed only measures public pages, so tenants never supply their own. Managed in Super Admin, with PAGESPEED_API_KEY as the environment fallback.',
   },
+  apollo_platform: {
+    key: 'apollo_platform',
+    // MODE B (owner, 2026-11-10): Omnivyra's CENTRAL Apollo key, used only for
+    // tenants who opted into central Apollo access, charged in Omnivyra credits
+    // at vendor cost x 1.5. Entered in Super Admin (API catalogue). NO env names:
+    // the owner rule is "set in Super Admin", so no environment value can stand
+    // in for it, and the funding port additionally accepts only `managed`.
+    sourceName: 'Apollo (platform)',
+    mode: 'SUPER_ADMIN_MANAGED',
+    envNames: [],
+    honourSourceToggle: true,
+    rationale: 'Central Apollo access (mode B): one platform Apollo key managed in Super Admin, used only for opted-in tenants and charged in credits. The tenant own Apollo key always takes precedence.',
+  },
   openai_report_probe: {
     key: 'openai_report_probe',
     sourceName: null,

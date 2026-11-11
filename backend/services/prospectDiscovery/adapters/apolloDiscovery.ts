@@ -99,6 +99,11 @@ export const APOLLO_DISCOVERY_FILTERS: Readonly<Record<string, string>> = Object
   companyHeadcount: 'organization_num_employees_ranges',
   /** Free-text name fragment. */
   nameQuery: 'q_person_name',
+  /**
+   * Employer keyword tags. Used ONLY as an APPROXIMATE stand-in for an ICP
+   * industry criterion (owner decision R2-a); the tenant acknowledges that.
+   */
+  industryKeywords: 'q_organization_keyword_tags',
 });
 
 /** A provider failure, classified. The executor records the message verbatim. */
@@ -290,6 +295,10 @@ export const apolloDiscoveryAdapter: DiscoveryProviderAdapter = {
   // MUST match the registered `LeadSourceAdapter.source` — one provider identity.
   provider: 'apollo',
   label: 'Apollo',
+  // The executor refuses any other top-level filter key BEFORE anything is
+  // recorded or called: the allowlist is enforced at the canonicaliser, not
+  // only ignored here.
+  filterKeys: Object.keys(APOLLO_DISCOVERY_FILTERS),
 
   async discover({ filters, continuation, remaining, credential }) {
     const key = typeof credential === 'string' ? credential.trim() : '';

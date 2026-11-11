@@ -59,6 +59,7 @@ import {
 import {
   claimDiscoveryExecution,
   completeDiscoveryExecution,
+  recordDiscoveryUsage,
   findLiveDiscoveryExecution,
   getDiscoveryExecution,
   markDiscoveryProviderCallPending,
@@ -72,6 +73,7 @@ import { tenantFundedExecutionPort } from '../enrichment/providers/cost';
 import { resolveLeadIngestionGate, ingestLeadBatch } from '../leadIngestion/orchestrator';
 import { hasLeadSourceAdapter } from '../leadIngestion/registry';
 import { isProviderErrorView, type ProviderErrorView } from '../providerErrors/apolloErrors';
+import { screenDiscoveredRecords, type ScreenFn } from '../prospectImportReview/screen';
 
 /** How long an executor holds the lease before it may be reclaimed. */
 export const DISCOVERY_LEASE_MS = 5 * 60 * 1000;
@@ -131,11 +133,19 @@ export interface DiscoveryPorts {
   readonly hasProvider?: typeof hasDiscoveryProvider;
   readonly getProvider?: typeof getDiscoveryProvider;
   readonly ingest?: typeof ingestLeadBatch;
+  /**
+   * R3 pre-import screen (block or park, never merge). ALWAYS defaults to the
+   * production screen. A caller that must bypass it (tests of the executor
+   * itself) passes `passThroughScreen` explicitly, so every bypass is visible.
+   */
+  readonly screen?: ScreenFn;
   readonly now?: () => string;
   // ── ledger writers ──
   readonly nextAttemptNumber?: typeof nextDiscoveryAttemptNumber;
   readonly claim?: typeof claimDiscoveryExecution;
   readonly complete?: typeof completeDiscoveryExecution;
+  /** Mode B usage write (best-effort, after the close). */
+  readonly recordUsage?: typeof recordDiscoveryUsage;
   readonly getExecution?: typeof getDiscoveryExecution;
   readonly markPending?: typeof markDiscoveryProviderCallPending;
   readonly recordPage?: typeof recordDiscoveryPage;
@@ -194,6 +204,24 @@ export async function createDiscoveryExecution(
   try {
     if (!provider) throw new MalformedSearchError('provider is required');
     canonicalFilters = canonicalizeSearchCriteria(input.filters);
+    // The provider's own allowlist, enforced HERE (before any record or call),
+    // not merely ignored by the adapter. Key NAMES only in the message.
+    // An unregistered provider is refused later in this flow with its own
+    // reason; here it simply has no allowlist to consult.
+    let declaredKeys: readonly string[] | undefined;
+    try {
+      declaredKeys = hasProvider(provider)
+        ? (ports.getProvider ?? getDiscoveryProvider)(provider)?.filterKeys
+        : undefined;
+    } catch {
+      declaredKeys = undefined;
+    }
+    if (declaredKeys) {
+      const unknownKeys = Object.keys(canonicalFilters).filter((k) => !declaredKeys.includes(k));
+      if (unknownKeys.length) {
+        throw new MalformedSearchError(`unsupported search filter key(s): ${unknownKeys.sort().join(', ')}`);
+      }
+    }
     bounds = validateBounds(input.bounds);
     searchDigest = computeSearchDigest({ provider, canonicalFilters, bounds });
   } catch (e) {
@@ -320,6 +348,12 @@ export interface RunDiscoveryResult {
   readonly providerError?: ProviderErrorView | null;
   /** The provider's request-rate quota from the LAST page it answered, if it stated one. */
   readonly providerUsage?: unknown;
+  /**
+   * R3 screening for THIS run (not cumulative across resumed runs, not
+   * persisted). Held and unknown records were NOT ingested; held ones wait in
+   * the tenant review list, unknown ones are reconsidered on the next run.
+   */
+  readonly screening?: { skippedDuplicates: number; heldForReview: number; probeUnknown: number };
 }
 
 /**
@@ -353,7 +387,16 @@ export async function runDiscoveryExecution(input: {
   const authorizeCost = ports.authorizeCost ?? tenantFundedExecutionPort.authorizeCost;
   const getProvider = ports.getProvider ?? getDiscoveryProvider;
   const ingest = ports.ingest ?? ingestLeadBatch;
+  // UNCONDITIONAL production default (PI review, package 3): the R3 safety
+  // control must not disappear because a caller injected an unrelated port.
+  // A deliberate bypass is passed explicitly (`screen: passThroughScreen`).
+  const screen = ports.screen ?? screenDiscoveredRecords;
+  const screening = { skippedDuplicates: 0, heldForReview: 0, probeUnknown: 0 };
   const complete = ports.complete ?? completeDiscoveryExecution;
+  const recordUsage = ports.recordUsage ?? recordDiscoveryUsage;
+  // Discovery is funded by the tenant's own key only (no platform route yet),
+  // so once a credential resolves the funding is 'tenant' and costs 0 credits.
+  let funding: 'tenant' | 'platform' | null = null;
   const readExecution = ports.getExecution ?? getDiscoveryExecution;
   const markPending = ports.markPending ?? markDiscoveryProviderCallPending;
   const recordPage = ports.recordPage ?? recordDiscoveryPage;
@@ -393,12 +436,19 @@ export async function runDiscoveryExecution(input: {
       },
       ...(status === 'failed' ? { lastFailureAt: at } : {}),
     });
+    // Usage AFTER the close, best-effort (never throws). Skipped when there is
+    // nothing to say: no credential resolved and nothing screened.
+    if (funding || screening.skippedDuplicates || screening.heldForReview || screening.probeUnknown) {
+      await recordUsage({ organizationId, id: executionId, funding,
+        creditsCharged: funding === 'tenant' ? 0 : null, screeningDelta: { ...screening } });
+    }
     return {
       executionId, providerCalls: state.calls, pagesFetched: state.pages,
       resultsObserved: state.observed, resultsIngested: state.ingested,
       status, outcome, stopReason,
       providerError: extra.providerError ?? null,
       providerUsage: extra.providerUsage ?? null,
+      screening: { ...screening },
     };
   };
 
@@ -413,6 +463,7 @@ export async function runDiscoveryExecution(input: {
   const credential = await credentialPort.resolveCredential({
     organizationId, providerId: row.providerKey,
   });
+  if (credential) funding = 'tenant';
   if (!credential) {
     return close('refused_pre_call', 'not_called', 'credential_missing',
       'no tenant credential is stored for this provider', state, null);
@@ -504,11 +555,21 @@ export async function runDiscoveryExecution(input: {
     // resolves an identity, detects a duplicate, resolves an account or writes a
     // canonical row: that is the whole point of the seam.
     let ingestedThisPage = 0;
-    if (records.length) {
+    // R3: screen BEFORE ingestion. Duplicates are not imported, weak matches are
+    // held for tenant review, and nothing here merges. Only `toIngest` goes on.
+    const screened = records.length
+      ? await screen({ organizationId, source: row.providerKey, records: records as Array<Record<string, unknown>>, now: now() })
+      : null;
+    if (screened) {
+      screening.skippedDuplicates += screened.skippedDuplicates;
+      screening.heldForReview += screened.heldForReview;
+      screening.probeUnknown += screened.probeUnknown;
+    }
+    if (screened && screened.toIngest.length) {
       const result = await ingest({
         organizationId,
         source: row.providerKey,
-        records: records as Array<Record<string, unknown>>,
+        records: screened.toIngest,
         // PROVENANCE: the execution id is the run correlation, so each
         // `source_records.ingestion_run_id` (and each pi_discovery contribution)
         // names the search that discovered it. Previously null: the search →

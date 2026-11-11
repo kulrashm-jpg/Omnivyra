@@ -304,9 +304,11 @@ describe('Phase 3 — tenant isolation on the exposed surface', () => {
     apiFetchMock.mockResolvedValue(ok(ALL_PROVIDERS));
     await act(async () => { render(<EnrichmentProvidersPage />); });
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
-    const url = String(apiFetchMock.mock.calls[0][0]);
-    expect(url).toContain(TENANT_A.company_id);
-    expect(url).not.toContain(TENANT_B.company_id);
+    // Every request on the page (credential panel AND the R1 field-groups panel).
+    for (const url of apiFetchMock.mock.calls.map((c) => String(c[0]))) {
+      expect(url).toContain(TENANT_A.company_id);
+      expect(url).not.toContain(TENANT_B.company_id);
+    }
   });
 
   it('switching tenant re-requests for the new tenant and renames the surface', async () => {
@@ -327,9 +329,8 @@ describe('Phase 3 — tenant isolation on the exposed surface', () => {
     selected(TENANT_OWNER);
     apiFetchMock.mockResolvedValue(ok(ALL_PROVIDERS));
     await act(async () => { render(<EnrichmentProvidersPage />); });
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
-    expect(String(apiFetchMock.mock.calls[0][0])).toContain(TENANT_OWNER.company_id);
+    await waitFor(() => expect(apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/api/prospect-sources/credentials'))).toHaveLength(1));
+    for (const u of apiFetchMock.mock.calls.map((c) => String(c[0]))) expect(u).toContain(TENANT_OWNER.company_id);
     // Same cards, same narrowing, no extra provider.
     expect(screen.getByTestId('enrichment-apollo')).toBeInTheDocument();
     expect(screen.queryByTestId('lead-source-zoominfo')).toBeNull();

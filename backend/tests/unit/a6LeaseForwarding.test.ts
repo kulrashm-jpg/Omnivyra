@@ -115,6 +115,7 @@ function store() {
 const recorder = (s: ReturnType<typeof store>, now: string = NOW) => ({
   now: () => now,
   nextNumber: s.nextNumber,
+  latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
   record: s.record,
   complete: s.complete,
   markPending: async () => { /* proven in piA4qProviderCallState */ },

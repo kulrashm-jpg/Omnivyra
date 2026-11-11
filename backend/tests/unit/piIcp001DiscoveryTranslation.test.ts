@@ -594,8 +594,9 @@ describe('PI-ICP-DISCOVERY-002 - location stays UNMAPPED pending provider eviden
   });
 
   it('35. the mapping table still emits only keys the adapter accepts', () => {
+    // R2-a (owner, 2026-11-10) added account.industry as an APPROXIMATE mapping.
     expect(Object.keys(ICP_TO_DISCOVERY_FILTER).sort())
-      .toEqual(['person.job_title', 'person.seniority']);
+      .toEqual(['account.industry', 'person.job_title', 'person.seniority']);
     for (const m of Object.values(ICP_TO_DISCOVERY_FILTER)) {
       expect(Object.keys(APOLLO_DISCOVERY_FILTERS)).toContain(m.filterKey);
     }
@@ -878,7 +879,12 @@ describe('PI-ICP-DISCOVERY-006 - a refusal explains the REAL blocker', () => {
 
 describe('PI-ICP-005 - the rest of the contract is untouched', () => {
   it('53. headcount and location remain UNMAPPED', () => {
-    expect(Object.keys(ICP_TO_DISCOVERY_FILTER).sort()).toEqual(['person.job_title', 'person.seniority']);
+    // R2-a (owner, 2026-11-10) added ONLY account.industry (approximate). Headcount and location stay unmapped.
+    expect(Object.keys(ICP_TO_DISCOVERY_FILTER).sort()).toEqual(['account.industry', 'person.job_title', 'person.seniority']);
+    for (const k of ['account.employee_count', 'account.employee_band', 'account.city', 'account.region',
+      'account.country_code', 'person.city', 'person.region', 'person.country_code']) {
+      expect(ICP_TO_DISCOVERY_FILTER[k]).toBeUndefined();
+    }
     for (const attribute of ['employee_band', 'employee_count']) {
       const r = translate([criterion({ id: 'c1', subject: 'account', attribute, predicate: { op: 'one_of', values: ['11-50'] } })]);
       expect(r.ok).toBe(false);
@@ -896,7 +902,8 @@ describe('PI-ICP-005 - the rest of the contract is untouched', () => {
   });
 
   it('54. every emitted key is still one the adapter accepts', () => {
-    expect([...TRANSLATABLE_FILTER_KEYS]).toEqual(['titles', 'seniorities']);
+    // R2-a: industryKeywords added (approximate industry).
+    expect([...TRANSLATABLE_FILTER_KEYS]).toEqual(['titles', 'seniorities', 'industryKeywords']);
     for (const key of TRANSLATABLE_FILTER_KEYS) {
       expect(Object.keys(APOLLO_DISCOVERY_FILTERS)).toContain(key);
     }

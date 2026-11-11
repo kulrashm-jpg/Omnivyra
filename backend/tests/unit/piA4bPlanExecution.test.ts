@@ -187,6 +187,7 @@ function harness(opts: {
   const recorder = {
     now: () => NOW,
     nextNumber: async () => 1,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     record: async (i: unknown) => {
       attempts.push(i as Record<string, unknown>);
       return { attemptId: 'attempt-1' };

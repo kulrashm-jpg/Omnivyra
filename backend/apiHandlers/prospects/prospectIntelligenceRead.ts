@@ -47,7 +47,7 @@ import { buildProspectIntelligenceContext } from '../../services/leadUnderstandi
 import { assembleLeadUnderstanding } from '../../services/leadUnderstanding/engines/assembly';
 import { assessOutreachReadiness } from '../../services/prospectOutreach/readiness';
 import { readProspectOutcomeCorpus } from '../../services/prospectOutcomes/corpus';
-import { planProspectEnrichment } from '../../services/enrichment/service';
+import { planProspectEnrichment, type EnrichmentPorts } from '../../services/enrichment/service';
 import { ingestionEnrichmentCoverage } from '../../services/leadIngestion/enrichmentCoverage';
 // A6 — the production execution boundary. Every one of these is an EXISTING
 // production singleton or the existing canonical executor; none is new.
@@ -55,6 +55,8 @@ import { executePlannedField, type PlanFieldExecution } from '../../services/enr
 // A7K — the canonical production composition, assembled once in the service
 // layer and re-exported below under the name this boundary already used.
 import { makeProductionEnrichmentPorts } from '../../services/enrichment/productionPorts';
+import type { AttemptRecorder } from '../../services/enrichment/recordedExecution';
+import { readPersonLocators } from '../../services/salesNavCapture/locator';
 import {
   tenantCredentialPort,
   listSourceStatus,
@@ -567,8 +569,10 @@ function defaultEnrichmentPorts() {
       if (person.error) throw new Error(`unified_persons read failed: ${person.error.message}`);
 
       const personRow = (person.data ?? null) as Record<string, unknown> | null;
+      // D7(i): the non-merging LinkedIn locator, from the person's own evidence.
+      const personLocators = personRow ? await readPersonLocators(organizationId, personId) : null;
       const accountId = text(personRow?.account_id);
-      if (!accountId) return { personId, accountId: null, person: personRow, account: null };
+      if (!accountId) return { personId, accountId: null, person: personRow, account: null, personLocators };
 
       const account = await ownedDbTable('prospect_accounts')
         .select('*')
@@ -582,6 +586,7 @@ function defaultEnrichmentPorts() {
         accountId,
         person: personRow,
         account: (account.data ?? null) as Record<string, unknown> | null,
+        personLocators,
       };
     },
 
@@ -813,4 +818,248 @@ export async function executeProspectEnrichment(
   }, input.ports ?? defaultExecuteEnrichmentPorts());
 
   return { status: 'executed', execution };
+}
+
+// ─── Batch enrichment: a CAPPED, user-initiated run over several prospects ──
+
+/** Prospects per run. Matches the capture batch, so "enrich this capture" fits one run. */
+export const MAX_ENRICHMENT_BATCH_PROSPECTS = 25;
+/** Hard ceiling on provider calls per run, whatever the caller asks for. */
+export const MAX_ENRICHMENT_BATCH_PROVIDER_CALLS = 50;
+
+export interface ExecuteProspectEnrichmentBatchInput {
+  readonly organizationId: string;
+  readonly prospectIds: readonly string[];
+  /** The provider to enrich from. Named by the caller, never chosen here. */
+  readonly sourceId: string;
+  /**
+   * The most provider calls this run may make. Required: a batch over paid
+   * calls has no safe default. Clamped to `MAX_ENRICHMENT_BATCH_PROVIDER_CALLS`.
+   */
+  readonly maxProviderCalls: number;
+  readonly subjects?: readonly ('person' | 'account')[];
+  /**
+   * OPTIONAL narrowing, per subject: only these attributes may be fetched (R1:
+   * the tenant's chosen field groups). Absent means no narrowing. It can only
+   * REMOVE planned fields, never add one the planner did not mark `enrich`.
+   */
+  readonly allowedAttributes?: { readonly person?: readonly string[]; readonly account?: readonly string[] };
+  readonly now: string;
+  readonly stalenessDays?: number;
+  /** Test seams. Production supplies none. */
+  readonly ports?: ExecuteEnrichmentPorts;
+  readonly adapter?: EnrichmentProviderAdapter;
+  readonly planPorts?: EnrichmentPorts;
+  readonly statuses?: readonly SourceStatus[];
+  readonly recorder?: AttemptRecorder;
+}
+
+export interface BatchEnrichmentRow {
+  readonly prospectId: string;
+  readonly subject: 'person' | 'account';
+  readonly status: 'executed' | 'nothing_planned' | 'skipped_budget' | 'failed';
+  readonly attributes?: readonly string[];
+  readonly outcome?: string | null;
+  readonly refusal?: string | null;
+  readonly providerCalled?: boolean;
+  /** Error NAME only on `failed`; never a message, which could carry data. */
+  readonly error?: string;
+}
+
+export interface ExecuteProspectEnrichmentBatchResult {
+  readonly providerCalls: number;
+  readonly budgetExhausted: boolean;
+  readonly rows: readonly BatchEnrichmentRow[];
+}
+
+/**
+ * The planned fields ONE provider call would carry for a prospect and subject.
+ * Shared by the run and its preview, so an estimate can never describe a
+ * different selection from the one the run then makes.
+ */
+export function selectBatchFields(
+  plan: { fields: readonly import('../../services/enrichment/planner').PlannedField[] },
+  subject: 'person' | 'account',
+  sourceId: string,
+  allowed?: { readonly person?: readonly string[]; readonly account?: readonly string[] },
+): import('../../services/enrichment/planner').PlannedField[] {
+  const allow = allowed ? allowed[subject] ?? [] : null;
+  return plan.fields.filter((f) =>
+    f.subject === subject && f.action === 'enrich' && String(f.source ?? '') === sourceId
+    && (allow === null || allow.includes(f.attribute)));
+}
+
+/**
+ * Enrich several prospects from ONE named provider, under a hard call budget.
+ *
+ * It composes, and does not re-implement. `executeProspectEnrichment`'s path is
+ * reused: one tenant-statuses resolution feeds both the planner and the
+ * executor, and `executePlannedField` makes every call with
+ * `requireAttemptRecord`. What it adds is batching:
+ *
+ *  - ONE provider call per prospect per subject. The planned `enrich` fields
+ *    for that subject and source go as one attribute set (`alsoFields`), so a
+ *    provider that answers a whole person in one paid call is paid once.
+ *  - a BUDGET. Counted from the executor's own `providerCalled`, so a refusal
+ *    before egress costs nothing. Once the budget is spent, the remaining work
+ *    is reported `skipped_budget`, never silently dropped.
+ *  - SEQUENTIAL execution, so the budget check is exact and a tenant's provider
+ *    rate limit is never hammered in parallel.
+ *
+ * Fields the planner did not mark `enrich` from this source are never
+ * executed: the planner's verdict is quoted, never overridden.
+ */
+export async function executeProspectEnrichmentBatch(
+  input: ExecuteProspectEnrichmentBatchInput,
+): Promise<ExecuteProspectEnrichmentBatchResult> {
+  const sourceId = String(input.sourceId ?? '').trim();
+  if (!sourceId) throw new Error('executeProspectEnrichmentBatch: sourceId is required');
+  const ids = [...new Set((input.prospectIds ?? []).map((p) => String(p ?? '').trim()).filter(Boolean))];
+  if (ids.length === 0) throw new Error('executeProspectEnrichmentBatch: at least one prospectId is required');
+  if (ids.length > MAX_ENRICHMENT_BATCH_PROSPECTS) {
+    throw new Error(`executeProspectEnrichmentBatch: at most ${MAX_ENRICHMENT_BATCH_PROSPECTS} prospects per run`);
+  }
+  const requested = Number(input.maxProviderCalls);
+  if (!Number.isInteger(requested) || requested < 1) {
+    throw new Error('executeProspectEnrichmentBatch: maxProviderCalls must be a positive integer');
+  }
+  const budget = Math.min(requested, MAX_ENRICHMENT_BATCH_PROVIDER_CALLS);
+  const subjects = input.subjects?.length ? [...new Set(input.subjects)] : (['person', 'account'] as const);
+
+  // Resolved ONCE for the run and fed to both planner and executor (see
+  // PI-DEFECT-001 in `executeProspectEnrichment`).
+  const statuses = input.statuses ?? await tenantSourceStatuses(input.organizationId);
+  const planPorts = input.planPorts ?? defaultEnrichmentPorts();
+  const ports = input.ports ?? defaultExecuteEnrichmentPorts();
+
+  const rows: BatchEnrichmentRow[] = [];
+  let providerCalls = 0;
+  let budgetExhausted = false;
+
+  for (const prospectId of ids) {
+    if (budgetExhausted) {
+      for (const subject of subjects) rows.push({ prospectId, subject, status: 'skipped_budget' });
+      continue;
+    }
+    let planned: Awaited<ReturnType<typeof planProspectEnrichment>>;
+    try {
+      planned = await planProspectEnrichment({
+        organizationId: input.organizationId,
+        prospectId,
+        coverage: ingestionEnrichmentCoverage({ statuses }),
+        stalenessDays: input.stalenessDays,
+        now: input.now,
+      }, planPorts);
+    } catch (e) {
+      for (const subject of subjects) {
+        rows.push({ prospectId, subject, status: 'failed', error: e instanceof Error ? e.name : 'Error' });
+      }
+      continue;
+    }
+    const { plan, snapshot } = planned;
+
+    for (const subject of subjects) {
+      const fields = selectBatchFields(plan, subject, sourceId, input.allowedAttributes);
+      if (fields.length === 0) { rows.push({ prospectId, subject, status: 'nothing_planned' }); continue; }
+      if (providerCalls >= budget) {
+        budgetExhausted = true;
+        rows.push({ prospectId, subject, status: 'skipped_budget' });
+        continue;
+      }
+      try {
+        const execution = await executePlannedField({
+          plan,
+          field: fields[0],
+          alsoFields: fields.slice(1),
+          snapshot,
+          statuses,
+          // User-initiated, like the single-field route: no lease, but a lost
+          // attempt row must never become an unrecorded paid call.
+          requireAttemptRecord: true,
+          adapter: input.adapter,
+          recorder: input.recorder,
+        }, ports);
+        if (execution.providerCalled) providerCalls += 1;
+        rows.push({
+          prospectId,
+          subject,
+          status: 'executed',
+          attributes: execution.attributes ?? [execution.attribute],
+          outcome: execution.outcome,
+          refusal: execution.refusal,
+          providerCalled: execution.providerCalled,
+        });
+      } catch (e) {
+        // `AttemptRecordRequiredError` is thrown BEFORE adapter, credential and
+        // egress by contract, so it spent nothing. Any other throw may have
+        // happened after egress and is counted: an over-count stops early, an
+        // under-count overspends.
+        // `EnrichmentOperatorReviewRequired` likewise refuses before any egress
+        // (a previously paid answer was not stored: the rule sends it to review).
+        if (!(e instanceof Error && (e.name === 'AttemptRecordRequiredError' || e.name === 'EnrichmentOperatorReviewRequired'))) {
+          providerCalls += 1;
+        }
+        rows.push({ prospectId, subject, status: 'failed', error: e instanceof Error ? e.name : 'Error' });
+      }
+    }
+  }
+
+  return { providerCalls, budgetExhausted, rows };
+}
+
+export interface BatchEnrichmentEstimate {
+  /** Provider calls the run would make, at most: one per prospect per subject with work, capped by the budget. */
+  readonly estimatedProviderCalls: number;
+  readonly calls: ReadonlyArray<{ readonly prospectId: string; readonly subject: 'person' | 'account'; readonly attributes: readonly string[] }>;
+  /** Prospects whose plan could not be read; they would fail the same way in the run. */
+  readonly unreadable: readonly string[];
+  /** Echoed back by the run; a run whose recomputed estimate differs is refused. */
+  readonly estimateHash: string;
+}
+
+/**
+ * PREVIEW a batch run: plan every prospect exactly as the run would, make NO
+ * provider call, and report the calls and attribute sets the run would use.
+ * Selection is `selectBatchFields`, shared with the run.
+ */
+export async function previewProspectEnrichmentBatch(
+  input: Omit<ExecuteProspectEnrichmentBatchInput, 'ports' | 'adapter' | 'recorder'>,
+): Promise<BatchEnrichmentEstimate> {
+  const sourceId = String(input.sourceId ?? '').trim();
+  const ids = [...new Set((input.prospectIds ?? []).map((p) => String(p ?? '').trim()).filter(Boolean))];
+  if (!sourceId || ids.length === 0 || ids.length > MAX_ENRICHMENT_BATCH_PROSPECTS) {
+    throw new Error('previewProspectEnrichmentBatch: invalid input');
+  }
+  const requested = Number(input.maxProviderCalls);
+  if (!Number.isInteger(requested) || requested < 1) throw new Error('previewProspectEnrichmentBatch: maxProviderCalls must be a positive integer');
+  const budget = Math.min(requested, MAX_ENRICHMENT_BATCH_PROVIDER_CALLS);
+  const subjects = input.subjects?.length ? [...new Set(input.subjects)] : (['person', 'account'] as const);
+  const statuses = input.statuses ?? await tenantSourceStatuses(input.organizationId);
+  const planPorts = input.planPorts ?? defaultEnrichmentPorts();
+
+  const calls: Array<{ prospectId: string; subject: 'person' | 'account'; attributes: string[] }> = [];
+  const unreadable: string[] = [];
+  for (const prospectId of ids) {
+    let plan;
+    try {
+      plan = (await planProspectEnrichment({
+        organizationId: input.organizationId, prospectId,
+        coverage: ingestionEnrichmentCoverage({ statuses }),
+        stalenessDays: input.stalenessDays, now: input.now,
+      }, planPorts)).plan;
+    } catch {
+      unreadable.push(prospectId);
+      continue;
+    }
+    for (const subject of subjects) {
+      const fields = selectBatchFields(plan, subject, sourceId, input.allowedAttributes);
+      if (fields.length) calls.push({ prospectId, subject, attributes: [...new Set(fields.map((f) => f.attribute))].sort() });
+    }
+  }
+  const capped = calls.slice(0, budget);
+  const { createHash } = await import('crypto');
+  const estimateHash = createHash('sha256').update(JSON.stringify({
+    org: input.organizationId, sourceId, budget, calls: capped, unreadable,
+  })).digest('hex');
+  return { estimatedProviderCalls: capped.length, calls: capped, unreadable, estimateHash };
 }

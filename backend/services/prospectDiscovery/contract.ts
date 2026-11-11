@@ -384,6 +384,12 @@ export interface DiscoveryProviderAdapter {
   readonly provider: string;
   readonly label: string;
   /**
+   * OPTIONAL allowlist of top-level filter keys this provider accepts. When
+   * declared, `createDiscoveryExecution` refuses any other key as a malformed
+   * search before anything is recorded or called.
+   */
+  readonly filterKeys?: readonly string[];
+  /**
    * Fetch ONE page.
    *
    * `credential` is the TENANT's, injected by the executor immediately before

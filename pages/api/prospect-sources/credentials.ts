@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { assertTenantDataAck, TenantDataAckRequired } from '../../../backend/services/compliance/tenantDataAck';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExternalApiAccess } from '../../../backend/apiHandlers/externalApis/indexShared';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
@@ -106,6 +107,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (method === 'PUT') {
+      // Connecting a data vendor needs the data-controller acknowledgement
+      // (owner, 2026-11-11). Reading or REVOKING a key is never blocked.
+      try {
+        await assertTenantDataAck(tenantId, 'vendor_data');
+      } catch (e) {
+        if (e instanceof TenantDataAckRequired) {
+          return res.status(403).json({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: e.category, state: e.state });
+        }
+        throw e;
+      }
       const body = (req.body ?? {}) as { provider?: string; credentials?: unknown };
       const result = await configureProviderCredential({
         companyId: tenantId,

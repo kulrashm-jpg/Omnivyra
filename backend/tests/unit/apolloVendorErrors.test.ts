@@ -47,6 +47,7 @@ import {
 } from '../../services/enrichment/providers/billingPolicy';
 import { executeEnrichment, type ExecuteEnrichmentPorts } from '../../services/enrichment/providers/execute';
 import type { EnrichmentProviderAdapter, EnrichmentRequest } from '../../services/enrichment/providers/contract';
+import { passThroughScreen } from '../../services/prospectImportReview/screen';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT = '33333333-3333-4333-8333-333333333333';
@@ -321,6 +322,8 @@ describe('Discovery executor — passes the vendor error through to the run resu
     recordPage: async () => undefined,
     complete,
     ingest: async ({ records }: any) => ({ succeeded: records.length }),
+    // Explicit, greppable bypass: this suite tests vendor errors, not R3 screening.
+    screen: passThroughScreen,
     now: () => '2026-10-23T00:00:00.000Z',
   }) as any;
 

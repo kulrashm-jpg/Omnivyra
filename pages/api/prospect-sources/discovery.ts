@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { assertTenantDataAck, TenantDataAckRequired } from '../../../backend/services/compliance/tenantDataAck';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { requireCapability } from '../../../backend/security/requireCapability';
@@ -206,6 +207,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ratifiedBy: version.ratifiedBy,
       },
       ...(body.acknowledgeOmissions === true ? { acknowledgeOmissions: true as const } : {}),
+      ...(body.acknowledgeApproximations === true ? { acknowledgeApproximations: true as const } : {}),
     });
 
     // `=== false`, not `!translation.ok`: the root tsconfig sets `strict: false`,
@@ -239,7 +241,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       translated: translation.translated,
       omitted: translation.omitted,
       omissionsAcknowledged: translation.omissionsAcknowledged,
+      // Applied, but only approximately (e.g. industry via keyword tags).
+      approximations: translation.approximations,
     };
+  }
+
+  // A discovery search fetches vendor data: needs the data-controller
+  // acknowledgement for 'vendor_data' (owner, 2026-11-11).
+  try {
+    await assertTenantDataAck(companyId, 'vendor_data');
+  } catch (e) {
+    if (e instanceof TenantDataAckRequired) {
+      return res.status(403).json({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: e.category, state: e.state });
+    }
+    return res.status(503).json({ error: 'DATA_CONTROLLER_ACK_UNREADABLE' });
   }
 
   try {
@@ -321,6 +336,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // its own response headers, so the caller can warn before a limit. Null
       // when the provider stated none. It is never a credit balance.
       providerUsage: run.providerUsage ?? null,
+      // R3: what the duplicate screen did with this run's results. Held leads
+      // wait in the tenant review list; none of these was imported.
+      screening: run.screening ?? null,
     };
 
     // ── THE VENDOR'S OWN REFUSAL, SHOWN AS-IS (owner decision 2026-10-23) ──

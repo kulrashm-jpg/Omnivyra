@@ -170,6 +170,7 @@ function recorder(s: ReturnType<typeof store>, seen: Record<string, unknown>[] =
     rec: {
       now: () => NOW,
       nextNumber: s.nextNumber,
+      latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
       record: s.record,
       complete: s.complete,
       markPending: async () => { /* proven in piA4qProviderCallState */ },

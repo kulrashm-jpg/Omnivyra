@@ -41,6 +41,10 @@ export const PI_ADAPTER_PROFILES: Readonly<Record<string, IngestionSourceProfile
   crm: { sourceCategory: 'crm', platform: null, refProvider: 'crm' },
   csv: { sourceCategory: 'csv', platform: null, refProvider: 'csv' },
   manual: { sourceCategory: 'manual', platform: null, refProvider: 'manual' },
+  // Sales Navigator saved leads (extension capture now, SNAP later): DISCOVERY,
+  // like Apollo. A user curating a list in Sales Navigator is finding prospects;
+  // it is not a form, a CRM or a file. No new category (owner P-4: zero migrations).
+  linkedin_sales_navigator: { sourceCategory: 'pi_discovery', platform: 'linkedin_sales_navigator', refProvider: 'linkedin_sales_navigator' },
 });
 
 /**

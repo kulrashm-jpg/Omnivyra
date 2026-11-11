@@ -373,7 +373,7 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
   it('a successful execution is recorded, with the evidence referenced', async () => {
     const calls: unknown[] = [];
     const out = await executeEnrichmentRecorded(request, 'clearbit', ports(), {
-      adapter: adapter(calls), recorder: { now: () => NOW },
+      adapter: adapter(calls), recorder: { now: () => NOW, latest: async () => null },
     });
 
     expect(out.result.outcome).toBe('enriched');
@@ -611,8 +611,15 @@ describe('A4A — the recording seam changes no A3 semantic', () => {
 
     // And the decision layer is reached only from the consumer seam — nothing
     // may classify a work item and act on it somewhere else.
-    expect(callers('decideEnrichmentAction')).toEqual(
-      ['backend/services/enrichment/consumeEnrichmentWork.ts']);
+    // MODE B stop-gap (PI review, 2026-11-10): the USER path (recordedExecution,
+    // unleased only) now consults the SAME rule, so a paid answer that was not
+    // persisted cannot be re-paid by a user click. It may only REFUSE on the
+    // rule's OPERATOR_REVIEW / WAIT; it never acts on the rule's other
+    // decisions, so "classify and act elsewhere" still holds.
+    expect(callers('decideEnrichmentAction')).toEqual([
+      'backend/services/enrichment/consumeEnrichmentWork.ts',
+      'backend/services/enrichment/recordedExecution.ts',
+    ]);
 
     // And nothing along the chain schedules ITSELF. An entry point may be
     // CALLED on a timer; it may not contain one. `cron.ts` is deliberately

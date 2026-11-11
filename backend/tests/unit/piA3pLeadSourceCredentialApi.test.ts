@@ -99,6 +99,21 @@ jest.mock('../../security/TenantGuard', () => ({
 
 // The route uses the REAL handler module, which uses the REAL credential
 // service — so the service is faked at its own boundary, one level down.
+// Data-controller acknowledgement (owner, 2026-11-11): connecting a vendor key
+// needs 'vendor_data'. CURRENT by default so these suites exercise the credential
+// path; its refusal is pinned in the block at the end.
+let ackAllowed = true;
+jest.mock('../../services/compliance/tenantDataAck', () => {
+  const actual = jest.requireActual('../../services/compliance/tenantDataAck');
+  return {
+    ...actual,
+    assertTenantDataAck: async (_org: string, category: string) => {
+      if (!ackAllowed) throw new actual.TenantDataAckRequired(category, 'required');
+      return { state: 'current', allowed: true };
+    },
+  };
+});
+
 jest.mock('../../services/integrationCredentialService', () => {
   const actual = jest.requireActual('../../services/integrationCredentialService');
   return {
@@ -643,5 +658,23 @@ describe('A7P-C14C — the credential PUT succeeds and stays secret-safe', () =>
     expect(fn).toMatch(/\.eq\('company_id', companyId\)/);
     expect(fn).toMatch(/\.eq\('provider_key', providerKey\)/);
     expect(fn).toMatch(/\.eq\('credential_key', credentialKey\)/);
+  });
+});
+
+
+describe('data-controller acknowledgement (owner, 2026-11-11)', () => {
+  afterEach(() => { ackAllowed = true; });
+  it('connecting a vendor key WITHOUT the vendor_data acknowledgement -> 403, nothing stored', async () => {
+    ackAllowed = false;
+    const res = await call('PUT', { companyId: ORG_A }, { provider: 'apollo', credentials: { api_key: SECRET_A } });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: 'vendor_data' });
+    expect(store.size).toBe(0);
+    expect(JSON.stringify(res.body)).not.toContain(SECRET_A);
+  });
+  it('NEGATIVE CONTROL: reading status is never blocked by the acknowledgement', async () => {
+    ackAllowed = false;
+    const res = await call('GET', { companyId: ORG_A });
+    expect(res.statusCode).not.toBe(403);
   });
 });

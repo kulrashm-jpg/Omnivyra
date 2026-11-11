@@ -62,6 +62,7 @@ function store(opts: { markThrows?: boolean } = {}) {
   return {
     row, closes,
     nextNumber: async () => 1,
+    latest: async () => null,   // explicit: no prior attempt (mode B user-path rule)
     record: async () => ({ attemptId: 'attempt-1' }),
     claim: async () => ({ claimed: true as const, attemptId: 'attempt-1', attemptNumber: 1, reclaimed: false }),
     markPending: async () => {

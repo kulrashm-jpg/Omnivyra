@@ -67,9 +67,41 @@ function normalizeCrmRow(row: Record<string, unknown>): CrmLeadRecord {
   };
 }
 
-async function loadRows(input: CrmIngestionInput): Promise<CrmLeadRecord[]> {
+/** Every key the lead-intelligence adapter reads as a TENANT (`tenantOf`). */
+const TENANT_KEYS = ['company_id', 'organization_id', 'companyId', 'organizationId'] as const;
+
+/**
+ * The row handed to `adoptLead('crm', ...)`. The tenant is ALWAYS the
+ * importing company: every tenant-naming key is stripped from the spread record
+ * and `company_id` is written LAST, so no field of an imported record can
+ * choose which tenant's lead intelligence receives it (the adapter reads
+ * `organization_id ?? company_id`). Closed 2026-11-11 while the legacy CRM
+ * source is still fenced, so it cannot reopen when the fence lifts.
+ */
+export function crmAdoptionRow(
+  row: CrmLeadRecord,
+  fixed: { id: unknown; companyId: string; source: unknown; unifiedSource: unknown; qualificationScore: unknown; unifiedPersonId: unknown },
+): Record<string, unknown> {
+  const spread: Record<string, unknown> = { ...(row as unknown as Record<string, unknown>) };
+  for (const k of TENANT_KEYS) delete spread[k];
+  return {
+    id: fixed.id,
+    source: fixed.source,
+    unified_source: fixed.unifiedSource,
+    qualification_score: fixed.qualificationScore,
+    unified_person_id: fixed.unifiedPersonId,
+    ...spread,
+    company_id: fixed.companyId,
+  };
+}
+
+export async function loadRows(input: CrmIngestionInput): Promise<CrmLeadRecord[]> {
   if (Array.isArray(input.rows)) {
-    return input.rows;
+    // Normalised exactly like the CSV path (2026-11-11): a caller-supplied
+    // rows array is reduced to the fixed CrmLeadRecord keys, so no extra key
+    // (a tenant id among them) survives into the rows the importer spreads.
+    // normalizeCrmRow lower-cases keys first, so camelCase records map as before.
+    return input.rows.map((row) => normalizeCrmRow(row as unknown as Record<string, unknown>));
   }
   if (input.csvContent) {
     return parseCsv(input.csvContent).map((row) => normalizeCrmRow(row));
@@ -511,15 +543,14 @@ async function ingestCrmRows(
 
     // Phase 3 — route every imported CRM lead through the canonical facade
     // (identity already resolved above; re-resolution is idempotent). Fail-open.
-    adoptLead('crm', {
+    adoptLead('crm', crmAdoptionRow(row, {
       id: leadId,
-      company_id: companyId,
+      companyId,
       source,
-      unified_source: unifiedSource,
-      qualification_score: qualificationScore,
-      unified_person_id: identity.unifiedPersonId,
-      ...row,
-    });
+      unifiedSource,
+      qualificationScore,
+      unifiedPersonId: identity.unifiedPersonId,
+    }));
 
     // 003-B-R1: `leadsInserted` now counts CANONICAL CRM records processed. It
     // previously also depended on the legacy helper not throwing

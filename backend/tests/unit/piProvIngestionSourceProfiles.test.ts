@@ -39,6 +39,7 @@ describe('source → category matrix is explicit and inside the contract vocabul
       crm: { sourceCategory: 'crm', platform: null, refProvider: 'crm' },
       csv: { sourceCategory: 'csv', platform: null, refProvider: 'csv' },
       manual: { sourceCategory: 'manual', platform: null, refProvider: 'manual' },
+      linkedin_sales_navigator: { sourceCategory: 'pi_discovery', platform: 'linkedin_sales_navigator', refProvider: 'linkedin_sales_navigator' },
     });
     expect(PI_ENRICHMENT_PROFILE.sourceCategory).toBe('pi_enrichment');
   });

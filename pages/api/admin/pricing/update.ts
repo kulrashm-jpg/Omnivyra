@@ -53,7 +53,7 @@ type ModelUpdateBody = {
   target: 'model';
   provider:          string;
   model_name:        string;
-  kind?:             'completion' | 'embedding';
+  kind?:             'completion' | 'embedding' | 'unit';
   input_per_1k_usd:  number;
   output_per_1k_usd: number;
   effective_from?:   string;
@@ -83,14 +83,20 @@ async function handleModelUpdate(body: ModelUpdateBody, actorId: string, res: Ne
     return res.status(400).json({ error: 'provider + model_name required' });
   }
   const kind = body.kind ?? 'completion';
-  if (kind !== 'completion' && kind !== 'embedding') {
-    return res.status(400).json({ error: "kind must be 'completion' or 'embedding'" });
+  // 'unit' (mode B, 2026-11-10): a data vendor's per-unit cost (e.g. provider
+  // 'apollo', model_name 'credit'), stored as USD per 1,000 units.
+  if (kind !== 'completion' && kind !== 'embedding' && kind !== 'unit') {
+    return res.status(400).json({ error: "kind must be 'completion', 'embedding' or 'unit'" });
   }
   if (!isNonNegativeNumber(body.input_per_1k_usd) || !isNonNegativeNumber(body.output_per_1k_usd)) {
     return res.status(400).json({ error: 'input_per_1k_usd and output_per_1k_usd must be non-negative numbers' });
   }
-  if (kind === 'embedding' && body.output_per_1k_usd !== 0) {
-    return res.status(400).json({ error: 'embedding rows must have output_per_1k_usd = 0' });
+  if ((kind === 'embedding' || kind === 'unit') && body.output_per_1k_usd !== 0) {
+    return res.status(400).json({ error: `${kind} rows must have output_per_1k_usd = 0` });
+  }
+  if (kind === 'unit' && !(body.input_per_1k_usd > 0)) {
+    // A zero vendor cost would price central access as free.
+    return res.status(400).json({ error: 'a vendor unit cost must be greater than zero' });
   }
 
   const provider   = body.provider.toLowerCase().trim();

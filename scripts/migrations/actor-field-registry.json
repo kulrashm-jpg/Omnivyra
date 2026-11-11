@@ -95,6 +95,54 @@
       "evidence": "PRODUCTION_CATALOG_VERIFIED",
       "status": "remediating",
       "note": "Agent D track 1 owns the remediation. CHECK name is PRODUCTION_CATALOG_VERIFIED; the column name reviewed_by_user_id is CODE_VERIFIED at supabase/migrations/20261030000000_pi_prospect_archive_recommendations.sql:63, which declares it REFERENCES public.users (id) ON DELETE SET NULL while :90 requires it IS NOT NULL for status in (confirmed, rejected) — the DEFECT-008 shape visible in the migration source itself. Not in baseline.sql."
+    },
+    {
+      "table": "prospect_import_review_items",
+      "column": "decided_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": "piri_decision_coherent",
+      "writer_validation": "backend/services/prospectImportReview/repository.ts:decideReviewItems",
+      "evidence": "CODE_VERIFIED",
+      "status": "enforced",
+      "note": "Created without an FK in 20270206000000 (PI R3 staging table). Writer validation: decideReviewItems calls assertActiveMember (active user_company_roles row in THIS tenant, read checked by status; an unreadable membership refuses) before writing decided_by. SEQUENCING COMMITMENT (PI review, 2026-11-10): decideReviewItems is the ONLY writer of decided_by; no other write path may set it. piri_decision_coherent forbids decided_by on a pending row."
+    },
+    {
+      "table": "prospect_capture_runs",
+      "column": "initiated_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": null,
+      "writer_validation": "backend/services/salesNavCapture/service.ts:recordCaptureRun",
+      "evidence": "CODE_VERIFIED",
+      "status": "enforced",
+      "note": "Created without an FK in 20270209000000 (Data sources & usage). The ONLY writer is recordCaptureRun, which writes ctx.userId: the user Outreach's capture route verified (session -> user -> active membership in this tenant) before calling ingestCapturedSavedLeads. NULL when the context carries no user."
+    },
+    {
+      "table": "prospect_enrichment_attempts",
+      "column": "initiated_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": null,
+      "writer_validation": "NOT YET WIRED (PI mode B)",
+      "evidence": "CODE_VERIFIED",
+      "status": "remediating",
+      "note": "Column added without an FK in 20270209000000. No writer sets it yet: every attempt row leaves it NULL. SEQUENCING COMMITMENT: the writer will pass only a user id the API handler resolved from the verified session with an active membership in this tenant; a system/queue attempt stays NULL. Status moves to enforced when that writer lands."
+    },
+    {
+      "table": "prospect_discovery_attempts",
+      "column": "initiated_by",
+      "immutable_actor": true,
+      "fk_into_users": "absent",
+      "nullable": true,
+      "check_constraint": null,
+      "writer_validation": "NOT YET WIRED (PI mode B)",
+      "evidence": "CODE_VERIFIED",
+      "status": "remediating",
+      "note": "Column added without an FK in 20270209000000. No writer sets it yet. Same sequencing commitment as prospect_enrichment_attempts.initiated_by."
     }
   ],
   "pending_owner_decision": [

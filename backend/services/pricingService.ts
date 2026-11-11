@@ -18,7 +18,13 @@ export type {
   ResolvedActivityEconomics,
 } from './activityEconomyCatalog';
 
-export type PricingKind = 'completion' | 'embedding';
+/**
+ * `unit` (mode B, 2026-11-10): a third-party DATA VENDOR's per-unit cost, e.g.
+ * provider 'apollo', model_name 'credit'. Stored in the same versioned table as
+ * model prices, with `input_per_1k_usd` = USD per 1,000 units and
+ * `output_per_1k_usd` = 0. Used only by `resolveVendorUnitCost`.
+ */
+export type PricingKind = 'completion' | 'embedding' | 'unit';
 
 export interface ModelPricingRow {
   provider: string;
@@ -198,6 +204,21 @@ async function fetchCreditRateUsd(orgId: string): Promise<number> {
   }
 
   return parsePositiveRate((data as any)?.credit_rate_usd, orgId);
+}
+
+/**
+ * THE one USD -> credits rounding. Every pricing path should call this, so a
+ * vendor price and an LLM price can never round differently.
+ *
+ * Rounds the RATIO before the ceiling: binary floating point makes
+ * 0.2 x 1.5 / 0.02 = 15.000000000000002, and a bare Math.ceil would bill 16
+ * credits for an exact 15. Nine decimals is far below one credit and far above
+ * float noise. Callers own any minimum (e.g. "at least 1 credit").
+ */
+export function creditsForPriceUsd(priceUsd: number, creditRateUsd: number): number {
+  if (!Number.isFinite(priceUsd) || priceUsd < 0) throw new Error('creditsForPriceUsd: price must be a finite non-negative number');
+  if (!Number.isFinite(creditRateUsd) || creditRateUsd <= 0) throw new Error('creditsForPriceUsd: credit rate must be positive');
+  return Math.ceil(Number((priceUsd / creditRateUsd).toFixed(9)));
 }
 
 function applyPricingLayer(
@@ -712,4 +733,101 @@ function buildAlertMessage(opts: RecordAnomalyOpts): string {
     default:
       return `Cost anomaly: ${opts.type}`;
   }
+}
+
+// ─── Mode B: vendor unit cost -> tenant credits (additive) ─────────────────
+
+export interface ResolveVendorUnitCostInput {
+  /** The vendor, e.g. 'apollo'. Matches `llm_model_pricing.provider`. */
+  provider:  string;
+  /** The vendor's billing unit, e.g. 'credit'. Matches `llm_model_pricing.model_name`. */
+  unit:      string;
+  /** How many units this call consumes (e.g. 1 Apollo credit per person match). */
+  units:     number;
+  actionKey: string;
+  orgId:     string;
+  timestamp?: string | Date;
+  applyCeiling?: boolean;
+  /**
+   * QUOTE ONLY: price at this credit rate instead of the org's. Used for the
+   * public "N credits = 1 vendor unit" line, which has no org. Never used to
+   * reserve or charge credits.
+   */
+  quoteAtCreditRateUsd?: number;
+}
+
+export interface ResolvedVendorUnitCost {
+  provider: string;
+  unit: string;
+  units: number;
+  /** What the vendor charges Omnivyra for this call. */
+  total_cost_usd: number;
+  cost_multiplier: number;
+  final_price_usd: number;
+  credits: number;
+  pricing_snapshot: Record<string, unknown>;
+}
+
+/**
+ * Price a third-party data-vendor call in the tenant's credits.
+ *
+ * The SAME pricing layer as every other action, nothing re-implemented:
+ * base cost (units x the vendor's unit cost from `llm_model_pricing`, kind
+ * 'unit') -> `applyPricingLayer` (the action's cost_multiplier, minimum and
+ * ceiling from `action_pricing_config`) -> ceil(price / the org's own
+ * credit_rate_usd). With cost_multiplier 1.5 this is the owner's rule:
+ * "whatever the vendor charges x 1.5".
+ *
+ * A vendor with NO active unit cost throws `PricingMissingError`: a
+ * platform-funded call must be refused until Super Admin sets the cost.
+ */
+export async function resolveVendorUnitCost(input: ResolveVendorUnitCostInput): Promise<ResolvedVendorUnitCost> {
+  const provider = requireNonEmpty(input.provider, 'provider').toLowerCase();
+  const unit = requireNonEmpty(input.unit, 'unit').toLowerCase();
+  const actionKey = requireNonEmpty(input.actionKey, 'actionKey');
+  const quoteRate = input.quoteAtCreditRateUsd;
+  const orgId = quoteRate != null ? String(input.orgId ?? 'quote') : requireNonEmpty(input.orgId, 'orgId');
+  const units = Number(input.units);
+  if (!Number.isFinite(units) || units <= 0) {
+    throw new Error('[pricingService] units must be a positive number');
+  }
+  const effectiveAt = normalizeTimestamp(input.timestamp);
+
+  const [unitRow, actionRow, creditRateUsd] = await Promise.all([
+    fetchModelPricingRow(provider, unit, 'unit', effectiveAt),
+    fetchActionPricingRow(actionKey, effectiveAt),
+    quoteRate != null ? Promise.resolve(parsePositiveRate(quoteRate, 'quote')) : fetchCreditRateUsd(orgId),
+  ]);
+  const perUnitUsd = unitRow.input_per_1k_usd / 1000;
+  if (!Number.isFinite(perUnitUsd) || perUnitUsd <= 0) {
+    // A zero or negative vendor cost is a misconfiguration, never "free".
+    throw new PricingMissingError(provider, unit, 'unit');
+  }
+  const totalCostUsd = units * perUnitUsd;
+  const applyCeiling = input.applyCeiling !== false;
+  const finalPriceUsd = applyPricingLayer(totalCostUsd, actionRow, applyCeiling);
+  const credits = creditsForPriceUsd(finalPriceUsd, creditRateUsd);
+
+  return {
+    provider, unit, units,
+    total_cost_usd: totalCostUsd,
+    cost_multiplier: actionRow.cost_multiplier,
+    final_price_usd: finalPriceUsd,
+    credits,
+    pricing_snapshot: {
+      provider, unit, kind: 'unit', units,
+      action_key: actionKey,
+      effective_at: effectiveAt,
+      unit_pricing_effective_from: unitRow.effective_from,
+      action_pricing_effective_from: actionRow.effective_from,
+      usd_per_unit: perUnitUsd,
+      cost_multiplier: actionRow.cost_multiplier,
+      minimum_charge_usd: actionRow.minimum_charge_usd,
+      ceiling_usd: actionRow.ceiling_usd,
+      ceiling_applied: applyCeiling,
+      credit_rate_usd: creditRateUsd,
+      final_price_usd: finalPriceUsd,
+      credits,
+    },
+  };
 }

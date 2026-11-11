@@ -31,6 +31,10 @@ export const BILLING_POLICY_KEYS = [
   'kill_switch',
   'shadow_mode',
   'refine_variant_billing_enabled',
+  // PI mode B (2026-11-10): global-only knobs read by
+  // enrichment/providers/platformCeiling.ts. Not part of resolveBillingPolicy.
+  'central_vendor_daily_ceiling',
+  'central_vendor_tenant_share',
 ] as const;
 
 export type BillingPolicyKey = (typeof BILLING_POLICY_KEYS)[number];
