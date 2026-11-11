@@ -56,9 +56,26 @@ export function openAIImageSize(model: string, w: number, h: number): OpenAIImag
   return '1024x1024';
 }
 
+/** The image quality every request sends (e9 ruling, 2026-11-12): one tier, on BOTH request paths. */
+export const DEFAULT_RENDER_IMAGE_QUALITY = 'medium';
+
+/**
+ * The quality the provider sends. Resolved ONCE per provider, so billingSku() and submit() can never
+ * disagree. Precedence: config, then CREATOR_RENDER_IMAGE_QUALITY, then the older
+ * CREATOR_IMAGE_REFERENCE_QUALITY (which used to govern the edit path only), then 'medium'.
+ */
+export function resolveRenderImageQuality(configured?: string): string {
+  const pick = [configured, process.env.CREATOR_RENDER_IMAGE_QUALITY, process.env.CREATOR_IMAGE_REFERENCE_QUALITY]
+    .map((v) => String(v ?? '').trim().toLowerCase())
+    .find((v) => v.length > 0);
+  return pick ?? DEFAULT_RENDER_IMAGE_QUALITY;
+}
+
 export interface OpenAIProviderConfig {
   apiKey?: string;
   model?: string;
+  /** Image quality sent on every request (and billed); see resolveRenderImageQuality. */
+  quality?: string;
   /** Injected fetch — tests pass a stub; runtime uses global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -67,6 +84,19 @@ export function createOpenAIRenderProvider(
   cfg: OpenAIProviderConfig = {},
 ): RenderProvider {
   const model = cfg.model || 'gpt-image-1.5';
+  const quality = resolveRenderImageQuality(cfg.quality);
+
+  /**
+   * The billed SKU of the request submit() sends for this spec. Model, size and quality are the SAME
+   * values submit() sends on BOTH of its paths (images/edits with a reference, images/generations
+   * otherwise), so a reference-fetch fallback inside submit() cannot change what was reserved.
+   */
+  const billingSku = (spec: RenderSpec) => ({
+    provider: 'openai',
+    model,
+    size: openAIImageSize(model, spec.platform_projection.resolution.w, spec.platform_projection.resolution.h),
+    quality,
+  });
 
   const capabilities = (): RenderCapabilityMatrix => ({
     modalities: ['image'],
@@ -159,8 +189,8 @@ export function createOpenAIRenderProvider(
           form.append('prompt', prompt);
           form.append('size', size);
           form.append('n', '1');
-          // Cost-conscious default; overridable. gpt-image-1 quality: low|medium|high.
-          form.append('quality', process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'medium');
+          // The ONE configured quality (also sent on the generations path below, and billed).
+          form.append('quality', quality);
           form.append('image', new Blob([refBytes], { type: 'image/webp' }), 'reference.webp');
           const editResp = await doFetch('https://api.openai.com/v1/images/edits', {
             method: 'POST',
@@ -189,7 +219,9 @@ export function createOpenAIRenderProvider(
       method: 'POST',
       signal: AbortSignal.timeout(OPENAI_RENDER_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, prompt, n: 1, size }),
+      // quality is sent EXPLICITLY (it used to be omitted here, so OpenAI chose): the billed SKU is
+      // the quality sent, and it must not depend on which path ran.
+      body: JSON.stringify({ model, prompt, n: 1, size, quality }),
     });
     if (!resp.ok) {
       throw new Error(`OpenAI image API ${resp.status}`);
@@ -229,5 +261,5 @@ export function createOpenAIRenderProvider(
 
   const cancel = async (): Promise<void> => { /* synchronous: nothing to cancel */ };
 
-  return { key: 'openai', capabilities, supports, estimateCost, submit, poll, fetchOutput, cancel };
+  return { key: 'openai', capabilities, supports, estimateCost, billingSku, submit, poll, fetchOutput, cancel };
 }

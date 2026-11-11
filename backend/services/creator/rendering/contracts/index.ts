@@ -33,6 +33,7 @@ export type {
   ProviderStatus,
   RenderProvider,
   RenderProviderRegistry,
+  RenderBillingSku,
 } from './providerTypes';
 
 export type {

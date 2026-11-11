@@ -79,6 +79,14 @@ export interface ProviderStatus {
   error_code?: string;
 }
 
+/** The billed unit of one image request: priced as `${model}:${size}:${quality}` for `provider`. */
+export interface RenderBillingSku {
+  provider: string;
+  model: string;
+  size: string;
+  quality: string;
+}
+
 /**
  * The PURE provider contract. Effectful methods are typed as Promise but
  * NONE are implemented in R0. Implementations arrive in R3+ behind a
@@ -94,8 +102,17 @@ export interface RenderProvider {
   /** Pure: can this provider satisfy the spec? (no side effects) */
   supports(spec: RenderSpec): boolean;
 
-  /** Pure-ish: cost estimate → billing HOLD ceiling. */
+  /** Pure-ish: cost estimate. Informational only once credits are wired: the CHARGE is priced by the
+   *  image-credits helper from billingSku(), never from this number. */
   estimateCost(spec: RenderSpec): CreditEstimate;
+
+  /**
+   * Pure: the billed SKU of the request submit() WILL send for this spec (vendor, model, size,
+   * quality). It MUST be computed from the same values submit() sends, and no path inside submit()
+   * may send a different one, because credits are reserved for this SKU before submit() runs.
+   * A provider without it cannot be billed, so the render pipeline refuses it (fail closed).
+   */
+  billingSku?(spec: RenderSpec): RenderBillingSku;
 
   /** Effectful (future). Idempotent on idempotencyKey. */
   submit(spec: RenderSpec, idempotencyKey: string): Promise<ProviderHandle>;
