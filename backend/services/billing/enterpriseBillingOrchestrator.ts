@@ -277,9 +277,19 @@ export async function closeBillingOperation(
     confirmTxnId?:   string;
     releaseTxnId?:   string;
     failureReason?:  string;
+    /** Replaces the row's metadata when given (callers merge first). */
+    metadata?:       Record<string, unknown>;
   },
-): Promise<void> {
-  const { error } = await supabase
+  /**
+   * 2026-11-11 (image credits): an optional compare-and-set guard. When
+   * `fromStatuses` is given, the row is updated ONLY while its status is one of
+   * them, and the result reports how many rows changed - so a caller can tell
+   * "moved exactly the one held row" from "nothing matched". Existing callers
+   * pass no guard and ignore the result: unchanged behaviour.
+   */
+  guard?: { fromStatuses?: ReadonlyArray<string> },
+): Promise<{ updated: number | null; error: string | null }> {
+  let query = supabase
     .from('billing_operations')
     .update({
       status:             patch.status,
@@ -289,11 +299,23 @@ export async function closeBillingOperation(
       release_txn_id:     patch.releaseTxnId ?? null,
       failure_reason:     patch.failureReason ?? null,
       completed_at:       new Date().toISOString(),
+      ...(patch.metadata ? { metadata: patch.metadata } : {}),
     })
     .eq('id', operationId);
+  if (guard?.fromStatuses) query = query.in('status', [...guard.fromStatuses]);
+  if (!guard?.fromStatuses) {
+    const { error } = await query;
+    if (error) logger.error('billing_op_close_failed', { operationId, message: error.message });
+    return { updated: null, error: error ? error.message : null };
+  }
+  const { data, error } = await query.select('id');
   if (error) {
     logger.error('billing_op_close_failed', { operationId, message: error.message });
+    return { updated: null, error: error.message };
   }
+  // Only an array is an answer (a blank PostgREST response is not "0 rows").
+  if (!Array.isArray(data)) return { updated: null, error: 'no answer from billing_operations update' };
+  return { updated: data.length, error: null };
 }
 
 async function reconcileBillingOperationToResult<T>(

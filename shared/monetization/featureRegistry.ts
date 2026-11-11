@@ -636,6 +636,33 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       usage_action_key: 'profile_extraction',
     },
   },
+  // Owner ruling 2026-11-11: charge image credits BEFORE launch. Without this
+  // entry `image_generation` resolved BY FALLBACK to reports.snapshot /
+  // website_audit, so a reservation would have billed an image as a website
+  // audit. Priced as a vendor pass-through: provider unit cost (llm_model_pricing
+  // kind='unit') x action_pricing_config multiplier at the org credit rate,
+  // clamped to the IMAGE_GENERATION catalog bounds - see
+  // backend/services/billing/imageCredits.ts, the only caller.
+  {
+    feature_key: 'creator_content.image_generation',
+    category: 'creator_content',
+    display_name: 'Image Generation',
+    display_group: 'Content Generation',
+    display_color: 'bg-blue-400',
+    charge_mode: 'metered_usage',
+    pricing_strategy: 'action_pricing_config',
+    usage_metering_enabled: true,
+    requires_credit_hold: true,
+    plan_eligible: true,
+    enforcement_eligible: true,
+    visible_to_customer: true,
+    internal_only: false,
+    pricing_keys: {
+      action_key: 'image_generation',
+      action_pricing_config: 'image_generation',
+      usage_action_key: 'image_generation',
+    },
+  },
 ];
 
 const SIMPLE_CREDIT_FEATURES: Record<CreditAction, Omit<MonetizationFeatureRegistryEntry, 'pricing_keys'>> = {

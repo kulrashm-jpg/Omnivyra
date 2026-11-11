@@ -23,6 +23,15 @@ const editCalls: Array<Record<string, unknown>> = [];
 const generateCalls: Array<Record<string, unknown>> = [];
 let uploads: Buffer[] = [];
 
+// Image credits (owner ruling 2026-11-11) are not under test here: every paid
+// call is admitted and charged by a stub, so this suite keeps testing what it
+// tested before. The billing contract itself: creatorImageCreditsWiring.test.ts.
+jest.mock('../../services/billing/imageCredits', () => ({
+  reserveImageCredits: async () => ({ ok: true, billingOperationId: 'op-test', creditsReserved: 2 }),
+  settleImageCredits: async () => ({ ok: true, creditsCharged: 2 }),
+  releaseImageCredits: async () => ({ ok: true }),
+}));
+const TEST_BILLING_ATTRIBUTION = { attribution: { organizationId: '00000000-0000-4000-8000-00000000b111' } };
 jest.mock('@/config', () => ({ config: { OPENAI_API_KEY: 'test-key' }, getValidatedConfig: () => ({}) }));
 jest.mock('../../../config', () => {
   const actual = jest.requireActual('../../../config');
@@ -290,14 +299,14 @@ describe('C — references (owner clarification: new, but inspired by the select
   });
 
   it('CRITICAL: provider — a style reference alone is sent at standard fidelity, never high', async () => {
-    await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: comicBytes(), mimeType: 'image/webp' }], referenceFidelity: 'high', referenceKind: 'look' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: comicBytes(), mimeType: 'image/webp' }], referenceFidelity: 'high', referenceKind: 'look' });
     expect(editCalls).toHaveLength(1);
     expect(editCalls[0].input_fidelity).toBeUndefined();
     expect(editCalls[0].quality).toBe('low');
   });
 
   it('CRITICAL: provider — the style reference never rides on input_fidelity high (user photo goes alone)', async () => {
-    await generateProviderImage({
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION,
       prompt: 'p',
       referenceImages: [{ bytes: Buffer.from('USER'), mimeType: 'image/png' }, { bytes: comicBytes(), mimeType: 'image/webp' }],
       referenceFidelity: 'high', referenceKind: 'user+look',
@@ -309,7 +318,7 @@ describe('C — references (owner clarification: new, but inspired by the select
   });
 
   it('CRITICAL: the user\'s own subject / product photo still gets high fidelity (unchanged)', async () => {
-    await generateProviderImage({ prompt: 'p', referenceImages: [{ bytes: Buffer.from('USER'), mimeType: 'image/png' }], referenceFidelity: 'high', referenceKind: 'user' });
+    await generateProviderImage({ ...TEST_BILLING_ATTRIBUTION, prompt: 'p', referenceImages: [{ bytes: Buffer.from('USER'), mimeType: 'image/png' }], referenceFidelity: 'high', referenceKind: 'user' });
     expect(editCalls).toHaveLength(1);
     expect(editCalls[0].input_fidelity).toBe('high');
     expect(editCalls[0].quality).toBe('medium');
