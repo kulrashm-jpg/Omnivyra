@@ -70,7 +70,13 @@ export function toLeadOutcome(key: string | null, o: IngestionRecordOutcome): Ca
   }
 }
 
-async function defaultAckAllowed(orgId: string): Promise<{ allowed: boolean; state: string }> {
+/**
+ * THE verdict for Sales Navigator capture under the tenant data-controller
+ * acknowledgement: current or in-grace = allowed; anything else (never
+ * accepted, expired, text changed, unreadable) = refused. Gate 4b uses exactly
+ * this, and Outreach's command issuer calls it too, so both decide the same way.
+ */
+export async function salesNavCaptureAckVerdict(orgId: string): Promise<{ allowed: boolean; state: string }> {
   try {
     const s = (await getTenantDataAckStatus(orgId)).categories.salesnav_capture;
     return { allowed: s.allowed, state: s.state };
@@ -142,7 +148,7 @@ async function ingestCapturedSavedLeadsCore(
 
   // 4b. The tenant's data-controller acknowledgement covering Sales Navigator
   // capture (owner, 2026-11-11): current or in grace. Unreadable = refused.
-  const ack = await (options.ackAllowed ?? defaultAckAllowed)(orgId);
+  const ack = await (options.ackAllowed ?? salesNavCaptureAckVerdict)(orgId);
   if (!ack.allowed) return refuse('data_controller_ack_required', `salesnav_capture:${ack.state}`);
 
   // 5. The provider, then the envelope.

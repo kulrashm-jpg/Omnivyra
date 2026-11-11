@@ -9,6 +9,7 @@ export { SALESNAV_EXTENSION_CAPTURE_ENABLED, SALESNAV_LEAD_KEY_PROVISIONAL } fro
 export {
   ingestCapturedSavedLeads,
   registerSalesNavLeadSource,
+  salesNavCaptureAckVerdict,
   SALESNAV_CAPTURE_FLAG_KEY,
 } from './service';
 export {
