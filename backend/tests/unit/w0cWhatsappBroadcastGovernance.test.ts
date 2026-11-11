@@ -320,9 +320,77 @@ describe('A2b — governance is re-read within a batch (every 30 s or 50 recipie
       db.failTable = 'contact_governance_records'; // the store becomes unreadable after the first send
       return r;
     };
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     await processBatch('b1', ['r1', 'r2', 'r3']);
     expect(fetchCalls).toHaveLength(1);
     expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'pending', 'pending']);
+    // Liveness: the broadcast is marked paused (never left looking finished), logged at ERROR.
+    expect(db.broadcasts[0].status).toBe('paused');
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('broadcast paused'), expect.objectContaining({ broadcast_id: 'b1', remaining: 2 }));
+    err.mockRestore();
+  });
+
+  it('NEGATIVE CONTROL: a batch whose re-reads all succeed leaves the broadcast status alone', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '1';
+    three();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3);
+    expect(db.broadcasts[0].status).toBe('running');
+    expect(db.updates.some((u) => u.table === 'whatsapp_broadcasts')).toBe(false);
+  });
+
+  it('EVERY above the cap is clamped to 500 (warned by name): the 501st recipient is decided on a fresh read', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '100000';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    seed();
+    const LAST = '+15550209999';
+    for (let k = 2; k <= 500; k += 1) {
+      db.recipients.push({ id: `r${k}`, encrypted_phone: encrypt(`+1555020${String(k).padStart(4, '0')}`), contact_name: 'X', status: 'pending', retry_count: 0 });
+    }
+    db.recipients.push({ id: 'r501', encrypted_phone: encrypt(LAST), contact_name: 'Z', status: 'pending', retry_count: 0 });
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) restrict({ id: 'u501', target_normalized: LAST });
+      return r;
+    };
+    await processBatch('b1', db.recipients.map((r) => String(r.id)));
+    expect(fetchCalls).toHaveLength(500);
+    expect(status('r501')).toBe('blocked_governance');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WHATSAPP_GOVERNANCE_REREAD_EVERY is above its cap'), expect.objectContaining({ cap: 500 }));
+    warn.mockRestore();
+  });
+
+  it('MS above the cap is clamped to 300000 (warned by name): a 5-minute gap forces a re-read', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_MS = '3600000';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    three();
+    jest.useFakeTimers({ now: new Date('2026-11-11T10:00:00.000Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) {
+        restrict({ id: 'u2', target_normalized: PHONE2 });
+        jest.setSystemTime(new Date('2026-11-11T10:05:00.000Z')); // exactly the 300 s cap
+      }
+      return r;
+    };
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'blocked_governance', 'sent']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WHATSAPP_GOVERNANCE_REREAD_MS is above its cap'), expect.objectContaining({ cap: 300000 }));
+    warn.mockRestore();
+  });
+
+  it('NEGATIVE CONTROL: values AT the caps are used as-is, without a warning', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '500';
+    process.env.WHATSAPP_GOVERNANCE_REREAD_MS = '300000';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3); // no re-read within 500 / 300 s
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it.each([['0'], ['-1'], ['abc'], ['1.5']])('WHATSAPP_GOVERNANCE_REREAD_EVERY=%s falls back to the default (50): no early re-read', async (v) => {
