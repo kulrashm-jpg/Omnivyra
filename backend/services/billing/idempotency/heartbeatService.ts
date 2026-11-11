@@ -40,8 +40,9 @@ export async function heartbeatBillingOperation(operationId: string): Promise<vo
       .maybeSingle();
     // best-effort: a heartbeat must never fail the paid work it reports on. But a
     // SILENT failure makes a live operation look stuck and invites auto-expiry
-    // to "recover" it (money stays protected by checkFinancialDrift, which now
-    // refuses on an unread check) - so every failure is logged.
+    // to "recover" it - so every failure is logged. DEPENDENCY: this B is only
+    // safe with 4577c29ee (checkFinancialDrift refuses on an unread check); do
+    // not ship or cherry-pick it onto a base without that commit.
     if (readErr) {
       logger.warn('heartbeat_billing_op_failed', { operationId, step: 'read', message: readErr.message });
       return;

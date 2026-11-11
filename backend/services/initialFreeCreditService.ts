@@ -54,6 +54,12 @@ export async function grantInitialFreeCredit(input: {
   // amount. Fail closed as grant_failed: setup-company / onboarding/complete log
   // it, and the login-time reconciler (sync-supabase-user ->
   // reconcileInitialFreeCreditForUser) retries the grant on the next login.
+  // Safe because this refusal writes NOTHING that could suppress that retry
+  // (the retry is unconditional; idempotency lives inside the grant).
+  // ACCEPTED COST (weighed 2026-11-12, e1/05): recovery is "next login", not
+  // "soon", and the reconciler is fire-and-forget - a persistently unreadable
+  // config means no credits with only an error log as the trace. Possibly-late
+  // credits are recoverable; a wrong grant against a disabled config is not.
   const { data: config, error: configErr } = await ownedDbTable('free_credit_config')
     .select('credits, expiry_days, is_active')
     .eq('category', INITIAL_FREE_CREDIT_CATEGORY)
