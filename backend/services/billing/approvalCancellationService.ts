@@ -45,11 +45,17 @@ export async function cancelApproval(args: CancelApprovalArgs): Promise<CancelAp
   incrCounter('approval_rejections_total');  // closest existing counter; cancellations rolled into rejection bucket
 
   // Pull org context for the audit trail
-  const { data: row } = await supabase
+  // best-effort: the cancellation itself is done (RPC above); this read only
+  // builds the financial-audit record. A failure leaves an AUDIT GAP, so it is
+  // logged loudly with the approval id rather than skipped silently.
+  const { data: row, error: rowErr } = await supabase
     .from('credit_action_approvals')
     .select('organization_id, action_type, payload')
     .eq('id', args.approvalId)
     .maybeSingle();
+  if (rowErr) {
+    logger.error('approval_cancel_audit_context_read_failed', { approvalId: args.approvalId, actorUserId: args.actorUserId, message: rowErr.message });
+  }
   if (row) {
     const r = row as { organization_id: string; action_type: 'admin_grant' | 'admin_adjust' | 'admin_refund' | 'admin_rate_change'; payload: { amountCredits?: number } };
     await recordAdminFinancialOperation({
