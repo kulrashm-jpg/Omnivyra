@@ -23,7 +23,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import {
-  computePayloadHash, computeValueHash, redactSecrets, decideCanonicalUpdates,
+  computePayloadHash, computeValueHash, redactSecrets, isSecretKey, redactSecretValue, decideCanonicalUpdates,
   INGESTION_BOUNDARY_VERSION,
 } from '../../services/prospectIdentity/ingestionBoundary';
 import { PERSON_ATTRIBUTE_COLUMNS, ACCOUNT_ATTRIBUTE_COLUMNS } from '../../services/prospectIdentity/attributes';
@@ -90,6 +90,105 @@ describe('redactSecrets', () => {
   it('leaves ordinary prospect data untouched', () => {
     const payload = { first_name: 'Ada', title: 'VP', emails: ['a@b.test'] };
     expect(redactSecrets(payload)).toEqual(payload);
+  });
+
+  // SEC raw_payload redaction (virality-05 finding, 2026-11-10): the old pattern needed a
+  // `_` boundary, so camelCase and hyphenated header names were stored in the clear.
+  it.each([
+    'authToken', 'accessToken', 'refreshToken', 'idToken', 'sessionToken', 'bearerToken', 'csrfToken',
+    'oauthToken', 'OAuthToken', 'sessionId', 'clientSecret', 'userPassword',
+    'x-api-key', 'X-Api-Key', 'x-auth-token', 'set-cookie', 'Set-Cookie', 'XAPIKey',
+    // still redacted, as before
+    'api_key', 'apiKey', 'APIKey', 'Authorization', 'client_secret', 'id_token', 'password', 'privateKey',
+  ])('MUST REDACT key %s', (key) => {
+    const out = redactSecrets({ [key]: 'v1234567890' }) as Record<string, unknown>;
+    expect(out[key]).toBe('[REDACTED]');
+  });
+
+  it.each([
+    'lead_key', 'author', 'authorId', 'author_name', 'authority', 'keyword', 'tokens', 'max_tokens',
+    'primaryKey', 'passwordless', 'sessions', 'monkey',
+    // Sales Navigator capture evidence (virality-e1): none is a secret
+    'capture_transport', 'public_profile_url', 'full_name', 'headline', 'title', 'company_name',
+    'company_salesnav_urn', 'company_linkedin_url', 'location',
+  ])('MUST KEEP key %s', (key) => {
+    const out = redactSecrets({ [key]: 'ACwAAexample' }) as Record<string, unknown>;
+    expect(out[key]).toBe('ACwAAexample');
+  });
+
+  it('redacts a nested header echoed in a response envelope', () => {
+    const out = redactSecrets({ request: { headers: { 'X-Api-Key': 'k-123456', accept: 'json' } } }) as any;
+    expect(out.request.headers['X-Api-Key']).toBe('[REDACTED]');
+    expect(out.request.headers.accept).toBe('json');
+  });
+
+  // Credential-shaped fixtures are built at RUNTIME and marked TESTONLY (repo convention), so no bearer literal
+  // sits in the source. OPAQUE meets the opaque-token structure: 20+ chars, no dots, upper + lower + digits.
+  const BEARER = 'Bear' + 'er';
+  const OPAQUE = ['AbCdEfGh', 'TESTONLY', '12345678'].join('');
+
+  it('redacts a credential under a NON-secret key (header name/value pair)', () => {
+    const out = redactSecrets({ headers: [{ name: 'Authorization', value: `${BEARER} ${OPAQUE}` }] }) as any;
+    expect(out.headers[0].name).toBe('Authorization');
+    expect(out.headers[0].value).toBe('Bearer [REDACTED]');
+  });
+
+  it('the value pass recurses into nested objects and arrays', () => {
+    expect(redactSecrets({ a: [{ h: `${BEARER} ${OPAQUE}` }], b: { c: { d: ['https://u:p12345@h/x'] } } }))
+      .toEqual({ a: [{ h: 'Bearer [REDACTED]' }], b: { c: { d: ['https://[REDACTED]@h/x'] } } });
+  });
+
+  it.each([
+    [['a3f8c9213b7e4d05', 'f6a1c8e92b4d7f03'].join(''), 'lowercase hex (HMAC / vendor key shape), entropy ~3.95'],
+    [['abcdef1234', '567890xyzw'].join(''), 'single-case alphanumeric, entropy ~4.32'],
+  ])('MUST REDACT a bearer token with no uppercase: %s (%s) -- virality-05: the value pass is the only guard under a non-secret key', (tok) => {
+    const out = redactSecrets({ headers: [{ name: 'Authorization', value: `${BEARER} ${tok}` }] }) as any;
+    expect(out.headers[0].value).toBe('Bearer [REDACTED]');
+  });
+
+  it('redacts lowercase and uppercase auth schemes in values', () => {
+    expect(redactSecrets({ note: `${BEARER.toLowerCase()} ${OPAQUE}` })).toEqual({ note: 'bearer [REDACTED]' });
+    // base64("user:pass123") contains no digit: Basic is judged by decoding, not by shape.
+    expect(redactSecrets({ note: 'BASIC dXNlcjpwYXNzMTIz' })).toEqual({ note: 'BASIC [REDACTED]' });
+    // a JWT-shaped bearer (dots) is redacted. Built at RUNTIME and marked TESTONLY (repo convention for
+    // credential-shaped fixtures), so the source holds no bearer literal for the secret gates to flag.
+    const fakeJwt = ['eyJhbGciOi', 'TESTONLYeyJzdWIiOi', 'c2lnbmF0dXJl'].join('.');
+    expect(redactSecrets({ note: `Authorization: ${'Bear' + 'er'} ${fakeJwt}` }))
+      .toEqual({ note: 'Authorization: Bearer [REDACTED]' });
+  });
+
+  it('redacts URL userinfo with a password, in any scheme and casing', () => {
+    expect(redactSecrets({ u: 'POSTGRESQL://u:p12345@h:5432/d' })).toEqual({ u: 'POSTGRESQL://[REDACTED]@h:5432/d' });
+    expect(redactSecrets({ u: 'https://user:pass1234@host/x' })).toEqual({ u: 'https://[REDACTED]@host/x' });
+  });
+
+  it('redacts secret-named query parameters and keeps the others', () => {
+    expect(redactSecrets({ u: 'https://api.test/v1?access_token=abc123&page=2#frag' }))
+      .toEqual({ u: 'https://api.test/v1?access_token=[REDACTED]&page=2#frag' });
+  });
+
+  it.each([
+    ['Basic Training for sales teams', 'prose after "Basic"'],
+    ['Bearer of good news', 'prose after "Bearer"'],
+    ['Basic authentication required', 'prose: "authentication" is not base64 of user:pass'],
+    ['Bearer tokensarerequiredhere', 'a long plain word after "Bearer" (no digit or token punctuation)'],
+    // Built at runtime like every bearer-shaped fixture, so the secret gates see no literal.
+    [`{"error":"${'Bear' + 'er'} ${['token', 'expired', 'at', '1699'].join('.')}"}`, 'a provider error string: dots but not JWT-shaped (virality-05)'],
+    [`${'Bear' + 'er'} ${'aaaaabbbbb' + 'cccccddddd'}`, 'low-entropy text (2.0 bits/char < 3.5): recorded residual'],
+    ['Basic Settings', 'prose: too short to be a credential'],
+    ['https://www.linkedin.com/in/ada-lovelace?trk=public_profile', 'a profile URL with a non-secret query'],
+    ['ada@example.test', 'an email address'],
+    ['mailto:ada@example.test', 'a mailto link (no password)'],
+    ['https://user@host/x', 'userinfo WITHOUT a password'],
+    ['ACwAAABCDEFG1234567890', 'a Sales Navigator lead id'],
+  ])('MUST KEEP value %s (%s)', (value) => {
+    expect(redactSecrets({ v: value })).toEqual({ v: value });
+  });
+
+  it('isSecretKey and redactSecretValue are exported for reuse and agree with redactSecrets', () => {
+    expect(isSecretKey('authToken')).toBe(true);
+    expect(isSecretKey('lead_key')).toBe(false);
+    expect(redactSecretValue('no secret here')).toBe('no secret here');
   });
 });
 

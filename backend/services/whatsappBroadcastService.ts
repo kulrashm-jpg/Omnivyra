@@ -900,11 +900,16 @@ export async function processBatch(
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
-  // The person is part of the identity the check needs: an unreadable page throws, so the
-  // job retries and nothing in it is sent.
+  // ONLY `pending` recipients (be1771a2e, the main hotfix). A batch job is retried with
+  // the SAME recipient_ids; the pending -> sending claim below is what guarantees a retry
+  // never messages anyone twice, and this filter skips the rows already settled before any
+  // governance read or decrypt. retryFailed resets failed rows to `pending` first, so that
+  // path still reaches them. The person is part of the identity the check needs: an
+  // unreadable page throws, so the job retries and nothing in it is sent.
   const { data: recipients, error: recipientsError } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id, encrypted_phone, contact_name, person_id')
-    .in('id', recipientIds);
+    .in('id', recipientIds)
+    .eq('status', 'pending');
   if (recipientsError) throw new Error(`Broadcast recipients unreadable: ${recipientsError.message}`);
 
   if (!recipients?.length) return;
