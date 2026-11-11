@@ -19,6 +19,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { logger } from '../../../../backend/services/logger';
 import {
   checkAndGrantSetupCredits,
   notifyEarnProgress,
@@ -40,13 +41,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
-  const { data: roleRow } = await supabase
+  // MONEY: a failed membership read is "unknown", not "no active company".
+  const { data: roleRow, error: roleErr } = await supabase
     .from('user_company_roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active')
     .limit(1)
     .maybeSingle();
+  if (roleErr) {
+    logger.error('credits_earn_setup_membership_read_failed', { userId: user.id, message: roleErr.message });
+    return res.status(503).json({ error: 'temporarily_unavailable', retryable: true });
+  }
 
   if (!roleRow) return res.status(400).json({ error: 'No active company' });
   const orgId = (roleRow as any).company_id as string;
@@ -59,26 +65,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // Upsert setup progress row
-  await supabase.from('company_setup_progress').upsert(
+  // MONEY: the grant below reads this row. If the step was not recorded, stop
+  // here - never answer success for progress that was not saved.
+  const { error: upsertErr } = await supabase.from('company_setup_progress').upsert(
     { company_id: orgId, [step]: true, updated_at: new Date().toISOString() },
     { onConflict: 'company_id' },
   );
+  if (upsertErr) {
+    logger.error('credits_earn_setup_record_failed', { userId: user.id, orgId, step, message: upsertErr.message });
+    return res.status(500).json({ error: 'setup_progress_not_saved' });
+  }
 
   // Check thresholds and grant if met
   const { setup_credits, website_credits } = await checkAndGrantSetupCredits(orgId, user.id);
 
   // If no credits granted yet, check how many steps are left and nudge
   if (setup_credits === 0) {
-    const { data: setupRow } = await supabase
+    // best-effort: these reads only phrase a nudge notification; the grant has
+    // already been decided. On a failed read no nudge is sent (never a wrong
+    // count) and the failure is logged.
+    const { data: setupRow, error: setupErr } = await supabase
       .from('company_setup_progress')
       .select('profile_complete, external_api_connected, social_accounts_connected, website_blog_connected, lead_capture_connected')
       .eq('company_id', orgId)
       .maybeSingle();
 
-    const { count: socialCount } = await supabase
+    const { count: socialCount, error: socialErr } = await supabase
       .from('social_accounts')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', orgId);
+    const nudgeErr = setupErr ?? socialErr;
+    if (nudgeErr) logger.error('credits_earn_setup_nudge_read_failed', { orgId, message: nudgeErr.message });
 
     const row = (setupRow as any) ?? {};
     const done = [
@@ -90,7 +107,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ].filter(Boolean).length;
 
     const remaining = 5 - done;
-    if (remaining > 0) {
+    if (!nudgeErr && remaining > 0) {
       await notifyEarnProgress({
         orgId,
         actionType: 'setup_complete',
@@ -100,14 +117,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (website_credits === 0 && (step === 'website_blog_connected' || step === 'lead_capture_connected')) {
-    const { data: setupRow } = await supabase
+    // best-effort: nudge only (see above); a failed read sends no nudge.
+    const { data: setupRow, error: webErr } = await supabase
       .from('company_setup_progress')
       .select('website_blog_connected, lead_capture_connected')
       .eq('company_id', orgId)
       .maybeSingle();
+    if (webErr) logger.error('credits_earn_setup_nudge_read_failed', { orgId, message: webErr.message });
 
     const row = (setupRow as any) ?? {};
-    if (!row.website_blog_connected || !row.lead_capture_connected) {
+    if (!webErr && (!row.website_blog_connected || !row.lead_capture_connected)) {
       const missing = !row.website_blog_connected ? 'company blog' : 'lead capture page';
       await notifyEarnProgress({
         orgId,

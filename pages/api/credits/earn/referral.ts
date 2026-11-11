@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { logger } from '../../../../backend/services/logger';
 
 function referralCodeFromUserId(userId: string): string {
   // Deterministic 10-char code — same user always gets same code
@@ -18,13 +19,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
-  const { data: roleRow } = await supabase
+  // MONEY: a failed membership read is "unknown", not "no active company".
+  const { data: roleRow, error: roleErr } = await supabase
     .from('user_company_roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active')
     .limit(1)
     .maybeSingle();
+  if (roleErr) {
+    logger.error('credits_earn_referral_membership_read_failed', { userId: user.id, message: roleErr.message });
+    return res.status(503).json({ error: 'temporarily_unavailable', retryable: true });
+  }
 
   if (!roleRow) return res.status(400).json({ error: 'No active company' });
   const orgId = (roleRow as any).company_id as string;
@@ -34,11 +40,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── GET — return code + referral history ──────────────────────────────────
   if (req.method === 'GET') {
-    const { data: referrals } = await supabase
+    const { data: referrals, error: listErr } = await supabase
       .from('referrals')
       .select('id, invited_email, status, completed_at, created_at')
       .eq('referrer_user_id', user.id)
       .order('created_at', { ascending: false });
+    if (listErr) {
+      logger.error('credits_earn_referral_list_failed', { userId: user.id, message: listErr.message });
+      return res.status(503).json({ error: 'temporarily_unavailable', retryable: true });
+    }
 
     return res.status(200).json({
       code,
@@ -62,13 +72,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Cannot invite yourself.' });
     }
 
-    await supabase.from('referrals').upsert({
+    // MONEY: the referral row is what later grants the referrer's credits. If
+    // it is not written, never answer "success" - the invite would be credited
+    // to nobody.
+    const { error: upsertErr } = await supabase.from('referrals').upsert({
       referrer_user_id: user.id,
       referrer_org_id:  orgId,
       referral_code:    code,
       invited_email:    invitedEmail,
       status:           'pending',
     }, { onConflict: 'referral_code,invited_email', ignoreDuplicates: true });
+    if (upsertErr) {
+      logger.error('credits_earn_referral_record_failed', { userId: user.id, message: upsertErr.message });
+      return res.status(500).json({ error: 'referral_not_recorded' });
+    }
 
     return res.status(200).json({
       success:       true,
