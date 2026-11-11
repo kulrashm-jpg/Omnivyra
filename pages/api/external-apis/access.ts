@@ -380,8 +380,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // overwrote its name and website and set status='active' (re-activating a
     // suspended company). Now: a read error fails closed with NO write, and the
     // ensure-row is INSERT-ONLY (ON CONFLICT DO NOTHING) and never names
-    // status (a new row takes the column default). An existing row is never
-    // modified by this route.
+    // status (a new row takes the column default 'active', the value the old
+    // code wrote explicitly - so a genuinely new company is unchanged). An
+    // existing row is never modified by this route.
+    //
+    // LOAD-BEARING: maybeSingle() returning {data:null,error:null} does NOT
+    // prove the company absent (a blank response arrives that way). Insert-only
+    // NEUTRALISES that ambiguity: a false "absent" makes the insert a no-op
+    // against the existing row. Do not turn this into a plain insert, and never
+    // add an update of name/website/status here - the overwrite would return.
     const { data: existingCompany, error: companyErr } = await supabase
       .from('companies')
       .select('id')
