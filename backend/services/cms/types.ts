@@ -37,6 +37,12 @@ export interface CmsPublishResult {
   externalId?: string;
   externalUrl?: string;
   providerResponse?: unknown;
+  /**
+   * The operation is not supported by this CMS at all, and NO network call was made: nothing can
+   * have been published, and a retry can never succeed. The job ends terminal (failed) - neither
+   * retried nor dead-lettered for "verify on the site" (05: that message must stay credible).
+   */
+  unsupported?: true;
 }
 
 export interface CmsHealthResult {

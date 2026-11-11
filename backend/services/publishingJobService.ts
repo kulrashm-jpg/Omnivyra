@@ -7,7 +7,7 @@ import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsSer
 import { runWorkerSnapshotShadowHook } from './workerSnapshotShadowHook';
 
 export type PublishingJobStatus = 'queued' | 'processing' | 'published' | 'failed' | 'retrying' | 'cancelled' | 'dead_letter' | 'scheduled';
-export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown' | 'uncertain';
+export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown' | 'uncertain' | 'unsupported';
 
 /**
  * A CREATE whose outcome is unknown: the provider call STARTED and did not come back as a clear
@@ -36,8 +36,10 @@ export const UNCERTAIN_PUBLISH_MESSAGE =
  */
 export function classifyPublishFailure(
   job: Pick<PublishingJob, 'job_type'>,
-  result: { message: string; externalId?: string },
+  result: { message: string; externalId?: string; unsupported?: true },
 ): PublishingFailureCategory {
+  // The adapter says so STRUCTURALLY (no network call was made), so this is never a guess from text.
+  if (result.unsupported === true && !result.externalId) return 'unsupported';
   const category = categorizeFailure(result.message);
   if (!isCreateJob(job)) return category;
   if (result.externalId) return UNCERTAIN_PUBLISH_CATEGORY; // something was created
@@ -506,8 +508,11 @@ async function markJobFailure(
 ): Promise<void> {
   const uncertain = category === UNCERTAIN_PUBLISH_CATEGORY;
   if (uncertain) message = `${UNCERTAIN_PUBLISH_MESSAGE} (${message})`;
-  const exhausted = uncertain || attemptNumber >= job.max_attempts || category === 'validation' || category === 'auth';
-  const status: PublishingJobStatus = exhausted ? 'dead_letter' : 'retrying';
+  // Unsupported (no call was made; it can never succeed): TERMINAL `failed` - not retried, and not
+  // dead-lettered with "verify on the site", which would be false and would devalue that message.
+  const unsupported = category === 'unsupported';
+  const exhausted = uncertain || unsupported || attemptNumber >= job.max_attempts || category === 'validation' || category === 'auth';
+  const status: PublishingJobStatus = unsupported ? 'failed' : exhausted ? 'dead_letter' : 'retrying';
   const nextRetryAt = exhausted ? null : new Date(Date.now() + backoffMs(attemptNumber)).toISOString();
   // Not silent: an unwritten failure leaves the job `processing`; stale recovery then reads the
   // failed attempt and re-queues it (the retry bound is the persisted attempt_count).
@@ -522,7 +527,7 @@ async function markJobFailure(
       lock_expires_at: null,
       next_retry_at: nextRetryAt,
       run_after: nextRetryAt ?? new Date().toISOString(),
-      dead_letter_at: exhausted ? new Date().toISOString() : null,
+      dead_letter_at: status === 'dead_letter' ? new Date().toISOString() : null,
       execution_duration_ms: duration ?? null,
       metrics: { duration_ms: duration ?? null, attempts: attemptNumber, failure_category: category },
       updated_at: new Date().toISOString(),

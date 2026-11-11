@@ -66,6 +66,7 @@ export class SquarespaceAdapter extends BaseCmsAdapter {
     return {
       success: false,
       message: 'Squarespace does not expose a public write API for blog posts. Publish is not supported.',
+      unsupported: true,
     };
   }
 
@@ -73,6 +74,7 @@ export class SquarespaceAdapter extends BaseCmsAdapter {
     return {
       success: false,
       message: `Squarespace does not expose a public write API; cannot update post ${externalId}.`,
+      unsupported: true,
     };
   }
 

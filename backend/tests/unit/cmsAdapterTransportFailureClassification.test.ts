@@ -52,6 +52,12 @@ it.each(Object.keys(CONFIGS))('%s: a 500 on CREATE classifies as UNCERTAIN', asy
     .toEqual({ provider, message: result.message, category: UNCERTAIN_PUBLISH_CATEGORY });
 });
 
+it('squarespace: no write API - the adapter says UNSUPPORTED structurally (no call made), never uncertain', async () => {
+  const result: any = await getCmsAdapter('squarespace').publishPost({ provider: 'squarespace', config: {} } as any, {} as any);
+  expect(result).toMatchObject({ success: false, unsupported: true });
+  expect(classifyPublishFailure({ job_type: 'publish_post' } as any, result)).toBe('unsupported');
+});
+
 it('NEGATIVE CONTROL: the classifier still reads a genuine refusal as definite', () => {
   expect(classifyPublishFailure({ job_type: 'publish_post' } as any, { message: 'WordPress authentication failed. Check your credentials.' })).toBe('auth');
   expect(classifyPublishFailure({ job_type: 'publish_post' } as any, { message: 'WordPress returned status 429.' })).toBe('rate_limit');

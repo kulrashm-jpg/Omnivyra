@@ -121,6 +121,15 @@ describe('Part 1 - the job', () => {
     expect(fakeDb.tables.publishing_jobs.find((x) => x.id === 'jp')!.status).toBe('retrying');
   });
 
+  it('UNSUPPORTED (no call was made, e.g. Squarespace): TERMINAL failed - not retried, not dead-lettered "verify on the site"', async () => {
+    seed();
+    returns({ success: false, message: 'Squarespace does not expose a public write API for blog posts. Publish is not supported.', unsupported: true });
+    await svc.executeClaimedPublishingJob(job(), 'w');
+    expect(attemptRow().failure_category).toBe('unsupported');
+    expect(jobRow()).toMatchObject({ status: 'failed', dead_letter_at: null });
+    expect(String(jobRow().last_error)).not.toContain('Verify on the site');
+  });
+
   it('NEGATIVE CONTROL: a successful create is published, nothing uncertain', async () => {
     seed();
     returns({ success: true, message: 'ok', externalId: 'wp-1' });
