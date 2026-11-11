@@ -1,8 +1,9 @@
 -- ROLLBACK for 20270216000000_image_generation_pricing.sql
 --
--- Removes the image_generation pricing rule and every image unit cost a Super
--- Admin entered (llm_model_pricing kind='unit', provider 'openai'). LOSSY for
--- those costs. Image generation becomes unpriced, so every image is REFUSED
+-- Removes the image_generation pricing rule and the image unit costs a Super
+-- Admin entered for EXACTLY the SKUs this feature defines (REQUIRED_IMAGE_SKUS in
+-- backend/services/billing/imageCredits.ts) - never any other openai unit cost.
+-- LOSSY for those six costs. Image generation becomes unpriced, so every image is REFUSED
 -- before the provider call (never rendered free). Grants nothing.
 --
 -- The CHECK constraints are restored to their production originals ONLY when no
@@ -14,7 +15,8 @@
 BEGIN;
 
 DELETE FROM public.action_pricing_config WHERE action_key = 'image_generation' AND source_type = 'vendor_unit';
-DELETE FROM public.llm_model_pricing WHERE kind = 'unit' AND provider = 'openai';
+DELETE FROM public.llm_model_pricing WHERE kind = 'unit' AND provider = 'openai'
+  AND model_name IN ('gpt-image-1.5:1024x1024:low', 'gpt-image-1.5:1024x1024:medium', 'gpt-image-1.5:1024x1536:medium', 'gpt-image-1.5:1536x1024:medium', 'gpt-image-1:1024x1024:low', 'gpt-image-1:1024x1024:medium');
 
 DO $restore$
 BEGIN
@@ -35,7 +37,8 @@ $restore$;
 DO $verify$
 BEGIN
   IF EXISTS (SELECT 1 FROM public.action_pricing_config WHERE action_key = 'image_generation' AND source_type = 'vendor_unit')
-     OR EXISTS (SELECT 1 FROM public.llm_model_pricing WHERE kind = 'unit' AND provider = 'openai') THEN
+     OR EXISTS (SELECT 1 FROM public.llm_model_pricing WHERE kind = 'unit' AND provider = 'openai'
+                  AND model_name IN ('gpt-image-1.5:1024x1024:low', 'gpt-image-1.5:1024x1024:medium', 'gpt-image-1.5:1024x1536:medium', 'gpt-image-1.5:1536x1024:medium', 'gpt-image-1:1024x1024:low', 'gpt-image-1:1024x1024:medium')) THEN
     RAISE EXCEPTION 'image pricing rollback postcondition: an image pricing row survived';
   END IF;
 END

@@ -30,16 +30,36 @@ interface Payload {
 
 const SAMPLE_CREDIT_RATE_USD = 0.02;
 
-async function saveUnitCost(provider: string, unit: string, usdPerUnit: number, notes: string): Promise<string> {
+/**
+ * USD per unit (as typed) -> USD per 1,000 units, EXACTLY: the decimal point is
+ * shifted in the string, never multiplied in binary float (0.0407 * 1000 is
+ * 40.699999999999996; this returns 40.7, which serialises as "40.7" into the
+ * numeric column). Null for anything that is not a plain positive decimal.
+ */
+export function toPerThousand(usdPerUnit: string): number | null {
+  const t = String(usdPerUnit ?? '').trim();
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(t);
+  if (!m) return null;
+  const whole = m[1];
+  const frac = (m[2] ?? '').padEnd(3, '0');
+  const shifted = `${whole}${frac.slice(0, 3)}${frac.length > 3 ? `.${frac.slice(3)}` : ''}`;
+  const n = Number(shifted);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** One save. The typed result is kept: callers branch on `ok`, never on wording. */
+export async function saveUnitCost(provider: string, unit: string, usdPerUnit: string, notes: string): Promise<{ ok: boolean; message: string }> {
+  const perThousand = toPerThousand(usdPerUnit);
+  if (perThousand == null) return { ok: false, message: 'Enter a cost greater than zero.' };
   const r = await performSuperAdminWrite(() => apiFetch('/api/admin/pricing/update', {
     method: 'POST',
     headers: freshIdempotencyHeaders(),
     body: JSON.stringify({
       target: 'model', provider: provider.trim().toLowerCase(), model_name: unit.trim().toLowerCase(), kind: 'unit',
-      input_per_1k_usd: usdPerUnit * 1000, output_per_1k_usd: 0, notes,
+      input_per_1k_usd: perThousand, output_per_1k_usd: 0, notes,
     }),
   }));
-  return r.ok ? 'Saved as a new version.' : `Not saved: ${r.message}`;
+  return r.ok ? { ok: true, message: 'Saved as a new version.' } : { ok: false, message: `Not saved: ${r.message}` };
 }
 
 export default function VendorUnitCostsSection() {
@@ -59,20 +79,16 @@ export default function VendorUnitCostsSection() {
 
   const saveVendor = async () => {
     setMessage(null);
-    const value = Number(usd);
-    if (!(value > 0)) { setMessage('Enter a cost greater than zero.'); return; }
-    const msg = await saveUnitCost(provider, unit, value, 'Data vendor unit cost (mode B central access).');
-    setMessage(msg);
-    if (msg.startsWith('Saved')) { setUsd(''); await mutate(); }
+    const r = await saveUnitCost(provider, unit, usd, 'Data vendor unit cost (mode B central access).');
+    setMessage(r.message);
+    if (r.ok) { setUsd(''); await mutate(); }
   };
 
   const saveImage = async (sku: ImageSku) => {
     setMessage(null);
-    const value = Number(imageUsd[sku.unit]);
-    if (!(value > 0)) { setMessage(`Enter a cost greater than zero for ${sku.unit}.`); return; }
-    const msg = await saveUnitCost(sku.provider, sku.unit, value, `Image generation unit cost (${sku.usedBy}).`);
-    setMessage(`${sku.unit}: ${msg}`);
-    if (msg.startsWith('Saved')) { setImageUsd((m) => ({ ...m, [sku.unit]: '' })); await mutate(); }
+    const r = await saveUnitCost(sku.provider, sku.unit, imageUsd[sku.unit] ?? '', `Image generation unit cost (${sku.usedBy}).`);
+    setMessage(`${sku.unit}: ${r.message}`);
+    if (r.ok) { setImageUsd((m) => ({ ...m, [sku.unit]: '' })); await mutate(); }
   };
 
   const missingImage = (data?.requiredImageSkus ?? []).filter((k) => !k.priced);
