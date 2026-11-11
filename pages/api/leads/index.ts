@@ -125,7 +125,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           email: String(email).trim().toLowerCase(),
           phone: phone ? String(phone).trim() : undefined,
           source: source ? String(source) : 'webhook',
-          integration_id: body.integration_id,
+          // The AUTHENTICATED integration, never the raw body value: the gate
+          // above validated String(body.integration_id), so a non-string body
+          // value (e.g. ["<id>"]) must not reach the insert as-is.
+          integration_id: auth.integration_id,
+          provenance_mode: 'inbound_webhook',   // asserted by the entry point, not inferred
           website_id: websiteId,
           visitor_session_id: session.sessionId,
           attribution: attribution as Record<string, unknown>,
@@ -257,6 +261,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           phone: leadPhone ? String(leadPhone).trim() : undefined,
           source: 'form_embed',
           form_id: form.id,
+          provenance_mode: 'inbound_form',      // asserted by the entry point, not inferred
           integration_id: form.integration_id ?? undefined,
           website_id: websiteId,
           visitor_session_id: session.sessionId,
@@ -303,6 +308,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         email: String(email).trim().toLowerCase(),
         phone: phone ? String(phone).trim() : undefined,
         source: source ? String(source) : 'manual',
+        provenance_mode: 'manual',            // authenticated manual entry: asserted, not a fallthrough
         website_id: attribution.website_id ?? null,
         attribution: attribution as Record<string, unknown>,
         consent_state: attribution.consent_state ?? null,

@@ -222,6 +222,12 @@ export async function captureWebsiteLead(
     email,
     phone: submission.phone?.trim() || undefined,
     source: 'website',
+    // Website lead capture, asserted. LABEL DISCONTINUITY (2026-11-11, 739852a8e+):
+    // a capture whose visitor session did not resolve was labelled 'manual' (the
+    // classifier fallback) and is 'website' from this change on. Rows written
+    // before keep 'manual'. A step in source_category across this deploy is a
+    // labelling fix, not a business change.
+    provenance_mode: 'website',
     website_id: websiteId,
     visitor_session_id: session.sessionId,
     attribution: attribution as Record<string, unknown>,

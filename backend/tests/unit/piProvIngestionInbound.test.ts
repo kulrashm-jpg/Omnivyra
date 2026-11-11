@@ -7,12 +7,14 @@ jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jes
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: () => { throw new Error('unexpected direct db access'); } }));
 
 import {
+  classifyInboundLead,
   recordInboundLeadProvenance,
   scheduleInboundLeadProvenance,
   type InboundProvenanceDeps,
 } from '../../services/prospectProvenance/ingestion/inboundLeadProvenance';
 import {
   getProvenanceIngestionCounters,
+  recordProvenanceOutcome,
   resetProvenanceIngestionCounters,
 } from '../../services/prospectProvenance/ingestion/provenanceTelemetry';
 import type { SourceContributionInput } from '../../../lib/prospectProvenance/contract';
@@ -62,6 +64,55 @@ const lead = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => resetProvenanceIngestionCounters());
+
+describe('unknown mode (no asserted mode, no structural signal)', () => {
+  it('a caller with no mode and no signal gets UNKNOWN: skipped mode_unknown, gate not consulted, nothing read or written', async () => {
+    const { deps, calls } = harness();
+    const mode = classifyInboundLead({ form_id: null, integration_id: null, visitor_session_id: null });
+    expect(mode).toBeNull(); // never a guessed 'manual'
+    const r = await recordInboundLeadProvenance(ORG_A, lead({ form_id: null, visitor_session_id: null, source: 'manual' }), mode, deps);
+    expect(r).toEqual({ status: 'skipped', reason: 'mode_unknown' });
+    expect(deps.gate).not.toHaveBeenCalled();
+    expect(calls.upsert).toHaveLength(0);
+    expect(calls.resolve).toHaveLength(0);
+    expect(calls.contributions).toHaveLength(0); // no source_category is manufactured
+    // A DEFECT, so it is on the failure channel, never the routine skipped bucket.
+    const counters = getProvenanceIngestionCounters();
+    expect(counters['inbound_lead:failed']).toBe(1);
+    expect(counters['inbound_lead:failed:mode_unknown']).toBe(1); // the defect is a LABEL on the metric
+    expect(counters['inbound_lead:skipped']).toBeUndefined();
+  });
+
+  it('a genuine failure (thrown work) is NOT labelled mode_unknown, so the two are separable at alert time', async () => {
+    const { deps } = harness();
+    deps.upsertSourceRecord = jest.fn(async () => { throw new Error('provider down'); });
+    await scheduleInboundLeadProvenance(ORG_A, lead(), 'inbound_form', deps);
+    const counters = getProvenanceIngestionCounters();
+    expect(counters['inbound_lead:failed']).toBe(1);
+    expect(counters['inbound_lead:failed:mode_unknown']).toBeUndefined();
+  });
+
+  it('a free-form reason (an error message) is NOT used as a label: the counter key space stays bounded', () => {
+    recordProvenanceOutcome('inbound_lead', 'failed', { reason: 'connect ECONNREFUSED 10.0.0.1:5432' });
+    recordProvenanceOutcome('inbound_lead', 'failed', { reason: 'Some Error: request 8f3a timed out' });
+    const keys = Object.keys(getProvenanceIngestionCounters());
+    expect(keys).toEqual(['inbound_lead:failed']);
+    expect(getProvenanceIngestionCounters()['inbound_lead:failed']).toBe(2);
+  });
+
+  it('a routine skip (closed gate) stays in the skipped bucket, so the two are distinguishable', async () => {
+    const { deps } = harness({ gate: false });
+    await recordInboundLeadProvenance(ORG_A, lead(), 'inbound_form', deps);
+    const counters = getProvenanceIngestionCounters();
+    expect(counters['inbound_lead:skipped']).toBe(1);
+    expect(counters['inbound_lead:failed']).toBeUndefined();
+  });
+
+  it('the pre-739852a8e live mislabel is closed: a website capture without a session is website when asserted, unknown when not', () => {
+    expect(classifyInboundLead({ mode: 'website', visitor_session_id: null })).toBe('website');
+    expect(classifyInboundLead({ visitor_session_id: null })).toBeNull(); // was 'manual'
+  });
+});
 
 describe('gate', () => {
   it('closed gate ⇒ skipped, nothing read or written', async () => {

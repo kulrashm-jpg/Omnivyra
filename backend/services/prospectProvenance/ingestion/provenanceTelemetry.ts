@@ -28,6 +28,7 @@ export type ProvenanceOutcome =
   | 'error';
 
 const counters = new Map<string, number>();
+const REASON_LABEL = /^[a-z][a-z0-9_]{0,40}$/;
 
 export function recordProvenanceOutcome(
   path: ProvenancePath,
@@ -36,6 +37,20 @@ export function recordProvenanceOutcome(
 ): void {
   const key = `${path}:${outcome}`;
   counters.set(key, (counters.get(key) ?? 0) + 1);
+  // A FAILURE that names its reason is also counted under that reason as a label
+  // (`<path>:failed:<reason>`), so an alert on the failure rate can tell a code
+  // defect (e.g. inbound_lead:failed:mode_unknown) from a provider outage; the two
+  // need opposite responses. The aggregate key above is unchanged.
+  // BOUNDED: only a short snake_case literal is admitted as a label. A free-form
+  // reason (e.g. someone passing err.message) gets the aggregate key only, so the
+  // never-evicted Map cannot grow per distinct error string (a slow leak in a
+  // long-lived worker). These counters are process-local conveniences for
+  // splitting an alert; the structured warning log is the durable signal.
+  if ((outcome === 'failed' || outcome === 'error')
+      && typeof detail.reason === 'string' && REASON_LABEL.test(detail.reason)) {
+    const labelled = `${key}:${detail.reason}`;
+    counters.set(labelled, (counters.get(labelled) ?? 0) + 1);
+  }
   if (outcome === 'failed' || outcome === 'error') {
     try {
       logger.warn('prospect_provenance_side_effect_failed', { path, outcome, ...detail });
