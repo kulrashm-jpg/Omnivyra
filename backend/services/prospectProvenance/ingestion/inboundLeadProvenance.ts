@@ -87,7 +87,18 @@ export async function recordInboundLeadProvenance(
   };
   // UNKNOWN mode: no profile can be chosen without guessing, so no contribution
   // (and no source_category) is written. Checked before the gate: no read at all.
-  if (mode === null) return skip('mode_unknown');
+  // Unlike every other skip reason (gate, test lead, ...) this one is a DEFECT:
+  // a createLead caller forgot to assert its mode, and a real person silently
+  // never becomes a canonical prospect. So it is reported on the FAILURE channel
+  // (counted as inbound_lead:failed and logged as a warning), never in the routine
+  // `skipped` bucket where no one would look (virality-05, 2026-11-11).
+  if (mode === null) {
+    recordProvenanceOutcome('inbound_lead', 'failed', {
+      reason: 'mode_unknown', defect: 'createLead_caller_did_not_assert_provenance_mode',
+      leadId: str(lead.id), organizationId,
+    });
+    return { status: 'skipped', reason: 'mode_unknown' };
+  }
 
   const gate = deps.gate ?? (async (org: string) =>
     (await import('../../leadIngestion/orchestrator')).resolveLeadIngestionGate(org));

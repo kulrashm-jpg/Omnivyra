@@ -75,6 +75,18 @@ describe('unknown mode (no asserted mode, no structural signal)', () => {
     expect(calls.upsert).toHaveLength(0);
     expect(calls.resolve).toHaveLength(0);
     expect(calls.contributions).toHaveLength(0); // no source_category is manufactured
+    // A DEFECT, so it is on the failure channel, never the routine skipped bucket.
+    const counters = getProvenanceIngestionCounters();
+    expect(counters['inbound_lead:failed']).toBe(1);
+    expect(counters['inbound_lead:skipped']).toBeUndefined();
+  });
+
+  it('a routine skip (closed gate) stays in the skipped bucket, so the two are distinguishable', async () => {
+    const { deps } = harness({ gate: false });
+    await recordInboundLeadProvenance(ORG_A, lead(), 'inbound_form', deps);
+    const counters = getProvenanceIngestionCounters();
+    expect(counters['inbound_lead:skipped']).toBe(1);
+    expect(counters['inbound_lead:failed']).toBeUndefined();
   });
 
   it('the pre-739852a8e live mislabel is closed: a website capture without a session is website when asserted, unknown when not', () => {
