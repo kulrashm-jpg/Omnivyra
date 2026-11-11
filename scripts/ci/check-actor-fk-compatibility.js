@@ -591,7 +591,9 @@ function detect(catalog, registry = { columns: [] }, known = []) {
   //    boundary while the column was added later (source_assertions.
   //    platform_mapping_profile_id, PI-LDB step E, against a 20260916000000
   //    baseline). Such an entry is not judged here - the --db path decides it.
-  //    On an unbounded (live / replayed) catalog a missing column IS stale.
+  //    On an unbounded (live / replayed) catalog a missing column OR table IS
+  //    stale, so unjudged_known is always empty there: it means only "a bounded
+  //    dump cannot see this".
   const knownMap = new Map((known || []).map((k) => [k.key, k]));
   const open = [];
   const knownSeen = [];
@@ -606,7 +608,7 @@ function detect(catalog, registry = { columns: [] }, known = []) {
       if (seenKeys.has(key)) return false;
       const [t, c] = key.split('.');
       const table = catalog.tables.get(t);
-      if (!table) return false;
+      if (!table) return !catalog.coverage.boundary; // absent table: stale only on a live catalog
       return table.columns.has(c) || !catalog.coverage.boundary;
     },
   );
@@ -684,7 +686,7 @@ function reportCoverageLimits(result, out = process.stdout) {
       '(neither reproduced nor stale). NOT a pass: run the --db path to decide.\n',
     );
     for (const u of unjudged) {
-      out.write(`           NOT JUDGED  public.${u.key}  catalog_known  ${u.missing} not in this catalog\n`);
+      out.write(`           NOT JUDGED (acknowledgement)  public.${u.key}  catalog_known  ${u.missing} not in this catalog\n`);
     }
   }
   const nm = result.not_modelled;

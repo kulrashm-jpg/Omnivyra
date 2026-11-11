@@ -428,7 +428,7 @@ describe('actor-FK compatibility detector — catalog level', () => {
     const text = lines.join('');
     expect(text).toMatch(/columns later migrations added to older tables, are NOT covered/);
     expect(text).toMatch(/NOT a pass: run the --db path to decide/);
-    expect(text).toContain('NOT JUDGED  public.t.later  catalog_known  column not in this catalog');
+    expect(text).toContain('NOT JUDGED (acknowledgement)  public.t.later  catalog_known  column not in this catalog');
     const live = actorFk.detect(actorFk.parseBaselineCatalog(ddl, { source: 'pg_catalog' }), { columns: [] }, entry);
     expect(live.stale_known).toEqual(['t.later']);
     expect(live.counts.error).toBe(1);
@@ -448,6 +448,17 @@ describe('actor-FK compatibility detector — catalog level', () => {
     const r = actorFk.detect(cat, { columns: [] }, [{ key: 'missing_table.a', owner: 'x', classification: 'y' }]);
     expect(r.stale_known).toEqual([]);
     expect(r.counts.error).toBe(0);
+    expect(r.unjudged_known).toEqual([{ key: 'missing_table.a', missing: 'table' }]);
+  });
+
+  it('on a LIVE catalog an entry for an absent table IS stale (nothing further could judge it)', () => {
+    // 05 (2026-11-11): the table branch was not boundary-aware, so on the --db
+    // run a dropped table read "NOT JUDGED ... run the --db path" and stayed green.
+    const cat = actorFk.parseBaselineCatalog('CREATE TABLE public.other (\n    a uuid\n);', { source: 'pg_catalog' });
+    const r = actorFk.detect(cat, { columns: [] }, [{ key: 'missing_table.a', owner: 'x', classification: 'y' }]);
+    expect(r.stale_known).toEqual(['missing_table.a']);
+    expect(r.counts.error).toBe(1);
+    expect(r.unjudged_known).toEqual([]);
   });
 
   it('parses the real baseline into a catalog of the expected size', () => {
