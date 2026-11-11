@@ -52,5 +52,5 @@ it('an aborted request (TimeoutError) ends ingestComments as a failure for that 
     throw e;
   });
   const r = await ingestComments('sp');
-  expect(r).toMatchObject({ success: false, ingested: 0, failure: 'provider' });
+  expect(r).toMatchObject({ success: false, ingested: 0, failure: 'timeout' }); // D2b: its own failure kind
 });

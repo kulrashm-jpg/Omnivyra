@@ -30,11 +30,13 @@ import { buildXConversationSearchUrl } from './engagement/xReplyQuery';
 import {
   summarizeIngestionCycle,
   ingestionCycleLogPayload,
+  updateProviderStreaks,
+  providerFailingCycles,
   type IngestionCycleSummary,
   type IngestOutcome,
 } from './engagement/ingestionHealth';
 import { markSocialAccountNeedsReauth } from '../auth/tokenStore';
-import { OAUTH_REFRESH_TIMEOUT_MS } from '../auth/oauthRefreshTimeout';
+import { OAUTH_REFRESH_TIMEOUT_MS, isRefreshTimeoutText } from '../auth/oauthRefreshTimeout';
 
 /**
  * How far back scheduled ingestion looks for posts to poll. See the rationale
@@ -600,6 +602,7 @@ export type IngestFailureKind =
   | 'auth'            // provider rejected the credential
   | 'not_found'       // endpoint/resource absent — no credential will fix this
   | 'refresh_deferred' // D2: the cycle's refresh budget was spent; refresh tried next cycle
+  | 'timeout'         // D2b: the provider did not answer within the request timeout
   | 'provider';       // any other provider or persistence failure
 
 export type IngestCommentsResult = {
@@ -626,7 +629,7 @@ export type IngestCommentsResult = {
  * runs out (scheduler concurrency x one refresh, a Facebook refresh being up to two
  * requests).
  */
-export type RefreshBudget = { remainingMs: number; reserveMs: number; deferred: number };
+export type RefreshBudget = { remainingMs: number; reserveMs: number; deferred: number; backedOff: number };
 export const DEFAULT_INGEST_REFRESH_BUDGET_MS = 120_000;
 
 /**
@@ -649,7 +652,52 @@ export function createRefreshBudget(
   totalMs: number = ingestRefreshBudgetMs(),
   reserveMs: number = OAUTH_REFRESH_TIMEOUT_MS,
 ): RefreshBudget {
-  return { remainingMs: totalMs, reserveMs, deferred: 0 };
+  return { remainingMs: totalMs, reserveMs, deferred: 0, backedOff: 0 };
+}
+
+/**
+ * D2b — per-account backoff after a refresh TIMEOUT (virality-e9).
+ *
+ * A timeout does not consume the reauth ceiling (D2 option B), so without this an
+ * always-timing-out provider is retried on every cycle, each time spending budget other
+ * accounts could use. After a refresh that ended as a timeout - read back from the
+ * persisted last_refresh_error, which since D2 is exactly REFRESH_TIMEOUT_ERROR for a
+ * structural timeout on every platform including X - the account's refresh is skipped
+ * for INGEST_REFRESH_TIMEOUT_BACKOFF_MS (default 30 min). Skipped = deferred: not
+ * attempted, nothing recorded. Applies only where a budget is passed (the ingest timer
+ * and the polling job); process-local, so a restart simply retries sooner.
+ */
+export const DEFAULT_REFRESH_TIMEOUT_BACKOFF_MS = 30 * 60 * 1000;
+
+export function refreshTimeoutBackoffMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.INGEST_REFRESH_TIMEOUT_BACKOFF_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_REFRESH_TIMEOUT_BACKOFF_MS;
+  const n = Number(raw.trim());
+  if (Number.isInteger(n) && n >= 1) return n;
+  console.warn('[engagementIngestion] INGEST_REFRESH_TIMEOUT_BACKOFF_MS is not a positive integer; using the default',
+    { value: raw.slice(0, 32), default_ms: DEFAULT_REFRESH_TIMEOUT_BACKOFF_MS });
+  return DEFAULT_REFRESH_TIMEOUT_BACKOFF_MS;
+}
+
+const refreshBackoffUntil = new Map<string, number>();
+
+/** Test seam: clear the process-local backoff. */
+export function __resetRefreshBackoff(): void {
+  refreshBackoffUntil.clear();
+}
+
+/** Did this account's last refresh end as a timeout? An unreadable row says no (no backoff). */
+async function lastRefreshTimedOut(socialAccountId: string): Promise<boolean> {
+  try {
+    const { data, error } = await ownedDbTable('social_accounts')
+      .select('last_refresh_error')
+      .eq('id', socialAccountId)
+      .maybeSingle();
+    if (error) return false;
+    return isRefreshTimeoutText((data as { last_refresh_error?: string | null } | null)?.last_refresh_error ?? null);
+  } catch {
+    return false;
+  }
 }
 
 /** refreshPlatformToken, within the cycle budget when there is one (no budget = unchanged). */
@@ -660,6 +708,12 @@ async function refreshWithinBudget(
   token: Awaited<ReturnType<typeof getToken>>,
 ): Promise<{ deferred: true } | { deferred: false; token: Awaited<ReturnType<typeof refreshPlatformToken>> }> {
   if (!budget) return { deferred: false, token: await refreshPlatformToken(platform, socialAccountId, token as any) };
+  const until = refreshBackoffUntil.get(socialAccountId);
+  if (until !== undefined && Date.now() < until) {
+    budget.backedOff += 1;
+    console.warn('[engagementIngestion] refresh_deferred: account in timeout backoff', { platform });
+    return { deferred: true };
+  }
   if (budget.remainingMs <= 0) {
     budget.deferred += 1;
     console.warn('[engagementIngestion] refresh_deferred: cycle refresh budget spent', { platform });
@@ -667,12 +721,27 @@ async function refreshWithinBudget(
   }
   budget.remainingMs -= budget.reserveMs;
   const started = Date.now();
+  let refreshed: Awaited<ReturnType<typeof refreshPlatformToken>> = null;
   try {
-    return { deferred: false, token: await refreshPlatformToken(platform, socialAccountId, token as any) };
+    refreshed = await refreshPlatformToken(platform, socialAccountId, token as any);
   } finally {
     budget.remainingMs += budget.reserveMs - (Date.now() - started);
   }
+  if (refreshed?.access_token) {
+    refreshBackoffUntil.delete(socialAccountId);
+  } else if (await lastRefreshTimedOut(socialAccountId)) {
+    refreshBackoffUntil.set(socialAccountId, Date.now() + refreshTimeoutBackoffMs());
+  }
+  return { deferred: false, token: refreshed };
 }
+
+/**
+ * Per-provider streaks of fully failed cycles (D2b). Process-local: the cycle runs
+ * in one process at a time under its lease. A restart, or the lease (and so the timer)
+ * moving to another replica, resets the count: the FAILING alert is then delayed by at
+ * most N cycles, and is never raised falsely.
+ */
+const providerFailureStreaks = new Map<string, number>();
 
 /**
  * Ingest comments for a single scheduled post.
@@ -867,9 +936,11 @@ export async function ingestComments(
       success: false,
       ingested: 0,
       error: e?.message ?? 'Failed to fetch or persist comments',
-      failure: isProviderRequestError(e)
-        ? (e.kind === 'not_found' ? 'not_found' : e.kind === 'auth' ? 'auth' : 'provider')
-        : 'provider',
+      failure: isRequestTimeout(e)
+        ? 'timeout'
+        : isProviderRequestError(e)
+          ? (e.kind === 'not_found' ? 'not_found' : e.kind === 'auth' ? 'auth' : 'provider')
+          : 'provider',
     };
   }
 }
@@ -945,7 +1016,22 @@ export async function ingestRecentPublishedPosts(): Promise<{
   // went unnoticed. Counts and typed reasons only — no ids, no URLs, no
   // provider bodies — so it is safe wherever logs are shipped.
   const summary = summarizeIngestionCycle(outcomes, totalIngested);
-  const payload = { ...ingestionCycleLogPayload(summary), refresh_deferred: refreshBudget.deferred };
+  // D2b: one provider failing every post for N consecutive cycles is reported at
+  // ERROR even when the cycle overall is only degraded, so log alerting catches it.
+  summary.failingProviders = updateProviderStreaks(providerFailureStreaks, outcomes, providerFailingCycles());
+  for (const f of summary.failingProviders) {
+    console.error('[engagementIngestion] provider FAILING', {
+      provider: f.provider,
+      consecutive_cycles: f.consecutiveCycles,
+      attempted: f.attempted,
+      by_failure_kind: f.byFailureKind,
+    });
+  }
+  const payload = {
+    ...ingestionCycleLogPayload(summary),
+    refresh_deferred: refreshBudget.deferred,
+    refresh_backed_off: refreshBudget.backedOff,
+  };
   if (summary.actionable) {
     // Eligible work existed and NOTHING succeeded. This is the only state
     // worth escalating; an idle cycle never reaches here.
