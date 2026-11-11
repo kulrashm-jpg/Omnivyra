@@ -86,27 +86,56 @@ async function redisIncrBy(key: string, count: number, ttlSeconds: number): Prom
 
 // ── DB layer (fallback) ───────────────────────────────────────────────────────
 
-async function dbGetDailyUsage(socialAccountId: string): Promise<number> {
-  const { data } = await ownedDbTable('social_accounts')
-    .select('messaging_tier')
-    .eq('id', socialAccountId)
-    .single();
+/**
+ * THE DEFECT THIS CLOSES (C10, 2026-11-11): the fallback used to READ
+ * api_provider_accounts.current_usage_day by account_name = <social account id> (the
+ * external-API credential table, where no such row ever exists, so usage read as 0)
+ * and to INCREMENT through rpc('increment_wa_usage'), a function that exists in no
+ * environment, with the error discarded. During a Redis outage every send was
+ * allowed: the limit failed OPEN.
+ *
+ * Now: ONE call to whatsapp_consume_daily_quota, which checks and consumes in a single
+ * statement (it writes only when the new total stays within the limit). FAIL CLOSED:
+ * an error, a thrown call, or an answer without a boolean `allowed` and a numeric
+ * `used` is a refusal - never "allowed" - and is logged at ERROR.
+ */
+const INT_MAX = 2_147_483_647;
 
-  // Read current_usage_day from api_provider_accounts linked to this WA source
-  const { data: usage } = await ownedDbTable('api_provider_accounts')
-    .select('current_usage_day')
-    .eq('account_name', socialAccountId) // best available link without schema change
-    .single();
-
-  return usage?.current_usage_day ?? 0;
-}
-
-async function dbIncrUsage(socialAccountId: string, count: number): Promise<void> {
-  await supabase.rpc('increment_wa_usage', {
-    account_id: socialAccountId,
-    increment:  count,
-  });
-  // If RPC doesn't exist yet, falls through silently — DB becomes best-effort
+async function dbConsume(
+  socialAccountId: string,
+  usageDay:        string,
+  count:           number,
+  limit:           number,
+): Promise<{ allowed: boolean; used: number } | null> {
+  try {
+    const { data, error } = await supabase.rpc('whatsapp_consume_daily_quota', {
+      p_social_account_id: socialAccountId,
+      p_usage_day:         usageDay,
+      p_count:             count,
+      p_limit:             limit,
+    });
+    if (error) {
+      console.error('[whatsappRateLimiter] daily quota check failed; send refused (fail closed)', {
+        social_account_id: socialAccountId, error: error.message,
+      });
+      return null;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row || typeof row.allowed !== 'boolean' || typeof row.used !== 'number') {
+      // No answer is not an answer: a missing or malformed row refuses (a blank
+      // response can arrive as {error:null} with no data).
+      console.error('[whatsappRateLimiter] daily quota check returned no answer; send refused (fail closed)', {
+        social_account_id: socialAccountId,
+      });
+      return null;
+    }
+    return { allowed: row.allowed, used: row.used };
+  } catch (err) {
+    console.error('[whatsappRateLimiter] daily quota check threw; send refused (fail closed)', {
+      social_account_id: socialAccountId, error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 // ── Core rate limit check ─────────────────────────────────────────────────────
@@ -152,15 +181,15 @@ export async function checkAndConsume(params: {
     return { allowed: true, remaining, tier, source: 'redis' };
   }
 
-  // ── Layer 2: DB fallback (Refinement 6) ───────────────────────────────────
-  const currentDb = await dbGetDailyUsage(social_account_id);
-
-  if (currentDb + count > effective) {
-    return { allowed: false, remaining: Math.max(0, effective - currentDb), tier, source: 'db' };
+  // ── Layer 2: DB fallback (Refinement 6) - atomic, fails CLOSED ────────────
+  // An unlimited plan/tier is metered against the integer maximum (still counted).
+  const dbLimit  = Number.isFinite(effective) ? effective : INT_MAX;
+  const consumed = await dbConsume(social_account_id, new Date().toISOString().slice(0, 10), count, dbLimit);
+  if (!consumed) {
+    return { allowed: false, remaining: 0, tier, source: 'db' };
   }
-
-  await dbIncrUsage(social_account_id, count);
-  return { allowed: true, remaining: Math.max(0, effective - currentDb - count), tier, source: 'db' };
+  const remaining = Number.isFinite(effective) ? Math.max(0, effective - consumed.used) : Infinity;
+  return { allowed: consumed.allowed, remaining, tier, source: 'db' };
 }
 
 // ── Chunking strategy (Improvement 4) ────────────────────────────────────────
@@ -184,19 +213,8 @@ export function getBroadcastChunkStrategy(tier: number): ChunkStrategy {
   return { batch_size, delay_ms };
 }
 
-// ── Daily counter reset ───────────────────────────────────────────────────────
-
-/**
- * Reset daily usage counters for all WhatsApp phone numbers.
- * Schedule via cron at 00:00 UTC.
- * Redis keys auto-expire via TTL; this resets the DB backup counters.
- */
-export async function resetDailyCounters(): Promise<void> {
-  // api_provider_accounts.current_usage_day reset for WA sources
-  const { error } = await ownedDbTable('api_provider_accounts')
-    .update({ current_usage_day: 0, last_reset_at: new Date().toISOString() })
-    .eq('is_active', true);
-    // Note: filter by WA api_source_id once WhatsApp is added to external_api_sources
-
-  if (error) console.error('[whatsappRateLimiter] resetDailyCounters failed:', error.message);
-}
+// No daily reset job: the database counter is keyed by UTC day
+// (whatsapp_daily_usage), and Redis keys expire by TTL. The former
+// resetDailyCounters had no caller, and if wired it would have zeroed
+// current_usage_day on EVERY active api_provider_accounts row - other
+// components' counters - so it is removed rather than scheduled.
