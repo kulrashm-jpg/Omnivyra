@@ -59,27 +59,45 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { action, requestId } = body as { action: string; requestId: string };
     if (!requestId) return res.status(400).json({ error: 'requestId required' });
 
-    const { data: request } = await sb.from('access_requests').select('*').eq('id', requestId).maybeSingle();
+    // A failed read is not "no such request" (404). 503, nothing changed.
+    const { data: request, error: requestErr } = await sb.from('access_requests').select('*').eq('id', requestId).maybeSingle();
+    if (requestErr) return res.status(503).json({ error: 'request lookup unavailable', retryable: true });
     if (!request) return res.status(404).json({ error: 'Request not found' });
 
     if (action === 'approve') {
       const { creditsToGrant = 300, whitelistDomain = true, adminNote } = body;
 
-      await sb.from('access_requests').update({
+      // MONEY: the approval must be recorded BEFORE credits move. An unread
+      // failure used to grant credits against a request still 'pending' (which
+      // could then be rejected). Retrying approve is safe: the credit key is
+      // per request.
+      const { error: approveErr } = await sb.from('access_requests').update({
         status: 'approved',
         reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
         admin_note: adminNote ?? null,
         credits_granted_amount: creditsToGrant,
       }).eq('id', requestId);
+      if (approveErr) {
+        console.error('[free-credits/requests] approval write failed - nothing granted:', requestId, approveErr.message);
+        return res.status(500).json({ error: 'approval not recorded', code: 'APPROVAL_WRITE_FAILED', retryable: true });
+      }
+      const warnings: string[] = [];
 
       if (whitelistDomain && request.domain) {
-        await sb.from('domain_whitelist').upsert({
+        // best-effort: the approval stands; a missing whitelist entry is
+        // reported to the operator.
+        const { error: wlErr } = await sb.from('domain_whitelist').upsert({
           domain: request.domain,
           added_by: adminId,
           reason: adminNote ?? `Approved via access request ${requestId}`,
         }, { onConflict: 'domain' });
-        await invalidateDomainCache(request.domain);
+        if (wlErr) {
+          console.error('[free-credits/requests] domain whitelist write failed:', request.domain, wlErr.message);
+          warnings.push('domain NOT whitelisted (write failed) - retry approve');
+        } else {
+          await invalidateDomainCache(request.domain);
+        }
       }
 
       if (creditsToGrant > 0 && request.organization_id) {
@@ -96,28 +114,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             idempotencyKey: makeIdempotencyKey(actor, 'domain_access_approval', requestId),
           });
         } catch (creditErr: any) {
+          // Never answer success for credits that were not granted. The approval
+          // is recorded; retrying approve re-attempts the grant idempotently.
           console.error('[free-credits/requests] credit grant failed:', creditErr.message);
+          return res.status(500).json({ error: 'credits not granted', code: 'CREDIT_GRANT_FAILED', approved: true, retryable: true });
         }
       }
 
       // Ensure the user has COMPANY_ADMIN role (never SUPER_ADMIN).
       // If they have no role yet, create one. If they already have one, leave it alone.
       if (request.user_id && request.organization_id) {
-        const { data: existingRole } = await sb
+        // PRIVILEGE: a membership is created only on a CLEAN "no existing role"
+        // read - an unread error used to look like "no role" and insert a
+        // COMPANY_ADMIN row for a user who may already hold another role.
+        const { data: existingRole, error: roleReadErr } = await sb
           .from('user_company_roles')
           .select('id, role')
           .eq('user_id', request.user_id)
           .eq('company_id', request.organization_id)
           .maybeSingle();
 
-        if (!existingRole) {
+        if (roleReadErr) {
+          console.error('[free-credits/requests] role read failed - membership not changed:', requestId, roleReadErr.message);
+          warnings.push('company-admin membership NOT ensured (role read failed) - retry approve');
+        } else if (!existingRole) {
           // No role at all — create COMPANY_ADMIN
-          await sb.from('user_company_roles').insert({
+          const { error: roleInsertErr } = await sb.from('user_company_roles').insert({
             user_id:    request.user_id,
             company_id: request.organization_id,
             role:       'COMPANY_ADMIN',
             status:     'active',
           });
+          if (roleInsertErr) {
+            console.error('[free-credits/requests] role insert failed:', requestId, roleInsertErr.message);
+            warnings.push('company-admin membership NOT created - retry approve');
+          }
         }
         // Closure-015J (R-6): an existing SUPER_ADMIN membership is left untouched — it
         // already exceeds COMPANY_ADMIN, and platform super-admin authority changes only
@@ -128,27 +159,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // Any other role (COMPANY_ADMIN, CONTENT_CREATOR, etc.) — leave untouched
       }
 
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ success: true, ...(warnings.length ? { warnings } : {}) });
     }
 
     if (action === 'reject') {
       const { reason } = body;
       if (!reason) return res.status(400).json({ error: 'reason required for rejection' });
-      await sb.from('access_requests').update({
+      const { error: rejectErr } = await sb.from('access_requests').update({
         status: 'rejected',
         reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
         rejection_reason: reason,
       }).eq('id', requestId);
+      if (rejectErr) return res.status(500).json({ error: 'rejection not recorded', retryable: true });
       return res.status(200).json({ success: true });
     }
 
     if (action === 'delete') {
-      await sb.from('access_requests').update({
+      const { error: deleteErr } = await sb.from('access_requests').update({
         status: 'deleted',
         reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
       }).eq('id', requestId);
+      if (deleteErr) return res.status(500).json({ error: 'deletion not recorded', retryable: true });
       return res.status(200).json({ success: true });
     }
 

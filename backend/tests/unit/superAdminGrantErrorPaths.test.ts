@@ -20,8 +20,10 @@ jest.mock('../../services/requestAccessService', () => ({ requireAdminRateLimit:
 jest.mock('../../security/requireCapability', () => ({ requireCapability: async () => ({ ok: true, principal: { userId: 'sa1' } }) }));
 jest.mock('../../security/preAuthorization', () => ({ mayAttemptCapability: async () => true }));
 jest.mock('../../services/adminAuditService', () => ({ recordAdminAudit: async () => undefined }));
+jest.mock('../../services/domainEligibilityService', () => ({ invalidateDomainCache: async () => undefined }));
+let mockGrantThrows = false;
 jest.mock('../../services/creditExecutionService', () => ({
-  createCredit: async (a: { referenceId: string }) => { mockGrants.push(a.referenceId); },
+  createCredit: async (a: { referenceId: string }) => { if (mockGrantThrows) throw new Error('rpc down'); mockGrants.push(a.referenceId); },
   makeIdempotencyKey: (...p: string[]) => p.join(':'),
 }));
 jest.mock('../../db/supabaseClient', () => ({
@@ -32,6 +34,8 @@ jest.mock('../../db/supabaseClient', () => ({
       const result = () => (mockScript[table + ':' + op] ?? (() => ({ data: null, error: null })))();
       for (const m of ['select', 'eq', 'limit']) b[m] = () => b;
       b.insert = () => { op = 'insert'; mockWrites.push(table + ':insert'); return b; };
+      b.update = () => { op = 'update'; mockWrites.push(table + ':update'); return b; };
+      b.upsert = () => { op = 'upsert'; mockWrites.push(table + ':upsert'); return b; };
       b.maybeSingle = async () => result();
       b.single = async () => result();
       b.then = (ok: (v: Res) => unknown, ko: (e: unknown) => unknown) => Promise.resolve(result()).then(ok, ko);
@@ -42,6 +46,7 @@ jest.mock('../../db/supabaseClient', () => ({
 
 import creditsGrant from '../../../pages/api/super-admin/credits/grant';
 import freeCreditsGrant from '../../../pages/api/super-admin/free-credits/grant';
+import accessRequests from '../../../pages/api/super-admin/free-credits/requests';
 
 function mockRes() {
   const r: any = { statusCode: 0, body: null };
@@ -59,7 +64,7 @@ const DOWN = () => ({ data: null, error: { message: 'down' } });
 let errSpy: jest.SpyInstance;
 beforeEach(() => {
   mockScript = { 'manual_credit_grants:insert': () => ({ data: { id: 'g1' }, error: null }) };
-  mockWrites.length = 0; mockGrants.length = 0;
+  mockWrites.length = 0; mockGrants.length = 0; mockGrantThrows = false;
   errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 afterEach(() => errSpy.mockRestore());
@@ -99,5 +104,51 @@ describe('super-admin/free-credits/grant', () => {
     mockScript['user_company_roles:insert'] = DOWN;
     const res = await post(freeCreditsGrant, BODY);
     expect(res.body).toMatchObject({ roleEnsured: false });
+  });
+});
+
+describe('super-admin/free-credits/requests (approve)', () => {
+  const REQ = () => ({ data: { id: 'r1', user_id: 'u1', organization_id: 'o1', domain: 'acme.com' }, error: null });
+  const APPROVE = { action: 'approve', requestId: 'r1', creditsToGrant: 300 };
+
+  it('request read error -> 503, NOT 404; nothing changed', async () => {
+    mockScript['access_requests:select'] = DOWN;
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(503);
+    expect(mockWrites).toEqual([]);
+  });
+
+  it('approval write error -> 500 and NO credits granted (credits never move on an unrecorded approval)', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = DOWN;
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(500);
+    expect(mockGrants).toEqual([]);
+  });
+
+  it('credit grant failure -> 500 CREDIT_GRANT_FAILED, never success:true', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockGrantThrows = true;
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toMatchObject({ code: 'CREDIT_GRANT_FAILED', approved: true });
+  });
+
+  it('role read error -> approved and credited, NO membership inserted, warned', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['user_company_roles:select'] = DOWN;
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(200);
+    expect(mockGrants).toEqual(['r1']);
+    expect(mockWrites).not.toContain('user_company_roles:insert');
+    expect(res.body.warnings?.join(' ')).toMatch(/membership NOT ensured/);
+  });
+
+  it('control: a clean approve records, whitelists, credits and creates the membership', async () => {
+    mockScript['access_requests:select'] = REQ;
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(mockWrites).toEqual(['access_requests:update', 'domain_whitelist:upsert', 'user_company_roles:insert']);
   });
 });
