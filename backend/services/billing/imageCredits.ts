@@ -23,8 +23,12 @@
  *   registry entry or an infra error => ok:false and the caller makes NO
  *   provider call.
  * - One reservation per attempt key. The same key again returns the SAME
- *   billingOperationId (a lost response of the same attempt; callers serialise
- *   attempts before billing). A REFUSED key is reusable (nothing was held). A
+ *   billingOperationId. The creator flow's keys carry a per-invocation nonce
+ *   (creator-image:<org>:<uuid>:<n>), so it never presents a repeated key; the
+ *   render pipeline's per-attempt keys are serialised by its claim / CAS. The
+ *   same-key path is therefore DEFENCE for a future caller with a deterministic
+ *   key, and the open converges on the row that owns the key (re-read after
+ *   open) rather than relying on any caller's key shape. A REFUSED key is reusable (nothing was held). A
  *   key whose reservation was confirmed or released is SPENT ('key_spent').
  * - settle / release work BY billingOperationId with no request context
  *   (sweeper-callable), load everything from the row, and move exactly the one
@@ -109,6 +113,27 @@ export function imageUnitFor(model: string, size: string, quality: string): stri
   return `${String(model).trim()}:${String(size).trim()}:${String(quality || 'auto').trim()}`.toLowerCase();
 }
 
+/**
+ * The image SKUs the owner must price in Super Admin before images can be
+ * generated (owner ruling 2026-11-11: no seeded prices; fail closed until set).
+ * Derived from what the code SENDS:
+ *  - creator flow (creatorAssetRendererMedia): AI_IMAGE_SIZE 1024x1024;
+ *    generate + showcase edit at 'low'; a main-subject reference edit raises
+ *    'low' to 'medium' (referenceEditParams); model gpt-image-1.5, falling back
+ *    to gpt-image-1 when 1.5 is unavailable.
+ *  - render pipeline (Orchestration): gpt-image-1.5 at 'medium' in the three
+ *    supported sizes.
+ * Keep in step with those call sites; the Super Admin page lists these.
+ */
+export const REQUIRED_IMAGE_SKUS: ReadonlyArray<{ provider: string; model: string; size: string; quality: string; usedBy: string }> = Object.freeze([
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'low',    usedBy: 'creator: generate, style-reference edit' },
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium', usedBy: 'creator: main-subject edit; render' },
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1024x1536', quality: 'medium', usedBy: 'render (portrait)' },
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1536x1024', quality: 'medium', usedBy: 'render (landscape)' },
+  { provider: 'openai', model: 'gpt-image-1',   size: '1024x1024', quality: 'low',    usedBy: 'creator fallback model' },
+  { provider: 'openai', model: 'gpt-image-1',   size: '1024x1024', quality: 'medium', usedBy: 'creator fallback model' },
+]);
+
 export function clampCredits(credits: number, bounds: { min: number; max: number }): number {
   return Math.min(bounds.max, Math.max(bounds.min, Math.ceil(credits)));
 }
@@ -164,7 +189,14 @@ export function makeImageCredits(deps: ImageCreditsDeps) {
         if (err instanceof StepTimeout) throw err;
         if (deps.isPricingMissing(err)) {
           logger.warn('image_credits_not_priced', { provider: input.provider, unit: imageUnitFor(input.model, input.size, input.quality) });
-          return { ok: false, reason: 'not_priced', detail: err instanceof Error ? err.message : String(err) };
+          return {
+            ok: false,
+            reason: 'not_priced',
+            detail: `not priced: ${input.provider.toLowerCase()} '${imageUnitFor(input.model, input.size, input.quality)}' - `
+              + 'a Super Admin must set it under Pricing > Provider unit costs (image SKUs: '
+              + REQUIRED_IMAGE_SKUS.map((k) => imageUnitFor(k.model, k.size, k.quality)).join(', ') + ')'
+              + ` [cause: ${err instanceof Error ? err.message : String(err)}]`,
+          };
         }
         throw err;
       }
@@ -176,14 +208,28 @@ export function makeImageCredits(deps: ImageCreditsDeps) {
         sku: { provider: input.provider, model: input.model, size: input.size, quality: input.quality },
         pricing: snapshot,
       };
-      const opId = existing?.id ?? await bounded(deps.openOp({
-        organizationId: input.organizationId,
-        actorUserId: input.actorUserId ?? null,
-        idempotencyKey: key,
-        correlationId,
-        amountEstimated: credits,
-        metadata: baseMeta,
-      }), ms, 'open');
+      let opId = existing?.id ?? null;
+      if (!opId) {
+        await bounded(deps.openOp({
+          organizationId: input.organizationId,
+          actorUserId: input.actorUserId ?? null,
+          idempotencyKey: key,
+          correlationId,
+          amountEstimated: credits,
+          metadata: baseMeta,
+        }), ms, 'open');
+        // openBillingOperation upserts on the key; re-read by key so a lost
+        // first-open race converges on the ONE row that owns it instead of
+        // depending on the caller's key shape (05).
+        const owner = await bounded(deps.findOpByKey(key), ms, 'lookup-after-open');
+        if (!owner || !isHelperRow(owner)) return { ok: false, reason: 'unavailable', detail: 'could not open the billing operation' };
+        if (owner.status === 'held') {
+          const hold = (owner.metadata as Record<string, unknown>)?.hold as HoldHandle | undefined;
+          return { ok: true, billingOperationId: owner.id, creditsReserved: hold?.creditsReserved ?? 0 };
+        }
+        if (!(REUSABLE as readonly string[]).includes(owner.status)) return { ok: false, reason: 'key_spent', detail: `reservation already ${owner.status}` };
+        opId = owner.id;
+      }
 
       const res = await bounded(deps.reserve({
         userId: input.organizationId,            // org-as-actor sentinel (no session; membership not re-checked)
@@ -210,8 +256,10 @@ export function makeImageCredits(deps: ImageCreditsDeps) {
         if (moved.error || moved.updated !== 1) {
           // The credits ARE held; the lineage row could not record it. Release
           // the hold rather than leave an untracked reservation (fail closed).
-          await bounded(deps.release({ ...hold, note: 'image credits: lineage write failed' }), ms, 'release-orphan').catch(() => undefined);
-          logger.error('image_credits_lineage_failed', { opId, key, updated: moved.updated, error: moved.error });
+          const orphan = await bounded(deps.release({ ...hold, note: 'image credits: lineage write failed' }), ms, 'release-orphan')
+            .then((x) => x.status)
+            .catch((e: unknown) => `release failed: ${e instanceof Error ? e.message : String(e)}`);
+          logger.error('image_credits_lineage_failed', { opId, key, updated: moved.updated, error: moved.error, holdId: hold.holdTransactionId, orphanRelease: orphan });
           return { ok: false, reason: 'unavailable', detail: 'could not record the hold' };
         }
         return { ok: true, billingOperationId: opId, creditsReserved: hold.creditsReserved };
@@ -254,8 +302,18 @@ export function makeImageCredits(deps: ImageCreditsDeps) {
     const { op, hold } = loaded;
     try {
       const r = await bounded(deps.confirm({ ...hold, note: 'image delivered' }), ms, 'confirm');
-      if (r.status === 'already_released') return { ok: false, reason: 'not_held', detail: 'reservation was released' };
-      const charged = r.status === 'confirmed' ? Number(r.creditsCharged ?? hold.creditsReserved) : hold.creditsReserved;
+      // A charge is recorded ONLY for a status named here (05, BLOCKING): any
+      // other answer - released, refused, unknown - touches nothing and leaves
+      // the row 'held' for reconciliation. Never charge by default.
+      let charged: number;
+      if (r.status === 'confirmed') charged = Number(r.creditsCharged ?? hold.creditsReserved);
+      else if (r.status === 'already_confirmed') charged = hold.creditsReserved;
+      else if (r.status === 'already_released' || r.status === 'released') {
+        return { ok: false, reason: 'not_held', detail: `reservation was released (${r.status})` };
+      } else {
+        logger.error('image_credits_confirm_unexpected_status', { opId: op.id, status: r.status });
+        return { ok: false, reason: 'unavailable', detail: `confirm answered '${r.status}'; nothing recorded` };
+      }
       const moved = await bounded(deps.closeOp(op.id, {
         status: 'confirmed', amountCharged: charged, reservationTxnId: hold.holdTransactionId,
         confirmTxnId: r.confirmTransactionId ?? undefined, metadata: op.metadata ?? {},
@@ -286,11 +344,21 @@ export function makeImageCredits(deps: ImageCreditsDeps) {
         logger.error('image_credits_release_after_confirm', { opId: op.id });
         return { ok: false, reason: 'not_held', detail: 'reservation was already confirmed' };
       }
+      if (r.status !== 'released' && r.status !== 'already_released') {
+        logger.error('image_credits_release_unexpected_status', { opId: op.id, status: r.status });
+        return { ok: false, reason: 'unavailable', detail: `release answered '${r.status}'; nothing recorded` };
+      }
       const moved = await bounded(deps.closeOp(op.id, {
         status: 'released', reservationTxnId: hold.holdTransactionId,
         releaseTxnId: r.releaseTransactionId ?? undefined, failureReason: input.reason, metadata: op.metadata ?? {},
       }, ['held']), ms, 'mark-released');
       if (moved.error) return { ok: false, reason: 'unavailable', detail: moved.error };
+      if (moved.updated !== 1) {
+        // The credits ARE released; the lineage row did not move (it changed
+        // underneath). Report it rather than claim a clean release.
+        logger.error('image_credits_release_lineage_not_moved', { opId: op.id, updated: moved.updated });
+        return { ok: false, reason: 'not_held', detail: 'the held row changed underneath' };
+      }
       return { ok: true };
     } catch (err) {
       return { ok: false, reason: 'unavailable', detail: err instanceof Error ? err.message : String(err) };

@@ -161,6 +161,14 @@ export async function generateProviderImage(input: {
   // BETA-020 RULE 4 — Beta AI render mode: deterministic fixture image, zero OpenAI cost. Off by
   // default (BETA_AI_MODE unset) so production is byte-identical; enabled only in the Beta env.
   if (isBetaAiRenderMode()) {
+    // Image credits (e9-approved option (c)): the beta mock calls no paid
+    // provider, so nothing is reserved or charged. A distinct event makes it
+    // visible if this ever fires where it should not (e.g. in production).
+    creatorEvent('provider', 'ok', {
+      category: 'render_skipped_billing_beta_mock',
+      creatorType: input.eventContext?.creatorType ?? null,
+      platform: input.eventContext?.platform ?? null,
+    });
     return { image: { buffer: await createBetaMockImage(input.prompt), model: BETA_MOCK_MODEL } };
   }
   const apiKey = await resolveOpenAiImageKey();
