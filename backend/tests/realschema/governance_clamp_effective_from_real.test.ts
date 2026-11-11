@@ -166,6 +166,13 @@ describe('20270212000000: effective_from is clamped to the database instant', ()
     expect(await attempt(POSTCONDITION)).toBe('P0001');
   }));
 
+  it('PREMISE: a function body that loses the NULL guard makes the postcondition RAISE (the guard is pinned, not only tested)', () => inRollback(async () => {
+    await db.query(`CREATE OR REPLACE FUNCTION public.contact_governance_records_clamp_effective_from()
+      RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+      BEGIN NEW.effective_from := LEAST(NEW.effective_from, now()); RETURN NEW; END $f$`); // rolled back
+    expect(await attempt(POSTCONDITION)).toBe('P0001');
+  }));
+
   it('an explicitly supplied NULL is NOT silently clamped: NOT NULL still refuses it (23502)', () => inRollback(async () => {
     const person = await newPerson(ORG_A);
     expect(await attempt(

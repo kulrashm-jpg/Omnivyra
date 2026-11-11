@@ -89,6 +89,11 @@ BEGIN
   IF position('NEW.effective_from := LEAST(NEW.effective_from, now())' IN pg_get_functiondef(fn)) = 0 THEN
     RAISE EXCEPTION 'governance clamp postcondition: public.contact_governance_records_clamp_effective_from() no longer clamps to LEAST(supplied, now())';
   END IF;
+  -- The NULL guard is pinned too: without it LEAST (which ignores NULLs) would silently turn an
+  -- explicit NULL into now() instead of the NOT NULL refusal (23502) this migration preserves.
+  IF position('IF NEW.effective_from IS NOT NULL THEN' IN pg_get_functiondef(fn)) = 0 THEN
+    RAISE EXCEPTION 'governance clamp postcondition: public.contact_governance_records_clamp_effective_from() lost its explicit NULL guard (an explicit NULL must still fail NOT NULL)';
+  END IF;
   IF (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = fn) THEN
     RAISE EXCEPTION 'governance clamp postcondition: the clamp function must stay SECURITY INVOKER';
   END IF;
