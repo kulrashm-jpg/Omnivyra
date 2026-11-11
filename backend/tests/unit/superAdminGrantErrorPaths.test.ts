@@ -32,7 +32,7 @@ jest.mock('../../db/supabaseClient', () => ({
       let op = 'select';
       const b: any = {};
       const result = () => (mockScript[table + ':' + op] ?? (() => ({ data: null, error: null })))();
-      for (const m of ['select', 'eq', 'limit']) b[m] = () => b;
+      for (const m of ['select', 'eq', 'limit', 'in']) b[m] = () => b;
       b.insert = () => { op = 'insert'; mockWrites.push(table + ':insert'); return b; };
       b.update = () => { op = 'update'; mockWrites.push(table + ':update'); return b; };
       b.upsert = () => { op = 'upsert'; mockWrites.push(table + ':upsert'); return b; };
@@ -128,6 +128,7 @@ describe('super-admin/free-credits/requests (approve)', () => {
 
   it('credit grant failure -> 500 CREDIT_GRANT_FAILED, never success:true', async () => {
     mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [{ id: 'r1' }], error: null });
     mockGrantThrows = true;
     const res = await post(accessRequests, APPROVE);
     expect(res.statusCode).toBe(500);
@@ -136,6 +137,7 @@ describe('super-admin/free-credits/requests (approve)', () => {
 
   it('role read error -> approved and credited, NO membership inserted, warned', async () => {
     mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [{ id: 'r1' }], error: null });
     mockScript['user_company_roles:select'] = DOWN;
     const res = await post(accessRequests, APPROVE);
     expect(res.statusCode).toBe(200);
@@ -146,9 +148,25 @@ describe('super-admin/free-credits/requests (approve)', () => {
 
   it('control: a clean approve records, whitelists, credits and creates the membership', async () => {
     mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [{ id: 'r1' }], error: null });
     const res = await post(accessRequests, APPROVE);
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ success: true });
     expect(mockWrites).toEqual(['access_requests:update', 'domain_whitelist:upsert', 'user_company_roles:insert']);
+  });
+
+  it('STATE CAS: approving a request that is no longer pending (0 rows moved) -> 409, NO credits granted', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [], error: null });
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(409);
+    expect(mockGrants).toEqual([]);
+  });
+
+  it('STATE CAS: rejecting a non-pending request -> 409', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [], error: null });
+    const res = await post(accessRequests, { action: 'reject', requestId: 'r1', reason: 'x' });
+    expect(res.statusCode).toBe(409);
   });
 });

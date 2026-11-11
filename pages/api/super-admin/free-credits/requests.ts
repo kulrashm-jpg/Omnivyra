@@ -71,16 +71,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // failure used to grant credits against a request still 'pending' (which
       // could then be rejected). Retrying approve is safe: the credit key is
       // per request.
-      const { error: approveErr } = await sb.from('access_requests').update({
+      // STATE CAS (05, 2026-11-12): approve only a request that is still
+      // 'pending' - or already 'approved' (a retry after CREDIT_GRANT_FAILED,
+      // re-attempting the idempotent grant). Never a rejected / deleted one:
+      // approving those used to GRANT CREDITS on a decision already reversed.
+      // Exactly one row must move; 0 rows = the state changed -> 409.
+      const { data: approvedRows, error: approveErr } = await sb.from('access_requests').update({
         status: 'approved',
         reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
         admin_note: adminNote ?? null,
         credits_granted_amount: creditsToGrant,
-      }).eq('id', requestId);
+      }).eq('id', requestId).in('status', ['pending', 'approved']).select('id');
       if (approveErr) {
         console.error('[free-credits/requests] approval write failed - nothing granted:', requestId, approveErr.message);
         return res.status(500).json({ error: 'approval not recorded', code: 'APPROVAL_WRITE_FAILED', retryable: true });
+      }
+      if (!Array.isArray(approvedRows) || approvedRows.length !== 1) {
+        return res.status(409).json({ error: 'request is not pending', code: 'NOT_PENDING' });
       }
       const warnings: string[] = [];
 
@@ -165,23 +173,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (action === 'reject') {
       const { reason } = body;
       if (!reason) return res.status(400).json({ error: 'reason required for rejection' });
-      const { error: rejectErr } = await sb.from('access_requests').update({
+      // STATE CAS: only a pending request can be rejected (rejecting an approved
+      // one would leave its credits granted under a 'rejected' record).
+      const { data: rejectedRows, error: rejectErr } = await sb.from('access_requests').update({
         status: 'rejected',
         reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
         rejection_reason: reason,
-      }).eq('id', requestId);
+      }).eq('id', requestId).eq('status', 'pending').select('id');
       if (rejectErr) return res.status(500).json({ error: 'rejection not recorded', retryable: true });
+      if (!Array.isArray(rejectedRows) || rejectedRows.length !== 1) {
+        return res.status(409).json({ error: 'request is not pending', code: 'NOT_PENDING' });
+      }
       return res.status(200).json({ success: true });
     }
 
     if (action === 'delete') {
-      const { error: deleteErr } = await sb.from('access_requests').update({
+      // STATE CAS: an APPROVED request (credits granted) is never soft-deleted -
+      // it would vanish from the grant activity view.
+      const { data: deletedRows, error: deleteErr } = await sb.from('access_requests').update({
         status: 'deleted',
         reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
-      }).eq('id', requestId);
+      }).eq('id', requestId).in('status', ['pending', 'rejected']).select('id');
       if (deleteErr) return res.status(500).json({ error: 'deletion not recorded', retryable: true });
+      if (!Array.isArray(deletedRows) || deletedRows.length !== 1) {
+        return res.status(409).json({ error: 'only a pending or rejected request can be deleted', code: 'NOT_DELETABLE' });
+      }
       return res.status(200).json({ success: true });
     }
 
