@@ -73,6 +73,12 @@ afterAll(() => { global.fetch = realFetch; });
 beforeEach(() => { metaCalls.length = 0; mockJobs.length = 0; mockRedis.store.clear(); jest.restoreAllMocks(); });
 
 async function account(org: string): Promise<string> {
+  // ONE live account per number: a phone_number_id held by two live accounts is refused at
+  // send (owner ruling 2026-11-11, mirroring inbound), so a test that creates two broadcasts
+  // reuses the tenant's account for PHONE_NUMBER_ID instead of connecting the number twice.
+  const existing = await db.query(
+    `SELECT id FROM public.social_accounts WHERE company_id = $1 AND phone_number_id = $2 AND is_active LIMIT 1`, [org, PHONE_NUMBER_ID]);
+  if (existing.rows[0]) return String(existing.rows[0].id);
   const user = await newUser();
   const a = await one(`INSERT INTO public.social_accounts
     (user_id, platform, platform_user_id, account_name, access_token, company_id, phone_number_id, is_active)
