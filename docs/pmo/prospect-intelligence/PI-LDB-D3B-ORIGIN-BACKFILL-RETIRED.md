@@ -34,9 +34,22 @@ shipped.
   739852a8e (fix/leads-webhook-auth-integration-20261111) every `createLead`
   caller also asserts `provenance_mode` explicitly. Changing that fallback to
   NULL is a separate, later change.
-- **Basis-2 caveat (virality-05), on record for any future backfill:**
-  `prospect_source_contributions.source_category` is only as asserted as the
-  mode that chose its profile.
+- **Basis-2 caveat (virality-05), and its date boundary.** For any future backfill:
+  `prospect_source_contributions.source_category` is only as reliable as the
+  mode that chose its profile. The caveat is time-bounded; it is not general
+  distrust of the column:
+  - **Before `739852a8e`:** inbound-lead contributions may carry a
+    fallback-derived `manual`. In particular, a website capture whose visitor
+    session did not resolve was labelled `manual` and should read `website`.
+    This mislabel can be identified (website-path rows written before that
+    commit and labelled `manual`), so correcting it later remains possible.
+  - **From `739852a8e`:** every `createLead` call site asserts its mode. That is
+    the operative boundary, because the live mislabel stopped there.
+  - **`3e3aa7ef0` / `8d162b8bb`** are the backstop. A caller that does not
+    assert gets unknown (no contribution), and that case is reported on the
+    failure channel.
+  - Contributions written after the boundary are a sound basis. Do not rule out
+    a future backfill on them because of this caveat.
 - **Reserved version:** 20270211000008 is released through virality-83 (registry
   owner).
 - **Files removed once 83 marks the version retired:** the migration, its
