@@ -16,6 +16,7 @@ import {
   expandRecipients,
   enqueueBroadcast,
   BroadcastPartiallyEnqueuedError,
+  refreshDirtyBroadcastCounts,
   senderAccountRefusalResponse,
   type CreateBroadcastInput,
   type ContactInput,
@@ -40,8 +41,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (status) query = query.eq('status', status);
 
-    const { data, count, error } = await query;
+    let { data, count, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
+
+    // A debounced (dirty) count is refreshed from the recipient rows, then re-read.
+    if (await refreshDirtyBroadcastCounts((data ?? []) as Array<{ id: string; counts_dirty?: boolean | null }>)) {
+      ({ data, count, error } = await query);
+      if (error) return res.status(500).json({ error: error.message });
+    }
 
     return res.status(200).json({ broadcasts: data ?? [], total: count ?? 0 });
   }

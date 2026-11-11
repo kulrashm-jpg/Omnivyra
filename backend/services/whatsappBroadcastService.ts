@@ -1119,14 +1119,63 @@ export async function processBatch(
     }
   }
 
-  // Increment broadcast counters
-  if (sentCount > 0 || failedCount > 0) {
-    await supabase.rpc('increment_broadcast_counts', {
-      p_broadcast_id: broadcastId,
-      p_sent:         sentCount,
-      p_failed:       failedCount,
+  // Batch end: recompute the broadcast's counts from the rows, unconditionally (it is
+  // idempotent; a batch that moved nothing still clears a deferred refresh).
+  void sentCount; void failedCount;
+  await refreshBroadcastCounts(broadcastId);
+}
+
+// ── Broadcast counts (recomputed from the recipient rows) ─────────────────────
+
+/**
+ * C10 (2026-11-11): the counters used to be bumped through rpc('increment_broadcast_counts')
+ * and rpc('increment_broadcast_stat'), functions that exist in no environment, with the
+ * results discarded - every count read 0 and no broadcast ever completed. Now one reviewed
+ * function RECOMPUTES the counts from the recipient rows (idempotent, self-healing) and
+ * completes a running broadcast with nothing pending/sending.
+ *
+ * minIntervalSeconds > 0 debounces (the delivery webhook can fire per message): a refresh
+ * within the window only marks the broadcast dirty; batch ends refresh unconditionally and
+ * readers refresh dirty broadcasts first (refreshDirtyBroadcastCounts), so nothing is lost.
+ * Counts are bookkeeping: a failure is logged at ERROR and never fails the send or webhook.
+ */
+export const WEBHOOK_COUNTS_MIN_INTERVAL_SECONDS = 30;
+
+export async function refreshBroadcastCounts(
+  broadcastId: string,
+  minIntervalSeconds = 0,
+): Promise<'refreshed' | 'deferred' | 'missing' | 'error'> {
+  try {
+    const { data, error } = await supabase.rpc('whatsapp_refresh_broadcast_counts', {
+      p_broadcast_id:         broadcastId,
+      p_min_interval_seconds: minIntervalSeconds,
     });
+    if (error) {
+      console.error('[wa-broadcast] broadcast counts NOT refreshed', { broadcast_id: broadcastId, error: error.message });
+      return 'error';
+    }
+    if (data === 'refreshed' || data === 'deferred' || data === 'missing') return data;
+    console.error('[wa-broadcast] broadcast counts refresh returned no answer', { broadcast_id: broadcastId });
+    return 'error';
+  } catch (err) {
+    console.error('[wa-broadcast] broadcast counts refresh threw', {
+      broadcast_id: broadcastId, error: err instanceof Error ? err.message : String(err),
+    });
+    return 'error';
   }
+}
+
+/**
+ * Readers call this BEFORE reading counts: every listed broadcast whose last refresh was
+ * deferred is recomputed now (unconditionally), so a reader never sees a debounced gap.
+ */
+export async function refreshDirtyBroadcastCounts(broadcasts: Array<{ id: string; counts_dirty?: boolean | null }>): Promise<number> {
+  let n = 0;
+  for (const b of broadcasts) {
+    if (b.counts_dirty !== true) continue;
+    if ((await refreshBroadcastCounts(b.id)) === 'refreshed') n += 1;
+  }
+  return n;
 }
 
 // ── Build message body ────────────────────────────────────────────────────────
@@ -1457,12 +1506,7 @@ export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): 
   const recipient = moved?.[0];
   if (!recipient) return;
 
-  // Increment broadcast aggregate counter
-  if (update.status === 'delivered' || update.status === 'read') {
-    const col = update.status === 'read' ? 'read_count' : 'delivered_count';
-    await supabase.rpc('increment_broadcast_stat', {
-      p_broadcast_id: recipient.broadcast_id,
-      p_column:       col,
-    });
-  }
+  // Recompute the broadcast's counts, debounced (one refresh per window; a deferred one
+  // marks the broadcast dirty for the next batch end or reader).
+  await refreshBroadcastCounts(recipient.broadcast_id, WEBHOOK_COUNTS_MIN_INTERVAL_SECONDS);
 }

@@ -64,7 +64,9 @@ describe('updateRecipientDelivery moves forward only', () => {
     const firstDeliveredAt = row().delivered_at;
     await event('delivered');
     expect(row().delivered_at).toBe(firstDeliveredAt);
-    expect(fakeDb.rpcs).toEqual([{ fn: 'increment_broadcast_stat', args: { p_broadcast_id: 'b1', p_column: 'delivered_count' } }]);
+    // One (debounced) recompute for the event that moved the row; the replay moved nothing
+    // and triggers none. (A recompute could not over-count even if it were called again.)
+    expect(fakeDb.rpcs).toEqual([{ fn: 'whatsapp_refresh_broadcast_counts', args: { p_broadcast_id: 'b1', p_min_interval_seconds: 30 } }]);
   });
 
   it('a late event leaves the failure detail alone', async () => {
