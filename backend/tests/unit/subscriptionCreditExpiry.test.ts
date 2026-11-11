@@ -21,7 +21,7 @@ function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolea
         then: (res: any) => {
           let data: any[] = [];
           if (table === 'billing_subscriptions') data = opts.sub ? [opts.sub] : [];
-          else if (table === 'credit_transactions') data = [{ free_delta: allocFree, credits_delta: allocFree }]; // subscription_allocation
+          else if (table === 'credit_transactions') data = [{ id: 'alloc-1', free_delta: allocFree, credits_delta: allocFree }]; // subscription_allocation
           return Promise.resolve({ data }).then(res);
         },
       };
@@ -83,5 +83,54 @@ describe('expireSubscriptionCreditsForOrg', () => {
     const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 300, allocFree: 0 }, cap));
     expect(r).toMatchObject({ expired: 0, reason: 'no_subscription_credits' });
     expect(cap.rpc).toHaveLength(0);
+  });
+});
+
+// MONEY (2026-11-12): per-ALLOCATION idempotency + explicit read failures.
+describe('subscription expiry - idempotency per allocation, never per day', () => {
+  it('the same allocation produces the SAME key on consecutive days (day 2 cannot re-expire it)', async () => {
+    const day1 = { rpc: [] as any[] };
+    await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 500, allocFree: 200 }, day1));
+    const day2deps = stub({ sub: expiredSub, free: 300, allocFree: 200 }, { rpc: [] as any[] });
+    const day2 = { rpc: [] as any[] };
+    await expireSubscriptionCreditsForOrg('org1', { ...day2deps, now: () => NOW + 86_400_000, rpc: async (a: any) => { day2.rpc.push(a); return { error: null }; } });
+    expect(day1.rpc[0].p_idempotency_key).toBe(day2.rpc[0].p_idempotency_key);
+  });
+
+  it('day 2 with the expiry row present -> already_expired, nothing drained', async () => {
+    const cap = { rpc: [] as any[] };
+    const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 300, allocFree: 200, existingTxn: true }, cap));
+    expect(r.reason).toBe('already_expired');
+    expect(cap.rpc).toHaveLength(0);
+  });
+});
+
+describe('subscription expiry - read failures are explicit skips (nothing expired)', () => {
+  function failing(table: string): ExpiryDeps {
+    const base = stub({ sub: expiredSub, free: 100 }, { rpc: [] });
+    return {
+      ...base,
+      db: {
+        from(t: string) {
+          const inner = (base.db as any).from(t);
+          if (t !== table) return inner;
+          const api: any = { select: () => api, eq: () => api, order: () => api, limit: () => api,
+            maybeSingle: () => Promise.resolve({ data: null, error: { message: 'down' } }),
+            then: (res: any) => Promise.resolve({ data: null, error: { message: 'down' } }).then(res) };
+          return api;
+        },
+      } as any,
+    };
+  }
+  let spy: jest.SpyInstance;
+  beforeEach(() => { spy = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
+  afterEach(() => spy.mockRestore());
+
+  it('wallet read error -> read_failed:wallet, no RPC', async () => {
+    const d = failing('organization_credits');
+    const calls: any[] = [];
+    const r = await expireSubscriptionCreditsForOrg('org1', { ...d, rpc: async (a: any) => { calls.push(a); return { error: null }; } });
+    expect(r.reason).toBe('read_failed:wallet');
+    expect(calls).toHaveLength(0);
   });
 });
