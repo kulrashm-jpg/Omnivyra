@@ -2,7 +2,7 @@
  * CKRE-002 §4/§5/§6/§7 — knowledge versions, refresh history, events, cache.
  */
 
-jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
+jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: jest.fn() } }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async () => undefined) }));
 jest.mock('../../observability', () => ({ recordRawCounter: jest.fn() }));
 jest.mock('../../services/signupEventService', () => ({
@@ -16,20 +16,28 @@ import { recordRawCounter } from '../../observability';
 import { getKnowledgeState, recordRefresh } from '../../services/crawl/knowledgeVersionStore';
 import { emitRefreshEvent, metricForRefreshEvent, REFRESH_EVENT_CAPABILITY_PREFIX } from '../../services/crawl/refreshEventService';
 import { isCacheable } from '../../services/aiResponseCache';
+import { rpcOver } from '../helpers/reportSettingsRpcFake';
 
 const mockFrom = (supabase as any).from as jest.Mock;
 const mockLog = logSecurityEvent as jest.MockedFunction<typeof logSecurityEvent>;
 const mockCounter = recordRawCounter as jest.Mock;
 
+/**
+ * report_settings unit 1: writes go through merge_report_settings_keys (a faithful fake that applies the
+ * patch to the stored row). captureUpdate receives the RESULTING column, so sibling-preservation
+ * assertions test the server-side merge, not a client-side spread.
+ */
 function stubProfile(reportSettings: Record<string, unknown> | null, captureUpdate?: (u: any) => void) {
+  const row = reportSettings === null ? null : { report_settings: reportSettings as unknown };
   mockFrom.mockReturnValue({
     select: jest.fn().mockReturnValue({
       eq: jest.fn().mockReturnValue({
-        maybeSingle: jest.fn().mockResolvedValue({ data: reportSettings === null ? null : { report_settings: reportSettings } }),
+        maybeSingle: jest.fn().mockResolvedValue({ data: row, error: null }),
       }),
     }),
-    update: jest.fn((u: any) => { captureUpdate?.(u); return { eq: jest.fn().mockResolvedValue({ error: null }) }; }),
+    update: jest.fn(() => { throw new Error('whole-column update of report_settings is not allowed'); }),
   });
+  (supabase as any).rpc = rpcOver(() => row, (r, args) => captureUpdate?.({ report_settings: r.report_settings, updated_at: args.p_updated_at }));
 }
 
 describe('CKRE-002 §5/§7 — knowledge versions + history (additive report_settings)', () => {

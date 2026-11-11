@@ -14,6 +14,7 @@
 
 import { supabase } from '../../db/supabaseClient';
 import { logger } from '../logger';
+import { mergeReportSettingsKeys } from '../../db/reportSettingsKeys';
 import { buildDiscoveredProvenance } from '../companyProfile/enrichmentProvenance';
 import type { DiscoveredWebsiteMetadata } from '../companyProfile/websiteMetadataExtractor';
 
@@ -33,15 +34,20 @@ export async function refreshDiscoveredMetadata(
 ): Promise<IncrementalMetadataResult> {
   if (!companyId || !metadata) return { updated: false, fields: [] };
   try {
-    const { data } = await supabase
+    // report_settings is NOT read: the bundle is merged server-side (merge_report_settings_keys).
+    const { data, error: readError } = await supabase
       .from('company_profiles')
-      .select('report_settings, user_locked_fields, logo_url, favicon_url, geography')
+      .select('user_locked_fields, logo_url, favicon_url, geography')
       .eq('company_id', companyId)
       .maybeSingle();
+    if (readError) {
+      // Unread locks are UNKNOWN locks: writing could overwrite a user edit. Write nothing.
+      logger.warn('incremental_metadata_read_failed', { companyId, message: readError.message });
+      return { updated: false, fields: [] };
+    }
     if (!data) return { updated: false, fields: [] };
 
     const row = data as {
-      report_settings?: Record<string, unknown>;
       user_locked_fields?: unknown;
     };
     const locked = new Set<string>(Array.isArray(row.user_locked_fields) ? (row.user_locked_fields as string[]) : []);
@@ -55,10 +61,8 @@ export async function refreshDiscoveredMetadata(
     setIfUnlocked('favicon_url', metadata.faviconUrl);
     setIfUnlocked('geography', metadata.country);
 
-    // Merge the discovered_metadata bundle + provenance (reuses ONBOARD-001R).
-    const rs = row.report_settings ?? {};
-    update.report_settings = {
-      ...rs,
+    // The discovered_metadata bundle + provenance (reuses ONBOARD-001R). Replaces ONLY that key.
+    const bundle = {
       discovered_metadata: {
         source: 'system_discovered',
         discovered_at: now,
@@ -76,16 +80,31 @@ export async function refreshDiscoveredMetadata(
         favicon_url: metadata.faviconUrl,
       },
     };
-    fields.push('discovered_metadata');
 
-    const { error } = await supabase
-      .from('company_profiles')
-      .update(update)
-      .eq('company_id', companyId);
-    if (error) {
-      logger.warn('incremental_metadata_refresh_failed', { companyId, message: error.message });
-      return { updated: false, fields: [] };
+    // 1) the unlocked COLUMNS (never report_settings: a whole-column write races every sibling key).
+    if (fields.length > 0) {
+      const { error } = await supabase
+        .from('company_profiles')
+        .update(update)
+        .eq('company_id', companyId);
+      if (error) {
+        logger.warn('incremental_metadata_refresh_failed', { companyId, message: error.message });
+        return { updated: false, fields: [] };
+      }
     }
+    // 2) the bundle, as ONE key, server-side.
+    const columnFields = [...fields];
+    try {
+      const written = await mergeReportSettingsKeys(companyId, bundle, { updatedAt: now });
+      if (!written) {
+        logger.warn('incremental_metadata_bundle_no_row', { companyId });
+        return { updated: columnFields.length > 0, fields: columnFields };
+      }
+    } catch (err) {
+      logger.warn('incremental_metadata_bundle_failed', { companyId, columnsWritten: columnFields, message: err instanceof Error ? err.message : String(err) });
+      return { updated: columnFields.length > 0, fields: columnFields };
+    }
+    fields.push('discovered_metadata');
     return { updated: true, fields };
   } catch (err) {
     logger.warn('incremental_metadata_refresh_threw', {

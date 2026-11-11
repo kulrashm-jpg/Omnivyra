@@ -32,6 +32,7 @@
  * authority.
  */
 
+import { mergeReportSettingsKeys, type ReportSettingsClient, type ReportSettingsPatch } from '../db/reportSettingsKeys';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DiscoveredWebsiteMetadata } from './companyProfile/websiteMetadataExtractor';
 import {
@@ -404,8 +405,10 @@ export async function bootstrapCompanyProfile(
       completeness,
     };
 
-    const nextReportSettings: Record<string, unknown> = {
-      ...reportSettings,
+    // report_settings unit 1 (2026-11-12): the keys this service owns (bootstrap marker, and the
+    // discovered bundle when absent) are merged SERVER-SIDE, one statement, never as a whole-column
+    // write: `{ ...reportSettings, ... }` from this read would drop any key another writer set since.
+    const ownKeys: ReportSettingsPatch = {
       // Backfill the discovered bundle only when absent (never clobber a richer
       // stored one).
       ...(needsBundle && derivation.discoveredBundle
@@ -414,16 +417,28 @@ export async function bootstrapCompanyProfile(
       bootstrap: marker,
     };
 
-    const { error: writeError } = await supabase
-      .from('company_profiles')
-      .update({
-        ...derivation.columnUpdates,
-        report_settings: nextReportSettings,
-        updated_at: now,
-      })
-      .eq('company_id', companyId);
-
-    if (writeError) {
+    // 1) the canonical COLUMNS first. The marker is written only after them, so a failure here leaves
+    //    no marker and the next run retries (filling only still-empty columns is idempotent).
+    if (hasColumnUpdates) {
+      const { error: writeError } = await supabase
+        .from('company_profiles')
+        .update({ ...derivation.columnUpdates, updated_at: now })
+        .eq('company_id', companyId);
+      if (writeError) {
+        return { ok: false, applied: false, reason: 'error', appliedFields: [], classification: derivation.classification, completeness };
+      }
+    }
+    // 2) the owned report_settings keys.
+    let keysWritten = false;
+    try {
+      keysWritten = await mergeReportSettingsKeys(companyId, ownKeys, {
+        updatedAt: now,
+        client: supabase as unknown as ReportSettingsClient,
+      });
+    } catch {
+      keysWritten = false;
+    }
+    if (!keysWritten) {
       return { ok: false, applied: false, reason: 'error', appliedFields: [], classification: derivation.classification, completeness };
     }
 

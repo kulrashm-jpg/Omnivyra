@@ -11,7 +11,7 @@
  * store and production uses the report_settings-backed default.
  */
 
-import { supabase } from '../../db/supabaseClient';
+import { readReportSettingsChecked, mergeReportSettingsKeys } from '../../db/reportSettingsKeys';
 import { logger } from '../logger';
 import type { AgentCheckpoint } from './agentContracts';
 
@@ -25,8 +25,9 @@ const KEY = 'agent_checkpoints';
 const LIMIT = 100;
 
 async function readReportSettings(companyId: string): Promise<Record<string, unknown>> {
-  const { data } = await supabase.from('company_profiles').select('report_settings').eq('company_id', companyId).maybeSingle();
-  return ((data as { report_settings?: Record<string, unknown> } | null)?.report_settings) ?? {};
+  // CHECKED (report_settings unit 1, 2026-11-12): a read error THROWS ReportSettingsUnreadableError;
+  // it is never answered as `{}` (that `{}` used to be written back over the whole column).
+  return (await readReportSettingsChecked(companyId)).settings;
 }
 
 function checkpointsOf(rs: Record<string, unknown>): AgentCheckpoint[] {
@@ -56,11 +57,9 @@ export const reportSettingsAgentStore: AgentStore = {
       const merged = Array.from(byId.values())
         .sort((a, b) => active(a) - active(b) || b.executionMetadata.updatedAt.localeCompare(a.executionMetadata.updatedAt))
         .slice(0, LIMIT);
-      const { error } = await supabase
-        .from('company_profiles')
-        .update({ report_settings: { ...rs, [KEY]: merged } })
-        .eq('company_id', companyId);
-      if (error) { logger.warn('agent_checkpoint_write_failed', { companyId, runId: checkpoint.runId, message: error.message }); return false; }
+      // Replaces ONLY report_settings.agent_checkpoints, server-side; sibling keys are never rewritten.
+      const written = await mergeReportSettingsKeys(companyId, { [KEY]: merged });
+      if (!written) { logger.warn('agent_checkpoint_write_no_row', { companyId, runId: checkpoint.runId }); return false; }
       return true;
     } catch (err) {
       logger.warn('agent_checkpoint_write_threw', { companyId, message: err instanceof Error ? err.message : String(err) });

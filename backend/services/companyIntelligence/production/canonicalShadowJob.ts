@@ -18,6 +18,12 @@
  * Shadow POPULATION (running it against tenants) is a separate, subsequent phase.
  */
 import {
+  readReportSettingsChecked,
+  mergeReportSettingsKeys,
+  ReportSettingsWriteError,
+  type ReportSettingsClient,
+} from '../../../db/reportSettingsKeys';
+import {
   produceCanonicalIdentity,
   writeInputsFromProfileAndExtraction,
   type ProfileFactsLike,
@@ -205,19 +211,26 @@ export function makeSupabaseShadowDeps(sb: unknown): ShadowPersistDeps {
   // `sb` is the Supabase client. It is accepted as `unknown` and narrowed to the minimal surface this
   // function uses — matching the full SupabaseClient type here triggers TS2589 (excessively deep) and adds
   // no safety, since the implementation only ever touches the report_settings column.
-  const client = sb as {
-    from: (table: string) => {
-      select: (cols: string) => { eq: (c: string, v: string) => { maybeSingle: () => Promise<{ data: { report_settings?: Record<string, unknown> | null } | null }> } };
-      update: (patch: { report_settings: Record<string, unknown> }) => { eq: (c: string, v: string) => Promise<unknown> };
-    };
-  };
+  //
+  // report_settings unit 1 (2026-11-12): the read is CHECKED (a read error throws
+  // ReportSettingsUnreadableError; it used to become `null`, the job then judged the canonical "IMPROVED"
+  // and wrote `{ canonical_understanding }` over the WHOLE column). The write sends ONLY the
+  // canonical_understanding key to merge_report_settings_keys, whatever object it is handed, and throws
+  // when nothing was written (it used to ignore the result entirely, so wrote=true could be a lie).
+  const client = sb as ReportSettingsClient;
   return {
     readReportSettings: async (companyId) => {
-      const { data } = await client.from('company_profiles').select('report_settings').eq('company_id', companyId).maybeSingle();
-      return (data?.report_settings as Record<string, unknown> | null) ?? null;
+      const { exists, settings } = await readReportSettingsChecked(companyId, client);
+      return exists ? settings : null;
     },
     writeReportSettings: async (companyId, reportSettings) => {
-      await client.from('company_profiles').update({ report_settings: reportSettings }).eq('company_id', companyId);
+      if (!('canonical_understanding' in reportSettings)) {
+        throw new ReportSettingsWriteError(companyId, 'shadow write carries no canonical_understanding');
+      }
+      const written = await mergeReportSettingsKeys(
+        companyId, { canonical_understanding: reportSettings.canonical_understanding }, { client },
+      );
+      if (!written) throw new ReportSettingsWriteError(companyId, 'no company_profiles row');
     },
   };
 }

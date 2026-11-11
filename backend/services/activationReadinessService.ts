@@ -10,6 +10,7 @@
  * No scoring, no maturity model. Just three booleans + tiny "next step" hints.
  */
 import { ownedDbTable } from '../db/writeOwner';
+import { readReportSettingsChecked, mergeReportSettingsKeys } from '../db/reportSettingsKeys';
 import { listCmsProviders } from './cms/registry';
 
 export interface ActivationCheck {
@@ -79,36 +80,31 @@ export function resolveActivationLatch(
   };
 }
 
+/**
+ * `readable: false` = the read FAILED: the stored latch is UNKNOWN, not empty. The readiness read
+ * still degrades to pure live state, but nothing is persisted from it: persisting `{} + live` would
+ * DROP checks that were latched earlier (and, before the key merge, wiped every sibling key).
+ */
 async function readActivationLatch(
   companyId: string,
-): Promise<{ latch: ActivationLatch; settings: Record<string, unknown> }> {
+): Promise<{ latch: ActivationLatch; readable: boolean }> {
   try {
-    const { data } = (await (ownedDbTable('company_profiles')
-      .select('report_settings')
-      .eq('company_id', companyId)
-      .maybeSingle() as unknown as Promise<{ data: { report_settings?: unknown } | null }>));
-    const settings =
-      data?.report_settings && typeof data.report_settings === 'object'
-        ? (data.report_settings as Record<string, unknown>)
-        : {};
+    const { settings } = await readReportSettingsChecked(companyId);
     const raw = settings.activation_latch;
     const latch: ActivationLatch = raw && typeof raw === 'object' ? (raw as ActivationLatch) : {};
-    return { latch, settings };
+    return { latch, readable: true };
   } catch {
-    return { latch: {}, settings: {} };
+    return { latch: {}, readable: false };
   }
 }
 
 async function persistActivationLatch(
   companyId: string,
-  settings: Record<string, unknown>,
   nextLatch: ActivationLatch,
 ): Promise<void> {
   try {
-    const merged = { ...settings, activation_latch: nextLatch };
-    await (ownedDbTable('company_profiles')
-      .update({ report_settings: merged })
-      .eq('company_id', companyId) as unknown as Promise<unknown>);
+    // Replaces ONLY report_settings.activation_latch, server-side; sibling keys are never rewritten.
+    await mergeReportSettingsKeys(companyId, { activation_latch: nextLatch });
   } catch {
     // Latch persistence must never break the readiness read.
   }
@@ -176,9 +172,10 @@ export async function buildActivationReadiness(companyId: string): Promise<Activ
   );
 
   // Persist any newly-earned latch exactly once (guarded — steady state writes
-  // nothing). Fire-and-forget so it never delays or breaks the read.
-  if (changed) {
-    void persistActivationLatch(companyId, latchState.settings, nextLatch);
+  // nothing). Fire-and-forget so it never delays or breaks the read. Never from an UNREAD latch:
+  // `{} + live` would drop checks latched earlier.
+  if (changed && latchState.readable) {
+    void persistActivationLatch(companyId, nextLatch);
   }
 
   const checks: ActivationCheck[] = [

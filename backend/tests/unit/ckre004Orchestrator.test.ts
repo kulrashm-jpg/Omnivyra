@@ -3,7 +3,7 @@
  * services: plan → invalidate → tasks → events; dispatch routing; rollback; resume.
  */
 
-jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
+jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: jest.fn() } }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async () => undefined) }));
 jest.mock('../../observability', () => ({ recordRawCounter: jest.fn() }));
 jest.mock('../../services/signupEventService', () => ({
@@ -20,17 +20,23 @@ import { logSecurityEvent } from '../../security/audit/SecurityAuditService';
 import { invalidateCacheByPrefix } from '../../services/aiResponseCache';
 import { rollbackKnowledge } from '../../services/knowledge/companyKnowledgeService';
 import { orchestrateKnowledgeChange, orchestrateRollback, resumeOrchestration, dispatch } from '../../services/orchestration/knowledgeOrchestrator';
+import { rpcOver } from '../helpers/reportSettingsRpcFake';
 
 const mockFrom = (supabase as any).from as jest.Mock;
 const mockLog = logSecurityEvent as jest.MockedFunction<typeof logSecurityEvent>;
 const NOW = '2026-07-13T00:00:00.000Z';
 
 let updatedSettings: any = null;
+let rpcSpy: jest.Mock = jest.fn();
 function stub(reportSettings: Record<string, unknown>) {
   updatedSettings = null;
+  // Stateful: the key merge (a faithful fake of merge_report_settings_keys) updates the row reads see.
+  const row = { report_settings: reportSettings as unknown };
+  rpcSpy = rpcOver(() => row, (r) => { updatedSettings = r.report_settings; });
+  (supabase as any).rpc = rpcSpy;
   mockFrom.mockReturnValue({
     select: jest.fn().mockReturnValue({
-      eq: jest.fn().mockReturnValue({ maybeSingle: jest.fn().mockResolvedValue({ data: { report_settings: reportSettings } }) }),
+      eq: jest.fn().mockReturnValue({ maybeSingle: jest.fn().mockResolvedValue({ data: row, error: null }) }),
     }),
     // The write reports the row it updated (orchestrationLedgerStore checks the row count).
     update: jest.fn((u: any) => { updatedSettings = u.report_settings; return { eq: jest.fn().mockReturnValue({ select: jest.fn().mockResolvedValue({ data: [{ company_id: 'org1' }], error: null }) }) }; }),
@@ -39,6 +45,8 @@ function stub(reportSettings: Record<string, unknown>) {
 /** The company_profiles read FAILS (PostgREST: {data: null, error}, never a throw). */
 function stubReadError() {
   updatedSettings = null;
+  rpcSpy = rpcOver(() => ({ report_settings: {} }), (r) => { updatedSettings = r.report_settings; });
+  (supabase as any).rpc = rpcSpy;
   const update = jest.fn((u: any) => { updatedSettings = u.report_settings; return { eq: jest.fn().mockReturnValue({ select: jest.fn().mockResolvedValue({ data: [{ company_id: 'org1' }], error: null }) }) }; });
   mockFrom.mockReturnValue({
     select: jest.fn().mockReturnValue({
@@ -138,6 +146,7 @@ describe('orchestration ledger: a FAILED read never wipes report_settings (2026-
     const update = stubReadError();
     await orchestrateKnowledgeChange({ companyId: 'org1', changedDomains: ['WEBSITE'], now: NOW });
     expect(update).not.toHaveBeenCalled();
+    expect(rpcSpy).not.toHaveBeenCalled();
     expect(updatedSettings).toBeNull();
   });
 
@@ -146,6 +155,7 @@ describe('orchestration ledger: a FAILED read never wipes report_settings (2026-
     const out = await resumeOrchestration('org1', NOW);
     expect(out).toEqual({ recovered: 0, runnable: 0 });
     expect(update).not.toHaveBeenCalled();
+    expect(rpcSpy).not.toHaveBeenCalled();
   });
 
   test('a readable ledger keeps every sibling report_settings key when it writes', async () => {

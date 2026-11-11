@@ -18,6 +18,7 @@ import {
   type ExistingProfileSnapshot,
 } from '../../services/companyBootstrapService';
 import type { DiscoveredWebsiteMetadata } from '../../services/companyProfile/websiteMetadataExtractor';
+import { applyMerge } from '../helpers/reportSettingsRpcFake';
 
 const NOW = '2026-07-13T00:00:00.000Z';
 
@@ -49,11 +50,17 @@ function makeSupabase(initialRow: Record<string, unknown> | null) {
           };
         },
         update(patch: Record<string, unknown>) {
+          if ('report_settings' in patch) throw new Error('whole-column update of report_settings is not allowed');
           state.updates.push(patch);
           state.row = { ...(state.row ?? {}), ...patch };
           return { eq: async () => ({ error: null }) };
         },
       };
+    },
+    // report_settings unit 1: owned keys go through merge_report_settings_keys (faithful fake).
+    async rpc(fn: string, args: Record<string, unknown>) {
+      state.updates.push({ rpc: fn, p_patch: args.p_patch });
+      return applyMerge(state.row as never, args);
     },
   };
   return { supabase: api as never, state };
@@ -181,11 +188,14 @@ describe('ONBOARD-004 §1/§8 — apply: bootstrap, idempotency, resume', () => 
     expect(r.applied).toBe(true);
     expect(r.reason).toBe('bootstrapped');
     expect(r.appliedFields).toEqual(expect.arrayContaining(['website_url', 'geography', 'logo_url', 'favicon_url']));
-    const written = state.updates[0];
-    expect((written.report_settings as Record<string, unknown>).bootstrap).toMatchObject({
+    // The columns, then ONE key merge (bootstrap + discovered_metadata); never a whole-column write.
+    expect(state.updates[0]).not.toHaveProperty('report_settings');
+    expect(state.updates[1]).toMatchObject({ rpc: 'merge_report_settings_keys' });
+    const rs = (state.row as Record<string, unknown>).report_settings as Record<string, unknown>;
+    expect(rs.bootstrap).toMatchObject({
       version: COMPANY_BOOTSTRAP_VERSION, source: 'company_bootstrap_service',
     });
-    expect((written.report_settings as Record<string, unknown>).discovered_metadata).toBeTruthy();
+    expect(rs.discovered_metadata).toBeTruthy();
   });
 
   test('idempotent: a second identical run writes nothing', async () => {

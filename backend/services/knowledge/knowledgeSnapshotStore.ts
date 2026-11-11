@@ -13,7 +13,7 @@
  * Best-effort/fail-safe.
  */
 
-import { supabase } from '../../db/supabaseClient';
+import { readReportSettingsChecked, mergeReportSettingsKeys, type ReportSettingsPatch } from '../../db/reportSettingsKeys';
 import { logger } from '../logger';
 import type { KnowledgeSnapshot } from './knowledgeDiffService';
 
@@ -30,25 +30,16 @@ export interface RollbackRecord {
 }
 
 async function readReportSettings(companyId: string): Promise<Record<string, unknown>> {
-  const { data } = await supabase
-    .from('company_profiles')
-    .select('report_settings')
-    .eq('company_id', companyId)
-    .maybeSingle();
-  return ((data as { report_settings?: Record<string, unknown> } | null)?.report_settings) ?? {};
+  // CHECKED (report_settings unit 1, 2026-11-12): a read error THROWS ReportSettingsUnreadableError;
+  // it is never answered as `{}` (that `{}` used to be written back over the whole column).
+  return (await readReportSettingsChecked(companyId)).settings;
 }
 
-async function mergeReportSettings(companyId: string, patch: Record<string, unknown>, now: string): Promise<boolean> {
-  const current = await readReportSettings(companyId);
-  const { error } = await supabase
-    .from('company_profiles')
-    .update({ report_settings: { ...current, ...patch }, updated_at: now })
-    .eq('company_id', companyId);
-  if (error) {
-    logger.warn('knowledge_snapshot_store_failed', { companyId, message: error.message });
-    return false;
-  }
-  return true;
+/** Replaces ONLY the patched keys, server-side; no client-side read of the column at all. */
+async function mergeReportSettings(companyId: string, patch: ReportSettingsPatch, now: string): Promise<boolean> {
+  const written = await mergeReportSettingsKeys(companyId, patch, { updatedAt: now });
+  if (!written) logger.warn('knowledge_snapshot_store_no_row', { companyId });
+  return written;
 }
 
 /** Read the snapshot array (newest-first). Never throws. */
@@ -86,11 +77,16 @@ export async function readRollbacks(companyId: string): Promise<RollbackRecord[]
   }
 }
 
-/** Append a rollback record (bounded, newest-first). Does NOT overwrite history. Never throws. */
+/**
+ * Append a rollback record (bounded, newest-first). Does NOT overwrite history. Never throws.
+ * Reads the log CHECKED, not through readRollbacks: that one answers [] on a read error, and appending
+ * to [] would REPLACE the whole rollback log with one record. A failed read writes nothing.
+ */
 export async function appendRollback(companyId: string, record: RollbackRecord, now: string = new Date().toISOString()): Promise<boolean> {
   if (!companyId) return false;
   try {
-    const existing = await readRollbacks(companyId);
+    const arr = (await readReportSettings(companyId))[ROLLBACKS_KEY];
+    const existing = Array.isArray(arr) ? (arr as RollbackRecord[]) : [];
     const next = [record, ...existing].slice(0, ROLLBACK_LOG_LIMIT);
     return await mergeReportSettings(companyId, { [ROLLBACKS_KEY]: next }, now);
   } catch (err) {

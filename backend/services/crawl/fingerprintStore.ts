@@ -11,6 +11,7 @@
 
 import { supabase } from '../../db/supabaseClient';
 import { logger } from '../logger';
+import { mergeReportSettingsKeys } from '../../db/reportSettingsKeys';
 import type { WebsiteFingerprint } from './websiteFingerprintService';
 
 const FINGERPRINT_KEY = 'website_fingerprint';
@@ -40,21 +41,11 @@ export async function getLatestWebsiteFingerprint(companyId: string): Promise<We
 export async function saveWebsiteFingerprint(companyId: string, fingerprint: WebsiteFingerprint): Promise<void> {
   if (!companyId) return;
   try {
-    const { data } = await supabase
-      .from('company_profiles')
-      .select('report_settings')
-      .eq('company_id', companyId)
-      .maybeSingle();
-
-    const current = ((data as { report_settings?: Record<string, unknown> } | null)?.report_settings) ?? {};
-    const next = { ...current, [FINGERPRINT_KEY]: fingerprint };
-
-    const { error } = await supabase
-      .from('company_profiles')
-      .update({ report_settings: next, updated_at: new Date().toISOString() })
-      .eq('company_id', companyId);
-    if (error) {
-      logger.warn('website_fingerprint_store_failed', { companyId, message: error.message });
+    // Replaces ONLY report_settings.website_fingerprint, server-side. There is no client-side read:
+    // a failed read used to become `{}` and the write then wiped every sibling key.
+    const written = await mergeReportSettingsKeys(companyId, { [FINGERPRINT_KEY]: fingerprint }, { updatedAt: new Date().toISOString() });
+    if (!written) {
+      logger.warn('website_fingerprint_store_no_row', { companyId });
     }
   } catch (err) {
     logger.warn('website_fingerprint_store_threw', {

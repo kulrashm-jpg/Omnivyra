@@ -10,7 +10,7 @@
  * website_fingerprint, activation_latch, …) are preserved. Best-effort/fail-safe.
  */
 
-import { supabase } from '../../db/supabaseClient';
+import { readReportSettingsChecked, mergeReportSettingsKeys } from '../../db/reportSettingsKeys';
 import { logger } from '../logger';
 import type { RefreshAction } from './refreshPolicyEngine';
 import type { ChangeVerdict } from './changeDetectionService';
@@ -44,12 +44,9 @@ export interface KnowledgeState {
 }
 
 async function readReportSettings(companyId: string): Promise<Record<string, unknown>> {
-  const { data } = await supabase
-    .from('company_profiles')
-    .select('report_settings')
-    .eq('company_id', companyId)
-    .maybeSingle();
-  return ((data as { report_settings?: Record<string, unknown> } | null)?.report_settings) ?? {};
+  // CHECKED (report_settings unit 1, 2026-11-12): a read error THROWS ReportSettingsUnreadableError;
+  // it is never answered as `{}` (that `{}` used to be written back over the whole column).
+  return (await readReportSettingsChecked(companyId)).settings;
 }
 
 /** Read the current knowledge version + history. Never throws. */
@@ -136,13 +133,15 @@ export async function recordRefresh(input: RecordRefreshInput): Promise<RecordRe
     // Newest-first, bounded.
     const history = [record, ...existingHistory].slice(0, Math.max(1, input.historyLimit));
 
-    const next = { ...rs, refresh_history: history, ...(nextVersion ? { knowledge_version: nextVersion } : {}) };
-    const { error } = await supabase
-      .from('company_profiles')
-      .update({ report_settings: next, updated_at: now })
-      .eq('company_id', input.companyId);
-    if (error) {
-      logger.warn('knowledge_version_record_failed', { companyId: input.companyId, message: error.message });
+    // Replaces ONLY refresh_history (+ knowledge_version when minted), server-side, in one statement.
+    // On a FAILED read we never get here: minting from an unread `{}` would also reset the version to 1.
+    const written = await mergeReportSettingsKeys(
+      input.companyId,
+      { refresh_history: history, ...(nextVersion ? { knowledge_version: nextVersion } : {}) },
+      { updatedAt: now },
+    );
+    if (!written) {
+      logger.warn('knowledge_version_record_no_row', { companyId: input.companyId });
       return { version: prior?.version ?? null, created: false };
     }
     return { version: nextVersion?.version ?? null, created };
