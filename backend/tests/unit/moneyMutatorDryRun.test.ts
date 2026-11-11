@@ -96,6 +96,14 @@ describe('monetization reservation reconciler', () => {
     expect(mockOps).toEqual([]);
   });
 
+  it('dry and real runs reach the SAME decision for every hold, including the unbuildable-handle quarantine (one decideHold, 05)', async () => {
+    const dry = await reconcileDurableMonetizationReservations({ dryRun: true });
+    const real = await reconcileDurableMonetizationReservations();
+    const m = (r: typeof dry) => Object.fromEntries(r.actions.map((x) => [x.holdId, x.decision]));
+    expect(m(real)).toEqual(m(dry));
+    expect(m(dry).h4).toBe('quarantine'); // legacy key: handle cannot be built
+  });
+
   it('control: the real run settles exactly what the dry run predicted', async () => {
     await reconcileDurableMonetizationReservations();
     expect(mockSettlements.sort()).toEqual(['confirm:h1', 'release:h2']);

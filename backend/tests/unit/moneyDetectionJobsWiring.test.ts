@@ -63,6 +63,9 @@ describe.each(KEYS)('%s', (key) => {
   it('is in ALWAYS_RUN_JOBS', () => {
     expect(ALWAYS_RUN_JOBS.has(key)).toBe(true);
   });
+  // COUPLED with the detect-only guard at the bottom of this file (05): running
+  // when Redis ERRORS is a deliberate fail-open, acceptable ONLY because these
+  // jobs provably never write. Do not weaken or delete either test alone.
   it('is ALLOWED with an empty activity set, and when Redis errors', async () => {
     await warmIntentContext();
     expect(getIntentGate(key)).toMatchObject({ allowed: true, reason: null });
@@ -114,6 +117,9 @@ it.each([
   expect(spec.triggerSource).toBe('scheduler');
 });
 
+// COUPLED with "is ALLOWED ... when Redis errors" above (05): that fail-open is
+// only safe because of THIS guard. If a job here ever needs a write, it leaves
+// MONEY_DETECTION_JOBS and goes through the report-only + owner-approval path.
 it.each([
   'backend/services/creditReconciliation.ts',
   'backend/services/billing/jobs/reservationReconciliationJob.ts',

@@ -173,6 +173,25 @@ function contentHasDurableOutput(content: Record<string, unknown>, referenceType
   return false;
 }
 
+/**
+ * THE settlement decision for a hold with no terminal sibling - the ONLY place
+ * it is made (05). The dry run and the real run both call this, so the dry run
+ * cannot predict a different settlement from the one the real run performs:
+ * the dry run is what an operator approves, so its fidelity is a safety
+ * property. A hold whose handle cannot be built is always quarantined.
+ */
+async function decideHold(row: HoldRow): Promise<{
+  decision: Exclude<ReconciliationDecision, 'skip'>;
+  reason: string;
+  handle: CreditReservationHandle | null;
+}> {
+  const classification = await classifyHold(row);
+  const handle = buildHandle(row);
+  if (!handle) return { decision: 'quarantine', reason: classification.reason, handle: null };
+  const decision = classification.decision === 'skip' ? 'quarantine' : classification.decision;
+  return { decision, reason: classification.reason, handle };
+}
+
 async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDecision; reason: string }> {
   const referenceType = row.reference_type;
   const referenceId = row.reference_id;
@@ -327,12 +346,11 @@ export async function reconcileDurableMonetizationReservations(input?: {
           result.actions.push({ holdId: row.id, decision: 'skip', reason: `already_${sibling.execution_phase}`, terminalTransactionId: sibling.id });
           continue;
         }
-        const classification = await classifyHold(row);
-        const decision: ReconciliationDecision = buildHandle(row) ? classification.decision : 'quarantine';
+        const { decision, reason } = await decideHold(row);
         if (decision === 'confirm') result.confirmed += 1;
         else if (decision === 'release') result.released += 1;
         else result.quarantined += 1;
-        result.actions.push({ holdId: row.id, decision, reason: classification.reason });
+        result.actions.push({ holdId: row.id, decision, reason });
       } catch (err) {
         result.failed += 1;
         result.actions.push({ holdId: row.id, decision: 'quarantine', reason: err instanceof Error ? err.message : String(err) });
@@ -361,29 +379,10 @@ export async function reconcileDurableMonetizationReservations(input?: {
         continue;
       }
 
-      const classification = await classifyHold(row);
-      const handle = buildHandle(row);
-      if (!handle) {
-        await stampHold(row, {
-          reconciliation_status: 'quarantined',
-          reconciliation_reason: classification.reason,
-          reconciled_at: new Date().toISOString(),
-          reconciled_by: reconciledBy,
-        });
-        result.quarantined += 1;
-        await recordMonetizationOperationalEvent({
-          eventName: 'monetization.reservation_quarantined',
-          severity: 'WARN',
-          organizationId: row.organization_id,
-          reservationId: row.id,
-          alertKey: 'reservation_quarantine',
-          metadata: { reason: classification.reason, reference_type: row.reference_type, reference_id: row.reference_id },
-        });
-        result.actions.push({ holdId: row.id, decision: 'quarantine', reason: classification.reason });
-        continue;
-      }
+      const { decision, reason, handle } = await decideHold(row);
+      const classification = { decision, reason };
 
-      if (classification.decision === 'confirm') {
+      if (decision === 'confirm' && handle) {
         const settlement = await confirmCreditReservation({
           ...handle,
           note: `[RECONCILED] ${classification.reason}`,
@@ -408,7 +407,7 @@ export async function reconcileDurableMonetizationReservations(input?: {
         continue;
       }
 
-      if (classification.decision === 'release') {
+      if (decision === 'release' && handle) {
         const release = await releaseCreditReservation({
           ...handle,
           note: `[RECONCILED] ${classification.reason}`,
