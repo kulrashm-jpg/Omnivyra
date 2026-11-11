@@ -968,7 +968,7 @@ export async function exportLeads(
   ): boolean => {
     const decision = evaluateGovernanceReads(governance.reads, {
       organizationId: query.companyId, personId, targetNormalized, channel,
-    });
+    }, governance.records?.length ?? 0);
     // `=== true`, not a truthiness test: `strict` is off in this repository, so a
     // bare `decision.ok` does not narrow the discriminated union and
     // `decision.verdict` would not type-check on the indeterminate branch.

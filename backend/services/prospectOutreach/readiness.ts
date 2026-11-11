@@ -514,7 +514,7 @@ export async function assessOutreachReadiness(
   // instant any of its rows was read at.
   const decided = evaluateGovernanceReads(loaded.reads, {
     organizationId, personId, targetNormalized, channel,
-  });
+  }, loaded.records?.length ?? 0);
 
   if (decided.ok === false) {
     // Rows arrived with no usable read instant, instants disagreed, or the

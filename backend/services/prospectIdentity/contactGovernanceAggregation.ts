@@ -146,15 +146,31 @@ const moreRestrictive = (a: MayContactResult, b: MayContactResult): MayContactRe
  * matched anything. Nothing was read because nothing could apply, and the
  * verdict is the same "nothing applies" the evaluator already returned for that
  * case before this change.
+ *
+ * `producedRecordCount` is the number of rows the producer returned in its flat
+ * `records` list. It NEVER decides a verdict (those rows have no single instant);
+ * it is used for one thing only: detecting a producer that returned rows while
+ * reporting NO read. `reads: []` with rows present is not "nothing applied" — it
+ * is "rows exist and no read instant is known", the same state as `undefined`,
+ * and it fails closed (virality-05, A2 review, 2026-11-11). REQUIRED, not
+ * optional, so a new caller cannot omit it and inherit the permissive branch.
  */
 export function evaluateGovernanceReads(
   reads: readonly GovernanceRead[] | undefined,
   base: GovernanceEvaluationBase,
+  producedRecordCount: number,
 ): AggregatedGovernanceDecision {
   if (reads === undefined) {
     return {
       ok: false,
       error: 'governance reads were not reported, so no decision instant is known',
+      reads: [],
+    };
+  }
+  if (reads.length === 0 && producedRecordCount !== 0) {
+    return {
+      ok: false,
+      error: `governance producer returned ${producedRecordCount} record(s) but reported no read, so no decision instant is known`,
       reads: [],
     };
   }

@@ -97,7 +97,14 @@ jest.mock('../../db/writeOwner', () => ({
 
 import { mayContact, type GovernanceRecord, type MayContactResult } from '../../services/prospectIdentity/contactGovernance';
 import { loadGovernanceRecords, loadTenantGovernanceRecords, type GovernanceRead } from '../../services/prospectIdentity/contactGovernanceRepository';
-import { evaluateGovernanceReads } from '../../services/prospectIdentity/contactGovernanceAggregation';
+import { evaluateGovernanceReads as evaluateGovernanceReadsRaw } from '../../services/prospectIdentity/contactGovernanceAggregation';
+
+// The truth-table cases below model a CONSISTENT producer: its flat `records` count equals the rows
+// carried by its successful reads. The inconsistent-producer branch is tested by name further down.
+const evaluateGovernanceReads = (
+  reads: Parameters<typeof evaluateGovernanceReadsRaw>[0],
+  base: Parameters<typeof evaluateGovernanceReadsRaw>[1],
+) => evaluateGovernanceReadsRaw(reads, base, (reads ?? []).reduce((n, r) => n + (r.ok ? r.records.length : 0), 0));
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const OTHER_ORG = '22222222-2222-4222-8222-222222222222';
@@ -634,5 +641,30 @@ describe('P0-2 — the aggregator adds no authority of its own', () => {
       expect(r.ok).toBe(true);
       expect(['allowed', 'blocked', 'deferred']).toContain(r.ok === true && r.verdict.decision);
     }
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+describe('A2 (virality-05) — reads: [] is "nothing applied" ONLY when the producer returned no rows', () => {
+  it('reads: [] with producedRecordCount 0 → ok (nothing could apply; unchanged behaviour)', () => {
+    const r = evaluateGovernanceReadsRaw([], base, 0);
+    expect(r.ok).toBe(true);
+  });
+
+  it('reads: [] with producedRecordCount 3 → indeterminate (rows exist, no read instant reported)', () => {
+    const r = evaluateGovernanceReadsRaw([], base, 3);
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.error).toMatch(/returned 3 record\(s\) but reported no read/);
+  });
+
+  it('reads: undefined stays indeterminate whatever the count (unchanged)', () => {
+    expect(evaluateGovernanceReadsRaw(undefined, base, 0).ok).toBe(false);
+    expect(evaluateGovernanceReadsRaw(undefined, base, 5).ok).toBe(false);
+  });
+
+  it('non-empty reads are judged on their own rows; the count never decides a verdict', () => {
+    const reads = [read({ anchor: 'person', records: [], readAt: T1 })];
+    // a count that disagrees with the reads does not change a non-empty evaluation
+    expect(evaluateGovernanceReadsRaw(reads, base, 0)).toEqual(evaluateGovernanceReadsRaw(reads, base, 7));
   });
 });
