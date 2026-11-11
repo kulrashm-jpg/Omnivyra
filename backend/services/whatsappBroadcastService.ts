@@ -35,6 +35,29 @@ import {
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
+/**
+ * A2b — governance re-read within a batch (decided by virality-e9). The batch reads
+ * governance once, then sends one message per recipient, so a restriction committed
+ * mid-batch (an unsubscribe) was not seen by the recipients still to go. Governance is
+ * re-read for the remaining recipients every WHATSAPP_GOVERNANCE_REREAD_MS (default
+ * 30 s) OR every WHATSAPP_GOVERNANCE_REREAD_EVERY recipients (default 50), whichever
+ * comes first, so an unsubscribe takes effect within about 30 s however long the batch
+ * runs. The host clock only SCHEDULES re-reads; every verdict still uses the read's
+ * own database instant (A2).
+ */
+export const DEFAULT_GOVERNANCE_REREAD_MS = 30_000;
+export const DEFAULT_GOVERNANCE_REREAD_EVERY = 50;
+
+/** A positive integer from the environment; anything else falls back to the default (logged). */
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw.trim());
+  if (Number.isInteger(n) && n >= 1) return n;
+  console.warn(`[whatsappBroadcast] ${name} is not a positive integer; using the default`, { value: raw.slice(0, 32), default: fallback });
+  return fallback;
+}
+
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -287,7 +310,12 @@ export async function processBatch(
   //
   // One tenant-scoped read per batch, then the PURE evaluator per recipient.
   // FAIL CLOSED: if the store cannot be read, NOTHING in this batch is sent.
-  const governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
+  const rereadMs = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_MS', DEFAULT_GOVERNANCE_REREAD_MS);
+  const rereadEvery = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_EVERY', DEFAULT_GOVERNANCE_REREAD_EVERY);
+  // Taken BEFORE the read, so the re-read schedule errs early, never late.
+  let readStartedAt = Date.now();
+  let governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
+  let decidedSinceRead = 0;
   // A2 — THE DEFECT THIS CLOSES: the decision instant was `new Date()` on this
   // HOST, taken after the read, for every recipient. A host clock running ahead
   // ended an in-force restriction early (effective_until "passed") and let the
@@ -297,15 +325,34 @@ export async function processBatch(
   // INDETERMINATE and fails closed, like an unreadable store.
   //
   // LIMIT, stated: the verdict is current as of THIS BATCH'S single read, not as
-  // of each send. The read happens once, then one provider call per recipient, so
-  // a restriction committed mid-batch (e.g. an unsubscribe) is not seen by the
-  // recipients still to go. This fix removes clock skew, not batch staleness
-  // (whether long batches should re-read or be capped is an open decision, e9).
+  // of each send. Batch staleness is bounded by the A2b re-read below: governance is
+  // re-read every rereadMs or rereadEvery recipients, whichever comes first.
 
   let sentCount = 0;
   let failedCount = 0;
 
-  for (const recipient of recipients) {
+  for (let i = 0; i < recipients.length; i += 1) {
+    const recipient = recipients[i];
+    // A2b — re-read governance for the REMAINING recipients when due.
+    if (decidedSinceRead >= rereadEvery || Date.now() - readStartedAt >= rereadMs) {
+      readStartedAt = Date.now();
+      const fresh = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
+      if (!fresh.ok) {
+        // FAIL CLOSED by stopping: nothing more is sent from this batch, and the
+        // remaining recipients are left untouched ('pending'), so they stay retryable
+        // (enqueueBroadcast re-queues every pending recipient). Marking them blocked
+        // would turn a transient read failure into a permanent refusal.
+        console.warn('[whatsappBroadcast] governance re-read failed; batch stopped, remaining recipients left pending', {
+          broadcast_id: broadcastId,
+          remaining: recipients.length - i,
+          error: fresh.error ?? 'unknown',
+        });
+        break;
+      }
+      governance = fresh;
+      decidedSinceRead = 0;
+    }
+    decidedSinceRead += 1;
     const phone = decryptPhone(recipient.encrypted_phone);
 
     // Evaluated BEFORE the message body is built and before `fetch`, so a
