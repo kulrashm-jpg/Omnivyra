@@ -46,10 +46,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       : await runFinancialIntegrityAudit();
 
     // 2. AI billing state
-    const { data: untrackedAllowlist } = await supabase
+    // Not "0 untracked actions allowed" on a failed read (inside the handler's try -> 500).
+    const { data: untrackedAllowlist, error: allowlistErr } = await supabase
       .from('credit_untracked_actions')
       .select('action_key, expires_at, created_at, reason')
       .limit(50);
+    if (allowlistErr) throw new Error(`untracked allowlist read failed: ${allowlistErr.message}`);
     const aiBilling = {
       enforced: isAiBillingEnforced(),
       untrackedAllowlistCount: untrackedAllowlist?.length ?? 0,

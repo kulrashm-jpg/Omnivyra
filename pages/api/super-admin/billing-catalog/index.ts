@@ -191,11 +191,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // Pre-read the row so the audit captures an accurate before_snapshot.
-  const { data: beforeRow } = await supabase
+  // The before_snapshot is part of the AUDIT record: a failed read would write
+  // an inaccurate audit (before = null). 503, nothing patched.
+  const { data: beforeRow, error: beforeErr } = await supabase
     .from('hidden_billing_catalog')
     .select('id, reference_key, kind, amount_minor, currency, enabled, internal_label')
     .eq('reference_key', referenceKey)
     .maybeSingle();
+  if (beforeErr) return res.status(503).json({ error: 'catalog_read_unavailable', retryable: true });
 
   patch.updated_at = new Date().toISOString();
 

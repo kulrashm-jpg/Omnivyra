@@ -30,10 +30,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (error) return res.status(500).json({ error: error.message });
 
   // Category breakdown from free_credit_claims
-  const { data: byCategory } = await supabase
+  // Failed reads are not "zero granted". 503.
+  const { data: byCategory, error: byCategoryErr } = await supabase
     .from('free_credit_claims')
     .select('category, credits_granted')
     .order('category');
+  if (byCategoryErr) return res.status(503).json({ error: 'summary_unavailable', retryable: true });
 
   const categoryTotals: Record<string, number> = {};
   for (const row of byCategory ?? []) {
@@ -44,12 +46,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const sixMonthsAgo = new Date();
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-  const { data: monthlyTx } = await supabase
+  const { data: monthlyTx, error: monthlyErr } = await supabase
     .from('credit_transactions')
     .select('created_at, credits_delta')
     .eq('reference_type', 'free_credits')
     .gte('created_at', sixMonthsAgo.toISOString())
     .order('created_at');
+  if (monthlyErr) return res.status(503).json({ error: 'summary_unavailable', retryable: true });
 
   const monthly: Record<string, number> = {};
   for (const tx of monthlyTx ?? []) {

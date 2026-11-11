@@ -49,10 +49,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // Attach claim counts
   const userIds = (profiles ?? []).map(p => p.user_id).filter(Boolean);
-  const { data: claims } = await sb
+  // A failed read is not "no claims" (every profile would show 0 granted). 503.
+  const { data: claims, error: claimsErr } = await sb
     .from('free_credit_claims')
     .select('user_id, category, credits_granted')
     .in('user_id', userIds);
+  if (claimsErr) return res.status(503).json({ error: 'claims_unavailable', retryable: true });
 
   const claimsByUser: Record<string, { categories: string[]; total: number }> = {};
   for (const c of claims ?? []) {
