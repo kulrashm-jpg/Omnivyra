@@ -181,6 +181,9 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
     const p = (person.data ?? {}) as Record<string, unknown>;
     const types = new Set<string>();
     for (const [channel, target] of [['email', p.primary_email], ['whatsapp', p.primary_phone]] as const) {
+      // Relies on a present personId: the loader returns `reads: []` ("nothing applies") only with no
+      // person and no target. Unreachable here BY THIS CALL SHAPE (personId is required), not by A's
+      // aggregator; a new caller must re-check A's empty-reads branch.
       const loaded = await loadGovernanceRecords({ organizationId, personId, channel, target: typeof target === 'string' ? target : null });
       if (!loaded.ok || loaded.reads === undefined) throw unreadable('contact governance');
       for (const read of loaded.reads) {

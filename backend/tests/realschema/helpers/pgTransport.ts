@@ -29,10 +29,23 @@ const normalize = (row: Row): Row => {
  * PostgREST COMPUTED FIELDS: a function taking the table's row type is selectable by name
  * (`.select('…, read_at')`). Plain SQL only resolves that through the qualified form
  * `"table".fn`, so the bare name would fail 42703 here and the caller would fail closed —
- * not what PostgREST does. Rendered as `to_json(…) #>> '{}'`, i.e. PostgreSQL's own text of
- * the value exactly as PostgREST's JSON carries it (an explicit offset, microseconds kept),
+ * not what PostgREST does. Rendered as PostgreSQL's own ISO-8601 text of the value (an explicit
+ * offset, microseconds kept), as PostgREST's JSON carries it,
  * never a JavaScript re-rendering. Only the functions listed here; anything else is a column.
  *   contact_governance_records.read_at: 20270202000000 (the read's transaction_timestamp()).
+ *
+ * LITERAL ALLOWLIST, deliberately: a computed field added later does NOT inherit this treatment.
+ * Rendered in UTC with an explicit offset regardless of the session TimeZone, so the string
+ * never depends on how this harness's session is configured. Microseconds are kept by the
+ * TRANSPORT only; callers that Date.parse() it compare at millisecond precision.
+ *
+ * FIDELITY CAVEAT: this produces read_at by a different mechanism than production (PostgREST's
+ * computed field), and the STRING differs in one known way: `.US` pads fractional seconds to six
+ * digits (`…:00.100000+00:00`, a whole second as `.000000`), where PostgREST's JSON trims trailing
+ * zeros (`…:00.1+00:00`, a whole second with no fraction). The instant is identical and every
+ * caller parses it; a test that pins the literal string would break exactly there. A green harness is therefore NOT evidence about PostgREST's behaviour; that is
+ * proven by .github/workflows/pi-contact-governance-postgrest.yml (real PostgREST). This shortcut
+ * is sound only while that workflow runs on every PR and main push (A2, b13c8964d).
  */
 const COMPUTED_FIELDS: Readonly<Record<string, readonly string[]>> = {
   contact_governance_records: ['read_at'],
@@ -42,7 +55,9 @@ export const renderCols = (table: string, cols: string): string => {
   if (!computed) return cols;
   return cols.split(',').map((c) => {
     const name = c.trim();
-    return computed.includes(name) ? `to_json("${table}".${name}) #>> '{}' AS "${name}"` : c;
+    return computed.includes(name)
+      ? `to_char("${table}".${name} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"') AS "${name}"`
+      : c;
   }).join(',');
 };
 /** What PostgREST does with a JSON body value: objects and arrays arrive as JSON. */

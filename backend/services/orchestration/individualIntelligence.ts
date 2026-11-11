@@ -99,6 +99,10 @@ export const durableIntelligencePort: IndividualIntelligencePort = {
   // each governance read is judged at its OWN database instant, so an application clock that
   // runs ahead of the database can never expire a restriction early and unlock contact.
   async channelPermission(organizationId, personId, channel, target, _now) {
+    // Relies on asking for a real channel (the loader then reads [channel, '*'], wanted.length > 1).
+    // A's aggregator treats `reads: []` as "nothing applies" (allowed); the loader returns that only
+    // when no channel could match. Unreachable here BY THIS CALL SHAPE, not by the aggregator: a new
+    // caller with a different shape must re-check A's empty-reads branch.
     const loaded = await loadTenantGovernanceRecords(organizationId, [channel]);
     if (!loaded.ok) return null;                  // unreadable → unknown → fail closed
     const decided = evaluateGovernanceReads(loaded.reads, {
