@@ -84,6 +84,10 @@ export function createOpenAIRenderProvider(
   cfg: OpenAIProviderConfig = {},
 ): RenderProvider {
   const model = cfg.model || 'gpt-image-1.5';
+  // Resolved ONCE per provider instance so the SKU and the submit cannot disagree: billingSku() prices
+  // this exact value and submit() sends it. This is a MONEY binding, not a performance cache. Resolving
+  // per request would let a config change land between the two reads (priced 'medium', rendered 'high').
+  // The cost: a quality change takes effect on the next provider instance.
   const quality = resolveRenderImageQuality(cfg.quality);
 
   /**
