@@ -52,7 +52,15 @@ jest.mock('../../middleware/queueBackpressure', () => ({
     if (mockQueueAck.lost) throw new Error('Connection is closed.');
   },
 }));
-jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({}) }));
+// No live batch jobs; the WhatsApp enqueue lease is a DELIBERATE NO-OP pass-through
+// (always acquired), as in the WhatsApp real-schema suites. Since the resume fix
+// enqueueBroadcast takes the lease and counts live batch jobs first; without these the
+// enqueue failed. Lease and live-job behaviour are covered by whatsappBroadcastResume.test.ts.
+// Nothing else this suite runs takes a distributed lease.
+jest.mock('../../queue/contentGenerationQueues', () => ({ getContentQueue: () => ({ getJobs: async () => [] }) }));
+jest.mock('../../../lib/platform/distributedLock', () => ({
+  withLease: async (_n: string, _t: number, fn: () => Promise<unknown>) => ({ ran: true, value: await fn() }),
+}));
 
 // Read once at module load by the broadcast service: a required production setting.
 process.env.PHONE_HASH_SALT = 'test-salt';
