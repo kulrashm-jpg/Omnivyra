@@ -200,31 +200,5 @@ export function snapshotFromPrincipal(
   };
 }
 
-/**
- * Specialized helper for the cookie super-admin bridge: every call from a
- * legacy cookie principal must be audited regardless of whether the action
- * succeeded. See backend/security/legacyCookieSuperAdminBridge.ts.
- */
-export async function logCookieSuperAdminUsage(input: {
-  capability: string;
-  decision: AuditDecision;
-  reason?: string | null;
-  ip?: string | null;
-  userAgent?: string | null;
-  resourceId?: string | null;
-  organizationId?: string | null;
-}): Promise<void> {
-  await logSecurityEvent({
-    capability: input.capability,
-    decision: input.decision,
-    reason: input.reason ?? 'legacy cookie super-admin bridge',
-    actorUserId: null,
-    principalUserId: null,
-    principalSupabaseUid: null,
-    organizationId: input.organizationId ?? null,
-    resourceId: input.resourceId ?? null,
-    ip: input.ip ?? null,
-    userAgent: input.userAgent ?? null,
-    viaLegacyBridge: true,
-  });
-}
+// logCookieSuperAdminUsage (the audit helper for legacy cookie principals) was
+// removed with the cookie bridge in e9 (C), 2026-11-11; it had no callers left.

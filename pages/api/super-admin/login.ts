@@ -2,23 +2,21 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * POST /api/super-admin/login
  *
- * Phase 1 — super-admin canonicalization:
- *   1. Validates env credentials (UNCHANGED — preserves existing UX).
- *   2. If `SUPER_ADMIN_PRIMARY_USER_ID` is set in env AND that user has an
- *      active SUPER_ADMIN row in `user_company_roles`, mints a CANONICAL
- *      `auth_sessions` row via SessionAuthorityService and sets the
- *      `omnivyra_session` cookie alongside the legacy bridge cookie.
- *   3. Otherwise (no canonical principal available — pre-bootstrap state),
- *      sets ONLY the legacy bridge cookie. Backwards-compatible with the
- *      pre-Phase-1 behavior so admin UX never breaks.
+ * Env-credential super-admin login onto a CANONICAL session:
+ *   1. Validates SUPER_ADMIN_USERNAME / SUPER_ADMIN_PASSWORD (constant time).
+ *   2. Mints an `auth_sessions` row via SessionAuthorityService for the user
+ *      named by SUPER_ADMIN_PRIMARY_USER_ID - which must exist, not be deleted,
+ *      and hold an ACTIVE SUPER_ADMIN row in user_company_roles - and sets the
+ *      `omnivyra_session` cookie. Authorization from then on is capability-
+ *      based (requireCapability), with step-up for platform writes.
+ *   3. If no canonical session can be minted, it FAILS CLOSED: 503
+ *      CANONICAL_SESSION_UNAVAILABLE (with the identity-wiring diagnosis).
+ *      There is no fallback.
  *
- * After Phase 1: bridge cookie is a COMPATIBILITY MIRROR, not an
- * independent authority. The canonical session is the substantive auth
- * once it's available; the bridge cookie remains for older admin routes
- * that have not been migrated to `requireCapability` yet.
- *
- * Wave 3 will delete this entire file once every admin route has been
- * migrated AND the canonical bootstrap path replaces env-credential auth.
+ * The legacy bridge cookie (`super_admin_session`) and the content-architect
+ * cookie are no longer issued by anything: this route only CLEARS them, so a
+ * browser holding an old value is cleaned up. The bridge was removed in e9 (C),
+ * 2026-11-11 (it had hard-expired on 2026-08-05).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

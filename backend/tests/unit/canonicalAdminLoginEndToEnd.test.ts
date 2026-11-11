@@ -70,7 +70,6 @@ jest.mock('../../services/authResolver', () => ({
 }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: jest.fn(async () => undefined),
-  logCookieSuperAdminUsage: jest.fn(async () => undefined),
   snapshotFromPrincipal: () => ({}),
 }));
 jest.mock('../../security/startup/superAdminIdentityCheck', () => ({ checkSuperAdminIdentity: async () => ({ ok: true, primaryUserId: 'sa-user' }) }));

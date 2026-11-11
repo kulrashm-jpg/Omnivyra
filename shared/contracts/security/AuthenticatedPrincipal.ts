@@ -107,18 +107,13 @@ export interface AuthenticatedPrincipal {
   device: PrincipalDeviceState;
   stepUp: PrincipalStepUpState;
 
-  // ── Bridge mode (legacy cookie super-admin) ───────────────────────────────
+  // ── Bridge mode (legacy cookie super-admin) - REMOVED ─────────────────────
   /**
-   * True iff this principal was authorized via the legacy
-   * super_admin_session=1 cookie path. When true:
-   *   - capabilities will include SUPER_ADMIN_LEGACY_BRIDGE
-   *   - sessionId is typically null (cookie has no auth_sessions row)
-   *   - userId may be a synthetic placeholder string
-   *   - cannot satisfy step-up requirements
-   *   - MUST be audited via SecurityAuditService.logCookieSuperAdminUsage
-   *
-   * Hard-expires per LEGACY_BRIDGE_HARD_EXPIRY_AT in
-   * backend/security/legacyCookieSuperAdminBridge.ts.
+   * ALWAYS false. It marked a principal authorized by the legacy cookie
+   * bridge, which was removed in e9 (C), 2026-11-11 (hard-expired 2026-08-05):
+   * no resolver produces such a principal any more. The field and the checks
+   * that refuse it remain only until a follow-up removes them (it is part of
+   * the /api/auth/session response contract).
    */
   legacyCookieSuperAdmin: boolean;
 }

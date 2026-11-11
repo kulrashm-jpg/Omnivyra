@@ -59,6 +59,8 @@ describe('the legacy cookie bridge stays gone (e9 (C))', () => {
       'backend/services/superAdminSession.ts',
       'backend/security/legacyCookieSuperAdminBridge.ts',
       'backend/security/bridgeCookie.ts',
+      'backend/services/bridgeUsageMonitor.ts',
+      'pages/api/super-admin/bridge-usage.ts',
     ]) {
       expect([m, fs.existsSync(path.join(REPO_ROOT, m))]).toEqual([m, false]);
     }
@@ -66,7 +68,7 @@ describe('the legacy cookie bridge stays gone (e9 (C))', () => {
 
   it('NO production file imports a deleted bridge module or names its functions', () => {
     const FORBIDDEN =
-      /services\/superAdminSession|security\/legacyCookieSuperAdminBridge|security\/bridgeCookie|getLegacySuperAdminSession|resolveLegacyCookieSuperAdminPrincipal|evaluateBridgeCookieLifecycle|mintSignedBridgeCookieValue|parseSignedBridgeCookie|isContentArchitectSession|checkContentArchitectAccess|getContentArchitectCompanyId|legacyCookieSuperAdminCapabilities/;
+      /services\/superAdminSession|security\/legacyCookieSuperAdminBridge|security\/bridgeCookie|getLegacySuperAdminSession|resolveLegacyCookieSuperAdminPrincipal|evaluateBridgeCookieLifecycle|mintSignedBridgeCookieValue|parseSignedBridgeCookie|isContentArchitectSession|checkContentArchitectAccess|getContentArchitectCompanyId|legacyCookieSuperAdminCapabilities|logCookieSuperAdminUsage|bridgeUsageMonitor|reportBridgeUsage/;
     const offenders = files.filter((f) => FORBIDDEN.test(code.get(f)!)).map(rel);
     expect(offenders).toEqual([]);
   });

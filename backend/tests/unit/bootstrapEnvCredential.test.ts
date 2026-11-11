@@ -36,7 +36,6 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({
   logSecurityEvent: jest.fn().mockResolvedValue(undefined),
-  logCookieSuperAdminUsage: jest.fn().mockResolvedValue(undefined),
   snapshotFromPrincipal: jest.fn().mockReturnValue({}),
 }));
 // SessionAuthorityService is hit only when mintCanonicalSession=true.

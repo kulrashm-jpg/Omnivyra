@@ -27,8 +27,9 @@ export type StepUpDiagnosticStatus = 'not_required' | 'required' | 'satisfied' |
 
 /**
  * Compute the step-up diagnostic label for a principal × policy pair.
- * Bridge principals receive 'not_applicable' (they can never satisfy
- * step-up by design — see legacyCookieSuperAdminBridge.ts).
+ * A principal flagged legacyCookieSuperAdmin would receive 'not_applicable'.
+ * None can exist since the cookie bridge was removed (e9 (C), 2026-11-11);
+ * the check is kept until the flag itself is removed.
  */
 export function stepUpStatusFor(
   principal: AuthenticatedPrincipal | null,

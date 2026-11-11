@@ -87,7 +87,7 @@ async function main(): Promise<number> {
     // The repo compiles with `strict: false` (tsconfig.json), so strictNullChecks
     // is off and a falsy test on the `ok` discriminant does NOT narrow this union.
     // `'reason' in auth` narrows structurally and does — the same pattern used by
-    // AuthorizationService.ts:170, legacyCookieSuperAdminBridge.ts:91 and
+    // AuthorizationService.ts:170 and
     // creatorAssetValidationService.ts:84. `authCheck()` always sets `reason` when
     // `ok` is false, so the fallback is unreachable and output is unchanged.
     const reason = 'reason' in auth ? auth.reason : 'unknown';

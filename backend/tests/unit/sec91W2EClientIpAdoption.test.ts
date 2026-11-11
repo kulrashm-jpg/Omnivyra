@@ -57,7 +57,6 @@ jest.mock('../../security/audit/SecurityAuditService', () => {
   return {
     ...actual,
     logSecurityEvent: jest.fn(async (e: Record<string, unknown>) => { mockAudit.push(e); }),
-    logCookieSuperAdminUsage: jest.fn(async (e: Record<string, unknown>) => { mockAudit.push(e); }),
   };
 });
 
