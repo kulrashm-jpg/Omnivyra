@@ -14,6 +14,7 @@ import {
 } from '../../services/prospectProvenance/ingestion/inboundLeadProvenance';
 import {
   getProvenanceIngestionCounters,
+  recordProvenanceOutcome,
   resetProvenanceIngestionCounters,
 } from '../../services/prospectProvenance/ingestion/provenanceTelemetry';
 import type { SourceContributionInput } from '../../../lib/prospectProvenance/contract';
@@ -89,6 +90,14 @@ describe('unknown mode (no asserted mode, no structural signal)', () => {
     const counters = getProvenanceIngestionCounters();
     expect(counters['inbound_lead:failed']).toBe(1);
     expect(counters['inbound_lead:failed:mode_unknown']).toBeUndefined();
+  });
+
+  it('a free-form reason (an error message) is NOT used as a label: the counter key space stays bounded', () => {
+    recordProvenanceOutcome('inbound_lead', 'failed', { reason: 'connect ECONNREFUSED 10.0.0.1:5432' });
+    recordProvenanceOutcome('inbound_lead', 'failed', { reason: 'Some Error: request 8f3a timed out' });
+    const keys = Object.keys(getProvenanceIngestionCounters());
+    expect(keys).toEqual(['inbound_lead:failed']);
+    expect(getProvenanceIngestionCounters()['inbound_lead:failed']).toBe(2);
   });
 
   it('a routine skip (closed gate) stays in the skipped bucket, so the two are distinguishable', async () => {
