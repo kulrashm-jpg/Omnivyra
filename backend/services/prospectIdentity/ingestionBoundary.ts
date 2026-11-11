@@ -169,23 +169,142 @@ export interface IngestionResult {
   canonicalContested: string[];
 }
 
+/**
+ * Words that make a key name a credential. Matched against WHOLE WORDS of the key
+ * (see keyWords), never as substrings: `author`, `tokens`, `keyword`, `lead_key`
+ * stay intact. Bare `key` is deliberately absent — `lead_key` is Sales Navigator
+ * identity evidence, not a secret.
+ */
+const SECRET_WORDS = new Set([
+  'apikey', 'authorization', 'auth', 'token', 'secret', 'password', 'passwd',
+  'credential', 'credentials', 'bearer', 'cookie', 'session',
+]);
+const SECRET_WORD_PAIRS = new Set(['api key', 'private key']);
+
+/**
+ * Split a key into lower-case words on `_ - . space` and on camelCase, PascalCase and
+ * acronym boundaries: `authToken` → auth|token, `X-Api-Key` → x|api|key,
+ * `OAuthToken` → o|auth|token, `client_secret` → client|secret.
+ */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[\s_.-]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+}
+
 /** Keys the platform must never persist inside a raw payload. */
-const SECRET_KEY_PATTERN = /^(.*_)?(api[-_]?key|apikey|authorization|auth|token|secret|password|passwd|credential|credentials|bearer|cookie|session|private[-_]?key)(_.*)?$/i;
+export function isSecretKey(key: string): boolean {
+  const words = keyWords(key);
+  for (let i = 0; i < words.length; i++) {
+    if (SECRET_WORDS.has(words[i])) return true;
+    if (i + 1 < words.length && SECRET_WORD_PAIRS.has(`${words[i]} ${words[i + 1]}`)) return true;
+  }
+  // A glued acronym (`XAPIKey` → xapi|key) still names an API key.
+  return key.toLowerCase().replace(/[^a-z]/g, '').endsWith('apikey');
+}
+
+const REDACTED_VALUE = '[REDACTED]';
+// An auth-scheme credential inside a string value (a header echoed as text, or a
+// `{name: "Authorization", value: "Bearer …"}` pair whose KEY is not secret). The
+// candidate is judged by isAuthSchemeCredential, so prose ("Basic Training",
+// "Bearer tokens are required") survives.
+const AUTH_SCHEME_IN_VALUE = /\b(Bearer|Basic)\s+([A-Za-z0-9._~+/=-]{8,})/gi;
+
+/**
+ * Basic: the token must be base64 that decodes to `user:password` (a precise test; a
+ * real Basic credential need not contain any digit). Bearer: 16+ characters including
+ * a digit or a token punctuation character (JWTs carry dots), never plain words.
+ */
+function isAuthSchemeCredential(scheme: string, token: string): boolean {
+  if (scheme.toLowerCase() === 'basic') {
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(token) || token.length % 4 === 1) return false;
+    const decoded = Buffer.from(token, 'base64').toString('utf8');
+    const reencoded = Buffer.from(decoded, 'utf8').toString('base64').replace(/=+$/, '');
+    return reencoded === token.replace(/=+$/, '') && /^[^:\s]+:\S+$/.test(decoded);
+  }
+  // Bearer needs STRUCTURE, like Basic (virality-05): a wrong redaction in stored evidence is permanent, and
+  // provider error strings such as "Bearer token.expired.at.1699" must survive. Redact only:
+  //   - a JWT: base64url header starting "eyJ" (base64 of '{"') + payload + signature segments; or
+  //   - an opaque token: 20+ chars, NO dots, and Shannon entropy >= 3.5 bits/char -- the SAME threshold as
+  //     .gitleaks.toml's authorization-bearer-literal rule, so the two definitions agree. Entropy (not
+  //     character classes) is what catches lowercase hex (HMACs, many vendor keys, ~4.0) while keeping
+  //     tokenish prose (~3.3). The dot exclusion stays load-bearing: "token.expired.at.1699" is ~3.75.
+  // JWT note: "eyJ" assumes the header JSON starts with '{"'; a header serialised as '{ "' (base64 "eyAi")
+  // is not matched by the JWT branch (rare; recorded, not widened).
+  // Known residual: a short (<20) or low-entropy opaque token in FREE TEXT is kept; it is still redacted when
+  // it sits under a secret-shaped key such as Authorization.
+  if (/^eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*$/.test(token)) return true;
+  return token.length >= 20 && !token.includes('.') && shannonEntropy(token) >= 3.5;
+}
+
+/** Shannon entropy in bits per character. */
+function shannonEntropy(s: string): number {
+  const counts = new Map<string, number>();
+  for (const ch of s) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const n of counts.values()) {
+    const p = n / s.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+// `scheme://user:password@` — userinfo WITH a password. `user@host` alone is kept. DELIBERATE: the whole
+// userinfo (the USERNAME too) is replaced, because a username is sometimes itself a key; the loss is permanent.
+// Recorded asymmetry: query-parameter redaction below is http(s)-only, so a postgres URL carrying both userinfo
+// and a secret-named query parameter loses the userinfo but keeps that parameter (non-http schemes rarely carry
+// secrets in a query; widen if one appears).
+const USERINFO_IN_VALUE = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@:]+:[^\s/?#@]+@/gi;
+// Query parameters inside an http(s) URL; the NAME is judged by isSecretKey, so the
+// value pass and the key pass share one vocabulary.
+const URL_IN_VALUE = /\bhttps?:\/\/[^\s"'<>]+/gi;
+
+function redactUrlQuery(url: string): string {
+  const q = url.indexOf('?');
+  if (q === -1) return url;
+  const hashAt = url.indexOf('#', q);
+  const end = hashAt === -1 ? url.length : hashAt;
+  const query = url.slice(q + 1, end)
+    .split('&')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq <= 0) return pair;
+      let name = pair.slice(0, eq);
+      try { name = decodeURIComponent(name); } catch { /* keep raw */ }
+      return isSecretKey(name) ? `${pair.slice(0, eq)}=${REDACTED_VALUE}` : pair;
+    })
+    .join('&');
+  return `${url.slice(0, q + 1)}${query}${url.slice(end)}`;
+}
+
+/** Redact credentials embedded in a string value. Unchanged when nothing matches. */
+export function redactSecretValue(value: string): string {
+  return value
+    .replace(AUTH_SCHEME_IN_VALUE, (m, scheme: string, token: string) =>
+      (isAuthSchemeCredential(scheme, token) ? `${scheme} ${REDACTED_VALUE}` : m))
+    .replace(USERINFO_IN_VALUE, (_m, scheme: string) => `${scheme}${REDACTED_VALUE}@`)
+    .replace(URL_IN_VALUE, (u) => redactUrlQuery(u));
+}
 
 /**
  * Strip anything that looks like a credential before the payload is stored.
  * Providers routinely echo the request — including its auth header — back in a
  * response envelope, and a stored token is a durable breach rather than a leak.
+ * Keys are judged by isSecretKey (whole words, any casing or separator); string
+ * values are passed through redactSecretValue.
  */
 export function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSecrets);
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_PATTERN.test(k) ? '[REDACTED]' : redactSecrets(v);
+      out[k] = isSecretKey(k) ? REDACTED_VALUE : redactSecrets(v);
     }
     return out;
   }
+  if (typeof value === 'string') return redactSecretValue(value);
   return value;
 }
 
