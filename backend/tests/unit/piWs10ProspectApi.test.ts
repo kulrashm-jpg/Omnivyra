@@ -266,6 +266,41 @@ describe('WS-10 — prospect detail exposes every delivered seam', () => {
     expect(data).toHaveProperty('requiredMissingFields');
   });
 
+  it('P0/3A: a historical request keeps its scoring and loses only its governance verdict', async () => {
+    // End to end through the composer: `historicalAsOf` reaches WS-8, which
+    // refuses to issue a verdict, while every scoring section still answers at
+    // the requested instant.
+    seedEngaged();
+    const ASOF = '2026-07-01T00:00:00.000Z';
+    const out = (await detail({ now: ASOF, historicalAsOf: true }))!;
+
+    const r = out.readiness;
+    expect(r.state).toBe('available');
+    const data = r.data as {
+      readiness: string; suppression: unknown; requiredMissingFields: string[];
+      nextBestAction: { abstained: boolean; action: string | null };
+    };
+    expect(data.readiness).toBe('not_ready');
+    expect(data.suppression).toBeNull();
+    expect(data.requiredMissingFields).toContain('reproducible_suppression_state');
+
+    // The scoring half survived the refusal.
+    expect(data.nextBestAction.abstained).toBe(false);
+    expect(data.nextBestAction.action).toBeTruthy();
+    expect(out.recommendation.state).toBe('available');
+  });
+
+  it('P0/3A: the same request WITHOUT the flag still receives a governance verdict', async () => {
+    // The control, at composition level: only the explicit signal changes the
+    // outcome, not the instant.
+    seedEngaged();
+    const ASOF = '2026-07-01T00:00:00.000Z';
+    const out = (await detail({ now: ASOF }))!;
+    const data = out.readiness.data as { readiness: string; suppression: unknown };
+    expect(data.suppression).not.toBeNull();
+    expect(['ready', 'deferred', 'blocked']).toContain(data.readiness);
+  });
+
   it('exposes the outcome corpus, marking unobservable types', async () => {
     seedEngaged();
     const o = (await detail())!.outcomes;

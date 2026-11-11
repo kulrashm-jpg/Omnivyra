@@ -112,11 +112,17 @@ const seed = (over: Row = {}) => {
   db.recipients.push({ id: 'r1', encrypted_phone: encrypt(PHONE), contact_name: 'A', status: 'pending', retry_count: 0 });
 };
 
+/**
+ * The DATABASE instant the governance read returns with every row (A2: the
+ * decision instant). The real select carries `read_at` (the transaction instant).
+ */
+const DB_NOW = '2026-11-11T10:00:00.000Z';
+
 const restrict = (over: Row = {}) => {
   db.governance.push({
     id: 'g1', organization_id: ORG, person_id: null, target_normalized: PHONE,
     channel: 'whatsapp', governance_type: 'dnc_channel',
-    effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null, ...over,
+    effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null, read_at: DB_NOW, ...over,
   });
 };
 
@@ -208,5 +214,193 @@ describe('W0-C — WhatsApp broadcast is governed before the external send', () 
     expect(fetchCalls).toHaveLength(1);                       // only r2 went out
     expect(recipient().status).toBe('blocked_governance');
     expect(db.recipients.find((r) => r.id === 'r2')!.status).toBe('sent');
+  });
+});
+
+describe('A2 — the decision instant is the governance READ instant, never the host clock', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('NEGATIVE CONTROL: a host clock 2 h AHEAD does not unlock a restriction still in force at the database instant', async () => {
+    seed();
+    // In force at DB_NOW (ends 1 h later); "over" only by a host clock 2 h ahead.
+    restrict({ effective_until: '2026-11-11T11:00:00.000Z' });
+    jest.useFakeTimers({ now: new Date('2026-11-11T12:00:00.000Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    await processBatch('b1', ['r1']);
+
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('blocked_governance');
+    expect(String(recipient().error_message)).toContain('dnc_channel');
+  });
+
+  it('control: once the database instant is past effective_until, the restriction no longer applies', async () => {
+    seed();
+    restrict({ effective_until: '2026-11-11T09:00:00.000Z' }); // ended before DB_NOW
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('rows that arrive WITHOUT a database read instant are indeterminate: nothing is sent', async () => {
+    seed();
+    restrict({ read_at: undefined, target_normalized: '+15550109999' }); // not even this number
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('blocked_governance');
+    expect(String(recipient().error_message)).toContain('governance indeterminate');
+  });
+});
+
+describe('A2b — governance is re-read within a batch (every 30 s or 50 recipients)', () => {
+  const PHONE2 = '+15550100002';
+  const PHONE3 = '+15550100003';
+  const three = () => {
+    seed();
+    db.recipients.push(
+      { id: 'r2', encrypted_phone: encrypt(PHONE2), contact_name: 'B', status: 'pending', retry_count: 0 },
+      { id: 'r3', encrypted_phone: encrypt(PHONE3), contact_name: 'C', status: 'pending', retry_count: 0 },
+    );
+  };
+  const status = (id: string) => db.recipients.find((r) => r.id === id)!.status;
+  /** After the FIRST send: the recipients of r2 and r3 unsubscribe (committed mid-batch). */
+  const unsubscribeAfterFirstSend = () => {
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) {
+        restrict({ id: 'u2', target_normalized: PHONE2, governance_type: 'dnc_channel' });
+        restrict({ id: 'u3', target_normalized: PHONE3, governance_type: 'dnc_channel' });
+      }
+      return r;
+    };
+  };
+  const envBackup = { ...process.env };
+  afterEach(() => {
+    process.env = { ...envBackup };
+    jest.useRealTimers();
+  });
+
+  it('an unsubscribe committed mid-batch blocks the LATER recipients (re-read by count)', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '1';
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(1);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'blocked_governance', 'blocked_governance']);
+  });
+
+  it('an unsubscribe committed mid-batch blocks the later recipients (re-read by TIME: 30 s passed)', async () => {
+    three();
+    jest.useFakeTimers({ now: new Date('2026-11-11T10:00:00.000Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) {
+        restrict({ id: 'u2', target_normalized: PHONE2 });
+        jest.setSystemTime(new Date('2026-11-11T10:00:31.000Z')); // the first send took 31 s
+      }
+      return r;
+    };
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'blocked_governance', 'sent']);
+  });
+
+  it('NEGATIVE CONTROL: within the window (default 50 / 30 s) there is no re-read, so the mid-batch unsubscribe is not yet seen', async () => {
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'sent', 'sent']);
+  });
+
+  it('a FAILED re-read stops the batch: nothing more is sent, the rest stay pending (retryable)', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '1';
+    three();
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      db.failTable = 'contact_governance_records'; // the store becomes unreadable after the first send
+      return r;
+    };
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(1);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'pending', 'pending']);
+    // Liveness: the broadcast is marked paused (never left looking finished), logged at ERROR.
+    expect(db.broadcasts[0].status).toBe('paused');
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('broadcast paused'), expect.objectContaining({ broadcast_id: 'b1', remaining: 2 }));
+    err.mockRestore();
+  });
+
+  it('NEGATIVE CONTROL: a batch whose re-reads all succeed leaves the broadcast status alone', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '1';
+    three();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3);
+    expect(db.broadcasts[0].status).toBe('running');
+    expect(db.updates.some((u) => u.table === 'whatsapp_broadcasts')).toBe(false);
+  });
+
+  it('EVERY above the cap is clamped to 500 (warned by name): the 501st recipient is decided on a fresh read', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '100000';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    seed();
+    const LAST = '+15550209999';
+    for (let k = 2; k <= 500; k += 1) {
+      db.recipients.push({ id: `r${k}`, encrypted_phone: encrypt(`+1555020${String(k).padStart(4, '0')}`), contact_name: 'X', status: 'pending', retry_count: 0 });
+    }
+    db.recipients.push({ id: 'r501', encrypted_phone: encrypt(LAST), contact_name: 'Z', status: 'pending', retry_count: 0 });
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) restrict({ id: 'u501', target_normalized: LAST });
+      return r;
+    };
+    await processBatch('b1', db.recipients.map((r) => String(r.id)));
+    expect(fetchCalls).toHaveLength(500);
+    expect(status('r501')).toBe('blocked_governance');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WHATSAPP_GOVERNANCE_REREAD_EVERY is above its cap'), expect.objectContaining({ cap: 500 }));
+    warn.mockRestore();
+  });
+
+  it('MS above the cap is clamped to 300000 (warned by name): a 5-minute gap forces a re-read', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_MS = '3600000';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    three();
+    jest.useFakeTimers({ now: new Date('2026-11-11T10:00:00.000Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) {
+        restrict({ id: 'u2', target_normalized: PHONE2 });
+        jest.setSystemTime(new Date('2026-11-11T10:05:00.000Z')); // exactly the 300 s cap
+      }
+      return r;
+    };
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'blocked_governance', 'sent']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WHATSAPP_GOVERNANCE_REREAD_MS is above its cap'), expect.objectContaining({ cap: 300000 }));
+    warn.mockRestore();
+  });
+
+  it('NEGATIVE CONTROL: values AT the caps are used as-is, without a warning', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '500';
+    process.env.WHATSAPP_GOVERNANCE_REREAD_MS = '300000';
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3); // no re-read within 500 / 300 s
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([['0'], ['-1'], ['abc'], ['1.5']])('WHATSAPP_GOVERNANCE_REREAD_EVERY=%s falls back to the default (50): no early re-read', async (v) => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = v;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WHATSAPP_GOVERNANCE_REREAD_EVERY'), expect.anything());
+    warn.mockRestore();
   });
 });

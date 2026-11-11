@@ -52,7 +52,13 @@ jest.mock('../../services/prospectIdentity/contactGovernanceRepository', () => {
   const actual = jest.requireActual('../../services/prospectIdentity/contactGovernanceRepository');
   return {
     ...actual,
-    loadTenantGovernanceRecords: async (org: string) => ({ ok: true, records: gov.records.filter((r) => r.organizationId === org) }),
+    // Shaped like the real loader since A2: the rows come back as ONE tenant read with
+    // its database instant (`read_at`). A stub without `reads` is indeterminate and
+    // would block for the wrong reason, hiding what this table characterises.
+    loadTenantGovernanceRecords: async (org: string) => {
+      const records = gov.records.filter((r) => r.organizationId === org);
+      return { ok: true, records, reads: [{ anchor: 'tenant', ok: true, records, readAt: '2026-11-11T10:00:00.000Z' }] };
+    },
     loadGovernanceRecords: async (l: { organizationId: string }) => ({ ok: true, records: gov.records.filter((r) => r.organizationId === l.organizationId) }),
   };
 });
