@@ -138,6 +138,9 @@ const moreRestrictive = (a: MayContactResult, b: MayContactResult): MayContactRe
  * evaluateGovernanceReads applies these and adds the WHOLE-RESULT rules (reads undefined; reads []
  * with records produced), which stay there. Any other caller that needs the governance types in
  * force rather than a verdict must apply THESE rules, not a copy, so a new case reaches every caller.
+ * NOT THE COMPLETE SET FOR EVERY CALLER: an UNPARSEABLE read instant is not a rule here, because the
+ * aggregator hands readAt to mayContact, which owns how it treats its own `now`. A caller that parses
+ * readAt itself (Orchestration's personRestrictions) must also refuse an unparseable instant.
  *   - the request failed                            -> indeterminate
  *   - rows arrived without a database read instant  -> indeterminate (never judged against another
  *                                                      request's instant or a host clock)

@@ -16,7 +16,15 @@
 --   - a FUTURE effective_from (relative to the database) becomes now(): in force immediately;
 --   - a PAST or present one is unchanged (LEAST), so backdated entries and the person-erasure
 --     re-inserts that carry a preserved historical effective_from keep their exact values;
---   - NULL takes now(), the column default.
+--   - an explicit NULL is NOT clamped: effective_from is NOT NULL (DEFAULT now() is applied before
+--     BEFORE triggers), so a writer that computes NULL by mistake still fails loudly (23502). LEAST
+--     alone would not preserve that (PostgreSQL's LEAST ignores NULLs), hence the explicit guard.
+-- PREMISE (the assumption this trigger rests on): NO writer sets a FUTURE effective_from on purpose;
+-- every future value is clock skew. Checked on A2 304ee0c7b: feedbackIngestion (provider occurredAt),
+-- sesProviderEventIngestion (occurredAt, app-clamped), personErasure (preserved PAST values), and no
+-- other writer passes effectiveFrom; the 'deferred' type expresses "later" through effective_until,
+-- not a future effective_from. A future "block from next Monday" governance type would contradict
+-- this premise and must change this trigger first.
 -- UPDATE OF effective_from as well as INSERT, so a later statement cannot re-open the window
 -- (no code updates effective_from today: revocation sets revoked_at/revoked_reason only, ADR §16).
 -- The CHECK effective_until > effective_from can only get easier: the value only moves earlier.
@@ -34,7 +42,9 @@ SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  NEW.effective_from := LEAST(COALESCE(NEW.effective_from, now()), now());
+  IF NEW.effective_from IS NOT NULL THEN
+    NEW.effective_from := LEAST(NEW.effective_from, now());
+  END IF;
   RETURN NEW;
 END
 $$;
@@ -68,15 +78,21 @@ BEGIN
        AND t.tgenabled IN ('O', 'A')
        AND (t.tgtype & 1) <> 0 AND (t.tgtype & 2) <> 0 AND (t.tgtype & 4) <> 0 AND (t.tgtype & 16) <> 0
        AND t.tgfoid = fn
+       -- UPDATE OF effective_from and NO other column: tgattr (int2vector) renders as the column
+       -- numbers separated by spaces, so exactly one column compares equal to that attnum's text.
+       AND t.tgattr::text = (SELECT a.attnum::text FROM pg_attribute a
+                              WHERE a.attrelid = 'public.contact_governance_records'::regclass
+                                AND a.attname = 'effective_from' AND NOT a.attisdropped)
   ) THEN
-    RAISE EXCEPTION 'governance clamp postcondition: trigger trg_contact_governance_records_clamp_effective_from is missing, not enabled for ordinary writes (O/A), not BEFORE ROW INSERT+UPDATE, or not bound to public.contact_governance_records_clamp_effective_from()';
+    RAISE EXCEPTION 'governance clamp postcondition: trigger trg_contact_governance_records_clamp_effective_from is missing, not enabled for ordinary writes (O/A), not BEFORE ROW INSERT+UPDATE OF effective_from (and no other column), or not bound to public.contact_governance_records_clamp_effective_from()';
   END IF;
-  IF position('LEAST(COALESCE(NEW.effective_from, now()), now())' IN pg_get_functiondef(fn)) = 0 THEN
+  IF position('NEW.effective_from := LEAST(NEW.effective_from, now())' IN pg_get_functiondef(fn)) = 0 THEN
     RAISE EXCEPTION 'governance clamp postcondition: public.contact_governance_records_clamp_effective_from() no longer clamps to LEAST(supplied, now())';
   END IF;
   IF (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = fn) THEN
     RAISE EXCEPTION 'governance clamp postcondition: the clamp function must stay SECURITY INVOKER';
   END IF;
+  -- Intentionally LITERAL (down to the space after the comma): an equivalent re-spelling RAISES, fail-closed.
   IF (SELECT p.proconfig FROM pg_proc p WHERE p.oid = fn) IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] THEN
     RAISE EXCEPTION 'governance clamp postcondition: the clamp function lost its search_path pin';
   END IF;

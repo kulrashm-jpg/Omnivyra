@@ -157,4 +157,19 @@ describe('20270212000000: effective_from is clamped to the database instant', ()
     }
     expect(await attempt(POSTCONDITION)).toBe('ok');
   }));
+
+  it('PREMISE: a trigger broadened to EVERY update (no column restriction) makes the postcondition RAISE (tgattr is asserted)', () => inRollback(async () => {
+    await db.query('DROP TRIGGER trg_contact_governance_records_clamp_effective_from ON public.contact_governance_records');
+    await db.query(`CREATE TRIGGER trg_contact_governance_records_clamp_effective_from
+      BEFORE INSERT OR UPDATE ON public.contact_governance_records
+      FOR EACH ROW EXECUTE FUNCTION public.contact_governance_records_clamp_effective_from()`); // rolled back
+    expect(await attempt(POSTCONDITION)).toBe('P0001');
+  }));
+
+  it('an explicitly supplied NULL is NOT silently clamped: NOT NULL still refuses it (23502)', () => inRollback(async () => {
+    const person = await newPerson(ORG_A);
+    expect(await attempt(
+      `INSERT INTO public.contact_governance_records (organization_id, person_id, channel, governance_type, source, effective_from)
+       VALUES ($1, $2, 'email', 'unsubscribe', 'clamp-test', NULL)`, [ORG_A, person])).toBe('23502');
+  }));
 });
