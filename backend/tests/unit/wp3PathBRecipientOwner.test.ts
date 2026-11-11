@@ -37,7 +37,14 @@ jest.mock('../../db/writeOwner', () => ({
       db.queries.push({ table, filters: st.filters });
       if (db.throws[table]) throw new Error(db.throws[table]);
       if (db.failures[table]) return { data: null, error: db.failures[table] };
-      const found = rows().filter(match);
+      // PostgREST computed field `read_at` (migration 20270202000000): ONE
+      // transaction timestamp per REQUEST, carried on every row. Governance
+      // evaluation judges each read against the instant that read returned, so
+      // a double that omits it reports an INDETERMINATE state instead of a
+      // verdict. The value below is the instant these tests already treat as
+      // the present, so every expectation in this file is unchanged.
+      const readAt = NOW;
+      const found = rows().filter(match).map((r) => ({ ...r, read_at: readAt }));
       return mode === 'many' ? { data: found, error: null } : { data: found[0] ?? null, error: null };
     };
     const b: Record<string, unknown> = {

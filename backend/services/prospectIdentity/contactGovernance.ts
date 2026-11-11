@@ -190,16 +190,127 @@ function anchorMatches(
 }
 
 /**
+ * Accepted instant grammars, as MEASURED rather than assumed.
+ *
+ * PostgreSQL renders a `timestamptz` through `to_json` as `T`-separated, with 1-6
+ * fractional digits and trailing zeros TRIMMED — so a whole second carries NO
+ * fractional part at all — and an ALWAYS-EXPLICIT numeric offset `±HH:MM`, **never
+ * `Z`**, not even at `TimeZone='UTC'`, where it emits `+00:00`. JS callers pass
+ * `toISOString()`, which is always `Z` with exactly 3 digits. Both forms must be
+ * accepted: they are the two sides this file used to compare as raw strings.
+ */
+const GOVERNANCE_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * One instant as integer epoch MICROSECONDS, or `null` if it is not a form we accept.
+ *
+ * WHY MICROSECONDS, AND WHY NOT `Date.parse`. PostgreSQL stores microseconds, while
+ * `Date.parse` and the `Date` constructor resolve to MILLISECONDS — so `.123456` and
+ * `.123100` both collapse to `.123`, and a restriction still in force for another
+ * 356 µs reads as lapsed. `Date.parse` is never applied to the whole timestamp.
+ *
+ * The phrase above deliberately says "the `Date` constructor" rather than spelling the
+ * call: `contactGovernanceEvaluator.test.ts:270` and `li3cGovernanceWiring.test.ts:223`
+ * both read THIS FILE AS TEXT and fail on a `/new Date\(\)/` match, to keep the module
+ * clock-free. A comment explaining that we avoid the clock would otherwise trip the
+ * guard that enforces it.
+ * `Date.UTC` is used on validated integer calendar parts, with the fraction and the
+ * offset carried separately at full precision.
+ *
+ * Epoch microseconds stay exact in a `number`: about 1.78e15 in 2026 against
+ * MAX_SAFE_INTEGER 9.007e15, so no BigInt is needed this side of ~2255. The result
+ * is checked with `Number.isSafeInteger` anyway, so on the day that stops being true
+ * this returns `null` and callers fail closed rather than comparing values that have
+ * been silently rounded.
+ *
+ * Exported so that any other temporal check can DELEGATE to this one comparison
+ * rather than mirror it — a mirrored comparison drifts, a delegated one cannot.
+ */
+export function parseGovernanceInstantUs(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const m = GOVERNANCE_INSTANT.exec(value);
+  if (m === null) return null;
+  const [, yy, mo, dd, hh, mi, ss, frac, offset] = m;
+  const year = Number(yy), month = Number(mo), day = Number(dd);
+  const hour = Number(hh), minute = Number(mi), second = Number(ss);
+  // The regex fixes the SHAPE; these fix the RANGE. `Date.UTC` rolls over silently
+  // (month 13 becomes January), so an out-of-range value would otherwise parse to a
+  // real but wrong instant, which is worse than rejecting it.
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  if (!Number.isFinite(ms)) return null;
+  // Round-trip the calendar so 2026-02-30 and 2026-04-31 are rejected rather than
+  // rolled forward into a different day.
+  const back = new Date(ms);
+  if (back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== day) {
+    return null;
+  }
+  // `.5` means 500000 µs, not 5. Pad on the RIGHT: these digits are a decimal
+  // fraction, and PostgreSQL trims trailing zeros before we ever see them.
+  const micros = frac === undefined ? 0 : Number(frac.padEnd(6, '0'));
+  let offsetUs = 0;
+  if (offset !== 'Z') {
+    const offHours = Number(offset.slice(1, 3));
+    const offMinutes = Number(offset.slice(4, 6));
+    if (offHours > 23 || offMinutes > 59) return null;
+    const magnitude = (offHours * 3600 + offMinutes * 60) * 1_000_000;
+    offsetUs = offset.startsWith('-') ? -magnitude : magnitude;
+  }
+  // The wall-clock reading is local to `offset`, so UTC is the reading MINUS the
+  // offset: `10:00+05:30` is 04:30Z, and `21:15-05:00` is 02:15Z on the NEXT day.
+  // A negative offset shifts the DATE too, which is why the calendar parts are
+  // never assumed to be the UTC date.
+  const us = ms * 1000 + micros - offsetUs;
+  return Number.isSafeInteger(us) ? us : null;
+}
+
+/**
  * ADR §11: a deferment is in force while `now < effective_until`. An UNDATED
  * deferment (`effective_until` null) has no expiry the database can evaluate —
  * how long it should hold is an open product decision (ADR §22, P-1), so this
  * function reports it as deferred with a null lapse time and does NOT invent a
  * default window.
+ *
+ * THE INTERVAL IS HALF-OPEN, `[effectiveFrom, effectiveUntil)`, and the microsecond
+ * rewrite does not change it: at exactly `effectiveFrom` a restriction IS in force,
+ * and at exactly `effectiveUntil` it is NOT.
+ *
+ * EVERY COMPARISON IS ON INTEGER MICROSECONDS, never on the strings. The two sides
+ * do not share a grammar — the DB renders `…+00:00` with up to 6 trimmed fractional
+ * digits, a JS caller renders `…Z` with exactly 3 — and compared lexicographically
+ * `+` (0x2B) sorts below both `.` (0x2E) and every digit, and far below the terminal
+ * `Z` (0x5A). So a DB timestamp read as a string looks EARLIER than it is, which
+ * expires a live restriction and PERMITS contact. Under a non-UTC session TimeZone
+ * the same ordering error is HOURS wide in both directions, and this repo pins
+ * TimeZone nowhere, so that is a live case rather than a theoretical one.
+ *
+ * FAIL-CLOSED, PER GUARD AND IN THE RIGHT DIRECTION. For a suppression check the
+ * safe answer under uncertainty is "in force", so an unusable instant must never
+ * become "not yet started" or "lapsed" — both of those PERMIT contact. An
+ * unparseable `now`, an unparseable `effectiveFrom` and an unparseable
+ * `effectiveUntil` therefore each resolve to in force.
  */
 function isInForce(record: GovernanceRecord, now: string): boolean {
+  // UNCHANGED, and deliberately FIRST: `revokedAt` is a null check, never a temporal
+  // comparison. Comparing it against `now` would make a future-dated revocation read
+  // as "still in force" — a behaviour change in the dangerous direction. It also
+  // short-circuits before any timestamp is parsed.
   if (record.revokedAt !== null) return false;
-  if (record.effectiveFrom > now) return false;                 // not yet started
-  if (record.effectiveUntil !== null && record.effectiveUntil <= now) return false; // lapsed
+
+  const nowUs = parseGovernanceInstantUs(now);
+  if (nowUs === null) return true;                              // no usable decision instant
+
+  const fromUs = parseGovernanceInstantUs(record.effectiveFrom);
+  if (fromUs === null) return true;                             // NOT "not yet started"
+  if (fromUs > nowUs) return false;                             // not yet started
+
+  if (record.effectiveUntil !== null) {
+    const untilUs = parseGovernanceInstantUs(record.effectiveUntil);
+    if (untilUs === null) return true;                          // NOT "lapsed"
+    if (untilUs <= nowUs) return false;                         // lapsed
+  }
   return true;
 }
 

@@ -112,11 +112,17 @@ const seed = (over: Row = {}) => {
   db.recipients.push({ id: 'r1', encrypted_phone: encrypt(PHONE), contact_name: 'A', status: 'pending', retry_count: 0 });
 };
 
+/**
+ * The DATABASE instant the governance read returns with every row (A2: the
+ * decision instant). The real select carries `read_at` (the transaction instant).
+ */
+const DB_NOW = '2026-11-11T10:00:00.000Z';
+
 const restrict = (over: Row = {}) => {
   db.governance.push({
     id: 'g1', organization_id: ORG, person_id: null, target_normalized: PHONE,
     channel: 'whatsapp', governance_type: 'dnc_channel',
-    effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null, ...over,
+    effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null, read_at: DB_NOW, ...over,
   });
 };
 
@@ -208,5 +214,37 @@ describe('W0-C — WhatsApp broadcast is governed before the external send', () 
     expect(fetchCalls).toHaveLength(1);                       // only r2 went out
     expect(recipient().status).toBe('blocked_governance');
     expect(db.recipients.find((r) => r.id === 'r2')!.status).toBe('sent');
+  });
+});
+
+describe('A2 — the decision instant is the governance READ instant, never the host clock', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('NEGATIVE CONTROL: a host clock 2 h AHEAD does not unlock a restriction still in force at the database instant', async () => {
+    seed();
+    // In force at DB_NOW (ends 1 h later); "over" only by a host clock 2 h ahead.
+    restrict({ effective_until: '2026-11-11T11:00:00.000Z' });
+    jest.useFakeTimers({ now: new Date('2026-11-11T12:00:00.000Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    await processBatch('b1', ['r1']);
+
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('blocked_governance');
+    expect(String(recipient().error_message)).toContain('dnc_channel');
+  });
+
+  it('control: once the database instant is past effective_until, the restriction no longer applies', async () => {
+    seed();
+    restrict({ effective_until: '2026-11-11T09:00:00.000Z' }); // ended before DB_NOW
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('rows that arrive WITHOUT a database read instant are indeterminate: nothing is sent', async () => {
+    seed();
+    restrict({ read_at: undefined, target_normalized: '+15550109999' }); // not even this number
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(recipient().status).toBe('blocked_governance');
+    expect(String(recipient().error_message)).toContain('governance indeterminate');
   });
 });

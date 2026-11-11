@@ -31,6 +31,41 @@
  * The legacy `suppression_entries` / `outreach_suppressions` stores are never
  * read; a test asserts it.
  *
+ * ─── THE SUPPRESSION CLOCK IS THE DATABASE'S, NOT THE CALLER'S ────────────
+ * `input.now` is SUPPLIED BY THE CALLER. `/api/prospects/[id]` derives it from
+ * an optional `asOf` query parameter, validated for parseability and bounded in
+ * neither direction, so an authenticated tenant member could choose the instant
+ * a suppression check was judged at — and an `asOf` before a restriction's
+ * `effective_from` makes that restriction read as "not yet started".
+ *
+ * So governance is no longer judged at `input.now` at ALL. `evaluateGovernanceReads`
+ * judges each read's rows at the `read_at` that read arrived with. `input.now`
+ * keeps its other job — the deterministic instant the WS-6 context and the score
+ * describe — and loses its temporal authority over permission.
+ *
+ * ─── HISTORICAL SCORING IS SUPPORTED; HISTORICAL GOVERNANCE IS NOT ────────
+ * A replay cannot be answered from this store, at all. The loader filters
+ * `revoked_at IS NULL`, so a restriction that was in force at the requested
+ * instant and has since been revoked is NOT RETURNED, and a deleted row leaves
+ * nothing behind. No parameter on the read could reconstruct either, which is
+ * why none was added.
+ *
+ * So a historical request is REFUSED rather than answered, and the refusal is
+ * UNCONDITIONAL: it does not depend on what the current read contains, or on
+ * whether the read succeeded, because none of that is evidence about the past.
+ * In particular an EMPTY current result is not proof of a clean historical
+ * state — it is the exact shape a since-revoked or since-deleted restriction
+ * leaves behind. The read is therefore not even issued.
+ *
+ * ─── THE SIGNAL IS EXPLICIT, NEVER INFERRED FROM CLOCK PROXIMITY ──────────
+ * `historicalAsOf` is set by the transport from the PRESENCE of the `asOf`
+ * query parameter and carried down the existing chain. An earlier revision
+ * inferred it by comparing `input.now` against the database instant inside a
+ * tolerance window; that is gone. A tolerance made governance depend on clock
+ * proximity — so ordinary host-clock skew could reclassify a live request, and
+ * an `asOf` chosen just inside the window still produced a verdict. Presence of
+ * a query parameter is a fact; nearness of two clocks is a guess.
+ *
  * ─── NOTHING IS INVENTED FOR AN UNAVAILABLE FIELD ─────────────────────────
  * The frozen NBA field set includes `objective` and `expiry`. Neither exists
  * anywhere: the engine emits a MESSAGE STRATEGY (`lead_with_trigger_event`),
@@ -54,12 +89,21 @@
  * assumed permitted.
  */
 
+// P0 — `mayContact` is deliberately NOT imported. It takes a decision instant,
+// and the only one this module could supply is `input.now`, which the caller
+// controls. `evaluateGovernanceReads` is the one seam that pairs each read's rows
+// with the `read_at` they arrived with, so permission is asked for only through
+// it.
+//
+// No timestamp parser is imported either, and that is the point of PART 3A: this
+// module performs NO temporal comparison of its own. It does not compare
+// `input.now` to anything, so there is nothing here for a parser to parse.
 import {
-  mayContact,
   KNOWN_CHANNELS,
   type GovernanceChannel,
   type MayContactResult,
 } from '../prospectIdentity/contactGovernance';
+import { evaluateGovernanceReads } from '../prospectIdentity/contactGovernanceAggregation';
 import {
   loadGovernanceRecords,
   normalizeGovernanceTarget,
@@ -74,6 +118,17 @@ export const OUTREACH_READINESS_VERSION = 'ws8.1';
 
 /** The engine's composite channel vocabulary is ordered; this is the separator. */
 const CHANNEL_STEP_SEPARATOR = '_then_';
+
+/**
+ * Said once, so the API, the UI and the tests all quote the same sentence.
+ *
+ * It names the LIMIT rather than faulting the caller: the request was legitimate
+ * and its scoring half was answered. What cannot be produced is the governance
+ * state as it stood, because revoked rows are filtered out of the read and
+ * deleted rows are gone.
+ */
+export const HISTORICAL_GOVERNANCE_REASON =
+  'Historical governance state cannot be reconstructed from the available record history';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FR-24 — Next Best Action
@@ -172,7 +227,14 @@ export type RequiredMissingField =
   | 'recommended_action'
   | 'governable_channel'
   | 'contact_anchor'
-  | 'readable_suppression_state';
+  | 'readable_suppression_state'
+  /**
+   * The store was READABLE and the request was HISTORICAL. Distinct from
+   * `readable_suppression_state` on purpose: that one means we could not ask,
+   * this one means we asked and the answer does not describe the instant the
+   * caller asked about. Collapsing them would make a replay look like an outage.
+   */
+  | 'reproducible_suppression_state';
 
 export interface OutreachReadiness {
   readonly version: string;
@@ -225,8 +287,30 @@ export interface OutreachReadinessInput {
   readonly built: ProspectContextResult;
   /** Recipient address for target-anchored governance, when the caller has one. */
   readonly target?: string | null;
-  /** Injected. The deterministic decision instant. */
+  /**
+   * Injected. The deterministic instant the SCORE and the context describe, and
+   * the one a caller replays through `asOf`.
+   *
+   * It is NOT the suppression clock and is NOT compared against one. Governance
+   * is judged at the database `read_at` that travelled with the rows — see the
+   * header. This value keeps its scoring, freshness and staleness role, and has
+   * no temporal authority over permission whatsoever.
+   */
   readonly now: string;
+  /**
+   * TRUE when the caller explicitly asked about a PAST instant — on the WS-10
+   * route, when the `asOf` query parameter was present.
+   *
+   * REQUIRED, and deliberately not optional. `now` alone cannot carry this:
+   * a live request and a replay both arrive as a timestamp, and the only
+   * honest difference is whether the caller named one. An optional flag would
+   * let a future caller omit the intent and silently receive the live
+   * treatment, and this flag decides whether a governance verdict is issued at
+   * all — so every caller of this seam is made to state it. Compare
+   * `ProspectDetailInput.historicalAsOf`, which IS optional, because there
+   * "absent" means the literal truth that no `asOf` was in the URL.
+   */
+  readonly historicalAsOf: boolean;
 }
 
 /**
@@ -257,8 +341,9 @@ export function resolveGovernanceChannel(recommended: string | null): {
  * performs the send: nothing here creates a campaign, composes a message,
  * schedules, retries or dispatches anything.
  *
- * Deterministic for identical evidence and `now`: it reads, evaluates and
- * returns. No clock, no random value, no write.
+ * Deterministic for identical evidence, `now` and governance rows: it reads,
+ * evaluates and returns. No clock, no random value, no write — and the one
+ * instant that decides permission comes back from the database with the rows.
  */
 export async function assessOutreachReadiness(
   input: OutreachReadinessInput,
@@ -377,6 +462,36 @@ export async function assessOutreachReadiness(
     };
   }
 
+  // ── HISTORICAL REQUEST: REFUSED, NOT ANSWERED ──────────────────────────
+  //
+  // Placed BEFORE the read, and that placement is the guarantee. Nothing the
+  // store returns — rows, no rows, or an error — can influence this branch,
+  // because the store is never asked. §4's "regardless of whether" list is
+  // satisfied by construction rather than by four separate checks.
+  //
+  // An empty current result is NOT proof of a clean historical state: it is
+  // exactly what a since-revoked or since-deleted restriction leaves behind, and
+  // `revoked_at IS NULL` in the loader means a revoked row never comes back at
+  // all. Treating that silence as "nobody was restricted" is the fail-open this
+  // branch exists to refuse.
+  //
+  // The SCORE is unaffected: `input.now` still anchors the context, the
+  // recommendation, freshness and staleness, and the full NBA is returned in
+  // `base` below. Only PERMISSION is withheld.
+  if (input.historicalAsOf === true) {
+    missing.push('reproducible_suppression_state');
+    constraints.push(`historical_as_of:${input.now}`);
+    return {
+      ...base,
+      readiness: 'not_ready',
+      reason: HISTORICAL_GOVERNANCE_REASON,
+      governanceChannel: channel,
+      requiredMissingFields: missing,
+      constraints,
+      suppression: null,
+    };
+  }
+
   const loaded = await ports.loadGovernance({ organizationId, personId, target, channel });
   if (!loaded.ok) {
     // The repository's own contract: an unreadable store must fail closed.
@@ -392,9 +507,37 @@ export async function assessOutreachReadiness(
     };
   }
 
-  const suppression = mayContact({
-    organizationId, personId, targetNormalized, channel, now: input.now, records: loaded.records,
-  });
+  // -- THE DECISION INSTANT IS THE DATABASE'S ------------------------------
+  // Each read's rows, judged at that read's own `read_at`, combined in the
+  // restrictive direction only. `input.now` is not passed in, and `loaded.records`
+  // — the flat cross-read list — is deliberately not used: it cannot say which
+  // instant any of its rows was read at.
+  const decided = evaluateGovernanceReads(loaded.reads, {
+    organizationId, personId, targetNormalized, channel,
+  }, loaded.records.length);
+
+  if (decided.ok === false) {
+    // Rows arrived with no usable read instant, instants disagreed, or the
+    // producer did not report its reads at all. The same failure class as an
+    // unreadable store, in the same vocabulary, because the caller's obligation
+    // is identical: do not act.
+    missing.push('readable_suppression_state');
+    return {
+      ...base,
+      readiness: 'not_ready',
+      reason: `suppression state is indeterminate (${decided.error}); failing closed`,
+      governanceChannel: channel,
+      requiredMissingFields: missing,
+      constraints,
+      suppression: null,
+    };
+  }
+
+  // THIS REQUEST IS LIVE. `input.now` is not consulted from here on: the verdict
+  // was produced at each read's own database instant, however far the caller's
+  // clock happens to sit from it. Host-clock skew — of two minutes or two
+  // hours — changes nothing, because nothing is compared.
+  const suppression = decided.verdict;
 
   if (suppression.decision !== 'allowed') {
     // OVERRIDES the recommendation, whatever it scored. The NBA is still

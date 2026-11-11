@@ -9,6 +9,18 @@
 // as the pre-existing `select → eq → limit`. `governance` is the seed the
 // governed-egress cases below manipulate; empty means "no restrictions".
 const governance: Array<Record<string, unknown>> = [];
+/**
+ * P0 — the database's own read instant, as PostgREST serves it on every row of
+ * one response (the `read_at` computed field over `transaction_timestamp()`).
+ * PostgreSQL's rendering, not JS's: `T` separated, explicit `+00:00`, never `Z`.
+ *
+ * The export no longer takes a clock of its own, so this value IS the instant
+ * every governance verdict below is judged at. A row served without it is
+ * INDETERMINATE rather than permissive, and redacts.
+ */
+const DB_READ_AT = '2026-06-01T00:00:00.000000+00:00';
+/** Set to drive the fail-closed path: an unreadable store must redact. */
+let governanceError: { message: string } | null = null;
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const chain: Record<string, unknown> = {};
@@ -18,7 +30,16 @@ jest.mock('../../db/writeOwner', () => ({
     chain.in = () => chain;
     chain.limit = async () => ({ data: [], error: null });
     (chain as { then?: unknown }).then = (resolve: (v: unknown) => void) =>
-      resolve({ data: table === 'contact_governance_records' ? governance : [], error: null });
+      resolve(
+        table === 'contact_governance_records' && governanceError !== null
+          ? { data: null, error: governanceError }
+          : {
+            data: table === 'contact_governance_records'
+              ? governance.map((r) => ({ read_at: DB_READ_AT, ...r }))
+              : [],
+            error: null,
+          },
+      );
     return chain;
   },
 }));
@@ -249,5 +270,127 @@ describe('W0-B — exportLeads applies contact governance before emitting', () =
 
     const csv = await exportLeads({ companyId: 'co1' }, 'csv', cased);
     expect(csv.body).toContain('A@B.com');
+  });
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// P0 — the export judges governance at the DATABASE instant, never at a clock
+//
+// `exportLeads` used to take `new Date().toISOString()` once per export and
+// compare every database-stamped `effective_from` / `effective_until` against
+// it. These drive the real export path and pin WHICH clock decided, in both
+// directions, by putting the database instant and the host clock on OPPOSITE
+// sides of a restriction's window.
+//
+// `DB_READ_AT` is 2026-06-01. The host clock, whenever this suite runs, is
+// later. So a window that CLOSES between them is in force at the database
+// instant and lapsed at the host clock, and a window that OPENS between them is
+// the reverse. One assertion each way, and neither can pass by accident.
+// ════════════════════════════════════════════════════════════════════════════
+describe('P0 — exportLeads judges each governance read at its own database instant', () => {
+  const emailLead = { id: 'p0-l1', company_id: 'co1', email: 'p0@b.com', source: 'form_embed' };
+  const rs = () => readers({ leads: async () => [emailLead] }).r;
+  const restrict = (over: Record<string, unknown> = {}) => {
+    governance.push({
+      id: 'p0-g1', organization_id: 'co1', person_id: null, target_normalized: 'p0@b.com',
+      channel: 'email', governance_type: 'unsubscribe',
+      effective_from: '2020-01-01T00:00:00.000Z', effective_until: null, revoked_at: null, ...over,
+    });
+  };
+  const exported = async (r = rs()): Promise<boolean> =>
+    (await exportLeads({ companyId: 'co1' }, 'csv', r)).body.includes('p0@b.com');
+
+  beforeEach(() => { governance.length = 0; governanceError = null; });
+
+  it('a restriction in force at the DATABASE instant redacts, although it is lapsed at the host clock', async () => {
+    // 2026-05-31 → 2026-06-02 brackets DB_READ_AT (2026-06-01) and closed long
+    // before this suite runs. Judged at the host clock it is LAPSED and the
+    // address is exported; judged at the database instant it is IN FORCE.
+    restrict({
+      effective_from: '2026-05-31T00:00:00+00:00',
+      effective_until: '2026-06-02T00:00:00+00:00',
+    });
+    expect(await exported()).toBe(false);
+  });
+
+  it('a restriction not yet started at the DATABASE instant does NOT redact, although it is in force at the host clock', async () => {
+    // The other direction, so the test above cannot pass just because something
+    // redacts everything. 2026-07-01 is after DB_READ_AT and before any run of
+    // this suite: not yet started on the database clock, in force on the host's.
+    restrict({ effective_from: '2026-07-01T00:00:00+00:00' });
+    expect(await exported()).toBe(true);
+  });
+
+  it('no caller instant is reachable: the module holds no clock and cannot call the authority directly', async () => {
+    // There is no parameter through which a caller could supply an instant, so a
+    // restriction in force at the database instant cannot be dodged by any value
+    // a caller chooses — there is nowhere to put one.
+    //
+    // COMMENTS ARE STRIPPED FIRST. The explanation beside the change quotes the
+    // removed `new Date().toISOString()` call, and an unstripped search finds
+    // the prose rather than the code. `contactGovernance.ts` carries a note
+    // about the same trap for the same reason.
+    const raw = require('fs').readFileSync(
+      require('path').join(__dirname, '../../services/leadIntelligence/leadIntelligenceReadService.ts'),
+      'utf8',
+    ) as string;
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    expect(code).toContain('evaluateGovernanceReads');
+    // No clock of any kind, anywhere in the module's executable code.
+    expect(code).not.toContain('new Date(');
+    expect(code).not.toContain('Date.now(');
+    // The authority is reached only through the seam that supplies the instant.
+    expect(code).not.toContain('mayContact(');
+    expect(code).not.toContain('import { mayContact }');
+  });
+
+  it('an unrelated producer with no applicable restriction is exported unchanged', async () => {
+    restrict();                                     // restricts p0@b.com only
+    const other = readers({
+      leads: async () => [{ ...emailLead, id: 'p0-l2', email: 'unrelated@b.com' }],
+    }).r;
+    const body = (await exportLeads({ companyId: 'co1' }, 'csv', other)).body;
+    expect(body).toContain('unrelated@b.com');
+    expect(body).not.toContain('withheld: contact governance');
+  });
+
+  it('rows that arrive with NO read instant redact — indeterminate is not permissive', async () => {
+    restrict({ read_at: undefined });
+    expect(await exported()).toBe(false);
+  });
+
+  it('rows whose read instants DISAGREE redact — one response cannot have two transaction times', async () => {
+    restrict({ id: 'p0-a', read_at: '2026-06-01T00:00:00.000000+00:00' });
+    restrict({ id: 'p0-b', read_at: '2026-06-01T00:00:02.000000+00:00', target_normalized: 'other@b.com' });
+    expect(await exported()).toBe(false);
+  });
+
+  it('a FAILED read redacts', async () => {
+    governanceError = { message: 'connection reset' };
+    expect(await exported()).toBe(false);
+  });
+
+  it('an EMPTY successful read stays neutral — nothing is governed, so nothing is withheld', async () => {
+    expect(await exported()).toBe(true);
+  });
+
+  it('the PROVENANCE-URL decision uses the database instant too, not a second clock', async () => {
+    // The export asks governance twice per row: once per endpoint, and once on a
+    // probe channel that only a `*` record can match, which gates the evidence
+    // URL. Both must move together. A `*` record in force only at the database
+    // instant must withhold the actionable recommendation as well.
+    restrict({
+      person_id: 'up_p0', target_normalized: null, channel: '*', governance_type: 'dnc_permanent',
+      effective_from: '2026-05-31T00:00:00+00:00',
+      effective_until: '2026-06-02T00:00:00+00:00',
+    });
+    const withPerson = readers({
+      durable: async () => [{ ...durableView('p0'), identity: { email: 'p0@b.com' } }],
+    }).r;
+    const body = (await exportLeads({ companyId: 'co1' }, 'csv', withPerson)).body;
+    expect(body).not.toContain('p0@b.com');
+    expect(body).toContain('withheld');
   });
 });

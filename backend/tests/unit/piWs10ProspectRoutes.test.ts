@@ -155,6 +155,43 @@ describe('GET /api/prospects/:id — authorization, then composition', () => {
     expect((getProspectDetail.mock.calls[1][0] as { now: string }).now).toBe('2026-09-01T00:00:00.000Z');
   });
 
+  it('P0/3A: historical intent is forwarded from the PRESENCE of asOf, and the public contract is unchanged', async () => {
+    // This route is the only layer that can tell a replay from a live request:
+    // after `asOf ?? new Date().toISOString()` both are just a timestamp. So the
+    // presence of the parameter travels separately.
+    const live = makeRes();
+    await (detailHandler as never as (q: NextApiRequest, r: Res) => Promise<void>)(
+      req({ companyId: ORG_A, id: LEAD }), live,
+    );
+    const liveArg = getProspectDetail.mock.calls[0][0] as { historicalAsOf?: boolean };
+    expect(liveArg.historicalAsOf).toBe(false);
+    expect(live._status).toBe(200);
+
+    const replay = makeRes();
+    await (detailHandler as never as (q: NextApiRequest, r: Res) => Promise<void>)(
+      req({ companyId: ORG_A, id: LEAD, asOf: '2026-09-01T00:00:00.000Z' }), replay,
+    );
+    const replayArg = getProspectDetail.mock.calls[1][0] as { now: string; historicalAsOf?: boolean };
+    expect(replayArg.historicalAsOf).toBe(true);
+    // Unchanged public contract: same parameter, same forwarded instant, same
+    // 200, and nothing named `historicalAsOf` in the response.
+    expect(replayArg.now).toBe('2026-09-01T00:00:00.000Z');
+    expect(replay._status).toBe(200);
+    expect(JSON.stringify(replay._json)).not.toContain('historicalAsOf');
+  });
+
+  it('P0/3A: an asOf that happens to be very close to now is STILL historical', async () => {
+    // Derived from presence, never from distance. The removed tolerance would
+    // have classed this as live.
+    const res = makeRes();
+    const nearly = new Date(Date.now() - 30_000).toISOString();
+    await (detailHandler as never as (q: NextApiRequest, r: Res) => Promise<void>)(
+      req({ companyId: ORG_A, id: LEAD, asOf: nearly }), res,
+    );
+    const arg = getProspectDetail.mock.calls[0][0] as { historicalAsOf?: boolean };
+    expect(arg.historicalAsOf).toBe(true);
+  });
+
   it('an unparseable asOf is refused, not silently replaced with the clock', async () => {
     const res = makeRes();
     await (detailHandler as never as (q: NextApiRequest, r: Res) => Promise<void>)(
