@@ -29,11 +29,17 @@ shipped.
 - **Production rows:** the 18 rows keep `origin_category` NULL, meaning unknown.
   Under D3, unknown is honest and a guess is not. A later write that asserts a
   category supersedes the NULL through 0005's trigger.
-- **Write-time path:** unchanged. `classifyInboundLead` keeps its `'manual'`
-  fallback (virality-05: at write time the call site gives the premise). Since
-  739852a8e (fix/leads-webhook-auth-integration-20261111) every `createLead`
-  caller also asserts `provenance_mode` explicitly. Changing that fallback to
-  NULL is a separate, later change.
+- **Write-time path:** the ruling as relayed said "write-time unchanged". Two
+  later steps, on fix/leads-webhook-auth-integration-20261111, have since
+  touched the write-time classifier:
+  - **739852a8e:** every `createLead` call site asserts `provenance_mode`
+    explicitly. `'manual'` comes only from the manual-entry route asserting it.
+  - **3e3aa7ef0 (e9 decision, 2026-11-11):** `classifyInboundLead`'s no-signal
+    fallback changed from `'manual'` to NULL (unknown). The guard test proves no
+    production call site reaches it, so current behaviour does not change.
+  - Because this changes code the owner's ruling named, virality-83 will put it
+    to the owner explicitly at PR approval. It is not presumed covered by the
+    ruling.
 - **Basis-2 caveat (virality-05), and its date boundary.** For any future backfill:
   `prospect_source_contributions.source_category` is only as reliable as the
   mode that chose its profile. The caveat is time-bounded; it is not general
@@ -50,11 +56,14 @@ shipped.
     failure channel.
   - Contributions written after the boundary are a sound basis. Do not rule out
     a future backfill on them because of this caveat.
-- **Reserved version:** 20270211000008 is released through virality-83 (registry
-  owner).
-- **Files removed once 83 marks the version retired:** the migration, its
-  rollback (`rollbacks/pi_ldb_origin_category_backfill_rollback.sql`), and
-  `backend/tests/realschema/pildb_origin_backfill.test.ts`.
+- **Version 20270211000008: RETIRED and SPENT, never to be reused.** virality-83
+  set this in the registry (f3f08b525, 056cf224f), at virality-05's request. The
+  number was reviewed and referenced across sessions, so reusing it would put two
+  artefacts under one version.
+- **Files removed** after that mark: the migration, its rollback
+  (`rollbacks/pi_ldb_origin_category_backfill_rollback.sql`), and
+  `backend/tests/realschema/pildb_origin_backfill.test.ts`. The text of all
+  three survives in history at 5c1ceeefc..83e614fcb.
 - **Kept as evidence:** the two dry-run SQL files in this folder. They are the
   instruments behind C9.
 
