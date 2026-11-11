@@ -391,6 +391,8 @@ describe('actor-FK compatibility detector — catalog level', () => {
     const r = actorFk.detect(cat, registry, actorFk.loadKnown());
     expect(r.counts.error).toBe(0);
     expect(r.stale_known).toEqual([]);
+    // The seventh entry postdates the baseline: visible as unjudged, not lost.
+    expect(r.unjudged_known.map((u: { key: string }) => u.key)).toEqual(['source_assertions.platform_mapping_profile_id']);
     expect(r.known_open.map((f: { table: string; column: string }) => `${f.table}.${f.column}`).sort()).toEqual([
       'canonical_revenue_events.company_id',
       'canonical_users.company_id',
@@ -419,9 +421,18 @@ describe('actor-FK compatibility detector — catalog level', () => {
     const bounded = actorFk.detect(actorFk.parseBaselineCatalog(ddl, { source: 'baseline', boundary: '20260916000000' }), { columns: [] }, entry);
     expect(bounded.stale_known).toEqual([]);
     expect(bounded.counts.error).toBe(0);
+    // Exempt is not silent: the entry is returned as unjudged and printed.
+    expect(bounded.unjudged_known).toEqual([{ key: 't.later', missing: 'column' }]);
+    const lines: string[] = [];
+    actorFk.reportCoverageLimits(bounded, { write: (x: string) => { lines.push(x); return true; } });
+    const text = lines.join('');
+    expect(text).toMatch(/columns later migrations added to older tables, are NOT covered/);
+    expect(text).toMatch(/NOT a pass: run the --db path to decide/);
+    expect(text).toContain('NOT JUDGED  public.t.later  catalog_known  column not in this catalog');
     const live = actorFk.detect(actorFk.parseBaselineCatalog(ddl, { source: 'pg_catalog' }), { columns: [] }, entry);
     expect(live.stale_known).toEqual(['t.later']);
     expect(live.counts.error).toBe(1);
+    expect(live.unjudged_known).toEqual([]);
   });
 
   it('a frozen entry whose column IS in a bounded dump but no longer reproduces still FAILS as stale', () => {

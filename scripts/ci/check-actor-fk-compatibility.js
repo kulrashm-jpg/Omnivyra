@@ -610,6 +610,13 @@ function detect(catalog, registry = { columns: [] }, known = []) {
       return table.columns.has(c) || !catalog.coverage.boundary;
     },
   );
+  // Entries this catalog could NOT judge (neither reproduced nor stale): the
+  // table, or on a bounded dump the column, is not in it. Never silent - they
+  // are returned and printed as NOT JUDGED under COVERAGE LIMIT 1/2.
+  const staleSet = new Set(staleKnown);
+  const unjudgedKnown = [...knownMap.keys()]
+    .filter((key) => !seenKeys.has(key) && !staleSet.has(key))
+    .map((key) => ({ key, missing: catalog.tables.has(key.split('.')[0]) ? 'column' : 'table' }));
 
   const counts = { error: 0, warn: 0, info: 0 };
   for (const f of open) counts[f.severity]++;
@@ -618,6 +625,7 @@ function detect(catalog, registry = { columns: [] }, known = []) {
     findings: open,
     known_open: knownSeen,
     stale_known: staleKnown,
+    unjudged_known: unjudgedKnown,
     counts,
     declared: decl.size,
     declared_covered: seenDeclared.size,
@@ -662,11 +670,22 @@ function reportCoverageLimits(result, out = process.stdout) {
   if (result.coverage.boundary) {
     out.write(
       `[actor-fk] COVERAGE LIMIT 1/2 — INPUT HORIZON: this run read a point-in-time dump at ledger ` +
-      `position ${result.coverage.boundary}. Tables created by later migrations are NOT covered. ` +
+      `position ${result.coverage.boundary}. Tables created by later migrations, and columns later ` +
+      'migrations added to older tables, are NOT covered. ' +
       'The --db path (real-schema CI, after replay) is what covers them.\n',
     );
   } else {
     out.write('[actor-fk] COVERAGE LIMIT 1/2 — INPUT HORIZON: none; this run read a live catalog.\n');
+  }
+  const unjudged = result.unjudged_known || [];
+  if (unjudged.length) {
+    out.write(
+      `           ${unjudged.length} catalog_known acknowledgement(s) could not be judged against this catalog ` +
+      '(neither reproduced nor stale). NOT a pass: run the --db path to decide.\n',
+    );
+    for (const u of unjudged) {
+      out.write(`           NOT JUDGED  public.${u.key}  catalog_known  ${u.missing} not in this catalog\n`);
+    }
   }
   const nm = result.not_modelled;
   if (!nm) {
@@ -733,6 +752,7 @@ async function main(argv) {
       registry_columns_with_fk_present: result.declared_covered,
       known_open: result.known_open.length,
       stale_known: result.stale_known.length,
+      unjudged_known: result.unjudged_known.length,
       errors: result.counts.error,
       info: result.counts.info,
     }));
@@ -765,7 +785,10 @@ async function main(argv) {
         `[actor-fk] OK — no NEW FK/NOT NULL/CHECK contradiction in ${result.coverage.foreignKeys} foreign keys` +
         (result.known_open.length
           ? `; ${result.known_open.length} known contradiction(s) remain OPEN and are listed above.`
-          : '.'),
+          : '.') +
+        (result.unjudged_known.length
+          ? ` ${result.unjudged_known.length} acknowledgement(s) NOT JUDGED by this catalog - see COVERAGE LIMIT 1/2.`
+          : ''),
       );
     }
   }
