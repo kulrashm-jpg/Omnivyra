@@ -411,6 +411,12 @@ export function createAccessProbe() {
       if (prop in target) return target[prop as string];
       throw new AccessProbeUnsupportedError(prop);
     },
+    // `res.statusCode = 503` is the one idiom that bypasses the getter. Captured as a status (so a
+    // 503 is never silently answered as "not found"); any other assignment is a named failure.
+    set(_target, prop, value) {
+      if (prop === 'statusCode') { captured.status = Number(value); return true; }
+      throw new AccessProbeUnsupportedError(`${String(prop)} (assignment)`);
+    },
   }) as unknown as NextApiResponse;
   return { res: proxy, captured };
 }

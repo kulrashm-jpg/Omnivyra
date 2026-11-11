@@ -54,6 +54,15 @@ describe('the probe itself', () => {
     const { res } = createAccessProbe();
     expect((res as any).then).toBeUndefined();
   });
+  it('`res.statusCode = 503` is CAPTURED as a status (never silently answered as "not found")', () => {
+    const { res, captured } = createAccessProbe();
+    (res as any).statusCode = 503;
+    expect(captured.status).toBe(503);
+  });
+  it('any other assignment on the probe is a NAMED failure', () => {
+    const { res } = createAccessProbe();
+    expect(() => { (res as any).locals = {}; }).toThrow(AccessProbeUnsupportedError);
+  });
   it('records headers, readable back through getHeader (case-insensitive)', () => {
     const { res, captured } = createAccessProbe();
     res.setHeader('Retry-After', '5');
