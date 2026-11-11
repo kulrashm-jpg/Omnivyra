@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { recordBlockTemplateUse } from '../../lib/content/recordBlockTemplateUse';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowLeft, Eye, LayoutGrid, Loader2, Pencil, Wand2 } from 'lucide-react';
@@ -331,6 +332,8 @@ export default function ManagedTemplateSelectionPage({
       format_type: formatType,
       template_name: selectedTemplateName,
     }));
+    // ONE use of a saved template (C10). System templates have no row to count.
+    void recordBlockTemplateUse(companyId, selectedSavedTemplate?.id);
     const carriedQuery = Object.entries(router.query).reduce<Record<string, string>>((accumulator, [key, value]) => {
       if (key === 'tpl') return accumulator;
       if (typeof value === 'string' && value.trim()) {

@@ -5,6 +5,8 @@ import {
   getBlockTemplate,
   updateBlockTemplate,
   deleteBlockTemplate,
+  recordBlockTemplateUse,
+  BlockTemplateUsageError,
 } from '../../../backend/services/blockTemplateService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -26,6 +28,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({ template });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── POST: record ONE use (C10, owner decision 2026-11-11) ─────────────────
+  // Called once by the "use this template" action on the template pages.
+  // Tenant-scoped in the service (own or system-default template only), atomic
+  // (compare-and-set), and every failure is a non-2xx - never a silent 200.
+  if (req.method === 'POST') {
+    try {
+      const usageCount = await recordBlockTemplateUse(id, companyId);
+      return res.status(200).json({ usage_count: usageCount });
+    } catch (err) {
+      if (err instanceof BlockTemplateUsageError) {
+        const status = err.kind === 'invalid_argument' ? 400 : err.kind === 'not_found' ? 404 : err.kind === 'conflict' ? 409 : 503;
+        return res.status(status).json({ error: err.message, code: `USAGE_${err.kind.toUpperCase()}` });
+      }
+      return res.status(503).json({ error: 'usage could not be recorded', code: 'USAGE_WRITE_FAILED' });
     }
   }
 
