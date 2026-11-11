@@ -140,14 +140,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }).select('id').single();
         jobId = job?.id;
         if (!jobId) return res.status(500).json({ render: { ok: false, status: 'failed', reason: 'job_insert_failed' } });
+        // A missing state row is adopted by the worker (processQueuedRenderJob), so this write is not fatal.
         await ownedDbTable('creator_render_job_state').insert({
           render_job_id: jobId, current_state: 'queued', last_transition_at: nowIso(),
         });
-        await ownedDbTable('billing_operations').insert({
-          correlation_id: contentCoreId, module: 'creator_render', action: 'render_image',
-          organization_id: orgId, idempotency_key: `render:${jobId}`,
-          amount_estimated: 5, status: 'held', metadata: { provider: chain[0], async: true },
-        });
+        // NO job-level billing hold here (05 / e9, 2026-11-11). The worker creates a hold PER ATTEMPT
+        // (`render:<jobId>:a<N>`, the sync path's model) and confirms or releases it by its own id. The
+        // old single `render:<jobId>` hold, inserted here with its error discarded and a hard-coded
+        // estimate of 5, was re-used by every attempt (held -> released -> confirmed: two paid calls, one
+        // charge) and could be "confirmed" when it did not exist.
       }
       const enq = await enqueueRenderJob(
         { supabase, ownedDbTable, now: nowIso },

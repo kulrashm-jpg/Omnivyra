@@ -55,17 +55,23 @@ const dbFailure = (r: DbResult | undefined, thrown: unknown): string | null => {
   return null;
 };
 
-/** Release this job's async hold; CHECKED (the client does not throw). */
-async function releaseBilling(deps: ProcessRenderDeps, jobId: string, reason: string, events: string[]): Promise<void> {
+/**
+ * Release a hold, ONLY while it is still 'held': a confirmed charge is never un-confirmed and a released
+ * hold is never touched again (billing_operations has no status-monotonic guard of its own). CHECKED
+ * (the client does not throw). `by.id` is an attempt's hold; `by.key` is the LEGACY job-level hold
+ * (`render:<jobId>`) that the enqueue route wrote before holds became per attempt.
+ */
+async function releaseHold(deps: ProcessRenderDeps, by: { id?: string; key?: string }, reason: string, events: string[]): Promise<void> {
   let res: DbResult | undefined; let thrown: unknown = null;
   try {
-    res = await deps.ownedDbTable('billing_operations')
-      .update({ status: 'released', failure_reason: reason, completed_at: deps.now() })
-      .eq('idempotency_key', `render:${jobId}`);
+    let q = deps.ownedDbTable('billing_operations')
+      .update({ status: 'released', failure_reason: reason, completed_at: deps.now() });
+    q = by.id !== undefined ? q.eq('id', by.id) : q.eq('idempotency_key', String(by.key));
+    res = await q.eq('status', 'held');
   } catch (e) { thrown = e ?? 'update threw'; }
   const failed = dbFailure(res, thrown);
   if (failed !== null) {
-    console.error('[creator-render-async] billing hold NOT released (still held, not charged)', { render_job_id: jobId, reason, error: failed });
+    console.error('[creator-render-async] billing hold NOT released (still held, not charged)', { ...by, reason, error: failed });
     events.push('billing_release_failed');
   }
 }
@@ -107,6 +113,8 @@ export async function processQueuedRenderJob(
   let claimed: Awaited<ReturnType<typeof claimRenderJob>> = null;
   /** Set once this worker holds the job (the conditional transition succeeded); cleared once delivered. */
   let held: { jobId: string; fromCount: number; attemptNumber: number; consumed: boolean } | null = null;
+  /** THIS attempt's own hold (billing_operations.id), once the worker has created it. */
+  let holdId: string | null = null;
   try {
     claimed = await claimRenderJob(deps, leaseOwner);
     if (!claimed) return { ok: true, status: 'idle', events };
@@ -115,6 +123,12 @@ export async function processQueuedRenderJob(
     const qId = claim.id;
     const jobId = claim.render_job_id;
     const queueMax = claim.retry_count + 1 < 3 ? 3 : claim.retry_count + 1;
+    /** The LEGACY job-level hold key (pre per-attempt holds); released, never confirmed, by this worker. */
+    const legacyHoldKey = `render:${jobId}`;
+    /** Release this attempt's hold (if any): a retry creates its own, so a failed attempt is never billed. */
+    const releaseAttemptHold = async (reason: string) => {
+      if (holdId) { const id = holdId; holdId = null; await releaseHold(deps, { id }, reason, events); }
+    };
 
     /**
      * End this attempt through the queue's own retry policy, and give job_state an exit: a queue
@@ -126,12 +140,13 @@ export async function processQueuedRenderJob(
       const r = await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: queueMax, reason });
       const h = held;
       const nextCount = h ? (h.consumed ? h.attemptNumber : h.fromCount) : undefined;
+      await releaseAttemptHold(label);
       if (r.event === 'render_retry_scheduled') {
         if (h) await writeJobState(deps, jobId, { current_state: 'queued', retry_count: nextCount }, `queue_retry:${label}`, events);
         events.push('render_retry_scheduled');
         return { ok: false, status: 'retry_scheduled', events, render_job_id: jobId, reason: label };
       }
-      await releaseBilling(deps, jobId, label, events);
+      await releaseHold(deps, { key: legacyHoldKey }, label, events);
       if (h) await writeJobState(deps, jobId, { current_state: 'retry_scheduled', retry_count: nextCount }, `queue_failed:${label}`, events);
       held = null;
       events.push('render_terminal_failure');
@@ -154,7 +169,8 @@ export async function processQueuedRenderJob(
       if (providerCalls < RENDER_MAX_ATTEMPTS) return settle(reason, label);
       held = null;
       await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'provider_exhausted' });
-      await releaseBilling(deps, jobId, `${label}:attempts_exhausted`, events);
+      await releaseAttemptHold(`${label}:attempts_exhausted`);
+      await releaseHold(deps, { key: legacyHoldKey }, `${label}:attempts_exhausted`, events);
       await writeJobState(deps, jobId, { current_state: 'failed_provider_exhausted', retry_count: attemptNo }, `exhausted:${label}`, events);
       events.push('render_terminal_failure');
       return { ok: false, status: 'failed', events, render_job_id: jobId, reason: `${label}:attempts_exhausted` };
@@ -162,7 +178,7 @@ export async function processQueuedRenderJob(
     /** A failure that can never succeed for this spec: terminal job state, conditional on what was read. */
     const finalFailure = async (reason: string, jobState: string, from: string, status: 'failed' | 'blocked' = 'failed'): Promise<ProcessResult> => {
       await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason });
-      await releaseBilling(deps, jobId, reason, events);
+      await releaseHold(deps, { key: legacyHoldKey }, reason, events);
       await writeJobState(deps, jobId, { current_state: jobState }, `final:${reason}`, events, from);
       events.push('render_terminal_failure');
       return { ok: false, status, events, render_job_id: jobId, reason };
@@ -200,13 +216,13 @@ export async function processQueuedRenderJob(
     if (cs === 'attached' && st.attached_output_id) {
       // Already rendered (e.g. by the sync path): nothing to do, and this job's async hold is not owed.
       await completeRenderJob(deps, qId);
-      await releaseBilling(deps, jobId, 'already_attached', events);
+      await releaseHold(deps, { key: legacyHoldKey }, 'already_attached', events);
       events.push('render_already_attached');
       return { ok: true, status: 'completed', events, render_job_id: jobId, reason: 'already_attached' };
     }
     if (RENDER_TERMINAL_STATES.has(cs)) {
       await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'superseded' });
-      await releaseBilling(deps, jobId, `render_terminal:${cs}`, events);
+      await releaseHold(deps, { key: legacyHoldKey }, `render_terminal:${cs}`, events);
       events.push('render_terminal_failure');
       return { ok: false, status: 'failed', events, render_job_id: jobId, reason: `render_terminal:${cs}` };
     }
@@ -233,7 +249,7 @@ export async function processQueuedRenderJob(
     if (!provider || !provider.supports(spec)) {
       // Capability can come back: terminal for this queue job, NOT for the render job (retry_scheduled).
       await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'no_capable_provider' });
-      await releaseBilling(deps, jobId, 'no_capable_provider', events);
+      await releaseHold(deps, { key: legacyHoldKey }, 'no_capable_provider', events);
       await writeJobState(deps, jobId, { current_state: 'retry_scheduled' }, 'no_capable_provider', events, cs);
       events.push('render_terminal_failure');
       return { ok: false, status: 'failed', events, render_job_id: jobId, reason: 'no_capable_provider' };
@@ -260,6 +276,8 @@ export async function processQueuedRenderJob(
     held = { jobId, fromCount: rc, attemptNumber: rc + 1, consumed: false };
     const attemptNumber = rc + 1;
     await advanceQueueState(deps, qId, 'rendering');
+    // A legacy job-level hold (enqueued before per-attempt holds) is superseded by this attempt's own.
+    await releaseHold(deps, { key: legacyHoldKey }, 'superseded_by_attempt_hold', events);
 
     // The variant (CHECKED): read it, insert it if absent, re-read after a concurrent insert. A retry
     // re-uses it (UNIQUE (render_job_id, spec_fingerprint) made the old blind re-insert throw on every
@@ -289,18 +307,35 @@ export async function processQueuedRenderJob(
       }
     }
 
-    const { data: bo, error: boError } = await deps.supabase.from('billing_operations')
-      .select('id').eq('idempotency_key', `render:${jobId}`).maybeSingle();
-    if (boError) return settle('store_unavailable', 'billing_unreadable');
+    // A HOLD PER ATTEMPT, created by the worker (the same model as the sync path; 05, 2026-11-11).
+    // The old model had ONE job-level hold that every attempt re-used: attempt 1 failed -> released;
+    // attempt 2 -> the SAME row confirmed, i.e. held -> released -> confirmed, two paid provider calls
+    // for one charge. Now each attempt's hold is confirmed or released BY ITS OWN ID.
+    const attemptKey = `render:${jobId}:a${attemptNumber}`;
+    const estimate = provider.estimateCost(spec).estimated_credits;
+    held.consumed = true; // from here this attempt number is spent: the next attempt uses fresh keys
+    {
+      const { data: hold, error: holdError } = await deps.ownedDbTable('billing_operations').insert({
+        correlation_id: String(job.task_id), module: 'creator_render', action: 'render_image',
+        organization_id: job.organization_id, idempotency_key: attemptKey,
+        amount_estimated: estimate, status: 'held',
+        metadata: { provider: provider.key, attempt_number: attemptNumber, async: true },
+      }).select('id').single();
+      holdId = (hold as { id?: string } | null)?.id ?? null;
+      if (!holdId) {
+        const conflict = (holdError as { code?: string } | null)?.code === '23505';
+        console.error('[creator-render-async] billing hold not created; refused before the provider', { render_job_id: jobId, attempt: attemptNumber, conflict });
+        return settle('store_unavailable', conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable');
+      }
+    }
+    const attemptHoldId: string = holdId;
 
     // Append-only attempt, CHECKED, BEFORE the provider. TENANT-SCOPED execution hash (GLOBAL UNIQUE).
-    const attemptKey = `render:${jobId}:a${attemptNumber}`;
-    held.consumed = true; // from here this attempt number is spent: the next attempt uses fresh keys
     const { data: attempt, error: attemptError } = await deps.ownedDbTable('creator_render_attempt').insert({
       variant_id: variantId, provider_key: provider.key,
       attempt_number: attemptNumber,
       idempotency_key: attemptKey,
-      billing_operation_id: (bo as { id?: string } | null)?.id ?? null,
+      billing_operation_id: attemptHoldId,
       execution_hash: renderAttemptExecutionHash(String(job.organization_id), spec.deterministic_input_hash, attemptNumber),
       status: 'submitted',
     }).select('id').single();
@@ -334,7 +369,7 @@ export async function processQueuedRenderJob(
     if (post.decision !== 'allowed') {
       held = null;
       await failRenderJob(deps, { id: qId, retryCount: claim.retry_count, maxRetries: 0, reason: 'post_moderation' });
-      await releaseBilling(deps, jobId, 'post_moderation', events);
+      await releaseAttemptHold('post_moderation');
       await writeJobState(deps, jobId, { current_state: 'failed_moderation_post', moderation_state: 'blocked' }, 'post_moderation', events);
       events.push('render_terminal_failure');
       return { ok: false, status: 'blocked', events, render_job_id: jobId, reason: 'post_moderation' };
@@ -354,17 +389,22 @@ export async function processQueuedRenderJob(
     // From here the render is delivered: nothing below releases the hold or retries.
     held = null;
 
-    // Billing CONFIRM (checked).
+    // Billing CONFIRM of THIS attempt's hold, BY ITS ID and only while it is 'held', with a ROW COUNT:
+    // a 0-row UPDATE is not an error in PostgREST, so "no error" never proves a confirm (05 finding 2).
+    holdId = null; // delivered: no failure path below may release it
     {
       let res: DbResult | undefined; let thrown: unknown = null;
       try {
         res = await deps.ownedDbTable('billing_operations')
-          .update({ status: 'confirmed', amount_charged: provider.estimateCost(spec).estimated_credits, completed_at: deps.now() })
-          .eq('idempotency_key', `render:${jobId}`);
+          .update({ status: 'confirmed', amount_charged: estimate, completed_at: deps.now() })
+          .eq('id', attemptHoldId)
+          .eq('status', 'held')
+          .select('id');
       } catch (e) { thrown = e ?? 'update threw'; }
-      const failed = dbFailure(res, thrown);
+      const failed = dbFailure(res, thrown)
+        ?? (Array.isArray(res?.data) && (res!.data as unknown[]).length === 1 ? null : 'no held row was confirmed');
       if (failed !== null) {
-        console.error('[creator-render-async] billing confirm failed for a delivered render (hold still held)', { render_job_id: jobId, error: failed });
+        console.error('[creator-render-async] billing confirm failed for a delivered render', { render_job_id: jobId, billing_operation_id: attemptHoldId, error: failed });
         events.push('billing_confirm_failed');
       } else {
         events.push('billing_confirmed');
@@ -402,7 +442,8 @@ export async function processQueuedRenderJob(
     console.error('[creator-render-async] unexpected error', { error: e instanceof Error ? e.message : String(e) });
     if (claimed) {
       await failRenderJob(deps, { id: claimed.id, retryCount: claimed.retry_count, maxRetries: 0, reason: 'unexpected' });
-      await releaseBilling(deps, claimed.render_job_id, 'unexpected', events);
+      if (holdId) { const id = holdId; holdId = null; await releaseHold(deps, { id }, 'unexpected', events); }
+      await releaseHold(deps, { key: `render:${claimed.render_job_id}` }, 'unexpected', events);
       const h = held as { jobId: string; fromCount: number; attemptNumber: number; consumed: boolean } | null;
       if (h) {
         await writeJobState(deps, h.jobId, { current_state: 'retry_scheduled', retry_count: h.consumed ? h.attemptNumber : h.fromCount }, 'unexpected', events);
