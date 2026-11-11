@@ -17,13 +17,15 @@
 -- LOCKING: replacing a CHECK takes ACCESS EXCLUSIVE. The new CHECK is added NOT
 -- VALID, so this transaction scans no rows; it is a strict SUPERSET of the
 -- validated one it replaces, so every existing row already satisfies it. The
--- VALIDATE (SHARE UPDATE EXCLUSIVE) runs separately.
+-- VALIDATE (SHARE UPDATE EXCLUSIVE) runs separately in 20270209000003
+-- (production reltuples = -1 per C7: size unknown, so no in-file validate).
 --
 -- PRECONDITION: refuses to replace a CHECK whose current value set differs
 -- from the one recorded below (drift => stop, not overwrite). The recorded set
 -- is the repository's (20260514_phase0_capability_consent_foundation.sql);
--- PRODUCTION's definition is being confirmed by virality-83's C7 catalogue read
--- before any apply.
+-- PRODUCTION's definition was CONFIRMED by virality-83's C7 (owner-approved,
+-- read-only, 2026-11-11): the same 7 values, validated; source_check
+-- ui/api/system; both triggers present and enabled.
 --
 -- APPLIED STATUS: this version has never been applied anywhere.
 
@@ -63,11 +65,38 @@ BEGIN
                     AND pg_get_constraintdef(oid) LIKE '%tenant_data_controller_ack%') THEN
     RAISE EXCEPTION 'consent ack postcondition: consent_records_capability_check does not admit tenant_data_controller_ack';
   END IF;
-  -- The ledger's append-only guarantees must still stand (they are what make
-  -- "one row per acceptance, no update path" true).
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'trg_consent_records_append_only_update')
-     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'trg_consent_records_block_delete') THEN
-    RAISE EXCEPTION 'consent ack postcondition: the consent_records append-only/no-delete trigger functions are missing';
+  -- PREMISE (GOV-SECURITY + PI review; the reference shape of
+  -- g11_optout_review.test.ts PREMISE): "one row per acceptance, no update
+  -- path" is true only because these TRIGGERS are ON public.consent_records,
+  -- ENABLED ('O'), BEFORE + ROW + the right event, bound to the intended
+  -- function, and that function STILL RAISES. Each is asserted; an object whose
+  -- existence merely correlates with the behaviour is not. The body check is a
+  -- SUBSTRING on the line that carries the premise (not md5): it survives benign
+  -- edits and fails only when a CREATE OR REPLACE drops the refusal.
+  -- tgtype bits: ROW = 1, BEFORE = 2, DELETE = 8, UPDATE = 16.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                  WHERE t.tgrelid = 'public.consent_records'::regclass
+                    AND t.tgname = 'consent_records_append_only' AND NOT t.tgisinternal
+                    AND t.tgenabled = 'O'
+                    AND (t.tgtype & 1) <> 0 AND (t.tgtype & 2) <> 0 AND (t.tgtype & 16) <> 0
+                    AND p.oid = 'public.trg_consent_records_append_only_update()'::regprocedure) THEN
+    RAISE EXCEPTION 'consent ack postcondition: trigger consent_records_append_only is missing, not enabled (O), not BEFORE ROW UPDATE, or not bound to public.trg_consent_records_append_only_update()';
+  END IF;
+  IF pg_get_functiondef('public.trg_consent_records_append_only_update()'::regprocedure)
+       NOT LIKE '%consent_records is append-only; only revoked_at / revoked_by may be set after insert%' THEN
+    RAISE EXCEPTION 'consent ack postcondition: public.trg_consent_records_append_only_update() no longer raises the append-only refusal';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                  WHERE t.tgrelid = 'public.consent_records'::regclass
+                    AND t.tgname = 'consent_records_no_delete' AND NOT t.tgisinternal
+                    AND t.tgenabled = 'O'
+                    AND (t.tgtype & 1) <> 0 AND (t.tgtype & 2) <> 0 AND (t.tgtype & 8) <> 0
+                    AND p.oid = 'public.trg_consent_records_block_delete()'::regprocedure) THEN
+    RAISE EXCEPTION 'consent ack postcondition: trigger consent_records_no_delete is missing, not enabled (O), not BEFORE ROW DELETE, or not bound to public.trg_consent_records_block_delete()';
+  END IF;
+  IF pg_get_functiondef('public.trg_consent_records_block_delete()'::regprocedure)
+       NOT LIKE '%consent_records is append-only; deletes blocked%' THEN
+    RAISE EXCEPTION 'consent ack postcondition: public.trg_consent_records_block_delete() no longer raises the deletes-blocked refusal';
   END IF;
 END
 $post$;
