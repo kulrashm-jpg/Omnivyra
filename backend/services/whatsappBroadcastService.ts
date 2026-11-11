@@ -345,9 +345,16 @@ export async function processBatch(
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
+  // ONLY `pending` recipients. A batch job is retried (attempts: 3, and 2 on the
+  // retryFailed path) with the SAME recipient_ids, so without this filter a job
+  // that threw after some sends re-sent every recipient already marked `sent`
+  // (or `blocked_governance`). processBatch must be idempotent however it is
+  // re-entered. retryFailed resets failed rows to `pending` before it enqueues,
+  // so that path still reaches them.
   const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id, encrypted_phone, contact_name')
-    .in('id', recipientIds);
+    .in('id', recipientIds)
+    .eq('status', 'pending');
 
   if (!recipients?.length) return;
 
