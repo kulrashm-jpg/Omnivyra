@@ -1,0 +1,12 @@
+# Acknowledged changes to scripts/ci/check-actor-fk-compatibility.js (#28 actor-FK parity).
+#
+# The actor-FK parity gate fails when the checker differs between HEAD and BASE, because a
+# weakened rule would otherwise read as "resolved". An intended, reviewed change is listed
+# here as the sha256 of the HEAD checker file, then " # <reason>". Example:
+#   <64 hex> # rule set_null_vs_check tightened (reviewed by virality-05, 2026-11-xx)
+#
+# Prune an entry once its change is on main: when HEAD and BASE run the same detector and
+# this file still lists that sha, the gate fails with STALE DETECTOR ACK.
+#
+# MIGRATION-CLASS (#27 clarification 3): every edit needs full virality-05 review.
+5b9d17e7a983ae5f8027f7db8301a65b0859c185c79fc181276944188ee93190 # PI-LDB (virality-e1, fa067bf87 = c1af54b4b): a catalog_known entry is judged STALE only when its column is visible in the catalogue or the catalogue is unbounded (live/replayed), mirroring registry_column_missing; an unjudged entry prints NOT JUDGED under COVERAGE LIMIT 1/2. Reviewed and PASSED by virality-05 2026-11-11: byte-equality pin via cat-file; whole-corpus differential on the committed baseline (823 tables, 791 FKs): no finding newly flagged or unflagged; only source_assertions.platform_mapping_profile_id moves from error to NOT JUDGED. Prune when it reaches main.
