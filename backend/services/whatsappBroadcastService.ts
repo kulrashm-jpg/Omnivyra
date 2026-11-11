@@ -35,6 +35,8 @@ const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 
+const RECIPIENT_ID_PAGE = 1000;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface ContactInput {
@@ -285,19 +287,30 @@ export async function enqueueBroadcast(
   const { getContentQueue } = await import('../queue/contentGenerationQueues');
   const queue = getContentQueue('whatsapp-broadcast');
 
-  let offset = 0;
-  let batchIndex = 0;
-
-  while (offset < totalCount) {
-    const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
+  // Every id is read BEFORE the first job is queued, and paged by key. Batch 0 has no
+  // delay, so a worker moves rows out of `pending` while this runs: an offset over that
+  // shrinking set skips recipients, and they are never queued.
+  const pendingIds: string[] = [];
+  for (;;) {
+    let page = ownedDbTable('whatsapp_broadcast_recipients')
       .select('id')
       .eq('broadcast_id', broadcastId)
-      .eq('status', 'pending')
-      .range(offset, offset + batch_size - 1);
+      .eq('status', 'pending');
+    if (pendingIds.length > 0) page = page.gt('id', pendingIds[pendingIds.length - 1]);
 
+    const { data: recipients, error: readError } = await page
+      .order('id', { ascending: true })
+      .limit(RECIPIENT_ID_PAGE);
+    if (readError) throw new Error(`Broadcast recipients unreadable: ${readError.message}`);
+    // Until an empty page: the server's row cap may be lower than the page asked for.
     if (!recipients?.length) break;
+    pendingIds.push(...recipients.map((r) => r.id as string));
+  }
 
-    const recipientIds = recipients.map((r) => r.id);
+  let batchIndex = 0;
+
+  for (let i = 0; i < pendingIds.length; i += batch_size) {
+    const recipientIds = pendingIds.slice(i, i + batch_size);
 
     await enqueueOrThrow(
       queue,
@@ -313,7 +326,6 @@ export async function enqueueBroadcast(
       },
     );
 
-    offset     += batch_size;
     batchIndex += 1;
   }
 
@@ -345,9 +357,16 @@ export async function processBatch(
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
+  // ONLY `pending` recipients. A batch job is retried (attempts: 3, and 2 on the
+  // retryFailed path) with the SAME recipient_ids, so without this filter a job
+  // that threw after some sends re-sent every recipient already marked `sent`
+  // (or `blocked_governance`). processBatch must be idempotent however it is
+  // re-entered. retryFailed resets failed rows to `pending` before it enqueues,
+  // so that path still reaches them.
   const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id, encrypted_phone, contact_name')
-    .in('id', recipientIds);
+    .in('id', recipientIds)
+    .eq('status', 'pending');
 
   if (!recipients?.length) return;
 
