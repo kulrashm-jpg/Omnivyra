@@ -3,8 +3,10 @@
  * "ensured" the companies row with an UPSERT ON CONFLICT (id) whenever the
  * read failed OR found nothing. A transient read error on an EXISTING company
  * therefore overwrote its name and website and set status='active' - which
- * re-activates a suspended company. Now a read error fails closed with no
- * write, and the ensure-row is insert-only and never names status.
+ * re-activates a suspended company. Owner ruling (c), 2026-11-11: the route no
+ * longer creates companies at all - its premise ("company_api_configs FK
+ * requires it") was false. Missing company -> 404 COMPANY_NOT_FOUND, zero
+ * writes; read error -> 500, zero writes; an existing company is untouched.
  *
  * Also pinned: an INVITED (not yet accepted) member is refused the write. The
  * real rbacService/rbacPrimitives run against the fake, so this exercises the
@@ -124,21 +126,26 @@ describe('the companies ensure-row never modifies an existing company', () => {
     expect(db.companies[0]).toEqual({ id: CO, name: 'Acme Ltd', website: 'https://acme.example', status: 'suspended' });
   });
 
-  it('a missing company is created INSERT-ONLY and the write never names status', async () => {
+  it('a MISSING company -> 404 COMPANY_NOT_FOUND and ZERO writes (nothing created, nothing configured)', async () => {
     db.companies = [];
-    await post({});
-    expect(companyWrites()).toHaveLength(1);
-    const w = companyWrites()[0];
-    expect(w.opts).toMatchObject({ onConflict: 'id', ignoreDuplicates: true });
-    expect(Object.keys(w.payload as Row)).not.toContain('status');
-    expect(db.companies).toHaveLength(1);
-    expect(db.companies[0]).toMatchObject({ id: CO, name: 'Profile Name' });
+    const res = await post({ company_default_api_ids: [] });
+    expect(res.code).toBe(404);
+    expect(res.body).toMatchObject({ code: 'COMPANY_NOT_FOUND' });
+    expect(writes).toHaveLength(0);
+    expect(db.companies).toHaveLength(0);
   });
 
-  it('a profile read error on a missing company fails closed with no write', async () => {
-    db.companies = [];
-    failRead.company_profiles = true;
-    expect((await post({})).code).toBe(500);
+  it('an EXISTING company -> unchanged behaviour (passes the check, reaches validation, companies untouched)', async () => {
+    const before = JSON.stringify(db.companies);
+    const res = await post({});
+    expect(res.code).toBe(400); // api_source_id is required - past the company check
+    expect(companyWrites()).toHaveLength(0);
+    expect(JSON.stringify(db.companies)).toBe(before);
+  });
+
+  it('an EXISTING company with a bulk config save still writes its configs, never the companies table', async () => {
+    const res = await post({ company_default_api_ids: [] });
+    expect(res.code).toBeLessThan(300);
     expect(companyWrites()).toHaveLength(0);
   });
 });

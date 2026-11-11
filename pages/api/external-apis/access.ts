@@ -374,21 +374,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // Ensure company exists in companies table (company_api_configs FK requires it).
-    // 2026-11-11: this used to UPSERT ON CONFLICT (id) whenever the read failed
-    // OR found nothing - so a transient read error on an EXISTING company
-    // overwrote its name and website and set status='active' (re-activating a
-    // suspended company). Now: a read error fails closed with NO write, and the
-    // ensure-row is INSERT-ONLY (ON CONFLICT DO NOTHING) and never names
-    // status (a new row takes the column default 'active', the value the old
-    // code wrote explicitly - so a genuinely new company is unchanged). An
-    // existing row is never modified by this route.
+    // The company must already exist. 2026-11-11 (owner, option 1): this route
+    // used to CREATE a companies row when none was found ("company_api_configs
+    // FK requires it" - it does not: company_api_configs.company_id has no FK
+    // to companies), inventing a name ('Company') and a fake website
+    // (https://company-<id>.local). Company creation belongs to the real flows
+    // (signup, onboarding, admin/create-company, super-admin/companies). Now:
+    // no companies row -> 404 COMPANY_NOT_FOUND and NO write; a read error ->
+    // 500, no write. This route never writes the companies table.
     //
-    // LOAD-BEARING: maybeSingle() returning {data:null,error:null} does NOT
-    // prove the company absent (a blank response arrives that way). Insert-only
-    // NEUTRALISES that ambiguity: a false "absent" makes the insert a no-op
-    // against the existing row. Do not turn this into a plain insert, and never
-    // add an update of name/website/status here - the overwrite would return.
+    // maybeSingle() returning {data:null,error:null} does not prove absence (a
+    // blank response arrives that way); a false "absent" now costs a
+    // retryable 404, never a write.
     const { data: existingCompany, error: companyErr } = await supabase
       .from('companies')
       .select('id')
@@ -399,30 +396,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: 'Company lookup failed' });
     }
     if (!existingCompany) {
-      const { data: profile, error: profileErr } = await supabase
-        .from('company_profiles')
-        .select('company_id, name')
-        .eq('company_id', companyId)
-        .maybeSingle();
-      if (profileErr) {
-        console.error('access POST company profile lookup failed', profileErr);
-        return res.status(500).json({ error: 'Company lookup failed' });
-      }
-      const { error: insertErr } = await supabase.from('companies').upsert(
-        {
-          id: companyId,
-          name: profile?.name || 'Company',
-          website: `https://company-${companyId}.local`,
-        },
-        { onConflict: 'id', ignoreDuplicates: true }
-      );
-      if (insertErr) {
-        console.error('access POST ensure company failed', insertErr);
-        return res.status(500).json({
-          error: 'Company not found or could not be created',
-          detail: insertErr.message,
-        });
-      }
+      return res.status(404).json({ error: 'Company not found', code: 'COMPANY_NOT_FOUND' });
     }
 
     const availableIds = new Set(availableApis.map((api) => api.id));
