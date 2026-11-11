@@ -38,6 +38,9 @@ const CONSUMED_ALERT_BY_THRESHOLD: Record<number, AlertType> = { 80: 'consumed_8
 // CORRECT SENDING (2026-11-12): every dedup read in this file fails toward
 // "already sent" (SUPPRESS) - an unread dedup check used to answer "not sent"
 // and re-send the alert. Suppressing writes nothing, so the next run retries.
+// The direction is deliberate (05): a missed-then-late alert is better than a
+// duplicate - duplicates teach the recipient that credit alerts are noise, and
+// then the one that matters is ignored. Do not "improve" this into a retry-send.
 export async function getFiredConsumptionThresholds(orgId: string, sinceIso: string): Promise<number[]> {
   const { data, error } = await ownedDbTable('credit_alert_log')
     .select('alert_type')
