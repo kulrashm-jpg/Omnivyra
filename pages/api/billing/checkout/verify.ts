@@ -62,11 +62,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!organizationId || !purchaseId) return res.status(400).json({ error: 'org_id and purchase_id are required' });
 
   // Ownership guard: the purchase must belong to this org.
-  const { data: purchase } = await supabase
+  // MONEY: a failed lookup is NOT "no such purchase". Answering 404 told a
+  // customer who has just paid that their purchase does not exist; 503 says
+  // "try again" and nothing is verified or settled on an unread row.
+  const { data: purchase, error: purchaseErr } = await supabase
     .from('credit_purchases')
     .select('id, organization_id, status, provider, provider_order_id')
     .eq('id', purchaseId)
     .maybeSingle();
+  if (purchaseErr) {
+    logger.error('checkout_verify_purchase_lookup_failed', { organizationId, purchaseId, message: purchaseErr.message });
+    return res.status(503).json({ error: 'purchase_lookup_unavailable', retryable: true });
+  }
   if (!purchase || (purchase as any).organization_id !== organizationId) {
     return res.status(404).json({ error: 'purchase_not_found' });
   }
