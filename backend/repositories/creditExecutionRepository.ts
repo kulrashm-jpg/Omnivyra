@@ -77,12 +77,22 @@ export async function callCreditReservation(command: CreditReservationCommand): 
   return { error: error as Error | null, transactionId: txId };
 }
 
+/**
+ * THE idempotency guard of every credit primitive (reserve / confirm / release /
+ * executeWithCredits): "is this key already held / confirmed / released?".
+ * MONEY (2026-11-12): a failed read used to answer null = "no", so a retried
+ * request whose work was already confirmed RE-RAN the paid work (provider call,
+ * artifact) and placed/settled again under DB idempotency alone. A failed read
+ * is "unknown": throw, and the caller fails closed (routes 5xx; the image-credit
+ * helper maps it to 'unavailable').
+ */
 export async function findCreditTransaction(key: string): Promise<CreditTransactionLookup | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('credit_transactions')
     .select('id, execution_phase')
     .eq('idempotency_key', key)
     .maybeSingle();
+  if (error) throw new Error(`[creditExecution] idempotency lookup failed for ${key}: ${error.message}`);
 
   return data as CreditTransactionLookup | null;
 }
@@ -108,11 +118,14 @@ export async function callCreditPartialConfirm(command: CreditPartialConfirmComm
 }
 
 export async function loadCreditHoldSplit(holdId: string): Promise<CategorySplit | null> {
-  const { data } = await supabase
+  // A failed read is not a "corrupted hold": callers treat null as "start a
+  // fresh hold with a zero split". Throw instead.
+  const { data, error } = await supabase
     .from('credit_transactions')
     .select('free_delta, paid_delta, incentive_delta')
     .eq('id', holdId)
     .maybeSingle();
+  if (error) throw new Error(`[creditExecution] hold split read failed for ${holdId}: ${error.message}`);
 
   if (!data) return null;
   const deltas = data as { free_delta?: number | null; paid_delta?: number | null; incentive_delta?: number | null };
