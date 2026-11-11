@@ -37,6 +37,7 @@ import {
 } from './contract';
 import { salesNavLeadSourceAdapter, toBatchRecord } from './adapter';
 import { checkEnvelope, extensionSavedLeadsProvider } from './providers';
+import { getTenantDataAckStatus } from '../compliance/tenantDataAck';
 
 /** The per-tenant opt-in flag key. Declared once; a second spelling enables nobody. */
 export const SALESNAV_CAPTURE_FLAG_KEY = 'salesnav_capture';
@@ -69,6 +70,15 @@ export function toLeadOutcome(key: string | null, o: IngestionRecordOutcome): Ca
   }
 }
 
+async function defaultAckAllowed(orgId: string): Promise<{ allowed: boolean; state: string }> {
+  try {
+    const s = (await getTenantDataAckStatus(orgId)).categories.salesnav_capture;
+    return { allowed: s.allowed, state: s.state };
+  } catch {
+    return { allowed: false, state: 'unknown' };
+  }
+}
+
 async function tenantCaptureFlag(orgId: string): Promise<{ allowed: boolean; reason: string }> {
   try {
     const r = await evaluateFeatureFlag({ organizationId: orgId, flagKey: SALESNAV_CAPTURE_FLAG_KEY, cohortKey: null });
@@ -93,7 +103,7 @@ async function tenantCaptureFlag(orgId: string): Promise<{ allowed: boolean; rea
 export async function ingestCapturedSavedLeads(
   ctx: CaptureCallerContext,
   payload: CaptureBatchPayload,
-  options: { now?: Date; recordRun?: typeof recordCaptureRun } = {},
+  options: { now?: Date; recordRun?: typeof recordCaptureRun; ackAllowed?: (orgId: string) => Promise<{ allowed: boolean; state: string }> } = {},
 ): Promise<CaptureBatchResult> {
   const record = options.recordRun ?? recordCaptureRun;
   let result: CaptureBatchResult;
@@ -110,7 +120,7 @@ export async function ingestCapturedSavedLeads(
 async function ingestCapturedSavedLeadsCore(
   ctx: CaptureCallerContext,
   payload: CaptureBatchPayload,
-  options: { now?: Date } = {},
+  options: { now?: Date; ackAllowed?: (orgId: string) => Promise<{ allowed: boolean; state: string }> } = {},
 ): Promise<CaptureBatchResult> {
   // 1. The code constant first: free, and it cannot be changed by configuration.
   if (!SALESNAV_EXTENSION_CAPTURE_ENABLED) return refuse('capture_disabled', 'code_constant_off');
@@ -129,6 +139,11 @@ async function ingestCapturedSavedLeadsCore(
   // 4. The tenant's opt-in for this source specifically.
   const flag = await tenantCaptureFlag(orgId);
   if (!flag.allowed) return refuse('capture_not_enabled_for_tenant', flag.reason);
+
+  // 4b. The tenant's data-controller acknowledgement covering Sales Navigator
+  // capture (owner, 2026-11-11): current or in grace. Unreadable = refused.
+  const ack = await (options.ackAllowed ?? defaultAckAllowed)(orgId);
+  if (!ack.allowed) return refuse('data_controller_ack_required', `salesnav_capture:${ack.state}`);
 
   // 5. The provider, then the envelope.
   const availability = await extensionSavedLeadsProvider.availability(orgId);

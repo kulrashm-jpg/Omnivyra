@@ -15,6 +15,7 @@
  */
 import React, { useState } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import TenantDataNotice from '@/components/compliance/TenantDataNotice';
 
 interface Blocking { criterionId: string; subject: string; attribute: string; kind: string; reason: string }
 interface RunView {
@@ -78,6 +79,8 @@ export default function IcpDiscoveryPanel({ companyId, versionId, version }: {
 
   return (
     <div className="mt-4 rounded-xl border border-purple-200 bg-white p-4" data-testid="icp-discovery-panel">
+      {/* Data-controller notice: shown on every search (owner, 2026-11-11). */}
+      <TenantDataNotice companyId={companyId} categories={['vendor_data']} />
       <h3 className="text-sm font-semibold text-gray-900">Find people matching ICP version {version} (Apollo)</h3>
       <p className="mt-1 text-xs text-gray-600">
         Only mandatory criteria become search filters. Leads that look like someone you already have are

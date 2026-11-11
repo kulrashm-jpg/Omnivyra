@@ -10,6 +10,9 @@ import { SWRConfig } from 'swr';
 
 const mockApiFetch = jest.fn();
 jest.mock('@/lib/apiFetch', () => ({ apiFetch: (u: string, init?: unknown) => mockApiFetch(u, init) }));
+// The data-controller notice makes its own request; it has its own DOM suite
+// (tenantDataNotice.dom), so it is stubbed here to keep these call orders exact.
+jest.mock('@/components/compliance/TenantDataNotice', () => ({ __esModule: true, default: () => null, TenantDataNoticeForSelectedCompany: () => null }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ImportReviewPanel = require('../../../components/prospects/ImportReviewPanel').default;

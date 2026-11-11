@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { getTenantDataAckStatus, TenantDataAckRequired } from '../../../backend/services/compliance/tenantDataAck';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { requireExternalApiAccess } from '../../../backend/apiHandlers/externalApis/indexShared';
@@ -35,13 +36,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const org = String(companyId);
 
   try {
+    // Data-controller acknowledgement (owner, 2026-11-11): configuring a data
+    // vendor needs 'vendor_data'; a contact group additionally needs
+    // 'contact_data'. Server-side; the UI only shows the notice.
+    const ack = await getTenantDataAckStatus(org);
+    const contactAllowed = ack.categories.contact_data.allowed;
     if (method === 'PUT') {
+      if (!ack.categories.vendor_data.allowed) throw new TenantDataAckRequired('vendor_data', ack.categories.vendor_data.state);
       const body = (req.body ?? {}) as { groups?: unknown };
-      const saved = await writeTenantFieldGroups(org, body.groups, tenant.userId);
+      const saved = await writeTenantFieldGroups(org, body.groups, tenant.userId, { contactAllowed });
       return res.status(200).json({ selected: saved });
     }
-    const selected = await readTenantFieldGroups(org);
+    const selected = await readTenantFieldGroups(org, { contactAllowed });
     return res.status(200).json({
+      dataAck: { vendor_data: ack.categories.vendor_data.state, contact_data: ack.categories.contact_data.state },
       groups: APOLLO_FIELD_GROUPS.map((g) => ({
         id: g.id, label: g.label, subject: g.subject, contact: g.contact,
         available: g.availability.available,
@@ -52,6 +60,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       selected,
     });
   } catch (e) {
+    if (e instanceof TenantDataAckRequired) {
+      return res.status(403).json({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: e.category, state: e.state });
+    }
     if (e instanceof FieldGroupSelectionRefused) {
       return res.status(400).json({ error: 'FIELD_GROUP_SELECTION_REFUSED', code: e.code, group: e.group ?? null });
     }

@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { getTenantDataAckStatus, TenantDataAckRequired } from '../../../backend/services/compliance/tenantDataAck';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { requireCapability } from '../../../backend/security/requireCapability';
@@ -68,7 +69,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const groups = await readTenantFieldGroups(companyId);
+    // Data-controller acknowledgement: a RUN fetches vendor data, so it needs a
+    // current (or in-grace) 'vendor_data' acknowledgement; a preview fetches
+    // nothing and is allowed, returning the state so the notice is shown.
+    const ack = await getTenantDataAckStatus(companyId);
+    if (mode === 'run' && !ack.categories.vendor_data.allowed) {
+      throw new TenantDataAckRequired('vendor_data', ack.categories.vendor_data.state);
+    }
+    const groups = await readTenantFieldGroups(companyId, { contactAllowed: ack.categories.contact_data.allowed });
     const allowedAttributes = allowedAttributesFor(groups);
     const now = new Date().toISOString();
     const common = {
@@ -102,6 +110,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
       return res.status(200).json({
+        dataAck: { vendor_data: ack.categories.vendor_data.state, contact_data: ack.categories.contact_data.state },
         fieldGroups: groups,
         funding: resolved?.funding === 'platform' ? 'central_apollo_access'
           : resolved ? 'tenant_apollo_key' : 'no_apollo_access',
@@ -120,6 +129,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const result = await executeProspectEnrichmentBatch(common);
     return res.status(200).json({ fieldGroups: groups, estimate, result });
   } catch (e) {
+    if (e instanceof TenantDataAckRequired) {
+      return res.status(403).json({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: e.category, state: e.state });
+    }
     console.error('[prospect-sources/apollo-enrich]', { mode, message: e instanceof Error ? e.message : 'error' });
     return res.status(500).json({ error: 'APOLLO_ENRICH_FAILED' });
   }

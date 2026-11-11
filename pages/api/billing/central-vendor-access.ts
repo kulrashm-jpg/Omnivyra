@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { assertTenantDataAck, TenantDataAckRequired } from '../../../backend/services/compliance/tenantDataAck';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { requireExternalApiAccess } from '../../../backend/apiHandlers/externalApis/indexShared';
@@ -39,6 +40,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (method === 'PUT') {
       const body = (req.body ?? {}) as { vendors?: unknown };
+      // Opting IN to central vendor access connects a data vendor: needs the
+      // data-controller acknowledgement (owner, 2026-11-11). Opting OUT (an
+      // empty list) is never blocked.
+      if (Array.isArray(body.vendors) && body.vendors.length > 0) await assertTenantDataAck(org, 'vendor_data');
       const optedIn = await writeCentralVendorOptIns(org, body.vendors, tenant.userId);
       return res.status(200).json({ optedIn });
     }
@@ -47,6 +52,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       vendors: quotes.map((q) => ({ ...q, optedIn: optedIn.includes(q.vendor) })),
     });
   } catch (e) {
+    if (e instanceof TenantDataAckRequired) {
+      return res.status(403).json({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: e.category, state: e.state });
+    }
     if (e instanceof CentralAccessSelectionRefused) {
       return res.status(400).json({ error: 'CENTRAL_ACCESS_SELECTION_REFUSED', code: e.code, vendor: e.vendor ?? null });
     }

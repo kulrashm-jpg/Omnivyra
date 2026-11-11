@@ -19,7 +19,6 @@ jest.mock('../../services/featureFlagService', () => ({
 
 import {
   APOLLO_FIELD_GROUPS,
-  CONTACT_DATA_LAWFUL_BASIS_RECORDED,
   DEFAULT_APOLLO_FIELD_GROUPS,
   allowedAttributesFor,
   readTenantFieldGroups,
@@ -32,18 +31,21 @@ const ORG = '00000000-0000-4000-8000-0000000000aa';
 beforeEach(() => { flagRead = { data: [], error: null, status: 200 }; upserts.length = 0; });
 
 describe('the groups', () => {
-  it('contact data is a group, default OFF, and REFUSES until the owner records a lawful basis (L1); phone is deferred', () => {
-    expect(CONTACT_DATA_LAWFUL_BASIS_RECORDED).toBe(false);
+  it('contact data is a group, default OFF, unlocked PER TENANT by the contact_data acknowledgement (L1 settled 2026-11-11); phone is deferred', () => {
     const email = APOLLO_FIELD_GROUPS.find((g) => g.id === 'contact_email')!;
     const phone = APOLLO_FIELD_GROUPS.find((g) => g.id === 'contact_phone')!;
     expect(email.contact && phone.contact).toBe(true);
-    expect(email.availability.available).toBe(false);
-    expect(phone.availability.available).toBe(false);
+    expect(email.availability.available).toBe(true);     // a product capability...
+    expect(phone.availability.available).toBe(false);    // ...phone still deferred
     expect(DEFAULT_APOLLO_FIELD_GROUPS).toEqual(['job_role', 'company_firmographics']);
   });
 
   it('validation refuses unknown and unavailable groups, never drops them silently', () => {
-    expect(() => validateFieldGroups(['job_role', 'contact_email'])).toThrow(/group_unavailable/);
+    expect(() => validateFieldGroups(['job_role', 'contact_phone'])).toThrow(/group_unavailable/);
+    // ...that a tenant may select ONLY with the contact_data acknowledgement (default: not allowed).
+    expect(() => validateFieldGroups(['job_role', 'contact_email'])).toThrow(/contact_ack_required/);
+    expect(() => validateFieldGroups(['job_role', 'contact_email'], { contactAllowed: false })).toThrow(/contact_ack_required/);
+    expect(validateFieldGroups(['job_role', 'contact_email'], { contactAllowed: true })).toEqual(['job_role', 'contact_email']);
     expect(() => validateFieldGroups(['job_role', 'everything'])).toThrow(/unknown_group/);
     expect(() => validateFieldGroups([])).toThrow(/empty_selection/);
     expect(validateFieldGroups(['technologies', 'job_role', 'job_role'])).toEqual(['technologies', 'job_role']);
@@ -66,7 +68,10 @@ describe('the tenant setting', () => {
 
   it('a stored selection is honoured; a stored group that is no longer available is dropped at read', async () => {
     flagRead = { data: [{ enabled: true, metadata: { groups: ['technologies', 'contact_email', 'bogus'] } }], error: null, status: 200 };
+    // Without a current contact_data acknowledgement (never accepted, or lapsed after grace) the stored contact group is dropped at READ...
     expect(await readTenantFieldGroups(ORG)).toEqual(['technologies']);
+    // ...and kept while the acknowledgement is current or in grace.
+    expect(await readTenantFieldGroups(ORG, { contactAllowed: true })).toEqual(['technologies', 'contact_email']);
   });
 
   it('an UNREADABLE setting throws (a guessed selection could fetch data the tenant turned off)', async () => {
@@ -77,7 +82,7 @@ describe('the tenant setting', () => {
   });
 
   it('writing validates first and stores via the existing feature-flag policy store', async () => {
-    await expect(writeTenantFieldGroups(ORG, ['contact_email'], 'u1')).rejects.toThrow(/group_unavailable/);
+    await expect(writeTenantFieldGroups(ORG, ['contact_email'], 'u1')).rejects.toThrow(/contact_ack_required/);
     expect(upserts).toEqual([]);
     await writeTenantFieldGroups(ORG, ['technologies'], 'u1');
     expect(upserts).toEqual([expect.objectContaining({

@@ -143,6 +143,8 @@ export type CaptureBatchRefusal =
   | 'organization_mismatch'
   | 'ingestion_not_enabled'
   | 'capture_not_enabled_for_tenant'
+  /** The tenant has no current (or in-grace) data-controller acknowledgement covering Sales Navigator capture. */
+  | 'data_controller_ack_required'
   | 'provider_unavailable'
   | 'unsupported_provider'
   | 'unsupported_contract_version'

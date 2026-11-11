@@ -20,6 +20,10 @@ jest.mock('../../services/featureFlagService', () => ({
 }));
 
 const gate = jest.fn(async () => ({ allowed: true, reason: 'tenant_flag:flag_enabled_full_rollout' }));
+// The tenant's data-controller acknowledgement (owner, 2026-11-11), injected
+// as CURRENT so these suites exercise the gates after it; its own refusal is
+// pinned in the 'data-controller acknowledgement' block below.
+const ACK_OK = async () => ({ allowed: true, state: 'current' });
 const ingest = jest.fn();
 // The usage-ledger write is pinned in salesNavCaptureRunLedger.test.ts; here it is stubbed explicitly.
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: () => ({ upsert: async () => ({ error: null }) }) }));
@@ -105,7 +109,7 @@ describe('the code constant', () => {
 
   it('when off, refuses before ANY gate, flag or ingestion call', async () => {
     state.captureEnabled = false;
-    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: ACK_OK });
     expect(r).toEqual({ ok: false, refusal: 'capture_disabled', detail: 'code_constant_off', leadKeyProvisional: true, outcomes: [] });
     expect(gate).not.toHaveBeenCalled();
     expect(flag).not.toHaveBeenCalled();
@@ -115,14 +119,14 @@ describe('the code constant', () => {
 
 describe('batch gates fail closed', () => {
   it('refuses a payload naming a different tenant', async () => {
-    const r = await ingestCapturedSavedLeads(ctx, payload({ org_id: '00000000-0000-4000-8000-0000000000bb' }), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload({ org_id: '00000000-0000-4000-8000-0000000000bb' }), { now: NOW, ackAllowed: ACK_OK });
     expect(r.refusal).toBe('organization_mismatch');
     expect(gate).not.toHaveBeenCalled();
   });
 
   it('refuses when the shared ingestion gate refuses', async () => {
     gate.mockResolvedValueOnce({ allowed: false, reason: 'global_kill_switch_off' });
-    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: ACK_OK });
     expect(r).toMatchObject({ ok: false, refusal: 'ingestion_not_enabled', detail: 'global_kill_switch_off' });
     expect(flag).not.toHaveBeenCalled();
     expect(ingest).not.toHaveBeenCalled();
@@ -130,7 +134,7 @@ describe('batch gates fail closed', () => {
 
   it('requires the tenant salesnav_capture flag, separately from lead_ingestion', async () => {
     flag.mockResolvedValueOnce({ enabled: false, reason: 'no_flag_row' });
-    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: ACK_OK });
     expect(r).toMatchObject({ refusal: 'capture_not_enabled_for_tenant', detail: 'tenant_flag:no_flag_row' });
     expect(flag).toHaveBeenCalledWith({ organizationId: ORG, flagKey: SALESNAV_CAPTURE_FLAG_KEY, cohortKey: null });
     expect(ingest).not.toHaveBeenCalled();
@@ -138,7 +142,7 @@ describe('batch gates fail closed', () => {
 
   it('a thrown flag evaluation is a refusal, never an open door', async () => {
     flag.mockRejectedValueOnce(new Error('db down'));
-    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: ACK_OK });
     expect(r.refusal).toBe('capture_not_enabled_for_tenant');
     expect(ingest).not.toHaveBeenCalled();
   });
@@ -151,14 +155,14 @@ describe('batch gates fail closed', () => {
     ['invalid_payload', { captured_at: 'yesterday' }],
     ['invalid_payload', { leads: [] }],
   ] as Array<[string, Partial<CaptureBatchPayload>]>)('refuses envelope: %s', async (refusal, over) => {
-    const r = await ingestCapturedSavedLeads(ctx, payload(over), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload(over), { now: NOW, ackAllowed: ACK_OK });
     expect(r.refusal).toBe(refusal);
     expect(ingest).not.toHaveBeenCalled();
   });
 
   it(`refuses more than ${MAX_CAPTURE_BATCH} leads in one batch`, async () => {
     const leads = Array.from({ length: MAX_CAPTURE_BATCH + 1 }, (_, i) => ({ lead_key: `ACwAAA${String(i).padStart(6, '0')}` }));
-    const r = await ingestCapturedSavedLeads(ctx, payload({ leads }), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload({ leads }), { now: NOW, ackAllowed: ACK_OK });
     expect(r.refusal).toBe('batch_too_large');
     expect(ingest).not.toHaveBeenCalled();
   });
@@ -186,7 +190,7 @@ describe('per-lead validation', () => {
         { lead_key: KEY_A },
         { lead_key: KEY_B },
       ],
-    }), { now: NOW });
+    }), { now: NOW, ackAllowed: ACK_OK });
     expect(r.ok).toBe(true);
     expect(r.outcomes).toEqual([
       { key: `urn:li:fs_salesProfile:(${KEY_A},X,y)`, status: 'rejected', reason: 'lead_key_is_full_urn' },
@@ -199,7 +203,7 @@ describe('per-lead validation', () => {
   });
 
   it('a batch with no valid lead never calls ingestion', async () => {
-    const r = await ingestCapturedSavedLeads(ctx, payload({ leads: [{ lead_key: 'bad key!' }] }), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload({ leads: [{ lead_key: 'bad key!' }] }), { now: NOW, ackAllowed: ACK_OK });
     expect(r.outcomes).toEqual([{ key: 'bad key!', status: 'rejected', reason: 'invalid_lead_key' }]);
     expect(ingest).not.toHaveBeenCalled();
   });
@@ -207,7 +211,7 @@ describe('per-lead validation', () => {
 
 describe('ingestion call and response shape', () => {
   it('calls ingestLeadBatch with the PI source, the context tenant and the command as run id', async () => {
-    await ingestCapturedSavedLeads(ctx, payload(), { now: NOW });
+    await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: ACK_OK });
     const input = ingest.mock.calls[0][0] as Record<string, unknown>;
     expect(input).toMatchObject({
       organizationId: ORG, source: 'linkedin_sales_navigator', ingestionRunId: 'cmd-1', now: NOW.toISOString(),
@@ -223,7 +227,7 @@ describe('ingestion call and response shape', () => {
         { externalId: 'x', ok: false, rejection: 'identity_failed', error: 'Jane Doe jane@x.com broke' }],
     }));
     const keys = ['ACwAAA000001', 'ACwAAA000002', 'ACwAAA000003', 'ACwAAA000004'];
-    const r = await ingestCapturedSavedLeads(ctx, payload({ leads: keys.map((k) => ({ lead_key: k, full_name: 'Jane Doe' })) }), { now: NOW });
+    const r = await ingestCapturedSavedLeads(ctx, payload({ leads: keys.map((k) => ({ lead_key: k, full_name: 'Jane Doe' })) }), { now: NOW, ackAllowed: ACK_OK });
     expect(r.outcomes.map((o) => o.status)).toEqual(['created', 'updated', 'unchanged', 'rejected']);
     expect(r.outcomes[3].reason).toBe('identity_failed');
     const json = JSON.stringify(r);
@@ -370,5 +374,22 @@ describe('what may be STORED as evidence (review NEW 1)', () => {
     if ('reason' in r) throw new Error(r.reason);
     const redacted = redactSecrets(translateSalesNavLead(toBatchRecord(r.lead), ORG).raw) as Record<string, unknown>;
     expect(redacted.lead_key).toBe(KEY_A);
+  });
+});
+
+
+describe('data-controller acknowledgement (gate 4b)', () => {
+  it('no current acknowledgement for salesnav_capture -> refused with its own code, nothing ingested', async () => {
+    for (const state of ['required', 'expired', 'text_changed', 'unknown']) {
+      ingest.mockClear();
+      const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: async () => ({ allowed: false, state }) });
+      expect(r).toMatchObject({ ok: false, refusal: 'data_controller_ack_required', detail: `salesnav_capture:${state}` });
+      expect(ingest).not.toHaveBeenCalled();
+    }
+  });
+
+  it('NEGATIVE CONTROL: in GRACE (wording updated, not yet re-accepted) capture still runs', async () => {
+    const r = await ingestCapturedSavedLeads(ctx, payload(), { now: NOW, ackAllowed: async () => ({ allowed: true, state: 'grace' }) });
+    expect(r.refusal).not.toBe('data_controller_ack_required');
   });
 });

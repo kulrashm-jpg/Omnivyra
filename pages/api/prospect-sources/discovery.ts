@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { assertTenantDataAck, TenantDataAckRequired } from '../../../backend/services/compliance/tenantDataAck';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { requireCapability } from '../../../backend/security/requireCapability';
@@ -243,6 +244,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // Applied, but only approximately (e.g. industry via keyword tags).
       approximations: translation.approximations,
     };
+  }
+
+  // A discovery search fetches vendor data: needs the data-controller
+  // acknowledgement for 'vendor_data' (owner, 2026-11-11).
+  try {
+    await assertTenantDataAck(companyId, 'vendor_data');
+  } catch (e) {
+    if (e instanceof TenantDataAckRequired) {
+      return res.status(403).json({ error: 'DATA_CONTROLLER_ACK_REQUIRED', category: e.category, state: e.state });
+    }
+    return res.status(503).json({ error: 'DATA_CONTROLLER_ACK_UNREADABLE' });
   }
 
   try {

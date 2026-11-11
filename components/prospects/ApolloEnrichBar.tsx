@@ -8,6 +8,7 @@
  */
 import React, { useState } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import TenantDataNotice from '@/components/compliance/TenantDataNotice';
 
 interface Estimate { estimatedProviderCalls: number; calls: Array<{ prospectId: string; subject: string; attributes: string[] }>; unreadable: string[]; estimateHash: string }
 interface Preview {
@@ -68,6 +69,8 @@ export default function ApolloEnrichBar({ companyId, prospectIds, onDone }: {
 
   return (
     <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm" data-testid="apollo-enrich-bar">
+      {/* Data-controller notice: shown on every fetch (owner, 2026-11-11). */}
+      <TenantDataNotice companyId={companyId} categories={['vendor_data', 'contact_data']} />
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-gray-800">
           {ids.length} prospect{ids.length === 1 ? '' : 's'} selected

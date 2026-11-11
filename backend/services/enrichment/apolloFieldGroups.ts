@@ -38,11 +38,14 @@ export interface ApolloFieldGroup {
 }
 
 /**
- * L1: no lawful basis has been recorded by the owner for holding
- * vendor-sourced contact data. A code constant, like the capture switch: it is
- * flipped only by a reviewed change after the owner records the basis.
+ * L1 is settled PER TENANT (owner, 2026-11-11): contact-data groups are a
+ * product capability, unlocked for a tenant ONLY while it holds a current (or
+ * in-grace) data-controller acknowledgement covering 'contact_data'
+ * (backend/services/compliance/tenantDataAck.ts). The former code constant
+ * CONTACT_DATA_LAWFUL_BASIS_RECORDED is retired; every function that admits a
+ * contact group now takes `contactAllowed`, which callers derive from the
+ * tenant's acknowledgement and which DEFAULTS TO FALSE.
  */
-export const CONTACT_DATA_LAWFUL_BASIS_RECORDED: boolean = false;
 
 export const APOLLO_FIELD_GROUPS: readonly ApolloFieldGroup[] = Object.freeze([
   {
@@ -59,9 +62,9 @@ export const APOLLO_FIELD_GROUPS: readonly ApolloFieldGroup[] = Object.freeze([
   },
   {
     id: 'contact_email', label: 'Work email', subject: 'person', attributes: ['email'], contact: true,
-    availability: CONTACT_DATA_LAWFUL_BASIS_RECORDED
-      ? { available: true }
-      : { available: false, reason: 'Not yet available: the lawful basis for holding provider-sourced contact data has not been recorded.' },
+    // Available as a product; per tenant it also needs the contact_data
+    // acknowledgement (`contactAllowed`).
+    availability: { available: true },
   },
   {
     id: 'contact_phone', label: 'Phone', subject: 'person', attributes: ['phone'], contact: true,
@@ -75,20 +78,22 @@ export const DEFAULT_APOLLO_FIELD_GROUPS: readonly ApolloFieldGroupId[] = Object
 const byId = (id: string) => APOLLO_FIELD_GROUPS.find((g) => g.id === id);
 
 export class FieldGroupSelectionRefused extends Error {
-  constructor(readonly code: 'unknown_group' | 'group_unavailable' | 'empty_selection', readonly group?: string) {
+  constructor(readonly code: 'unknown_group' | 'group_unavailable' | 'empty_selection' | 'contact_ack_required', readonly group?: string) {
     super(`field group selection refused: ${code}${group ? ` (${group})` : ''}`);
     this.name = 'FieldGroupSelectionRefused';
   }
 }
 
 /** Validate a requested selection. Unknown or unavailable groups are REFUSED, never silently dropped. */
-export function validateFieldGroups(groups: unknown): ApolloFieldGroupId[] {
+export function validateFieldGroups(groups: unknown, opts: { contactAllowed?: boolean } = {}): ApolloFieldGroupId[] {
   if (!Array.isArray(groups) || groups.length === 0) throw new FieldGroupSelectionRefused('empty_selection');
   const out: ApolloFieldGroupId[] = [];
   for (const g of groups) {
     const def = typeof g === 'string' ? byId(g) : undefined;
     if (!def) throw new FieldGroupSelectionRefused('unknown_group', String(g).slice(0, 40));
     if (!def.availability.available) throw new FieldGroupSelectionRefused('group_unavailable', def.id);
+    // Contact data needs the tenant's data-controller acknowledgement for it.
+    if (def.contact && opts.contactAllowed !== true) throw new FieldGroupSelectionRefused('contact_ack_required', def.id);
     if (!out.includes(def.id)) out.push(def.id);
   }
   return out;
@@ -99,7 +104,7 @@ export function validateFieldGroups(groups: unknown): ApolloFieldGroupId[] {
  * setting throws: running enrichment on a guessed selection could fetch, and
  * charge for, data the tenant turned off.
  */
-export async function readTenantFieldGroups(organizationId: string): Promise<ApolloFieldGroupId[]> {
+export async function readTenantFieldGroups(organizationId: string, opts: { contactAllowed?: boolean } = {}): Promise<ApolloFieldGroupId[]> {
   const res = await ownedDbTable('feature_flags').select('enabled, metadata')
     .eq('organization_id', organizationId).eq('flag_key', APOLLO_FIELD_GROUPS_FLAG_KEY).limit(1);
   if (res.error || (res.status !== 200 && res.status !== 206) || !Array.isArray(res.data)) {
@@ -107,15 +112,21 @@ export async function readTenantFieldGroups(organizationId: string): Promise<Apo
   }
   const row = res.data[0] as { enabled?: boolean; metadata?: { groups?: unknown } } | undefined;
   if (!row || row.enabled !== true) return [...DEFAULT_APOLLO_FIELD_GROUPS];
-  // A stored group that is no longer available (e.g. contact before L1) is
+  // A stored group that is no longer available - or a contact group whose
+  // acknowledgement is not current (never accepted, lapsed after grace) - is
   // dropped at READ, never fetched; the rest of the selection stands.
   const stored = Array.isArray(row.metadata?.groups) ? row.metadata!.groups as unknown[] : [];
-  const usable = stored.filter((g): g is ApolloFieldGroupId => typeof g === 'string' && !!byId(g) && byId(g)!.availability.available);
+  const usable = stored.filter((g): g is ApolloFieldGroupId => {
+    const def = typeof g === 'string' ? byId(g) : undefined;
+    return !!def && def.availability.available && (!def.contact || opts.contactAllowed === true);
+  });
   return usable.length ? usable : [...DEFAULT_APOLLO_FIELD_GROUPS];
 }
 
-export async function writeTenantFieldGroups(organizationId: string, groups: unknown, userId: string): Promise<ApolloFieldGroupId[]> {
-  const valid = validateFieldGroups(groups);
+export async function writeTenantFieldGroups(
+  organizationId: string, groups: unknown, userId: string, opts: { contactAllowed?: boolean } = {},
+): Promise<ApolloFieldGroupId[]> {
+  const valid = validateFieldGroups(groups, opts);
   await upsertFeatureFlag({
     organizationId,
     flagKey: APOLLO_FIELD_GROUPS_FLAG_KEY,

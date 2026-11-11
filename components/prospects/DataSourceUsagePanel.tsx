@@ -28,6 +28,7 @@ interface Report {
   byUser: Array<{ userId: string | null; label: string } & Totals>;
   byDay: Array<{ day: string } & Totals>;
   runs: Run[];
+  dataAck?: { noticeVersion?: string; readable: boolean; categories?: Record<string, { state: string; acceptedVersion: string | null; acceptedAt: string | null }> } | null;
 }
 
 const SOURCE_LABEL: Record<string, string> = { apollo: 'Apollo', linkedin_sales_navigator: 'Sales Navigator' };
@@ -106,6 +107,15 @@ export default function DataSourceUsagePanel() {
             {report.totals.skippedDuplicates} duplicates skipped
           </p>
 
+          {report.dataAck && (
+            <p className="mb-3 text-xs text-gray-600" data-testid="usage-data-ack">
+              Data-controller acknowledgement:{' '}
+              {report.dataAck.readable === false || !report.dataAck.categories
+                ? 'could not be read.'
+                : Object.entries(report.dataAck.categories).map(([c, v]) =>
+                  `${c.replace(/_/g, ' ')}: ${v.state}${v.acceptedAt ? ` (v${v.acceptedVersion}, ${v.acceptedAt.slice(0, 10)})` : ''}`).join(' · ')}
+            </p>
+          )}
           <h3 className="mt-4 text-sm font-semibold text-gray-900">By source</h3>
           <table className="w-full text-sm" data-testid="usage-by-source">
             <thead><tr><th align="left">Source</th><th align="left">Type</th><th align="right">Runs</th><th align="right">Vendor units</th><th align="right">Credits</th><th align="right">Leads added</th></tr></thead>
