@@ -118,13 +118,21 @@ export async function executeRenderJob(
     }
     events.push('render_started');
     const specHash = spec.deterministic_input_hash;
+    // TENANT-SCOPED KEYS. deterministic_input_hash (and spec_id = render:<hash>) are computed from the
+    // CONTENT alone, with no tenant; job_execution_registry is UNIQUE (execution_hash) and
+    // billing_operations is UNIQUE (idempotency_key), both GLOBAL. Keyed on the bare hash, a second
+    // tenant rendering identical content would hit the first tenant's registry row and billing key.
+    // Scoping both keys to the organization makes a registry entry or a key conflict mean "THIS
+    // tenant, this spec" by construction (the creator_render_job dedupe is already per tenant).
+    const registryHash = `${args.organizationId}:${specHash}`;
+    const billingKey = `render:${args.organizationId}:${spec.spec_id}`;
 
     /** Record the registry transition; checked (the client does not throw), never fatal. */
     const advanceRegistry = async (status: 'completed' | 'released', error: string | null): Promise<void> => {
       let res: RpcResult | undefined; let thrown: unknown = null;
       try {
         res = await supabase.rpc('advance_job_execution', {
-          p_execution_hash: specHash, p_status: status, p_billing_operation_id: billingId, p_error: error,
+          p_execution_hash: registryHash, p_status: status, p_billing_operation_id: billingId, p_error: error,
         });
       } catch (e) { thrown = e ?? 'rpc threw'; }
       const failed = rpcFailure(res, thrown);
@@ -184,8 +192,8 @@ export async function executeRenderJob(
       try {
         claim = await supabase.rpc('claim_job_execution', {
           p_job_id: spec.spec_id, p_queue_name: 'creator_render_sync',
-          p_execution_hash: specHash, p_correlation_id: args.contentCoreId,
-          p_idempotency_key: spec.spec_id, p_organization_id: args.organizationId,
+          p_execution_hash: registryHash, p_correlation_id: args.contentCoreId,
+          p_idempotency_key: billingKey, p_organization_id: args.organizationId,
           p_metadata: {},
         });
       } catch (e) { thrown = e ?? 'rpc threw'; }
@@ -196,8 +204,12 @@ export async function executeRenderJob(
         return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'execution_registry_unavailable', retryable: true };
       }
       if ((claim?.data as { is_terminal?: unknown } | null | undefined)?.is_terminal === true) {
-        events.push('duplicate_render_reused');
-        return { ok: true, status: 'reused', events, spec_id: spec.spec_id, output: null, attached: false };
+        // THIS tenant's registry says this spec already reached a terminal state, yet the per-tenant
+        // creator_render_job dedupe above found no job: an inconsistency, not a reusable render (there
+        // is no output to return). Refused, not retried as is; never an empty "reused".
+        console.error('[creator-render] execution registry is terminal but no render job exists; refused', { spec_id: spec.spec_id });
+        events.push('render_failed');
+        return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'execution_already_terminal', retryable: false };
       }
     }
 
@@ -206,7 +218,7 @@ export async function executeRenderJob(
     const { data: bo, error: boError } = await ownedDbTable('billing_operations').insert({
       correlation_id: args.contentCoreId, module: 'creator_render', action: 'render_image',
       organization_id: args.organizationId, actor_user_id: args.createdBy ?? null,
-      idempotency_key: `render:${spec.spec_id}`, amount_estimated: estimate.estimated_credits,
+      idempotency_key: billingKey, amount_estimated: estimate.estimated_credits,
       status: 'held', metadata: { provider: provider.key },
     }).select('id').single();
     billingId = bo?.id ?? null;
@@ -214,6 +226,8 @@ export async function executeRenderJob(
       // FAIL CLOSED (e9 ruling, 2026-11-11): a render without a billing hold would run UNBILLED.
       // The provider is never called. A unique-key conflict (an earlier attempt's operation for this
       // spec already exists) is not retryable as is; any other store error is.
+      // billing_operations UNIQUE (idempotency_key), and the key is tenant-scoped (billingKey above), so
+      // a 23505 provably means THIS tenant already holds an operation for this spec.
       const conflict = (boError as { code?: string } | null | undefined)?.code === '23505';
       const reason = conflict ? 'billing_hold_conflict' : 'billing_hold_unavailable';
       console.error('[creator-render] billing hold not created; render refused', { spec_id: spec.spec_id, reason, error: (boError as { message?: string } | null)?.message ?? 'no row returned' });
@@ -243,11 +257,25 @@ export async function executeRenderJob(
       resolution: spec.platform_projection.resolution,
       spec_fingerprint: specHash, production_source: 'ai_render',
     }).select('id').single();
+    // creator_render_attempt is UNIQUE (execution_hash), GLOBAL: the tenant-scoped registryHash, so a
+    // second tenant's identical content does not collide with the first tenant's attempt.
     const { data: attempt } = await ownedDbTable('creator_render_attempt').insert({
-      variant_id: variant.id, provider_key: provider.key, attempt_number: 1,
-      idempotency_key: `render:${spec.spec_id}`, billing_operation_id: billingId,
-      execution_hash: specHash, status: 'submitted',
+      variant_id: variant?.id, provider_key: provider.key, attempt_number: 1,
+      idempotency_key: billingKey, billing_operation_id: billingId,
+      execution_hash: registryHash, status: 'submitted',
     }).select('id').single();
+    if (!variant?.id || !attempt?.id) {
+      // FAIL CLOSED BEFORE THE PROVIDER: without the attempt row the output cannot be recorded, so a
+      // provider call here would be spent (provider cost) on a render that then fails. Previously
+      // unchecked: the provider was called and the later output insert threw.
+      await ownedDbTable('creator_render_job_state')
+        .update({ current_state: 'failed_render', last_transition_at: now() })
+        .eq('render_job_id', jobId);
+      await releaseBilling('attempt_insert_failed');
+      await advanceRegistry('released', 'attempt_insert_failed');
+      events.push('render_failed');
+      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: jobId, reason: 'attempt_insert_failed', retryable: true };
+    }
 
     // 8) provider submit → poll → fetch (synchronous)
     let outRef;

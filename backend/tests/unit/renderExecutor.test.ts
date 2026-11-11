@@ -301,14 +301,50 @@ describe('control RPCs and billing hold fail closed', () => {
     expect(w.calls.submit).toBe(0);
   });
 
-  it('claim reports a TERMINAL entry for this hash: reused, nothing billed or rendered', async () => {
+  it("claim reports a TERMINAL entry for THIS tenant's spec but no job exists: refused (never an empty 'reused'), nothing billed or rendered", async () => {
     const m = mockDeps(); const w = watched(); m.setProvider(w.p);
     withRpc(m, async (name) => (name === 'claim_job_execution'
       ? { data: { status: 'completed', is_terminal: true }, error: null } : { data: {}, error: null }));
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const r = await executeRenderJob(m.deps as any, ARGS);
-    expect(r).toMatchObject({ ok: true, status: 'reused' });
+    err.mockRestore();
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'execution_already_terminal', retryable: false });
     expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
     expect(w.calls.submit).toBe(0);
+  });
+
+  it('TENANT-SCOPED keys: two organisations rendering IDENTICAL content get distinct registry hashes and billing keys, and both render', async () => {
+    const keys: Record<string, { claim: string; billing: string; attempt: string }> = {};
+    for (const org of ['org-A', 'org-B']) {
+      const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+      let claimHash = '';
+      withRpc(m, async (name, a) => { if (name === 'claim_job_execution') claimHash = a.p_execution_hash; return { data: {}, error: null }; });
+      const r = await executeRenderJob(m.deps as any, { ...ARGS, organizationId: org });
+      expect(r.status).toBe('completed');
+      expect(w.calls.submit).toBe(1);
+      const billing = m.writes.find((x) => x.table === 'billing_operations' && x.op === 'insert')!.row.idempotency_key;
+      const attempt = m.writes.find((x) => x.table === 'creator_render_attempt' && x.op === 'insert')!.row.execution_hash;
+      keys[org] = { claim: claimHash, billing, attempt };
+    }
+    expect(keys['org-A'].claim).not.toBe(keys['org-B'].claim);
+    expect(keys['org-A'].billing).not.toBe(keys['org-B'].billing);
+    expect(keys['org-A'].attempt).not.toBe(keys['org-B'].attempt);
+    expect(keys['org-A'].billing).toMatch(/^render:org-A:render:[0-9a-f]{64}$/);
+    expect(keys['org-A'].claim).toMatch(/^org-A:[0-9a-f]{64}$/);
+  });
+
+  it('attempt insert fails: the provider is NEVER called, the hold is released, retryable', async () => {
+    const m = mockDeps(); const w = watched(); m.setProvider(w.p);
+    const orig = (m.deps as any).ownedDbTable;
+    (m.deps as any).ownedDbTable = (t: string) => {
+      const q = orig(t);
+      if (t === 'creator_render_attempt') q.insert = () => ({ select: () => ({ single: async () => ({ data: null, error: { code: '23505', message: 'dup' } }) }) });
+      return q;
+    };
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'attempt_insert_failed', retryable: true });
+    expect(w.calls.submit).toBe(0);
+    expect(r.events).toEqual(expect.arrayContaining(['billing_released']));
   });
 
   it('advance_job_execution error: the performed, billed render still COMPLETES, and the failure is reported', async () => {
