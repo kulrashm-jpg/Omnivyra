@@ -167,7 +167,11 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
     return ((res.data ?? []) as unknown as Array<{ delivery_status: unknown; transport_response?: unknown }>).some((r) => isComplaint(r));
   },
 
-  async personRestrictions(organizationId, personId, now) {
+  // `now` is deliberately NOT used to decide what is in force (the P0 class A closed for PI):
+  // each read's records are judged at THAT read's database instant (readAt). A read that failed,
+  // or returned rows without an instant, or a loader that did not report its reads, is
+  // indeterminate and fails closed (unreadable), never "no restriction".
+  async personRestrictions(organizationId, personId, _now) {
     const person = await ownedDbTable('unified_persons')
       .select('primary_email, primary_phone')
       .eq('company_id', organizationId)
@@ -176,15 +180,21 @@ export const durableJourneyResponsePort: JourneyResponsePort = {
     if (person.error) throw unreadable('person');
     const p = (person.data ?? {}) as Record<string, unknown>;
     const types = new Set<string>();
-    const nowMs = Date.parse(now);
     for (const [channel, target] of [['email', p.primary_email], ['whatsapp', p.primary_phone]] as const) {
       const loaded = await loadGovernanceRecords({ organizationId, personId, channel, target: typeof target === 'string' ? target : null });
-      if (!loaded.ok) throw unreadable('contact governance');
-      for (const r of loaded.records) {
-        const from = Date.parse(r.effectiveFrom);
-        const until = r.effectiveUntil === null ? Number.POSITIVE_INFINITY : Date.parse(r.effectiveUntil);
-        // An unparseable window is in force: a restriction is never assumed away.
-        if (!(Number.isFinite(from) && from > nowMs) && !(until <= nowMs)) types.add(r.governanceType);
+      if (!loaded.ok || loaded.reads === undefined) throw unreadable('contact governance');
+      for (const read of loaded.reads) {
+        if (!read.ok) throw unreadable('contact governance');
+        if (read.records.length === 0) continue;
+        if (read.readAt === null) throw unreadable('contact governance (rows without a database read instant)');
+        const atMs = Date.parse(read.readAt);
+        if (!Number.isFinite(atMs)) throw unreadable('contact governance (unparseable database read instant)');
+        for (const r of read.records) {
+          const from = Date.parse(r.effectiveFrom);
+          const until = r.effectiveUntil === null ? Number.POSITIVE_INFINITY : Date.parse(r.effectiveUntil);
+          // An unparseable window is in force: a restriction is never assumed away.
+          if (!(Number.isFinite(from) && from > atMs) && !(until <= atMs)) types.add(r.governanceType);
+        }
       }
     }
     return [...types];
