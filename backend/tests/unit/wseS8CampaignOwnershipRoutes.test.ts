@@ -29,6 +29,20 @@ import { faults, resetFaults } from '../helpers/wseFaultClient';
 
 const mockEffects: string[] = [];
 
+// Owner principle 2026-11-12: a Super Admin WRITE into a company where they hold
+// no active role needs a step-up (superAdminCrossTenantStepUp, exercised for
+// real in superAdminCrossTenantStepUp.test.ts). Mirrored here so this suite
+// keeps testing tenant binding: reads and own-company pass; a cross-tenant
+// write passes only when the case sets mockStepUpOk.
+let mockStepUpOk = false;
+jest.mock('../../security/superAdminCrossTenantStepUp', () => ({
+  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, i: { hasMembership: boolean }) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase()) || i.hasMembership || mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
 jest.mock('../../db/supabaseClient', () => jest.requireActual('../helpers/wseFaultClient').supabaseModule());
 jest.mock('../../db/writeOwner', () => jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule());
@@ -351,6 +365,7 @@ describe('content/regenerate — role company, query, body and canonical owner c
   });
 
   it('platform super admin naming the owner → 200; naming another company → 403', async () => {
+    mockStepUpOk = true; // cross-tenant SA write: now WITH step-up
     expect((await post('SUPER', { companyId: CO_A }, { companyId: CO_A })).status).toBe(200);
     world(...(OWNED_A as [Row, Row[]]));
     expect((await post('SUPER', { companyId: CO_B }, { companyId: CO_B })).status).toBe(403);

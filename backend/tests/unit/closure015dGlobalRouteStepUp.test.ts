@@ -128,6 +128,7 @@ const INVITED = 'u-invited';                // SUPER_ADMIN row in CO_A only INVI
 const INACTIVE = 'u-inactive';              // SUPER_ADMIN row INACTIVE; passkey + trusted device
 const EXPIRED = 'u-expired';                // SUPER_ADMIN row status EXPIRED; passkey + trusted device
 const NOBODY = 'u-nobody';                  // authenticated, no membership at all
+const SUPER_OWN = 'u-super-own';            // active SA who ALSO holds an active role in CO_A; no step-up
 const CADMIN = 'u-cadmin';                  // active COMPANY_ADMIN of CO_A; passkey + trusted device
 /** VIEW_ONLY tenant user with a DIRECT PLATFORM_CONTROLS_MANAGE grant, passkey step-up, trusted device. */
 const GRANTEE = 'u-grantee';
@@ -140,12 +141,13 @@ function world() {
       role(SUPER_TOTP, P, 'SUPER_ADMIN'), role(SUPER_UNTRUSTED, P, 'SUPER_ADMIN'),
       role(INVITED, CO_A, 'SUPER_ADMIN', 'invited'), role(INACTIVE, P, 'SUPER_ADMIN', 'inactive'),
       role(EXPIRED, P, 'SUPER_ADMIN', 'expired'), role(CADMIN, CO_A, 'COMPANY_ADMIN'), role(GRANTEE, CO_A, 'VIEW_ONLY'),
+      role(SUPER_OWN, P, 'SUPER_ADMIN'), role(SUPER_OWN, CO_A, 'COMPANY_ADMIN'),
     ],
     capability_assignments: [
       { user_id: GRANTEE, capability: PLATFORM_CONTROLS_MANAGE, organization_id: null, expires_at: null, revoked_at: null },
     ],
     stepup_sessions: [...STEPPED.map((u) => stepUp(u, 'webauthn')), stepUp(SUPER_TOTP, 'totp'), stepUp(SUPER_STALE, 'webauthn', PAST())],
-    trusted_devices: [SUPER, SUPER_NO_STEPUP, SUPER_STALE, SUPER_TOTP, INVITED, INACTIVE, EXPIRED, CADMIN, GRANTEE].map(trustedDevice),
+    trusted_devices: [SUPER, SUPER_NO_STEPUP, SUPER_STALE, SUPER_TOTP, INVITED, INACTIVE, EXPIRED, CADMIN, GRANTEE, SUPER_OWN].map(trustedDevice),
     users: [],
   });
 }
@@ -206,10 +208,47 @@ describe.each(STEP_UP_ROUTES)('$name — active platform SA + PLATFORM_CONTROLS_
 });
 
 describe.each(NO_STEP_UP_ROUTES)('$name — active platform SA, no step-up', (r) => {
-  it('active platform SA WITHOUT any step-up session → 200, effect runs once', async () => {
+  // Owner principle 2026-11-12 ("only Super Admin crosses companies, WITH
+  // step-up") closes 015D A-1's deferral: enforceRole's Super Admin bypass now
+  // requires a step-up for a cross-tenant WRITE.
+  // Reads never step up.
+  it('active platform SA WITHOUT any step-up session: a WRITE → 401 STEP_UP_REQUIRED (effect never runs); a READ → 200 (effect once)', async () => {
     const res = await call(r, SUPER_NO_STEPUP);
+    if (r.method === 'GET') {
+      expect(res.status).toBe(200);
+      expect(r.effect).toHaveBeenCalledTimes(1);
+    } else {
+      expect(res.status).toBe(401);
+      expect(r.effect).not.toHaveBeenCalled();
+    }
+  });
+});
+
+// Owner principle 2026-11-12 - the REAL enforceRole bypass + step-up helper
+// (superAdminCrossTenantStepUp), driven through withRBAC on the write routes
+// that had no step-up of their own.
+describe.each(NO_STEP_UP_ROUTES.filter((x) => x.method !== 'GET'))('$name — super admin cross-tenant write (owner principle)', (r) => {
+  it('WITH a passkey step-up on a trusted device → allowed, effect once', async () => {
+    const res = await call(r, SUPER);
     expect(res.status).toBe(200);
     expect(r.effect).toHaveBeenCalledTimes(1);
+  });
+  it('a super admin with an ACTIVE role in the target company → unchanged: allowed WITHOUT step-up', async () => {
+    const res = await call(r, SUPER_OWN);
+    expect(res.status).toBe(200);
+    expect(r.effect).toHaveBeenCalledTimes(1);
+  });
+  it('an EXPIRED or TOTP step-up does not satisfy it (platform policy: passkey) → 401, effect never runs', async () => {
+    for (const who of [SUPER_STALE, SUPER_TOTP]) {
+      const res = await call(r, who);
+      expect(res.status).toBe(401);
+    }
+    expect(r.effect).not.toHaveBeenCalled();
+  });
+  it('a non-super-admin is unchanged (refused by role, never asked for step-up)', async () => {
+    const res = await call(r, CADMIN);
+    expect(res.status).toBe(403);
+    expect(r.effect).not.toHaveBeenCalled();
   });
 });
 

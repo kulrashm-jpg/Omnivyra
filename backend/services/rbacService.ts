@@ -625,6 +625,14 @@ export const enforceRole = async (input: {
   // They are Omnivyra platform admins who control the whole app — they must be able to
   // call any route regardless of which roles that route explicitly lists.
   if (superAdminResult || platformSuperAdminResult) {
+    // Owner principle 2026-11-12: "only Super Admin crosses companies, WITH
+    // step-up". A WRITE into a company where this Super Admin holds no active
+    // role needs a valid step-up (the platform policy; reads never step up).
+    // getUserRole reports a failed lookup as "no role", so an unverifiable
+    // membership fails closed into step-up.
+    const hasMembership = Boolean(userRoleResult.role) && !userRoleResult.error;
+    const { requireSuperAdminCrossTenantStepUp } = await import('../security/superAdminCrossTenantStepUp');
+    if (!(await requireSuperAdminCrossTenantStepUp(input.req, input.res, { companyId, hasMembership }))) return null;
     return { userId: user.userId, role: Role.SUPER_ADMIN };
   }
 

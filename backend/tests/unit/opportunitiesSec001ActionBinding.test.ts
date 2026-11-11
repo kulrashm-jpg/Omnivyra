@@ -58,6 +58,20 @@ const fillSlotCalls: Array<{ companyId: string; type: string }> = [];
 // company (companyOperationalState). This suite's fake database models no
 // companies table and tests a different property, so the company is operational
 // here; company status itself is proven in closure015eInvitationAndCompanyStatus.
+// Owner principle 2026-11-12: a Super Admin WRITE into a company where they hold
+// no active role needs a step-up (superAdminCrossTenantStepUp, exercised for
+// real in superAdminCrossTenantStepUp.test.ts). Mirrored here so this suite
+// keeps testing tenant binding: reads and own-company pass; a cross-tenant
+// write passes only when the case sets mockStepUpOk.
+let mockStepUpOk = false;
+jest.mock('../../security/superAdminCrossTenantStepUp', () => ({
+  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, i: { hasMembership: boolean }) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase()) || i.hasMembership || mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('../../services/companyOperationalState', () => ({ companyOperationalState: async () => 'operational' }));
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () =>
@@ -268,6 +282,7 @@ describe('C/D — cross-company access and identifier splitting', () => {
 
 describe('E — platform super-admin', () => {
   it('keeps the bypass when naming the opportunity’s OWN company', async () => {
+    mockStepUpOk = true; // cross-tenant SA write: now WITH step-up
     const res = await call(SUPERADMIN, { id: OPP_VICTIM, body: { action: 'DISMISSED', companyId: VICTIM } });
     expect(res.statusCode).toBe(200);
     expect(takeActionCalls).toEqual([{ id: OPP_VICTIM, action: 'DISMISSED' }]);

@@ -265,11 +265,20 @@ describe('POST /api/users/invite — RETIRED (Closure-015I, F-3); the 015E bypas
   const invite = (who: string | null, email: string, roleName: string) =>
     invoke(inviteRoute as never, { method: 'POST', body: { email, companyId: CO_A, role: roleName }, headers: who ? { 'x-test-user': who } : {} });
 
-  it.each([['stepped-up', SUPER], ['no step-up', SUPER_NO_STEPUP]])('active platform SA (%s) → 410 ENDPOINT_RETIRED; no user created', async (_d, who) => {
+  it('active platform SA (stepped-up) → 410 ENDPOINT_RETIRED; no user created', async () => {
     world();
-    const r = await invite(who, 'new@example.test', 'VIEW_ONLY');
+    const r = await invite(SUPER, 'new@example.test', 'VIEW_ONLY');
     expect(r.status).toBe(410);
     expect(r.body).toEqual({ error: 'ENDPOINT_RETIRED', replacement: '/api/admin/invite-user' });
+    expect(rows('users').some((u) => u.email === 'new@example.test')).toBe(false);
+  });
+
+  // Owner principle 2026-11-12: a cross-tenant Super Admin WRITE needs step-up,
+  // so withRBAC answers 401 before the retired handler's 410. No user either way.
+  it('active platform SA (no step-up) → 401 STEP_UP_REQUIRED before the 410; no user created', async () => {
+    world();
+    const r = await invite(SUPER_NO_STEPUP, 'new@example.test', 'VIEW_ONLY');
+    expect(r.status).toBe(401);
     expect(rows('users').some((u) => u.email === 'new@example.test')).toBe(false);
   });
 

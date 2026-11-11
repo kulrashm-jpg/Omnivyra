@@ -100,6 +100,20 @@ const saveCalls: Array<{ companyId: unknown; campaignId: unknown; weekNumber: un
 const syncStageCalls: Array<{ campaignId: unknown; companyId: unknown }> = [];
 const assetCalls: Array<{ campaignId: unknown }> = [];
 
+// Owner principle 2026-11-12: a Super Admin WRITE into a company where they hold
+// no active role needs a step-up (superAdminCrossTenantStepUp, exercised for
+// real in superAdminCrossTenantStepUp.test.ts). Mirrored here so this suite
+// keeps testing tenant binding: reads and own-company pass; a cross-tenant
+// write passes only when the case sets mockStepUpOk.
+let mockStepUpOk = false;
+jest.mock('../../security/superAdminCrossTenantStepUp', () => ({
+  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, i: { hasMembership: boolean }) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase()) || i.hasMembership || mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () =>
     authUser
@@ -549,6 +563,7 @@ describe('PLATFORM-PLAN-SEC-001 — campaign identity binding', () => {
 
 describe('PLATFORM-PLAN-SEC-001 — SUPER_ADMIN semantics preserved', () => {
   it('a super admin may operate on a company they are not a member of', async () => {
+    mockStepUpOk = true; // cross-tenant SA write: now WITH step-up
     // enforceRole grants SUPER_ADMIN for any company and TenantGuard honours the
     // platform bypass, so the victim tenant's own campaign is reachable — by
     // design, and unchanged by this fix.

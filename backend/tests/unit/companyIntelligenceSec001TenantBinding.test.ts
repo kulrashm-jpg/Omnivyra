@@ -129,6 +129,20 @@ const competitorEngineCalls: Array<{ companyId: string | undefined }> = [];
 /** Everything except the authorization chain's own lookups. */
 const appQueries = () => queries.filter((q) => !['user_company_roles', 'companies'].includes(q.table));
 
+// Owner principle 2026-11-12: a Super Admin WRITE into a company where they hold
+// no active role needs a step-up (superAdminCrossTenantStepUp, exercised for
+// real in superAdminCrossTenantStepUp.test.ts). Mirrored here so this suite
+// keeps testing tenant binding: reads and own-company pass; a cross-tenant
+// write passes only when the case sets mockStepUpOk.
+let mockStepUpOk = false;
+jest.mock('../../security/superAdminCrossTenantStepUp', () => ({
+  requireSuperAdminCrossTenantStepUp: async (req: { method?: string }, res: { status: (c: number) => { json: (b: unknown) => void } }, i: { hasMembership: boolean }) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase()) || i.hasMembership || mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () =>
     authUser
@@ -469,7 +483,18 @@ describe.each(Object.keys(TABLES))('company/intelligence/%s', (route) => {
 
   /* ── SUPER_ADMIN semantics preserved ─────────────────────────────────── */
 
+  it('PUT: a SUPER_ADMIN naming the victim tenant WITHOUT step-up -> 401, nothing written (owner principle)', async () => {
+    const res = await call(route, SUPERADMIN, {
+      method: 'PUT',
+      query: { companyId: VICTIM },
+      body: putBody(route, fixture.victimRow, 'admin-edit'),
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toMatchObject({ code: 'STEP_UP_REQUIRED' });
+  });
+
   it('PUT: a SUPER_ADMIN naming the victim tenant may still mutate it', async () => {
+    mockStepUpOk = true; // cross-tenant SA write: now WITH step-up
     // Platform super admins are authorized for every tenant by design
     // (TenantGuard bypass). The fix binds the mutation to the AUTHORIZED
     // company; for a super admin that company may legitimately be B.
