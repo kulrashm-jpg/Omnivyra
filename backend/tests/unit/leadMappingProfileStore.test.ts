@@ -89,7 +89,8 @@ class FakeDb {
       const sameShape = this.profiles.filter(
         (p) =>
           !isSelf(p) &&
-          p.organization_id === row.organization_id &&
+          (p.scope ?? 'tenant') === (row.scope ?? 'tenant') &&
+          (p.organization_id ?? null) === (row.organization_id ?? null) &&
           p.source === row.source &&
           p.schema_fingerprint === row.schema_fingerprint,
       );
@@ -173,14 +174,28 @@ class FakeQuery implements PromiseLike<PgResult> {
     this.filters.push([col, value]);
     return this;
   }
+  /** PostgREST `is.null`: matches NULL (and an absent column, which is NULL). */
+  is(col: string, value: null) {
+    this.filters.push([col, value]);
+    return this;
+  }
+  private cap: number | null = null;
+  limit(n: number) {
+    this.cap = n;
+    return this;
+  }
   order(_col: string, _opts?: unknown) {
     return this;
   }
 
   private matching(): Row[] {
-    return this.db
+    // `scope` has a column DEFAULT of 'tenant'; a seeded row without it reads
+    // as tenant, exactly as the database would store it.
+    const value = (r: Row, c: string) => (c === 'scope' ? (r.scope ?? 'tenant') : (r[c] ?? null));
+    const hits = this.db
       ._rows(this.tableName)
-      .filter((r) => this.filters.every(([c, v]) => r[c] === v));
+      .filter((r) => this.filters.every(([c, v]) => value(r, c) === v));
+    return this.cap === null ? hits : hits.slice(0, this.cap);
   }
 
   private run(): PgResult {
@@ -269,7 +284,9 @@ jest.mock('@/config', () => ({ config: {} }), { virtual: true });
 import {
   MappingProfileStoreError,
   loadActiveProfile,
+  loadPlatformProfile,
   loadProfileContext,
+  savePlatformProfileVersion,
   saveProfileVersion,
   type SaveProfileEntry,
 } from '../../services/leadMapping/mappingProfileStore';
@@ -471,16 +488,21 @@ describe('mappingProfileStore · a half-written profile is never readable', () =
     expect((err as Error).message).not.toMatch(/\bsaved and active\b/);
   });
 
-  it('cleans up the staged row so the version sequence stays readable', async () => {
+  it('leaves the staged row superseded and UNREADABLE (no DELETE: service_role holds none), and numbers past it', async () => {
+    // Step E, 2026-11-11: the store used to DELETE the staged row here. In
+    // production that delete could only fail (service_role is granted SELECT,
+    // INSERT, UPDATE - never DELETE), so this test was passing against a
+    // behaviour production never had. The honest behaviour is asserted now.
     db.failOnce('source_mapping_profile_entries:insert', { message: 'connection reset' });
     await expect(save()).rejects.toThrow();
-    expect(db.profiles).toHaveLength(0);
+    expect(db.profiles).toHaveLength(1);
+    expect(db.profiles[0].status).toBe('superseded');
+    expect(db.log).not.toContain('source_mapping_profiles:delete');
+    expect(await loadActiveProfile(key)).toBeNull();      // nothing reads it
 
-    // And the next approval is version 1, not version 2 — a tenant's first
-    // successful approval should not be numbered as though it were their
-    // second.
     const retry = await save();
-    expect(retry.version).toBe(1);
+    expect(retry.version).toBe(2);                          // the staged row keeps number 1
+    expect((await loadActiveProfile(key))?.version).toBe(2);
   });
 });
 
@@ -829,5 +851,95 @@ describe('mappingProfileStore · tolerates rows it did not write', () => {
     });
     const profile = await loadActiveProfile({ ...key, schemaFingerprint: FP2 });
     expect(profile!.headers).toEqual([]);
+  });
+});
+
+/* -- 9. step E: platform (vendor) profiles ---------------------------------- */
+
+describe('mappingProfileStore · platform (vendor) profiles, step E', () => {
+  const SUPER = '00000000-0000-4000-8000-0000000000d1';
+  const platformEntry = (over: Partial<SaveProfileEntry> = {}): SaveProfileEntry =>
+    approve({ mappingMethod: 'platform_approved', ...over });
+  const savePlatform = (over: Partial<Parameters<typeof savePlatformProfileVersion>[0]> = {}) =>
+    savePlatformProfileVersion({
+      source: 'apollo', schemaFingerprint: FP, headers: HEADERS, approvedBy: SUPER,
+      entries: [platformEntry()], ...over,
+    });
+
+  it.each(['apollo', 'Apollo', 'apollo.io', 'APOLLO_export', 'enrichment_apollo'])(
+    'a TENANT approval for vendor source %j is refused (vendor mappings are Super Admin only)',
+    async (source) => {
+      const err = await save({ source }).catch((e) => e);
+      expect(err).toBeInstanceOf(MappingProfileStoreError);
+      expect((err as MappingProfileStoreError).kind).toBe('invalid_argument');
+      expect((err as Error).message).toMatch(/platform vendor source/);
+      expect(db.profiles).toHaveLength(0);
+    },
+  );
+
+  it("a tenant approval cannot use the 'platform_approved' method", async () => {
+    const err = await save({ entries: [approve({ mappingMethod: 'platform_approved' })] }).catch((e) => e);
+    expect((err as MappingProfileStoreError).kind).toBe('invalid_argument');
+    expect(db.profiles).toHaveLength(0);
+  });
+
+  it('a platform approval stores scope platform, NO tenant, the vendor KEY as source, and only platform_approved entries', async () => {
+    const saved = await savePlatform({ source: 'Apollo.io' });
+    expect(saved.version).toBe(1);
+    expect(db.profiles[0]).toMatchObject({ scope: 'platform', organization_id: null, source: 'apollo', status: 'active' });
+    expect(db.entries.every((e) => e.scope === 'platform' && e.organization_id === null)).toBe(true);
+    expect(db.entries[0].mapping_method).toBe('platform_approved');
+
+    const err = await savePlatform({ entries: [approve()] }).catch((e) => e); // tenant_confirmed
+    expect((err as MappingProfileStoreError).kind).toBe('invalid_argument');
+    const notVendor = await savePlatform({ source: 'csv' }).catch((e) => e);
+    expect((notVendor as Error).message).toMatch(/not a platform vendor source/);
+  });
+
+  it('a vendor source reads the platform profile, marked scope platform', async () => {
+    await savePlatform();
+    const p = await loadActiveProfile({ organizationId: ORG, source: 'apollo', schemaFingerprint: FP });
+    expect(p).toMatchObject({ scope: 'platform', version: 1 });
+    expect((await loadPlatformProfile({ source: 'apollo', schemaFingerprint: FP }))?.scope).toBe('platform');
+  });
+
+  it("TENANT FIRST: a tenant's own csv profile answers before a platform profile for the same shape", async () => {
+    await savePlatform({ entries: [platformEntry({ target: 'department' })] });
+    await save(); // tenant csv, same FP, Designation -> jobTitle
+    const p = await loadActiveProfile(key);
+    expect(p!.scope).toBe('tenant');
+    expect(p!.entries[0].target).toBe('jobTitle');
+  });
+
+  it('PLATFORM FALLBACK: a csv upload with no tenant profile is recognised by shape as the vendor\'s', async () => {
+    await savePlatform({ entries: [platformEntry({ target: 'department' })] });
+    const ctx = await loadProfileContext(key, HEADERS);
+    expect(ctx.profile!.scope).toBe('platform');
+    expect(ctx.profile!.entries[0].target).toBe('department');
+    // And another tenant gets the same vendor answer.
+    expect((await loadActiveProfile({ ...key, organizationId: OTHER_ORG }))!.scope).toBe('platform');
+  });
+
+  it("the fallback NEVER returns another tenant's profile for the same shape", async () => {
+    await save({ organizationId: OTHER_ORG }); // OTHER_ORG's csv profile for FP
+    expect(await loadActiveProfile(key)).toBeNull(); // ORG has none; no platform row
+  });
+
+  it('two vendors claiming one header set is AMBIGUOUS: the fallback answers nothing rather than guess', async () => {
+    await savePlatform();
+    db.profiles.push({
+      id: 'p-other-vendor', scope: 'platform', organization_id: null, source: 'othervendor',
+      schema_fingerprint: FP, version: 1, status: 'active', superseded_at: null,
+      header_count: HEADERS.length, headers: HEADERS, created_at: '2026-01-01T00:00:00.000Z',
+    });
+    expect(await loadActiveProfile(key)).toBeNull();
+  });
+
+  it('a platform profile is versioned like a tenant one: a second approval supersedes the first', async () => {
+    await savePlatform();
+    const second = await savePlatform({ entries: [platformEntry({ target: 'department' })] });
+    expect(second.version).toBe(2);
+    expect(db.profiles.filter((r) => r.status === 'active')).toHaveLength(1);
+    expect((await loadPlatformProfile({ source: 'apollo', schemaFingerprint: FP }))!.entries[0].target).toBe('department');
   });
 });

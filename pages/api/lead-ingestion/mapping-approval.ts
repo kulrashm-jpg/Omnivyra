@@ -5,13 +5,12 @@ import { isLeadIngestionEnabled, resolveLeadIngestionGate } from '../../../backe
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
-import { isCanonicalFieldKey } from '../../../backend/services/leadMapping/canonicalFieldRegistry';
-import { isSubmittableTarget } from '../../../lib/prospects/import/submittableTargets';
+import { validateMappingApprovalBody } from '../../../backend/services/leadMapping/mappingApprovalValidation';
+import { platformVendorKey } from '../../../backend/services/leadMapping/platformVendorSources';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
 import {
   saveProfileVersion,
   MappingProfileStoreError,
-  type SaveProfileEntry,
 } from '../../../backend/services/leadMapping/mappingProfileStore';
 
 /**
@@ -80,43 +79,15 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const TENANT_OVERRIDE_KEYS = ['organizationId', 'organization_id', 'companyId', 'company_id'];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const FINGERPRINT = /^[a-f0-9]{64}$/;
-
 const ALLOWED_SOURCES = new Set(['csv']);
-const MAX_HEADERS = 200;
 
-/** The decisions the profile-entry table accepts. */
-const DECISIONS = new Set(['approved', 'rejected', 'ignored']);
-
-/** The mapping methods the profile-entry table accepts. */
-const METHODS = new Set([
+/** The mapping methods a TENANT may use (never 'platform_approved'). */
+const TENANT_METHODS = new Set([
   'approved_profile_match',
   'high_confidence_suggestion',
   'tenant_confirmed',
   'tenant_override',
 ]);
-
-/** The closed transformation vocabulary the engine may propose. */
-const TRANSFORMATIONS = new Set([
-  'none',
-  'trim',
-  'lowercase_email',
-  'digits_only_phone',
-  'url_to_domain',
-  'split_full_name',
-  'parse_integer',
-  'parse_date',
-  'split_delimited_list',
-  'match_enum_value',
-]);
-
-interface ValidatedEntry {
-  sourceField: string;
-  target: string | null;
-  transformation: string;
-  decision: string;
-  mappingMethod: string;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -165,129 +136,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  const source = typeof body.source === 'string' ? body.source.trim() : '';
-  if (!ALLOWED_SOURCES.has(source)) {
-    return res.status(400).json({
-      error: `source must be one of: ${[...ALLOWED_SOURCES].join(', ')}`,
+  // ── VENDOR SOURCES ARE SUPER ADMIN ONLY (step E, e9 2026-11-11) ─────────
+  // A data vendor's mapping (e.g. Apollo) is approved ONCE by a Super Admin
+  // for every company (/api/super-admin/mapping-profiles). A tenant can never
+  // create or approve one. Checked by name BEFORE the source allowlist, so the
+  // refusal survives a later widening of that list.
+  if (platformVendorKey(body.source)) {
+    return res.status(403).json({
+      error: 'Mappings for data vendors are approved by Omnivyra for every company, not per company.',
+      code: 'PLATFORM_VENDOR_SOURCE',
     });
   }
 
-  const schemaFingerprint =
-    typeof body.schemaFingerprint === 'string' ? body.schemaFingerprint.trim() : '';
-  if (!FINGERPRINT.test(schemaFingerprint)) {
-    return res.status(400).json({
-      error: 'schemaFingerprint must be a 64-character hex digest',
-    });
-  }
-
-  if (!Array.isArray(body.headers) || body.headers.length === 0) {
-    return res.status(400).json({ error: 'headers must be a non-empty array' });
-  }
-  if (body.headers.length > MAX_HEADERS) {
-    return res.status(413).json({ error: `headers exceeds the ${MAX_HEADERS} column limit` });
-  }
-  if (!body.headers.every((h) => typeof h === 'string' && h.trim() !== '')) {
-    return res.status(400).json({ error: 'every header must be a non-empty string' });
-  }
-  const headers = body.headers as string[];
-
-  if (!Array.isArray(body.entries) || body.entries.length === 0) {
-    return res.status(400).json({ error: 'entries must be a non-empty array' });
-  }
-  if (body.entries.length > MAX_HEADERS) {
-    return res.status(413).json({ error: `entries exceeds the ${MAX_HEADERS} column limit` });
-  }
-
-  const knownHeaders = new Set(headers);
-  const seen = new Set<string>();
-  const entries: ValidatedEntry[] = [];
-
-  for (const raw of body.entries) {
-    if (!isRecord(raw)) {
-      return res.status(400).json({ error: 'every entry must be an object' });
-    }
-
-    const sourceField = typeof raw.sourceField === 'string' ? raw.sourceField : '';
-    if (!knownHeaders.has(sourceField)) {
-      return res.status(400).json({
-        error: 'every entry.sourceField must be one of the submitted headers',
-        code: 'UNKNOWN_SOURCE_FIELD',
-      });
-    }
-    // One decision per column. Two entries for one heading is a client bug, and
-    // the table's unique indexes would refuse it anyway — better a clear 400.
-    if (seen.has(sourceField)) {
-      return res.status(400).json({
-        error: `entries contains more than one decision for '${sourceField}'`,
-        code: 'DUPLICATE_ENTRY',
-      });
-    }
-    seen.add(sourceField);
-
-    const decision = typeof raw.decision === 'string' ? raw.decision : '';
-    if (!DECISIONS.has(decision)) {
-      return res.status(400).json({
-        error: `entry.decision must be one of: ${[...DECISIONS].join(', ')}`,
-      });
-    }
-
-    const mappingMethod = typeof raw.mappingMethod === 'string' ? raw.mappingMethod : '';
-    if (!METHODS.has(mappingMethod)) {
-      return res.status(400).json({
-        error: `entry.mappingMethod must be one of: ${[...METHODS].join(', ')}`,
-      });
-    }
-
-    const transformation = typeof raw.transformation === 'string' ? raw.transformation : 'none';
-    if (!TRANSFORMATIONS.has(transformation)) {
-      return res.status(400).json({
-        error: 'entry.transformation is not a recognised transformation',
-        code: 'UNKNOWN_TRANSFORMATION',
-      });
-    }
-
-    // ── THE BOUNDARY THAT MATTERS ─────────────────────────────────────────
-    // `target: null` is a legitimate, first-class decision — it records an
-    // approved IGNORE. Anything else must be a destination the registry knows
-    // AND the ingestion contract can carry.
-    const target = raw.target === null || raw.target === undefined ? null : raw.target;
-    if (target !== null) {
-      if (typeof target !== 'string' || !isCanonicalFieldKey(target)) {
-        return res.status(400).json({
-          error: 'entry.target is not a canonical destination',
-          code: 'UNKNOWN_TARGET',
-        });
-      }
-      if (!isSubmittableTarget(target)) {
-        return res.status(400).json({
-          error: `'${target}' is a recognised destination but imports cannot write to it yet`,
-          code: 'TARGET_NOT_SUBMITTABLE',
-        });
-      }
-    }
-
-    // An ignore decision must not carry a destination, and an approval must.
-    if (decision === 'ignored' && target !== null) {
-      return res.status(400).json({
-        error: "an 'ignored' decision cannot name a target",
-        code: 'INCONSISTENT_DECISION',
-      });
-    }
-    if (decision === 'approved' && target === null) {
-      return res.status(400).json({
-        error: "an 'approved' decision must name a target — use 'ignored' to skip a column",
-        code: 'INCONSISTENT_DECISION',
-      });
-    }
-
-    entries.push({
-      sourceField,
-      target: target as string | null,
-      transformation,
-      decision,
-      mappingMethod,
-    });
-  }
+  const checked = validateMappingApprovalBody(body, {
+    sourceAllowed: (src) => ALLOWED_SOURCES.has(src),
+    sourceMessage: `source must be one of: ${[...ALLOWED_SOURCES].join(', ')}`,
+    methods: TENANT_METHODS,
+  });
+  if (!checked.ok) return res.status(checked.status).json(checked.body);
+  const { source, schemaFingerprint, headers, entries } = checked.value;
 
   // ── SAVE (PI-LDB D, 2026-11-11) ─────────────────────────────────────────
   // Coordinator ruling (e9, under owner delegation): `mappingProfileStore` is
@@ -310,7 +177,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       schemaFingerprint,
       headers,
       approvedBy,
-      entries: entries as unknown as SaveProfileEntry[],
+      entries,
     });
     return res.status(201).json({ profileId: saved.profileId, version: saved.version });
   } catch (err) {

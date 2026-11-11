@@ -27,6 +27,22 @@ describe('verification', () => {
     expect(v.verifiedProfileId).toBe('prof-1');
   });
 
+  it('a PLATFORM (vendor) profile match is cited in platformMappingProfileId, never in the tenant column (step E)', async () => {
+    const v = await run(
+      { schemaFingerprint: FP, fields: [{ sourceField: 'Designation', target: 'jobTitle', method: 'approved_profile_match' }] },
+      async () => ({ ...PROFILE, profileId: 'plat-1', scope: 'platform' }),
+    );
+    expect(v.person.job_title).toEqual({
+      sourceField: 'Designation', mappingMethod: 'approved_profile_match',
+      platformMappingProfileId: 'plat-1', approvedBy: APPROVER, approvedAt: '2026-11-01T00:00:00Z',
+    });
+    expect(v.person.job_title.mappingProfileId).toBeUndefined();
+    expect(v.verifiedProfileId).toBe('plat-1');
+    // And the insert columns put it in the platform FK column, scope 'platform'.
+    const cols = mappingProvenanceColumns(v.person.job_title, true);
+    expect(cols).toMatchObject({ mapping_profile_id: null, platform_mapping_profile_id: 'plat-1', platform_mapping_profile_scope: 'platform' });
+  });
+
   it('the profile is looked up by (tenant, source, fingerprint) - a request-supplied id is NEVER used', async () => {
     const keys: unknown[] = [];
     const v = await run({ schemaFingerprint: FP, profileId: 'someone-elses-profile', fields: [{ sourceField: 'Designation', target: 'jobTitle', method: 'approved_profile_match' }] },

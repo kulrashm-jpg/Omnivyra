@@ -279,6 +279,12 @@ export interface MappingEngineInput {
 
 export interface StoredMappingProfile {
   profileId: string;
+  /**
+   * Which kind of profile answered: the tenant's own ('tenant') or a data
+   * vendor's, approved once by a Super Admin for every company ('platform').
+   * Provenance cites them in different columns, and the UI says which it is.
+   */
+  scope: 'tenant' | 'platform';
   version: number;
   sourceSchemaFingerprint: string;
   headers: readonly string[];

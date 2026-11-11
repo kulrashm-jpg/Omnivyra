@@ -113,10 +113,18 @@ export async function verifyImportMapping(input: VerifyImportMappingInput): Prom
     const entry = approved.get(normaliseHeader(f.sourceField));
     let prov: AssertionMappingProvenance;
     if (profile && entry && entry.target === f.target) {
-      prov = {
-        sourceField: f.sourceField, mappingMethod: 'approved_profile_match',
-        mappingProfileId: profile.profileId, approvedBy: entry.approvedBy, approvedAt: entry.approvedAt,
-      };
+      // Cited in the column for the profile's scope: a tenant profile in
+      // mapping_profile_id, a platform (vendor) profile in
+      // platform_mapping_profile_id. The two are exclusive (table CHECK).
+      prov = profile.scope === 'platform'
+        ? {
+          sourceField: f.sourceField, mappingMethod: 'approved_profile_match',
+          platformMappingProfileId: profile.profileId, approvedBy: entry.approvedBy, approvedAt: entry.approvedAt,
+        }
+        : {
+          sourceField: f.sourceField, mappingMethod: 'approved_profile_match',
+          mappingProfileId: profile.profileId, approvedBy: entry.approvedBy, approvedAt: entry.approvedAt,
+        };
       out.verifiedProfileId = profile.profileId;
     } else if (f.method === 'high_confidence_suggestion') {
       prov = { sourceField: f.sourceField, mappingMethod: 'high_confidence_suggestion' };

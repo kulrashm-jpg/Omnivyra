@@ -500,3 +500,21 @@ describe('the TARGET_NOT_SUBMITTABLE boundary is still reachable', () => {
     expect(String(res._json.error)).toContain('description');
   });
 });
+
+describe('VENDOR SOURCES ARE SUPER ADMIN ONLY (step E)', () => {
+  it.each(['apollo', 'Apollo', 'apollo.io', 'enrichment_apollo'])(
+    'a tenant approval for vendor source %j is refused 403 PLATFORM_VENDOR_SOURCE, and nothing is saved',
+    async (source) => {
+      const res = await call(req({ body: { source, schemaFingerprint: FINGERPRINT, headers: ['Email'], entries: [entry()] } }));
+      expect(res._status).toBe(403);
+      expect(res._json.code).toBe('PLATFORM_VENDOR_SOURCE');
+      expect(saveProfileVersion).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a tenant cannot use the Super Admin method 'platform_approved'", async () => {
+    const res = await call(withEntry({ mappingMethod: 'platform_approved' }));
+    expect(res._status).toBe(400);
+    expect(saveProfileVersion).not.toHaveBeenCalled();
+  });
+});
