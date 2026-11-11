@@ -37,9 +37,8 @@ shipped.
   - **3e3aa7ef0 (e9 decision, 2026-11-11):** `classifyInboundLead`'s no-signal
     fallback changed from `'manual'` to NULL (unknown). The guard test proves no
     production call site reaches it, so current behaviour does not change.
-  - Because this changes code the owner's ruling named, virality-83 will put it
-    to the owner explicitly at PR approval. It is not presumed covered by the
-    ruling.
+  - Because this changes code the owner's ruling named, it was put to the
+    owner separately: **owner-approved 2026-11-11** (relayed by virality-e9).
 - **Basis-2 caveat (virality-05), and its date boundary.** For any future backfill:
   `prospect_source_contributions.source_category` is only as reliable as the
   mode that chose its profile. The caveat is time-bounded; it is not general
