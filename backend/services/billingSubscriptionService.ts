@@ -69,7 +69,7 @@ export function extractPriceId(obj: StripeSubscriptionObject): string | null {
   return obj.plan?.id ?? obj.items?.data?.[0]?.price?.id ?? null;
 }
 
-export type PlanResolutionSource = 'metadata' | 'price_map' | 'legacy_plan_key' | 'unmapped_price' | 'none';
+export type PlanResolutionSource = 'metadata' | 'price_map' | 'legacy_plan_key' | 'unmapped_price' | 'none' | 'read_failed';
 export interface PlanResolution { planId: string | null; source: PlanResolutionSource; priceId: string | null; }
 
 /**
@@ -86,12 +86,17 @@ export async function resolvePlanId(obj: StripeSubscriptionObject, deps: Billing
   const metaPlanId = meta.plan_id;
   if (isUuid(metaPlanId)) {
     const r = await deps.db.from('pricing_plans').select('id').eq('id', metaPlanId).maybeSingle();
+    // A failed read is not "unmapped" / "none": report it as what it is
+    // (planId null, source read_failed) - the subscription is still recorded,
+    // and the plan mapping is visibly unresolved rather than silently absent.
+    if (r?.error) { console.error('[billingSubscription] plan read failed (metadata):', r.error.message); return { planId: null, source: 'read_failed', priceId }; }
     if (r?.data?.id) return { planId: r.data.id, source: 'metadata', priceId };
   }
 
   // B — Stripe price_id → provider_price_id mapping.
   if (priceId) {
     const r = await deps.db.from('pricing_plans').select('id').eq('provider_price_id', priceId).maybeSingle();
+    if (r?.error) { console.error('[billingSubscription] plan read failed (price_map):', r.error.message); return { planId: null, source: 'read_failed', priceId }; }
     if (r?.data?.id) return { planId: r.data.id, source: 'price_map', priceId };
   }
 
@@ -99,6 +104,7 @@ export async function resolvePlanId(obj: StripeSubscriptionObject, deps: Billing
   const planKey = typeof meta.plan_key === 'string' ? meta.plan_key : null;
   if (planKey) {
     const r = await deps.db.from('pricing_plans').select('id').eq('plan_key', planKey).eq('is_active', true).maybeSingle();
+    if (r?.error) { console.error('[billingSubscription] plan read failed (legacy_plan_key):', r.error.message); return { planId: null, source: 'read_failed', priceId }; }
     if (r?.data?.id) return { planId: r.data.id, source: 'legacy_plan_key', priceId };
   }
 
@@ -203,10 +209,14 @@ export async function markExpiredSubscriptions(deps: BillingSubDeps, graceDays =
     .select('id, current_period_end, status')
     .in('status', ['active', 'trialing', 'past_due'])
     .lt('current_period_end', cutoffIso);
-  if (error || !data) return { expired: 0, ids: [] };
+  // A failed read is not "nothing to expire", and an unread update is not
+  // "expired": throw so the cron reports the failure instead of a false count.
+  if (error) throw new Error(`[billingSubscription] expiry candidates read failed: ${error.message}`);
+  if (!data) return { expired: 0, ids: [] };
   const ids: string[] = (data as any[]).map((r) => r.id);
   if (ids.length === 0) return { expired: 0, ids: [] };
   const nowIso = new Date(nowMs).toISOString();
-  await deps.db.from('billing_subscriptions').update({ status: 'expired', updated_at: nowIso }).in('id', ids);
+  const { error: updErr } = await deps.db.from('billing_subscriptions').update({ status: 'expired', updated_at: nowIso }).in('id', ids);
+  if (updErr) throw new Error(`[billingSubscription] expiry update failed for ${ids.length} subscription(s): ${updErr.message}`);
   return { expired: ids.length, ids };
 }

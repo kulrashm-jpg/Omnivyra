@@ -105,12 +105,14 @@ export async function getContractContext(orgId: string, atDate?: string): Promis
 
 export async function listUpcomingContractExpirations(daysAhead = 60): Promise<ActiveContract[]> {
   const cutoff = new Date(Date.now() + daysAhead * 86400_000).toISOString().slice(0, 10);
-  const { data } = await supabase
+  // A failed read is not "no contracts expiring" (renewal alerts would go silent). Throw.
+  const { data, error } = await supabase
     .from('enterprise_contracts')
     .select('*')
     .eq('status', 'active')
     .lte('end_date', cutoff)
     .order('end_date', { ascending: true });
+  if (error) throw new Error(`[enterpriseContractResolver] expiring contracts read failed: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map(row => ({
     id:                   String(row.id),
     contractNumber:       String(row.contract_number),
