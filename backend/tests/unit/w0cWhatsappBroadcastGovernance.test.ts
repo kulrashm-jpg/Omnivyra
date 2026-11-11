@@ -248,3 +248,91 @@ describe('A2 — the decision instant is the governance READ instant, never the 
     expect(String(recipient().error_message)).toContain('governance indeterminate');
   });
 });
+
+describe('A2b — governance is re-read within a batch (every 30 s or 50 recipients)', () => {
+  const PHONE2 = '+15550100002';
+  const PHONE3 = '+15550100003';
+  const three = () => {
+    seed();
+    db.recipients.push(
+      { id: 'r2', encrypted_phone: encrypt(PHONE2), contact_name: 'B', status: 'pending', retry_count: 0 },
+      { id: 'r3', encrypted_phone: encrypt(PHONE3), contact_name: 'C', status: 'pending', retry_count: 0 },
+    );
+  };
+  const status = (id: string) => db.recipients.find((r) => r.id === id)!.status;
+  /** After the FIRST send: the recipients of r2 and r3 unsubscribe (committed mid-batch). */
+  const unsubscribeAfterFirstSend = () => {
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) {
+        restrict({ id: 'u2', target_normalized: PHONE2, governance_type: 'dnc_channel' });
+        restrict({ id: 'u3', target_normalized: PHONE3, governance_type: 'dnc_channel' });
+      }
+      return r;
+    };
+  };
+  const envBackup = { ...process.env };
+  afterEach(() => {
+    process.env = { ...envBackup };
+    jest.useRealTimers();
+  });
+
+  it('an unsubscribe committed mid-batch blocks the LATER recipients (re-read by count)', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '1';
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(1);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'blocked_governance', 'blocked_governance']);
+  });
+
+  it('an unsubscribe committed mid-batch blocks the later recipients (re-read by TIME: 30 s passed)', async () => {
+    three();
+    jest.useFakeTimers({ now: new Date('2026-11-11T10:00:00.000Z'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] });
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      if (fetchCalls.length === 1) {
+        restrict({ id: 'u2', target_normalized: PHONE2 });
+        jest.setSystemTime(new Date('2026-11-11T10:00:31.000Z')); // the first send took 31 s
+      }
+      return r;
+    };
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'blocked_governance', 'sent']);
+  });
+
+  it('NEGATIVE CONTROL: within the window (default 50 / 30 s) there is no re-read, so the mid-batch unsubscribe is not yet seen', async () => {
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'sent', 'sent']);
+  });
+
+  it('a FAILED re-read stops the batch: nothing more is sent, the rest stay pending (retryable)', async () => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = '1';
+    three();
+    const realFetch = (global as unknown as { fetch: (u: string) => Promise<unknown> }).fetch;
+    (global as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      const r = await realFetch(url);
+      db.failTable = 'contact_governance_records'; // the store becomes unreadable after the first send
+      return r;
+    };
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(1);
+    expect([status('r1'), status('r2'), status('r3')]).toEqual(['sent', 'pending', 'pending']);
+  });
+
+  it.each([['0'], ['-1'], ['abc'], ['1.5']])('WHATSAPP_GOVERNANCE_REREAD_EVERY=%s falls back to the default (50): no early re-read', async (v) => {
+    process.env.WHATSAPP_GOVERNANCE_REREAD_EVERY = v;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    three();
+    unsubscribeAfterFirstSend();
+    await processBatch('b1', ['r1', 'r2', 'r3']);
+    expect(fetchCalls).toHaveLength(3);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('WHATSAPP_GOVERNANCE_REREAD_EVERY'), expect.anything());
+    warn.mockRestore();
+  });
+});
