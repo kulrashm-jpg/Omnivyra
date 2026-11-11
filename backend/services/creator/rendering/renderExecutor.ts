@@ -157,12 +157,23 @@ export async function executeRenderJob(
       .eq('deterministic_input_hash', specHash)
       .maybeSingle();
     if (existing?.id) {
-      const { data: doneOut } = await supabase
-        .from('creator_render_output')
-        .select('id, storage_ref, content_sha256, attempt_id')
-        .order('created_at', { ascending: false })
-        .limit(1)
+      // SECURITY (cross-tenant): the reused output is THIS job's own attached output, never "the most
+      // recent output in the table". The previous query had no filter at all (job, attempt or tenant),
+      // so a re-render could attach ANOTHER tenant's image to this tenant's content. The job itself is
+      // tenant-filtered above; its state row names the output it attached.
+      const { data: state } = await supabase
+        .from('creator_render_job_state')
+        .select('attached_output_id')
+        .eq('render_job_id', existing.id)
         .maybeSingle();
+      const attachedOutputId = (state as { attached_output_id?: string | null } | null)?.attached_output_id ?? null;
+      const { data: doneOut } = attachedOutputId
+        ? await supabase
+          .from('creator_render_output')
+          .select('id, storage_ref, content_sha256, attempt_id')
+          .eq('id', attachedOutputId)
+          .maybeSingle()
+        : { data: null };
       events.push('duplicate_render_reused');
       if (doneOut?.id) {
         await attachToSharedMedia(deps, args, specHash, doneOut.id, doneOut.storage_ref, events);
