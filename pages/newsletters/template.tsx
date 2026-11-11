@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { recordBlockTemplateUse } from '../../lib/content/recordBlockTemplateUse';
+import { recordBlockTemplateUse } from '../../lib/client/recordBlockTemplateUse';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowLeft, Eye, LayoutGrid, Loader2, Pencil } from 'lucide-react';

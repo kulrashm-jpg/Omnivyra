@@ -3,7 +3,7 @@
  * One use = exactly one POST; no saved template = no call; a failure is
  * REPORTED (console.error with the template id), never swallowed.
  */
-import { recordBlockTemplateUse } from '../../../lib/content/recordBlockTemplateUse';
+import { recordBlockTemplateUse } from '../../../lib/client/recordBlockTemplateUse';
 
 const CO = '00000000-0000-4000-8000-0000000000aa';
 const TPL = '00000000-0000-4000-8000-0000000000c1';

@@ -8,6 +8,10 @@
  * is reported (console.error with the template id and status), never swallowed;
  * it does not block the user's navigation, because a usage counter must not
  * stop someone writing.
+ *
+ * BROWSER-ONLY (lives in lib/client/): the browser issues this same-origin
+ * relative /api request, so it is not a server SSRF surface. Never import it
+ * from backend/** or pages/api/** - the server uses blockTemplateService.
  */
 export function recordBlockTemplateUse(
   companyId: string | null | undefined,
