@@ -54,35 +54,92 @@ export * from './creatorPackageBridge';
 
 /* ── User-template runtime registry ──────────────────────────────────────
  * User templates REUSE the canonical CreatorTemplate model (ownership: 'user').
- * They are registered at runtime — loaded from storage by the app/service layer
- * and registered into THIS one registry — so getTemplateById() / resolveTemplate()
- * resolve them IDENTICALLY to system templates (one resolver, one model, one
- * rendering pipeline). The registry is empty by default, so system-template
- * resolution and all existing behavior remain byte-identical.
+ * They are registered at runtime so getTemplateById() / resolveTemplate()
+ * resolve them like system templates (one resolver, one model, one pipeline).
+ *
+ * SECURITY (2026-11-11): the registry is KEYED BY TENANT. It used to be one
+ * process-global map, so a template registered for company B's render was
+ * returned by getTemplateById() to ANY later caller in that process - company A
+ * could have B's template resolved and rendered by putting B's id in A's plan
+ * or asset. Now:
+ *   - ownership 'system' templates (in-code, curated) live in a PLATFORM bucket
+ *     everyone resolves;
+ *   - user/AI templates live in a bucket per TENANT, and resolve only for the
+ *     CURRENT tenant, supplied by a provider hook;
+ *   - in the BROWSER (no provider; one signed-in tenant per page) a single
+ *     default bucket keeps the gallery working exactly as before;
+ *   - on the SERVER the backend installs the provider (an AsyncLocalStorage
+ *     scope per render). With no provider, or outside a tenant scope, a
+ *     user/AI template is never registered and never resolved - a render path
+ *     that forgets the scope gets platform templates only (fails closed).
  */
-const userTemplateRegistry = new Map<string, CreatorTemplate>();
+const platformTemplateRegistry = new Map<string, CreatorTemplate>();
+const tenantTemplateRegistry = new Map<string, Map<string, CreatorTemplate>>();
+const BROWSER_TENANT = '__browser_single_tenant__';
+let templateTenantProvider: (() => string | null) | null = null;
 
-/** Register (or replace) a user template so it resolves like a system template. */
-export function registerUserTemplate(template: CreatorTemplate): void {
-  if (template && typeof template.id === 'string' && template.id.trim()) {
-    userTemplateRegistry.set(template.id.trim(), template);
-  }
+/** Server-side: install the source of the CURRENT tenant (backend AsyncLocalStorage). */
+export function setTemplateTenantProvider(provider: (() => string | null) | null): void {
+  templateTenantProvider = provider;
 }
-/** Register many user templates at once. */
+
+/** The tenant whose user templates may be registered/resolved right now, or null. */
+function currentTemplateTenant(): string | null {
+  if (templateTenantProvider) {
+    const t = templateTenantProvider();
+    return typeof t === 'string' && t.trim() ? t.trim() : null;
+  }
+  // No provider: the browser is single-tenant; a server without a provider is
+  // NOT, so it gets no tenant (platform only).
+  return typeof window !== 'undefined' ? BROWSER_TENANT : null;
+}
+
+function tenantBucket(create: boolean): Map<string, CreatorTemplate> | null {
+  const tenant = currentTemplateTenant();
+  if (!tenant) return null;
+  let bucket = tenantTemplateRegistry.get(tenant);
+  if (!bucket && create) { bucket = new Map(); tenantTemplateRegistry.set(tenant, bucket); }
+  return bucket ?? null;
+}
+
+/**
+ * Register (or replace) a template so it resolves like a system template.
+ * Platform (ownership 'system') templates go to the shared bucket; anything
+ * else goes to the CURRENT tenant's bucket - and is refused (not registered)
+ * when there is no current tenant. Returns whether it was registered.
+ */
+export function registerUserTemplate(template: CreatorTemplate): boolean {
+  if (!template || typeof template.id !== 'string' || !template.id.trim()) return false;
+  const id = template.id.trim();
+  if (template.ownership === 'system') { platformTemplateRegistry.set(id, template); return true; }
+  const bucket = tenantBucket(true);
+  if (!bucket) return false;
+  bucket.set(id, template);
+  return true;
+}
+/** Register many templates at once (same rules as registerUserTemplate). */
 export function registerUserTemplates(templates: readonly CreatorTemplate[]): void {
   for (const t of templates) registerUserTemplate(t);
 }
-/** Remove a user template from the runtime registry. */
+/** Remove a template from the current tenant's bucket (and the platform bucket). */
 export function unregisterUserTemplate(id: string): void {
-  userTemplateRegistry.delete(String(id || '').trim());
+  const key = String(id || '').trim();
+  tenantBucket(false)?.delete(key);
+  platformTemplateRegistry.delete(key);
 }
-/** Clear the runtime registry (test isolation / context resets). */
+/** Clear every bucket (test isolation / context resets). */
 export function clearUserTemplateRegistry(): void {
-  userTemplateRegistry.clear();
+  platformTemplateRegistry.clear();
+  tenantTemplateRegistry.clear();
 }
-/** All currently-registered user templates. */
+/** The registered templates visible to the CURRENT tenant (platform + its own). */
 export function listRegisteredUserTemplates(): CreatorTemplate[] {
-  return Array.from(userTemplateRegistry.values());
+  return [...platformTemplateRegistry.values(), ...(tenantBucket(false)?.values() ?? [])];
+}
+
+/** A registered template visible to the current tenant: platform first, then its own. */
+function registeredTemplate(id: string): CreatorTemplate | undefined {
+  return platformTemplateRegistry.get(id) ?? tenantBucket(false)?.get(id);
 }
 
 /** Every template for a family (system only, this phase). */
@@ -289,7 +346,7 @@ export function getTemplateById(id: string, family?: TemplateAssetFamily): Creat
   // Curated SYSTEM templates are materialized on demand (deterministic) so a
   // gallery-selected curated design resolves identically on client and server.
   const found = ALL_SYSTEM_TEMPLATES.find((t) => t.id === normalized)
-    ?? userTemplateRegistry.get(normalized)
+    ?? registeredTemplate(normalized)
     ?? materializeCuratedById(normalized)
     ?? null;
   if (!found) return null;

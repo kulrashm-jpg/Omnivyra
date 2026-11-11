@@ -24,6 +24,7 @@
  * those concerns around the orchestrator.
  */
 
+import { runWithTemplateTenant } from './templateTenantContext';
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
 import { createCreatorExecutionEngine } from '../executionEngines/creatorExecutionEngine';
@@ -488,7 +489,7 @@ async function runRenderDispatch(input: {
     // PART A — register a user template_id before the inline render.
     try {
       const { ensureUserTemplateRegisteredForAsset } = await import('./userTemplateService');
-      await ensureUserTemplateRegisteredForAsset(renderInput);
+      await ensureUserTemplateRegisteredForAsset(renderInput, input.companyId);
     } catch { /* best-effort */ }
     // THE single runtime entry into the composition-asset resolver. Everything
     // downstream — routing, tenant checks, lifecycle, byte retrieval, the
@@ -508,7 +509,8 @@ async function runRenderDispatch(input: {
        * Read from the render payload — the same template id the renderer
        * itself resolves — so the slots belong to the design being rendered.
        */
-      templateSlots: templateAssetSlotsForRenderPayload(renderInput),
+      // Resolved in the rendering company's template scope (SECURITY 2026-11-11).
+      templateSlots: runWithTemplateTenant(input.companyId, () => templateAssetSlotsForRenderPayload(renderInput)),
     });
     const rendered = await renderAsset(renderInput, {
       campaignId: input.campaignId,
@@ -577,7 +579,7 @@ async function runCreatorOrchestrationCore(
     const card = safeObject(input.creatorCard);
     if (typeof card.template_id === 'string' && card.template_id.trim()) {
       const { validatePlannedCard } = await import('./campaignPlanValidationService');
-      const planCheck = await validatePlannedCard(card, effectiveContentType);
+      const planCheck = await validatePlannedCard(card, effectiveContentType, input.companyId);
       if (planCheck && !planCheck.ok) {
         throw new Error(`Invalid campaign plan — generated asset rejected before generation: ${planCheck.errors.join(' ')}`);
       }
@@ -782,7 +784,7 @@ async function runCreatorOrchestrationCore(
         let resolved: import('../../../lib/creator-templates').CreatorTemplate | null = null;
         try {
           const { getTemplateById } = require('../../../lib/creator-templates') as typeof import('../../../lib/creator-templates');
-          resolved = getTemplateById(tid);
+          resolved = runWithTemplateTenant(input.companyId, () => getTemplateById(tid));
         } catch { resolved = null; }
         return {
           id: tid,

@@ -6,7 +6,7 @@ jest.mock('../../db/supabaseClient', () => {
   const ut = cloneTemplate(sys, 'infographic', { id: 'ut-round', ownerUserId: 'u1' });
   // Simulate the DB column: the JSON-safe ENCODED template (what we now store).
   const ROW: Record<string, unknown> = {
-    id: 'ut-round', company_id: 'co', owner_user_id: 'u1', team_id: null,
+    id: 'ut-round', company_id: '00000000-0000-4000-8000-0000000000aa', owner_user_id: 'u1', team_id: null,
     asset_family: 'infographic', name: ut.name, category: ut.category, description: ut.description,
     status: 'draft', version: 1, parent_template_id: sys.id, preview_url: null,
     template_json: JSON.parse(JSON.stringify(lib.serializeTemplate(ut))), // through real JSON, sentinels survive
@@ -30,6 +30,9 @@ import {
 } from '../../../lib/creator-templates';
 import { cloneTemplate } from '../../../lib/creator-templates/userTemplate';
 import { getUserTemplate, ensureUserTemplateRegisteredForAsset } from '../../services/creator/userTemplateService';
+import { runWithTemplateTenant } from '../../services/creator/templateTenantContext';
+// The template's company (the fixture row): registration + resolution are tenant-scoped (SECURITY 2026-11-11).
+const CO = '00000000-0000-4000-8000-0000000000aa';
 
 const sysInfo = listTemplatesForFamily('infographic')[0];
 
@@ -69,15 +72,15 @@ describe('TEMPLATE-019 Part A — worker resolution + round-trip fidelity', () =
 
   it('ensureUserTemplateRegisteredForAsset registers from the asset payload → resolveTemplate resolves it', async () => {
     expect(getTemplateById('ut-round')).toBeNull(); // not registered yet
-    await ensureUserTemplateRegisteredForAsset({ media_bundle: { metadata: { template_id: 'ut-round' } } });
-    const rt = resolveTemplate('ut-round', { family: 'infographic' });
+    await ensureUserTemplateRegisteredForAsset({ media_bundle: { metadata: { template_id: 'ut-round' } } }, CO);
+    const rt = runWithTemplateTenant(CO, () => resolveTemplate('ut-round', { family: 'infographic' }));
     expect(rt.matched).toBe(true);
     expect(rt.infographicStyle).toEqual(sysInfo.infographicStyle); // same pipeline + faithful style
   });
 
   it('is a no-op for system ids and missing ids', async () => {
-    await ensureUserTemplateRegisteredForAsset({ media_bundle: { metadata: { template_id: sysInfo.id } } });
-    await ensureUserTemplateRegisteredForAsset({});
+    await ensureUserTemplateRegisteredForAsset({ media_bundle: { metadata: { template_id: sysInfo.id } } }, CO);
+    await ensureUserTemplateRegisteredForAsset({}, CO);
     expect(resolveTemplate(sysInfo.id).matched).toBe(true); // system unaffected
   });
 });

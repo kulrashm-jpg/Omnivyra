@@ -30,6 +30,13 @@ import {
   registerUserTemplate,
   clearUserTemplateRegistry,
 } from '../../../lib/creator-templates';
+import { setTemplateTenantProvider } from '../../../lib/creator-templates';
+
+// SECURITY (2026-11-11): the runtime registry is keyed by tenant and, on the
+// server, resolves user templates only for the CURRENT tenant. These tests
+// exercise single-tenant resolution, so they run inside one test tenant.
+beforeAll(() => setTemplateTenantProvider(() => 'test-tenant'));
+afterAll(() => setTemplateTenantProvider(null));
 import { ALL_SYSTEM_TEMPLATES } from '../../../lib/creator-templates/systemTemplates';
 import {
   deriveTemplateAssetSlots,

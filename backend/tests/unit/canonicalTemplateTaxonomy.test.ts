@@ -27,6 +27,13 @@ import {
   type CreatorTemplate,
   type TemplateAssetFamily,
 } from '../../../lib/creator-templates';
+import { setTemplateTenantProvider } from '../../../lib/creator-templates';
+
+// SECURITY (2026-11-11): the runtime registry is keyed by tenant and, on the
+// server, resolves user templates only for the CURRENT tenant. These tests
+// exercise single-tenant resolution, so they run inside one test tenant.
+beforeAll(() => setTemplateTenantProvider(() => 'test-tenant'));
+afterAll(() => setTemplateTenantProvider(null));
 import { systemScopeSource } from '../../../lib/creator-outcomes/templateDiscovery';
 import { CURATED_SYSTEM_TEMPLATES } from '../../../lib/creator-outcomes/curatedSystemTemplates';
 

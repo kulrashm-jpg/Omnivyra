@@ -11,6 +11,7 @@
  * so the gallery + Creator flow keep working unchanged.
  */
 
+import { currentTemplateTenantId, runWithTemplateTenant } from './templateTenantContext';
 import { supabase } from '../../db/supabaseClient';
 import type { CreatorTemplate, TemplateAssetFamily } from '../../../lib/creator-templates';
 import {
@@ -63,9 +64,12 @@ function hydrate(row: Record<string, unknown>): CreatorTemplate | null {
     createdAt: String(row.created_at ?? ''),
   };
   // Register into the canonical runtime registry so getTemplateById() /
-  // resolveTemplate() resolve this user template identically to a system one
-  // (same rendering pipeline) wherever it is loaded.
-  registerUserTemplate(t);
+  // resolveTemplate() resolve this user template identically to a system one.
+  // SECURITY (2026-11-11): ONLY into its OWN company's bucket - i.e. only when
+  // the current template tenant IS this row's company. Hydrating another
+  // tenant's row (e.g. via the by-id getUserTemplate) inside company A's render
+  // scope must never make it resolvable for A.
+  if (String(row.company_id ?? '') === currentTemplateTenantId()) registerUserTemplate(t);
   return t;
 }
 
@@ -123,7 +127,26 @@ export async function getUserTemplate(id: string): Promise<CreatorTemplate | nul
 export async function loadAndRegisterUserTemplate(id: string): Promise<CreatorTemplate | null> {
   const normalized = String(id || '').trim();
   if (!normalized || getTemplateById(normalized)) return null; // system id resolves already
-  return getUserTemplate(normalized); // hydrate() registers on success
+  // SECURITY (2026-11-11): load ONLY within the current template tenant. It used
+  // to load ANY company's template by id and register it process-wide.
+  const company = currentTemplateTenantId();
+  if (!company) return null;
+  return getUserTemplateForCompany(normalized, company); // hydrate() registers on success
+}
+
+/**
+ * A user template ONLY if it belongs to `companyId` (SECURITY, 2026-11-11);
+ * getUserTemplate reads by id alone. A read failure is null.
+ */
+export async function getUserTemplateForCompany(id: string, companyId: string): Promise<CreatorTemplate | null> {
+  if (!id || !companyId) return null;
+  try {
+    const { data, error } = await supabase.from(TABLE).select('*').eq('id', id).eq('company_id', companyId).maybeSingle();
+    if (error || !data) return null;
+    return hydrate(data as Record<string, unknown>);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -135,7 +158,14 @@ export async function loadAndRegisterUserTemplate(id: string): Promise<CreatorTe
  * its style/contract. Idempotent + best-effort: system ids / missing ids /
  * unavailable storage are no-ops, so existing renders are unaffected.
  */
-export async function ensureUserTemplateRegisteredForAsset(assetPayload: unknown): Promise<void> {
+export async function ensureUserTemplateRegisteredForAsset(assetPayload: unknown, companyId: string | null | undefined): Promise<void> {
+  // SECURITY (2026-11-11): registration happens in the RENDERING company's
+  // template scope, so only that company's own template can be loaded and the
+  // render (also scoped, in renderAsset) resolves only that company's bucket.
+  return runWithTemplateTenant(companyId, () => ensureUserTemplateRegisteredForAssetInScope(assetPayload));
+}
+
+async function ensureUserTemplateRegisteredForAssetInScope(assetPayload: unknown): Promise<void> {
   try {
     const payload = (assetPayload && typeof assetPayload === 'object' ? assetPayload : {}) as Record<string, unknown>;
     const bundle = (payload.media_bundle && typeof payload.media_bundle === 'object' ? payload.media_bundle : {}) as Record<string, unknown>;
@@ -164,6 +194,10 @@ export async function ensureUserTemplateRegisteredForAsset(assetPayload: unknown
 export async function loadAndRegisterUserTemplateVersion(id: string, version: number): Promise<CreatorTemplate | null> {
   const normalized = String(id || '').trim();
   if (!normalized || getTemplateById(normalized)) return null; // system ids are immutable in-code
+  // SECURITY (2026-11-11): the version snapshot is only loaded for a template
+  // the CURRENT template tenant owns.
+  const company = currentTemplateTenantId();
+  if (!company || (await companyIdFor(normalized)) !== company) return null;
   const versions = await listUserTemplateVersions(normalized);
   const snap = versions.find((v) => v.version === version);
   if (!snap) return null;

@@ -361,7 +361,7 @@ async function withRenderedMedia(output: CanonicalCreatorOutput): Promise<Canoni
   // PART A — register a user template_id before render (canonical runtime flow).
   try {
     const { ensureUserTemplateRegisteredForAsset } = await import('../creator/userTemplateService');
-    await ensureUserTemplateRegisteredForAsset(output.asset_payload);
+    await ensureUserTemplateRegisteredForAsset(output.asset_payload, String(output.metadata.company_id || '') || null);
   } catch { /* best-effort */ }
 
   // CAMPAIGN-007 — operational health events (best-effort, EXISTING audit store).

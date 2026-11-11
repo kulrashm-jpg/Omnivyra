@@ -1,3 +1,4 @@
+import { runWithTemplateTenant } from './creator/templateTenantContext';
 import type { Job } from 'bullmq';
 import { renderAsset } from './creatorAssetRenderer';
 import type { CreatorDurableRenderJobData } from './creatorRenderDurableQueue';
@@ -46,7 +47,7 @@ export async function processCreatorRenderJob(job: Job<CreatorDurableRenderJobDa
   // resolver, no duplicate registration). Best-effort: system/absent ids no-op.
   try {
     const { ensureUserTemplateRegisteredForAsset } = await import('./creator/userTemplateService');
-    await ensureUserTemplateRegisteredForAsset(assetPayload);
+    await ensureUserTemplateRegisteredForAsset(assetPayload, typeof options.companyId === 'string' ? options.companyId : null);
   } catch { /* best-effort — system + default-style resolution unaffected */ }
 
   /*
@@ -75,7 +76,8 @@ export async function processCreatorRenderJob(job: Job<CreatorDurableRenderJobDa
         // The template's own slots decide what it accepts. Omitting them is not
         // a neutral default — the resolver reads absent slots as "accepts
         // nothing" and rejects every attachment.
-        templateSlots: templateAssetSlotsForRenderPayload(assetPayload),
+        // Resolved in the rendering company's template scope (SECURITY 2026-11-11).
+        templateSlots: runWithTemplateTenant(workerCompanyId, () => templateAssetSlotsForRenderPayload(assetPayload)),
       });
     } catch {
       // Resolution is an enhancement, never a reason a queued render fails.

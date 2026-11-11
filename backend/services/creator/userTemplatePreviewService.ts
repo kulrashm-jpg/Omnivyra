@@ -12,6 +12,7 @@
  * it, so saving stays fast. Status transitions: pending → rendering → ready|failed.
  */
 
+import { runWithTemplateTenant } from './templateTenantContext';
 import { type CreatorTemplate, registerUserTemplate } from '../../../lib/creator-templates';
 import { buildPreviewIntent } from '../../../lib/creator-templates/userTemplatePreview';
 import { setPreviewStatus, setPreviewResult } from './userTemplateService';
@@ -33,7 +34,8 @@ export interface GeneratedPreview {
 export async function generateUserTemplatePreview(template: CreatorTemplate, companyId: string): Promise<GeneratedPreview> {
   // Register the user template so the renderer's resolveTemplate(template_id)
   // resolves ITS style + contract (not the default) — same pipeline as system.
-  registerUserTemplate(template);
+  // Registered in THIS company's template scope only (SECURITY 2026-11-11).
+  runWithTemplateTenant(companyId, () => registerUserTemplate(template));
   const assetPayload = buildPreviewIntent(template);
 
   // Configure fontconfig BEFORE the renderer (sharp) is imported — same ordering

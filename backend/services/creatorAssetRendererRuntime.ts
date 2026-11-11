@@ -1,4 +1,5 @@
 /** Part 10/10 of creatorAssetRenderer.ts — verbatim split (barrel preserved; importers unchanged). */
+import { runWithTemplateTenant } from './creator/templateTenantContext';
 import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { config } from '../../config';
@@ -496,6 +497,16 @@ async function renderAssetDispatch(
 export async function renderAsset(
   assetPayload: Record<string, unknown>,
   options: RenderOptions = {},
+): Promise<RenderedMediaBundle> {
+  // SECURITY (2026-11-11): every template resolution during this render sees
+  // ONLY the rendering company's user templates (plus platform ones). Without a
+  // company the render resolves platform templates only.
+  return runWithTemplateTenant(options.companyId ?? null, () => renderAssetInTenantScope(assetPayload, options));
+}
+
+async function renderAssetInTenantScope(
+  assetPayload: Record<string, unknown>,
+  options: RenderOptions,
 ): Promise<RenderedMediaBundle> {
   const contentType = String(
     safeObject(safeObject(assetPayload.media_bundle).metadata).content_type || assetPayload.asset_kind || '',

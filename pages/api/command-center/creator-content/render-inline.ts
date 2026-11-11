@@ -148,7 +148,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (loadUserTemplate) {
       try {
         const { ensureUserTemplateRegisteredForAsset } = await import('../../../../backend/services/creator/userTemplateService');
-        await ensureUserTemplateRegisteredForAsset(assetPayload);
+        await ensureUserTemplateRegisteredForAsset(assetPayload, companyId || null);
       } catch { /* best-effort */ }
     }
     // Deferred import: loads sharp AFTER ensureRenderFonts() set FONTCONFIG_FILE.

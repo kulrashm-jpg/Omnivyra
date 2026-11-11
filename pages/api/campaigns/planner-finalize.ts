@@ -385,7 +385,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         await import('../../../backend/services/creator/campaignPlanValidationService');
       const plannedAssets = plannedAssetsFromActivities(activities);
       if (plannedAssets.length > 0) {
-        const planValidation = await validateCampaignPlanAssets(plannedAssets);
+        const planValidation = await validateCampaignPlanAssets(plannedAssets, companyId);
         if (!planValidation.ok) {
           return res.status(422).json({
             error: 'Campaign plan rejected: one or more planned assets are incompatible with their selected template.',
