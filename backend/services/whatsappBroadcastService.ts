@@ -47,15 +47,34 @@ const META_GRAPH = 'https://graph.facebook.com/v22.0';
  */
 export const DEFAULT_GOVERNANCE_REREAD_MS = 30_000;
 export const DEFAULT_GOVERNANCE_REREAD_EVERY = 50;
+/**
+ * Upper bounds on the two settings. These are a DAMAGE LIMIT ON MISCONFIGURATION,
+ * not policy: the defaults above (30 s / 50) are the policy. At the cap, up to
+ * 5 minutes or 500 messages can still go out after an unsubscribe; the cap only
+ * bounds how far a setting can drift without anyone noticing. A value above the
+ * cap is clamped (and logged), never refused, so a bad setting weakens the guard
+ * as little as possible instead of stopping sends.
+ */
+export const MAX_GOVERNANCE_REREAD_MS = 300_000;
+export const MAX_GOVERNANCE_REREAD_EVERY = 500;
 
-/** A positive integer from the environment; anything else falls back to the default (logged). */
-function positiveIntEnv(name: string, fallback: number): number {
+/**
+ * A positive integer from the environment, at most `cap`. Not a positive integer
+ * -> the default; above the cap -> the cap. Both are logged by variable name.
+ */
+function positiveIntEnv(name: string, fallback: number, cap: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
   const n = Number(raw.trim());
-  if (Number.isInteger(n) && n >= 1) return n;
-  console.warn(`[whatsappBroadcast] ${name} is not a positive integer; using the default`, { value: raw.slice(0, 32), default: fallback });
-  return fallback;
+  if (!Number.isInteger(n) || n < 1) {
+    console.warn(`[whatsappBroadcast] ${name} is not a positive integer; using the default`, { value: raw.slice(0, 32), default: fallback });
+    return fallback;
+  }
+  if (n > cap) {
+    console.warn(`[whatsappBroadcast] ${name} is above its cap; using the cap`, { value: n, cap });
+    return cap;
+  }
+  return n;
 }
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
@@ -310,8 +329,9 @@ export async function processBatch(
   //
   // One tenant-scoped read per batch, then the PURE evaluator per recipient.
   // FAIL CLOSED: if the store cannot be read, NOTHING in this batch is sent.
-  const rereadMs = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_MS', DEFAULT_GOVERNANCE_REREAD_MS);
-  const rereadEvery = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_EVERY', DEFAULT_GOVERNANCE_REREAD_EVERY);
+  const rereadMs = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_MS', DEFAULT_GOVERNANCE_REREAD_MS, MAX_GOVERNANCE_REREAD_MS);
+  const rereadEvery = positiveIntEnv('WHATSAPP_GOVERNANCE_REREAD_EVERY', DEFAULT_GOVERNANCE_REREAD_EVERY, MAX_GOVERNANCE_REREAD_EVERY);
+  console.debug('[whatsappBroadcast] governance re-read schedule', { broadcast_id: broadcastId, reread_ms: rereadMs, reread_every: rereadEvery });
   // Taken BEFORE the read, so the re-read schedule errs early, never late.
   let readStartedAt = Date.now();
   let governance = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
@@ -342,11 +362,24 @@ export async function processBatch(
         // remaining recipients are left untouched ('pending'), so they stay retryable
         // (enqueueBroadcast re-queues every pending recipient). Marking them blocked
         // would turn a transient read failure into a permanent refusal.
-        console.warn('[whatsappBroadcast] governance re-read failed; batch stopped, remaining recipients left pending', {
+        //
+        // The broadcast is marked 'paused' - the state the rate-limit stop already
+        // uses and the UI already shows - so an unfinished broadcast never looks
+        // finished or merely idle. Resumption is MANUAL only (POST ?action=enqueue);
+        // nothing auto-resumes a paused broadcast, so a persistent read failure
+        // cannot loop. whatsapp_broadcasts has no reason column: this ERROR log is
+        // the only record of WHY it paused (rate limit vs governance re-read).
+        console.error('[whatsappBroadcast] governance re-read failed; batch stopped, broadcast paused, remaining recipients left pending', {
           broadcast_id: broadcastId,
           remaining: recipients.length - i,
           error: fresh.error ?? 'unknown',
         });
+        const { error: pauseErr } = await ownedDbTable('whatsapp_broadcasts')
+          .update({ status: 'paused', updated_at: new Date().toISOString() })
+          .eq('id', broadcastId);
+        if (pauseErr) {
+          console.error('[whatsappBroadcast] could not mark the broadcast paused', { broadcast_id: broadcastId, error: pauseErr.message });
+        }
         break;
       }
       governance = fresh;
