@@ -408,6 +408,29 @@ describe('actor-FK compatibility detector — catalog level', () => {
     expect(r.counts.error).toBe(1);
   });
 
+  it('a frozen entry whose COLUMN postdates a bounded dump is NOT called stale; on a live catalog it IS', () => {
+    // source_assertions predates the 20260916000000 baseline; its
+    // platform_mapping_profile_id column (PI-LDB step E) does not. Absence of a
+    // column proves nothing on a bounded dump - same rule as registry_column_missing.
+    const ddl = `CREATE TABLE public.t (
+    a uuid
+);`;
+    const entry = [{ key: 't.later', owner: 'x', classification: 'y' }];
+    const bounded = actorFk.detect(actorFk.parseBaselineCatalog(ddl, { source: 'baseline', boundary: '20260916000000' }), { columns: [] }, entry);
+    expect(bounded.stale_known).toEqual([]);
+    expect(bounded.counts.error).toBe(0);
+    const live = actorFk.detect(actorFk.parseBaselineCatalog(ddl, { source: 'pg_catalog' }), { columns: [] }, entry);
+    expect(live.stale_known).toEqual(['t.later']);
+    expect(live.counts.error).toBe(1);
+  });
+
+  it('a frozen entry whose column IS in a bounded dump but no longer reproduces still FAILS as stale', () => {
+    const cat = actorFk.parseBaselineCatalog(`CREATE TABLE public.t (
+    a uuid
+);`, { source: 'baseline', boundary: '20260916000000' });
+    expect(actorFk.detect(cat, { columns: [] }, [{ key: 't.a', owner: 'x', classification: 'y' }]).stale_known).toEqual(['t.a']);
+  });
+
   it('a frozen entry for a table absent from a point-in-time dump is NOT called stale', () => {
     // Absence in a boundary-limited dump proves nothing.
     const cat = actorFk.parseBaselineCatalog('CREATE TABLE public.other (\n    a uuid\n);', { source: 'baseline', boundary: '20260916000000' });

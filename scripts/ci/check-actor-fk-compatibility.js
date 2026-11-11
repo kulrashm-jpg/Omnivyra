@@ -586,7 +586,12 @@ function detect(catalog, registry = { columns: [] }, known = []) {
   //    A frozen entry is only honoured when the catalog that produced it could
   //    actually see the table. On a point-in-time baseline, a table that is
   //    absent proves nothing, so `stale` is reported only for tables present in
-  //    this catalog.
+  //    this catalog. The same holds for a COLUMN on a bounded dump (the rule
+  //    registry_column_missing already applies): the table may predate the
+  //    boundary while the column was added later (source_assertions.
+  //    platform_mapping_profile_id, PI-LDB step E, against a 20260916000000
+  //    baseline). Such an entry is not judged here - the --db path decides it.
+  //    On an unbounded (live / replayed) catalog a missing column IS stale.
   const knownMap = new Map((known || []).map((k) => [k.key, k]));
   const open = [];
   const knownSeen = [];
@@ -597,7 +602,13 @@ function detect(catalog, registry = { columns: [] }, known = []) {
   }
   const seenKeys = new Set(knownSeen.map((f) => `${f.table}.${f.column}`));
   const staleKnown = [...knownMap.keys()].filter(
-    (key) => !seenKeys.has(key) && catalog.tables.has(key.split('.')[0]),
+    (key) => {
+      if (seenKeys.has(key)) return false;
+      const [t, c] = key.split('.');
+      const table = catalog.tables.get(t);
+      if (!table) return false;
+      return table.columns.has(c) || !catalog.coverage.boundary;
+    },
   );
 
   const counts = { error: 0, warn: 0, info: 0 };
