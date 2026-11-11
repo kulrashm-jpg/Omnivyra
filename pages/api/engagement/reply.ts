@@ -462,6 +462,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //    status=sent transitions from any state other than 'approved'
     //    (migration 20260506000011). No fallback, no soft-validation:
     //    bypass here would defeat the entire AI-reply safety contract.
+    // The draft's thread, once proven to be this organization's (SEC-91A). The
+    // mark-sent write after dispatch is scoped by it.
+    let verifiedDraftThreadId: string | null = null;
     if (body.ai_generated === true) {
       if (!body.ai_draft_id) {
         return res.status(400).json({
@@ -507,15 +510,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           code: 'AI_DRAFT_NOT_FOUND',
         });
       }
+      verifiedDraftThreadId = String(draft.thread_id);
       if (draft.status === 'sent' || draft.status === 'rejected') {
         return res.status(400).json({
           error: `ai_draft already in terminal status=${draft.status}`,
           code: 'AI_DRAFT_TERMINAL',
         });
       }
-      const resolvedThreadId =
-        message?.thread_id ?? threadId ?? resolvedSignalThreadId ?? null;
-      if (resolvedThreadId && draft.thread_id !== resolvedThreadId) {
+      // UNCONDITIONAL thread binding (e9, 2026-11-11). A draft always belongs to
+      // ONE thread (thread_id NOT NULL; generate-response creates one only when a
+      // thread resolves), so it may only answer THAT thread. The check used to be
+      // skipped whenever no thread resolved - a signal with no thread - which let a
+      // draft written for thread A be approved and marked sent for a reply
+      // elsewhere in the same tenant. Only SERVER-resolved threads count:
+      // body.thread_id is client-supplied, checked against the message on the
+      // message path but unverified on the signal path, so it cannot vouch.
+      const serverThreadId = message?.thread_id ?? resolvedSignalThreadId ?? null;
+      if (!serverThreadId || draft.thread_id !== serverThreadId) {
         return res.status(400).json({
           error: 'ai_draft thread mismatch',
           code: 'AI_DRAFT_THREAD_MISMATCH',
@@ -542,7 +553,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       //    Scope: gated on ai_generated only. A human typing a deliberate
       //    follow-up is a legitimate action on an answered thread; silently
       //    blocking that would be a behaviour regression, not a safety win.
-      const actionabilityThreadId = resolvedThreadId ?? draft.thread_id ?? null;
+      // After the unconditional binding above, this is the server-resolved thread,
+      // which equals the draft's (never null here; the guard below stays as defence).
+      const actionabilityThreadId = serverThreadId;
       if (!actionabilityThreadId) {
         return res.status(409).json({
           error: 'ai_draft has no resolvable thread; cannot verify the thread still awaits a reply',
@@ -587,7 +600,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         // Record the actual text being sent (may differ from generated_text
         // if the user edited the suggestion in the UI).
-        const { error: approveErr } = await supabase
+        const { data: approvedRows, error: approveErr } = await supabase
           .from('ai_message_drafts')
           .update({
             status: 'approved',
@@ -596,11 +609,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           })
           .eq('id', body.ai_draft_id)
           .eq('thread_id', draft.thread_id)
-          .eq('status', 'draft');
+          .eq('status', 'draft')
+          .select('id');
         if (approveErr) {
           return res.status(500).json({
             error: `ai_draft approve failed: ${approveErr.message}`,
             code: 'AI_DRAFT_APPROVE_FAILED',
+          });
+        }
+        // Zero rows: the draft left 'draft' since it was read (another send or a
+        // rejection). Refused BEFORE dispatch - nothing is sent on a stale read.
+        if (!Array.isArray(approvedRows) || approvedRows.length === 0) {
+          return res.status(409).json({
+            error: 'ai_draft changed since it was read; reload and try again',
+            code: 'AI_DRAFT_STATE_CHANGED',
           });
         }
       }
@@ -865,13 +887,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // AI safety: transition the approved draft to status='sent'. The DB
     // trigger ensures this only succeeds if the row is currently 'approved'
     // — so this is idempotent and safe even on retry.
-    if (body.ai_generated === true && body.ai_draft_id) {
-      const { error: draftSentErr } = await supabase
+    // Scoped to the draft's verified thread and to the 'approved' state the trigger
+    // requires. The reply was already dispatched, so a failure is recorded at
+    // ERROR rather than refused (the audit trail is then incomplete, not the send).
+    if (body.ai_generated === true && body.ai_draft_id && verifiedDraftThreadId) {
+      const { data: sentRows, error: draftSentErr } = await supabase
         .from('ai_message_drafts')
         .update({ status: 'sent' })
-        .eq('id', body.ai_draft_id);
-      if (draftSentErr) {
-        console.warn('[engagement/reply] ai_draft mark-sent failed:', draftSentErr.message);
+        .eq('id', body.ai_draft_id)
+        .eq('thread_id', verifiedDraftThreadId)
+        .eq('status', 'approved')
+        .select('id');
+      if (draftSentErr || !Array.isArray(sentRows) || sentRows.length === 0) {
+        console.error('[engagement/reply] reply dispatched but the ai_draft was NOT marked sent', {
+          ai_draft_id: body.ai_draft_id,
+          error: draftSentErr?.message ?? 'no approved draft on the verified thread',
+        });
       }
     }
 

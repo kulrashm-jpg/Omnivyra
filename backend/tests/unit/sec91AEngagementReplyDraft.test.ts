@@ -25,10 +25,20 @@ jest.mock('../../security/IdentityResolver', () => require('../helpers/sec91AHar
 const executeAction = jest.fn(async () => ({ ok: true, status: 'executed', platform_id: 'urn:li:comment:999', correlation_id: 'c', response: {} }));
 jest.mock('../../services/communityAiActionExecutor', () => ({ executeAction: (...a: unknown[]) => (executeAction as any)(...a) }));
 jest.mock('../../services/engagementCapabilityMap', () => ({ resolveEngagementCapability: () => ({ status: 'api_verified', mode: 'api' }) }));
+// Runs between the draft read and its approval / after dispatch: lets a test change
+// the draft's state mid-request, as a concurrent send or rejection would.
+let mockMidRequest: (() => void) | null = null;
 jest.mock('../../services/engagementThreadService', () => ({
   // Actionability is org-scoped in production; here: A's thread awaits a reply.
-  isThreadActionable: async (org: string, thread: string) => org === 'co-a-0000-0000-0000-00000000000a' && thread === 'thr-a',
+  isThreadActionable: async (org: string, thread: string) => { mockMidRequest?.(); return org === 'co-a-0000-0000-0000-00000000000a' && thread === 'thr-a'; },
   getThreadActionability: async () => new Map(),
+}));
+// Signal path: campaign 'camp-a' is A's, 'camp-b' is B's.
+jest.mock('../../services/campaignOwnershipService', () => ({
+  resolveCampaignOwnership: async (campaignId: string) => ({
+    status: 'OWNED',
+    companyId: campaignId === 'camp-a' ? 'co-a-0000-0000-0000-00000000000a' : 'co-b-0000-0000-0000-00000000000b',
+  }),
 }));
 jest.mock('../../services/responsePerformanceService', () => ({ recordReplyPerformance: async () => undefined }));
 jest.mock('../../services/engagementOpportunityResolutionService', () => ({ resolveOpportunityByReply: async () => undefined }));
@@ -55,6 +65,12 @@ beforeEach(() => {
     ],
     engagement_messages: [
       { id: MSG_A, thread_id: THREAD_A, organization_id: CO_A, platform_message_id: 'urn:li:comment:1', post_comment_id: null, platform: 'linkedin', message_type: 'comment', author_id: null, raw_payload: {} },
+    ],
+    campaign_activity_engagement_signals: [
+      // A's signal with NO thread (no source message): every thread source is absent.
+      { id: 'sig-a-nothread', campaign_id: 'camp-a', activity_id: 'act-1', platform: 'linkedin', conversation_url: 'https://example.test/c/1', source_id: null },
+      // A's signal whose source message is on THREAD_A.
+      { id: 'sig-a-thread', campaign_id: 'camp-a', activity_id: 'act-2', platform: 'linkedin', conversation_url: null, source_id: MSG_A },
     ],
     ai_message_drafts: [
       { id: DRAFT_A, thread_id: THREAD_A, platform: 'linkedin', status: 'draft', generated_text: 'a' },
@@ -88,6 +104,7 @@ beforeEach(() => {
   // 200 path and no assertion reads it, so append remains the honest model.
   upsertAppendsBlindly('engagement_messages', 'nothing — the 200 path touches this table and no assertion reads it');
   executeAction.mockClear();
+  mockMidRequest = null;
 });
 
 const send = (draftId: string, who: Parameters<typeof bearer>[0] | null = 'A') =>
@@ -139,6 +156,66 @@ describe('POST /api/engagement/reply — AI draft is bound to the authorized org
     expect(draft(DRAFT_A).status).toBe('sent');
     expect(executeAction).toHaveBeenCalledTimes(1);
     expect(draft(DRAFT_B_OPEN).status).toBe('draft');
+  });
+});
+
+const sendSignal = (signalId: string, draftId: string, extra: Record<string, unknown> = {}) =>
+  invoke(reply, {
+    method: 'POST',
+    headers: bearer('A'),
+    body: { organization_id: CO_A, signal_id: signalId, platform: 'linkedin', reply_text: 'Thanks!', ai_generated: true, ai_draft_id: draftId, ...extra },
+  });
+
+describe('e9 2026-11-11 - the draft is bound to its thread UNCONDITIONALLY, and its writes are checked', () => {
+  it('a CROSS-TENANT draft id with EVERY thread source absent (signal without a thread) -> 404, no write, no dispatch', async () => {
+    const r = await sendSignal('sig-a-nothread', DRAFT_B_OPEN);
+    expect(r.status).toBe(404);
+    expect(writeCalls(['ai_message_drafts'])).toEqual([]);
+    expect(draft(DRAFT_B_OPEN).status).toBe('draft');
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it("A's OWN draft for THREAD_A on a signal with no thread -> 400 thread mismatch (was: approved and sent), no write, no dispatch", async () => {
+    const r = await sendSignal('sig-a-nothread', DRAFT_A);
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ code: 'AI_DRAFT_THREAD_MISMATCH' });
+    expect(writeCalls(['ai_message_drafts'])).toEqual([]);
+    expect(draft(DRAFT_A).status).toBe('draft');
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it('a CLIENT-SUPPLIED thread_id cannot vouch for the draft on the signal path -> 400, no dispatch', async () => {
+    const r = await sendSignal('sig-a-nothread', DRAFT_A, { thread_id: THREAD_A });
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ code: 'AI_DRAFT_THREAD_MISMATCH' });
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it("NEGATIVE CONTROL: a signal whose source message is on the draft's thread -> 200, approved then sent, dispatched once", async () => {
+    const r = await sendSignal('sig-a-thread', DRAFT_A);
+    expect(r.status).toBe(200);
+    expect(draft(DRAFT_A).status).toBe('sent');
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("the draft left 'draft' between the read and the approval -> 409 AI_DRAFT_STATE_CHANGED, refused BEFORE dispatch", async () => {
+    mockMidRequest = () => { draft(DRAFT_A).status = 'rejected'; };
+    const r = await send(DRAFT_A);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'AI_DRAFT_STATE_CHANGED' });
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it('dispatched but the draft could not be marked sent -> 200 (the reply went out) and an ERROR names the draft', async () => {
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    executeAction.mockImplementationOnce(async () => {
+      draft(DRAFT_A).status = 'rejected'; // moved after approval, before mark-sent
+      return { ok: true, status: 'executed', platform_id: 'urn:li:comment:999', correlation_id: 'c', response: {} };
+    });
+    const r = await send(DRAFT_A);
+    expect(r.status).toBe(200);
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('NOT marked sent'), expect.objectContaining({ ai_draft_id: DRAFT_A }));
+    err.mockRestore();
   });
 });
 

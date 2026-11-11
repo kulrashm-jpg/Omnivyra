@@ -51,9 +51,13 @@ function builder(table: string) {
     update(patch: Row) {
       const upd: any = {
         eq(c: string, v: unknown) { filters.push([c, v]); return upd; },
+        // Like PostgREST: `.select()` after an update returns the rows it moved
+        // (matched on the filters BEFORE the patch applies).
+        select() { return upd; },
         then(res: (v: unknown) => unknown) {
-          for (const r of rows()) Object.assign(r, patch);
-          return Promise.resolve({ error: null }).then(res);
+          const hit = rows();
+          for (const r of hit) Object.assign(r, patch);
+          return Promise.resolve({ data: hit.map((r) => ({ ...r })), error: null }).then(res);
         },
       };
       return upd;
