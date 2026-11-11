@@ -374,26 +374,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // Ensure company exists in companies table (company_api_configs FK requires it)
+    // Ensure company exists in companies table (company_api_configs FK requires it).
+    // 2026-11-11: this used to UPSERT ON CONFLICT (id) whenever the read failed
+    // OR found nothing - so a transient read error on an EXISTING company
+    // overwrote its name and website and set status='active' (re-activating a
+    // suspended company). Now: a read error fails closed with NO write, and the
+    // ensure-row is INSERT-ONLY (ON CONFLICT DO NOTHING) and never names
+    // status (a new row takes the column default). An existing row is never
+    // modified by this route.
     const { data: existingCompany, error: companyErr } = await supabase
       .from('companies')
       .select('id')
       .eq('id', companyId)
       .maybeSingle();
-    if (companyErr || !existingCompany) {
-      const { data: profile } = await supabase
+    if (companyErr) {
+      console.error('access POST company lookup failed', companyErr);
+      return res.status(500).json({ error: 'Company lookup failed' });
+    }
+    if (!existingCompany) {
+      const { data: profile, error: profileErr } = await supabase
         .from('company_profiles')
         .select('company_id, name')
         .eq('company_id', companyId)
         .maybeSingle();
+      if (profileErr) {
+        console.error('access POST company profile lookup failed', profileErr);
+        return res.status(500).json({ error: 'Company lookup failed' });
+      }
       const { error: insertErr } = await supabase.from('companies').upsert(
         {
           id: companyId,
           name: profile?.name || 'Company',
           website: `https://company-${companyId}.local`,
-          status: 'active',
         },
-        { onConflict: 'id' }
+        { onConflict: 'id', ignoreDuplicates: true }
       );
       if (insertErr) {
         console.error('access POST ensure company failed', insertErr);
