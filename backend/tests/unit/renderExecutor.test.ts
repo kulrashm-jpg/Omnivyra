@@ -333,6 +333,34 @@ describe('control RPCs and billing hold fail closed', () => {
     expect(keys['org-A'].claim).toMatch(/^org-A:[0-9a-f]{64}$/);
   });
 
+  it('NO DOUBLE CHARGE across the key-format change: a spec rendered + billed BEFORE it is found by the UNCHANGED (organization_id, deterministic_input_hash) job dedupe, before any claim or billing', async () => {
+    // The tenant-scoped formats changed ONLY the registry, billing and attempt keys. The reuse lookup is
+    // creator_render_job (UNIQUE (organization_id, deterministic_input_hash)), whose key did not change,
+    // and it runs BEFORE the claim and the billing hold. So a pre-deploy success (old-format registry and
+    // billing rows) is reused: nothing is claimed, held, billed or rendered again.
+    const m = mockDeps({
+      existingJob: { id: 'job-before-deploy' },
+      existingOutput: { id: 'out-before', storage_ref: 'https://cdn/before.png', content_sha256: 'h', attempt_id: 'a' },
+    });
+    const w = watched(); m.setProvider(w.p);
+    const filters: Record<string, unknown>[] = [];
+    const origFrom = (m.deps as any).supabase.from;
+    const rpcNames: string[] = [];
+    (m.deps as any).supabase = {
+      ...(m.deps as any).supabase,
+      from: (t: string) => { const q = origFrom(t); if (t === 'creator_render_job') filters.push(q._f); return q; },
+      rpc: async (name: string) => { rpcNames.push(name); return { data: {}, error: null }; },
+    };
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('reused');
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.organization_id).toBe(ARGS.organizationId);
+    expect(String(f.deterministic_input_hash)).toMatch(/^[0-9a-f]{64}$/);   // the BARE hash: the unchanged key
+    expect(rpcNames).not.toContain('claim_job_execution');
+    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    expect(w.calls.submit).toBe(0);
+  });
+
   it('attempt insert fails: the provider is NEVER called, the hold is released, retryable', async () => {
     const m = mockDeps(); const w = watched(); m.setProvider(w.p);
     const orig = (m.deps as any).ownedDbTable;
