@@ -89,12 +89,22 @@ describe('submit', () => {
     expect(fakeDb.tables.whatsapp_templates[0]).toMatchObject({ status: 'REJECTED', rejection_reason: expect.stringContaining('Social account unreadable') });
   });
 
-  it('Meta ACCEPTED but storing its id FAILS: logged with both ids, NOT marked rejected (stays pending)', async () => {
+  it('storing Meta’s id fails ONCE: retried, and the id is stored (no orphan)', async () => {
     seed([]);
     failNext('whatsapp_templates', 'update');
     const id = await submitTemplate(input);
+    expect(row(id)).toMatchObject({ status: 'PENDING', meta_template_id: 'meta-new' });
+    expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('ORPHANED'), expect.anything());
+  });
+
+  it('storing Meta’s id fails PERSISTENTLY: logged as ORPHANED with both ids, NOT marked rejected', async () => {
+    seed([]);
+    const { fakeDb: db } = require('../helpers/fakeWhatsappDb');
+    db.failures.set('whatsapp_templates:update', { skip: 0, times: 3 });
+    const id = await submitTemplate(input);
     expect(row(id)).toMatchObject({ status: 'PENDING' });
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('meta_template_id was NOT stored'),
+    expect(row(id).meta_template_id).toBeUndefined();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('ORPHANED'),
       expect.objectContaining({ template_id: id, meta_template_id: 'meta-new' }));
   });
 

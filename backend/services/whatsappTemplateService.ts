@@ -126,14 +126,21 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
 
     const { id: meta_template_id } = await res.json();
 
-    const { error: storeError } = await ownedDbTable('whatsapp_templates')
-      .update({ meta_template_id })
-      .eq('id', inserted.id);
+    // A one-column write: retried, so only a PERSISTENT failure orphans the template (05).
+    let storeError: { message: string } | null = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      ({ error: storeError } = await ownedDbTable('whatsapp_templates')
+        .update({ meta_template_id })
+        .eq('id', inserted.id));
+      if (!storeError) break;
+    }
     if (storeError) {
-      // Meta HOLDS this template now, so it must not be marked REJECTED, and it is not silent:
-      // without its meta_template_id the approval webhook cannot find it, so it stays PENDING
-      // (never sendable) until the id is stored. Logged with both ids for an operator.
-      console.error('[whatsappTemplate] Meta accepted the template but its meta_template_id was NOT stored; it stays PENDING until fixed', {
+      // Meta HOLDS this template now, so it must not be marked REJECTED (Meta names are unique per
+      // WABA: a local REJECTED row beside a live Meta template would also block recreating it).
+      // And this is PERMANENT, not transient: the status webhook matches rows on meta_template_id,
+      // so it can NEVER match this row - it stays PENDING (never sendable) and will not heal when
+      // Meta approves it. Manual reconciliation from this log line is the only recovery.
+      console.error('[whatsappTemplate] Meta accepted the template but its meta_template_id was NOT stored after 3 attempts: the row is ORPHANED (the status webhook can never match it); store this meta_template_id on the row manually', {
         template_id: inserted.id, meta_template_id, error: storeError.message,
       });
     }
