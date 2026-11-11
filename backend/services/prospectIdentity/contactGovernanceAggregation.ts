@@ -133,6 +133,24 @@ const moreRestrictive = (a: MayContactResult, b: MayContactResult): MayContactRe
   (compareSeverity(a, b) <= 0 ? a : b);
 
 /**
+ * THE PER-READ INDETERMINACY RULES, in one place (05, item 4). Returns the REASON a single read
+ * cannot be judged, or null when it can (an empty successful read is judgeable: it is neutral).
+ * evaluateGovernanceReads applies these and adds the WHOLE-RESULT rules (reads undefined; reads []
+ * with records produced), which stay there. Any other caller that needs the governance types in
+ * force rather than a verdict must apply THESE rules, not a copy, so a new case reaches every caller.
+ *   - the request failed                            -> indeterminate
+ *   - rows arrived without a database read instant  -> indeterminate (never judged against another
+ *                                                      request's instant or a host clock)
+ */
+export function indeterminacyReason(read: GovernanceRead): string | null {
+  if (!read.ok) return `${read.anchor}: ${read.error ?? 'read failed'}`;
+  if (read.records.length > 0 && read.readAt === null) {
+    return `${read.anchor}: ${read.records.length} governance record(s) arrived without a database read instant`;
+  }
+  return null;
+}
+
+/**
  * Evaluate each read at its own instant and combine the verdicts restrictively.
  *
  * `reads` is `GovernanceLoadResult.reads`. It is optional on that type so that
@@ -176,10 +194,10 @@ export function evaluateGovernanceReads(
   const indeterminate: string[] = [];
 
   for (const read of reads) {
-    if (!read.ok) {
-      const why = `${read.anchor}: ${read.error ?? 'read failed'}`;
+    const why = indeterminacyReason(read);
+    if (why !== null) {
       indeterminate.push(why);
-      evaluations.push({ anchor: read.anchor, readAt: null, recordCount: 0, verdict: null, indeterminate: why });
+      evaluations.push({ anchor: read.anchor, readAt: null, recordCount: read.ok ? read.records.length : 0, verdict: null, indeterminate: why });
       continue;
     }
 
@@ -188,16 +206,6 @@ export function evaluateGovernanceReads(
       // at all, so it cannot outvote a restriction from the other read. No
       // instant is required, and none is fabricated.
       evaluations.push({ anchor: read.anchor, readAt: read.readAt, recordCount: 0, verdict: null });
-      continue;
-    }
-
-    if (read.readAt === null) {
-      // Rows arrived, but without the one instant they can honestly be judged
-      // against. The only alternatives are another request's instant or a host
-      // clock, and both are the defect this change exists to remove.
-      const why = `${read.anchor}: ${read.records.length} governance record(s) arrived without a database read instant`;
-      indeterminate.push(why);
-      evaluations.push({ anchor: read.anchor, readAt: null, recordCount: read.records.length, verdict: null, indeterminate: why });
       continue;
     }
 
