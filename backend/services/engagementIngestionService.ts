@@ -706,7 +706,9 @@ export async function ingestComments(
   }
   if (isTokenExpiringSoon(token, 5)) {
     const proactive = await refreshWithinBudget(opts.refreshBudget, post.platform, post.social_account_id, token);
-    const refreshedToken = proactive.deferred ? null : proactive.token;
+    // `in`, not the discriminant: this repo compiles with strict:false, where
+    // narrowing on `deferred` does not reach the union's members (TS2339).
+    const refreshedToken = 'token' in proactive ? proactive.token : null;
     if (proactive.deferred) {
       // D2: the refresh is deferred to the next cycle; the fetch still runs with the
       // existing token (expiring soon is not expired). If the provider rejects it, the
@@ -747,7 +749,7 @@ export async function ingestComments(
           failure: 'refresh_deferred',
         };
       }
-      const refreshedToken = onAuth.token;
+      const refreshedToken = 'token' in onAuth ? onAuth.token : null;
       if (!refreshedToken?.access_token) {
         await markSocialAccountNeedsReauth(
           post.social_account_id,
