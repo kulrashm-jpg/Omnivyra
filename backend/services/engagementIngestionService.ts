@@ -617,9 +617,20 @@ export type IngestCommentsResult = {
 export type RefreshBudget = { remainingMs: number; reserveMs: number; deferred: number };
 export const DEFAULT_INGEST_REFRESH_BUDGET_MS = 120_000;
 
+/**
+ * INGEST_REFRESH_BUDGET_MS as a POSITIVE integer. 0, a negative or a non-numeric value
+ * falls back to the default and is logged (Orchestration review): a budget of 0 would
+ * defer every refresh in this timer forever, so one mistyped env var must not be able to
+ * stop token refresh for comment ingestion silently. Unset = the default, no log.
+ */
 export function ingestRefreshBudgetMs(env: Record<string, string | undefined> = process.env): number {
-  const n = Number.parseInt(String(env.INGEST_REFRESH_BUDGET_MS ?? ''), 10);
-  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_INGEST_REFRESH_BUDGET_MS;
+  const raw = env.INGEST_REFRESH_BUDGET_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_INGEST_REFRESH_BUDGET_MS;
+  const n = Number(raw.trim());
+  if (Number.isInteger(n) && n >= 1) return n;
+  console.warn('[engagementIngestion] INGEST_REFRESH_BUDGET_MS is not a positive integer; using the default',
+    { value: raw.slice(0, 32), default_ms: DEFAULT_INGEST_REFRESH_BUDGET_MS });
+  return DEFAULT_INGEST_REFRESH_BUDGET_MS;
 }
 
 export function createRefreshBudget(

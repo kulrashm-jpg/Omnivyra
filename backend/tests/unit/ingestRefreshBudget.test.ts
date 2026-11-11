@@ -54,6 +54,16 @@ it('the default budget is 120 s and INGEST_REFRESH_BUDGET_MS overrides it', () =
   expect(ingestRefreshBudgetMs({ INGEST_REFRESH_BUDGET_MS: 'nonsense' })).toBe(DEFAULT_INGEST_REFRESH_BUDGET_MS);
 });
 
+it.each(['0', '-5', '1.5', '12abc', 'nonsense'])(
+  'INGEST_REFRESH_BUDGET_MS=%s (not a positive integer) falls back to the default and is logged - it can never mean "defer every refresh"',
+  (value) => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(ingestRefreshBudgetMs({ INGEST_REFRESH_BUDGET_MS: value })).toBe(DEFAULT_INGEST_REFRESH_BUDGET_MS);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('INGEST_REFRESH_BUDGET_MS'), expect.objectContaining({ default_ms: 120_000 }));
+    warn.mockRestore();
+  },
+);
+
 it('N timing-out refreshes cannot push a cycle past its budget: the rest are deferred, not attempted', async () => {
   const budget = createRefreshBudget(100, 50);
   const results = [];
