@@ -18,6 +18,7 @@ import { preRenderModeration, postRenderModeration } from './moderation/renderMo
 import { computeDeterministicInputHash } from './contracts';
 import type { RenderProviderRegistry, RenderSpec } from './contracts';
 import { RENDER_TERMINAL_STATES } from './renderTerminalStates';
+import { renderAttemptExecutionHash } from './renderAttemptKeys';
 
 export function isCreatorRenderingEnabled(): boolean {
   const raw = String(process.env.ENABLE_CREATOR_RENDERING ?? '').trim().toLowerCase();
@@ -202,7 +203,7 @@ export async function executeRenderJob(
     // tenant rendering identical content would hit the first tenant's registry row and billing key.
     // Scoping both keys to the organization makes a registry entry or a key conflict mean "THIS
     // tenant, this spec" by construction (the creator_render_job dedupe is already per tenant).
-    let registryHash = `${args.organizationId}:${specHash}`;
+    let registryHash = renderAttemptExecutionHash(args.organizationId, specHash, 1);
     let billingKey = `render:${args.organizationId}:${spec.spec_id}`;
 
     /** Record the registry transition; checked (the client does not throw), never fatal. */
@@ -430,10 +431,11 @@ export async function executeRenderJob(
     // The attempt number is part of every key below, so a retry never meets the failed attempt's
     // registry row (whose 'released' is terminal) or its released billing key.
     const attemptNumber = retryOf ? retryOf.retryCount + 1 : 1;
-    if (attemptNumber > 1) {
-      registryHash = `${registryHash}:a${attemptNumber}`;
-      billingKey = `${billingKey}:a${attemptNumber}`;
-    }
+    // ONE implementation of the attempt key, shared with the async worker (05 finding 4): the two paths
+    // share attempt numbers through job_state.retry_count, so a drift between two copies would be a key
+    // miss (advance_job_execution finds no row) or a collision.
+    registryHash = renderAttemptExecutionHash(args.organizationId, specHash, attemptNumber);
+    if (attemptNumber > 1) billingKey = `${billingKey}:a${attemptNumber}`;
 
     /**
      * CONSUMED: a failure AFTER the registry claim. This attempt's keys are spent: the hold is released
