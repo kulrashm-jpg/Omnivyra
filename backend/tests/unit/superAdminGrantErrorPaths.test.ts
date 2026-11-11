@@ -169,4 +169,22 @@ describe('super-admin/free-credits/requests (approve)', () => {
     const res = await post(accessRequests, { action: 'reject', requestId: 'r1', reason: 'x' });
     expect(res.statusCode).toBe(409);
   });
+
+  it('ONE GRANT PER REQUEST: re-approving a request already credited (any key, e.g. another admin) grants nothing', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [{ id: 'r1' }], error: null });
+    mockScript['credit_transactions:select'] = () => ({ data: { id: 'tx-old' }, error: null });
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(200);
+    expect(mockGrants).toEqual([]);
+  });
+
+  it('prior-grant read error -> 500 CREDIT_GRANT_FAILED, nothing granted (never "not granted yet")', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [{ id: 'r1' }], error: null });
+    mockScript['credit_transactions:select'] = DOWN;
+    const res = await post(accessRequests, APPROVE);
+    expect(res.statusCode).toBe(500);
+    expect(mockGrants).toEqual([]);
+  });
 });

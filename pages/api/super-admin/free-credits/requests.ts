@@ -73,7 +73,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // per request.
       // STATE CAS (05, 2026-11-12): approve only a request that is still
       // 'pending' - or already 'approved' (a retry after CREDIT_GRANT_FAILED,
-      // re-attempting the idempotent grant). Never a rejected / deleted one:
+      // re-attempting the idempotent grant). DEPENDS ON the grant's idempotency
+      // key being per REQUEST (makeIdempotencyKey(..., requestId) below): if it
+      // ever became per-attempt, re-approve would grant TWICE through this CAS.
+      // Never a rejected / deleted one:
       // approving those used to GRANT CREDITS on a decision already reversed.
       // Exactly one row must move; 0 rows = the state changed -> 409.
       const { data: approvedRows, error: approveErr } = await sb.from('access_requests').update({
@@ -110,7 +113,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       if (creditsToGrant > 0 && request.organization_id) {
         const actor = adminId;
-        try {
+        // ONE GRANT PER REQUEST (2026-11-12, found via 05's dependency review):
+        // the key used to be makeIdempotencyKey(ADMIN, ..., requestId) - per
+        // admin AND request - so a second admin re-approving (now a supported
+        // retry path through the CAS above, and with no CAS at all before)
+        // granted the credits AGAIN. Two guards:
+        //  1. the ledger already holds a grant for this request (under ANY key,
+        //     including the old admin-based one) -> do not grant again; a read
+        //     error refuses (never "not granted yet" on an unread answer);
+        //  2. new grants use a per-REQUEST key (no actor), so concurrent
+        //     re-approvals by different admins collapse into one.
+        const { data: priorGrant, error: priorGrantErr } = await sb
+          .from('credit_transactions')
+          .select('id')
+          .eq('reference_type', 'domain_access_approval')
+          .eq('reference_id', requestId)
+          .limit(1)
+          .maybeSingle();
+        if (priorGrantErr) {
+          console.error('[free-credits/requests] prior-grant read failed - not granted:', requestId, priorGrantErr.message);
+          return res.status(500).json({ error: 'credits not granted', code: 'CREDIT_GRANT_FAILED', approved: true, retryable: true });
+        }
+        if (!priorGrant) try {
           await createCredit({
             orgId:          request.organization_id,
             amount:         creditsToGrant,
@@ -119,7 +143,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             referenceId:    requestId,
             note:           `Domain access approved — ${creditsToGrant} credits`,
             performedBy:    actor,
-            idempotencyKey: makeIdempotencyKey(actor, 'domain_access_approval', requestId),
+            // MUST stay per REQUEST (no actor): the approve CAS above allows
+            // re-approving an 'approved' request (retry after
+            // CREDIT_GRANT_FAILED) and relies on this key - plus the prior-grant
+            // check above for grants made under the old admin-based key - to
+            // make that retry a no-op instead of a second grant.
+            idempotencyKey: makeIdempotencyKey(request.organization_id, 'domain_access_approval', requestId),
           });
         } catch (creditErr: any) {
           // Never answer success for credits that were not granted. The approval
