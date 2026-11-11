@@ -25,17 +25,18 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *     effective_from?: ISO timestamp
  *   }
  *
- * Auth: super-admin via requireAuthenticatedInternalUser + RBAC check.
+ * Auth (2026-11-11, image credits): requireCapability(BILLING_PLAN_MANAGE) on a
+ * platform SUPER_ADMIN principal WITH step-up - every price in the platform
+ * (model, vendor unit and action multiplier) is set here, so it is a money
+ * write. Previously a bare super-admin role check with no step-up.
  * Rejects unknown action_keys (enforcement layer for D2: "reject unknown
  * action at config time, don't fail runtime requests").
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
-import {
-  requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
-} from '../../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { refreshPricingCache, getActionPricing } from '../../../../backend/services/pricingService';
@@ -47,7 +48,7 @@ type ModelUpdateBody = {
   target: 'model';
   provider:          string;
   model_name:        string;
-  kind?:             'completion' | 'embedding';
+  kind?:             'completion' | 'embedding' | 'unit';
   input_per_1k_usd:  number;
   output_per_1k_usd: number;
   effective_from?:   string;
@@ -75,14 +76,20 @@ async function handleModelUpdate(body: ModelUpdateBody, actorId: string, res: Ne
     return res.status(400).json({ error: 'provider + model_name required' });
   }
   const kind = body.kind ?? 'completion';
-  if (kind !== 'completion' && kind !== 'embedding') {
-    return res.status(400).json({ error: "kind must be 'completion' or 'embedding'" });
+  // 'unit' (mode B, 2026-11-10): a data vendor's per-unit cost (e.g. provider
+  // 'apollo', model_name 'credit'), stored as USD per 1,000 units.
+  if (kind !== 'completion' && kind !== 'embedding' && kind !== 'unit') {
+    return res.status(400).json({ error: "kind must be 'completion', 'embedding' or 'unit'" });
   }
   if (!isNonNegativeNumber(body.input_per_1k_usd) || !isNonNegativeNumber(body.output_per_1k_usd)) {
     return res.status(400).json({ error: 'input_per_1k_usd and output_per_1k_usd must be non-negative numbers' });
   }
-  if (kind === 'embedding' && body.output_per_1k_usd !== 0) {
-    return res.status(400).json({ error: 'embedding rows must have output_per_1k_usd = 0' });
+  if ((kind === 'embedding' || kind === 'unit') && body.output_per_1k_usd !== 0) {
+    return res.status(400).json({ error: `${kind} rows must have output_per_1k_usd = 0` });
+  }
+  if (kind === 'unit' && !(body.input_per_1k_usd > 0)) {
+    // A zero vendor cost would price central access as free.
+    return res.status(400).json({ error: 'a vendor unit cost must be greater than zero' });
   }
 
   const provider   = body.provider.toLowerCase().trim();
@@ -237,11 +244,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:pricing', 20, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
-  }
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_PLAN_MANAGE,
+    reason: 'set platform pricing (model / vendor unit / action multiplier)',
+    requireStepUp: true,
+    requirePlatformAuthority: true,
+  });
+  if (guard.ok !== true) return;
+  const user = { id: guard.principal.userId };
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
   const target = (body as UpdateBody).target;

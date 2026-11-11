@@ -478,7 +478,6 @@ const NON_CAPABILITY_WRITE_ROUTES: Record<string, string> = {
   'admin/intelligence/query-templates': 'role: requireSuperAdmin',
   'admin/org/[id]/control': 'role: isPlatformSuperAdmin',
   'admin/pricing/apply': 'role: isPlatformSuperAdmin',
-  'admin/pricing/update': 'role: isPlatformSuperAdmin',
   'admin/rate-limit-config': 'role: requireSuperAdminUser',
   'admin/website-intelligence/alerts': 'role: enforceRole COMPANY_ADMIN|SUPER_ADMIN (tenant-scoped)',
   'admin/website-intelligence/queue-metrics': 'role: enforceRole COMPANY_ADMIN|SUPER_ADMIN (tenant-scoped)',

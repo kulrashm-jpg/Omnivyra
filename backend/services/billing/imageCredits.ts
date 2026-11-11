@@ -109,6 +109,27 @@ export function imageUnitFor(model: string, size: string, quality: string): stri
   return `${String(model).trim()}:${String(size).trim()}:${String(quality || 'auto').trim()}`.toLowerCase();
 }
 
+/**
+ * The image SKUs the owner must price in Super Admin before images can be
+ * generated (owner ruling 2026-11-11: no seeded prices; fail closed until set).
+ * Derived from what the code SENDS:
+ *  - creator flow (creatorAssetRendererMedia): AI_IMAGE_SIZE 1024x1024;
+ *    generate + showcase edit at 'low'; a main-subject reference edit raises
+ *    'low' to 'medium' (referenceEditParams); model gpt-image-1.5, falling back
+ *    to gpt-image-1 when 1.5 is unavailable.
+ *  - render pipeline (Orchestration): gpt-image-1.5 at 'medium' in the three
+ *    supported sizes.
+ * Keep in step with those call sites; the Super Admin page lists these.
+ */
+export const REQUIRED_IMAGE_SKUS: ReadonlyArray<{ provider: string; model: string; size: string; quality: string; usedBy: string }> = Object.freeze([
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'low',    usedBy: 'creator: generate, style-reference edit' },
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium', usedBy: 'creator: main-subject edit; render' },
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1024x1536', quality: 'medium', usedBy: 'render (portrait)' },
+  { provider: 'openai', model: 'gpt-image-1.5', size: '1536x1024', quality: 'medium', usedBy: 'render (landscape)' },
+  { provider: 'openai', model: 'gpt-image-1',   size: '1024x1024', quality: 'low',    usedBy: 'creator fallback model' },
+  { provider: 'openai', model: 'gpt-image-1',   size: '1024x1024', quality: 'medium', usedBy: 'creator fallback model' },
+]);
+
 export function clampCredits(credits: number, bounds: { min: number; max: number }): number {
   return Math.min(bounds.max, Math.max(bounds.min, Math.ceil(credits)));
 }
@@ -164,7 +185,14 @@ export function makeImageCredits(deps: ImageCreditsDeps) {
         if (err instanceof StepTimeout) throw err;
         if (deps.isPricingMissing(err)) {
           logger.warn('image_credits_not_priced', { provider: input.provider, unit: imageUnitFor(input.model, input.size, input.quality) });
-          return { ok: false, reason: 'not_priced', detail: err instanceof Error ? err.message : String(err) };
+          return {
+            ok: false,
+            reason: 'not_priced',
+            detail: `not priced: ${input.provider.toLowerCase()} '${imageUnitFor(input.model, input.size, input.quality)}' - `
+              + 'a Super Admin must set it under Pricing > Provider unit costs (image SKUs: '
+              + REQUIRED_IMAGE_SKUS.map((k) => imageUnitFor(k.model, k.size, k.quality)).join(', ') + ')'
+              + ` [cause: ${err instanceof Error ? err.message : String(err)}]`,
+          };
         }
         throw err;
       }
