@@ -379,27 +379,58 @@ export const UNIFORM_NOT_FOUND = Object.freeze({ error: 'Not found', code: 'NOT_
  * Callers answer a missing or company-unresolvable resource with UNIFORM_NOT_FOUND themselves, so
  * all three cases are byte-identical.
  */
+/** The access check used a response method the capturing probe does not implement (05, 2026-11-12). */
+export class AccessProbeUnsupportedError extends Error {
+  constructor(readonly member: string) {
+    super(`enforceCompanyAccessUniform: the access check touched res.${member}, which its capturing probe does not implement. Add it to the probe (and replay it) before relying on it.`);
+    this.name = 'AccessProbeUnsupportedError';
+  }
+}
+
+/**
+ * The capturing response the access check writes to. Its correctness is an UNSTATED CONTRACT with
+ * enforceCompanyAccess (and what it calls), so the contract is stated HERE: the check may only use
+ * status / json / send / setHeader / getHeader / end. Anything else throws AccessProbeUnsupportedError
+ * (a NAMED failure), never "x is not a function" in an authorization path. Headers are recorded and
+ * replayed on the pass-through path, so a future Retry-After on a 503 is not silently lost.
+ * Exported for the contract test.
+ */
+export function createAccessProbe() {
+  const captured: { status: number | null; body: unknown; headers: Record<string, unknown> } = { status: null, body: undefined, headers: {} };
+  const impl: Record<string, unknown> = {
+    status(code: number) { captured.status = code; return proxy; },
+    json(body: unknown) { captured.body = body; return proxy; },
+    send(body: unknown) { captured.body = body; return proxy; },
+    setHeader(name: string, value: unknown) { captured.headers[String(name).toLowerCase()] = value; return proxy; },
+    getHeader(name: string) { return captured.headers[String(name).toLowerCase()]; },
+    end() { return proxy; },
+  };
+  const proxy: NextApiResponse = new Proxy(impl, {
+    get(target, prop) {
+      if (typeof prop === 'symbol' || prop === 'then') return undefined; // not a thenable; inspection-safe
+      if (prop in target) return target[prop as string];
+      throw new AccessProbeUnsupportedError(prop);
+    },
+  }) as unknown as NextApiResponse;
+  return { res: proxy, captured };
+}
+
 export const enforceCompanyAccessUniform = async (input: {
   req: NextApiRequest;
   res: NextApiResponse;
   companyId: string;
   campaignId?: string | null;
 }): Promise<UserContext | null> => {
-  const captured: { status: number | null; body: unknown } = { status: null, body: undefined };
-  const probe: any = {
-    status(code: number) { captured.status = code; return probe; },
-    json(body: unknown) { captured.body = body; return probe; },
-    send(body: unknown) { captured.body = body; return probe; },
-    setHeader() { return probe; },
-    end() { return probe; },
-  };
-  const access = await enforceCompanyAccess({ req: input.req, res: probe as NextApiResponse, companyId: input.companyId, campaignId: input.campaignId ?? null });
+  const probe = createAccessProbe();
+  const access = await enforceCompanyAccess({ req: input.req, res: probe.res, companyId: input.companyId, campaignId: input.campaignId ?? null });
   if (access) return access;
-  const status = captured.status ?? 403;
+  const status = probe.captured.status ?? 403;
   if (status === 403 || status === 404) {
     input.res.status(404).json(UNIFORM_NOT_FOUND);
     return null;
   }
-  input.res.status(status).json(captured.body ?? { error: 'Access check failed' });
+  // Pass-through (401 / 503 / 400): replay what the check said, headers included.
+  for (const [name, value] of Object.entries(probe.captured.headers)) input.res.setHeader(name, value as string);
+  input.res.status(status).json(probe.captured.body ?? { error: 'Access check failed' });
   return null;
 };
