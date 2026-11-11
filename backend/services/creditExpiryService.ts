@@ -153,6 +153,25 @@ async function expireOrgFreeCredits(
 
   if (existing) return 0; // already processed this expiry window
 
+  // ── Runtime guard 1b: at most ONE free expiry per ORG (2026-11-12, e1/05) ──
+  // free_credit_profiles is UNIQUE per USER (several profiles per org are
+  // allowed) and each carries initial_credits + its own expiry date, while the
+  // onboarding grant is ONE per org. Keyed per profile date, an org with N
+  // profiles had the initial amount expired up to N times - capped only by the
+  // free balance, so it drained free credits from other sources. Until expiry
+  // is rebuilt on lot accounting (grant / consumed / expired per lot), refuse
+  // any further free expiry for an org that already has one. This respects
+  // every row written under the existing key (no key-format change).
+  const { data: priorFreeExpiry, error: priorErr } = await ownedDbTable('credit_transactions')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('execution_phase', 'expire')
+    .eq('reference_type', 'expiry')
+    .limit(1)
+    .maybeSingle();
+  if (priorErr) throw new Error(`[creditExpiry] prior-expiry read failed for ${orgId}: ${priorErr.message}`);
+  if (priorFreeExpiry) return 0; // this org's single free grant has already been expired
+
   // ── Runtime guard 2: snapshot paid_balance BEFORE expiry ─────────────────
   const before = await getWalletSnapshot(orgId);
   if (!before) return 0;

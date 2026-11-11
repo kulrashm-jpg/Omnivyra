@@ -24,7 +24,7 @@ function mockBuilder(table: string) {
     mockCalls[k] = (mockCalls[k] ?? 0) + 1;
     return (mockScript[k] ?? (() => ({ data: null, error: null })))(mockCalls[k]);
   };
-  for (const m of ['select', 'eq', 'lt', 'gt', 'not']) b[m] = () => b;
+  for (const m of ['select', 'eq', 'lt', 'gt', 'not', 'limit']) b[m] = () => b;
   b.insert = () => { op = 'insert'; return b; };
   b.maybeSingle = async () => result();
   b.then = (ok: (v: Res) => unknown, ko: (e: unknown) => unknown) => Promise.resolve(result()).then(ok, ko);
@@ -101,4 +101,30 @@ it('incentive expiry ENABLED by config -> REFUSED in code (FIFO accounting missi
   expect(r.incentive_expired).toBe(0);
   expect(r.errors).toBe(1);
   expect(errSpy.mock.calls.some((c) => String(c[1] ?? '').includes('INCENTIVE_EXPIRY_REFUSED'))).toBe(true);
+});
+
+it('ONE free expiry per org: two user profiles in the same org expire the single onboarding grant only once', async () => {
+  mockScript['free_credit_profiles:select'] = () => ({ data: [
+    { user_id: 'u1', organization_id: 'o1', initial_credits: 300, credit_expiry_at: '2026-10-01T00:00:00Z' },
+    { user_id: 'u2', organization_id: 'o1', initial_credits: 300, credit_expiry_at: '2026-10-20T00:00:00Z' },
+  ], error: null });
+  // idempotency reads (per profile date) find nothing; the prior-org-expiry read finds the
+  // first expiry once it has happened (2nd profile's check).
+  let priorChecks = 0;
+  mockScript['credit_transactions:select'] = () => {
+    priorChecks += 1;
+    // order per profile: [idempotency, prior-expiry]; 4th call = 2nd profile's prior check
+    return priorChecks === 4 ? { data: { id: 'exp-1' }, error: null } : { data: null, error: null };
+  };
+  const r = await runExpiryCheck();
+  expect(mockRpc).toEqual(['expire']);
+  expect(r).toMatchObject({ expired: 1, errors: 0 });
+});
+
+it('prior-expiry read error -> per-org error, nothing expired', async () => {
+  let n = 0;
+  mockScript['credit_transactions:select'] = () => { n += 1; return n === 2 ? { data: null, error: { message: 'down' } } : { data: null, error: null }; };
+  const r = await runExpiryCheck();
+  expect(r.errors).toBe(1);
+  expect(mockRpc).toEqual([]);
 });
