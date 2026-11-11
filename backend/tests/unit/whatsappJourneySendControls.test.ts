@@ -207,8 +207,9 @@ describe('journey broadcasts: an inbound message, per recipient, before the clai
   it.each(['social_accounts', 'engagement_threads', 'engagement_messages'])('%s unreadable: fails closed', async (table) => {
     seed();
     inboundAt('2026-11-02T09:00:00.000Z');
-    // processBatch reads social_accounts for the phone number id first; the reply check is the second read.
-    failNext(table, 'select', table === 'social_accounts' ? 1 : 0);
+    // processBatch reads social_accounts for the phone number id first, then for the shared-number
+    // check (a number held by another live account is refused); the reply check is the third read.
+    failNext(table, 'select', table === 'social_accounts' ? 2 : 0);
     await processBatch('b1', ['r1']);
     expect(fetchCalls).toHaveLength(0);
     expect(r().status).toBe(BLOCKED_SEND_CONTROL);
@@ -235,16 +236,47 @@ describe('journey broadcasts: an inbound message, per recipient, before the clai
   });
 });
 
-describe('operator broadcasts behave as they did', () => {
-  it.each([undefined, 'Spring sale', 'wf', 'WF:task', 'x wf:task'])('name %p: none of these are read, and it sends', async (name) => {
+// OWNER RULING (2026-11-11, "stop everything", via e9): the two KILL SWITCHES now stop operator
+// broadcasts too - paused, recipients left pending, nothing sent. The journey-only controls
+// (WS-3 enablement, the channel list, inbound replies) still do NOT apply to them.
+describe('operator broadcasts: the kill switches stop them; journey-only controls do not apply', () => {
+  const OPERATOR_NAMES = [undefined, 'Spring sale', 'wf', 'WF:task', 'x wf:task'];
+
+  it.each(OPERATOR_NAMES)('name %p, TENANT kill switch on: nothing sent, recipient pending, broadcast paused', async (name) => {
     seed({ broadcast: { name: name ?? null } });
     config().kill_switch = true;
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(r().status).toBe('pending');
+    expect(fakeDb.tables.whatsapp_broadcasts[0].status).toBe('paused');
+  });
+
+  it.each(OPERATOR_NAMES)('name %p, GLOBAL kill switch on: nothing sent, recipient pending, broadcast paused', async (name) => {
+    seed({ broadcast: { name: name ?? null } });
     process.env.LEAD_OUTREACH_EXECUTION_DISABLED = 'true';
-    inboundAt('2026-11-02T10:05:00.000Z');
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(r().status).toBe('pending');
+    expect(fakeDb.tables.whatsapp_broadcasts[0].status).toBe('paused');
+  });
+
+  it.each(OPERATOR_NAMES)('name %p, journey-only controls set (no WS-3 row, inbound reply): still sends; no engagement read', async (name) => {
+    seed({ broadcast: { name: name ?? null } });
+    fakeDb.tables.outreach_governance_config = [];               // tenant_not_enabled for a journey
+    inboundAt('2026-11-02T10:05:00.000Z');                        // a reply that would hold a journey
     await processBatch('b1', ['r1']);
     expect(fetchCalls).toHaveLength(1);
     expect(r().status).toBe('sent');
-    expect(fakeDb.calls.filter((c) => /outreach_governance_config|engagement_/.test(c))).toEqual([]);
+    expect(fakeDb.calls.filter((c) => /engagement_/.test(c))).toEqual([]);
+  });
+
+  it('an UNREADABLE tenant kill switch counts as ON (fail closed) for an operator broadcast', async () => {
+    seed({ broadcast: { name: 'Spring sale' } });
+    failNext('outreach_governance_config', 'select');
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(r().status).toBe('pending');
+    expect(fakeDb.tables.whatsapp_broadcasts[0].status).toBe('paused');
   });
 });
 

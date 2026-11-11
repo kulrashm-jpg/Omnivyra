@@ -35,7 +35,7 @@ import {
   loadTenantGovernanceRecords,
   normalizeGovernanceTarget,
 } from './prospectIdentity/contactGovernanceRepository';
-import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig } from './leadOutreachExecution/governanceService';
+import { isLeadOutreachGloballyDisabled, loadTenantGovernanceConfig, OUTREACH_GOVERNANCE_CONFIG_TABLE } from './leadOutreachExecution/governanceService';
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
@@ -262,12 +262,93 @@ export async function loadOwnedSenderAccount(
  * HTTP mapping for routes, matching `pages/api/social/comments.ts`: an unknown
  * and a foreign account both get 404, a failed lookup 503. Null for any other error.
  */
-export function senderAccountRefusalResponse(err: unknown): { status: 404 | 409 | 503; error: string } | null {
+export function senderAccountRefusalResponse(err: unknown): { status: 404 | 409 | 503; error: string; code?: string } | null {
+  if (err instanceof WhatsAppSendStoppedError) return { status: 409, error: err.message, code: `${err.code}:${err.reason}` };
+  if (err instanceof WhatsAppSharedNumberError) return { status: 409, error: err.message, code: err.code };
   if (!(err instanceof WhatsAppSenderAccountError)) return null;
   if (err.reason === 'disconnected') return { status: 409, error: err.message };
   return err.reason === 'unreadable'
     ? { status: 503, error: 'Social account lookup failed. Please try again.' }
     : { status: 404, error: 'Social account not found' };
+}
+
+// ── Emergency stop + shared number (owner ruling via e9, 2026-11-11) ──────────
+
+/** Which kill switch stopped WhatsApp sending; `unreadable` = the tenant switch could not be read. */
+export type WhatsAppSendStop = 'global_kill_switch' | 'tenant_kill_switch' | 'kill_switch_unreadable';
+
+const SEND_STOP_MESSAGES: Record<WhatsAppSendStop, string> = {
+  global_kill_switch:     'WhatsApp sending is stopped: the GLOBAL outreach kill switch is on.',
+  tenant_kill_switch:     'WhatsApp sending is stopped: this company\'s outreach kill switch is on.',
+  kill_switch_unreadable: 'WhatsApp sending is stopped: this company\'s kill switch could not be read, so it is treated as on.',
+};
+
+/** Sending refused by a kill switch. Recipients are left `pending`, so Resume works once it clears. */
+export class WhatsAppSendStoppedError extends Error {
+  readonly code = 'WHATSAPP_SENDING_STOPPED';
+  constructor(readonly reason: WhatsAppSendStop) {
+    super(SEND_STOP_MESSAGES[reason]);
+    this.name = 'WhatsAppSendStoppedError';
+  }
+}
+
+/** The sender's phone number is held by more than one live account (mirrors the inbound refusal). */
+export class WhatsAppSharedNumberError extends Error {
+  readonly code = 'WHATSAPP_NUMBER_SHARED';
+  constructor(readonly otherAccounts: number) {
+    super('This WhatsApp number is connected to more than one account; resolve before sending.');
+    this.name = 'WhatsAppSharedNumberError';
+  }
+}
+
+/**
+ * OWNER RULING ("stop everything"): when the GLOBAL or the TENANT WS-3 kill switch is on, no
+ * WhatsApp message goes out - journeys AND operator broadcasts (create, enqueue/Resume, Retry,
+ * and batches already queued). ONLY the two kill switches: tenant_not_enabled /
+ * channel_not_enabled are WS-3 ENABLEMENT, not an emergency stop, and are NOT applied to
+ * operator broadcasts (they would block every tenant without lead-outreach config).
+ *
+ * The global switch is the env LEAD_OUTREACH_EXECUTION_DISABLED (no read; checked per send).
+ * The tenant switch is read here directly rather than through loadTenantGovernanceConfig,
+ * which maps a FAILED read to "unconfigured, switch off": for a stop switch an unreadable
+ * state must count as ON (fail closed), while NO config row is genuinely "off".
+ */
+export async function whatsappKillSwitchStop(companyId: string): Promise<WhatsAppSendStop | null> {
+  if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+  try {
+    const { data, error } = await ownedDbTable(OUTREACH_GOVERNANCE_CONFIG_TABLE)
+      .select('kill_switch')
+      .eq('company_id', companyId)
+      .maybeSingle();
+    if (error) return 'kill_switch_unreadable';
+    return data?.kill_switch === true ? 'tenant_kill_switch' : null;
+  } catch {
+    return 'kill_switch_unreadable';
+  }
+}
+
+/**
+ * Another LIVE WhatsApp account (any tenant) holding this account's phone_number_id makes the
+ * per-account daily budget per-account rather than per-number, so the number's real tier
+ * limit can be exceeded - the inbound processor already refuses such a number
+ * (whatsappWebhookProcessor: "phone_number_id held by more than one tenant"). Disconnected
+ * accounts do not count: they can no longer send. FAIL CLOSED: an unreadable lookup refuses.
+ * A null phone_number_id is not checked here; processBatch refuses it before any send.
+ */
+async function assertNumberNotShared(account: { id: string; phone_number_id: string | null }): Promise<void> {
+  if (!account.phone_number_id) return;
+  let res: { data?: any; error?: unknown };
+  try {
+    res = await ownedDbTable('social_accounts')
+      .select('id, is_active')
+      .eq('platform', 'whatsapp')
+      .eq('phone_number_id', account.phone_number_id);
+  } catch {
+    throw new WhatsAppSenderAccountError('unreadable');
+  }
+  if (res.error) throw new WhatsAppSenderAccountError('unreadable');
+  const others = (Array.isArray(res.data) ? res.data : []).filter((r: any) => r.id !== account.id && r.is_active !== false);
+  if (others.length > 0) throw new WhatsAppSharedNumberError(others.length);
 }
 
 /**
@@ -293,10 +374,43 @@ async function assertOwnedSenderAccount(companyId: unknown, socialAccountId: unk
   return check.account;
 }
 
+/**
+ * The ONE check every WhatsApp send path runs (create, enqueue/Resume, Retry, processBatch):
+ * owned and connected, its number not shared, and no kill switch on. Order: the kill switch
+ * first (cheapest, and the answer an operator most needs), then the account.
+ */
+async function assertSenderMaySend(companyId: unknown, socialAccountId: unknown) {
+  if (typeof companyId === 'string' && companyId) {
+    const stop = await whatsappKillSwitchStop(companyId);
+    if (stop) throw new WhatsAppSendStoppedError(stop);
+  }
+  const account = await assertOwnedSenderAccount(companyId, socialAccountId);
+  await assertNumberNotShared(account);
+  return account;
+}
+
+/**
+ * processBatch's answer to a kill switch. An OPERATOR broadcast is paused - the state the UI
+ * shows with Resume - with every remaining recipient left `pending`, and the job ends without
+ * throwing (no retry storm). A JOURNEY broadcast keeps Orchestration's B-17 contract: the error
+ * is thrown, the job retries, and the batch-start send-control check records the refusal
+ * (blocked_send_control) as it always has.
+ */
+async function pauseForStop(broadcastId: string, isJourney: boolean, stop: WhatsAppSendStoppedError, remaining: number): Promise<void> {
+  if (isJourney) throw stop;
+  console.error('[whatsappBroadcast] sending stopped by a kill switch; broadcast paused, remaining recipients left pending', {
+    broadcast_id: broadcastId, switch: stop.reason, remaining,
+  });
+  const { error } = await ownedDbTable('whatsapp_broadcasts')
+    .update({ status: 'paused', updated_at: new Date().toISOString() })
+    .eq('id', broadcastId);
+  if (error) console.error('[whatsappBroadcast] could not mark the broadcast paused', { broadcast_id: broadcastId, error: error.message });
+}
+
 // ── Create broadcast ──────────────────────────────────────────────────────────
 
 export async function createBroadcast(input: CreateBroadcastInput): Promise<string> {
-  await assertOwnedSenderAccount(input.company_id, input.social_account_id);
+  await assertSenderMaySend(input.company_id, input.social_account_id);
 
   const { data, error } = await ownedDbTable('whatsapp_broadcasts')
     .insert({
@@ -511,7 +625,7 @@ export function enqueueOutcomeResponse(
   // A draft naming another company's account (created before the ownership
   // check) is refused like an unknown account.
   const refused = senderAccountRefusalResponse(err);
-  if (refused) return { status: refused.status, body: { enqueued: false, error: refused.error } };
+  if (refused) return { status: refused.status, body: { enqueued: false, error: refused.error, ...(refused.code ? { code: refused.code } : {}) } };
   return { status: 400, body: { enqueued: false, error: err instanceof Error ? err.message : String(err) } };
 }
 
@@ -544,7 +658,7 @@ export function retryOutcomeResponse(
     return { status: 500, body: { retried: false, uncertain: true, code: err.code, error: err.message } };
   }
   const refused = senderAccountRefusalResponse(err);
-  if (refused) return { status: refused.status, body: { retried: false, error: refused.error } };
+  if (refused) return { status: refused.status, body: { retried: false, error: refused.error, ...(refused.code ? { code: refused.code } : {}) } };
   return { status: 400, body: { retried: false, error: err instanceof Error ? err.message : String(err) } };
 }
 
@@ -568,7 +682,7 @@ export async function enqueueBroadcast(
 
   // A draft created before the ownership check existed may name another
   // company's account; refuse before its rate limit or queue is touched.
-  await assertOwnedSenderAccount(broadcast.company_id, broadcast.social_account_id);
+  await assertSenderMaySend(broadcast.company_id, broadcast.social_account_id);
 
   // Improvement 5 + Refinement 7: validate template before touching queue
   if (broadcast.message_type === 'template') {
@@ -939,7 +1053,15 @@ export async function processBatch(
   // queued (or a draft created) before the route checked ownership, and the
   // retry path reaches this function without the route. On refusal nothing is
   // sent, recipients stay `pending`, and the job fails visibly.
-  const account = await assertOwnedSenderAccount(broadcast.company_id, broadcast.social_account_id);
+  let account: Awaited<ReturnType<typeof assertSenderMaySend>>;
+  try {
+    account = await assertSenderMaySend(broadcast.company_id, broadcast.social_account_id);
+  } catch (err) {
+    // A kill switch is not a failure of this job: pause, leave every recipient `pending`,
+    // and return (no retry storm). Resume works once the switch clears.
+    if (err instanceof WhatsAppSendStoppedError) { await pauseForStop(broadcastId, isJourney, err, recipientIds.length); return; }
+    throw err;
+  }
 
   if (!account.phone_number_id) throw new Error('phone_number_id not set on social account');
 
@@ -994,9 +1116,21 @@ export async function processBatch(
 
   for (let i = 0; i < recipients.length; i += 1) {
     const recipient = recipients[i];
+    // OWNER RULING: the GLOBAL kill switch is checked before EVERY send (an env read).
+    if (isLeadOutreachGloballyDisabled()) {
+      await pauseForStop(broadcastId, isJourney, new WhatsAppSendStoppedError('global_kill_switch'), recipients.length - i);
+      break;
+    }
     // A2b — re-read governance for the REMAINING recipients when due.
     if (decidedSinceRead >= rereadEvery || Date.now() - readStartedAt >= rereadMs) {
       readStartedAt = Date.now();
+      // The TENANT kill switch is re-read on the same cadence (every rereadMs / rereadEvery,
+      // the bound an unsubscribe has): a switch flipped mid-run stops the rest of this batch.
+      const stop = await whatsappKillSwitchStop(broadcast.company_id);
+      if (stop) {
+        await pauseForStop(broadcastId, isJourney, new WhatsAppSendStoppedError(stop), recipients.length - i);
+        break;
+      }
       // Same hard-coded ['whatsapp'] as the first read above (never a channel from data).
       const fresh = await loadTenantGovernanceRecords(broadcast.company_id, ['whatsapp']);
       if (!fresh.ok) {
@@ -1269,7 +1403,7 @@ export async function retryFailed(broadcastId: string): Promise<RetryResult> {
     .eq('id', broadcastId)
     .single();
   if (error || !broadcast) throw new Error(`Broadcast not found: ${broadcastId}`);
-  await assertOwnedSenderAccount(broadcast.company_id, broadcast.social_account_id);
+  await assertSenderMaySend(broadcast.company_id, broadcast.social_account_id);
   return withBroadcastLease(broadcastId, () => retryRun(broadcastId),
     'Another enqueue or retry of this broadcast is in progress.');
 }
