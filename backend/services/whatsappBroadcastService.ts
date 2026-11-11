@@ -23,6 +23,8 @@ import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimite
 import { getValidAccessToken } from '../auth/metaAuthService';
 import { requireEncryptionKey } from '../auth/credentialEncryption';
 import { withLease } from '../../lib/platform/distributedLock';
+import { resolveRolloutChecked } from '../../lib/platform/rolloutAdmin';
+import { WHATSAPP_SENDING_FLAG } from './whatsappSendingFlag';
 
 // W0-C — the canonical contact-governance evaluator, applied through
 // `evaluateGovernanceReads` (A2): each read's rows are judged at that read's own
@@ -275,10 +277,14 @@ export function senderAccountRefusalResponse(err: unknown): { status: 404 | 409 
 // ── Emergency stop + shared number (owner ruling via e9, 2026-11-11) ──────────
 
 /** Which kill switch stopped WhatsApp sending; `unreadable` = the tenant switch could not be read. */
-export type WhatsAppSendStop = 'global_kill_switch' | 'tenant_kill_switch' | 'kill_switch_unreadable';
+export type WhatsAppSendStop =
+  | 'global_kill_switch' | 'super_admin_stop' | 'stop_switch_unreadable'
+  | 'tenant_kill_switch' | 'kill_switch_unreadable';
 
 const SEND_STOP_MESSAGES: Record<WhatsAppSendStop, string> = {
   global_kill_switch:     'WhatsApp sending is stopped: the GLOBAL outreach kill switch is on.',
+  super_admin_stop:       'WhatsApp sending is stopped: the Super Admin "stop all WhatsApp" switch is on.',
+  stop_switch_unreadable: 'WhatsApp sending is paused: the Super Admin stop switch could not be read, so it is treated as on.',
   tenant_kill_switch:     'WhatsApp sending is stopped: this company\'s outreach kill switch is on.',
   kill_switch_unreadable: 'WhatsApp sending is stopped: this company\'s kill switch could not be read, so it is treated as on.',
 };
@@ -303,6 +309,41 @@ export class WhatsAppSharedNumberError extends Error {
   }
 }
 
+/** At most one UNREADABLE-stop alert per window per process (the check runs per send). */
+const STOP_UNREADABLE_ALERT_WINDOW_MS = 60_000;
+let lastStopUnreadableAlertAt = 0;
+/** Test seam: forget the alert window. */
+export function __resetStopAlertWindow(): void { lastStopUnreadableAlertAt = 0; }
+
+/**
+ * The GLOBAL stops, either of which stops ALL WhatsApp sending (owner rulings 2026-11-11):
+ *   1. env LEAD_OUTREACH_EXECUTION_DISABLED (needs a redeploy to flip);
+ *   2. the instant Super Admin switch, rollout flag `whatsapp-sending` (no redeploy). It FAILS
+ *      SAFE: if the admin config cannot be read (Redis/admin config unreadable), sending PAUSES
+ *      (same pending/pause semantics as the tenant switch) and an alert is logged at ERROR with
+ *      a stable marker - the log-alerting path D2b's "provider FAILING" uses.
+ * Read through the kit's 30 s cache, so it is cheap per send; a kill reaches other processes
+ * within that TTL (the writing process re-reads at once). No admin layer at all (Redis not
+ * configured - local dev, tests) means no instant switch exists here: env only.
+ */
+export async function whatsappGlobalStop(): Promise<WhatsAppSendStop | null> {
+  if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+  const { decision, adminReadable } = await resolveRolloutChecked(WHATSAPP_SENDING_FLAG);
+  if (adminReadable === false) {
+    if (Date.now() - lastStopUnreadableAlertAt >= STOP_UNREADABLE_ALERT_WINDOW_MS) {
+      lastStopUnreadableAlertAt = Date.now();
+      console.error('[whatsappBroadcast] WhatsApp stop switch UNREADABLE - all WhatsApp sending PAUSED (fail safe)', {
+        flag: WHATSAPP_SENDING_FLAG.key,
+        action: 'restore Redis / the rollout admin config; sending resumes on the next successful read',
+      });
+    }
+    return 'stop_switch_unreadable';
+  }
+  // Only THIS flag's own stop counts; the kit-wide rollout kill (source 'global-kill') does not.
+  if (decision.mode === 'off' && decision.source !== 'global-kill') return 'super_admin_stop';
+  return null;
+}
+
 /**
  * OWNER RULING ("stop everything"): when the GLOBAL or the TENANT WS-3 kill switch is on, no
  * WhatsApp message goes out - journeys AND operator broadcasts (create, enqueue/Resume, Retry,
@@ -316,7 +357,8 @@ export class WhatsAppSharedNumberError extends Error {
  * state must count as ON (fail closed), while NO config row is genuinely "off".
  */
 export async function whatsappKillSwitchStop(companyId: string): Promise<WhatsAppSendStop | null> {
-  if (isLeadOutreachGloballyDisabled()) return 'global_kill_switch';
+  const global = await whatsappGlobalStop();
+  if (global) return global;
   try {
     const { data, error } = await ownedDbTable(OUTREACH_GOVERNANCE_CONFIG_TABLE)
       .select('kill_switch')
@@ -1132,9 +1174,11 @@ export async function processBatch(
 
   for (let i = 0; i < recipients.length; i += 1) {
     const recipient = recipients[i];
-    // OWNER RULING: the GLOBAL kill switch is checked before EVERY send (an env read).
-    if (isLeadOutreachGloballyDisabled()) {
-      await pauseForStop(broadcastId, isJourney, new WhatsAppSendStoppedError('global_kill_switch'), recipients.length - i);
+    // OWNER RULINGS: the GLOBAL stops (env + the instant Super Admin switch, fail safe) are
+    // checked before EVERY send; the flag is read through the kit's 30 s cache.
+    const globalStop = await whatsappGlobalStop();
+    if (globalStop) {
+      await pauseForStop(broadcastId, isJourney, new WhatsAppSendStoppedError(globalStop), recipients.length - i);
       break;
     }
     // A2b — re-read governance for the REMAINING recipients when due.

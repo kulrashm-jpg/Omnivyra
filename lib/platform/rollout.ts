@@ -114,7 +114,17 @@ export interface RolloutAdminConfig {
   flags: Record<string, RolloutFlagOverride>;
 }
 
-interface CacheEntry { data: RolloutAdminConfig | null; ts: number }
+interface CacheEntry {
+  data: RolloutAdminConfig | null;
+  ts: number;
+  /**
+   * Whether the admin-config READ worked: true = read (key present or absent), false = the
+   * read failed / timed out / did not parse, null = no admin layer (Redis not configured, or
+   * tests). Absent on entries written before this field existed: treated as null. Callers that
+   * must fail SAFE on an unreadable override (a stop switch) read it via resolveRolloutChecked.
+   */
+  readable?: boolean | null;
+}
 /** Admin-config cache TTL. Shared with the server-only rolloutAdmin loader. */
 export const ROLLOUT_ADMIN_CACHE_TTL_MS = 30_000;
 let adminCache: CacheEntry | null = null;

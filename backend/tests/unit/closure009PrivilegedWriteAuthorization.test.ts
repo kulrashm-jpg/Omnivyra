@@ -185,6 +185,9 @@ jest.mock('../../../lib/platform/rolloutAdmin', () => ({
   setRolloutOverride: via('setRolloutOverride'), resolveRollout: async () => ({ mode: 'off', source: 'override' }),
 }));
 jest.mock('../../services/context/canonicalProfileAdapter', () => ({}));
+// Like the line above: the route's side-effect flag registration (whatsapp-sending), stubbed
+// because this suite replaces the rollout kit with a getRolloutFlag-only double.
+jest.mock('../../services/whatsappSendingFlag', () => ({}));
 jest.mock('../../services/customerActivationWorkbenchService', () => ({ loadCustomerActivationInputs: async () => [{ company_id: 'co-tracked' }] }));
 jest.mock('../../services/customerActivationOperationsService', () => ({
   buildOperations: () => [], isOutreachState: (s: unknown) => s === 'CONTACTED',

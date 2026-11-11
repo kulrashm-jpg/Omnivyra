@@ -35,32 +35,53 @@ import {
 } from './rollout';
 
 async function loadAdminConfig(): Promise<RolloutAdminConfig | null> {
+  return (await loadAdminConfigStatus()).data;
+}
+
+const READ_TIMED_OUT = Symbol('rollout-admin-read-timeout');
+
+/**
+ * The admin config AND whether reading it worked. Behaviour for loadAdminConfig is unchanged
+ * (any failure -> null -> env-only resolution); the extra `readable` lets a caller that must
+ * fail SAFE tell "no override" from "could not read the override" (WhatsApp stop switch).
+ */
+async function loadAdminConfigStatus(): Promise<{ data: RolloutAdminConfig | null; readable: boolean | null }> {
   const cached = __getRolloutAdminCache();
-  if (cached && Date.now() - cached.ts < ROLLOUT_ADMIN_CACHE_TTL_MS) return cached.data;
+  if (cached && Date.now() - cached.ts < ROLLOUT_ADMIN_CACHE_TTL_MS) {
+    return { data: cached.data, readable: cached.readable ?? null };
+  }
   let data: RolloutAdminConfig | null = null;
+  let readable: boolean | null = null;
   try {
     // Redis is optional infrastructure for this kit: absent/unreachable Redis
     // (tests, local dev without Redis) degrades to env-only resolution.
     // F-06: access goes through the canonical Redis layer.
     const { redisConfigured, getStandaloneRedis } = await import('../redis/canonicalClient');
     if (process.env.NODE_ENV !== 'test' && redisConfigured()) {
+      readable = false; // the layer IS configured: unreadable until the read completes
       const client = await getStandaloneRedis('rate_limit');
-      const raw = await Promise.race<string | null>([
+      const raw = await Promise.race<string | null | typeof READ_TIMED_OUT>([
         client.get(ROLLOUT_CONFIG_KEY),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_500)),
+        new Promise<typeof READ_TIMED_OUT>((resolve) => setTimeout(() => resolve(READ_TIMED_OUT), 1_500)),
       ]);
-      if (raw) {
-        const parsed = JSON.parse(raw);
+      if (raw === null) {
+        readable = true; // read, and no override stored
+      } else if (raw !== READ_TIMED_OUT) {
+        const parsed = JSON.parse(raw); // a parse error lands in catch: readable stays false
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.flags) {
           data = parsed as RolloutAdminConfig;
+          readable = true;
         }
+        // else: a stored value of the wrong shape is NOT "no override" - readable stays false.
       }
     }
   } catch {
     data = null; // fail-safe: env-only resolution
+    // `readable` is false when the Redis layer is configured (client or read failed), and stays
+    // null only when the failure came before that (the canonical client module unavailable).
   }
-  __setRolloutAdminCache({ data, ts: Date.now() });
-  return data;
+  __setRolloutAdminCache({ data, ts: Date.now(), readable });
+  return { data, readable };
 }
 
 /** Resolve the effective mode (env + cached admin override + tenant targeting). */
@@ -73,6 +94,24 @@ export async function resolveRollout(
     return resolveFromSources(flag, admin?.flags?.[flag.key], opts.tenantId);
   } catch {
     return { mode: 'off', source: 'fail-safe' };
+  }
+}
+
+/**
+ * resolveRollout plus whether the admin override could be READ. `adminReadable`: true = read,
+ * false = the read failed (the decision then reflects env only), null = no admin layer here.
+ * For a flag whose override is a STOP (kill = stop), the caller must treat false as "stopped":
+ * resolveRollout alone cannot tell "no override" from "could not read one".
+ */
+export async function resolveRolloutChecked(
+  flag: RolloutFlag,
+  opts: { tenantId?: string } = {},
+): Promise<{ decision: RolloutDecision; adminReadable: boolean | null }> {
+  try {
+    const { data, readable } = await loadAdminConfigStatus();
+    return { decision: resolveFromSources(flag, data?.flags?.[flag.key], opts.tenantId), adminReadable: readable };
+  } catch {
+    return { decision: { mode: 'off', source: 'fail-safe' }, adminReadable: false };
   }
 }
 

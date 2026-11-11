@@ -37,6 +37,8 @@ import { setRolloutOverride, resolveRollout } from '../../../lib/platform/rollou
 // Side-effect import: registers the `canonical-grounding` flag so it is a valid
 // write target (same registration the read surface relies on).
 import '../../../backend/services/context/canonicalProfileAdapter';
+// Registers `whatsapp-sending`, the instant "stop all WhatsApp" switch (kill = stop).
+import '../../../backend/services/whatsappSendingFlag';
 
 const ALLOWED_MODES: RolloutMode[] = ['off', 'shadow', 'enforce'];
 const ALLOWED_ACTIONS = ['set-mode', 'kill', 'unkill', 'set-tenants', 'clear'] as const;
