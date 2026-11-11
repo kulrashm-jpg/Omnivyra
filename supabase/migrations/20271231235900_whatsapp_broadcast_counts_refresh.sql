@@ -20,7 +20,10 @@
 --   uncertain = send_uncertain                   (outcome unknown)
 --   total     = every recipient row
 -- INVARIANT (05): total = sent + failed + open + uncertain - those FOUR partition the
--- recipients. delivered_count (delivered + read) and read_count (read) are SUBSETS of
+-- recipients. PRECONDITION: it holds for rows with counts_refreshed_at IS NOT NULL. The
+-- counts were never computed before this migration, so a pre-existing row reads
+-- total_recipients = N with every count 0 until its first refresh; counts_refreshed_at
+-- NULL means "never computed", NOT "zero". delivered_count (delivered + read) and read_count (read) are SUBSETS of
 -- sent_count, reported separately for the delivery funnel; they are NOT addends, so the
 -- five columns do not sum to the total. On a completed broadcast open = 0, so
 -- uncertain_count is exactly the number of sends whose outcome nobody knows.
@@ -60,11 +63,11 @@ ALTER TABLE public.whatsapp_broadcasts
   ADD COLUMN IF NOT EXISTS uncertain_count integer NOT NULL DEFAULT 0;
 
 COMMENT ON COLUMN public.whatsapp_broadcasts.counts_refreshed_at IS
-  'When whatsapp_refresh_broadcast_counts last recomputed the counts from the recipient rows.';
+  'When whatsapp_refresh_broadcast_counts last recomputed the counts from the recipient rows. NULL = the counts have never been computed (they read 0, which is not a measurement).';
 COMMENT ON COLUMN public.whatsapp_broadcasts.counts_dirty IS
   'A debounced refresh was deferred; readers and the next batch end refresh it.';
 COMMENT ON COLUMN public.whatsapp_broadcasts.open_count IS
-  'Recipients still pending or sending. total = sent + failed + open + uncertain.';
+  'Recipients still pending or sending. total = sent + failed + open + uncertain once counts_refreshed_at IS NOT NULL (NULL = never computed, not zero).';
 COMMENT ON COLUMN public.whatsapp_broadcasts.uncertain_count IS
   'Recipients whose send outcome is unknown (send_uncertain). On a completed broadcast, the sends nobody can confirm.';
 
