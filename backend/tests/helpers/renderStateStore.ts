@@ -95,57 +95,84 @@ export function makeStore() {
 }
 export type RenderStore = ReturnType<typeof makeStore>;
 
+
 /**
- * A store-backed fake of e1's image-credits helper (backend/services/billing/imageCredits), with its
- * agreed semantics. It OWNS one billing_operations row per idempotency key:
- *  - reserve: same key while held -> the same row; a refused key leaves nothing held; a settled or
- *    released key -> key_spent. `prices` maps `${model}:${size}:${quality}` to credits; an unpriced
- *    SKU -> not_priced, the production default until pricing exists.
- *  - settle / release: move exactly the one held row (by id); release is idempotent and never
- *    un-confirms.
- * Faults: `faults['billing_operations.insert']` -> reserve 'unavailable';
- * `faults['billing_operations.update']` -> settle / release 'unavailable'.
+ * e1's REAL image-credits helper (makeImageCredits) running over this store (05, 2026-11-12: a fake of
+ * another track's contract must not be kinder than the real thing). Only its I/O is replaced:
+ *  - billing_operations rows live in the store; closeOp is a compare-and-set on `fromStatuses` and
+ *    reports the rows it moved, exactly like closeBillingOperation;
+ *  - the credit ledger is a fake whose ANSWERS are injectable: `reserveAnswer`, `confirmAnswer`,
+ *    `releaseAnswer` (e.g. 'released', 'insufficient_credits', or an unknown status), so the helper's
+ *    own state machine meets every case it was written for, including the ones it once got wrong;
+ *  - pricing: `prices` maps the lower-cased unit `${model}:${size}:${quality}` to credits; a missing
+ *    unit is "pricing missing" -> not_priced, the production default until a Super Admin sets prices.
+ * Faults: `faults['billing_operations.insert']` makes the ledger reserve throw (-> 'unavailable');
+ * `faults['billing_operations.update']` makes closeOp error (-> 'unavailable').
  */
-export function storeImageCredits(s: RenderStore, opts: { prices?: Record<string, number>; refuse?: string } = {}) {
+class TestPricingMissing extends Error {}
+export function storeImageCredits(s: RenderStore, opts: {
+  prices?: Record<string, number>;
+  /** Shorthand for a reserve refusal: insufficient_credits | org_blocked | not_priced | key_spent. */
+  refuse?: string;
+  reserveAnswer?: string; confirmAnswer?: string; releaseAnswer?: string;
+} = {}) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { makeImageCredits } = require('../../services/billing/imageCredits');
   const prices = opts.prices ?? { 'gpt-image-1.5:1024x1024:medium': 5, 'gpt-image-1.5:1024x1536:medium': 5, 'gpt-image-1.5:1536x1024:medium': 5 };
+  const refuseAnswer: Record<string, string> = {
+    insufficient_credits: 'insufficient_credits', org_blocked: 'org_control_blocked', key_spent: 'already_confirmed',
+  };
+  const reserveAnswer = opts.reserveAnswer ?? (opts.refuse ? refuseAnswer[opts.refuse] : undefined) ?? 'reserved';
+  const ops = () => s.rows('billing_operations');
+  const snake: Record<string, string> = {
+    amountCharged: 'amount_charged', reservationTxnId: 'reservation_txn_id', confirmTxnId: 'confirm_txn_id',
+    releaseTxnId: 'release_txn_id', failureReason: 'failure_reason',
+  };
+  const helper = makeImageCredits({
+    timeoutMs: 2000,
+    resolveFeatureActionKey: (a: string) => a,
+    bounds: () => ({ min: 2, max: 12 }),
+    price: async ({ unit }: { unit: string }) => {
+      if (opts.refuse === 'not_priced' || prices[unit] === undefined) throw new TestPricingMissing(`no price for ${unit}`);
+      return { credits: prices[unit]!, snapshot: { unit } };
+    },
+    isPricingMissing: (e: unknown) => e instanceof TestPricingMissing,
+    findOpByKey: async (key: string) => ops().find((r) => r.idempotency_key === key) ?? null,
+    findOpById: async (id: string) => ops().find((r) => r.id === id) ?? null,
+    openOp: async (a: any) => {
+      const existing = ops().find((r) => r.idempotency_key === a.idempotencyKey);
+      if (existing) return existing.id;
+      const row = {
+        id: `ic-${ops().length + 1}`, organization_id: a.organizationId, idempotency_key: a.idempotencyKey,
+        status: 'initiated', amount_estimated: a.amountEstimated, metadata: a.metadata,
+      };
+      ops().push(row);
+      return row.id;
+    },
+    closeOp: async (id: string, patch: Record<string, unknown>, from: ReadonlyArray<string>) => {
+      if (s.faults['billing_operations.update']) return { updated: null, error: 'fault' };
+      const row = ops().find((r) => r.id === id && from.includes(r.status));
+      if (!row) return { updated: 0, error: null };
+      for (const [k, v] of Object.entries(patch)) if (v !== undefined) row[snake[k] ?? k] = v;
+      return { updated: 1, error: null };
+    },
+    reserve: async (o: any) => {
+      if (s.faults['billing_operations.insert']) throw new Error('ledger down');
+      if (reserveAnswer !== 'reserved') return { status: reserveAnswer };
+      return {
+        status: 'reserved', orgId: o.orgId, userId: o.userId, action: o.action, referenceType: o.referenceType,
+        referenceId: o.referenceId, idempotencyKey: o.idempotencyKey, holdTransactionId: `hold-${o.idempotencyKey}`,
+        creditsReserved: o.amountOverride, split: { free: 0, incentive: 0, paid: o.amountOverride },
+      };
+    },
+    confirm: async (h: any) => ({ status: opts.confirmAnswer ?? 'confirmed', creditsCharged: h.creditsReserved, confirmTransactionId: `confirm-${h.idempotencyKey}` }),
+    release: async (h: any) => ({ status: opts.releaseAnswer ?? 'released', releaseTransactionId: `release-${h.idempotencyKey}` }),
+  });
   const calls = { reserve: [] as any[], settle: [] as any[], release: [] as any[] };
   const port = {
-    reserve: async (input: any) => {
-      calls.reserve.push(input);
-      if (opts.refuse) return { ok: false, reason: opts.refuse };
-      if (s.faults['billing_operations.insert']) return { ok: false, reason: 'unavailable', detail: 'fault' };
-      const unit = `${input.model}:${input.size}:${input.quality}`;
-      const price = prices[unit];
-      const existing = s.rows('billing_operations').find((r) => r.idempotency_key === input.idempotencyKey);
-      if (existing && existing.status === 'held') return { ok: true, billingOperationId: existing.id, creditsReserved: existing.amount_estimated };
-      if (existing && (existing.status === 'confirmed' || existing.status === 'released')) return { ok: false, reason: 'key_spent' };
-      if (price === undefined) return { ok: false, reason: 'not_priced' };
-      const row = {
-        // Unique per STORE (a port is often created per call, so a per-port counter would repeat ids).
-        id: `ic-${s.rows('billing_operations').length + 1}`, idempotency_key: input.idempotencyKey, organization_id: input.organizationId,
-        status: 'held', amount_estimated: price, metadata: { helper: 'image_credits_v1', unit, ...(input.metadata ?? {}) },
-      };
-      s.rows('billing_operations').push(row);
-      return { ok: true, billingOperationId: row.id, creditsReserved: price };
-    },
-    settle: async ({ billingOperationId }: any) => {
-      calls.settle.push(billingOperationId);
-      if (s.faults['billing_operations.update']) return { ok: false, reason: 'unavailable', detail: 'fault' };
-      const row = s.rows('billing_operations').find((r) => r.id === billingOperationId);
-      if (!row || row.status !== 'held') return { ok: false, reason: 'not_held' };
-      row.status = 'confirmed'; row.amount_charged = row.amount_estimated;
-      return { ok: true, creditsCharged: row.amount_charged };
-    },
-    release: async ({ billingOperationId }: any) => {
-      calls.release.push(billingOperationId);
-      if (s.faults['billing_operations.update']) return { ok: false, reason: 'unavailable', detail: 'fault' };
-      const row = s.rows('billing_operations').find((r) => r.id === billingOperationId);
-      if (!row) return { ok: false, reason: 'not_held' };
-      if (row.status === 'released') return { ok: true };
-      if (row.status !== 'held') return { ok: false, reason: 'not_held' };
-      row.status = 'released';
-      return { ok: true };
-    },
+    reserve: (i: any) => { calls.reserve.push(i); return helper.reserveImageCredits(i); },
+    settle: (i: any) => { calls.settle.push(i.billingOperationId); return helper.settleImageCredits(i); },
+    release: (i: any) => { calls.release.push(i.billingOperationId); return helper.releaseImageCredits(i); },
   };
   return { port, calls };
 }

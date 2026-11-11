@@ -377,7 +377,9 @@ describe('async credit refusals (R3-credits)', () => {
     expect(r).toMatchObject({ ok: false, status: 'failed', reason: why });
     expect(queue(s, jobId).queue_state).toBe('failed');
     expect(state(s, jobId)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 0 });
-    expect(s.rows('billing_operations')).toHaveLength(0);
+    // Nothing held or charged. e1's REAL helper closes a refused row as insufficient / error (a reusable
+    // status), so a later reserve with the SAME key re-opens THAT row.
+    expect(s.rows('billing_operations').filter((r) => r.status === 'held' || r.status === 'confirmed')).toHaveLength(0);
     expect(s.rows('creator_render_attempt')).toHaveLength(0);
   });
 
@@ -419,5 +421,48 @@ describe('async credit refusals (R3-credits)', () => {
     expect(ic.calls.reserve[0]).toMatchObject({ organizationId: 'org-a', idempotencyKey: `render:${jobId}:a1`, provider: 'openai', model: 'gpt-image-1.5', size: '1024x1024', quality: 'medium' });
     expect(ic.calls.reserve[0]).not.toHaveProperty('amount');
     expect(ic.calls.settle).toHaveLength(1);
+  });
+});
+
+describe('the REAL image-credits helper over the store (05, 2026-11-12): no kinder than production', () => {
+  it('a refused key is REUSED after the cause is fixed: the SAME row is re-opened and held, then charged once', async () => {
+    const s = makeStore(); const { p, calls } = provider();
+    const jobId = enqueue(s, 'org-a');
+    const refused = await processQueuedRenderJob({ ...deps(s, p), imageCredits: storeImageCredits(s, { refuse: 'insufficient_credits' }).port }, 'w1');
+    expect(refused.reason).toBe('insufficient_credits');
+    const rowId = s.rows('billing_operations')[0]!.id;
+    expect(s.rows('billing_operations')[0]!.status).toBe('insufficient');
+    // A top-up later; the job is retried (e.g. by the manual retry action) under the SAME attempt and key.
+    queue(s, jobId).queue_state = 'retry_scheduled'; queue(s, jobId).next_retry_at = NOW;
+    const r = await processQueuedRenderJob(deps(s, p), 'w2');
+    expect(r.status).toBe('completed');
+    expect(calls.submit).toBe(1);
+    expect(s.rows('billing_operations')).toHaveLength(1);
+    expect(s.rows('billing_operations')[0]).toMatchObject({ id: rowId, idempotency_key: `render:${jobId}:a1`, status: 'confirmed', amount_charged: 5 });
+  });
+
+  it.each(['released', 'already_released', 'insufficient_credits', 'something_new'])('a delivered render whose ledger CONFIRM answers %s records NO charge: billing_confirm_failed, the row stays held for reconciliation', async (answer) => {
+    const s = makeStore(); const { p } = provider();
+    const jobId = enqueue(s, 'org-a');
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await processQueuedRenderJob({ ...deps(s, p), imageCredits: storeImageCredits(s, { confirmAnswer: answer }).port }, 'w1');
+    err.mockRestore();
+    expect(r.status).toBe('completed');
+    expect(r.events).toContain('billing_confirm_failed');
+    expect(r.events).not.toContain('billing_confirmed');
+    const row = s.rows('billing_operations').find((b) => b.idempotency_key === `render:${jobId}:a1`)!;
+    expect(row.status).toBe('held');
+    expect(row.amount_charged).toBeUndefined();
+  });
+
+  it('a release whose ledger answer is unexpected is reported (billing_release_failed), never claimed clean', async () => {
+    const s = makeStore();
+    const { p } = provider({ poll: async () => { throw new Error('provider timeout'); } });
+    enqueue(s, 'org-a');
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const r = await processQueuedRenderJob({ ...deps(s, p), imageCredits: storeImageCredits(s, { releaseAnswer: 'something_new' }).port }, 'w1');
+    err.mockRestore();
+    expect(r.events).toContain('billing_release_failed');
+    expect(s.rows('billing_operations')[0]!.status).toBe('held');
   });
 });
