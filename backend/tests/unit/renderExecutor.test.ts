@@ -63,7 +63,13 @@ function registryOf(p: RenderProvider | null): RenderProviderRegistry {
 }
 
 /** In-memory supabase + ownedDbTable. Records every write for asserts. */
-function mockDeps(opts: { existingJob?: any; existingOutput?: any; attachedOutputId?: string | null; otherOutputs?: any[]; jobState?: { current_state: string; retry_count: number } | null; jobStateError?: any; casRows?: any[]; existingVariant?: any } = {}) {
+function mockDeps(opts: {
+  existingJob?: any; existingOutput?: any; attachedOutputId?: string | null; otherOutputs?: any[];
+  jobState?: { current_state: string; retry_count: number } | null; jobStateError?: any; casRows?: any[]; existingVariant?: any;
+  /** creator_render_attempt rows that exist before this request (default: jobState.retry_count). */
+  priorProviderCalls?: number; countError?: boolean; noStateRow?: boolean; variantReadError?: any;
+  insertErrors?: Record<string, any>; upsertErrors?: Record<string, any>; updateErrors?: Record<string, any>;
+} = {}) {
   const tables: Record<string, any[]> = {};
   const writes: { table: string; op: string; row?: any }[] = [];
   let seq = 0;
@@ -75,13 +81,23 @@ function mockDeps(opts: { existingJob?: any; existingOutput?: any; attachedOutpu
     const q: any = { _t: table, _f: {} as any };
     q.select = () => q; q.order = () => q; q.limit = () => q;
     q.eq = (k: string, v: any) => { q._f[k] = v; return q; };
+    // A HEAD count (.select('id', { count: 'exact', head: true }).eq(...)) is awaited directly.
+    q.then = (resolve: (v: unknown) => unknown) => resolve(table === 'creator_render_attempt'
+      ? (opts.countError
+        ? { count: null, error: { code: 'XX000', message: 'count failed' } }
+        : { count: (opts.priorProviderCalls ?? opts.jobState?.retry_count ?? 0) + (tables.creator_render_attempt?.length ?? 0), error: null })
+      : { data: null, error: null });
     q.maybeSingle = async () => {
       if (table === 'creator_render_job') return { data: opts.existingJob ?? null };
       if (table === 'creator_render_job_state') {
         if (opts.jobStateError) return { data: null, error: opts.jobStateError };
+        if (opts.noStateRow) return { data: null, error: null };
         return { data: opts.existingJob && q._f.render_job_id === opts.existingJob.id ? { attached_output_id: attachedOutputId, ...(opts.jobState ?? {}) } : null, error: null };
       }
-      if (table === 'creator_render_variant') return { data: opts.existingVariant ?? null };
+      if (table === 'creator_render_variant') {
+        if (opts.variantReadError) return { data: null, error: opts.variantReadError };
+        return { data: opts.existingVariant ?? null, error: null };
+      }
       if (table === 'creator_render_output') {
         if (q._f.id !== undefined) return { data: outputs.find((o) => o.id === q._f.id) ?? null };
         return { data: outputs.length ? outputs[outputs.length - 1] : null };
@@ -94,10 +110,16 @@ function mockDeps(opts: { existingJob?: any; existingOutput?: any; attachedOutpu
     const q: any = { _t: table };
     q.insert = (row: any) => {
       const rec = Array.isArray(row) ? row[0] : row;
+      const err = opts.insertErrors?.[table];
+      if (err) {
+        // PostgREST: {data: null, error}, never a throw; nothing is stored.
+        writes.push({ table, op: 'insert_failed', row: rec });
+        return { select: () => ({ single: async () => ({ data: null, error: err }) }), then: (resolve: (v: unknown) => unknown) => resolve({ data: null, error: err }) };
+      }
       const withId = { id: `${table}-${++seq}`, ...rec };
       (tables[table] ||= []).push(withId);
       writes.push({ table, op: 'insert', row: withId });
-      return { select: () => ({ single: async () => ({ data: withId }) }) };
+      return { select: () => ({ single: async () => ({ data: withId }) }), then: (resolve: (v: unknown) => unknown) => resolve({ data: withId, error: null }) };
     };
     q.update = (patch: any) => {
       const filters: Record<string, any> = {};
@@ -106,14 +128,19 @@ function mockDeps(opts: { existingJob?: any; existingOutput?: any; attachedOutpu
         eq: (k: string, v: any) => { filters[k] = v; return chain; },
         // A conditional transition (.eq(...).eq('current_state', ...).select()) reports the rows it moved.
         select: async () => ({ data: opts.casRows ?? [{ render_job_id: filters.render_job_id }], error: null }),
-        then: (resolve: (v: unknown) => unknown) => resolve({ error: null }),
+        then: (resolve: (v: unknown) => unknown) => resolve({ error: opts.updateErrors?.[table] ?? null }),
       };
       return chain;
     };
     q.upsert = (row: any) => {
+      const err = opts.upsertErrors?.[table];
+      if (err) {
+        writes.push({ table, op: 'upsert_failed', row });
+        return { error: err, data: null, select: () => ({ single: async () => ({ data: null, error: err }) }) };
+      }
       (tables[table] ||= []).push(row);
       writes.push({ table, op: 'upsert', row });
-      return { select: () => ({ single: async () => ({ data: { id: `${table}-u` } }) }) };
+      return { error: null, select: () => ({ single: async () => ({ data: { id: `${table}-u` } }) }) };
     };
     return q;
   };
@@ -530,5 +557,184 @@ describe('control RPCs and billing hold fail closed', () => {
     expect(r.events).toEqual(expect.arrayContaining(['billing_confirmed', 'execution_registry_advance_failed', 'render_completed']));
     expect(err).toHaveBeenCalledWith('[creator-render] execution registry advance failed', expect.objectContaining({ status: 'completed' }));
     err.mockRestore();
+  });
+});
+
+describe('05 review of eebd5e261: no freeze after the provider, a provider-only budget, checked lineage writes', () => {
+  beforeEach(() => { process.env[FLAG] = '1'; });
+  let err: jest.SpyInstance;
+  beforeEach(() => { err = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
+  afterEach(() => { err.mockRestore(); });
+
+  const stateUpdates = (m: ReturnType<typeof mockDeps>) => m.writes.filter((x) => x.table === 'creator_render_job_state' && x.op === 'update').map((x) => x.row);
+  const lastState = (m: ReturnType<typeof mockDeps>) => stateUpdates(m).slice(-1)[0];
+  const watched = (over: Partial<RenderProvider> = {}) => {
+    const calls = { submit: 0 };
+    const base = mockProvider(over);
+    return { calls, p: { ...base, submit: async (...a: any[]) => { calls.submit += 1; return base.submit(...(a as [any, any])); } } as RenderProvider };
+  };
+  const recordRpc = (m: ReturnType<typeof mockDeps>) => {
+    const names: { name: string; args: any }[] = [];
+    (m.deps as any).supabase = { ...(m.deps as any).supabase, rpc: async (name: string, args: any) => { names.push({ name, args }); return { data: {}, error: null }; } };
+    return names;
+  };
+  const released = (m: ReturnType<typeof mockDeps>) => m.writes.some((x) => x.table === 'billing_operations' && x.op === 'update' && x.row.status === 'released');
+  const confirmed = (m: ReturnType<typeof mockDeps>) => m.writes.some((x) => x.table === 'billing_operations' && x.op === 'update' && x.row.status === 'confirmed');
+
+  // ── Finding A ──────────────────────────────────────────────────────────────────────────────────
+  it('A: an output insert ERROR after a successful provider call consumes the attempt (retry_scheduled), never leaves the job "rendering"', async () => {
+    const m = mockDeps({ insertErrors: { creator_render_output: { code: '23514', message: 'check' } } });
+    const w = watched(); m.setProvider(w.p);
+    const rpc = recordRpc(m);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(w.calls.submit).toBe(1);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'output_insert_failed', retryable: true });
+    expect(r.render_job_id).toBeTruthy();
+    expect(lastState(m)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 1 });
+    expect(released(m)).toBe(true);
+    expect(confirmed(m)).toBe(false);
+    expect(rpc.some((c) => c.name === 'advance_job_execution' && c.args.p_status === 'released')).toBe(true);
+  });
+
+  it('A: an output insert error on the 3rd PROVIDER call exhausts the job (terminal)', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 2 }, existingVariant: { id: 'var-1' }, priorProviderCalls: 2, insertErrors: { creator_render_output: { code: 'XX000', message: 'x' } } });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ reason: 'output_insert_failed:attempts_exhausted', retryable: false });
+    expect(lastState(m)).toMatchObject({ current_state: 'failed_provider_exhausted', retry_count: 3 });
+  });
+
+  it('A: an UNEXPECTED throw after the provider call goes through the attempt bookkeeping (job state written, render_job_id returned)', async () => {
+    const m = mockDeps();
+    m.setProvider(mockProvider({ fetchOutput: async () => ({ get storage_ref(): string { throw new Error('boom'); }, mime_type: 'image/png' } as any) }));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'unexpected_error', retryable: true });
+    expect(r.render_job_id).toBeTruthy();
+    expect(lastState(m)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 1 });
+    expect(released(m)).toBe(true);
+  });
+
+  // ── Finding B ──────────────────────────────────────────────────────────────────────────────────
+  it('B: failures that never reach the provider do NOT spend the budget (attempt 3 after two infra failures is not exhausted)', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 2 }, existingVariant: { id: 'var-1' }, priorProviderCalls: 0, insertErrors: { billing_operations: { code: 'XX000', message: 'down' } } });
+    const w = watched(); m.setProvider(w.p);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(w.calls.submit).toBe(0);
+    expect(r).toMatchObject({ reason: 'billing_hold_unavailable', retryable: true });
+    expect(lastState(m)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 3 });
+  });
+
+  it('B: a provider failure is judged on PROVIDER calls: attempt 6 with 1 earlier provider call is still retryable', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 5 }, existingVariant: { id: 'var-1' }, priorProviderCalls: 1 });
+    m.setProvider(mockProvider({ submit: async () => { throw new Error('provider down'); } }));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ reason: 'provider_failed', retryable: true });
+    expect(lastState(m)).toMatchObject({ current_state: 'retry_scheduled', retry_count: 6 });
+  });
+
+  it('B: if the provider-call count cannot be read, the attempt NUMBER bounds it (errs toward stopping a paid provider)', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 2 }, existingVariant: { id: 'var-1' }, priorProviderCalls: 0, countError: true });
+    m.setProvider(mockProvider({ submit: async () => { throw new Error('provider down'); } }));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ reason: 'provider_failed:attempts_exhausted', retryable: false });
+  });
+
+  it('B: a variant READ error is refused BEFORE the claim and is not consumed (retry_count unchanged, nothing claimed or held)', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 1 }, variantReadError: { code: '57014', message: 'timeout' } });
+    const w = watched(); m.setProvider(w.p);
+    const rpc = recordRpc(m);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ reason: 'variant_unavailable', retryable: true });
+    expect(rpc).toEqual([]);
+    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    expect(w.calls.submit).toBe(0);
+    expect(lastState(m).current_state).toBe('retry_scheduled');
+    expect(lastState(m)).not.toHaveProperty('retry_count');
+  });
+
+  it('B: a retry whose variant row is MISSING (an earlier insert failed) creates it and renders', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 1 }, existingVariant: null, priorProviderCalls: 0 });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('completed');
+    expect(m.writes.filter((x) => x.table === 'creator_render_variant' && x.op === 'insert')).toHaveLength(1);
+  });
+
+  it('B: a variant INSERT error is refused before the claim, not consumed', async () => {
+    const m = mockDeps({ insertErrors: { creator_render_variant: { code: 'XX000', message: 'down' } } });
+    const w = watched(); m.setProvider(w.p);
+    const rpc = recordRpc(m);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ reason: 'variant_unavailable', retryable: true });
+    expect(rpc).toEqual([]);
+    expect(w.calls.submit).toBe(0);
+    expect(lastState(m)).toMatchObject({ current_state: 'retry_scheduled' });
+  });
+
+  // ── the job-state row ───────────────────────────────────────────────────────────────────────────
+  it('a job-state INSERT error on the first render is refused before any claim, hold or provider call', async () => {
+    const m = mockDeps({ insertErrors: { creator_render_job_state: { code: 'XX000', message: 'down' } } });
+    const w = watched(); m.setProvider(w.p);
+    const rpc = recordRpc(m);
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ reason: 'job_state_unavailable', retryable: true });
+    expect(rpc).toEqual([]);
+    expect(m.writes.some((x) => x.table === 'billing_operations')).toBe(false);
+    expect(w.calls.submit).toBe(0);
+  });
+
+  it('an ORPHAN job (no state row) is adopted as a retry, not read as "in progress" forever', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, noStateRow: true, existingVariant: { id: 'var-1' }, priorProviderCalls: 0 });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(m.writes.find((x) => x.table === 'creator_render_job_state' && x.op === 'insert')!.row).toMatchObject({ render_job_id: 'job-1', current_state: 'retry_scheduled', retry_count: 0 });
+    expect(r.status).toBe('completed');
+  });
+
+  it('the retry transition is conditional on retry_count too (a stale reader cannot move a job another request advanced)', async () => {
+    const m = mockDeps({ existingJob: { id: 'job-1' }, attachedOutputId: null, jobState: { current_state: 'retry_scheduled', retry_count: 2 }, existingVariant: { id: 'var-1' } });
+    await executeRenderJob(m.deps as any, ARGS);
+    const cas = m.writes.find((x) => x.table === 'creator_render_job_state' && x.op === 'update' && x.row.current_state === 'preparing') as any;
+    expect(cas.filters).toMatchObject({ render_job_id: 'job-1', current_state: 'retry_scheduled', retry_count: 2 });
+  });
+
+  // ── billing writes ──────────────────────────────────────────────────────────────────────────────
+  it('a billing RELEASE error is surfaced (billing_release_failed), not reported as released', async () => {
+    const m = mockDeps({ updateErrors: { billing_operations: { code: 'XX000', message: 'down' } } });
+    m.setProvider(mockProvider({ submit: async () => { throw new Error('provider down'); } }));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.events).toContain('billing_release_failed');
+    expect(r.events).not.toContain('billing_released');
+  });
+
+  it('a billing CONFIRM error on a delivered render is surfaced, the render completes, and the hold is NEVER released', async () => {
+    const m = mockDeps({ updateErrors: { billing_operations: { code: 'XX000', message: 'down' } } });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('completed');
+    expect(r.events).toContain('billing_confirm_failed');
+    expect(r.events).not.toContain('billing_confirmed');
+    expect(released(m)).toBe(false);
+  });
+
+  // ── Finding C ──────────────────────────────────────────────────────────────────────────────────
+  it.each(['content_core_asset', 'content_asset_attachment'])('C: a lineage upsert error on %s reports attached:false, never media_lineage_attached', async (table) => {
+    const m = mockDeps({ upsertErrors: { [table]: { code: '42501', message: 'denied' } } });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: true, status: 'completed', attached: false });
+    expect(r.events).toContain('media_lineage_attach_failed');
+    expect(r.events).not.toContain('media_lineage_attached');
+    expect(confirmed(m)).toBe(true);
+  });
+
+  it('C: a reuse re-attempts the lineage and reports what landed', async () => {
+    const out = { id: 'out-1', storage_ref: 's', content_sha256: 'h', attempt_id: 'a' };
+    const failing = mockDeps({ existingJob: { id: 'job-1' }, existingOutput: out, upsertErrors: { content_core_asset: { code: 'XX000', message: 'down' } } });
+    expect(await executeRenderJob(failing.deps as any, ARGS)).toMatchObject({ status: 'reused', attached: false });
+    const healed = mockDeps({ existingJob: { id: 'job-1' }, existingOutput: out });
+    expect(await executeRenderJob(healed.deps as any, ARGS)).toMatchObject({ status: 'reused', attached: true });
+  });
+
+  it('the success state write is CHECKED: a failure is surfaced (render_state_write_failed)', async () => {
+    const m = mockDeps({ updateErrors: { creator_render_job_state: { code: 'XX000', message: 'down' } } });
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.status).toBe('completed');
+    expect(r.events).toContain('render_state_write_failed');
   });
 });
