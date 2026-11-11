@@ -31,7 +31,7 @@ export type RenderEvent =
   | 'render_skipped_disabled' | 'media_lineage_attached'
   | 'execution_registry_unavailable' | 'execution_registry_advance_failed' | 'billing_hold_failed'
   | 'billing_release_failed' | 'billing_confirm_failed' | 'media_lineage_attach_failed'
-  | 'render_state_write_failed';
+  | 'render_state_write_failed' | 'render_output_recovered';
 
 export interface RenderDeps {
   supabase: any;
@@ -83,6 +83,37 @@ const rpcFailure = (r: RpcResult | undefined, thrown: unknown): string | null =>
  */
 export const RENDER_MAX_ATTEMPTS = 3;
 
+type RecoveredOutput = { id: string; storage_ref: string; content_sha256: string };
+
+/**
+ * THIS job's own moderation-allowed output, through its variants -> attempts -> outputs, or null when
+ * it has none. Every read is CHECKED: an error is returned, never read as "no output".
+ */
+async function recoverOwnOutput(supabase: any, jobId: string): Promise<{ output: RecoveredOutput | null; error: string | null }> {
+  const fail = (step: string, e: unknown) => ({ output: null, error: `${step}: ${(e as { code?: string; message?: string } | null)?.code ?? ''} ${(e as { message?: string } | null)?.message ?? String(e)}`.trim() });
+  try {
+    const { data: vs, error: vErr } = await supabase.from('creator_render_variant').select('id').eq('render_job_id', jobId);
+    if (vErr) return fail('variants', vErr);
+    const variantIds = ((vs ?? []) as { id: string }[]).map((v) => v.id);
+    if (variantIds.length === 0) return { output: null, error: null };
+    const { data: ats, error: aErr } = await supabase.from('creator_render_attempt').select('id').in('variant_id', variantIds);
+    if (aErr) return fail('attempts', aErr);
+    const attemptIds = ((ats ?? []) as { id: string }[]).map((a) => a.id);
+    if (attemptIds.length === 0) return { output: null, error: null };
+    const { data: outs, error: oErr } = await supabase.from('creator_render_output')
+      .select('id, storage_ref, content_sha256')
+      .in('attempt_id', attemptIds)
+      .eq('moderation_state', 'allowed')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (oErr) return fail('outputs', oErr);
+    const out = ((outs ?? []) as RecoveredOutput[])[0];
+    return { output: out?.id ? out : null, error: null };
+  } catch (e) {
+    return fail('threw', e);
+  }
+}
+
 function skip(reason: string): ExecuteRenderResult {
   return { ok: false, status: 'skipped', events: ['render_skipped_disabled'], reason };
 }
@@ -121,11 +152,16 @@ export async function executeRenderJob(
     }
     events.push('billing_released');
   };
-  /** A job_state write; CHECKED. A failed write is logged and surfaced, never silently assumed. */
-  const writeJobState = async (jobIdToWrite: string, patch: Record<string, unknown>, context: string): Promise<boolean> => {
+  /**
+   * A job_state write; CHECKED. A failed write is logged and surfaced, never silently assumed.
+   * `onlyFrom` makes it conditional on the state it was read in.
+   */
+  const writeJobState = async (jobIdToWrite: string, patch: Record<string, unknown>, context: string, onlyFrom?: string): Promise<boolean> => {
     let res: RpcResult | undefined; let thrown: unknown = null;
     try {
-      res = await ownedDbTable('creator_render_job_state').update(patch).eq('render_job_id', jobIdToWrite);
+      let q = ownedDbTable('creator_render_job_state').update(patch).eq('render_job_id', jobIdToWrite);
+      if (onlyFrom !== undefined) q = q.eq('current_state', onlyFrom);
+      res = await q;
     } catch (e) { thrown = e ?? 'update threw'; }
     const failed = rpcFailure(res, thrown);
     if (failed !== null) {
@@ -242,6 +278,31 @@ export async function executeRenderJob(
         };
       }
       const cs = String(st?.current_state ?? '');
+      if (st && !RENDER_TERMINAL_STATES.has(cs)) {
+        // RECOVERY (05 residual D): a non-terminal job with no attached output may still HAVE one, when a
+        // state write failed after the output landed (the final 'attached' write, or failAttempt's after an
+        // unexpected throw). Resolve through THIS job's own variant -> attempt -> output (tenant-bounded:
+        // the job row was tenant-filtered above), reuse it, and repair the state. No provider call and no
+        // billing write: the render that produced it was billed by its own attempt.
+        const recovered = await recoverOwnOutput(supabase, String(existing.id));
+        if (recovered.error) {
+          console.error('[creator-render] output recovery read failed', { render_job_id: existing.id, error: recovered.error });
+          events.push('render_failed');
+          return { ok: false, status: 'failed', events, spec_id: spec.spec_id, render_job_id: existing.id, reason: 'render_state_unreadable', retryable: true };
+        }
+        if (recovered.output) {
+          const out = recovered.output;
+          // Conditional on the state read, so a concurrent writer's newer state is never overwritten.
+          await writeJobState(String(existing.id), { current_state: 'attached', moderation_state: 'post_passed', attached_output_id: out.id, last_transition_at: now() }, `recover_from:${cs}`, cs);
+          events.push('render_output_recovered', 'duplicate_render_reused');
+          const attached = await attachToSharedMedia(deps, args, specHash, out.id, out.storage_ref, events);
+          return {
+            ok: true, status: 'reused', events, spec_id: spec.spec_id, render_job_id: existing.id,
+            output: { output_id: out.id, storage_ref: out.storage_ref, content_sha256: out.content_sha256 },
+            attached,
+          };
+        }
+      }
       if (!st) {
         // ORPHAN: the job exists but its state row does not (a state insert that failed). Without this it
         // would read as "in progress" forever. Adopt it as retry_scheduled at count 0; a concurrent
