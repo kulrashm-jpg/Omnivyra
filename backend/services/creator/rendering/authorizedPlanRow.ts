@@ -17,10 +17,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../db/supabaseClient';
 import { enforceCompanyAccess, resolveUserContext } from '../../userContextService';
+import type { UserContext } from '../../userContextService';
 
 export const NOT_FOUND_BODY = Object.freeze({ error: 'Not found', code: 'NOT_FOUND' });
 
-export type AuthorizedPlanRow = { row: Record<string, unknown>; companyId: string };
+/** `access` is the principal enforceCompanyAccess authorized (e.g. created_by on a render). */
+export type AuthorizedPlanRow = { row: Record<string, unknown>; companyId: string; access: UserContext };
 
 /** A response stand-in that records what enforceCompanyAccess would have sent. */
 function capturingResponse(): NextApiResponse & { captured: { status: number | null; body: unknown } } {
@@ -54,13 +56,15 @@ export async function loadAuthorizedPlanRow(
 
   const cols = columns.split(',').map((c) => c.trim());
   const select = cols.includes('campaign_id') ? columns : `${columns}, campaign_id`;
-  const { data: row, error: rowError } = await supabase.from('daily_content_plans').select(select).eq('id', id).maybeSingle();
+  const { data: rowData, error: rowError } = await supabase.from('daily_content_plans').select(select).eq('id', id).maybeSingle();
   if (rowError) { res.status(500).json({ error: 'load failed' }); return null; }
+  // A runtime column list types the row as GenericStringError; it is a plain row object.
+  const row = (rowData ?? null) as unknown as Record<string, unknown> | null;
   if (!row) { res.status(404).json(NOT_FOUND_BODY); return null; }
 
   let companyId: string | null = null;
   const { data: c, error: cError } = await supabase.from('campaigns').select('company_id')
-    .eq('id', (row as Record<string, unknown>).campaign_id as string).maybeSingle();
+    .eq('id', row.campaign_id as string).maybeSingle();
   if (cError) { res.status(500).json({ error: 'load failed' }); return null; }
   companyId = (c as { company_id?: string } | null)?.company_id ?? null;
   if (!companyId) { res.status(404).json(NOT_FOUND_BODY); return null; }
@@ -73,5 +77,5 @@ export async function loadAuthorizedPlanRow(
     res.status(status).json(probe.captured.body ?? { error: 'Access check failed' });
     return null;
   }
-  return { row: row as Record<string, unknown>, companyId };
+  return { row, companyId, access };
 }
