@@ -149,6 +149,12 @@ for (const [feature, jobs] of Object.entries(FEATURE_JOB_MAP)) {
 
 // Jobs that skip the inactive-company gate — they must run regardless.
 const ALWAYS_RUN_JOBS = new Set([
+  // MONEY detect-only jobs (2026-11-12): read and report only (see
+  // backend/jobs/moneyDetectionJobs.ts). Money detection must not depend on
+  // company activity, and the activity gate never opens anyway.
+  'creditReconciliation',
+  'billingReservationReconcile',
+  'billingOrphanUsageScan',
   'findDuePostsAndEnqueue',
   'conversationTriageWorker',
   'leadThreadQueueCleanup',

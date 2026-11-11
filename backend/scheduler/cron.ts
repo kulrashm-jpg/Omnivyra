@@ -132,6 +132,7 @@ import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefre
 import { runScheduledAnalyticsSync } from '../services/scheduledAnalyticsSync';
 import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
 import { runReadinessSnapshotJob } from '../jobs/readinessSnapshotJob';
+import { runMoneyDetectionJob, MONEY_DETECTION_JOBS } from '../jobs/moneyDetectionJobs';
 import { runHealthSnapshotJob } from '../jobs/healthSnapshotJob';
 import { runLifecycleSnapshotJob } from '../jobs/lifecycleSnapshotJob';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
@@ -328,6 +329,10 @@ async function shouldRunPublishCycle(): Promise<boolean> {
 
 let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
+// MONEY detect-only jobs (2026-11-12): built, tested and merged but never on a
+// timer anywhere. Last-run kept in memory like readinessSnapshot (a restart
+// re-runs them once; they only READ and report).
+const lastMoneyDetectionRun: Record<string, number> = {};
 let lastAutoOptimizationRun = 0;
 let lastReadinessSnapshotRun = 0; // CSA-002 — daily readiness snapshot
 let lastHealthSnapshotRun = 0;    // CSA-003 — daily health snapshot
@@ -1114,6 +1119,25 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
       console.log('✅ Governance audit completed');
     } catch (error: unknown) {
       console.error('❌ Governance audit error:', formatCaughtError(error));
+    }
+  }
+
+  // MONEY detect-only jobs (2026-11-12, e9/e1). Each READS and reports drift /
+  // stuck reservations / orphan usage through emitAnomaly; none writes a wallet,
+  // a hold or a ledger row. Listed in ALWAYS_RUN_JOBS: the inactive-company gate
+  // never opens (recordUserActivity has no callers), and money detection must
+  // not depend on activity anyway. The mutating jobs (orphan-hold reap,
+  // monetization reservation reconcile, idempotency expire) are deliberately
+  // NOT here - they need a report-only first run and owner approval.
+  for (const job of MONEY_DETECTION_JOBS) {
+    if (shouldRunCronJob(job.key, job.intervalMs, lastMoneyDetectionRun[job.key] ?? 0)) {
+      lastMoneyDetectionRun[job.key] = Date.now();
+      try {
+        const r = await runMoneyDetectionJob(job.key);
+        console.log(`[money-detection] ${job.key} ${r.status}`);
+      } catch (error: unknown) {
+        console.error(`[money-detection] ${job.key} error:`, formatCaughtError(error));
+      }
     }
   }
 

@@ -70,11 +70,13 @@ describe('readinessSnapshot is exempt from the inactive-company gate', () => {
     expect(blocked).toHaveLength(7);
   });
 
-  test('the always-run set is exactly the previous ten jobs plus readinessSnapshot', () => {
+  test('the always-run set is exactly the previous ten jobs plus readinessSnapshot plus the three money detect-only jobs', () => {
     expect([...ALWAYS_RUN_JOBS].sort()).toEqual([
       'confidenceCalibration', 'connectorTokenRefresh', 'conversationTriageWorker', 'engagementSignalArchive',
       'findDuePostsAndEnqueue', 'governanceAudit', 'intelligenceEventCleanup', 'leadThreadQueueCleanup',
       'performanceAggregation', 'readinessSnapshot', 'staleExecutionSweep',
+      // MONEY detect-only (2026-11-12; moneyDetectionJobsWiring.test.ts)
+      'billingOrphanUsageScan', 'billingReservationReconcile', 'creditReconciliation',
     ].sort());
   });
 });
