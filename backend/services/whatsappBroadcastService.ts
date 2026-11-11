@@ -427,7 +427,9 @@ async function assertOwnedSenderAccount(companyId: unknown, socialAccountId: unk
   // null insert or a row written before the column mattered; those accounts could send
   // before this guard, so refusing them would be a functional break, not a safety gain.
   // "Tightening" this to `!is_active` changes WHICH LEGACY ACCOUNTS CAN SEND - decide that
-  // deliberately (measure `is_active IS NULL` first; if zero, SET NOT NULL retires it).
+  // deliberately. Retired by 20270216000002 (production had 0 NULL rows): the column is NOT
+  // NULL from then on, so `=== false` is exact; it stays `=== false` so this code is also
+  // correct on a database where that migration has not been applied yet.
   if (check.account.is_active === false) throw new WhatsAppSenderAccountError('disconnected');
   return check.account;
 }
