@@ -1,0 +1,11 @@
+# Acknowledged changes to scripts/ci/check-actor-fk-compatibility.js (#28 actor-FK parity).
+#
+# The actor-FK parity gate fails when the checker differs between HEAD and BASE, because a
+# weakened rule would otherwise read as "resolved". An intended, reviewed change is listed
+# here as the sha256 of the HEAD checker file, then " # <reason>". Example:
+#   <64 hex> # rule set_null_vs_check tightened (reviewed by virality-05, 2026-11-xx)
+#
+# Prune an entry once its change is on main: when HEAD and BASE run the same detector and
+# this file still lists that sha, the gate fails with STALE DETECTOR ACK.
+#
+# MIGRATION-CLASS (#27 clarification 3): every edit needs full virality-05 review.
