@@ -77,7 +77,7 @@ describe('catalog state', () => {
               EXISTS (SELECT 1 FROM aclexplode(proacl) a WHERE a.grantee = 0) AS public_x
          FROM pg_proc WHERE oid = to_regprocedure($1)`, [FN])).rows[0];
     expect(r).toMatchObject({ prosecdef: false, default_acl: false, anon_x: false, auth_x: false, svc_x: true, public_x: false });
-    expect(r.proconfig).toContain('search_path=pg_catalog, public');
+    expect(r.proconfig).toContain('search_path=pg_catalog, public, pg_temp');
   });
   it('exactly one function of that name (no second, differently-granted entry point)', async () => {
     const r = (await db.query(`SELECT count(*)::int AS n FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'merge_report_settings_keys'`)).rows[0];

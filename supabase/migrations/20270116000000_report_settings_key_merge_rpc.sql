@@ -31,7 +31,7 @@
 --   * returns the number of rows updated: 0 = no company_profiles row (company_id is UNIQUE,
 --     idx_company_profiles_company_id), 1 = written. A caller treats 0 as "not written".
 --   * SECURITY INVOKER (runs with the caller's own privileges; only service_role is granted),
---     search_path pinned to pg_catalog, public.
+--     search_path pinned to pg_catalog, public, pg_temp (pg_temp LAST: unnamed, it is searched FIRST).
 --
 -- Grants: hosted Supabase gives a new function in public EXECUTE to anon, authenticated and
 -- service_role by default privileges, and PostgreSQL gives PUBLIC EXECUTE (proacl IS NULL means
@@ -94,7 +94,7 @@ CREATE OR REPLACE FUNCTION public.merge_report_settings_keys(
 ) RETURNS integer
 LANGUAGE plpgsql
 SECURITY INVOKER
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, pg_temp
 AS $fn$
 DECLARE
   -- The SYSTEM-owned keys. Keep in step with backend/db/reportSettingsKeys.ts
@@ -190,8 +190,8 @@ BEGIN
   IF r.prosecdef THEN
     RAISE EXCEPTION 'RS-MERGE postcondition: must be SECURITY INVOKER';
   END IF;
-  IF r.proconfig IS NULL OR NOT ('search_path=pg_catalog, public' = ANY (r.proconfig)) THEN
-    RAISE EXCEPTION 'RS-MERGE postcondition: search_path must be pinned to pg_catalog, public, found %', r.proconfig;
+  IF r.proconfig IS NULL OR NOT ('search_path=pg_catalog, public, pg_temp' = ANY (r.proconfig)) THEN
+    RAISE EXCEPTION 'RS-MERGE postcondition: search_path must be pinned to pg_catalog, public, pg_temp; found %', r.proconfig;
   END IF;
   -- proacl IS NULL means the DEFAULT ACL, which for a function is EXECUTE to PUBLIC: open.
   IF r.proacl IS NULL THEN
