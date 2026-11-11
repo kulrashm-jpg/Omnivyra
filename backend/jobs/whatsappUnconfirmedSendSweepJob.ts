@@ -15,6 +15,11 @@
  *
  * Registered in scheduler/cron.ts and in ALWAYS_RUN_JOBS (a recovery job must not depend
  * on recorded company activity - see readinessSnapshot).
+ *
+ * LOAD (05): it runs unconditionally every 10 minutes, and touches NO Redis - one bounded
+ * DB read to find tenants, the sweep's DB functions per tenant, and metrics into the
+ * in-process registry (observability/metrics.ts). It runs inside the cron tick, whose
+ * CronGuard lock is already taken every tick, so it adds no lock or lease either.
  */
 
 import { ownedDbTable } from '../db/writeOwner';
