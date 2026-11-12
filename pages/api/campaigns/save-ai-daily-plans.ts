@@ -57,16 +57,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
 
-    const { data: campaign } = await supabase
+    const { data: campaign, error: campaignReadError } = await supabase
       .from('campaigns')
       .select('id, start_date')
       .eq('id', campaignId)
       .maybeSingle();
 
-    let startDate =
+    const clientStartDate =
       campaignStartDate && /^\d{4}-\d{2}-\d{2}/.test(String(campaignStartDate).trim())
         ? String(campaignStartDate).trim().split('T')[0]
-        : (campaign as { start_date?: string } | null)?.start_date?.split?.('T')?.[0];
+        : null;
+    // Without a client date the stored start_date dates every row. A failed read is not "no start
+    // date": the fallback below would invent one from today and date the whole week wrongly
+    // (unread-error pkg 2). Nothing has been written yet, so the request is safe to retry.
+    if (!clientStartDate && campaignReadError) {
+      console.error('[save-ai-daily-plans] campaign start_date unreadable; nothing saved', { campaignId, weekNumber, message: campaignReadError.message });
+      return res.status(503).json({
+        code: 'CAMPAIGN_START_DATE_READ_FAILED',
+        error: 'Could not read the campaign start date. Nothing was saved. Please try again.',
+      });
+    }
+    let startDate = clientStartDate ?? (campaign as { start_date?: string } | null)?.start_date?.split?.('T')?.[0];
     if (!startDate) {
       const fallback = new Date();
       fallback.setDate(fallback.getDate() - (weekNumber - 1) * 7);
