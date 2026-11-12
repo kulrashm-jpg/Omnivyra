@@ -9,7 +9,7 @@
 -- company, a re-apply RAISEs instead of reproducing it. Rows the trigger filled after apply whose
 -- campaign or account was later removed are likewise not re-derivable. Export
 -- (id, company_id) before running this if those values must survive.
--- ORDER: roll back 20270217000029 FIRST (its hard_delete_company body reads scheduled_posts.company_id).
+-- ORDER: roll back 20270217000030 and 20270217000029 FIRST (both read scheduled_posts.company_id).
 -- CODE DEPENDENCY (05 review): once the publish-time account-company guard is deployed
 -- (backend/services/publishAccountCompanyGuard.ts, fix/publish-account-company-check-20261113), it REFUSES to publish
 -- any post without a company_id. Rolling this migration back while that code is live therefore HALTS ALL PUBLISHING
@@ -32,6 +32,11 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('public.hard_delete_company(uuid, uuid, text)')
               AND md5(replace(prosrc, E'\r', '')) = '3f2c47120b18bb9e0d98d95e74fcbb29') THEN
     RAISE EXCEPTION 'SP-COMPANY rollback: roll back 20270217000029 first (hard_delete_company still reads scheduled_posts.company_id)';
+  END IF;
+  -- 030's content_analytics guard reads scheduled_posts.company_id too: dropping it under that trigger would break
+  -- every later analytics insert.
+  IF to_regprocedure('public.content_analytics_company_id_guard()') IS NOT NULL THEN
+    RAISE EXCEPTION 'SP-COMPANY rollback: roll back 20270217000030 first (content_analytics guard reads scheduled_posts.company_id)';
   END IF;
 END
 $provenance$;

@@ -37,8 +37,9 @@ function verifyBlock(): string {
   return sql.slice(start, end + ('$' + 'verify$;').length);
 }
 
-/** Rolls back 028 in the enforced order: 029 first (it is applied on this branch), then 028. */
+/** Rolls back 028 in the enforced order: 030 and 029 first (both applied on this branch), then 028. */
 async function rollback028(c: Client): Promise<void> {
+  await c.query(unwrapped(path.join('rollbacks', 'content_analytics_company_id_rollback.sql')));
   await c.query(unwrapped(ROLLBACK_029));
   await c.query(unwrapped(ROLLBACK_FILE));
 }
