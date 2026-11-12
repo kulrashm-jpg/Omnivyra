@@ -20,6 +20,20 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { publishNow } from '../../../backend/services/publishNowService';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
+
+/**
+ * A status write that names the status it expects (CLASS-2 D8). Its answer is NOT ignored (05): a
+ * write that moved nothing means another execution owns the post now - logged, so a lost race is
+ * visible rather than reported as handled. The protection itself is the filter in the statement.
+ */
+async function recordStatus(input: Parameters<typeof updatePostPublishStatus>[0]): Promise<void> {
+  const moved = await updatePostPublishStatus(input);
+  if (!moved) {
+    console.warn('[cron/process-scheduled-posts] status not written: the post is no longer in the expected status (another execution owns it)', {
+      post_id: input.post_id, status: input.status, expected: input.expectedFromStatus,
+    });
+  }
+}
 import { runJob } from '../../../backend/services/jobRunner';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
@@ -166,7 +180,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // No connected account — terminal classification, do not retry.
         // CLASS-2 D8: every write here names the status it expects. The scan read `scheduled`; the
         // queue worker may have claimed the post since, and a blind `failed` flipped its live claim.
-        await updatePostPublishStatus({
+        await recordStatus({
           post_id: post.id,
           status: 'FAILED',
           last_error: `No connected ${post.platform} account`,
@@ -222,7 +236,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (outcome.status === 'tenant_invalid') {
         // Owning org is gone or suspended — mark FAILED with terminal
         // classification so the cron doesn't keep retrying this post.
-        await updatePostPublishStatus({
+        await recordStatus({
           post_id: post.id,
           status: 'FAILED',
           last_error: `Tenant invalid: ${outcome.reason}`,
@@ -247,7 +261,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           // publishNow threw: it restores the pre-claim status (`scheduled`) when nothing was sent, and
           // records an uncertain outcome itself when the call had started. Only the restored row is
           // this cron's to fail; any other state belongs to another execution or to reconciliation.
-          await updatePostPublishStatus({
+          await recordStatus({
             post_id: post.id,
             status: 'FAILED',
             last_error: msg || 'Unexpected error',
@@ -274,8 +288,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         continue;
       }
       // A mirror of what publishNow already wrote, so it lands only on that status: once `failed`
-      // the post is claimable, and another execution may hold it already.
-      await updatePostPublishStatus({
+      // the post is claimable, and another execution may hold it already. D5 + D8 are only correct
+      // TOGETHER (05): a superseded publishNow writes nothing (D5) and is skipped above
+      // (`suppressed`); were it not, this pinned mirror would still match nothing - and a BLIND
+      // mirror here would make the very write D5 refused, one layer up.
+      await recordStatus({
         post_id:          post.id,
         status:           result.status,
         external_post_id: result.external_post_id,

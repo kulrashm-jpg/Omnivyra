@@ -303,14 +303,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // nothing is written.
       if (!result.suppressed) {
         // CLASS-2 D8: a mirror of what publishNow wrote, so it lands only on that status - once
-        // `failed` the post is claimable and another execution may hold it already.
-        await updatePostPublishStatus({
+        // `failed` the post is claimable and another execution may hold it already. D5 + D8 are only
+        // correct TOGETHER (05): a superseded publishNow writes nothing and is skipped here
+        // (`suppressed`); the pin also stops this mirror making the write D5 refused.
+        const mirrored = await updatePostPublishStatus({
           post_id: post.id,
           status: result.status,
           external_post_id: result.external_post_id,
           last_error: result.status === 'PUBLISHED' ? undefined : result.message,
           expectedFromStatus: result.status.toLowerCase(),
         });
+        if (!mirrored) console.warn('[social/publish] status mirror not written: another execution owns the post now', { post_id: post.id, status: result.status });
       }
 
       // The post itself is unsafe to publish until reconciled — distinct from
@@ -347,6 +350,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           status: 'FAILED',
           last_error: error?.message || 'Publish failed',
           ...(post.status ? { expectedFromStatus: String(post.status) } : {}),
+        }).then((moved) => {
+          if (!moved) console.warn('[social/publish] failure not written: the post is no longer in the status this request read', { post_id });
         });
       } catch (_) {}
       return res.status(500).json({

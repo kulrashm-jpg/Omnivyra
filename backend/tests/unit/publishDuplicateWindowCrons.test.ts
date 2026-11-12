@@ -18,7 +18,8 @@ export {};
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 
 const mockPublishNow = jest.fn();
-const mockUpdatePostPublishStatus = jest.fn(async (_p: Record<string, unknown>) => undefined);
+// Answers as the real one does: whether a row moved.
+const mockUpdatePostPublishStatus = jest.fn(async (_p: Record<string, unknown>) => true);
 
 type Row = Record<string, unknown>;
 let duePosts: Row[] = [];
@@ -212,4 +213,13 @@ describe('CLASS-2 D8 - every cron status write names the status it expects (neve
     expect(mockUpdatePostPublishStatus).toHaveBeenCalledWith(expect.objectContaining({ post_id: 'sp-1', expectedFromStatus: 'failed' }));
     expect(mockUpdatePostPublishStatus).toHaveBeenCalledWith(expect.objectContaining({ post_id: 'sp-2', expectedFromStatus: 'published' }));
   });
+});
+
+it('CLASS-2 D8: a status write that moved nothing (another execution owns the post) is LOGGED, not silently counted as handled', async () => {
+  duePosts = [due('sp-1')];
+  mockPublishNow.mockResolvedValue({ status: 'FAILED', message: 'token expired', timestamp: 't' });
+  mockUpdatePostPublishStatus.mockResolvedValueOnce(false);
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  await processScheduledPosts(cronReq(), mockRes());
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('status not written'), expect.objectContaining({ post_id: 'sp-1', expected: 'failed' }));
 });
