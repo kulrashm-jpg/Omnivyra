@@ -8,8 +8,18 @@
 -- (enterpriseBillingOrchestrator, e6f55d76c) makes open insert-or-read and close never rewrite a settled row; this
 -- trigger makes the same invariants hold for EVERY writer:
 --   1. id, organization_id and idempotency_key are immutable;
---   2. a FINAL row - confirmed / released / duplicate - never changes status;
+--   2. a FINAL row - confirmed / released / duplicate - never changes status, and its amount_charged never changes
+--      (05 review: a settled charge is money; re-confirming with the SAME amount, as renderExecutor's retry does, is
+--      not a change and passes);
 --   3. no row returns to 'initiated' once it has left it.
+-- billing_operations.status is NOT NULL DEFAULT 'initiated' (20260663), so the IN / IS DISTINCT FROM tests below
+-- have no NULL path.
+-- Everything else stays mutable ON PURPOSE - metadata, completed_at, failure_reason, the txn-id columns, and the
+-- amount on a NON-final row: this table is the record of an operation's attempts, and the credit ledger
+-- (credit_transactions) is the authority for what was charged.
+-- DO NOT make 'error' / 'insufficient' final here without changing closeBillingOperation in the SAME change: the
+-- orchestrator reuses the row by idempotency key and settles error -> confirmed / insufficient -> confirmed on a later
+-- attempt, so a stricter trigger would turn a recoverable billing error into a permanent hard failure.
 -- 'error' and 'insufficient' stay transitionable ON PURPOSE: the orchestrator may settle a recoverable row on a later
 -- attempt (closeBillingOperation's FINAL set is the same three statuses), and recovery moves stuck
 -- initiated / held / executed rows to 'error'. Metadata-only updates (aiExecutionResultStore save, the lifecycle
@@ -35,6 +45,10 @@ BEGIN
   END IF;
   IF OLD.status IN ('confirmed', 'released', 'duplicate') AND NEW.status IS DISTINCT FROM OLD.status THEN
     RAISE EXCEPTION 'BILLING_OPERATION_FINAL_STATUS: billing operation % is % and cannot become %', OLD.id, OLD.status, NEW.status
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF OLD.status IN ('confirmed', 'released', 'duplicate') AND NEW.amount_charged IS DISTINCT FROM OLD.amount_charged THEN
+    RAISE EXCEPTION 'BILLING_OPERATION_FINAL_AMOUNT: billing operation % is % and its charged amount cannot change', OLD.id, OLD.status
       USING ERRCODE = 'P0001';
   END IF;
   IF NEW.status = 'initiated' AND OLD.status IS DISTINCT FROM 'initiated' THEN

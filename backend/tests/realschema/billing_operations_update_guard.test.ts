@@ -94,6 +94,10 @@ describe('billing_operations_row_guard', () => {
       expect(await attempt(`UPDATE public.billing_operations SET idempotency_key = 'other' WHERE id = $1`, [id])).toBe('P0001');
       expect(await attempt(`UPDATE public.billing_operations SET status = 'error' WHERE id = $1`, [id])).toBe('P0001');
       expect(await attempt(`UPDATE public.billing_operations SET status = 'initiated' WHERE id = $1`, [id])).toBe('P0001');
+      // a settled charge is money: its amount never changes; re-confirming with the SAME amount is not a change
+      expect(await attempt(`UPDATE public.billing_operations SET amount_charged = 99 WHERE id = $1`, [id])).toBe('P0001');
+      expect(await attempt(`UPDATE public.billing_operations SET amount_charged = NULL WHERE id = $1`, [id])).toBe('P0001');
+      expect(await attempt(`UPDATE public.billing_operations SET status = 'confirmed', amount_charged = 5, completed_at = now() WHERE id = $1`, [id])).toBe('ok');
     });
   });
 
