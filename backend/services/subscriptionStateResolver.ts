@@ -131,8 +131,11 @@ export async function resolveTopupEntitlement(organizationId: string, deps: Reso
     // best-effort BY POLICY (fail-open, documented above): a read error keeps
     // top-up credits usable. It used to reach that answer SILENTLY via an
     // unread r.error (as if there were no subscription row); the policy is now
-    // explicit and the failure logged. Owner question raised 2026-11-12 (e1):
-    // is fail-open still right for a terminated subscription during an outage?
+    // explicit and the failure logged. OWNER DECISION 2026-11-12 (via e9):
+    // fail-open STAYS, deliberately, for UNCERTAINTY (read failed) as well as
+    // absence (no row) - top-up credits remain usable when the subscription
+    // cannot be read, including a possibly-terminated one during an outage.
+    // Keep the log line: it is how an outage-driven fail-open is seen.
     if (r?.error) {
       console.error('[subscriptionStateResolver] topup entitlement read failed - fail-open by policy:', organizationId, r.error.message);
       return { usable: true, state: 'NO_SUBSCRIPTION' };
