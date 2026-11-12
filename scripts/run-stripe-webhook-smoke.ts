@@ -19,6 +19,7 @@ import {
   failPurchase,
 } from '../backend/services/purchaseService';
 import { ownedDbTable } from '../backend/db/writeOwner';
+import { markPaymentEventState, readPaymentEventState } from '../backend/services/payments/paymentEventState';
 
 const PROVIDER = 'stripe';
 
@@ -65,11 +66,10 @@ async function main() {
       if (code === '23505') return { inserted: false, duplicate: true };
       throw new Error(`payment_transactions insert failed: ${error.message}`);
     },
-    markEvent: async (eventId, status, errorMsg) => {
-      await ownedDbTable('payment_provider_events').update({
-        processing_status: status, processed_at: new Date().toISOString(), error_message: errorMsg ?? null,
-      }).eq('id', eventId);
-    },
+    // 20270217000003: the ledger is immutable - state goes through the guarded writer
+    // (the old UPDATE here was refused), exactly like pages/api/stripe/webhook.ts.
+    markEvent: async (eventId, status, errorMsg) => markPaymentEventState(eventId, status, errorMsg),
+    getEventState: async (eventId) => readPaymentEventState(eventId),
   };
 
   const event: StripeEventPayload = {
