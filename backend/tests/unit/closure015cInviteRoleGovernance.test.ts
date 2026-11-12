@@ -90,14 +90,21 @@ describe('Part 1 — inviteUser never grants, mints or rewrites a SUPER_ADMIN me
     expect(membership(TARGET)).toEqual([expect.objectContaining({ role: 'SUPER_ADMIN', status: 'active' })]);
   });
 
-  it.each(['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_CREATOR', 'CONTENT_ENGAGER', 'ADMIN', 'COMPANY_ADMIN', 'VIEW_ONLY'])(
-    'legitimate workflow kept: role %s (incl. the /admin/users legacy vocabulary) is still invitable',
+  // R3 (e9 2026-11-12): ADMIN is a legacy alias, no longer invitable (pinned below).
+  it.each(['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_CREATOR', 'CONTENT_ENGAGER', 'VIEWER', 'COMPANY_ADMIN', 'VIEW_ONLY'])(
+    'legitimate workflow kept: role %s is still invitable',
     async (role) => {
       world();
       const r = await inviteUser('new-person@example.test', CO_A, role, asRequester(USER_SUPER));
       expect(r).toMatchObject({ ok: true, role: role.toUpperCase() });
     },
   );
+
+  it('R3 (e9 2026-11-12): the legacy ADMIN alias is refused (400 UNSUPPORTED_ROLE)', async () => {
+    world();
+    const r = await inviteUser('new-person@example.test', CO_A, 'ADMIN', asRequester(USER_SUPER));
+    expect(r).toMatchObject({ ok: false, status: 400, error: 'UNSUPPORTED_ROLE' });
+  });
 
   it('legitimate workflow kept: an existing non-SUPER_ADMIN member\'s role can still be changed', async () => {
     world({ role: 'VIEW_ONLY', status: 'active' });

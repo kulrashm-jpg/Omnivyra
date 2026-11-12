@@ -145,7 +145,8 @@ describe('policy wiring', () => {
 });
 
 describe('legitimate non-privileged role update — preserved, now behind the identity-assignment gate', () => {
-  it.each(['VIEW_ONLY', 'CONTENT_REVIEWER', 'COMPANY_ADMIN', 'CONTENT_MANAGER', 'ADMIN'])(
+  // R3 (e9 2026-11-12): ADMIN is a legacy alias, no longer storable (pinned below).
+  it.each(['VIEW_ONLY', 'CONTENT_REVIEWER', 'COMPANY_ADMIN', 'CONTENT_MANAGER', 'VIEWER'])(
     'active platform SA with passkey step-up on a trusted device: CONTENT_CREATOR → %s → 200, row updated, elevated access + business audit recorded',
     async (to) => {
       world();
@@ -156,6 +157,13 @@ describe('legitimate non-privileged role update — preserved, now behind the id
       expect(logUserManagementAudit).toHaveBeenCalledWith('USER_ROLE_UPDATED', expect.objectContaining({ target_user_id: TARGET, role: to }));
     },
   );
+
+  it('R3 (e9 2026-11-12): the legacy ADMIN alias is refused (400); the row is unchanged', async () => {
+    world();
+    const r = await patch(SUPER, 'ADMIN');
+    expect(r.status).toBe(400);
+    expect(targetRow()).toMatchObject({ role: 'CONTENT_CREATOR' });
+  });
 });
 
 describe('step-up failures — nothing read-for-write, nothing written', () => {

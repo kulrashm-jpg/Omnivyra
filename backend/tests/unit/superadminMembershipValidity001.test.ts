@@ -162,10 +162,13 @@ describe('the invited-SUPER_ADMIN state is unreachable by design', () => {
      */
     for (const rel of ['pages/api/admin/invite-user.ts', 'pages/api/team/invite.ts']) {
       const src: string = fs.readFileSync(path.join(repo, rel), 'utf8');
-      const m = src.match(/const VALID_ROLES = new Set\(\[([\s\S]*?)\]\)/);
-      expect(m).toBeTruthy();
-      expect(m![1]).not.toMatch(/SUPER_ADMIN/);
+      // R3 (e9 2026-11-12): both routes take VALID_ROLES from the ONE shared list.
+      expect(src).toMatch(/const VALID_ROLES = new Set<string>\(INVITABLE_TENANT_ROLES\)/);
     }
+    const { INVITABLE_TENANT_ROLES } = jest.requireActual('../../services/rbacPrimitives');
+    expect(INVITABLE_TENANT_ROLES.length).toBeGreaterThan(0);
+    expect(INVITABLE_TENANT_ROLES).not.toContain('SUPER_ADMIN');
+    expect(INVITABLE_TENANT_ROLES).not.toContain('ADMIN');
   });
 
   it('revocation downgrades the ROLE and never writes a status', () => {

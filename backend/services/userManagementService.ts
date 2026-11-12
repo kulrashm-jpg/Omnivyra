@@ -80,7 +80,8 @@ const getOrCreateUserByEmail = async (email: string, companyId?: string): Promis
  * alias spelling normalizeRole would also tolerate (e.g. 'COMPANYADMIN',
  * 'content creator') — fails closed instead of being stored verbatim.
  */
-export const INVITABLE_ROLES: ReadonlyArray<Role> = Object.values(Role).filter((r) => r !== Role.SUPER_ADMIN);
+// R3 (e9 2026-11-12): ADMIN is a legacy ALIAS, never stored - dropped from the invitable set.
+export const INVITABLE_ROLES: ReadonlyArray<Role> = Object.values(Role).filter((r) => r !== Role.SUPER_ADMIN && r !== Role.ADMIN);
 
 export const inviteUser = async (
   email: string,
@@ -109,11 +110,18 @@ export const inviteUser = async (
 
   const user = await getOrCreateUserByEmail(email, companyId);
 
-  const { data: existing } = await (ownedDbTable('user_company_roles') as any)
+  // CLASS 1 (e9 ruling (a), 2026-11-12): every read and write below is READ - a
+  // failed write used to return ok:true and log USER_INVITED for an invite that
+  // never happened. Fixed separately from the users/* gate (HELD): this route is
+  // still super-admin-only until the last-admin guard unit.
+  const { data: existing, error: readError } = await (ownedDbTable('user_company_roles') as any)
     .select('id, role')
     .eq('user_id', user.id)
     .eq('company_id', companyId)
     .limit(1);
+  if (readError) {
+    return { ok: false as const, status: 503, error: 'MEMBERSHIP_LOOKUP_FAILED' };
+  }
 
   if (existing && existing.length > 0) {
     const existingRow = existing[0];
@@ -121,17 +129,28 @@ export const inviteUser = async (
       return { ok: false as const, status: 403, error: 'SUPER_ADMIN_MEMBERSHIP_NOT_CHANGEABLE_HERE' };
     }
     if (existingRow.role !== normalizedRole) {
-      await ownedDbTable('user_company_roles')
+      const { error: updateError } = await ownedDbTable('user_company_roles')
         .update({ role: normalizedRole })
         .eq('id', existingRow.id);
+      if (updateError) {
+        return { ok: false as const, status: 503, error: 'MEMBERSHIP_UPDATE_FAILED' };
+      }
     }
   } else {
-    await ownedDbTable('user_company_roles').insert({
+    const { error: insertError } = await ownedDbTable('user_company_roles').insert({
       user_id: user.id,
       company_id: companyId,
       role: normalizedRole,
       created_at: new Date().toISOString(),
     });
+    if (insertError) {
+      // 23505: a concurrent invite created the membership first - not a success
+      // of THIS call; the caller re-reads. Anything else is a failure.
+      if ((insertError as { code?: string }).code === '23505') {
+        return { ok: false as const, status: 409, error: 'MEMBERSHIP_CREATED_CONCURRENTLY' };
+      }
+      return { ok: false as const, status: 503, error: 'MEMBERSHIP_INSERT_FAILED' };
+    }
   }
 
   logUserManagementAudit('USER_INVITED', {

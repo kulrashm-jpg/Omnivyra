@@ -13,13 +13,19 @@ import {
 import { createAndSendInvitation } from '../../services/invitationService';
 import { withIdempotency } from '../../middleware/withIdempotency';
 import { logger } from '../../services/logger';
-import { normalizeRole } from '../../services/rbacPrimitives';
+import { NON_ADMIN_TENANT_ROLES, normalizeRole } from '../../services/rbacPrimitives';
 
+/**
+ * App role -> stored role. R3 (e9 2026-11-12): COMPANY_ADMIN, the legacy 'USER'
+ * (-> CONTENT_CREATOR) and every non-admin tenant role, stored AS NAMED (never
+ * downgraded). SUPER_ADMIN / ADMIN / unknown -> null (refused).
+ */
 export const mapAppRoleToRbac = (role: string): Role | null => {
   const normalized = role.toUpperCase();
   if (normalized === 'COMPANY_ADMIN') return Role.COMPANY_ADMIN;
   if (normalized === 'USER') return Role.CONTENT_CREATOR;
-  return null;
+  const named = (NON_ADMIN_TENANT_ROLES as ReadonlyArray<string>).find((r) => r === normalized);
+  return (named as Role | undefined) ?? null;
 };
 
 export const ensureCompanyAccess = async (
@@ -142,13 +148,10 @@ export const findOrCreateUserByEmail = async (email: string): Promise<{ id: stri
   return { id: (created as any).id, error: null };
 };
 
+/** R3 (e9 2026-11-12): only the legacy ADMIN alias is mapped; no role is silently downgraded. */
 export const normalizeInviteRole = (role: string) => {
   const upper = role.toUpperCase();
   if (upper === 'ADMIN') return Role.COMPANY_ADMIN;
-  if (upper === 'CONTENT_MANAGER') return Role.CONTENT_CREATOR;
-  if (upper === 'CONTENT_PLANNER') return Role.CONTENT_CREATOR;
-  if (upper === 'CONTENT_ENGAGER') return Role.VIEW_ONLY;
-  if (upper === 'VIEWER') return Role.VIEW_ONLY;
   return upper;
 };
 

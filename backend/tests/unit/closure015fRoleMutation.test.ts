@@ -182,7 +182,8 @@ describe('policy wiring', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('A — PATCH /api/company/users/[userId]/role', () => {
-  it.each([['COMPANY_ADMIN', 'ADMIN'], ['USER', 'CONTENT_CREATOR']])('stepped-up active platform SA: %s → stored %s, 200, elevated access recorded; B membership untouched', async (to, stored) => {
+  // R3 (e9 2026-11-12): role.ts writes COMPANY_ADMIN, never the legacy ADMIN alias.
+  it.each([['COMPANY_ADMIN', 'COMPANY_ADMIN'], ['USER', 'CONTENT_CREATOR']])('stepped-up active platform SA: %s → stored %s, 200, elevated access recorded; B membership untouched', async (to, stored) => {
     world({ role: to === 'USER' ? 'ADMIN' : 'CONTENT_CREATOR', status: 'active' });
     const r = await patchRole(SUPER, to);
     expect(r.status).toBe(200);

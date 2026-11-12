@@ -6,7 +6,7 @@ import { sendInvite } from '@/backend/services/emailService';
 import { resolveAuthenticatedUser } from '@/backend/services/authResolver';
 import { getCanonicalAppUrl } from '@/backend/config/getCanonicalAppUrl';
 import { randomBytes, createHash } from 'crypto';
-import { normalizeRole, Role } from '@/backend/services/rbacPrimitives';
+import { INVITABLE_TENANT_ROLES, normalizeRole, Role } from '@/backend/services/rbacPrimitives';
 
 async function getActorUserId(req: NextApiRequest): Promise<string | null> {
   // resolveAuthenticatedUser already returns public.users.id after joining
@@ -163,9 +163,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // 2026-11-12): CONTENT_MANAGER / PLANNER / ENGAGER / VIEWER keep their
     // identity and are NOT silently downgraded; until the roles-step invite
     // migration widens invitations_role_check they fail closed here.
-    const INVITATION_ROLES: ReadonlyArray<string> = [
-      Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.CONTENT_REVIEWER, Role.CONTENT_PUBLISHER, Role.VIEW_ONLY,
-    ];
+    // R3 (e9 2026-11-12): the ONE invitable list (= invitations_role_check, 20270217000010).
+    const INVITATION_ROLES: ReadonlyArray<string> = INVITABLE_TENANT_ROLES;
     if (!canonicalRole || !INVITATION_ROLES.includes(canonicalRole)) {
       return res.status(409).json({ error: 'ROLE_NOT_REINVITABLE' });
     }

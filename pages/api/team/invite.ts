@@ -8,14 +8,10 @@ import { createAndSendInvitation } from '../../../backend/services/invitationSer
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilityService';
+import { INVITABLE_TENANT_ROLES } from '../../../backend/services/rbacPrimitives';
 
-const VALID_ROLES = new Set([
-  'COMPANY_ADMIN',
-  'CONTENT_CREATOR',
-  'CONTENT_REVIEWER',
-  'CONTENT_PUBLISHER',
-  'VIEW_ONLY',
-]);
+// R3 (e9 2026-11-12): the ONE invitable list (= invitations_role_check, 20270217000010).
+const VALID_ROLES = new Set<string>(INVITABLE_TENANT_ROLES);
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

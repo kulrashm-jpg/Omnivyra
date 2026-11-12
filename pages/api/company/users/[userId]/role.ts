@@ -9,12 +9,10 @@ import { requireCapability } from '../../../../../backend/security/requireCapabi
 import { IDENTITY_ADMIN_ASSIGN } from '../../../../../shared/contracts/security';
 import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
 
-const mapAppRoleToRbac = (role: string): Role | null => {
-  const normalized = role.toUpperCase();
-  if (normalized === 'COMPANY_ADMIN') return Role.ADMIN;
-  if (normalized === 'USER') return Role.CONTENT_CREATOR;
-  return null;
-};
+// R3 (e9 2026-11-12): ONE mapping (usersShared) - it writes COMPANY_ADMIN, never
+// the legacy ADMIN alias. (This route is behind the HELD dead gate at
+// requireCompanyAdmin until the last-admin guard unit.)
+import { mapAppRoleToRbac } from '../../../../../backend/apiHandlers/company/usersShared';
 
 const ensureCompanyAdminAccess = async (
   req: NextApiRequest,

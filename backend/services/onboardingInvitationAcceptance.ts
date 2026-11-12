@@ -27,16 +27,10 @@
 import { supabase } from '../db/supabaseClient';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from './auditActorService';
 import { isInvitationExpired } from './invitationExpiry';
-import { normalizeRole } from './rbacPrimitives';
+import { INVITABLE_TENANT_ROLES, normalizeRole } from './rbacPrimitives';
 
-/** invitations_role_check — the only roles an invitation can activate. */
-export const INVITATION_ACCEPTANCE_ROLES: ReadonlyArray<string> = [
-  'COMPANY_ADMIN',
-  'CONTENT_CREATOR',
-  'CONTENT_REVIEWER',
-  'CONTENT_PUBLISHER',
-  'VIEW_ONLY',
-];
+/** invitations_role_check — the only roles an invitation can activate (R3: the shared list). */
+export const INVITATION_ACCEPTANCE_ROLES: ReadonlyArray<string> = INVITABLE_TENANT_ROLES;
 
 export type InvitedMembership = { id: string; company_id: string; role: string | null; status: string | null };
 

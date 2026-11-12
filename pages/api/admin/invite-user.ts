@@ -14,14 +14,10 @@ import { requireCapability } from '../../../backend/security/requireCapability';
 import { mayAttemptInvite } from '../../../backend/security/preAuthorization';
 import { IDENTITY_ADMIN_ASSIGN } from '../../../shared/contracts/security';
 import { insertAuditLogStrict } from '../../../backend/services/auditActorService';
+import { INVITABLE_TENANT_ROLES } from '../../../backend/services/rbacPrimitives';
 
-const VALID_ROLES = new Set([
-  'COMPANY_ADMIN',
-  'CONTENT_CREATOR',
-  'CONTENT_REVIEWER',
-  'CONTENT_PUBLISHER',
-  'VIEW_ONLY',
-]);
+// R3 (e9 2026-11-12): the ONE invitable list (= invitations_role_check, 20270217000010).
+const VALID_ROLES = new Set<string>(INVITABLE_TENANT_ROLES);
 
 type SuccessResponse = { invitationId: string };
 type ErrorResponse = { error: string; code?: string };

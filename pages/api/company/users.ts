@@ -17,6 +17,7 @@ import { logger } from '../../../backend/services/logger';
 import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilityService';
 
 import { ensureCompanyAccess, ensureCompanyAdminAccess, findOrCreateUserByEmail, insertAuditLog, mapAppRoleToRbac, normalizeInviteRole, readTargetMembership, upsertUserCompanyRole } from '../../../backend/apiHandlers/company/usersShared';
+import { INVITABLE_TENANT_ROLES } from '../../../backend/services/rbacPrimitives';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const rawCompanyId =
@@ -105,13 +106,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const desiredRole = normalizeInviteRole(String(role));
     const displayName = name ? String(name).trim() : '';
-    const allowedRoles = [
-      Role.COMPANY_ADMIN,
-      Role.CONTENT_CREATOR,
-      Role.CONTENT_REVIEWER,
-      Role.CONTENT_PUBLISHER,
-      Role.VIEW_ONLY,
-    ];
+    // R3 (e9 2026-11-12): the ONE invitable list (= invitations_role_check, 20270217000010).
+    const allowedRoles = INVITABLE_TENANT_ROLES;
     if (!(allowedRoles as readonly string[]).includes(desiredRole)) {
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
     }
@@ -254,13 +250,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'userId and role are required' });
     }
     const desiredRole = normalizeInviteRole(String(role));
-    const allowedRoles = [
-      Role.COMPANY_ADMIN,
-      Role.CONTENT_CREATOR,
-      Role.CONTENT_REVIEWER,
-      Role.CONTENT_PUBLISHER,
-      Role.VIEW_ONLY,
-    ];
+    // R3 (e9 2026-11-12): the ONE invitable list (= invitations_role_check, 20270217000010).
+    const allowedRoles = INVITABLE_TENANT_ROLES;
     if (!(allowedRoles as readonly string[]).includes(desiredRole)) {
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
     }

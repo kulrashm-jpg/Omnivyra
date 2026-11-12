@@ -4,7 +4,7 @@
  * model so a tier can never quietly become an admin grant.
  */
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => { throw new Error('no DB in this test'); } } }));
-import { Role, ROLE_BASE_TIERS, roleSatisfies, normalizeRole, normalizePermissionRole } from '../../services/rbacPrimitives';
+import { Role, ROLE_BASE_TIERS, roleSatisfies, normalizeRole, normalizePermissionRole, INVITABLE_TENANT_ROLES } from '../../services/rbacPrimitives';
 import { COMMUNITY_AI_CAPABILITIES, hasCommunityAiCapability } from '../../services/rbac/communityAiCapabilities';
 import { PERMISSIONS } from '../../services/rbacService';
 import { capabilitiesForRole } from '../../security/capabilityRegistry';
@@ -94,5 +94,28 @@ it('R2: each of the four holds exactly the capabilities of its tiers (raw stored
 it('R2: none of the four holds a capability COMPANY_ADMIN-only roles hold beyond content (org / billing / integration / identity / prospect)', () => {
   const contentUniverse = new Set([...capabilitiesForRole('CONTENT_PUBLISHER'), ...capabilitiesForRole('CONTENT_REVIEWER'), ...capabilitiesForRole('CONTENT_CREATOR'), ...capabilitiesForRole('VIEW_ONLY')]);
   for (const r of FOUR) for (const c of capabilitiesForRole(r)) expect(contentUniverse.has(c)).toBe(true);
+});
+
+// R3 - the code lists and the migrations must name the SAME sets (one list, no drift).
+const migrationRoles = (file: string, constraint: string): string[] => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const sql = fs.readFileSync(path.resolve(__dirname, '../../../supabase/migrations', file), 'utf8');
+  const i = sql.indexOf(`ADD CONSTRAINT ${constraint} CHECK`);
+  expect(i).toBeGreaterThan(-1);
+  const arr = sql.slice(i, sql.indexOf(']::text[]', i));
+  return Array.from(arr.matchAll(/'([A-Z_]+)'/g)).map((m) => m[1]).sort();
+};
+
+it('R3: INVITABLE_TENANT_ROLES == the invitations_role_check set in 20270217000010 (never SUPER_ADMIN / ADMIN)', () => {
+  const mig = migrationRoles('20270217000010_invitations_role_check_content_roles.sql', 'invitations_role_check');
+  expect(mig).toEqual([...INVITABLE_TENANT_ROLES].sort());
+  expect(mig).not.toContain('SUPER_ADMIN');
+  expect(mig).not.toContain('ADMIN');
+});
+
+it('R3: the user_company_roles CHECK in 20270217000011 == every canonical Role value except the ADMIN alias', () => {
+  const mig = migrationRoles('20270217000011_user_company_roles_role_check.sql', 'user_company_roles_role_check');
+  expect(mig).toEqual((Object.values(Role) as string[]).filter((r) => r !== 'ADMIN').sort());
 });
 

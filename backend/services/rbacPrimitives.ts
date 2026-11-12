@@ -39,6 +39,15 @@ export const NON_ADMIN_TENANT_ROLES = [
 ] as const;
 
 /**
+ * The roles an INVITATION may carry = invitations_role_check (widened by
+ * 20270217000010): COMPANY_ADMIN plus every non-admin tenant role. ONE list for
+ * every invite / reinvite / acceptance path (roles step R3, e9 2026-11-12) - no
+ * path keeps its own copy and none SILENTLY downgrades a role. SUPER_ADMIN is
+ * never invitable (identity.admin.assign only); ADMIN is a legacy alias only.
+ */
+export const INVITABLE_TENANT_ROLES = [Role.COMPANY_ADMIN, ...NON_ADMIN_TENANT_ROLES] as const;
+
+/**
  * ROLES APPROACH A (owner ruling via e9, 2026-11-12). CONTENT_MANAGER,
  * CONTENT_PLANNER, CONTENT_ENGAGER and VIEWER are REAL roles: they keep their
  * identity (they are no longer rewritten) and authorise through deliberate

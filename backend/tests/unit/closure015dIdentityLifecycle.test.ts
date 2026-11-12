@@ -99,15 +99,17 @@ beforeEach(() => { mockSentInvites.length = 0; });
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe('B — /api/users/invite role vocabulary', () => {
-  it('the accepted vocabulary is exactly the server Role set minus SUPER_ADMIN (incl. every /admin/users legacy name)', () => {
-    expect([...INVITABLE_ROLES].sort()).toEqual(Object.values(Role).filter((r) => r !== 'SUPER_ADMIN').sort());
-    for (const legacy of ['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_CREATOR', 'CONTENT_ENGAGER', 'ADMIN']) {
-      expect(INVITABLE_ROLES).toContain(legacy);
+  // R3 (e9 2026-11-12): ADMIN is a legacy alias, never stored - dropped from the vocabulary.
+  it('the accepted vocabulary is exactly the server Role set minus SUPER_ADMIN and the ADMIN alias', () => {
+    expect([...INVITABLE_ROLES].sort()).toEqual(Object.values(Role).filter((r) => r !== 'SUPER_ADMIN' && r !== 'ADMIN').sort());
+    for (const r of ['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_CREATOR', 'CONTENT_ENGAGER', 'VIEWER']) {
+      expect(INVITABLE_ROLES).toContain(r);
     }
     expect(INVITABLE_ROLES).not.toContain('SUPER_ADMIN');
+    expect(INVITABLE_ROLES).not.toContain('ADMIN');
   });
 
-  it.each([...Object.values(Role).filter((r) => r !== 'SUPER_ADMIN')])('supported role %s → invited, stored as that name', async (role) => {
+  it.each([...Object.values(Role).filter((r) => r !== 'SUPER_ADMIN' && r !== 'ADMIN')])('supported role %s → invited, stored as that name', async (role) => {
     world();
     const r = await inviteUser('new-person@example.test', CO_A, role, asRequester(USER_SUPER));
     expect(r).toMatchObject({ ok: true, role });
@@ -201,27 +203,18 @@ describe('C — reinvitation of privileged users', () => {
     ['CONTENT_REVIEWER', 'CONTENT_REVIEWER'],
     ['CONTENT_PUBLISHER', 'CONTENT_PUBLISHER'],
     ['VIEW_ONLY', 'VIEW_ONLY'],
+    // R3 (e9 2026-11-12) (+ 20270217000010): the four content roles are carried AS NAMED.
+    ['CONTENT_MANAGER', 'CONTENT_MANAGER'],
+    ['CONTENT_PLANNER', 'CONTENT_PLANNER'],
+    ['CONTENT_ENGAGER', 'CONTENT_ENGAGER'],
+    ['VIEWER', 'VIEWER'],
   ])('a former %s → invited membership keeps its role; the invitation carries %s (an invitations_role_check value)', async (held, expected) => {
     world({ role: held, status: 'inactive' });
     const r = await reinvite('A');
     expect(r.status).toBe(200);
     expect(membership(TARGET)).toEqual([expect.objectContaining({ role: held, status: 'invited' })]);
     expect(invitationFor()).toEqual([expect.objectContaining({ role: expected })]);
-    expect(['COMPANY_ADMIN', 'CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY']).toContain(expected);
-  });
-
-  // ROLES APPROACH A (e9 2026-11-12): the four content roles keep their identity,
-  // so they are no longer SILENTLY downgraded to CONTENT_CREATOR / VIEW_ONLY on
-  // the invitation. Until invitations_role_check admits them (the roles-step
-  // invite migration), reinviting one fails CLOSED - never a downgrade.
-  it.each(['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER'])('a former %s → 409 ROLE_NOT_REINVITABLE (no silent downgrade); nothing written', async (held) => {
-    world({ role: held, status: 'inactive' });
-    const r = await reinvite('A');
-    expect(r.status).toBe(409);
-    expect(r.body).toEqual({ error: 'ROLE_NOT_REINVITABLE' });
-    expect(membership(TARGET)).toEqual([expect.objectContaining({ role: held, status: 'inactive' })]);
-    expect(invitationFor()).toHaveLength(0);
-    expect(mockSentInvites).toHaveLength(0);
+    expect(jest.requireActual('../../services/rbacPrimitives').INVITABLE_TENANT_ROLES).toContain(expected);
   });
 
   it('a brand-new person → CONTENT_CREATOR membership and a CONTENT_CREATOR invitation (unchanged default, now explicit)', async () => {
@@ -271,7 +264,7 @@ describe('C — acceptance activates exactly the invitation role; expiry and rev
     ['COMPANY_ADMIN', 'COMPANY_ADMIN'],
     ['ADMIN', 'COMPANY_ADMIN'],
     ['CONTENT_REVIEWER', 'CONTENT_REVIEWER'],
-    ['VIEW_ONLY', 'VIEW_ONLY'],
+    ['VIEWER', 'VIEWER'], // R3: accepted AS NAMED (no silent demotion)
   ])('a re-invited former %s accepts → ACTIVE %s (no silent demotion to CONTENT_CREATOR)', async (held, expected) => {
     const token = await reinviteAndCaptureToken(held);
     const r = await accept(token);
