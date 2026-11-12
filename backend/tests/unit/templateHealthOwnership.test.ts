@@ -18,14 +18,14 @@ jest.mock('../../services/creator/userTemplateService', () => ({
     { action: 'generation_succeeded', templateId: id, templateVersion: 1, at: '2026-11-02T00:00:00Z' },
   ]; },
   listUserTemplateVersions: async () => [{ version: 4 }],
-  getUserTemplate: async (id: string) => ({ id, version: 4, status: 'published', metadata: {} }),
+  getUserTemplateForCompany: async (id: string) => ({ id, version: 4, status: 'published', metadata: {} }),
   listUserTemplates: async () => [],
 }));
 
 import { getTemplateHealth } from '../../services/creator/templateHealthService';
 
 it('a registered USER template is reported as a user template with its own versions', async () => {
-  const h = await getTemplateHealth('tpl-registered');
+  const h = (await getTemplateHealth('tpl-registered', 'company-a'))!;
   expect(h.ownership).toBe('user');
   expect(h.latestVersion).toBe(4);
 });
@@ -42,6 +42,6 @@ it('e9 RULING: a SYSTEM template exposes NO cross-tenant audit events (catalog m
 
 it('control: a USER template keeps its own audit-derived events', async () => {
   mockAuditReads.length = 0;
-  await getTemplateHealth('tpl-registered');
+  await getTemplateHealth('tpl-registered', 'company-a');
   expect(mockAuditReads).toEqual(['tpl-registered']);
 });
