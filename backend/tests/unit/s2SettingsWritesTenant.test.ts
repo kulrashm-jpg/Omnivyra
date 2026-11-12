@@ -13,12 +13,22 @@ export {};
 type Row = Record<string, any>;
 const mockDb: Record<string, Row[]> = {};
 const mockWrites: Array<{ table: string; op: string; filters: Row; payload: any }> = [];
+let mockFailWrite: string | null = null;
 function mockTable(table: string) {
   const filters: Row = {}; const tests: Array<(r: Row) => boolean> = [];
   let op = 'select'; let payload: any = null; let one = false; let maybe = false;
   const run = () => {
     const rows = (mockDb[table] = mockDb[table] ?? []);
-    if (op === 'upsert' || op === 'insert') { mockWrites.push({ table, op, filters: {}, payload }); (Array.isArray(payload) ? payload : [payload]).forEach((r: Row) => rows.push({ ...r })); return { data: null, error: null }; }
+    if (op === 'upsert' || op === 'insert') {
+      const list = (Array.isArray(payload) ? payload : [payload]) as Row[];
+      // FAITHFUL (schema): company_intelligence_config.company_id is uuid (FK companies) - a
+      // non-uuid value is refused by Postgres with 22P02, as the sentinel always was in prod.
+      if (table === 'company_intelligence_config' && list.some((r) => !/^[0-9a-f-]{36}$/i.test(String(r.company_id)))) {
+        return { data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid' } };
+      }
+      if (mockFailWrite === table) return { data: null, error: { code: 'XX000', message: 'down' } };
+      mockWrites.push({ table, op, filters: {}, payload }); list.forEach((r: Row) => rows.push({ ...r })); return { data: null, error: null };
+    }
     const hit = rows.filter((r) => tests.every((t) => t(r)));
     if (op === 'update' || op === 'delete') { mockWrites.push({ table, op, filters: { ...filters }, payload }); if (op === 'update') hit.forEach((r) => Object.assign(r, payload)); return { data: null, error: null }; }
     if (one) return hit.length ? { data: hit[0], error: null } : { data: null, error: maybe ? null : { message: 'none' } };
@@ -69,6 +79,7 @@ async function call(h: any, method: string, query: Row, body: Row = {}) {
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
   mockWrites.length = 0;
+  mockFailWrite = null;
   mockDb.user_company_roles = [{ user_id: 'user-a', company_id: A, role: 'COMPANY_ADMIN', status: 'active' }];
   mockDb.social_accounts = [
     { id: 'sa-a', user_id: 'user-a', company_id: A, platform: 'linkedin', is_active: true },
@@ -114,13 +125,21 @@ describe('e9 follow-up fixes (intelligence-access)', () => {
   const C = '33333333-3333-4333-8333-333333333333';
   const units = (body: Row) => (body?.intelligence ?? []) as Row[];
 
-  it('GLOBAL mode (super admin): the overrides it WRITES are READ back (was a missing read)', async () => {
+  it('GLOBAL unit write (super admin) is REFUSED 409 - never a faked success; nothing written (the sentinel cannot be stored: uuid column)', async () => {
     mockDb.user_company_roles = [{ user_id: 'user-a', company_id: A, role: 'SUPER_ADMIN', status: 'active' }];
-    const put = await call(intelligence, 'PUT', {}, { mode: 'global', units: [{ id: 'iu-1', enabled: false }] });
-    expect(put.statusCode).toBe(200);
-    expect(mockDb.company_intelligence_config.find((r) => r.company_id === '__GLOBAL_DEFAULT__')).toMatchObject({ iu_id: 'iu-1', enabled: false });
+    const put = await call(intelligence, 'PUT', {}, { mode: 'global', units: [{ id: 'iu-1', enabled: false }], insights: { market_trends: false } });
+    expect(put.statusCode).toBe(409);
+    expect(put.body.code).toBe('GLOBAL_UNIT_DEFAULTS_UNSUPPORTED');
+    expect(mockWrites).toHaveLength(0); // refused before ANY write (no partial apply of the flags)
     const get = await call(intelligence, 'GET', { mode: 'global' });
-    expect(units(get.body).find((u) => u.id === 'iu-1')).toMatchObject({ enabled: false });
+    expect(get.statusCode).toBe(200);
+    expect(units(get.body).find((u) => u.id === 'iu-1')).toMatchObject({ enabled: true }); // built-in default
+  });
+
+  it('a FAILED company-mode unit write is an error (500), never a silent success', async () => {
+    mockFailWrite = 'company_intelligence_config';
+    const r = await call(intelligence, 'PUT', {}, { units: [{ id: 'iu-1', enabled: false }] });
+    expect(r.statusCode).toBe(500);
   });
 
   it('an admin of A AND B edits B when B is requested (was always their first company)', async () => {

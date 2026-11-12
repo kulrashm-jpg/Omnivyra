@@ -207,15 +207,20 @@ async function upsertFlags(companyId: string, flags: CompanyExecutionFlags, upda
   );
 }
 
+/**
+ * GLOBAL unit defaults cannot be stored today (2026-11-12): company_intelligence_config.company_id
+ * is a uuid with an FK to companies, so the sentinel '__GLOBAL_DEFAULT__' can never be written
+ * (22P02) - the old route ignored that error and reported success. Until the owner-ruled
+ * "global unit defaults apply" feature gives them real storage, global mode has no unit overrides
+ * (every unit shows its built-in default) and a global unit write is REFUSED, never faked.
+ * (Global insight/frequency FLAGS live in company_execution_config, whose company_id is text.)
+ */
+const GLOBAL_UNIT_DEFAULTS_UNSUPPORTED = 'GLOBAL_UNIT_DEFAULTS_UNSUPPORTED';
+
 async function getCompanyUnitOverrides(userId: string, companyId: string): Promise<Map<string, { enabled: boolean }>> {
-  let data: unknown[] | null;
-  if (companyId === GLOBAL_DEFAULT_PROFILE_ID) {
-    // The PLATFORM default profile (super-admin, global mode): keyed by a sentinel, not a tenant.
-    // cross-tenant: intelligence-access-global-defaults
-    ({ data } = await supabase.from('company_intelligence_config').select('iu_id, enabled').eq('company_id', companyId));
-  } else {
-    ({ data } = await tenantTable('company_intelligence_config', tenantContextFor({ userId }, companyId)).select('iu_id, enabled'));
-  }
+  if (companyId === GLOBAL_DEFAULT_PROFILE_ID) return new Map();
+  const { data, error } = await tenantTable('company_intelligence_config', tenantContextFor({ userId }, companyId)).select('iu_id, enabled');
+  if (error) throw new Error(`unit overrides read failed: ${error.message}`);
 
   const rows = (data ?? []) as Array<{ iu_id: string; enabled: boolean }>;
   return new Map(rows.map((r) => [r.iu_id, { enabled: r.enabled }]));
@@ -225,15 +230,12 @@ async function setCompanyUnitOverrides(userId: string, companyId: string, units:
   if (!units.length) return;
   const rows = units.map((u) => ({ iu_id: u.id, enabled: u.enabled, priority_override: null }));
 
-  if (companyId === GLOBAL_DEFAULT_PROFILE_ID) {
-    // The PLATFORM default profile (super-admin, global mode): keyed by a sentinel, not a tenant.
-    // cross-tenant: intelligence-access-global-defaults
-    await supabase.from('company_intelligence_config').upsert(rows.map((r) => ({ ...r, company_id: companyId })), { onConflict: 'company_id,iu_id' });
-    return;
-  }
-  // S2: a company's overrides are written through the seam, pinned to the resolved company.
-  await tenantTable('company_intelligence_config', tenantContextFor({ userId }, companyId))
+  if (companyId === GLOBAL_DEFAULT_PROFILE_ID) throw new Error(GLOBAL_UNIT_DEFAULTS_UNSUPPORTED);
+  // S2: a company's overrides are written through the seam, pinned to the resolved company. A
+  // failed write is an error, never a silent success.
+  const { error } = await tenantTable('company_intelligence_config', tenantContextFor({ userId }, companyId))
     .upsert(rows, { onConflict: 'company_id,iu_id' });
+  if (error) throw new Error(`unit overrides write failed: ${error.message}`);
 }
 
 async function resetCompanyOverrides(companyId: string): Promise<void> {
@@ -378,6 +380,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (req.method === 'PUT') {
       if (!access.canWrite) {
         return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (mode === 'global' && Array.isArray(body.units) && body.units.length > 0) {
+        // Refused up front, before any other write in this request (no partial apply).
+        return res.status(409).json({
+          error: 'Global unit defaults are not supported yet: set unit overrides per company.',
+          code: GLOBAL_UNIT_DEFAULTS_UNSUPPORTED,
+        });
       }
 
       if (body.resetToDefault === true && mode === 'company') {
