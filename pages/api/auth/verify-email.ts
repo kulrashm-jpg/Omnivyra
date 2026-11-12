@@ -27,6 +27,7 @@ import {
 } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { incrementAuthMetric } from '../../../backend/services/authMetrics';
+import { recordSignupWithoutIntentIfMissing } from '../../../backend/services/signupWithoutIntentTelemetry';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 import {
@@ -124,6 +125,13 @@ async function handler(
       // The canonical envelope (status from the registry, typed code, auth_error_emitted log + counter).
       return sendAuthError(res, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED);
     }
+    // P1 telemetry: flag a brand-new identity with no signup_intents row at all
+    // (possible GoTrue-direct signup). Never blocks; never throws.
+    await recordSignupWithoutIntentIfMissing({
+      email,
+      endpoint:    'verify-email',
+      supabaseUid: identity.supabaseUid,
+    });
 
     const insertResult = await supabase
       .from('users')
