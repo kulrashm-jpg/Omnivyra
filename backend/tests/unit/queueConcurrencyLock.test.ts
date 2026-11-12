@@ -14,6 +14,8 @@ const mockRpcResponses: Record<string, any> = {};
 const queueOps: { add: any[]; getJob: any[]; remove: number } = { add: [], getJob: [], remove: 0 };
 const queueJobRows: Array<{ id: string; scheduled_post_id: string; status: string; scheduled_for?: string | null; updated_at?: string }> = [];
 const ownedQueueJobOps: Array<{ kind: 'update'; payload: Record<string, any>; ids: string[] }> = [];
+/** How a queue_jobs READ answers: normally, with a returned error, or by throwing (the database is unreadable). */
+const mockQueueRead = { mode: 'ok' as 'ok' | 'error' | 'throw' };
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -68,7 +70,7 @@ jest.mock('../../db/writeOwner', () => ({
         return { data: null, error: null };
       }),
       update: jest.fn((p: Record<string, any>) => { payload = p; return api; }),
-      then(resolve: any) {
+      then(resolve: any, reject?: any) {
         if (table === 'queue_jobs') {
           if (payload) {
             ownedQueueJobOps.push({ kind: 'update', payload, ids });
@@ -85,6 +87,8 @@ jest.mock('../../db/writeOwner', () => ({
             for (const row of targets) Object.assign(row, payload);
             return Promise.resolve({ data: targets, error: null }).then(resolve);
           }
+          if (mockQueueRead.mode === 'error') return Promise.resolve({ data: null, error: { message: 'connection reset' } }).then(resolve);
+          if (mockQueueRead.mode === 'throw') return Promise.reject(new Error('socket hang up')).then(resolve, reject);
           const matching = queueJobRows.filter((r) =>
             (!filters.scheduled_post_id || r.scheduled_post_id === filters.scheduled_post_id) &&
             (!filters.status || (Array.isArray(filters.status) ? filters.status.includes(r.status) : r.status === filters.status))
@@ -121,6 +125,7 @@ function resetState() {
   queueOps.remove = 0;
   queueJobRows.length = 0;
   ownedQueueJobOps.length = 0;
+  mockQueueRead.mode = 'ok';
 }
 
 describe('queue concurrency lock + atomic re-enqueue', () => {
@@ -152,6 +157,30 @@ describe('queue concurrency lock + atomic re-enqueue', () => {
     const lock = await tryAcquireScheduledPostQueueLock('00000000-0000-0000-0000-000000000003');
     expect(lock.acquired).toBe(true);
     expect(lock.mode === 'optimistic_check' || lock.mode === 'none').toBe(true);
+  });
+
+  // CLASS-2 (e9, 05's audit): the advisory RPC exists in no environment, so this fallback is what runs.
+  // When even its read FAILED it answered acquired:true - "go ahead" from a database that had just
+  // failed to answer (and a RETURNED error was not even read). Both now refuse.
+  test.each(['error', 'throw'] as const)('the fallback read fails (%s): acquired:false - both callers answer 409 / lock_contention', async (mode) => {
+    mockRpcResponses['try_scheduled_post_lock'] = new Error('rpc missing');
+    mockQueueRead.mode = mode;
+    const { tryAcquireScheduledPostQueueLock } = await import('../../scheduler/schedulerService');
+    const lock = await tryAcquireScheduledPostQueueLock('00000000-0000-0000-0000-000000000004');
+    expect(lock.acquired).toBe(false);
+  });
+
+  test('a reschedule whose lock fallback cannot read the database touches nothing', async () => {
+    mockRpcResponses['try_scheduled_post_lock'] = new Error('rpc missing');
+    mockQueueRead.mode = 'error';
+    queueJobRows.push({ id: 'qj-9', scheduled_post_id: 'sp-9', status: 'pending' });
+    const { atomicCancelAndReEnqueueScheduledPost } = await import('../../scheduler/schedulerService');
+    const r = await atomicCancelAndReEnqueueScheduledPost({
+      scheduledPostId: 'sp-9', newScheduledFor: new Date(Date.now() + 3_600_000).toISOString(), socialAccountId: 'sa-1', userId: 'u-1',
+    } as never);
+    expect(r).toMatchObject({ ok: false, locked: false });
+    expect(ownedQueueJobOps).toEqual([]);
+    expect(queueOps.add).toEqual([]);
   });
 
   test('atomicCancelAndReEnqueueScheduledPost returns ok:true on happy path', async () => {

@@ -173,8 +173,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Cancel the post (and, for a thread, its children), then its queue job.
   // The queue lock taken below is NOT an exclusion guarantee (its fallback
-  // always acquires — see tryAcquireScheduledPostQueueLock); a concurrent
-  // reschedule is ordered by the post compare-and-set, which runs first ──
+  // grants without excluding, and refuses only when the database cannot be
+  // read — see tryAcquireScheduledPostQueueLock); a concurrent reschedule is
+  // ordered by the post compare-and-set, which runs first ──
   let queueResult: Awaited<ReturnType<typeof cancelScheduledPostQueueEntry>> = { db_cancelled: 0, queue_removed: 0, errors: [] };
   let threadChildrenCancelled = 0;
   if (linkedPost) {

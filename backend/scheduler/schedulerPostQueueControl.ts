@@ -258,8 +258,10 @@ export async function enqueueScheduledPostAt(
  *     its two-key call passes BIGINTs to a function whose two-key form takes
  *     int4 (code review; not verified against a live database). Do not
  *     deploy it as written.
- *   - so the fallback runs, and it ALWAYS reports acquired:true (its
- *     queue_jobs read is not compared with anything).
+ *   - so the fallback runs. It reports acquired:true WITHOUT exclusion when
+ *     the database answers, and acquired:false when it cannot (CLASS-2, e9:
+ *     it used to answer acquired:true there too - "go ahead" from a database
+ *     that had just failed to answer).
  * Making the fallback fail closed would turn every unschedule and reschedule
  * into a 409 (the RPC is never there). Callers must therefore be correct
  * WITHOUT exclusion — and are: the post-level compare-and-sets (owner, status,
@@ -304,30 +306,30 @@ export async function tryAcquireScheduledPostQueueLock(
     void rpcError;
   }
 
-  // ── Optimistic-check fallback ────────────────────────────────────────
-  // No advisory lock available. Capture the latest `updated_at` of the
-  // queue_jobs row(s) for this post; the caller compares again before
-  // committing its mutation. Best-effort serialization for environments
-  // without the advisory-lock RPC.
+  // ── No-exclusion fallback (the advisory RPC exists in no environment) ─────
+  // `acquired: true` here grants NO exclusion and the caller owes NOTHING for it: both callers are
+  // correct without one, because each MUTATION is itself a compare-and-set with its row count
+  // checked - unschedule cancels the post on the exact state it judged safe (owner, status,
+  // error_code, no platform_post_id) and answers 409 when that moves nothing; reschedule pins the
+  // post's updated_at the same way. The fallback only proves the database is answering.
+  //
+  // CLASS-2 (e9, 05's audit): when even that read FAILED it answered acquired:true (mode 'none') -
+  // "go ahead" from a database that had just failed to answer. A returned error was not even read
+  // (only a throw reached the catch). Both now REFUSE: acquired:false, which both callers already
+  // answer as 409 / lock_contention.
   try {
-    const { data } = await ownedDbTable('queue_jobs')
-      .select('id, updated_at')
+    const { error: probeError } = await ownedDbTable('queue_jobs')
+      .select('id')
       .eq('scheduled_post_id', scheduledPostId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const baselineUpdatedAt = (data as { updated_at?: string } | null)?.updated_at ?? null;
-    void baselineUpdatedAt;
-    return {
-      acquired: true,
-      mode: 'optimistic_check',
-      release: async () => undefined,
-      // expose baseline via closure for the caller if they want it later;
-      // we keep the public shape symmetrical with the advisory path
-    } as { acquired: boolean; release: () => Promise<void>; mode: 'advisory' | 'optimistic_check' | 'none' };
+      .limit(1);
+    if (probeError) {
+      console.warn('[scheduled-post-lock] database unreadable; refusing the mutation', { scheduledPostId, message: probeError.message });
+      return { acquired: false, release: async () => undefined, mode: 'none' };
+    }
+    return { acquired: true, mode: 'optimistic_check', release: async () => undefined };
   } catch (fallbackError) {
-    console.warn('[scheduled-post-lock] optimistic-check fallback failed', { scheduledPostId, message: (fallbackError as Error)?.message });
-    return { acquired: true, release: async () => undefined, mode: 'none' };
+    console.warn('[scheduled-post-lock] database unreadable; refusing the mutation', { scheduledPostId, message: (fallbackError as Error)?.message });
+    return { acquired: false, release: async () => undefined, mode: 'none' };
   }
 }
 
