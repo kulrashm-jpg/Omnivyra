@@ -47,10 +47,11 @@ export async function grantInitialFreeCredit(input: {
   userId: string;
   emailDomain?: string | null;
   /**
-   * REPAIR ONLY (e9 ruling 2026-11-12): when the ledger already has this org's grant, repair the claim / stamp /
-   * category exactly as before - but when it does NOT, return 'no_existing_grant' and write NOTHING (no wallet row,
-   * no ledger credit, no claim). For callers that are not the onboarding grant (the login reconcile), which run none
-   * of onboarding's eligibility checks.
+   * REPAIR ONLY (e9 ruling 2026-11-12): when the ledger already has this org's grant, repair bookkeeping exactly as
+   * before - that case writes up to THREE bookkeeping rows (a missing claim insert, a ledger category relabel, the
+   * company stamp) and NEVER a wallet row or a ledger credit. When the ledger has NO grant, return
+   * 'no_existing_grant' and write nothing at all. For callers that are not the onboarding grant (the login
+   * reconcile), which run none of onboarding's eligibility checks.
    */
   repairOnly?: boolean;
 }): Promise<InitialFreeCreditResult> {
