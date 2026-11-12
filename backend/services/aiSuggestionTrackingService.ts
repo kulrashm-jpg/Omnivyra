@@ -72,6 +72,15 @@ export async function recordSuggestionShown(input: AiSuggestionInput): Promise<A
  * one distinguishes "not found" from "lookup failed": a transient failure must
  * never be read as "no owner, therefore allow", so it also returns null and
  * the caller denies.
+ *
+ * WHY THIS IS NOT SELF-AUTHORIZING (05, 2026-11-13): it derives a tenant from a
+ * caller-supplied id, which looks like the anti-pattern — and is safe ONLY
+ * because the caller then authorizes the USER against the derived tenant
+ * (ai-suggestion.ts: enforceCompanyAccess({ companyId: owningOrganizationId }))
+ * before anything is written, and passes that tenant into the write. A member
+ * of A naming B's suggestion derives B and is refused. Never use this result
+ * without that access check. It must also pick the SAME identifier the write
+ * keys on: suggestion_id first, correlation_id only when no suggestion_id.
  */
 export async function getSuggestionOrganizationId(input: {
   suggestion_id?: string;

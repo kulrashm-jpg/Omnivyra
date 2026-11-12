@@ -37,6 +37,7 @@ jest.mock('../../services/engagementThreadEventService', () => ({ recordThreadEv
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const reply = require('../../../pages/api/engagement/reply').default;
+const aiSuggestion = require('../../../pages/api/engagement/ai-suggestion').default;
 const tracking = require('../../services/aiSuggestionTrackingService');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
@@ -110,6 +111,41 @@ describe('engagement/reply — suggestion acceptance is bound to the authorized 
     await settle();
     expect(r.status).toBe(200);
     expect(suggestion(SUG_A).accepted_at).not.toBeNull();
+  });
+});
+
+// MIXED IDENTIFIERS (05, 2026-11-13): correlation_id co-occurs with identity without being it. Each case asserts
+// WHICH ROW ended up accepted, not just allow/deny: a wrong-row write inside the caller's own org is invisible to a
+// tenant-boundary test.
+describe('mixed suggestion_id / correlation_id — the suggestion_id decides, and only that row moves', () => {
+  const acceptedIds = () => rows('ai_suggestions').filter((r) => r.accepted_at !== null).map((r) => r.id).sort();
+
+  it("ai-suggestion: B's suggestion_id + A's correlation_id → 403, NOTHING accepted (not A's row via the correlation)", async () => {
+    const r = await invoke(aiSuggestion, { method: 'POST', headers: bearer('A'), body: { event: 'accepted', suggestion_id: SUG_B, correlation_id: CORR_A } });
+    expect(r.status).toBe(403);
+    expect(acceptedIds()).toEqual([]);
+  });
+
+  it("ai-suggestion: A's suggestion_id + B's correlation_id → 200, ONLY A's suggestion accepted", async () => {
+    const r = await invoke(aiSuggestion, { method: 'POST', headers: bearer('A'), body: { event: 'accepted', suggestion_id: SUG_A, correlation_id: CORR_B } });
+    expect(r.status).toBe(200);
+    expect(acceptedIds()).toEqual([SUG_A]);
+  });
+
+  it("reply: B's suggestion_id + an executor correlation of A's suggestion → NOTHING accepted", async () => {
+    executorCorrelationId = CORR_A;
+    const r = await sendAsA({ suggestion_id: SUG_B });
+    await settle();
+    expect(r.status).toBe(200);
+    expect(acceptedIds()).toEqual([]);
+  });
+
+  it("reply: A's suggestion_id + an executor correlation of B's suggestion → ONLY A's suggestion accepted", async () => {
+    executorCorrelationId = CORR_B;
+    const r = await sendAsA({ suggestion_id: SUG_A });
+    await settle();
+    expect(r.status).toBe(200);
+    expect(acceptedIds()).toEqual([SUG_A]);
   });
 });
 
