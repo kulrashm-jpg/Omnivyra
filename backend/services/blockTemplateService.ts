@@ -7,7 +7,6 @@ import { ownedDbTable } from '../db/writeOwner';
  * Follows the strategyTemplateService pattern.
  */
 
-import { supabase } from '../db/supabaseClient';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -348,15 +347,37 @@ export async function listBlockTemplates(
   return (data || []).map(mapRow);
 }
 
+// ── Tenant scope (SECURITY, 2026-11-11) ─────────────────────────────────────
+// Every read, update and delete by id is scoped to the AUTHORISED company. These
+// used to filter by id ONLY, and ownedDbTable is service-role (RLS does not
+// apply), so any member of any company could read, edit or delete another
+// tenant's template by id. Another tenant's id is indistinguishable from a
+// missing one (null / false -> the routes answer 404), never revealing that it
+// exists. System defaults (is_default) are readable by every company and
+// writable by none.
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Both ids must be uuids: companyId is interpolated into a PostgREST `or` filter. */
+function scopedIds(id: string, companyId: string): boolean {
+  return UUID.test(id ?? '') && UUID.test(companyId ?? '');
+}
+
 // ── Get ──────────────────────────────────────────────────────────────────────
 
-export async function getBlockTemplate(id: string): Promise<BlockTemplate | null> {
+/** The template if THIS company may read it (its own, or a system default); else null. */
+export async function getBlockTemplate(id: string, companyId: string): Promise<BlockTemplate | null> {
+  if (!scopedIds(id, companyId)) return null;
   const { data, error } = await ownedDbTable('block_templates')
     .select('*')
     .eq('id', id)
-    .single();
-  if (error || !data) return null;
-  return mapRow(data);
+    .or(`company_id.eq.${companyId},is_default.eq.true`)
+    .limit(1);
+  // A failed read is an error, not "not found": a null error is not an answer.
+  if (error || !Array.isArray(data)) {
+    throw new Error(`Failed to read block template: ${error?.message ?? 'no rows array returned'}`);
+  }
+  return data.length ? mapRow(data[0]) : null;
 }
 
 // ── Create ───────────────────────────────────────────────────────────────────
@@ -394,41 +415,43 @@ export async function createBlockTemplate(
 
 // ── Update ───────────────────────────────────────────────────────────────────
 
+/** Updates THIS company's own (non-default) template; null when none matched. */
 export async function updateBlockTemplate(
   id: string,
+  companyId: string,
   updates: Partial<Pick<BlockTemplate, 'name' | 'description' | 'content_blocks' | 'tags' | 'is_public'>>,
-): Promise<BlockTemplate> {
+): Promise<BlockTemplate | null> {
+  if (!scopedIds(id, companyId)) return null;
   const { data, error } = await ownedDbTable('block_templates')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .eq('company_id', companyId) // never another tenant's row
     .eq('is_default', false) // cannot update system defaults
-    .select()
-    .single();
-  if (error) throw new Error(`Failed to update block template: ${error.message}`);
-  return mapRow(data);
+    .select();
+  if (error || !Array.isArray(data)) {
+    throw new Error(`Failed to update block template: ${error?.message ?? 'no rows array returned'}`);
+  }
+  return data.length ? mapRow(data[0]) : null;
 }
 
 // ── Delete ───────────────────────────────────────────────────────────────────
 
-export async function deleteBlockTemplate(id: string): Promise<void> {
-  const { error } = await ownedDbTable('block_templates')
+/** Deletes THIS company's own (non-default) template; false when none matched. */
+export async function deleteBlockTemplate(id: string, companyId: string): Promise<boolean> {
+  if (!scopedIds(id, companyId)) return false;
+  const { data, error } = await ownedDbTable('block_templates')
     .delete()
     .eq('id', id)
-    .eq('is_default', false); // cannot delete system defaults
-  if (error) throw new Error(`Failed to delete block template: ${error.message}`);
-}
-
-// ── Increment usage ─────────────────────────────────────────────────────────
-
-export async function incrementTemplateUsage(id: string): Promise<void> {
-  const { error } = await supabase.rpc('increment_block_template_usage', { template_id: id });
-  if (error) {
-    // Fallback: manual increment
-    const tpl = await getBlockTemplate(id);
-    if (tpl) {
-      await ownedDbTable('block_templates')
-        .update({ usage_count: tpl.usage_count + 1 })
-        .eq('id', id);
-    }
+    .eq('company_id', companyId) // never another tenant's row
+    .eq('is_default', false) // cannot delete system defaults
+    .select('id');
+  if (error || !Array.isArray(data)) {
+    throw new Error(`Failed to delete block template: ${error?.message ?? 'no rows array returned'}`);
   }
+  return data.length > 0;
 }
+
+// ── Usage count ─────────────────────────────────────────────────────────────
+// The former incrementTemplateUsage (no caller; it called an RPC that never
+// existed, then fell back to an UNSCOPED read by id) is removed with the other
+// unscoped reads. A tenant-scoped, atomic use counter lands separately (C10).

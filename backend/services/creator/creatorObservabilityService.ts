@@ -54,7 +54,7 @@ export async function getCreatorObservabilityReport(companyId: string): Promise<
     ...collections.flatMap((c) => c.templateIds),
     ...cds.flatMap((d) => d.pinnedSnapshot?.templateIds ?? []),
   ]));
-  const resolve: TemplateResolver = allIds.length ? await buildResolver(allIds) : ((id) => getTemplateById(id) ?? null);
+  const resolve: TemplateResolver = allIds.length ? await buildResolver(allIds, companyId) : ((id) => getTemplateById(id) ?? null);
 
   // Performance (best-effort).
   let measuredAssets = 0;
