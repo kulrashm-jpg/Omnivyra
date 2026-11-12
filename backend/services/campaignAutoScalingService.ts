@@ -2,11 +2,14 @@ import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Auto-Scaling Service — Step 7
  *
- * When a campaign shows high engagement AND high prediction confidence,
- * applies three scaling actions:
- *   1. Increase ad budget recommendation (stored in campaign_decision_log)
- *   2. Increase posting frequency (updates campaigns table)
- *   3. Flag winning content patterns for duplication (written to campaign_learnings)
+ * When a campaign shows high engagement AND high prediction confidence, it SUGGESTS:
+ *   1. An ad budget recommendation (stored in campaign_decision_log)
+ *   2. Winning content patterns for duplication (written to campaign_learnings)
+ *
+ * It NEVER changes the customer's campaign (e9 ruling, 2026-11-12; owner: campaign health is
+ * SUGGEST-ONLY). It used to raise campaigns.posting_frequency by 20% on EVERY healthy run, with no cap
+ * and no once-per-period guard (about 2x a day at the 6-hourly cadence), and the schedulers read
+ * posting_frequency. That write is removed; posting_frequency is only READ, for platform priority.
  *
  * Thresholds: loaded from decision_engine_config (admin-tunable).
  */
@@ -29,8 +32,8 @@ export type ScalingResult = {
 /*
  * unread-error pkg 2: PostgREST returns an error, never throws. Each read below used to turn a failure
  * into "no frequency" / "no company" (silently skipping the actions); each write used to report its
- * action as done whatever happened. Reads now throw (nothing has been changed yet); the frequency write
- * throws (it is the first change); a later write that fails is recorded in failed_actions.
+ * action as done whatever happened. Reads now throw (nothing has been written yet); a write that fails
+ * is recorded in failed_actions.
  */
 
 /** Load current posting frequency for a campaign from its strategy or campaigns table. */
@@ -79,22 +82,11 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
 
   result.scaled = true;
 
-  // ── Action 1: Increase posting frequency by 20% ───────────────────────────
+  // Read only (platform priority for the recommendation). SUGGEST-ONLY: posting_frequency is never
+  // written here (e9 ruling, 2026-11-12).
   const currentFreq = await getCurrentFrequency(campaignId);
-  const boostedFreq: Record<string, number> = {};
-  for (const [p, freq] of Object.entries(currentFreq)) {
-    boostedFreq[p] = Math.round(freq * 1.2);
-  }
 
-  if (Object.keys(boostedFreq).length > 0) {
-    const { error: freqError } = await ownedDbTable('campaigns')
-      .update({ posting_frequency: boostedFreq, updated_at: new Date().toISOString() })
-      .eq('id', campaignId);
-    if (freqError) throw new Error(`auto-scale: posting_frequency write failed: ${freqError.message}`);
-    result.actions.push(`Increased posting frequency +20%: ${JSON.stringify(boostedFreq)}`);
-  }
-
-  // ── Action 2: Log ad budget recommendation ───────────────────────────────
+  // ── Suggestion 1: Log ad budget recommendation ───────────────────────────
   const impressions  = perf?.impressions ?? 0;
   const monthlyBasis = Math.round(impressions / 1000) * 10;
   const minBudget    = Math.max(500, monthlyBasis);
@@ -118,7 +110,7 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
     result.actions.push(`Ad budget recommendation: $${minBudget}–$${maxBudget}/month`);
   }
 
-  // ── Action 3: Flag winning content patterns ───────────────────────────────
+  // ── Suggestion 2: Flag winning content patterns ──────────────────────────
   if (companyId) {
     await upsertLearning({
       company_id:       companyId,

@@ -205,13 +205,24 @@ describe('AT_RISK optimization', () => {
 describe('auto-scale (HEALTHY)', () => {
   beforeEach(() => { results['performance_feedback:select'] = engagement(0.2, 0.2); });
 
-  it('CONTROL: tryAutoScale boosts the frequency, records the budget, and reports both', async () => {
+  it('CONTROL: tryAutoScale records the budget recommendation and the learning, and reports them', async () => {
     const r = await tryAutoScale('c1');
     expect(r.scaled).toBe(true);
     expect(r.failed_actions).toEqual([]);
-    expect(r.actions.join('\n')).toMatch(/Increased posting frequency/);
     expect(r.actions.join('\n')).toMatch(/Ad budget recommendation/);
-    expect((wrote('campaigns:update')[0]?.payload as { posting_frequency?: unknown }).posting_frequency).toEqual({ linkedin: 6 });
+    expect(r.actions.join('\n')).toMatch(/Winning content pattern saved/);
+    expect(wrote('campaign_decision_log:insert')).toHaveLength(1);
+  });
+
+  it('SUGGEST-ONLY (e9 ruling): a healthy run NEVER writes posting_frequency (any campaigns update throws here)', async () => {
+    delete results['campaigns:update'];
+    const direct = await tryAutoScale('c1');
+    expect(direct.scaled).toBe(true);
+    expect(direct.actions.join('\n')).not.toMatch(/posting frequency/i);
+    const viaMonitor = await runCampaignHealthMonitor();
+    expect(viaMonitor).toMatchObject({ scaled: ['c1'], errors: [] });
+    expect(wrote('campaigns:update')).toEqual([]);
+    expect(writes.map((w) => w.key)).not.toContain('campaigns:update');
   });
 
   it('an UNREADABLE company throws (never a silent skip of the learning and decision log)', async () => {
@@ -225,11 +236,6 @@ describe('auto-scale (HEALTHY)', () => {
     expect(writes).toEqual([]);
   });
 
-  it('a FAILED frequency write throws, and nothing after it is recorded', async () => {
-    results['campaigns:update'] = boom();
-    await expect(tryAutoScale('c1')).rejects.toThrow(/posting_frequency write failed: boom/);
-    expect(wrote('campaign_decision_log:insert')).toEqual([]);
-  });
 
   it('a FAILED budget record is a failed action, never a reported one, and the decision says FAILED', async () => {
     results['campaign_decision_log:insert'] = boom();
