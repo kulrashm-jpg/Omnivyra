@@ -47,6 +47,20 @@ function loadRegistry() {
   for (const [name, got] of [['TENANT_TABLES', direct.size], ['TENANT_CHILD_TABLES', child.size], ['GLOBAL_TABLES', global.size]]) {
     if (rowsIn(name) !== got) throw new Error(`[tenant-seam] registry parse: ${name} has ${rowsIn(name)} rows but ${got} were parsed`);
   }
+  // 05 (S1 review, NOTE 1): the generated type no longer proves a child's parent exists (a multi-hop parent is itself
+  // a child, so the spec type widened to string). Re-prove it here, which also covers a hand-edit of the generated
+  // file: every parent resolves to a direct or child table, and every chain ends at a direct table without a cycle.
+  for (const [name, spec] of child) {
+    const seen = new Set([name]);
+    let p = spec.parent;
+    for (let hop = 1; ; hop++) {
+      if (direct.has(p)) break;
+      if (!child.has(p)) throw new Error(`[tenant-seam] registry: ${name} has parent ${p}, which is neither a direct nor a child tenant table`);
+      if (seen.has(p) || hop > 4) throw new Error(`[tenant-seam] registry: ${name}'s parent chain does not end at a direct table within 4 hops`);
+      seen.add(p);
+      p = child.get(p).parent;
+    }
+  }
   return { direct, child, global };
 }
 function loadAllowList() {
@@ -215,6 +229,25 @@ function scan() {
         }
         const e = marker && allow.get(marker);
         if (!e || e.file !== rel) findings.push({ rule: 'R9', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-' });
+      }
+    }
+    // R10 (derive-then-authorize, e1/83 2026-11-13): ownerCompanyOfRow returns only the owning company. Its result
+    // must be bound to a variable, and an access call (shape match, 05: (require|enforce|assert)Xxx( ) that takes that
+    // variable must come BEFORE the first tenantContextFor / tenantTable / ownedDbTable use after it.
+    if (rel.startsWith('pages/api/')) {
+      for (const m of code.matchAll(/\bownerCompanyOfRow\s*\(/g)) {
+        const line = lineAt(m.index);
+        const head = code.slice(Math.max(0, code.lastIndexOf('\n', m.index) + 1), m.index);
+        const bound = head.match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?$/);
+        const r10 = (why) => findings.push({ rule: 'R10', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
+        if (!bound) { r10('result not bound to a variable'); continue; }
+        const v = bound[1];
+        const rest = code.slice(m.index);
+        const esc = v.replace(/[$]/g, '\\$');
+        const access = rest.search(new RegExp('\\b(?:require|enforce|assert)[A-Z]\\w*\\s*\\([^;]*\\b' + esc + '\\b'));
+        const use = rest.slice(1).search(/\b(?:tenantContextFor|tenantTable|tenantChildTable|ownedDbTable|supabase\s*\.\s*from)\s*\(/);
+        if (access < 0) r10(`no access check takes ${v}`);
+        else if (use >= 0 && use + 1 < access) r10(`${v} is used before its access check`);
       }
     }
     for (const m of code.matchAll(/tenantContextFor\s*\(([^;]*?)\)/g)) {
