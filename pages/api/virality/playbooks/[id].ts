@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../../backend/db/tenantTable';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { ORGANIZATION_MANAGE } from '../../../../shared/contracts/security';
 
@@ -54,8 +55,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       status: status ?? playbook.status ?? 'draft',
       updated_at: new Date().toISOString(),
     };
-    const { data, error: updateError } = await supabase
-      .from('virality_playbooks')
+    // S2: the write is pinned to the playbook's company, which requireCapability just authorized.
+    const { data, error: updateError } = await tenantTable('virality_playbooks', tenantContextFor(guard.principal, playbook.company_id))
       .update(payload)
       .eq('id', id)
       .select('*')

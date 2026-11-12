@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../../backend/db/tenantTable';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import {
   getUserRole,
@@ -52,10 +52,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     const access = await requirePlaybookAccess(req, res, companyId);
     if (!access) return;
-    const { data, error } = await supabase
-      .from('virality_playbooks')
+    // S2: pinned to the company the role check above authorized (never the raw query value alone).
+    const { data, error } = await tenantTable('virality_playbooks', tenantContextFor(access, companyId as string))
       .select('*')
-      .eq('company_id', companyId)
       .order('updated_at', { ascending: false });
     if (error) {
       return res.status(500).json({ error: 'Failed to load playbooks' });
@@ -92,7 +91,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
     const payload = {
-      company_id: companyId,
       name,
       objective,
       platforms,
@@ -105,8 +103,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    const { data, error } = await supabase
-      .from('virality_playbooks')
+    // S2: company_id stamped by the seam with the company requireCapability authorized.
+    const { data, error } = await tenantTable('virality_playbooks', tenantContextFor(guard.principal, companyId))
       .insert(payload)
       .select('*')
       .single();
