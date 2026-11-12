@@ -54,23 +54,28 @@ async function handler(
   }
 
   // ── 3. Resolve the user's internal ID ────────────────────────────────────
-  const { data: userRow } = await supabase
-    .from('users')
-    .select('id')
-    .or(`supabase_uid.eq.${supabaseUid},email.eq.${email.toLowerCase()}`)
-    .maybeSingle();
+  // Two exact reads - never an interpolated .or() filter string. A read error refuses.
+  const byUid = await supabase.from('users').select('id').eq('supabase_uid', supabaseUid).maybeSingle();
+  const byEmail = byUid.data || byUid.error
+    ? { data: null, error: null }
+    : await supabase.from('users').select('id').eq('email', email.toLowerCase()).maybeSingle();
+  if (byUid.error || byEmail.error) return res.status(500).json({ error: 'Could not check your company.' });
+  const userRow = byUid.data ?? byEmail.data;
 
   // If the user has no DB row yet (edge case during onboarding), let setup-company handle it
   if (!userRow) return res.status(200).json({ matched: false });
 
   // ── 4. Find a company whose domain matches the user's email domain ────────
   // Check both website_domain and admin_email_domain.
-  const { data: company } = await supabase
-    .from('companies')
-    .select('id, name')
-    .eq('status', 'active')
-    .or(`website_domain.eq.${emailDomain},admin_email_domain.eq.${emailDomain}`)
-    .maybeSingle();
+  // website_domain first, then admin_email_domain - two exact reads, no interpolated .or().
+  const byWebsite = await supabase
+    .from('companies').select('id, name').eq('status', 'active').eq('website_domain', emailDomain).maybeSingle();
+  const byAdminDomain = byWebsite.data || byWebsite.error
+    ? { data: null, error: null }
+    : await supabase
+        .from('companies').select('id, name').eq('status', 'active').eq('admin_email_domain', emailDomain).maybeSingle();
+  if (byWebsite.error || byAdminDomain.error) return res.status(500).json({ error: 'Could not check your company.' });
+  const company = byWebsite.data ?? byAdminDomain.data;
 
   if (!company) return res.status(200).json({ matched: false });
 

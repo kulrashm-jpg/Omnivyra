@@ -122,6 +122,23 @@ describe('same-tenant use works; errors are not ignored', () => {
     expect(postsOf(S_A).map((p) => p.blog_id)).toEqual(['blog-a2', 'blog-a1']);
   });
 
+  // 05/e9 (2026-11-12): the ownership check compares a SET of normalised ids.
+  it('a REPEATED own blog id is one blog, not a foreign reference (200)', async () => {
+    const res = await call('PATCH', S_A, { posts: [{ blog_id: 'blog-a1', position: 0 }, { blog_id: 'blog-a1', position: 1 }] });
+    expect(res.code).toBe(200);
+  });
+
+  it('an own blog id with surrounding whitespace is the same blog (200), stored trimmed', async () => {
+    const res = await call('PATCH', S_A, { posts: [{ blog_id: ' blog-a2 ', position: 0 }, { blog_id: 'blog-a2', position: 1 }] });
+    expect(res.code).toBe(200);
+    expect(postsOf(S_A).map((p) => p.blog_id)).toEqual(['blog-a2', 'blog-a2']);
+  });
+
+  it('control: a foreign id mixed with own ids is still refused 400', async () => {
+    const res = await call('PATCH', S_A, { posts: [{ blog_id: 'blog-a1', position: 0 }, { blog_id: 'blog-b1', position: 1 }] });
+    expect(res.code).toBe(400);
+  });
+
   it('a failed clear is a 500, and no insert follows it', async () => {
     failDelete = true;
     const res = await call('PATCH', S_A, { posts: [{ blog_id: 'blog-a2', position: 0 }] });
