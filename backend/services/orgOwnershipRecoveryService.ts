@@ -70,28 +70,35 @@ interface OrgRow { id: string; status: string | null }
 interface RoleRow { user_id: string; company_id: string; role: string | null; status: string | null }
 interface UserRow { id: string; is_deleted: boolean | null }
 
+// PRIVILEGE (2026-11-12): these reads THROW on error. A failed read used to be
+// "no org / no user / no membership" - a refusal with a false reason (and an
+// ambiguous membership, e.g. duplicate rows, read as "none"). Callers' routes
+// answer a thrown error as a 500, which is the truthful answer.
 async function fetchOrg(orgId: string): Promise<OrgRow | null> {
-  const { data } = await ownedDbTable('companies')
+  const { data, error } = await ownedDbTable('companies')
     .select('id, status')
     .eq('id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[orgOwnershipRecovery] org read failed for ${orgId}: ${error.message}`);
   return (data as OrgRow | null) ?? null;
 }
 
 async function fetchUser(userId: string): Promise<UserRow | null> {
-  const { data } = await ownedDbTable('users')
+  const { data, error } = await ownedDbTable('users')
     .select('id, is_deleted')
     .eq('id', userId)
     .maybeSingle();
+  if (error) throw new Error(`[orgOwnershipRecovery] user read failed for ${userId}: ${error.message}`);
   return (data as UserRow | null) ?? null;
 }
 
 async function fetchRole(orgId: string, userId: string): Promise<RoleRow | null> {
-  const { data } = await ownedDbTable('user_company_roles')
+  const { data, error } = await ownedDbTable('user_company_roles')
     .select('user_id, company_id, role, status')
     .eq('user_id', userId)
     .eq('company_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[orgOwnershipRecovery] membership read failed for ${userId}@${orgId}: ${error.message}`);
   return (data as RoleRow | null) ?? null;
 }
 
@@ -161,11 +168,21 @@ export async function promoteMemberToAdmin(input: {
     return { ok: true, previousRole, newRole: previousRole, idempotent: true };
   }
 
-  const { error } = await ownedDbTable('user_company_roles')
+  // CLASS 2 (2026-11-12): CAS on the row as READ (role + status 'active') with
+  // a row count. Unconditioned, a concurrent SUPER_ADMIN grant was overwritten
+  // to COMPANY_ADMIN, and a row deactivated in between still got the admin role.
+  let cas = ownedDbTable('user_company_roles')
     .update({ role: 'COMPANY_ADMIN', updated_at: new Date().toISOString() })
     .eq('user_id', input.userId)
-    .eq('company_id', input.orgId);
+    .eq('company_id', input.orgId)
+    .eq('status', 'active');
+  cas = previousRole === null ? cas.is('role', null) : cas.eq('role', previousRole);
+  const { data: promoted, error } = await cas.select('user_id');
 
+  if (!error && (!Array.isArray(promoted) || promoted.length !== 1)) {
+    logger.warn('org_recovery_promote_stale', { orgId: input.orgId, userId: input.userId, previousRole, rows: Array.isArray(promoted) ? promoted.length : null });
+    return { ok: false, reason: 'STALE_MEMBERSHIP' };
+  }
   if (error) {
     logger.error('org_recovery_promote_failed', {
       orgId: input.orgId,
