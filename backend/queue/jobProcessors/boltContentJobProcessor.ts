@@ -197,6 +197,9 @@ export async function getCachedMaster(
     // hit_count was not selected, so `undefined + 1` would have written NaN. Its own try/catch,
     // so a counter failure can never turn a HIT into a miss (a miss regenerates and costs credits).
     // Read-modify-write: concurrent hits can under-count, acceptable for a usage counter.
+    // AWAITED DELIBERATELY: do not "optimise" this back into fire-and-forget. A floated write can
+    // be lost when the worker finishes the job or is torn down; that IS the bug this replaced. If
+    // this ever moves onto a request path, derive the count from logs or sample 1-in-N instead.
     try {
       const current = Number((data as { hit_count?: unknown }).hit_count);
       const { error } = await ownedDbTable('master_content_cache')
