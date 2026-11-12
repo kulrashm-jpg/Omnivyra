@@ -264,21 +264,53 @@ describe('ownerCompanyOfRow (derive-then-authorize, R10)', () => {
   const col = TENANT_TABLES.campaigns.column;
   it('returns ONLY the owning company id (lowercase), read by id, never row data', async () => {
     const HEX = 'abcdef12-3456-4789-8abc-def012345678';
-    parentRow = { [col]: HEX.toUpperCase() };
+    limitRows.campaigns = [{ [col]: HEX.toUpperCase() }];
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'playbook by id')).resolves.toBe(HEX);
-    expect(calls.map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['id', 'c-1']], ['maybeSingle', []]]);
+    expect(calls.map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['id', 'c-1']], ['limit', [51]]]);
   });
   it('missing, unreadable, NULL-tenant or non-uuid tenant -> null (uniform 404); a reason is required', async () => {
-    parentRow = null;
+    limitRows.campaigns = [];
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
-    parentRow = { [col]: A }; parentError = { code: '57014' };
+    limitRows.campaigns = [{ [col]: A }]; limitError.campaigns = { code: '57014' };
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
-    parentError = null; parentRow = { [col]: null };
+    limitError = {}; limitRows.campaigns = [{ [col]: null }];
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
-    parentRow = { [col]: 'not-a-uuid' };
+    limitRows.campaigns = [{ [col]: 'not-a-uuid' }];
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
     await expect(ownerCompanyOfRow('campaigns', '', 'by id')).resolves.toBeNull();
     await expect(ownerCompanyOfRow('campaigns', 'c-1', '')).rejects.toThrow(/reason/);
+    await expect(ownerCompanyOfRow('no_such_table' as never, 'c-1', 'by id')).rejects.toThrow(/TENANT_TABLE_UNKNOWN/);
+  });
+  it('a CHILD row is followed up its parent chain to the root company (55: daily_content_plans by plan id)', async () => {
+    const via = TENANT_CHILD_TABLES.daily_content_plans.via;
+    limitRows.daily_content_plans = [{ [via]: 'c-7' }];
+    limitRows.campaigns = [{ [col]: A }];
+    await expect(ownerCompanyOfRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toBe(A);
+    expect(calls.map((c) => [c.table, c.op, c.args])).toEqual([
+      ['daily_content_plans', 'select', [via]], ['daily_content_plans', 'eq', ['id', 'plan-1']], ['daily_content_plans', 'limit', [51]],
+      ['campaigns', 'select', [col]], ['campaigns', 'eq', ['id', 'c-7']], ['campaigns', 'limit', [51]],
+    ]);
+  });
+  it('two hops with a non-id key (content_asset_versions -> content_assets.asset_id -> campaigns)', async () => {
+    limitRows.content_asset_versions = [{ asset_id: 'a-1' }];
+    limitRows.content_assets = [{ campaign_id: 'c-1' }];
+    limitRows.campaigns = [{ [col]: A }];
+    await expect(ownerCompanyOfRow('content_asset_versions', 'v-1', 'version by id')).resolves.toBe(A);
+  });
+  it('a NULL link, a missing parent, or a non-unique key whose rows DISAGREE -> null (never a guess)', async () => {
+    const via = TENANT_CHILD_TABLES.daily_content_plans.via;
+    limitRows.daily_content_plans = [{ [via]: null }];
+    await expect(ownerCompanyOfRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toBeNull();
+    limitRows.daily_content_plans = [{ [via]: 'c-7' }]; limitRows.campaigns = [];
+    await expect(ownerCompanyOfRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toBeNull();
+    const ccol = TENANT_TABLES.content_core_asset.column;
+    limitRows.content_asset_platform_override = [{ attachment_id: 'att-1' }];
+    limitRows.content_asset_attachment = [{ content_core_id: 'core-1' }];
+    limitRows.content_core_asset = [{ [ccol]: A }, { [ccol]: B }];
+    await expect(ownerCompanyOfRow('content_asset_platform_override', 'o-1', 'override by id')).resolves.toBeNull();
+    expect(calls.filter((c) => c.table === 'content_core_asset' && c.op === 'limit')).toHaveLength(1); // reached the root: null is the disagreement
+    limitRows.content_core_asset = [{ [ccol]: A }, { [ccol]: A }];
+    await expect(ownerCompanyOfRow('content_asset_platform_override', 'o-1', 'override by id')).resolves.toBe(A);
   });
 });
 
