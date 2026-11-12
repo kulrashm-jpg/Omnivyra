@@ -37,8 +37,8 @@ const storageCalls: Array<{ op: string; bucket: string; args: unknown; rowsAtCal
 let storageRemoveError: string | null = null;
 let deleteError: string | null = null;
 
-const CO = 'company-aaaa';
-const OTHER_CO = 'company-bbbb';
+const CO = 'aaaaaaaa-0000-4000-8000-00000000000a';
+const OTHER_CO = 'bbbbbbbb-0000-4000-8000-00000000000b';
 const RENDER = (co = CO, digest = 'abc123abc123') =>
   `creator/${co}/campaign-1/user-1/banner-${digest}.png`;
 const signedUrl = (bucket: string, p: string) =>
@@ -109,6 +109,10 @@ jest.mock('../../services/telemetry/telemetryDispatcher', () => ({ trackEvent: j
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { deleteCreatorAssetRecord } = require('../../services/creatorAssetPersistenceService');
+// S2: the service takes the tenant context first; company ids are uuids.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { systemTenantContext } = require('../../db/tenantTable');
+const ctxOf = (co: string) => systemTenantContext(co, 'test: creator asset delete');
 
 function seedAsset(opts: { id?: string; companyId?: string; url?: string | null } = {}) {
   const id = opts.id ?? `asset-${assets.length + 1}`;
@@ -129,7 +133,7 @@ beforeEach(() => {
 describe('A — the rendered object is removed', () => {
   it('CRITICAL: deleting a creator asset removes its rendered object', async () => {
     const id = seedAsset();
-    const r = await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    const r = await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(r.deletedAsset).toBe(true);
     expect(removes()).toHaveLength(1);
     expect(removes()[0].bucket).toBe('media-images');
@@ -138,14 +142,14 @@ describe('A — the rendered object is removed', () => {
 
   it('works for a public url as well as a signed one', async () => {
     const id = seedAsset({ url: publicUrl('media-images', RENDER()) });
-    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(removes()[0].args).toEqual([RENDER()]);
   });
 
   it('works for a PDF render in the document bucket', async () => {
     const p = `creator/${CO}/campaign-1/user-1/doc-abc123abc123.pdf`;
     const id = seedAsset({ url: signedUrl('media-documents', p) });
-    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(removes()[0].bucket).toBe('media-documents');
     expect(removes()[0].args).toEqual([p]);
   });
@@ -154,12 +158,12 @@ describe('A — the rendered object is removed', () => {
     // Ordering is the whole safety argument: orphaned bytes are a cost, a row
     // pointing at missing bytes is a defect.
     const id = seedAsset();
-    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(removes()[0].rowsAtCall).toBe(0);   // row already gone when storage ran
   });
 
   it('never mints a URL while deleting', async () => {
-    await deleteCreatorAssetRecord({ assetId: seedAsset(), companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: seedAsset() });
     expect(storageCalls.filter((c) => c.op !== 'remove')).toHaveLength(0);
   });
 });
@@ -167,7 +171,7 @@ describe('A — the rendered object is removed', () => {
 describe('B — nothing else can ever be removed', () => {
   it('CRITICAL: a foreign company cannot delete the asset, and touches no object', async () => {
     const id = seedAsset({ companyId: CO });
-    const r = await deleteCreatorAssetRecord({ assetId: id, companyId: OTHER_CO });
+    const r = await deleteCreatorAssetRecord(ctxOf(OTHER_CO), { assetId: id });
     expect(r.deletedAsset).toBe(false);
     expect(assets).toHaveLength(1);
     expect(storageCalls).toHaveLength(0);
@@ -175,7 +179,7 @@ describe('B — nothing else can ever be removed', () => {
 
   it("CRITICAL: a url naming ANOTHER company's namespace is refused", async () => {
     const id = seedAsset({ url: signedUrl('media-images', RENDER(OTHER_CO)) });
-    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(removes()).toHaveLength(0);
   });
 
@@ -183,20 +187,20 @@ describe('B — nothing else can ever be removed', () => {
     for (const bucket of ['media-uploads', 'secrets', 'avatars']) {
       assets.length = 0; storageCalls.length = 0;
       const id = seedAsset({ url: signedUrl(bucket, RENDER()) });
-      await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+      await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
       expect(removes()).toHaveLength(0);
     }
   });
 
   it('CRITICAL: a path outside the creator namespace is refused', async () => {
     const id = seedAsset({ url: signedUrl('media-images', `${CO}/not-a-render.png`) });
-    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(removes()).toHaveLength(0);
   });
 
   it('CRITICAL: traversal is refused', async () => {
     const id = seedAsset({ url: signedUrl('media-images', `creator/${CO}/../../other/x.png`) });
-    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(removes()).toHaveLength(0);
   });
 
@@ -204,7 +208,7 @@ describe('B — nothing else can ever be removed', () => {
     for (const u of ['not a url', 'https://evil.example.com/x.png', 'https://ref.supabase.co/other/path']) {
       assets.length = 0; storageCalls.length = 0;
       const id = seedAsset({ url: u });
-      await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+      await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
       expect(removes()).toHaveLength(0);
     }
   });
@@ -213,7 +217,7 @@ describe('B — nothing else can ever be removed', () => {
     for (const u of [null, '', '   ']) {
       assets.length = 0; storageCalls.length = 0;
       const id = seedAsset({ url: u });
-      const r = await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+      const r = await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
       expect(r.deletedAsset).toBe(true);
       expect(removes()).toHaveLength(0);
     }
@@ -221,10 +225,11 @@ describe('B — nothing else can ever be removed', () => {
 
   it('CRITICAL: the caller supplies no bucket or path — the signature has nowhere for one', async () => {
     // Location comes only from the deleted row.
-    expect(deleteCreatorAssetRecord).toHaveLength(1);
+    // S2: (ctx, input) - the tenant context and the row id; still no location parameter.
+    expect(deleteCreatorAssetRecord).toHaveLength(2);
     const id = seedAsset();
-    await deleteCreatorAssetRecord({
-      assetId: id, companyId: CO,
+    await deleteCreatorAssetRecord(ctxOf(CO), {
+      assetId: id,
       bucket: 'secrets', path: 'creator/x/y/z.png', url: signedUrl('secrets', 'a/b.png'),
     } as never);
     expect(removes()[0].bucket).toBe('media-images');
@@ -239,7 +244,7 @@ describe('C — a shared object is never pulled from under another row', () => {
     const shared = signedUrl('media-images', RENDER());
     const doomed = seedAsset({ url: shared });
     seedAsset({ id: 'sibling', url: shared });
-    await deleteCreatorAssetRecord({ assetId: doomed, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: doomed });
     expect(removes()).toHaveLength(0);
     expect(assets.map((a) => a.id)).toEqual(['sibling']);
   });
@@ -248,16 +253,16 @@ describe('C — a shared object is never pulled from under another row', () => {
     const shared = signedUrl('media-images', RENDER());
     const a = seedAsset({ url: shared });
     const b = seedAsset({ id: 'sibling', url: shared });
-    await deleteCreatorAssetRecord({ assetId: a, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: a });
     expect(removes()).toHaveLength(0);
-    await deleteCreatorAssetRecord({ assetId: b, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: b });
     expect(removes()).toHaveLength(1);
   });
 
   it('a DIFFERENT object does not block this one', async () => {
     const doomed = seedAsset();
     seedAsset({ id: 'other', url: signedUrl('media-images', RENDER(CO, 'ffffffffffff')) });
-    await deleteCreatorAssetRecord({ assetId: doomed, companyId: CO });
+    await deleteCreatorAssetRecord(ctxOf(CO), { assetId: doomed });
     expect(removes()).toHaveLength(1);
   });
 });
@@ -266,20 +271,20 @@ describe('D — failure semantics match the sibling deletions', () => {
   it('storage failure still reports success — the row deletion is committed', async () => {
     storageRemoveError = 'network down';
     const id = seedAsset();
-    const r = await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    const r = await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(r.deletedAsset).toBe(true);
     expect(assets).toHaveLength(0);
   });
 
   it('an object already gone is success, not an error', async () => {
     storageRemoveError = 'Object not found';
-    const r = await deleteCreatorAssetRecord({ assetId: seedAsset(), companyId: CO });
+    const r = await deleteCreatorAssetRecord(ctxOf(CO), { assetId: seedAsset() });
     expect(r.deletedAsset).toBe(true);
   });
 
   it('a database failure throws and touches no storage', async () => {
     deleteError = 'deadlock detected';
-    await expect(deleteCreatorAssetRecord({ assetId: seedAsset(), companyId: CO }))
+    await expect(deleteCreatorAssetRecord(ctxOf(CO), { assetId: seedAsset() }))
       .rejects.toThrow(/Failed to delete creator asset/i);
     expect(storageCalls).toHaveLength(0);
   });
@@ -287,7 +292,7 @@ describe('D — failure semantics match the sibling deletions', () => {
   it('attachment deletion still runs', async () => {
     const id = seedAsset();
     attachments.push({ id: 'at-1', company_id: CO, creator_asset_id: id });
-    const r = await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    const r = await deleteCreatorAssetRecord(ctxOf(CO), { assetId: id });
     expect(r.deletedAttachments).toBe(1);
     expect(attachments).toHaveLength(0);
   });
@@ -306,7 +311,9 @@ describe('E — mutation guards on the shipped code', () => {
   });
 
   it('M2: the DB delete precedes the storage call in source order', () => {
-    expect(SVC.indexOf("ownedDbTable('creator_assets')\n    .delete()"))
+    // S2: the delete runs through the tenant seam.
+    expect(SVC.indexOf("tenantTable('creator_assets', ctx)\n    .delete()")).toBeGreaterThan(-1);
+    expect(SVC.indexOf("tenantTable('creator_assets', ctx)\n    .delete()"))
       .toBeLessThan(SVC.indexOf('await removeRenderedObjectsForDeletedAsset('));
   });
 
@@ -325,7 +332,9 @@ describe('E — mutation guards on the shipped code', () => {
   });
 
   it('M5: company scoping guards both the row and the namespace', () => {
-    expect(SVC).toContain("eq('company_id', input.companyId)");
+    // S2: company scoping is the tenant seam on the delete chain.
+    expect(SVC).toContain("tenantTable('creator_assets', ctx)\n    .delete()");
+    expect(SVC).not.toContain("ownedDbTable('creator_assets')");
     expect(SVC).toContain('path.startsWith(`${RENDER_NAMESPACE}${companyId}/`)');
   });
 

@@ -44,6 +44,7 @@ import {
   attachCreatorAsset,
   upsertCreatorAssetRecord,
 } from '../creatorAssetPersistenceService';
+import { systemTenantContext } from '../../db/tenantTable';
 import {
   resolveRenderStrategy as _resolveRenderStrategy,
   resolveWriterOrCanonical,
@@ -377,9 +378,8 @@ export async function persistCreatorAssetRow(input: {
   try {
     const userId = input.userId || input.companyId;
     if (sourceType && sourceId) {
-      const result = await attachCreatorAsset({
+      const result = await attachCreatorAsset(systemTenantContext(input.companyId, 'creator orchestrator: persist generated asset'), {
         tenantId: input.companyId,
-        companyId: input.companyId,
         userId,
         sourceType,
         sourceId,
@@ -396,9 +396,8 @@ export async function persistCreatorAssetRow(input: {
       });
       return String((result as Record<string, unknown>).creator_asset_id ?? (result as Record<string, unknown>).id ?? '');
     }
-    const asset = await upsertCreatorAssetRecord({
+    const asset = await upsertCreatorAssetRecord(systemTenantContext(input.companyId, 'creator orchestrator: persist generated asset'), {
       tenantId: input.companyId,
-      companyId: input.companyId,
       userId,
       sourceType: null,
       sourceId: null,

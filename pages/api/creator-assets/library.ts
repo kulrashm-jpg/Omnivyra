@@ -17,6 +17,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantContextFor } from '@/backend/db/tenantTable';
 import {
   libraryReadAsset,
   libraryListAssets,
@@ -36,12 +37,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = String(req.body?.company_id || req.query.company_id || '').trim();
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // S2: the tenant context is built from the company the access check just authorized.
+  const tenant = tenantContextFor(access, companyId);
 
   try {
     if (req.method === 'GET') {
       const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
       if (id) {
-        const record = await libraryReadAsset({ companyId, assetId: id });
+        const record = await libraryReadAsset(tenant, { assetId: id });
         return res.status(200).json({ asset: record?.envelope ?? null, server_meta: record?.serverMeta ?? null });
       }
       const types = typeof req.query.type === 'string' && req.query.type.trim()
@@ -50,8 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const tags = typeof req.query.tags === 'string' && req.query.tags.trim()
         ? req.query.tags.split(',').map((t) => t.trim()).filter(Boolean)
         : undefined;
-      const records = await libraryListAssets({
-        companyId,
+      const records = await libraryListAssets(tenant, {
         q: typeof req.query.q === 'string' ? req.query.q : undefined,
         creatorTypes: types,
         tags,
@@ -68,14 +70,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || !envelope.id) {
         return res.status(400).json({ error: 'asset envelope with id is required' });
       }
-      const record = await libraryWriteAsset({ companyId, userId: access.userId, envelope });
+      const record = await libraryWriteAsset(tenant, { userId: access.userId, envelope });
       return res.status(200).json({ asset: record.envelope, server_meta: record.serverMeta });
     }
 
     // DELETE — hard remove (identity convergence path).
     const id = String(req.query.id || req.body?.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id required' });
-    const removed = await libraryRemoveAsset({ companyId, assetId: id });
+    const removed = await libraryRemoveAsset(tenant, { assetId: id });
     return res.status(200).json({ success: true, removed });
   } catch (error) {
     // SEC-1: an id held by another company is refused, never overwritten.

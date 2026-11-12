@@ -138,17 +138,20 @@ function tableApi(table: string) {
 
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => tableApi(t) }));
 
-import {
-  upsertCreatorAssetRecord,
-  libraryWriteAsset,
-  libraryReadAsset,
-  archiveLibraryAsset,
-  softDeleteLibraryAsset,
-} from '../../services/creatorAssetPersistenceService';
+import * as persistence from '../../services/creatorAssetPersistenceService';
+// S2: the service now takes the tenant context first. These adapters keep each case's call shape; the
+// context is built from the case's company (a uuid), and the company no longer travels in the input.
+import { systemTenantContext } from '../../db/tenantTable';
+const ctxOf = (companyId: string) => systemTenantContext(companyId, 'test: creator asset re-home convergence');
+const upsertCreatorAssetRecord = ({ companyId, ...input }: any): ReturnType<typeof persistence.upsertCreatorAssetRecord> => persistence.upsertCreatorAssetRecord(ctxOf(companyId), input);
+const libraryWriteAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.libraryWriteAsset> => persistence.libraryWriteAsset(ctxOf(companyId), input);
+const libraryReadAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.libraryReadAsset> => persistence.libraryReadAsset(ctxOf(companyId), input);
+const archiveLibraryAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.archiveLibraryAsset> => persistence.archiveLibraryAsset(ctxOf(companyId), input);
+const softDeleteLibraryAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.softDeleteLibraryAsset> => persistence.softDeleteLibraryAsset(ctxOf(companyId), input);
 
-const A = 'co-A';
-const B = 'co-B';
-const B_INPUT = { companyId: B, userId: 'user-of-co-B', creatorType: 'image', title: 'Creator asset' };
+const A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+const B = 'bbbbbbbb-0000-4000-8000-00000000000b';
+const B_INPUT = { companyId: B, userId: `user-of-${B}`, creatorType: 'image', title: 'Creator asset' };
 const A_SECRET = 'A-only confidential deck';
 
 function reset() {
@@ -171,7 +174,7 @@ async function deterministicIdOfB(): Promise<string> {
 async function plantAsA(id: string): Promise<string> {
   await libraryWriteAsset({
     companyId: A,
-    userId: 'user-of-co-A',
+    userId: `user-of-${A}`,
     envelope: { id, currentVersion: 1, versions: [{ version: 1, op: 'generate', payload: { title: A_SECRET }, createdAt: '2026-01-01' }] },
   });
   return JSON.stringify(db.creator_assets.find((r) => r.id === id));

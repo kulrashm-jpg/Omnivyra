@@ -213,10 +213,11 @@ describe('F — Phase 74/78 lifecycle is untouched', () => {
     // Anchored to the DELETE chain. A bare substring passes on the sharer
     // scan's identical projection, so it would not notice the delete narrowing
     // back to `url` — the exact Phase 78 defect.
+    // S2: the company predicate is the tenant seam's (tenantTable applies it before .eq('id')).
     expect(PERSIST).toContain(
+      "tenantTable('creator_assets', ctx)\n" +
       "    .delete()\n" +
       "    .eq('id', input.assetId)\n" +
-      "    .eq('company_id', input.companyId)\n" +
       "    .select('id, url, files, metadata');",
     );
     expect(PERSIST).toContain('await removeRenderedObjectsForDeletedAsset(');

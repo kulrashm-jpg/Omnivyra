@@ -23,8 +23,12 @@ import {
   getCampaignState,
   resumeCampaign,
 } from '../../services/campaignExecutionStateService';
+import { systemTenantContext } from '../../db/tenantTable';
 
 const CAMPAIGN = 'campaign-exactly-once-1';
+// S2: the checkpoint service runs under the campaign's tenant; the campaign row below belongs to this company.
+const COMPANY = '11111111-1111-4111-8111-111111111111';
+const CTX = systemTenantContext(COMPANY, 'test: campaign exactly-once execution');
 
 type StateRow = Record<string, unknown>;
 type CheckpointRow = Record<string, unknown>;
@@ -176,6 +180,22 @@ function createMocks() {
       };
     }
 
+    if (table === 'campaigns') {
+      // tenantChildTable verifies the parent campaign under the tenant: select('id').eq(company_id).eq(id).maybeSingle()
+      return {
+        select: () => ({
+          eq: (c1: string, v1: string) => ({
+            eq: (c2: string, v2: string) => ({
+              maybeSingle: () => Promise.resolve({
+                data: c1 === 'company_id' && v1 === COMPANY && c2 === 'id' && v2 === CAMPAIGN ? { id: CAMPAIGN } : null,
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      };
+    }
+
     if (table === 'content_assets') {
       return {
         select: () => ({
@@ -234,12 +254,12 @@ describe('campaign_exactly_once_execution', () => {
 
   it('1. Crash after content generation but before markDayComplete: resume does NOT duplicate content', async () => {
     await startCampaign(CAMPAIGN, 4);
-    await createCheckpoint(CAMPAIGN, 1, 1);
+    await createCheckpoint(CTX, CAMPAIGN, 1, 1);
 
     const contentId = `content-${Date.now()}`;
     contentStore.set(contentId, { campaign_id: CAMPAIGN, week_number: 1, day: 'Monday' });
 
-    const { finalized, abandoned } = await resolveOrphanedCheckpoints(CAMPAIGN);
+    const { finalized, abandoned } = await resolveOrphanedCheckpoints(CTX, CAMPAIGN);
 
     expect(finalized).toContainEqual({ week: 1, day: 1 });
     expect(abandoned).not.toContainEqual({ week: 1, day: 1 });
@@ -251,9 +271,9 @@ describe('campaign_exactly_once_execution', () => {
 
   it('2. Crash before content save: content regenerates safely', async () => {
     await startCampaign(CAMPAIGN, 4);
-    await createCheckpoint(CAMPAIGN, 1, 1);
+    await createCheckpoint(CTX, CAMPAIGN, 1, 1);
 
-    const { finalized, abandoned } = await resolveOrphanedCheckpoints(CAMPAIGN);
+    const { finalized, abandoned } = await resolveOrphanedCheckpoints(CTX, CAMPAIGN);
 
     expect(abandoned).toContainEqual({ week: 1, day: 1 });
     expect(finalized).not.toContainEqual({ week: 1, day: 1 });
@@ -262,20 +282,20 @@ describe('campaign_exactly_once_execution', () => {
     expect(state?.current_week).toBe(1);
     expect(state?.current_day).toBe(1);
 
-    const cp = await createCheckpoint(CAMPAIGN, 1, 1);
+    const cp = await createCheckpoint(CTX, CAMPAIGN, 1, 1);
     expect(cp?.status).toBe('in_progress');
   });
 
   it('3. Repeated retries do not create duplicates', async () => {
     await startCampaign(CAMPAIGN, 4);
-    await createCheckpoint(CAMPAIGN, 1, 1);
+    await createCheckpoint(CTX, CAMPAIGN, 1, 1);
 
     const contentId = 'content-retry-1';
     contentStore.set(contentId, { campaign_id: CAMPAIGN, week_number: 1, day: 'Monday' });
 
-    await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
-    const result2 = await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
-    const result3 = await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
+    await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
+    const result2 = await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
+    const result3 = await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
 
     expect(result2).not.toBeNull();
     expect(result3).not.toBeNull();
@@ -287,19 +307,19 @@ describe('campaign_exactly_once_execution', () => {
 
   it('4. Progression advances only once', async () => {
     await startCampaign(CAMPAIGN, 4);
-    await createCheckpoint(CAMPAIGN, 1, 1);
+    await createCheckpoint(CTX, CAMPAIGN, 1, 1);
 
     const contentId = 'content-prog-1';
     contentStore.set(contentId, { campaign_id: CAMPAIGN, week_number: 1, day: 'Monday' });
 
-    await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
+    await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
 
     const state1 = await getCampaignState(CAMPAIGN);
     expect(state1?.current_week).toBe(1);
     expect(state1?.current_day).toBe(2);
 
-    await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
-    await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
+    await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
+    await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
 
     const state2 = await getCampaignState(CAMPAIGN);
     expect(state2?.current_week).toBe(1);
@@ -308,19 +328,19 @@ describe('campaign_exactly_once_execution', () => {
 
   it('edge: resolveOrphanedCheckpoints with no orphaned checkpoints returns empty', async () => {
     await startCampaign(CAMPAIGN, 4);
-    const { finalized, abandoned } = await resolveOrphanedCheckpoints(CAMPAIGN);
+    const { finalized, abandoned } = await resolveOrphanedCheckpoints(CTX, CAMPAIGN);
     expect(finalized).toEqual([]);
     expect(abandoned).toEqual([]);
   });
 
   it('edge: createCheckpoint for completed day returns null', async () => {
     await startCampaign(CAMPAIGN, 4);
-    await createCheckpoint(CAMPAIGN, 1, 1);
+    await createCheckpoint(CTX, CAMPAIGN, 1, 1);
     const contentId = 'content-completed-1';
     contentStore.set(contentId, { campaign_id: CAMPAIGN, week_number: 1, day: 'Monday' });
-    await completeCheckpoint(CAMPAIGN, 1, 1, contentId);
+    await completeCheckpoint(CTX, CAMPAIGN, 1, 1, contentId);
 
-    const cp = await createCheckpoint(CAMPAIGN, 1, 1);
+    const cp = await createCheckpoint(CTX, CAMPAIGN, 1, 1);
     expect(cp).toBeNull();
   });
 });

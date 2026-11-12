@@ -6,7 +6,7 @@ import { resolvePublishMedia } from '../../services/creator/creatorPublishResolu
 
 const mockList = listCreatorAssets as jest.Mock;
 const mockMetric = recordCreatorRenderMetric as jest.Mock;
-const ctx = { companyId: 'co', userId: 'u', platform: 'linkedin' };
+const ctx = { companyId: 'c0000000-0000-4000-8000-000000000000', userId: 'u', platform: 'linkedin' };
 beforeEach(() => { mockList.mockReset(); mockMetric.mockReset(); });
 
 describe('Single publishing-resolution path', () => {

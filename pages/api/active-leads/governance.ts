@@ -11,6 +11,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import { getUserRole } from '../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../backend/services/rbac/communityAiCapabilities';
 import {
@@ -52,7 +53,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
     const status = typeof req.query.status === 'string' && GOVERNANCE_POLICY_STATUSES.includes(req.query.status as GovernancePolicyStatus)
       ? (req.query.status as GovernancePolicyStatus)
       : undefined;
-    const items = await listPoliciesForOrg(companyId, { policyKey, status });
+    const items = await listPoliciesForOrg(tenantContextFor(ctx, companyId), { policyKey, status });
     return res.status(200).json({ items, total: items.length });
   } catch (err: any) {
     console.error('[governance GET] failed:', err?.message);
@@ -75,8 +76,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
   try {
-    const result = await createPolicyDraft({
-      organizationId: companyId,
+    const result = await createPolicyDraft(tenantContextFor(ctx, companyId), {
       policyKey,
       body: (body.body ?? {}) as Record<string, unknown>,
       rationale: typeof body.rationale === 'string' ? body.rationale : null,
@@ -113,7 +113,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
   try {
     let result;
     if (action === 'activate') {
-      result = await activatePolicyDraft({ organizationId: companyId, policyDraftId: policyId, actorUserId: ctx.userId });
+      result = await activatePolicyDraft(tenantContextFor(ctx, companyId), { policyDraftId: policyId, actorUserId: ctx.userId });
       void publishRealtime({
         organizationId: companyId,
         topic: 'governance' as never,
@@ -121,7 +121,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
         payload: { policy_id: result.id, policy_key: result.policy_key, version: result.version },
       });
     } else {
-      result = await archivePolicy({ organizationId: companyId, policyId });
+      result = await archivePolicy(tenantContextFor(ctx, companyId), { policyId });
     }
     return res.status(200).json({ ok: true, policy: result });
   } catch (err: any) {

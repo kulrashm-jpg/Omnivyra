@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantContextFor } from '@/backend/db/tenantTable';
 import {
   listCreatorAssets,
   upsertCreatorAssetRecord,
@@ -55,6 +56,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = String(req.body?.company_id || req.query.company_id || '').trim();
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // S2: the tenant context is built from the company the access check just authorized.
+  const tenant = tenantContextFor(access, companyId);
 
   // ── DELETE: remove a creator_assets row (id in query OR body) ─────────────
   // Lives on the static index path because dynamic [id] routes are
@@ -66,7 +69,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       : '').trim();
     if (!id) return res.status(400).json({ error: 'id required' });
     try {
-      const result = await deleteCreatorAssetRecord({ assetId: id, companyId });
+      const result = await deleteCreatorAssetRecord(tenant, { assetId: id });
       if (!result.deletedAsset) {
         return res.status(404).json({ error: 'Creator asset not found for this company' });
       }
@@ -82,8 +85,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
       const aliases = creatorTypeAliases(req.query.creator_type || req.query.type);
-      const rows = await listCreatorAssets({
-        companyId,
+      const rows = await listCreatorAssets(tenant, {
         userId: access.userId,
         creatorTypes: aliases.length > 0 ? aliases : undefined,
         limit: Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : 48,
@@ -105,9 +107,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const row = await upsertCreatorAssetRecord({
+    const row = await upsertCreatorAssetRecord(tenant, {
       tenantId: companyId,
-      companyId,
       userId: access.userId,
       sourceType: asSourceType(req.body?.source_type),
       sourceId: typeof req.body?.source_id === 'string' ? req.body.source_id : null,

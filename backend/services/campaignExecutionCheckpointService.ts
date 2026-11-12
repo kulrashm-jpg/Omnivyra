@@ -1,12 +1,16 @@
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantChildTable, type TenantContext } from '../db/tenantTable';
 /**
  * Campaign Execution Checkpoint Service
  * Guarantees exactly-once progression advancement via atomic checkpoints.
  *
  * Flow:
- * 1. Before content gen: createCheckpoint(campaignId, week, day)
- * 2. After content stored: completeCheckpoint(campaignId, week, day, contentId)
- * 3. On resume: resolveOrphanedCheckpoints(campaignId) then resume
+ * 1. Before content gen: createCheckpoint(ctx, campaignId, week, day)
+ * 2. After content stored: completeCheckpoint(ctx, campaignId, week, day, contentId)
+ * 3. On resume: resolveOrphanedCheckpoints(ctx, campaignId) then resume
+ *
+ * Tenancy (S2): every exported function takes the TenantContext of the campaign's company. The checkpoint table
+ * (and daily_content_plans) are children of campaigns: tenantChildTable verifies the campaign belongs to the tenant
+ * BEFORE any read or write, and pins every statement to that campaign.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -44,14 +48,18 @@ function toCheckpoint(row: Record<string, unknown>): ExecutionCheckpoint {
   };
 }
 
-async function contentExists(contentId: string, source: ContentSource): Promise<boolean> {
+const checkpoints = (ctx: TenantContext, campaignId: string) =>
+  tenantChildTable('campaign_execution_checkpoint', ctx, campaignId);
+
+async function contentExists(ctx: TenantContext, campaignId: string, contentId: string, source: ContentSource): Promise<boolean> {
   if (!contentId) return false;
   if (source === 'content_assets') {
     const asset = await getContentAssetById(contentId);
     return asset != null;
   }
   if (source === 'daily_content_plans') {
-    const { data, error } = await ownedDbTable('daily_content_plans')
+    // S2: the plan must be one of THIS campaign's plans (tenantChildTable verifies the campaign is the tenant's).
+    const { data, error } = await (await tenantChildTable('daily_content_plans', ctx, campaignId))
       .select('id')
       .eq('id', contentId)
       .maybeSingle();
@@ -80,13 +88,13 @@ async function findContentForCheckpoint(
  * Create checkpoint BEFORE generating content. Idempotent: returns existing in_progress.
  */
 export async function createCheckpoint(
+  ctx: TenantContext,
   campaignId: string,
   week: number,
   day: number
 ): Promise<ExecutionCheckpoint | null> {
-  const { data: existing } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data: existing } = await (await checkpoints(ctx, campaignId))
     .select('*')
-    .eq('campaign_id', campaignId)
     .eq('week', week)
     .eq('day', day)
     .maybeSingle();
@@ -96,13 +104,12 @@ export async function createCheckpoint(
     if (status === 'completed') return null;
     if (status === 'in_progress') return toCheckpoint(existing as Record<string, unknown>);
     if (status === 'abandoned') {
-      const { data: updated, error } = await ownedDbTable('campaign_execution_checkpoint')
+      const { data: updated, error } = await (await checkpoints(ctx, campaignId))
         .update({
           status: 'in_progress',
           content_id: null,
           updated_at: new Date().toISOString(),
         })
-        .eq('campaign_id', campaignId)
         .eq('week', week)
         .eq('day', day)
         .select()
@@ -112,9 +119,8 @@ export async function createCheckpoint(
     }
   }
 
-  const { data: inserted, error } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data: inserted, error } = await (await checkpoints(ctx, campaignId))
     .insert({
-      campaign_id: campaignId,
       week,
       day,
       status: 'in_progress',
@@ -127,9 +133,8 @@ export async function createCheckpoint(
 
   if (error) {
     if ((error as any).code === '23505') {
-      const { data: conflict } = await ownedDbTable('campaign_execution_checkpoint')
+      const { data: conflict } = await (await checkpoints(ctx, campaignId))
         .select('*')
-        .eq('campaign_id', campaignId)
         .eq('week', week)
         .eq('day', day)
         .maybeSingle();
@@ -144,15 +149,15 @@ export async function createCheckpoint(
  * Complete checkpoint AFTER content stored. Updates checkpoint then calls markDayComplete.
  */
 export async function completeCheckpoint(
+  ctx: TenantContext,
   campaignId: string,
   week: number,
   day: number,
   contentId: string,
   contentSource: ContentSource = 'content_assets'
 ): Promise<{ checkpoint: ExecutionCheckpoint; state: Awaited<ReturnType<typeof markDayComplete>> } | null> {
-  const { data: row, error: fetchError } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data: row, error: fetchError } = await (await checkpoints(ctx, campaignId))
     .select('*')
-    .eq('campaign_id', campaignId)
     .eq('week', week)
     .eq('day', day)
     .maybeSingle();
@@ -166,14 +171,13 @@ export async function completeCheckpoint(
   }
   if (status !== 'in_progress') return null;
 
-  const { data: updated, error } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data: updated, error } = await (await checkpoints(ctx, campaignId))
     .update({
       status: 'completed',
       content_id: contentId,
       content_source: contentSource,
       updated_at: new Date().toISOString(),
     })
-    .eq('campaign_id', campaignId)
     .eq('week', week)
     .eq('day', day)
     .select()
@@ -189,17 +193,17 @@ export async function completeCheckpoint(
  * Abandon checkpoint (no content). Caller can retry generation.
  */
 export async function abandonCheckpoint(
+  ctx: TenantContext,
   campaignId: string,
   week: number,
   day: number
 ): Promise<ExecutionCheckpoint | null> {
-  const { data: updated, error } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data: updated, error } = await (await checkpoints(ctx, campaignId))
     .update({
       status: 'abandoned',
       content_id: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('campaign_id', campaignId)
     .eq('week', week)
     .eq('day', day)
     .eq('status', 'in_progress')
@@ -214,13 +218,12 @@ export async function abandonCheckpoint(
 /**
  * Resolve orphaned checkpoints on resume. In_progress + content exists → finalize. In_progress + no content → abandon.
  */
-export async function resolveOrphanedCheckpoints(campaignId: string): Promise<{
+export async function resolveOrphanedCheckpoints(ctx: TenantContext, campaignId: string): Promise<{
   finalized: { week: number; day: number }[];
   abandoned: { week: number; day: number }[];
 }> {
-  const { data: rows, error } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data: rows, error } = await (await checkpoints(ctx, campaignId))
     .select('*')
-    .eq('campaign_id', campaignId)
     .eq('status', 'in_progress');
 
   if (error || !rows?.length) return { finalized: [], abandoned: [] };
@@ -238,11 +241,11 @@ export async function resolveOrphanedCheckpoints(campaignId: string): Promise<{
     if (!contentId) {
       contentId = await findContentForCheckpoint(campaignId, week, day);
     }
-    if (contentId && (await contentExists(contentId, source))) {
-      await completeCheckpoint(campaignId, week, day, contentId, source);
+    if (contentId && (await contentExists(ctx, campaignId, contentId, source))) {
+      await completeCheckpoint(ctx, campaignId, week, day, contentId, source);
       finalized.push({ week, day });
     } else {
-      await abandonCheckpoint(campaignId, week, day);
+      await abandonCheckpoint(ctx, campaignId, week, day);
       abandoned.push({ week, day });
     }
   }
@@ -254,13 +257,13 @@ export async function resolveOrphanedCheckpoints(campaignId: string): Promise<{
  * Get in-progress checkpoint for (campaign, week, day) if any.
  */
 export async function getCheckpoint(
+  ctx: TenantContext,
   campaignId: string,
   week: number,
   day: number
 ): Promise<ExecutionCheckpoint | null> {
-  const { data, error } = await ownedDbTable('campaign_execution_checkpoint')
+  const { data, error } = await (await checkpoints(ctx, campaignId))
     .select('*')
-    .eq('campaign_id', campaignId)
     .eq('week', week)
     .eq('day', day)
     .maybeSingle();

@@ -30,6 +30,7 @@
 
 import { resolveActivityCreative, activityCreativeIsRefinable } from './activityCreativeService';
 import { libraryReadAsset, libraryWriteAsset } from '../creatorAssetPersistenceService';
+import { systemTenantContext } from '../../db/tenantTable';
 import { ownedDbTable } from '../../db/writeOwner';
 
 export type RefinementFailureReason =
@@ -112,8 +113,9 @@ async function appendRefinedVersion(input: {
   assetId: string;
   payload: Record<string, unknown>;
 }): Promise<{ version: number; originalVersion: number } | null> {
+  const tenant = systemTenantContext(input.companyId, 'activity creative refinement: append a version to the asset envelope');
   for (let attempt = 0; ; attempt += 1) {
-    const record = await libraryReadAsset({ companyId: input.companyId, assetId: input.assetId });
+    const record = await libraryReadAsset(tenant, { assetId: input.assetId });
     // libraryReadAsset returns { envelope, serverMeta } — read the envelope itself.
     const envelope = asObject(record?.envelope ?? null);
     const versions = Array.isArray(envelope.versions) ? envelope.versions as Record<string, unknown>[] : [];
@@ -140,8 +142,7 @@ async function appendRefinedVersion(input: {
     };
 
     try {
-      await libraryWriteAsset({
-        companyId: input.companyId,
+      await libraryWriteAsset(tenant, {
         userId: input.userId || '',
         envelope: nextEnvelope,
         expectedCurrentVersion,

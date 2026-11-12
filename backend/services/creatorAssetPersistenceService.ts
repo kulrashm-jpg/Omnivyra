@@ -1,8 +1,15 @@
 import { createHash, randomBytes } from 'crypto';
 import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, TenantSeamError, type TenantContext } from '../db/tenantTable';
 import { supabase } from '../db/supabaseClient';
 import { IMAGE_BUCKET, DOCUMENT_BUCKET } from './creatorAssetRendererContracts';
 import { trackEvent } from './telemetry/telemetryDispatcher';
+
+/** The context's company, refusing a missing context with the seam's own error (before any id is derived from it). */
+function tenantCompany(ctx: TenantContext): string {
+  if (!ctx || typeof ctx.companyId !== 'string') throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'creator asset persistence called without a tenant context');
+  return ctx.companyId;
+}
 
 type IntegritySeverity = 'ok' | 'warning' | 'error';
 
@@ -28,9 +35,13 @@ type PersistenceAvailability = {
   error?: string;
 };
 
+/**
+ * Tenancy (S2): every exported function that touches creator_assets / creator_asset_attachments takes the
+ * TenantContext FIRST (built by the caller after its access check, or a system context for internal callers) and
+ * reaches both tables only through tenantTable. The company is ctx.companyId; it is no longer an input field.
+ */
 export type CreatorAttachmentInput = {
   tenantId?: string | null;
-  companyId: string;
   userId: string;
   sourceType: 'post' | 'thread';
   sourceId: string;
@@ -49,7 +60,6 @@ export type CreatorAttachmentInput = {
 
 export type CreatorAssetRecordInput = {
   tenantId?: string | null;
-  companyId: string;
   userId: string;
   sourceType?: 'post' | 'thread' | null;
   sourceId?: string | null;
@@ -420,7 +430,8 @@ export class CreatorAssetIdConflictError extends Error {
   }
 }
 
-export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): Promise<Record<string, unknown>> {
+export async function upsertCreatorAssetRecord(ctx: TenantContext, input: CreatorAssetRecordInput): Promise<Record<string, unknown>> {
+  const companyId = tenantCompany(ctx);
   const availability = await checkCreatorPersistenceAvailability();
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
@@ -428,7 +439,7 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   const files = normalizeFiles(input.files);
   const renderIdentityHash = compact(input.renderIdentityHash || input.metadata?.renderIdentityHash || input.metadata?.render_identity_hash) || null;
   const id = stableAssetId({
-    companyId: input.companyId,
+    companyId,
     userId: input.userId,
     sourceType: input.sourceType,
     sourceId: input.sourceId,
@@ -439,7 +450,7 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   });
   const baseMetadata: Record<string, unknown> = {
     ...safeObject(input.metadata),
-    companyId: input.companyId,
+    companyId,
     userId: input.userId,
     url: input.url ?? null,
     files,
@@ -457,8 +468,8 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   });
   const row = {
     id,
-    tenant_id: input.tenantId || input.companyId,
-    company_id: input.companyId,
+    tenant_id: companyId, // follows the TenantContext, never caller input (S2)
+    company_id: companyId,
     user_id: input.userId,
     source_type: input.sourceType ?? null,
     source_id: input.sourceId ?? null,
@@ -476,7 +487,7 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   };
   if (safeObject(metadata.integrity).status === 'error') {
     logCreatorPersistenceDiagnostic('asset_integrity_validation_failed', {
-      companyId: input.companyId,
+      companyId,
       userId: input.userId,
       creatorType: input.creatorType,
       errors: safeObject(metadata.integrity).errors,
@@ -490,10 +501,9 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   // this company created it concurrently (the scoped update now lands) or
   // another company holds it — and that row is never touched.
   const updateOwned = async (targetId: string, payload: Record<string, unknown>) => {
-    const { data, error } = await ownedDbTable('creator_assets')
+    const { data, error } = await tenantTable('creator_assets', ctx)
       .update(payload)
       .eq('id', targetId)
-      .eq('company_id', input.companyId)
       .select()
       .maybeSingle();
     if (error) throw new Error(`Failed to persist creator asset: ${error.message}`);
@@ -501,7 +511,7 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   };
   /** The inserted row, or null when the id already exists (23505). */
   const insertRow = async (payload: Record<string, unknown>) => {
-    const { data, error } = await ownedDbTable('creator_assets')
+    const { data, error } = await tenantTable('creator_assets', ctx)
       .insert(payload)
       .select()
       .single();
@@ -523,9 +533,8 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   // 23505 and adopts the winner's row. Without that index the race can leave a
   // second row; every later write still converges on the same oldest row.
   const findRehomed = async (): Promise<string> => {
-    const { data, error } = await ownedDbTable('creator_assets')
+    const { data, error } = await tenantTable('creator_assets', ctx)
       .select('id')
-      .eq('company_id', input.companyId)
       .eq('metadata->>rehomedFrom', id)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -557,7 +566,7 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   // was persisted. Deduped per asset id (the write is idempotent per id).
   trackEvent({
     type: 'ai.generated',
-    organizationId: input.companyId,
+    organizationId: companyId,
     actorId: input.userId ?? null,
     entityId: typeof asset.id === 'string' ? asset.id : null,
     metadata: { creatorType: input.creatorType ?? '', assetType: input.sourceType ?? '' },
@@ -565,14 +574,14 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
   return asset;
 }
 
-export async function attachCreatorAsset(input: CreatorAttachmentInput): Promise<Record<string, unknown>> {
+export async function attachCreatorAsset(ctx: TenantContext, input: CreatorAttachmentInput): Promise<Record<string, unknown>> {
+  const companyId = tenantCompany(ctx);
   const availability = await checkCreatorPersistenceAvailability();
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  const asset = await upsertCreatorAssetRecord({
+  const asset = await upsertCreatorAssetRecord(ctx, {
     tenantId: input.tenantId,
-    companyId: input.companyId,
     userId: input.userId,
     sourceType: input.sourceType,
     sourceId: input.sourceId,
@@ -590,7 +599,7 @@ export async function attachCreatorAsset(input: CreatorAttachmentInput): Promise
   const normalizedFiles = normalizeFiles(input.files);
   const baseMetadata = {
     ...safeObject(input.metadata),
-    companyId: input.companyId,
+    companyId,
     userId: input.userId,
     url: input.url ?? null,
     files: normalizedFiles,
@@ -604,10 +613,11 @@ export async function attachCreatorAsset(input: CreatorAttachmentInput): Promise
     renderIdentityHash: input.renderIdentityHash,
   });
 
-  const { data, error } = await ownedDbTable('creator_asset_attachments')
+  // The conflict key includes company_id (the seam requires it), so DO UPDATE can only take this tenant's row.
+  const { data, error } = await tenantTable('creator_asset_attachments', ctx)
     .upsert({
-      tenant_id: input.tenantId || input.companyId,
-      company_id: input.companyId,
+      tenant_id: companyId, // follows the TenantContext, never caller input (S2)
+      company_id: companyId,
       user_id: input.userId,
       source_type: input.sourceType,
       source_id: input.sourceId,
@@ -630,8 +640,7 @@ export async function attachCreatorAsset(input: CreatorAttachmentInput): Promise
   return data as Record<string, unknown>;
 }
 
-export async function listCreatorAssetAttachments(input: {
-  companyId: string;
+export async function listCreatorAssetAttachments(ctx: TenantContext, input: {
   userId: string;
   sourceType: 'post' | 'thread';
   sourceId: string;
@@ -640,9 +649,8 @@ export async function listCreatorAssetAttachments(input: {
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  const { data, error } = await ownedDbTable('creator_asset_attachments')
+  const { data, error } = await tenantTable('creator_asset_attachments', ctx)
     .select('*')
-    .eq('company_id', input.companyId)
     .eq('user_id', input.userId)
     .eq('source_type', input.sourceType)
     .eq('source_id', input.sourceId)
@@ -653,8 +661,7 @@ export async function listCreatorAssetAttachments(input: {
   return (data || []) as Record<string, unknown>[];
 }
 
-export async function listCreatorAssets(input: {
-  companyId: string;
+export async function listCreatorAssets(ctx: TenantContext, input: {
   userId: string;
   creatorTypes?: string[];
   limit?: number;
@@ -663,9 +670,8 @@ export async function listCreatorAssets(input: {
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  let query = ownedDbTable('creator_assets')
+  let query = tenantTable('creator_assets', ctx)
     .select('*')
-    .eq('company_id', input.companyId)
     .order('created_at', { ascending: false })
     .limit(input.limit ?? 48);
   if (input.creatorTypes && input.creatorTypes.length > 0) {
@@ -676,8 +682,7 @@ export async function listCreatorAssets(input: {
   return (data || []) as Record<string, unknown>[];
 }
 
-export async function validatePersistedCreatorAsset(input: {
-  companyId: string;
+export async function validatePersistedCreatorAsset(ctx: TenantContext, input: {
   userId: string;
   assetId: string;
 }): Promise<{
@@ -690,9 +695,8 @@ export async function validatePersistedCreatorAsset(input: {
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  const { data, error } = await ownedDbTable('creator_assets')
+  const { data, error } = await tenantTable('creator_assets', ctx)
     .select('*')
-    .eq('company_id', input.companyId)
     .eq('user_id', input.userId)
     .eq('id', input.assetId)
     .maybeSingle();
@@ -701,7 +705,7 @@ export async function validatePersistedCreatorAsset(input: {
   const row = data as Record<string, unknown>;
   const metadata = safeObject(row.metadata);
   const integrity = validateCreatorAssetIntegrity({
-    companyId: input.companyId,
+    companyId: ctx.companyId,
     userId: input.userId,
     url: typeof row.url === 'string' ? row.url : undefined,
     files: normalizeFiles(row.files),
@@ -720,8 +724,7 @@ export async function validatePersistedCreatorAsset(input: {
   return { asset: row, integrity, reconstruction, parity };
 }
 
-export async function detectCreatorAssetStaleState(input: {
-  companyId: string;
+export async function detectCreatorAssetStaleState(ctx: TenantContext, input: {
   userId: string;
   assetId?: string;
   limit?: number;
@@ -737,9 +740,8 @@ export async function detectCreatorAssetStaleState(input: {
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  let query = ownedDbTable('creator_assets')
+  let query = tenantTable('creator_assets', ctx)
     .select('id, url, files, metadata, render_identity_hash')
-    .eq('company_id', input.companyId)
     .eq('user_id', input.userId)
     .order('created_at', { ascending: false })
     .limit(input.limit ?? 50);
@@ -751,7 +753,7 @@ export async function detectCreatorAssetStaleState(input: {
     const reasons: string[] = [];
     const completion = safeObject(metadata.persistenceCompletion);
     const integrity = validateCreatorAssetIntegrity({
-      companyId: input.companyId,
+      companyId: ctx.companyId,
       userId: input.userId,
       url: typeof row.url === 'string' ? row.url : undefined,
       files: normalizeFiles(row.files),
@@ -772,13 +774,12 @@ export async function detectCreatorAssetStaleState(input: {
 
 /**
  * Delete a creator_assets row PLUS any attachment-table rows that
- * reference it. Scoped strictly to (assetId, companyId) so a caller
- * can never delete a row outside their tenant. Returns the number of
+ * reference it. Scoped strictly to (assetId, tenant) through the tenant seam so a
+ * caller can never delete a row outside their tenant. Returns the number of
  * deleted rows in each table for the API response.
  */
-export async function deleteCreatorAssetRecord(input: {
+export async function deleteCreatorAssetRecord(ctx: TenantContext, input: {
   assetId: string;
-  companyId: string;
 }): Promise<{ deletedAsset: boolean; deletedAttachments: number }> {
   const availability = await checkCreatorPersistenceAvailability();
   if (!availability.available) {
@@ -789,9 +790,8 @@ export async function deleteCreatorAssetRecord(input: {
   // attachment lists consistent if the asset was previously embedded.
   let deletedAttachments = 0;
   try {
-    const { data: attachRows } = await ownedDbTable('creator_asset_attachments')
+    const { data: attachRows } = await tenantTable('creator_asset_attachments', ctx)
       .delete()
-      .eq('company_id', input.companyId)
       .eq('creator_asset_id', input.assetId)
       .select('id');
     deletedAttachments = Array.isArray(attachRows) ? attachRows.length : 0;
@@ -804,10 +804,9 @@ export async function deleteCreatorAssetRecord(input: {
   // than from a caller — is what makes an arbitrary storage path unexpressible
   // here. Projecting `url` alone was the defect: a carousel owns N slides and a
   // document, and only the first slide was ever removed.
-  const { data, error } = await ownedDbTable('creator_assets')
+  const { data, error } = await tenantTable('creator_assets', ctx)
     .delete()
     .eq('id', input.assetId)
-    .eq('company_id', input.companyId)
     .select('id, url, files, metadata');
   if (error) throw new Error(`Failed to delete creator asset: ${error.message}`);
 
@@ -818,7 +817,7 @@ export async function deleteCreatorAssetRecord(input: {
     // residue is safer: orphaned bytes nothing reads (a cost), or a row
     // pointing at bytes that are gone (a defect the renderer would hit).
     await removeRenderedObjectsForDeletedAsset(
-      input.companyId,
+      ctx,
       renderedObjectUrlsForRow((data as Array<Record<string, unknown>>)[0] ?? {}),
     );
   }
@@ -846,11 +845,10 @@ const SHARER_SCAN_LIMIT = 2000;
  * two rows pointing at the same object can carry different URL strings. The
  * object identity is the bucket and key, which only parsing yields.
  */
-async function referencedRenderPathsForCompany(companyId: string): Promise<Set<string> | null> {
+async function referencedRenderPathsForCompany(ctx: TenantContext): Promise<Set<string> | null> {
   try {
-    const { data, error } = await ownedDbTable('creator_assets')
+    const { data, error } = await tenantTable('creator_assets', ctx)
       .select('id, url, files, metadata')
-      .eq('company_id', companyId)
       .limit(SHARER_SCAN_LIMIT);
     if (error) return null;
     const rows = Array.isArray(data) ? data : [];
@@ -905,9 +903,10 @@ const RENDER_NAMESPACE = 'creator/';
  * else is skipped — deleting the wrong object is far worse than leaving one.
  */
 async function removeRenderedObjectsForDeletedAsset(
-  companyId: string,
+  ctx: TenantContext,
   urls: string[],
 ): Promise<void> {
+  const companyId = tenantCompany(ctx);
   if (!Array.isArray(urls) || urls.length === 0) return;   // nothing was rendered
   const skip = (reason: string) =>
     console.warn('[creator-asset][rendered-object-skipped]', { companyId, reason });
@@ -940,7 +939,7 @@ async function removeRenderedObjectsForDeletedAsset(
    * The deleted row is already gone, so whatever remains IS the set of other
    * owners. An indeterminate answer skips every object rather than guessing.
    */
-  const referenced = await referencedRenderPathsForCompany(companyId);
+  const referenced = await referencedRenderPathsForCompany(ctx);
   if (referenced === null) {
     return skip('could not confirm the objects are unreferenced');
   }
@@ -1088,8 +1087,7 @@ function isUniqueViolation(error: { code?: unknown } | null | undefined): boolea
   return String(error?.code ?? '') === '23505';
 }
 
-export async function libraryWriteAsset(input: {
-  companyId: string;
+export async function libraryWriteAsset(ctx: TenantContext, input: {
   userId: string;
   envelope: Record<string, unknown>;
   /**
@@ -1108,16 +1106,16 @@ export async function libraryWriteAsset(input: {
   const payload = envelopeCurrentPayload(input.envelope);
   const nowIso = new Date().toISOString();
 
-  const { data: existing } = await ownedDbTable('creator_assets')
+  const companyId = tenantCompany(ctx);
+  const { data: existing } = await tenantTable('creator_assets', ctx)
     .select('id, metadata')
     .eq('id', id)
-    .eq('company_id', input.companyId)
     .maybeSingle();
 
   const row: Record<string, unknown> = {
     id,
-    tenant_id: input.companyId,
-    company_id: input.companyId,
+    tenant_id: companyId,
+    company_id: companyId,
     user_id: input.userId,
     creator_type: compact(payload.creatorType) || 'asset',
     title: compact(payload.title) || 'Creator asset',
@@ -1132,7 +1130,7 @@ export async function libraryWriteAsset(input: {
   if (!existing) {
     // Brand-new library-origin row: give it a minimal metadata column so the
     // legacy list mapper has something coherent to read.
-    row.metadata = { ...safeObject(payload.metadata), companyId: input.companyId, userId: input.userId };
+    row.metadata = { ...safeObject(payload.metadata), companyId, userId: input.userId };
     row.source_type = null;
     row.source_id = null;
   }
@@ -1150,10 +1148,9 @@ export async function libraryWriteAsset(input: {
   // Callers that omit `expectedCurrentVersion` take the scoped update/insert
   // path below, which is what creation and non-versioned writes need.
   if (typeof input.expectedCurrentVersion === 'number') {
-    const { data, error } = await ownedDbTable('creator_assets')
+    const { data, error } = await tenantTable('creator_assets', ctx)
       .update(row)
       .eq('id', id)
-      .eq('company_id', input.companyId)
       .eq('library->>currentVersion', String(input.expectedCurrentVersion))
       .select()
       .maybeSingle();
@@ -1167,14 +1164,13 @@ export async function libraryWriteAsset(input: {
   // SEC-1: never upsert on `id` alone. The id is client-supplied and globally
   // unique, so an id-only upsert would overwrite another company's row and
   // reassign its company_id. A row this company owns is updated in place
-  // (scoped by company_id); anything else is a plain INSERT, and a unique
+  // (scoped by the tenant seam); anything else is a plain INSERT, and a unique
   // violation on insert means the id already exists — re-check ownership and
   // either update this company's row (a concurrent create) or refuse.
   const updateOwned = async () => {
-    const { data, error } = await ownedDbTable('creator_assets')
+    const { data, error } = await tenantTable('creator_assets', ctx)
       .update(row)
       .eq('id', id)
-      .eq('company_id', input.companyId)
       .select()
       .maybeSingle();
     if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
@@ -1184,17 +1180,16 @@ export async function libraryWriteAsset(input: {
 
   if (existing) return updateOwned();
 
-  const { data, error } = await ownedDbTable('creator_assets')
+  const { data, error } = await tenantTable('creator_assets', ctx)
     .insert(row)
     .select()
     .single();
   if (!error) return rowToLibraryRecord(data as Record<string, unknown>);
   if (!isUniqueViolation(error)) throw new Error(`Failed to persist library asset: ${error.message}`);
 
-  const { data: owned } = await ownedDbTable('creator_assets')
+  const { data: owned } = await tenantTable('creator_assets', ctx)
     .select('id')
     .eq('id', id)
-    .eq('company_id', input.companyId)
     .maybeSingle();
   if (!owned) throw new LibraryAssetIdConflictError(id);
   // Same company created it concurrently: keep that row's metadata/source
@@ -1205,26 +1200,23 @@ export async function libraryWriteAsset(input: {
   return updateOwned();
 }
 
-export async function libraryReadAsset(input: {
-  companyId: string;
+export async function libraryReadAsset(ctx: TenantContext, input: {
   assetId: string;
 }): Promise<LibraryAssetRecord | null> {
   const availability = await checkCreatorPersistenceAvailability();
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  const { data, error } = await ownedDbTable('creator_assets')
+  const { data, error } = await tenantTable('creator_assets', ctx)
     .select('*')
     .eq('id', input.assetId)
-    .eq('company_id', input.companyId)
     .is('deleted_at', null)
     .maybeSingle();
   if (error) throw new Error(`Failed to load library asset: ${error.message}`);
   return data ? rowToLibraryRecord(data as Record<string, unknown>) : null;
 }
 
-export async function libraryListAssets(input: {
-  companyId: string;
+export async function libraryListAssets(ctx: TenantContext, input: {
   q?: string;
   creatorTypes?: string[];
   tags?: string[];
@@ -1235,9 +1227,8 @@ export async function libraryListAssets(input: {
   if (!availability.available) {
     throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
   }
-  let query = ownedDbTable('creator_assets')
+  let query = tenantTable('creator_assets', ctx)
     .select('*')
-    .eq('company_id', input.companyId)
     .is('deleted_at', null)
     .order('updated_at', { ascending: false })
     .limit(input.limit ?? 200);
@@ -1263,54 +1254,47 @@ export async function libraryListAssets(input: {
 
 /** Hard remove — used ONLY by identity convergence (temp-id → canonical id).
  *  User-facing deletion is soft (softDeleteLibraryAsset). */
-export async function libraryRemoveAsset(input: { companyId: string; assetId: string }): Promise<boolean> {
-  const result = await deleteCreatorAssetRecord({ assetId: input.assetId, companyId: input.companyId });
+export async function libraryRemoveAsset(ctx: TenantContext, input: { assetId: string }): Promise<boolean> {
+  const result = await deleteCreatorAssetRecord(ctx, { assetId: input.assetId });
   return result.deletedAsset;
 }
 
-export async function archiveLibraryAsset(input: {
-  companyId: string;
+export async function archiveLibraryAsset(ctx: TenantContext, input: {
   assetId: string;
   archived: boolean;
 }): Promise<boolean> {
-  const { data, error } = await ownedDbTable('creator_assets')
+  const { data, error } = await tenantTable('creator_assets', ctx)
     .update({ archived_at: input.archived ? new Date().toISOString() : null, updated_at: new Date().toISOString() })
     .eq('id', input.assetId)
-    .eq('company_id', input.companyId)
     .select('id');
   if (error) throw new Error(`Failed to ${input.archived ? 'archive' : 'unarchive'} asset: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
 }
 
-export async function softDeleteLibraryAsset(input: {
-  companyId: string;
+export async function softDeleteLibraryAsset(ctx: TenantContext, input: {
   assetId: string;
 }): Promise<boolean> {
-  const { data, error } = await ownedDbTable('creator_assets')
+  const { data, error } = await tenantTable('creator_assets', ctx)
     .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', input.assetId)
-    .eq('company_id', input.companyId)
     .select('id');
   if (error) throw new Error(`Failed to delete asset: ${error.message}`);
   return Array.isArray(data) && data.length > 0;
 }
 
-export async function recordLibraryAssetUsage(input: {
-  companyId: string;
+export async function recordLibraryAssetUsage(ctx: TenantContext, input: {
   assetId: string;
 }): Promise<void> {
   // Read-then-write increment; usage is a coarse indicator, races are fine.
-  const { data } = await ownedDbTable('creator_assets')
+  const { data } = await tenantTable('creator_assets', ctx)
     .select('usage_count')
     .eq('id', input.assetId)
-    .eq('company_id', input.companyId)
     .maybeSingle();
   if (!data) return;
-  await ownedDbTable('creator_assets')
+  await tenantTable('creator_assets', ctx)
     .update({
       usage_count: Number((data as { usage_count?: number }).usage_count ?? 0) + 1,
       last_used_at: new Date().toISOString(),
     })
-    .eq('id', input.assetId)
-    .eq('company_id', input.companyId);
+    .eq('id', input.assetId);
 }
