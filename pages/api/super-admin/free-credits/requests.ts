@@ -18,6 +18,15 @@ import { requireCapability } from '@/backend/security/requireCapability';
 import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
+/**
+ * A user-supplied search term as a PostgREST double-quoted filter value for ILIKE: LIKE wildcards (% and _) and the
+ * escape character are escaped first, then the quoting characters (backslash, double quote) for PostgREST.
+ */
+function likeLiteral(term: string): string {
+  const like = term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  return like.replace(/[\\"]/g, (ch) => `\\${ch}`);
+}
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Closure-014 (D): per-route write rate limit (before authorization and any business work).
   if (req.method !== 'GET' && !(await requireAdminRateLimit(req, res, 'rl:super-admin:free-credits:requests', 30, 60))) return;
@@ -46,7 +55,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .range(offset, offset + limitNum - 1);
 
     if (status !== 'all') q = q.eq('status', status);
-    if (search) q = q.or(`email.ilike.%${search}%,domain.ilike.%${search}%,company_name.ilike.%${search}%`);
+    // e1 2026-11-13 (05 finding, low severity - super-admin only): the search term was interpolated raw into a
+    // PostgREST `.or()` filter string, so a comma rewrote the filter and `%` / `_` acted as wildcards. The term is
+    // now a double-quoted filter value (PostgREST quoting: backslash and double quote escaped) with the LIKE
+    // wildcards escaped, so it is matched literally as a substring.
+    if (search) {
+      const needle = `"%${likeLiteral(String(search))}%"`;
+      q = q.or(`email.ilike.${needle},domain.ilike.${needle},company_name.ilike.${needle}`);
+    }
 
     const { data, error, count } = await q;
     if (error) return res.status(500).json({ error: error.message });

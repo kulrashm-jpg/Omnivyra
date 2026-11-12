@@ -99,11 +99,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── 4. Look up or verify caller's users row ───────────────────────────────
   // active_company_id is the canonical "primary org" pointer; users.company_id
   // is deprecated and no longer read.
-  const { data: userRow } = await supabase
+  // BLOCKING fix (e1, 2026-11-13; account-takeover class, e9 ruling): this used
+  // `.or(`supabase_uid.eq.${callerUid},email.eq.${callerEmail}`)` - the caller's identity email interpolated into a
+  // PostgREST filter string, the same shape as the fixed onboarding `.or()` takeover. A provider-accepted address
+  // with a quoted local part may contain commas and dots, so a crafted address could append filter terms and
+  // resolve ANOTHER user's row. Now two structural `.eq()` reads: by supabase_uid first, then by the exact email.
+  // A read error fails closed (retryable 503), never "not found" and never another row.
+  const byUid = await supabase
     .from('users')
     .select('id, active_company_id, status')
-    .or(`supabase_uid.eq.${callerUid},email.eq.${callerEmail.toLowerCase()}`)
+    .eq('supabase_uid', callerUid)
     .maybeSingle();
+  if (byUid.error) {
+    return res.status(503).json({ error: 'Could not load your account. Please try again.' });
+  }
+  let userRow = byUid.data;
+  if (!userRow) {
+    const byEmail = await supabase
+      .from('users')
+      .select('id, active_company_id, status')
+      .eq('email', callerEmail.toLowerCase())
+      .maybeSingle();
+    if (byEmail.error) {
+      return res.status(503).json({ error: 'Could not load your account. Please try again.' });
+    }
+    userRow = byEmail.data;
+  }
 
   if (!userRow) {
     return res.status(401).json({ error: 'User account not found. Please complete sign-in first.' });

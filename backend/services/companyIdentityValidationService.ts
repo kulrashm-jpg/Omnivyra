@@ -254,18 +254,36 @@ export interface ValidateCompanyIdentityDeps {
   cacheSet?: (domain: string, verdict: CachedDomainVerdict) => void;
 }
 
-/** Default rule-5 lookup: an active company already owning this domain. */
+/**
+ * Default rule-5 lookup: an active company already owning this domain.
+ *
+ * BLOCKING fix (e1, 2026-11-13; 05 finding, e9 ruling). The former lookup ran
+ * `.or(`website_domain.eq.${d},admin_email_domain.eq.${d}`).maybeSingle()` and kept only `data`:
+ *   - TWO matching companies (one by website_domain, another by admin_email_domain, or two merged onto one suffix)
+ *     make maybeSingle ERROR; the error was dropped, data was null, and the gate reported "not claimed" - a new
+ *     company could be created on an already-claimed domain;
+ *   - the domain was interpolated into a PostgREST filter string (the onboarding `.or()` takeover shape), safe only
+ *     because the email policy in another file rejects commas.
+ * Now: two structural `.eq()` reads (no filter-string interpolation), ANY read error THROWS (callers answer a
+ * retryable refusal - fail closed), and ANY match - including several - is CLAIMED.
+ */
 async function defaultLookupClaimedCompany(
   normalizedDomain: string,
 ): Promise<{ id: string; name: string | null } | null> {
   if (!normalizedDomain) return null;
-  const { data } = await supabase
-    .from('companies')
-    .select('id, name')
-    .eq('status', 'active')
-    .or(`website_domain.eq.${normalizedDomain},admin_email_domain.eq.${normalizedDomain}`)
-    .maybeSingle();
-  return data ? { id: (data as any).id, name: (data as any).name ?? null } : null;
+  for (const column of ['website_domain', 'admin_email_domain'] as const) {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, name')
+      .eq('status', 'active')
+      .eq(column, normalizedDomain)
+      .order('created_at', { ascending: true })
+      .limit(1);
+    if (error) throw new Error(`CLAIMED_DOMAIN_LOOKUP_FAILED:${error.message}`);
+    const row = (data as Array<{ id: string; name?: string | null }> | null)?.[0];
+    if (row) return { id: row.id, name: row.name ?? null };
+  }
+  return null;
 }
 
 function block(
