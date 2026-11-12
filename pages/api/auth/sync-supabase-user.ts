@@ -31,6 +31,7 @@ import { sendAuthError } from '../../../backend/services/sendAuthError';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { isAcceptableEmailAddress } from '../../../lib/auth/emailAddressPolicy';
 import { incrementAuthMetric } from '../../../backend/services/authMetrics';
+import { recordSignupWithoutIntentIfMissing } from '../../../backend/services/signupWithoutIntentTelemetry';
 
 
 const SUPPORT_EMAIL = 'support@omnivyra.com';
@@ -341,6 +342,13 @@ async function handler(
   // (extremely rare; would indicate a server-side INSERT-without-RETURNING
   // bug), we fall back to the by-uid lookup so projectSession can still mint
   // the canonical auth_session.
+  // P1 telemetry: flag a brand-new identity with no signup_intents row at all
+  // (possible GoTrue-direct signup). Never blocks; never throws.
+  await recordSignupWithoutIntentIfMissing({
+    email:       normalizedEmail,
+    endpoint:    'sync-supabase-user',
+    supabaseUid,
+  });
   const { data: inserted, error: insertError } = await supabase
     .from('users')
     .insert({

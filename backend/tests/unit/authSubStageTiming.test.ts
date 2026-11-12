@@ -86,6 +86,9 @@ describe('no behaviour was changed', () => {
     expect(RESOLVER.split('resolveUserRow(identity.supabaseUid, identity.email)').length - 1).toBe(1);
     // Two pre-existing users sites in the route: the `user` stage select and
     // the conditional active_company_id sync. Neither was added here.
-    expect(ROUTE.split("from('users')").length - 1).toBe(2);
+    // P1 (2026-11-13) added a third, in the POST website-edit branch only: the
+    // editor's email read for the website <-> email-domain rule. It is not on
+    // the GET/list path this timing work instruments.
+    expect(ROUTE.split("from('users')").length - 1).toBe(3);
   });
 });

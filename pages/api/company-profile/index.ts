@@ -26,6 +26,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { resolveCompanyAccess, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { extractDomain, validatePublicWebsite } from '../../../backend/services/companyMatchService';
+import { normalizeCompanyDomain } from '../../../lib/shared/domain/companyDomain';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
 import { buildUnifiedCompetitorIntelligence } from '../../../backend/services/unifiedCompetitorIntelligenceService';
 import {
@@ -462,7 +463,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!access) return;
       const existingProfile = await getProfile(resolvedCompanyId, { autoRefine: false, languageRefine: false });
       const normalizedRole = String(access.role ?? '').toUpperCase();
-      const canEditCanonicalWebsite = normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'CONTENT_ARCHITECT';
+      // P1 (owner ruling 2026-11-13): a company's website must sit on its admin's
+      // email domain, compared at the REGISTRABLE domain (eTLD+1) via the shared
+      // normalizeCompanyDomain helper — e.g. kuldeep@omnivyra.com <-> omnivyra.com,
+      // someone@mail.acme.com <-> acme.com. The ONLY exemption is SUPER_ADMIN.
+      // CONTENT_ARCHITECT is NOT exempt (owner: Content Architect is like any
+      // member) — it keeps its ability to change an existing website, but only to
+      // one on its own email domain, and passes the same public-URL and
+      // uniqueness checks as everyone else.
+      const isSuperAdminEditor = normalizedRole === 'SUPER_ADMIN';
+      const isContentArchitectEditor = normalizedRole === 'CONTENT_ARCHITECT';
       const incomingReportSettings =
         (body.report_settings as CompanyProfile['report_settings'] | undefined) ?? undefined;
       const incomingWebsite = typeof body.website_url === 'string' ? body.website_url.trim() : body.website_url;
@@ -470,21 +480,57 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // Soft fallback: a normal user may set the canonical website ONCE when none has
       // been derived (e.g. their work-email domain hosts no resolvable site), so they
       // are not stuck on a read-only field. After it exists, only SUPER_ADMIN /
-      // CONTENT_ARCHITECT may change it.
+      // CONTENT_ARCHITECT may change it (CONTENT_ARCHITECT subject to the domain rule).
       const hasExistingCanonical = String(existingWebsite || '').trim().length > 0;
-      const mayProvideCanonical = canEditCanonicalWebsite || !hasExistingCanonical;
+      const mayProvideCanonical = isSuperAdminEditor || isContentArchitectEditor || !hasExistingCanonical;
       if (incomingWebsite !== undefined && String(incomingWebsite || '').trim() !== String(existingWebsite || '').trim()) {
         const trimmedIncoming = String(incomingWebsite || '').trim();
         if (!mayProvideCanonical) {
           // Locked — only privileged roles change an existing canonical website.
           body.website_url = existingWebsite;
-        } else if (!canEditCanonicalWebsite && trimmedIncoming) {
-          // First-time, user-provided canonical website (onboarding soft fallback).
+        } else if (!isSuperAdminEditor && (trimmedIncoming || isContentArchitectEditor)) {
+          // Every non-SUPER_ADMIN website set/change. (A CONTENT_ARCHITECT clearing
+          // the website is a change too: an empty value has no domain, so it fails
+          // the domain rule below and is refused.)
           // (1) Valid public URL — ANY TLD (.ai/.io/.org/.in/.au/…), not a private/
           //     local address or a personal-email-provider domain.
-          const websiteErr = validatePublicWebsite(trimmedIncoming);
-          if (websiteErr) return res.status(400).json({ error: websiteErr });
-          // (2) Per-tenant uniqueness — the domain must not already belong to ANOTHER
+          if (trimmedIncoming) {
+            const websiteErr = validatePublicWebsite(trimmedIncoming);
+            if (websiteErr) return res.status(400).json({ error: websiteErr });
+          }
+          // (2) Website domain == requesting user's email domain (eTLD+1).
+          //     The email is read from the users row of the authenticated principal.
+          //     FAIL CLOSED: the legacy content-architect cookie principal
+          //     (userId 'content_architect') has NO user row and therefore NO email,
+          //     so it can never satisfy the rule and is refused; likewise a users
+          //     read error or a missing row/email refuses the change.
+          const websiteDomain = normalizeCompanyDomain(trimmedIncoming);
+          let editorEmail = '';
+          if (access.userId && access.userId !== 'content_architect') {
+            const { data: editorRow, error: editorErr } = await supabase
+              .from('users')
+              .select('email')
+              .eq('id', access.userId)
+              .maybeSingle();
+            if (!editorErr && editorRow && typeof (editorRow as { email?: unknown }).email === 'string') {
+              editorEmail = (editorRow as { email: string }).email;
+            }
+          }
+          const editorEmailDomain = normalizeCompanyDomain(editorEmail);
+          if (!editorEmailDomain) {
+            return res.status(400).json({
+              error:
+                'The website can only be set by a user with a verified email address on the company domain.',
+              code: 'WEBSITE_DOMAIN_MISMATCH',
+            });
+          }
+          if (!websiteDomain || websiteDomain !== editorEmailDomain) {
+            return res.status(400).json({
+              error: `The website must be on your email's domain (${editorEmailDomain}).`,
+              code: 'WEBSITE_DOMAIN_MISMATCH',
+            });
+          }
+          // (3) Per-tenant uniqueness — the domain must not already belong to ANOTHER
           //     company. This reserves omnivyra.com to omnivyra's own account and keeps
           //     every tenant on its own unique domain. (Hosted/forwarding verification
           //     stays at setup-company's resolveDomain by design — no probe here.)
