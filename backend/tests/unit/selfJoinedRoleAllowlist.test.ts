@@ -19,7 +19,7 @@ jest.mock('@/backend/db/supabaseClient', () => ({
     from: (table: string) => {
       const b: any = {};
       let op = 'select';
-      for (const m of ['eq', 'select']) b[m] = () => b;
+      for (const m of ['eq', 'in', 'select']) b[m] = () => b; // .in: the non-admin role filter (selfJoinedFounderProtected applies it)
       b.update = (p: Record<string, unknown>) => { op = 'update'; mockUpdates.push(p); return b; };
       b.insert = () => { op = 'insert'; return b; };
       b.then = (ok: any, ko: any) => {

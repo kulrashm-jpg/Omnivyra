@@ -86,6 +86,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // PRIVILEGE (2026-11-12, e1 audit): the ONLY app writer of join_source
+    // 'self_joined' is onboarding/setup-company - the FOUNDING COMPANY_ADMIN (the
+    // column defaults to 'invited'). Without a role filter this route let any
+    // ORGANIZATION_MANAGE holder demote or delete the founder (incl. the last
+    // admin). It may only ever act on NON-ADMIN rows.
     const { data: confirmed, error } = await supabaseAdmin
       .from('user_company_roles')
       .update({
@@ -96,6 +101,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .eq('company_id', companyId)
       .eq('user_id', userId)
       .eq('join_source', 'self_joined')
+      .in('role', [...NON_ADMIN_TENANT_ROLES])
       .select('user_id');
 
     if (error) return res.status(500).json({ error: 'Failed to confirm the member' });
@@ -123,14 +129,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'DELETE') {
     if (!userId) return res.status(400).json({ error: 'userId is required' });
 
-    const { error } = await supabaseAdmin
+    // PRIVILEGE (2026-11-12, e1 audit): the ONLY app writer of join_source
+    // 'self_joined' is onboarding/setup-company - the FOUNDING COMPANY_ADMIN (the
+    // column defaults to 'invited'). Without a role filter this route let any
+    // ORGANIZATION_MANAGE holder demote or delete the founder (incl. the last
+    // admin). It may only ever act on NON-ADMIN rows.
+    const { data: removed, error } = await supabaseAdmin
       .from('user_company_roles')
       .delete()
       .eq('company_id', companyId)
       .eq('user_id', userId)
-      .eq('join_source', 'self_joined');
+      .eq('join_source', 'self_joined')
+      .in('role', [...NON_ADMIN_TENANT_ROLES])
+      .select('user_id');
 
     if (error) return res.status(500).json({ error: error.message });
+    // 0 rows: not a self-joined NON-ADMIN member (e.g. the founding admin) - never a 200 for nothing.
+    if (!Array.isArray(removed) || removed.length === 0) {
+      return res.status(404).json({ error: 'No self-joined membership for this user', code: 'NOT_SELF_JOINED' });
+    }
 
     // Notify the removed user
     await supabaseAdmin.from('notifications').insert({
