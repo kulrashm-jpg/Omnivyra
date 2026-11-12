@@ -81,6 +81,23 @@ function requireCtx(ctx: TenantContext | null | undefined): TenantContext {
 type Row = Record<string, unknown>;
 
 /**
+ * 05 (tenantChildTableOf review; the #378 upsertVariant class): in an upsert the CONFLICT KEY decides which existing
+ * row DO UPDATE takes. A key without the scoping column - including the default primary key - can resolve onto
+ * ANOTHER tenant's (or parent's) row, which the stamped payload then re-stamps into this scope. So every seam upsert
+ * must name an onConflict that includes the scoping column, unless it is ignoreDuplicates (DO NOTHING never touches
+ * the existing row). Anything else is refused before the builder is reached.
+ */
+function scopedConflict(table: string, scopeColumn: string, options?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (options && options.ignoreDuplicates === true) return options;
+  const raw = options && typeof options.onConflict === 'string' ? options.onConflict : '';
+  const cols = raw.split(',').map((x) => x.trim().replace(/^"|"$/g, '')).filter(Boolean);
+  if (!cols.includes(scopeColumn)) {
+    throw new TenantSeamError('TENANT_PAYLOAD_INVALID', `${table}: upsert must name an onConflict that includes ${scopeColumn} (or use ignoreDuplicates); a conflict key without it can take over another tenant's row`);
+  }
+  return options;
+}
+
+/**
  * Embedded selects (`'*, other(*)'`) are REFUSED (05, S1 review): the tenant predicate constrains the base
  * table only, and an embed of a PARENT / belongs-to row (outbound FK) returns that row whatever tenant it
  * belongs to; `!inner` does not help. Read the other table through its own tenantTable / tenantChildTable.
@@ -133,7 +150,7 @@ export function tenantTable(table: TenantTableName, ctx: TenantContext) {
       return (ownedDbTable(table) as any).insert(stamp(values, column, c.companyId), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), options);
+      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), scopedConflict(table, column, options));
     },
   };
 }
@@ -168,7 +185,7 @@ export function tenantOrPlatformTable(table: TenantTableName, ctx: TenantContext
       return (ownedDbTable(table) as any).insert(stamp(values, column, c.companyId), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), options);
+      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), scopedConflict(table, column, options));
     },
   };
 }
@@ -271,7 +288,7 @@ export async function tenantChildTable(table: TenantChildTableName, ctx: TenantC
       return (ownedDbTable(table) as any).insert(pin(values), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(pin(values), options);
+      return (ownedDbTable(table) as any).upsert(pin(values), scopedConflict(table, via, options));
     },
   };
 }
@@ -342,7 +359,7 @@ export async function tenantChildTableOf(table: TenantChildTableName, ctx: Tenan
       return (ownedDbTable(table) as any).insert(check(values), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(check(values), options);
+      return (ownedDbTable(table) as any).upsert(check(values), scopedConflict(table, via, options));
     },
   };
 }
