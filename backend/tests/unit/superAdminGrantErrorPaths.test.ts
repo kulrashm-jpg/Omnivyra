@@ -268,3 +268,32 @@ describe('super-admin/free-credits/requests (approve)', () => {
     expect(mockGrants).toEqual([]);
   });
 });
+
+// MUTANT SURVIVORS (2026-11-12): free-credits requests - the role INSERT error
+// (after a clean empty role read), the reject write error and the delete write
+// error had no case of their own (a failed write fell to the 0-row 409 path).
+describe('super-admin/free-credits/requests write errors, each alone', () => {
+  const REQ = () => ({ data: { id: 'r1', user_id: 'u1', organization_id: 'o1', domain: 'acme.com', status: 'pending' }, error: null });
+  it('approve: role INSERT error (role read clean, empty) -> 200 with the "NOT created" warning', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = () => ({ data: [{ id: 'r1' }], error: null });
+    mockScript['user_company_roles:insert'] = DOWN;
+    const res = await post(accessRequests, { action: 'approve', requestId: 'r1', creditsToGrant: 300 });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.warnings?.join(' ')).toMatch(/membership NOT created/);
+  });
+  it('reject: write error -> 500 "rejection not recorded" (never the 409 not-pending answer)', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = DOWN;
+    const res = await post(accessRequests, { action: 'reject', requestId: 'r1', reason: 'no' });
+    expect(res.statusCode).toBe(500);
+    expect(res.body.error).toBe('rejection not recorded');
+  });
+  it('delete: write error -> 500 "deletion not recorded" (never the 409 not-deletable answer)', async () => {
+    mockScript['access_requests:select'] = REQ;
+    mockScript['access_requests:update'] = DOWN;
+    const res = await post(accessRequests, { action: 'delete', requestId: 'r1' });
+    expect(res.statusCode).toBe(500);
+    expect(res.body.error).toBe('deletion not recorded');
+  });
+});

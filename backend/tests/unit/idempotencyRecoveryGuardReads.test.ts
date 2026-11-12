@@ -11,7 +11,7 @@
  */
 export {};
 type Res = { data?: unknown; error: { message: string } | null };
-type Ctx = { table: string; op: string; filters: Record<string, unknown>; inVals: unknown[][] };
+type Ctx = { table: string; op: string; filters: Record<string, unknown>; inVals: unknown[][]; cols: string };
 let mockFailWhen: ((c: Ctx) => boolean) | null = null;
 let mockRows: (c: Ctx) => unknown = () => null;
 const mockUpdates: string[] = [];
@@ -20,10 +20,11 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     rpc: jest.fn(),
     from: (table: string) => {
-      const ctx: Ctx = { table, op: 'select', filters: {}, inVals: [] };
+      const ctx: Ctx = { table, op: 'select', filters: {}, inVals: [], cols: '' };
       const b: any = {};
       const result = (): Res => (mockFailWhen?.(ctx) ? { data: null, error: { message: 'connection reset' } } : { data: mockRows(ctx), error: null });
-      b.select = () => b;
+      // the SELECTED COLUMNS tell the two billing_operations reads apart
+      b.select = (cols?: string) => { if (ctx.op === 'select') ctx.cols = cols ?? ''; return b; };
       b.eq = (c: string, v: unknown) => { ctx.filters[c] = v; return b; };
       b.in = (c: string, v: unknown[]) => { ctx.filters[c] = v; ctx.inVals.push(v); return b; };
       b.lt = () => b;
@@ -39,6 +40,7 @@ jest.mock('../../services/adminAuditService', () => ({ recordAdminAudit: jest.fn
 jest.mock('../../services/billing/billingAuditEmitter', () => ({ emitAnomaly: jest.fn(), emitFinancialAudit: jest.fn().mockResolvedValue(undefined) }));
 
 import {
+  findStuckOperations,
   safeRetryOperation,
   recoverOperation,
   runReconciliationAfterRecovery,
@@ -113,5 +115,38 @@ describe('recoverOperation / reconciliation-after-recovery', () => {
     mockFailWhen = isHold;
     const r = await runReconciliationAfterRecovery({ surface: 'billing_operations', id: 'b1', actorUserId: 'admin' } as never);
     expect(r.verdict).toBe('drift');
+  });
+});
+
+// MUTANT SURVIVORS (2026-11-12): billing_operations is read TWICE by safeRetry
+// (idempotency key, then current row) and the old case failed both; the stuck
+// scans and the job-registry key read had no case. Each fails ALONE now.
+describe('each guard read fails alone', () => {
+  it('idempotency-key read ALONE -> READ_FAILED naming that read', async () => {
+    mockFailWhen = (c) => isOp(c) && c.cols.includes('idempotency_key');
+    const r = await safeRetryOperation(RETRY);
+    expect(r).toMatchObject({ ok: false, code: 'READ_FAILED' });
+    expect((r as { message: string }).message).toMatch(/idempotency_key read failed/);
+    expect(mockUpdates).toEqual([]);
+  });
+  it('current-row read ALONE -> READ_FAILED naming that read', async () => {
+    mockFailWhen = (c) => isOp(c) && c.cols.startsWith('status');
+    const r = await safeRetryOperation(RETRY);
+    expect(r).toMatchObject({ ok: false, code: 'READ_FAILED' });
+    expect((r as { message: string }).message).toMatch(/current-row read failed/);
+    expect(mockUpdates).toEqual([]);
+  });
+  it('job_execution_registry idempotency-key read error -> READ_FAILED', async () => {
+    mockFailWhen = (c) => c.table === 'job_execution_registry' && c.cols.includes('idempotency_key');
+    const r = await safeRetryOperation({ ...RETRY, surface: 'job_execution_registry' as never });
+    expect(r).toMatchObject({ ok: false, code: 'READ_FAILED' });
+    expect((r as { message: string }).message).toMatch(/idempotency_key read failed/);
+  });
+  it.each([
+    ['billing_operations', /stuck billing_operations read failed/],
+    ['job_execution_registry', /stuck job_execution_registry read failed/],
+  ])('stuck scan of %s errors -> THROWS (never "nothing stuck")', async (table, msg) => {
+    mockFailWhen = (c) => c.table === table;
+    await expect(findStuckOperations({ surfaces: [table as never] } as never)).rejects.toThrow(msg as RegExp);
   });
 });
