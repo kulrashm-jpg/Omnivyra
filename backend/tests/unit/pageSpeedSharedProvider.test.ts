@@ -19,6 +19,8 @@ let mockSeq = 0;
 /** Make the next write of this table and operation fail with a database error, as PostgREST reports one. */
 const mockFail: Array<{ table: string; op: string; error: { code: string; message: string } }> = [];
 const mockInserts: Array<{ table: string; payload: any }> = [];
+/** Runs just BEFORE the next N api_provider_accounts updates (a concurrent writer). */
+const mockBeforeUpdate: Array<() => void> = [];
 function mockTable(table: string) {
   const filters: Array<(r: Row) => boolean> = [];
   let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
@@ -34,6 +36,12 @@ function mockTable(table: string) {
       const items = (Array.isArray(payload) ? payload : [payload]).map((p: Row) => ({ id: `${table}-${++mockSeq}`, ...p }));
       rows.push(...items);
       return { data: single ? items[0] : items, error: null };
+    }
+    if (op === 'update' && table === 'api_provider_accounts' && mockBeforeUpdate.length) {
+      mockBeforeUpdate.shift()!();
+      const rematch = rows.filter((r) => filters.every((f) => f(r)));
+      rematch.forEach((r) => Object.assign(r, payload));
+      return { data: single ? rematch[0] ?? null : rematch, error: null };
     }
     if (op === 'update') { match.forEach((r) => Object.assign(r, payload)); return { data: single ? match[0] ?? null : match, error: null }; }
     if (op === 'delete') { mockDb[table] = rows.filter((r) => !match.includes(r)); return { data: null, error: null }; }
@@ -306,5 +314,29 @@ describe('a failed save says which step failed, never the key', () => {
     expect(err).toMatchObject({ step: 'credential' });
     expect(err.logDetail).not.toMatch(/Failing row|secret-ish/);
     expect(`${err.message} ${err.logDetail}`).not.toContain(ADMIN_KEY);
+  });
+});
+
+// CLASS 2 (05, 2026-11-12): savePageSpeedConfig is the SECOND read-merge-write of
+// credentials_encrypted. A concurrent save between its read and its write must
+// not be silently reverted: CAS, re-read + merge once, refuse on a 2nd conflict.
+describe('savePageSpeedConfig - concurrent credential writes', () => {
+  it('a concurrent change before the write -> re-read, merged again, the concurrent field SURVIVES', async () => {
+    await savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY });
+    mockBeforeUpdate.push(() => {
+      const acc = mockDb.api_provider_accounts[0];
+      acc.credentials_encrypted = JSON.stringify({ ...JSON.parse(acc.credentials_encrypted), concurrent_marker: 'kept' });
+    });
+    await savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY.replace(/.$/, 'Z') });
+    const env = JSON.parse(mockDb.api_provider_accounts[0].credentials_encrypted);
+    expect(env.concurrent_marker).toBe('kept');
+    expect((await resolveProviderCredential('pagespeed')).value).toBe(ADMIN_KEY.replace(/.$/, 'Z'));
+  });
+  it('a SECOND conflict -> refused (never a silent overwrite)', async () => {
+    await savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY });
+    const bump = () => { const acc = mockDb.api_provider_accounts[0]; acc.credentials_encrypted = JSON.stringify({ ...JSON.parse(acc.credentials_encrypted), n: Math.random() }); };
+    mockBeforeUpdate.push(bump, bump);
+    await expect(savePageSpeedConfig({ enabled: true, apiKey: ADMIN_KEY.replace(/.$/, 'Y') })).rejects.toBeTruthy();
+    expect((await resolveProviderCredential('pagespeed')).value).toBe(ADMIN_KEY);
   });
 });

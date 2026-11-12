@@ -18,7 +18,7 @@
 import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { PAGESPEED_SOURCE_NAME, resolveProviderCredential } from './providerCredentialResolver';
-import { buildCredentialEnvelope, createProviderAccount, getActiveAccountForApi, resolveAccountCredentials, updateProviderAccount, type ProviderAccount } from './providerAccountService';
+import { buildCredentialEnvelope, createProviderAccount, getActiveAccountForApi, resolveAccountCredentials, updateProviderAccount, ProviderAccountConflictError, type ProviderAccount } from './providerAccountService';
 import { invalidatePageSpeedAccess, PAGESPEED_ISSUE_TEXT, pageSpeedFailure, runPageSpeed, type PageSpeedIssue } from './pageSpeedClient';
 import { updateApiHealth } from './externalApiHealthService';
 
@@ -142,9 +142,29 @@ export async function savePageSpeedConfig(input: { enabled: boolean; apiKey?: st
       await updateProviderAccount(account.id, { is_active: false });
     } else if (key) {
       // Merge onto the existing envelope; the value is encrypted (AES-256-GCM) before it is stored.
-      const envelope = buildCredentialEnvelope({ existing: account?.credentials_encrypted ?? null, supplied: { api_key_value: key } });
-      if (account) await updateProviderAccount(account.id, { credentials_encrypted: envelope });
-      else await createProviderAccount({ api_source_id: row.id, account_name: 'Application key', credentials_encrypted: envelope, priority: 1 });
+      // CLASS 2 (05, 2026-11-12): this is the SECOND read-merge-write of
+      // credentials_encrypted (the provider-accounts PUT is the first). The
+      // update is a CAS on the envelope merged onto; on a conflict (another
+      // save landed in between) re-read and merge ONCE more - there is no human
+      // decision in this merge - and refuse on a second conflict.
+      if (!account) {
+        const envelope = buildCredentialEnvelope({ existing: null, supplied: { api_key_value: key } });
+        await createProviderAccount({ api_source_id: row.id, account_name: 'Application key', credentials_encrypted: envelope, priority: 1 });
+      } else {
+        let current: ProviderAccount | null = account;
+        for (let attempt = 0; ; attempt++) {
+          const existing = current?.credentials_encrypted ?? null;
+          const envelope = buildCredentialEnvelope({ existing, supplied: { api_key_value: key } });
+          try {
+            await updateProviderAccount(account.id, { credentials_encrypted: envelope }, { expectCredentialsEncrypted: existing });
+            break;
+          } catch (err) {
+            if (!(err instanceof ProviderAccountConflictError) || attempt >= 1) throw err;
+            current = await getActiveAccountForApi(row.id);
+            if (!current || current.id !== account.id) throw err;
+          }
+        }
+      }
     }
   } catch (error) {
     // createProviderAccount / updateProviderAccount throw "<fn>: <db message>"; encryption throws on a bad ENCRYPTION_KEY.
