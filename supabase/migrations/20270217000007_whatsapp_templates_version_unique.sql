@@ -50,6 +50,9 @@ BEGIN
     SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
      WHERE i.indrelid = 'public.whatsapp_templates'::regclass AND c.relname = 'whatsapp_templates_version_unique'
        AND i.indisunique AND i.indnullsnotdistinct AND i.indpred IS NULL
+       AND (SELECT array_agg(a.attname ORDER BY k.ord) FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum)
+           = ARRAY['company_id', 'template_name', 'version']::name[]
   ) THEN
     RAISE EXCEPTION 'WTVU postcondition: whatsapp_templates_version_unique must be UNIQUE NULLS NOT DISTINCT (company_id, template_name, version)';
   END IF;

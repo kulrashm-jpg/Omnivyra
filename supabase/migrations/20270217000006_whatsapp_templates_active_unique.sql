@@ -62,10 +62,19 @@ BEGIN
     v_idx boolean := to_regclass('public.whatsapp_templates_one_active') IS NOT NULL;
     v_idx_exact boolean := EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
                                WHERE i.indrelid = 'public.whatsapp_templates'::regclass AND c.relname = 'whatsapp_templates_one_active'
-                                 AND i.indisunique AND i.indnullsnotdistinct AND pg_get_expr(i.indpred, i.indrelid) = 'is_active');
+                                 AND i.indisunique AND i.indnullsnotdistinct AND pg_get_expr(i.indpred, i.indrelid) = 'is_active'
+                                 AND (SELECT array_agg(a.attname ORDER BY k.ord) FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+                                        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum)
+                                     = ARRAY['company_id', 'template_name']::name[]);
     v_fn boolean := to_regprocedure('public.whatsapp_apply_template_status(uuid, text, timestamptz, text)') IS NOT NULL;
+    -- The body THIS migration installs (md5 of prosrc, LF or CRLF form): a same-signature function
+    -- with another body is someone else's (83's C21 measured such bodies in prod) and must never be
+    -- taken for a re-apply. The postcondition asserts the installed body matches, so editing the body
+    -- below without updating these hashes fails the apply.
+    v_fn_exact boolean := EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.whatsapp_apply_template_status(uuid, text, timestamptz, text)')
+                                    AND md5(p.prosrc) = ANY (ARRAY['8bfa4c0135900db2277f5cdf6aaab329', '7cfd98c9e03a77cce407d4ef8996606a']));
   BEGIN
-    IF (v_col OR v_idx OR v_fn) AND NOT (v_col_exact AND v_idx_exact AND v_fn) THEN
+    IF (v_col OR v_idx OR v_fn) AND NOT (v_col_exact AND v_idx_exact AND v_fn_exact) THEN
       RAISE EXCEPTION 'WTAU preflight: status_event_at / whatsapp_templates_one_active / whatsapp_apply_template_status partly exist or differ (column %, index %, function %) - they predate this migration; refusing (its rollback must never drop them)', v_col, v_idx, v_fn;
     END IF;
   END;
@@ -156,7 +165,10 @@ DECLARE
 BEGIN
   SELECT count(*) INTO v_n FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
    WHERE i.indrelid = 'public.whatsapp_templates'::regclass AND c.relname = 'whatsapp_templates_one_active'
-     AND i.indisunique AND i.indnullsnotdistinct AND pg_get_expr(i.indpred, i.indrelid) = 'is_active';
+     AND i.indisunique AND i.indnullsnotdistinct AND pg_get_expr(i.indpred, i.indrelid) = 'is_active'
+     AND (SELECT array_agg(a.attname ORDER BY k.ord) FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum)
+         = ARRAY['company_id', 'template_name']::name[];
   IF v_n <> 1 THEN
     RAISE EXCEPTION 'WTAU postcondition: whatsapp_templates_one_active must be UNIQUE NULLS NOT DISTINCT (company_id, template_name) WHERE is_active';
   END IF;
@@ -168,6 +180,9 @@ BEGIN
     RAISE EXCEPTION 'WTAU postcondition: whatsapp_apply_template_status is missing';
   END IF;
   SELECT p.prosecdef, p.proconfig, p.provolatile INTO v_secdef, v_config, v_vol FROM pg_proc p WHERE p.oid = v_fn;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_fn AND md5(p.prosrc) = ANY (ARRAY['8bfa4c0135900db2277f5cdf6aaab329', '7cfd98c9e03a77cce407d4ef8996606a'])) THEN
+    RAISE EXCEPTION 'WTAU postcondition: the installed function body does not match the hashes in this migration - update them with the body';
+  END IF;
   IF v_secdef THEN RAISE EXCEPTION 'WTAU postcondition: the function must be SECURITY INVOKER'; END IF;
   IF v_vol <> 'v' THEN RAISE EXCEPTION 'WTAU postcondition: the function must be VOLATILE'; END IF;
   IF v_config IS NULL OR NOT ('search_path=pg_catalog, public, pg_temp' = ANY (v_config)) THEN
