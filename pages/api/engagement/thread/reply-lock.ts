@@ -42,11 +42,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
     const me = access.userId;
 
-    const { data: thread } = await supabase
+    const readLock = () => supabase
       .from('engagement_threads')
       .select('id, organization_id, reply_lock_user_id, reply_lock_expires_at')
       .eq('id', threadId)
       .maybeSingle();
+    const { data: thread, error: threadError } = await readLock();
+    // A failed read is not "no such thread" (unread-error census).
+    if (threadError) return res.status(500).json({ error: 'Reply lock unavailable. Please try again.' });
 
     if (!thread || (thread as { organization_id: string | null }).organization_id !== organizationId) {
       return res.status(404).json({ error: 'Thread not found' });
@@ -63,10 +66,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (action === 'release') {
       // Only the holder can release; releasing a lock you don't hold is a no-op.
       if (row.reply_lock_user_id === me) {
-        await supabase
+        // Pinned to the holder (CLASS-2 C1): a lock someone else took since the read is not cleared.
+        const { error: releaseError } = await supabase
           .from('engagement_threads')
           .update({ reply_lock_user_id: null, reply_lock_expires_at: null })
-          .eq('id', threadId);
+          .eq('id', threadId)
+          .eq('reply_lock_user_id', me);
+        if (releaseError) console.warn('[engagement/thread/reply-lock] release not written', releaseError.message);
       }
       return res.status(200).json({ success: true, locked: false, held_by: null });
     }
@@ -84,14 +90,34 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const expiresAt = new Date(now + LOCK_TTL_MS).toISOString();
-    const { error: updateError } = await supabase
+    // CLASS-2 C1 (e9 sweep): the acquire was a blind write, so two operators reading a free (or
+    // expired) lock both got `locked: true`. It is now a compare-and-set on the EXACT lock state that
+    // was read (holder and expiry); if anyone changed it since, nothing moves and the current holder
+    // is reported. An explicit `force` stays a deliberate override (the client's choice).
+    let acquire = supabase
       .from('engagement_threads')
       .update({ reply_lock_user_id: me, reply_lock_expires_at: expiresAt })
       .eq('id', threadId);
+    if (!body.force) {
+      acquire = row.reply_lock_user_id === null ? acquire.is('reply_lock_user_id', null) : acquire.eq('reply_lock_user_id', row.reply_lock_user_id);
+      acquire = row.reply_lock_expires_at === null ? acquire.is('reply_lock_expires_at', null) : acquire.eq('reply_lock_expires_at', row.reply_lock_expires_at);
+    }
+    const { data: acquired, error: updateError } = await acquire.select('id');
 
     if (updateError) {
       console.warn('[engagement/thread/reply-lock]', updateError.message);
       return res.status(500).json({ error: 'Failed to update reply lock' });
+    }
+    if (!Array.isArray(acquired) || acquired.length === 0) {
+      // best-effort: who holds it now is informational; `locked: false` stands whatever this read answers
+      const { data: now2 } = await readLock();
+      const current = (now2 ?? {}) as { reply_lock_user_id?: string | null; reply_lock_expires_at?: string | null };
+      return res.status(200).json({
+        success: true,
+        locked: false,
+        held_by: current.reply_lock_user_id ?? null,
+        expires_at: current.reply_lock_expires_at ?? null,
+      });
     }
 
     return res.status(200).json({ success: true, locked: true, held_by: me, expires_at: expiresAt });

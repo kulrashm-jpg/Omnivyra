@@ -222,6 +222,10 @@ async function writeOutboundDmToThread(input: {
       .eq('platform', input.platform)
       .eq('action_type', 'dm')
       .eq('status', 'pending')
+      // CLASS-2 C3 (e9 sweep): not a DM the extension holds under a lease - it is being sent now.
+      // Superseding it could not stop that send; it only made the send's own result fail
+      // LEASE_MISMATCH, so a DELIVERED DM was recorded as failed. A leased row settles itself.
+      .is('dispatch_lease_id', null)
       .in('target_id', staleTargets);
     if (supersedeError) {
       console.warn('[engagement/outbound-mirror] pending DM supersede failed:', supersedeError.message);
