@@ -458,11 +458,15 @@ describe('040 — the legacy substrate is adapted to, never altered', () => {
     expect(sha('backend/services/leadOutreachExecution/materialization.ts')).toBe('46d4461b56be2908');
     expect(sha('backend/services/leadOutreachExecution/translation.ts')).toBe('a83e38bb9f2fe9b7');
     expect(sha('backend/services/leadOutreachExecution/personAnchor.ts')).toBe('7459e807986f20a6');
-    // quota.ts re-pinned 2026-11-10 (remediation, b4a592074): skip a disconnected shared Redis client
-    // instead of hanging the dispatch; the database stays the truth. PENDING PI ACCEPTANCE.
-    expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('9b990a337dc3d8b2');
+    // quota.ts RE-PINNED 2026-11-12 ONCE for D6 + D7 (e9 ruling 2026-11-12 D6/D7 option (2)), at
+    // f0fbb9a95: D7 reconcile raise-only by INCRBY (9871e688e) + the excess log (861541678); D6 the
+    // database layer reserves atomically via outreach_quota_consume (mig 20270217000009) and releases
+    // via outreach_quota_release. Still GRANTS under the limit (WS-3 contract). PI ACCEPTED (e1,
+    // reviewed the diff from b4a592074). Before that: b4a592074 (skip a disconnected Redis).
+    expect(sha('backend/services/leadOutreachExecution/quota.ts')).toBe('5dbd36ac41477522');
     // dispatch.ts re-pinned for Outreach F-1 (prior-attempt check for every task) and P-1 (repeated under the claim).
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('a23b5fbf0b38f5f2');
+    // RE-PINNED 2026-11-12 (D6, e9 ruling 2026-11-12 D6/D7 option (2)): ONE line - reserveQuota gets taskId.
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('bac004158ee5c595');
   });
 
   it('person resolution reuses the ONE existing mechanism', () => {

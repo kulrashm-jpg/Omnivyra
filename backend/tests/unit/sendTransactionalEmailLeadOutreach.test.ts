@@ -301,7 +301,9 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('c6e86299a89dc60f');
     // Re-pinned for Outreach F-1 (prior-attempt check for every task) and P-1 (repeated under the claim); same request.
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('a23b5fbf0b38f5f2');
+    // RE-PINNED 2026-11-12 (D6, e9 ruling 2026-11-12 D6/D7 option (2)): ONE line - reserveQuota gets
+    // taskId; the provider-facing request is unchanged.
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('bac004158ee5c595');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {
