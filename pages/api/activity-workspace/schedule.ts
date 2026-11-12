@@ -158,41 +158,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const platformNorm = canonicalizePlatformForDb(String(platform));
   const executionIdStr = String(executionId || '').trim();
 
-  // Try to resolve a connected social account for this platform.
-  // Falls back to any active social account for the user when no platform-specific one exists.
+  // Resolve the caller's connected social account for this platform, IN THE CAMPAIGN'S COMPANY ONLY.
+  //
+  // CROSS-TENANT DEFECT CLOSED (correct-sending): there used to be a fallback "1b" that, when the
+  // company-scoped lookup found nothing, took the user's active account for the platform in ANY company.
+  // A user who belongs to two companies, scheduling into company A's campaign, got company B's account
+  // attached, so A's post would be PUBLISHED through B's social account. The lookup is now filtered by the
+  // company requireCampaignTenantAccess authorized above (never the body's companyId). With no account in
+  // that company, social_account_id stays null (nullable by design: the UI shows a "Connect" badge and the
+  // publish workers refuse a post without one).
   let socialAccountId: string | null = null;
   try {
     const platformAlias = platformNorm === 'x' ? 'twitter' : platformNorm;
-    const isValidUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-
-    // 1a. Platform + company_id scoped lookup (only when companyId is a valid UUID)
-    if (!socialAccountId && companyId && isValidUuid(companyId)) {
-      const { data, error } = await supabase
-        .from('social_accounts')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('is_active', true)
-        .eq('company_id', companyId)
-        .in('platform', [platformNorm, platformAlias])
-        .limit(1)
-        .maybeSingle();
-      if (error) console.warn('[schedule] company-scoped account lookup error:', error.message);
-      socialAccountId = data?.id ?? null;
-    }
-
-    // 1b. Platform lookup without company scope
-    if (!socialAccountId) {
-      const { data, error } = await supabase
-        .from('social_accounts')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('is_active', true)
-        .in('platform', [platformNorm, platformAlias])
-        .limit(1)
-        .maybeSingle();
-      if (error) console.warn('[schedule] platform account lookup error:', error.message);
-      socialAccountId = data?.id ?? null;
-    }
+    const { data, error } = await supabase
+      .from('social_accounts')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .eq('company_id', campaignAccess.organizationId)
+      .in('platform', [platformNorm, platformAlias])
+      .limit(1)
+      .maybeSingle();
+    if (error) console.warn('[schedule] company-scoped account lookup error:', error.message);
+    socialAccountId = data?.id ?? null;
 
     console.log('[schedule] resolved socialAccountId:', socialAccountId);
   } catch (err) {
