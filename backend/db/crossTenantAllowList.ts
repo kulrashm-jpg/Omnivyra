@@ -69,6 +69,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: "SYSTEM JOB WORK-SET DISCOVERY (83 ruling 2, 2026-11-12): runNarrativeEngine must find WHICH companies have work before it can run per company, so it reads content_opportunities across tenants - selecting company_id ONLY, for rows created in the last 7 days, capped at 5000 rows. No title, description or any other content column is read, nothing is written by this read, and nothing from it reaches a tenant: each discovered company is then processed under systemTenantContext(companyId) through tenantTable/tenantChildTableOf (generateCampaignNarratives). Pinned by backend/tests/unit/s2NarrativeEngineTenant.test.ts 'discovery reads company_id only' and 'each company is processed only with its own opportunities'. Reads nothing else cross-tenant.",
     owner: 'virality-e1',
   },
+  {
+    id: 'strategy-templates-user-owned-or-public',
+    tables: ['strategy_templates'],
+    file: 'backend/services/strategyTemplateService.ts',
+    reason: "USER-OWNED + PUBLIC BY DESIGN (83 ruling 3, 2026-11-12): a strategy template belongs to its user_id (company_id is optional and often NULL) and is_public templates are readable by every signed-in user, so tenant scoping does not apply. Enforced: listStrategyTemplates returns only rows with user_id = the authenticated caller OR is_public = true (two exact reads, no interpolated filter); getStrategyTemplate's row is disclosed by pages/api/strategy-templates/[id].ts only to its owner or when public (a PRIVATE template of another user answers 404); updateStrategyTemplate / deleteStrategyTemplate are pinned to .eq('user_id', owner) and the route refuses a non-owner (403) before calling them; createStrategyTemplate writes user_id = the caller and a company_id only after enforceCompanyAccess. Pinned by backend/tests/unit/s2StrategyTemplatesOwnerScoped.test.ts 'a non-owner can never PUT or DELETE', 'a non-owner never reads a PRIVATE template, even by id' and 'the list is own + public only'. Reads nothing else cross-tenant.",
+    owner: 'virality-e1',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));

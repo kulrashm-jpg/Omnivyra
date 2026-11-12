@@ -50,7 +50,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       // Ownership / tenant columns are never client-writable.
       const { id: _id, user_id: _userId, company_id: _companyId, created_at: _createdAt, ...updates } = req.body || {};
-      const updated = await updateStrategyTemplate(id, updates);
+      const updated = await updateStrategyTemplate(id, user.id, updates);
       return res.status(200).json({ success: true, data: updated });
     } catch (error: any) {
       return res.status(500).json({
@@ -61,7 +61,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    await deleteStrategyTemplate(id);
+    await deleteStrategyTemplate(id, user.id);
     return res.status(200).json({ success: true });
   } catch (error: any) {
     return res.status(500).json({

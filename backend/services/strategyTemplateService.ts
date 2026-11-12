@@ -39,31 +39,40 @@ const mapTemplate = (row: any): StrategyTemplate => ({
   updated_at: row.updated_at,
 });
 
+/**
+ * S2 (e1, 83 ruling 3): strategy templates are USER-owned (company_id optional) and public templates are
+ * readable by every signed-in user by design - so these sites are allow-listed
+ * (strategy-templates-user-owned-or-public), not tenant-scoped. Every read is the caller's own rows or
+ * is_public rows; every write is pinned to the owner's user_id.
+ * The visible set is two exact reads (own, public) - never an interpolated .or() filter string.
+ */
 export async function listStrategyTemplates(
   userId: string,
   options: { company_id?: string; is_public?: boolean; tags?: string[] } = {}
 ): Promise<StrategyTemplate[]> {
-  let query = ownedDbTable('strategy_templates')
-    .select('*')
-    .or(`user_id.eq.${userId},is_public.eq.true`);
-
-  if (options.company_id) {
-    query = query.eq('company_id', options.company_id);
-  }
-  if (options.is_public !== undefined) {
-    query = query.eq('is_public', options.is_public);
-  }
-
-  const { data, error } = await query.order('updated_at', { ascending: false });
-  if (error) {
-    throw new Error(`Failed to list strategy templates: ${error.message}`);
-  }
-  return (data || []).map(mapTemplate);
+  const read = async (scope: 'own' | 'public') => {
+    // cross-tenant: strategy-templates-user-owned-or-public
+    let query = ownedDbTable('strategy_templates').select('*');
+    query = scope === 'own' ? query.eq('user_id', userId) : query.eq('is_public', true);
+    if (options.company_id) query = query.eq('company_id', options.company_id);
+    if (options.is_public !== undefined) query = query.eq('is_public', options.is_public);
+    const { data, error } = await query.order('updated_at', { ascending: false });
+    if (error) throw new Error(`Failed to list strategy templates: ${error.message}`);
+    return (data || []) as Array<Record<string, any>>;
+  };
+  const [own, pub] = await Promise.all([read('own'), read('public')]);
+  const byId = new Map<string, Record<string, any>>();
+  for (const row of [...own, ...pub]) byId.set(String(row.id), row);
+  return [...byId.values()]
+    .sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
+    .map(mapTemplate);
 }
 
 export async function getStrategyTemplate(
   templateId: string
 ): Promise<StrategyTemplate | null> {
+  // The ROUTE authorizes the returned row (owner, or public) before anything is disclosed.
+  // cross-tenant: strategy-templates-user-owned-or-public
   const { data, error } = await ownedDbTable('strategy_templates')
     .select('*')
     .eq('id', templateId)
@@ -89,6 +98,8 @@ export async function createStrategyTemplate(
     is_public?: boolean;
   }
 ): Promise<StrategyTemplate> {
+  // user_id is the authenticated caller; a company_id is written only after the route's enforceCompanyAccess.
+  // cross-tenant: strategy-templates-user-owned-or-public
   const { data, error } = await ownedDbTable('strategy_templates')
     .insert({
       user_id: userId,
@@ -116,6 +127,7 @@ export async function createStrategyTemplate(
 
 export async function updateStrategyTemplate(
   templateId: string,
+  ownerUserId: string,
   updates: {
     name?: string;
     description?: string | null;
@@ -130,9 +142,12 @@ export async function updateStrategyTemplate(
     is_public?: boolean;
   }
 ): Promise<StrategyTemplate> {
+  // Pinned to the owner: a template id alone never selects another user's row.
+  // cross-tenant: strategy-templates-user-owned-or-public
   const { data, error } = await ownedDbTable('strategy_templates')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', templateId)
+    .eq('user_id', ownerUserId)
     .select('*')
     .single();
 
@@ -142,8 +157,10 @@ export async function updateStrategyTemplate(
   return mapTemplate(data);
 }
 
-export async function deleteStrategyTemplate(templateId: string): Promise<void> {
-  const { error } = await ownedDbTable('strategy_templates').delete().eq('id', templateId);
+export async function deleteStrategyTemplate(templateId: string, ownerUserId: string): Promise<void> {
+  // Pinned to the owner: a template id alone never deletes another user's row.
+  // cross-tenant: strategy-templates-user-owned-or-public
+  const { error } = await ownedDbTable('strategy_templates').delete().eq('id', templateId).eq('user_id', ownerUserId);
   if (error) {
     throw new Error(`Failed to delete strategy template: ${error.message}`);
   }
