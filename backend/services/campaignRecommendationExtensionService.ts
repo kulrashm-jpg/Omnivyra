@@ -32,10 +32,13 @@ export async function generateCampaignRecommendations(input: {
   const sessionId = crypto.randomUUID();
 
   const blueprint = await getUnifiedCampaignBlueprint(campaignId);
-  const { data: campaign } = await ownedDbTable('campaigns')
+  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .select('id, name, description, current_stage, duration_weeks')
     .eq('id', campaignId)
     .maybeSingle();
+  // unread-error pkg 2: every PostgREST result in this file was unread (errors are returned, never
+  // thrown). Each now throws, so the route answers an error instead of a silently wrong result.
+  if (campaignError) throw new Error(`Recommendations: campaign unreadable: ${campaignError.message}`);
   let profile: any = {};
   try {
     profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
@@ -108,13 +111,14 @@ Generate improvement suggestions for each week.`;
     }));
   }
 
-  await ownedDbTable('campaign_recommendation_weeks')
+  const { error: clearError } = await ownedDbTable('campaign_recommendation_weeks')
     .delete()
     .eq('campaign_id', campaignId)
     .eq('session_id', sessionId);
+  if (clearError) throw new Error(`Recommendations: session could not be cleared: ${clearError.message}`);
 
   for (const rec of resultWeeks) {
-    await ownedDbTable('campaign_recommendation_weeks').insert({
+    const { error: insertError } = await ownedDbTable('campaign_recommendation_weeks').insert({
       campaign_id: campaignId,
       week_number: rec.week_number,
       session_id: sessionId,
@@ -130,6 +134,8 @@ Generate improvement suggestions for each week.`;
       platform_content_breakdown: rec.platform_content_breakdown ?? null,
       content_type_mix: rec.content_type_mix ?? null,
     });
+    // A week that was not saved must not be returned as part of the session.
+    if (insertError) throw new Error(`Recommendations: week ${rec.week_number} not saved: ${insertError.message}`);
   }
 
   return { sessionId, weeks: resultWeeks };
@@ -146,7 +152,9 @@ export async function fetchRecommendationWeeks(input: {
     .order('week_number');
   if (input.sessionId) query = query.eq('session_id', input.sessionId);
   if (input.status) query = query.eq('status', input.status);
-  const { data } = await query;
+  const { data, error } = await query;
+  // A failed read is not "no recommendations".
+  if (error) throw new Error(`Recommendations: weeks unreadable: ${error.message}`);
   return data ?? [];
 }
 
@@ -155,11 +163,12 @@ export async function markWeeksAgreed(input: {
   sessionId: string;
   weekNumbers: number[];
 }): Promise<void> {
-  await ownedDbTable('campaign_recommendation_weeks')
+  const { error } = await ownedDbTable('campaign_recommendation_weeks')
     .update({ status: 'agreed', agreed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('campaign_id', input.campaignId)
     .eq('session_id', input.sessionId)
     .in('week_number', input.weekNumbers);
+  if (error) throw new Error(`Recommendations: weeks not marked agreed: ${error.message}`);
 }
 
 export async function mergeRecommendationsIntoPlan(input: {
@@ -167,12 +176,14 @@ export async function mergeRecommendationsIntoPlan(input: {
   sessionId: string;
   weekNumbers: number[];
 }): Promise<{ merged: number }> {
-  const { data: recs } = await ownedDbTable('campaign_recommendation_weeks')
+  const { data: recs, error: recsError } = await ownedDbTable('campaign_recommendation_weeks')
     .select('*')
     .eq('campaign_id', input.campaignId)
     .eq('session_id', input.sessionId)
     .in('week_number', input.weekNumbers)
     .in('status', ['agreed', 'pending']);
+  // A failed read is not "nothing to merge" (which answered merged: 0 as a success).
+  if (recsError) throw new Error(`Recommendations: weeks to merge unreadable: ${recsError.message}`);
   if (!recs || recs.length === 0) return { merged: 0 };
 
   const blueprint = await getUnifiedCampaignBlueprint(input.campaignId);
@@ -202,20 +213,23 @@ export async function mergeRecommendationsIntoPlan(input: {
     };
   });
 
-  let { data: planRow } = await ownedDbTable('campaign_week_plan')
+  let { data: planRow, error: planError } = await ownedDbTable('campaign_week_plan')
     .select('id')
     .eq('campaign_id', input.campaignId)
     .in('status', ['edited_committed', 'committed'])
     .order('updated_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  // A failed read is not "no committed plan": the fallback would merge into an older, uncommitted row.
+  if (planError) throw new Error(`Recommendations: committed plan unreadable: ${planError.message}`);
   if (!planRow?.id) {
-    const { data: anyPlan } = await ownedDbTable('campaign_week_plan')
+    const { data: anyPlan, error: anyPlanError } = await ownedDbTable('campaign_week_plan')
       .select('id')
       .eq('campaign_id', input.campaignId)
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (anyPlanError) throw new Error(`Recommendations: plan unreadable: ${anyPlanError.message}`);
     planRow = anyPlan;
   }
   if (!planRow?.id) throw new Error('No plan row found for campaign');
@@ -245,7 +259,7 @@ export async function mergeRecommendationsIntoPlan(input: {
 
   if (error) throw new Error(`Failed to merge: ${error.message}`);
 
-  await ownedDbTable('campaign_recommendation_weeks')
+  const { error: appliedError } = await ownedDbTable('campaign_recommendation_weeks')
     .update({
       status: 'applied',
       applied_at: new Date().toISOString(),
@@ -254,6 +268,10 @@ export async function mergeRecommendationsIntoPlan(input: {
     .eq('campaign_id', input.campaignId)
     .eq('session_id', input.sessionId)
     .in('week_number', input.weekNumbers);
+  // The plan IS merged. Re-applying is safe (the merge sets the same fields again), so say so.
+  if (appliedError) {
+    throw new Error(`Recommendations were merged into the plan, but could not be marked applied (${appliedError.message}). Applying them again is safe.`);
+  }
 
   return { merged: recs.length };
 }
