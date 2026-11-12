@@ -175,6 +175,8 @@ jest.mock('../../services/publishNowService', () => {
   };
 });
 jest.mock('../../services/creator/publishingOrganizationResolver', () => ({
+  // The REAL error class: the processor branches on instanceof (unread-error pkg 2).
+  ...jest.requireActual('../../services/creator/publishingOrganizationResolver'),
   resolvePublishingOrganization: jest.fn(async () => null),
 }));
 // Stubbed for module-load reasons, not behavioural ones: the real module
@@ -258,11 +260,11 @@ function seedJob(id: string, scheduledPostId: string, overrides: Row = {}): Row 
   return row;
 }
 
-function job(id: string, scheduledPostId: string): Job<any> {
+function job(id: string, scheduledPostId: string, attemptsMade = 0): Job<any> {
   return {
     id,
     data: { scheduled_post_id: scheduledPostId, social_account_id: ACCOUNT, user_id: USER },
-    attemptsMade: 0,
+    attemptsMade,
     opts: { attempts: 3 },
   } as unknown as Job<any>;
 }
@@ -448,5 +450,32 @@ describe('publishProcessor — post-level publish claim', () => {
     await processPublishJob(job('qj-1', 'sp-root'));
 
     expect(threadCalls).toEqual(['sp-root']);
+  });
+});
+
+describe('publishProcessor — an unreadable publishing organization (unread-error pkg 2)', () => {
+  const resolver = () => jest.requireMock('../../services/creator/publishingOrganizationResolver').resolvePublishingOrganization as jest.Mock;
+  const readError = () => {
+    const { PublishingOrgReadError } = jest.requireActual('../../services/creator/publishingOrganizationResolver');
+    return new PublishingOrgReadError('social_accounts', { message: 'boom' });
+  };
+
+  test('a NON-final attempt fails (BullMQ retries), publishes nothing, and leaves the post untouched', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    const before = { ...post('sp-1') };
+    resolver().mockRejectedValueOnce(readError());
+    await expect(processPublishJob(job('qj-1', 'sp-1', 0))).rejects.toMatchObject({ code: 'PUBLISHING_ORG_READ_FAILED' });
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1').status).toBe(before.status);
+  });
+
+  test('the FINAL attempt marks the post failed with a named code (bounded and visible), and publishes nothing', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    resolver().mockRejectedValueOnce(readError());
+    await expect(processPublishJob(job('qj-1', 'sp-1', 2))).rejects.toMatchObject({ code: 'PUBLISHING_ORG_READ_FAILED' });
+    expect(publishesFor('sp-1')).toBe(0);
+    expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISHING_ORG_READ_FAILED' });
   });
 });

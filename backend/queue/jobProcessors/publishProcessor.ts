@@ -70,7 +70,7 @@ import {
   claimScheduledPostForPublish,
   releaseScheduledPostPublishClaim,
 } from '../../services/publishNowService';
-import { resolvePublishingOrganization } from '../../services/creator/publishingOrganizationResolver';
+import { resolvePublishingOrganization, PublishingOrgReadError } from '../../services/creator/publishingOrganizationResolver';
 import { logPipelineEvent } from '../../../lib/shared/observability';
 import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
@@ -115,7 +115,32 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
   // canonical owning tenant — we never trust caller-supplied org ids.
   // Canonical organization identity (the single resolver) — social_accounts.company_id
   // is the owning tenant; never a caller-supplied id, never userId-as-companyId.
-  const resolvedOrgId: string | null = await resolvePublishingOrganization({ socialAccountId: social_account_id });
+  //
+  // unread-error pkg 2: a FAILED org read throws PublishingOrgReadError. It used to answer null, and a
+  // null tenantId makes runJob SKIP the tenant check (platform-wide job), so the publish ran without the
+  // deleted/inactive-org guard. Now the attempt fails and BullMQ retries it (publish queue: attempts 3,
+  // exponential backoff). The throw happens before runJob, so the handler's own failure marking never
+  // runs: on the FINAL attempt the post is marked failed here, with a named code, so a permanently
+  // failing read ends visibly instead of leaving the post silently in its pre-publish state.
+  let resolvedOrgId: string | null;
+  try {
+    resolvedOrgId = await resolvePublishingOrganization({ socialAccountId: social_account_id });
+  } catch (orgError) {
+    const isFinalAttempt = ((job.attemptsMade ?? 0) + 1) >= (job.opts?.attempts ?? 1);
+    if (isFinalAttempt && orgError instanceof PublishingOrgReadError) {
+      await updateScheduledPostOnFailure(
+        scheduled_post_id,
+        'Publishing stopped: the owner of this post\'s connected account could not be confirmed. Please retry the post.',
+        undefined,
+        orgError.code,
+      ).catch((markError: unknown) => {
+        console.error('[publishProcessor] could not mark the post failed after the final org-read failure', {
+          scheduled_post_id, message: markError instanceof Error ? markError.message : String(markError),
+        });
+      });
+    }
+    throw orgError;
+  }
 
   const outcome = await runJob(
     {
