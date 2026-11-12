@@ -95,6 +95,12 @@ jest.mock('../../db/supabaseClient', () => {
         return rs;
       }
       if (table === 'company_profiles') return [{ logo_url: null, favicon_url: null }];
+      // e1 2026-11-12: memberships authorize only in OPERATIONAL companies; COMPANY_A and VICTIM are active here
+      // (company status itself is proven in inactiveCompanyRoleGate.test.ts). Honours the `.in('id', ...)` filter.
+      if (table === 'companies') {
+        const ids = filters['id__in'] as string[] | undefined;
+        return [COMPANY_A, VICTIM].filter((id) => !ids || ids.includes(id)).map((id) => ({ id, status: 'active', deleted_at: null }));
+      }
       return [];
     };
     const resolve = () => {

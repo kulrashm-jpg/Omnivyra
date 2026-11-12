@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { operationalCompanyIds } from '../../../backend/services/rbacPrimitives';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
@@ -305,7 +306,11 @@ async function resolveAccess(userId: string, requestedCompanyId?: string, mode: 
     return { companyId: selected, canWrite: true, isSuperAdmin: true };
   }
 
-  const companyAdminRole = roles.find((r: any) => String(r.role).toUpperCase() === 'COMPANY_ADMIN');
+  // e1 2026-11-12 (BLOCKING safety): memberships in INACTIVE / suspended / deleted companies confer nothing (fail closed).
+  // (Platform SUPER_ADMIN above is exempt - platform administration.)
+  const operational = await operationalCompanyIds(roles.map((r: any) => r.company_id));
+  if (!operational) return null;
+  const companyAdminRole = roles.find((r: any) => String(r.role).toUpperCase() === 'COMPANY_ADMIN' && operational.has(String(r.company_id)));
   if (!companyAdminRole) return null;
 
   return {

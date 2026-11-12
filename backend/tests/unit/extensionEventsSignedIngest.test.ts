@@ -32,8 +32,20 @@ function rolesBuilder() {
   };
   return api;
 }
-jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => rolesBuilder() } }));
-jest.mock('@/backend/db/supabaseClient', () => ({ supabase: { from: () => rolesBuilder() } }));
+// e1 2026-11-12: a membership authorizes only in an OPERATIONAL company - the session's company is active here,
+// every other company is absent (company status itself is proven in inactiveCompanyRoleGate.test.ts).
+function companiesBuilder() {
+  let id: unknown = null;
+  const api: any = {
+    select() { return api; },
+    eq(c: string, v: unknown) { if (c === 'id') id = v; return api; },
+    maybeSingle() { return Promise.resolve({ data: id === 'org-ext-1' ? { status: 'active', deleted_at: null } : null, error: null }); },
+  };
+  return api;
+}
+const mockFromTable = (t: string) => (t === 'companies' ? companiesBuilder() : rolesBuilder());
+jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => mockFromTable(t) } }));
+jest.mock('@/backend/db/supabaseClient', () => ({ supabase: { from: (t: string) => mockFromTable(t) } }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 // R-3 suspends ingestion on these routes; this suite proves the signature
 // layer underneath, which still guards them if ingestion is ever re-enabled.

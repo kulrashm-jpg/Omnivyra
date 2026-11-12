@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { operationalCompanyIds } from '../../../backend/services/rbacPrimitives';
 /** Route shell — reports/[reportId] API (Agent-B split: helpers/types in ../../../backend/apiHandlers/reports/reportIdShared). */
 /**
  * GET /api/reports/[reportId]?type=snapshot|performance|growth
@@ -92,9 +93,11 @@ async function handler(
       .eq('user_id', user.id)
       .eq('status', 'active');
     const delRows = (delMembership ?? []) as Array<{ company_id?: string | null; role?: string | null }>;
+    // e1 2026-11-12 (BLOCKING safety): memberships in INACTIVE / suspended / deleted companies confer nothing (fail closed).
+    const delOperational = await operationalCompanyIds(delRows.map((row) => row.company_id));
     const delCompanyIds = delRows
       .map((row) => row.company_id)
-      .filter((cid): cid is string => Boolean(cid));
+      .filter((cid): cid is string => Boolean(cid) && !!delOperational?.has(String(cid)));
     if (delCompanyIds.length === 0) {
       return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
     }
@@ -157,9 +160,13 @@ async function handler(
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active');
+  // e1 2026-11-12 (BLOCKING safety): memberships in INACTIVE / suspended / deleted companies confer nothing (fail closed).
+  const operationalIds = await operationalCompanyIds(
+    (membershipRows ?? []).map((row) => (row as { company_id?: string | null }).company_id),
+  );
   const accessibleCompanyIds = (membershipRows ?? [])
     .map((row) => (row as { company_id?: string | null }).company_id)
-    .filter((cid): cid is string => Boolean(cid));
+    .filter((cid): cid is string => Boolean(cid) && !!operationalIds?.has(String(cid)));
 
   if (accessibleCompanyIds.length === 0) {
     return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });

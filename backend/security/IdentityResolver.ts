@@ -22,6 +22,7 @@
 import type { NextApiRequest } from 'next';
 import { resolveAuthenticatedUser } from '../services/authResolver';
 import { supabase as db } from '../db/supabaseClient';
+import { operationalCompanyIds } from '../services/rbacPrimitives';
 import { logger } from '../services/logger';
 import { tolerantUserSelect } from '../services/userColumnProjection';
 import {
@@ -67,25 +68,33 @@ interface RoleRow {
   status: string | null;
 }
 
-async function fetchOrgMemberships(userId: string): Promise<PrincipalOrgMembership[]> {
+export async function fetchOrgMemberships(userId: string): Promise<PrincipalOrgMembership[]> {
   const { data } = await db
     .from('user_company_roles')
     .select('company_id, role, status')
     .eq('user_id', userId);
   const rows = (data ?? []) as RoleRow[];
-  return rows
-    .filter((r): r is RoleRow & { company_id: string; role: string; status: string } =>
-      !!r.company_id && !!r.role && !!r.status,
-    )
-    .map((r) => ({
+  const valid = rows.filter((r): r is RoleRow & { company_id: string; role: string; status: string } =>
+    !!r.company_id && !!r.role && !!r.status,
+  );
+  // e1 2026-11-12 (BLOCKING safety): a membership in an INACTIVE / suspended / deleted company is NOT usable - it
+  // is reported as 'inactive', so every capability decision (AuthorizationService requires m.status === 'active'
+  // for the organization) denies it. A company-status read error makes every tenant membership unusable (fail
+  // closed). EXEMPT: SUPER_ADMIN rows - platform administration must still reach an inactive company.
+  // See companyRoleGate (backend/services/rbacPrimitives.ts) for the status table.
+  const operational = await operationalCompanyIds(valid.map((r) => r.company_id), (t) => db.from(t));
+  return valid.map((r) => {
+    const rowStatus = (['active', 'invited', 'inactive', 'deactivated'] as const).includes(r.status as 'active')
+      ? (r.status as 'active' | 'invited' | 'inactive' | 'deactivated')
+      : 'inactive';
+    const platformAdmin = String(r.role).toUpperCase() === 'SUPER_ADMIN';
+    const companyUsable = platformAdmin || (operational !== null && operational.has(r.company_id));
+    return {
       organizationId: r.company_id,
       role: r.role,
-      status: (['active', 'invited', 'inactive', 'deactivated'] as const).includes(
-        r.status as 'active',
-      )
-        ? (r.status as 'active' | 'invited' | 'inactive' | 'deactivated')
-        : 'inactive',
-    }));
+      status: rowStatus === 'active' && !companyUsable ? 'inactive' : rowStatus,
+    };
+  });
 }
 
 async function fetchActiveCompanyId(userId: string): Promise<string | null> {

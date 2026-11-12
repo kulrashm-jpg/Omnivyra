@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { pickOperationalMembership } from '../../../backend/services/rbacPrimitives';
 
 /**
  * POST /api/credits/claim-action
@@ -101,13 +102,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
      * into that organisation's ledger, and with several rows the unordered
      * limit(1) could prefer a stale one over a live one.
      */
-    const { data: membership } = await serviceSb
+    const { data: membershipCandidates } = await serviceSb
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', user.id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
+      .eq('status', 'active');
+    // e1 2026-11-12 (BLOCKING safety): never derive an INACTIVE / suspended company - pick the first
+    // membership whose company is operational (fail closed on a status read error).
+    const membership = await pickOperationalMembership(membershipCandidates as Array<{ company_id?: string | null }> | null, { userId: user.id });
 
     const orgId = (membership as any)?.company_id ?? null;
     if (orgId) {

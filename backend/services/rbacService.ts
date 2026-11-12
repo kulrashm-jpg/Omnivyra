@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import {
 
+  companyRoleGate,
   getCompanyRoleIncludingInvited,
   normalizePermissionRole,
   normalizeRole,
@@ -506,6 +507,13 @@ export const getUserRole = async (
     return { role: null, error: null, membershipType: undefined };
   }
   if (data && data.length > 0) {
+    // e1 2026-11-12 (BLOCKING safety): an ACTIVE membership in an inactive / suspended / deleted company confers
+    // no role, and an unreadable company status fails closed. See companyRoleGate (rbacPrimitives) for the status
+    // table and the exemptions (platform super admin, content_architect - resolved by callers before this).
+    const gate = await companyRoleGate(companyId, (t) => ownedDbTable(t));
+    if (gate !== 'active') {
+      return { role: null, error: gate === 'inactive' ? 'COMPANY_INACTIVE' : 'COMPANY_STATUS_UNAVAILABLE', membershipType: undefined };
+    }
     const row = data[0] as { role: string; status?: string };
     const rawRole = typeof row.role === 'string' ? row.role.trim() : '';
     const normalizedRole = normalizeRole(rawRole || row.role);
@@ -631,6 +639,20 @@ export const enforceRole = async (input: {
   const { role, error } = userRoleResult;
   if (error === 'COMPANY_ACCESS_DENIED') {
     input.res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION' });
+    return null;
+  }
+  // e1 2026-11-12: the company-status gate (companyRoleGate) answers with the SAME contract as withRBAC /
+  // TenantGuard: an inactive company is a 403, an unreadable status a retryable 503 - never an allow.
+  if (error === 'COMPANY_INACTIVE') {
+    input.res.status(403).json({ error: 'Access denied to company' });
+    return null;
+  }
+  if (error === 'COMPANY_STATUS_UNAVAILABLE') {
+    input.res.status(503).json({
+      error: 'Membership check is temporarily unavailable. Please try again.',
+      code: 'TENANT_LOOKUP_ERROR',
+      retryable: true,
+    });
     return null;
   }
   // getUserRole now includes invited admin fallback internally; no extra getCompanyRoleIncludingInvited call

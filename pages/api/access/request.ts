@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { pickOperationalMembership } from '../../../backend/services/rbacPrimitives';
 
 /**
  * POST /api/access/request
@@ -106,12 +107,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ── Get org membership ─────────────────────────────────────────────────────
-  const { data: membership } = await supabase
+  const { data: membershipCandidates } = await supabase
     .from('user_company_roles')
     .select('company_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
+    .eq('user_id', user.id);
+  // e1 2026-11-12 (BLOCKING safety): never derive an INACTIVE / suspended company - pick the first
+  // membership whose company is operational (fail closed on a status read error).
+  const membership = await pickOperationalMembership(membershipCandidates as Array<{ company_id?: string | null }> | null, { userId: user.id });
 
   // ── Insert access request ──────────────────────────────────────────────────
   const domain = user.email.split('@').pop() ?? '';

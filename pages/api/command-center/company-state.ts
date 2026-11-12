@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { companyRoleGate } from '../../../backend/services/rbacPrimitives';
 
 /**
  * GET /api/command-center/company-state
@@ -82,13 +83,16 @@ async function handler(
     }
 
     // ── 3. Check if user has access to this company ────────────────────────
-    const { data: roleData } = await supabase
+    const { data: roleDataMembership } = await supabase
       .from('user_company_roles')
       .select('id')
       .eq('user_id', user.id)
       .eq('company_id', companyId)
       .eq('status', 'active')
       .maybeSingle();
+    // e1 2026-11-12 (BLOCKING safety): a membership in an INACTIVE / suspended / deleted company confers
+    // nothing (fail closed on a status read error) - see companyRoleGate.
+    const roleData = roleDataMembership && (await companyRoleGate(companyId)) === 'active' ? roleDataMembership : null;
 
     if (!roleData) {
       return res.status(403).json({

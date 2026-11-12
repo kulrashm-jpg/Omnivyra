@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { companyRoleGate } from '../../../backend/services/rbacPrimitives';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ingestExtensionEvent } from '../../../backend/services/extensionEventIngestionService';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -40,13 +41,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'Extension session organization mismatch' });
     }
 
-    const { data: roleRow, error: roleError } = await supabase
+    const { data: roleRowMembership, error: roleError } = await supabase
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', effectiveUserId)
       .eq('company_id', companyId)
       .eq('status', 'active')
       .maybeSingle();
+    // e1 2026-11-12 (BLOCKING safety): a membership in an INACTIVE / suspended / deleted company confers
+    // nothing (fail closed on a status read error) - see companyRoleGate.
+    const roleRow = roleRowMembership && (await companyRoleGate(companyId)) === 'active' ? roleRowMembership : null;
 
     if (roleError) {
       throw new Error(`Failed to validate extension event access: ${roleError.message}`);

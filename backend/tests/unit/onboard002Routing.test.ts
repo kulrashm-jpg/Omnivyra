@@ -32,7 +32,9 @@ function stubSupabase(userRow: Record<string, unknown> | null) {
   mockFrom.mockImplementation((table: string) => {
     if (table === 'users') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: userRow }) }) }) };
     if (table === 'user_company_roles') return { select: () => ({ eq: () => ({ eq: () => ({ order: async () => ({ data: [{ role: 'COMPANY_ADMIN', company_id: 'c1', status: 'active' }] }) }) }) }) };
-    if (table === 'companies') return { select: () => ({ in: async () => ({ data: [] }) }) };
+    // e1 2026-11-12: post-login routing considers only OPERATIONAL companies; this user's company c1 is active
+    // (inactive routing is proven in inactiveCompanyPostLoginRoute.test.ts).
+    if (table === 'companies') return { select: () => ({ in: async () => ({ data: [{ id: 'c1', status: 'active', deleted_at: null }], error: null }) }) };
     return {};
   });
 }

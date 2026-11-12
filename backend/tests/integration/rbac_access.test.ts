@@ -27,6 +27,12 @@ const createMockRes = () => {
 
 const mockRoleLookup = (rowsByCompany: Record<string, string | null>, anyRoles: string[] = []) => {
   (supabase.from as jest.Mock).mockImplementation((table: string) => {
+    // e1 2026-11-12: the membership role gate reads companies.status; every company here is operational
+    // (company status itself is proven in backend/tests/unit/inactiveCompanyRoleGate.test.ts).
+    if (table === 'companies') {
+      const c: any = { select: jest.fn(() => c), eq: jest.fn(() => c), maybeSingle: async () => ({ data: { status: 'active', deleted_at: null }, error: null }) };
+      return c;
+    }
     if (table !== 'user_company_roles') {
       return {
         select: jest.fn().mockReturnThis(),

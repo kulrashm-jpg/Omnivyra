@@ -126,14 +126,31 @@ async function handler(
     .eq('status', 'active')
     .order('created_at', { ascending: false });
 
-  const rawRoleRows = (activeRoleRows as Array<{ role?: string | null; company_id?: string | null; join_source?: string | null }> | null) ?? [];
-  const companyIds = Array.from(new Set(rawRoleRows.map((row) => row.company_id).filter(Boolean) as string[]));
-  const { data: companyRows } = companyIds.length
+  const memberRoleRows = (activeRoleRows as Array<{ role?: string | null; company_id?: string | null; join_source?: string | null }> | null) ?? [];
+  const companyIds = Array.from(new Set(memberRoleRows.map((row) => row.company_id).filter(Boolean) as string[]));
+  const { data: companyRows, error: companyRowsError } = companyIds.length
     ? await supabase
         .from('companies')
-        .select('id, website_domain, admin_email_domain')
+        .select('id, website_domain, admin_email_domain, status, deleted_at')
         .in('id', companyIds)
-    : { data: [] as any[] };
+    : { data: [] as any[], error: null };
+  // e1 2026-11-12 (BLOCKING safety): memberships in an INACTIVE / suspended / deleted company confer nothing, so
+  // routing considers only operational companies (platform SUPER_ADMIN rows are exempt). A user whose memberships
+  // are ALL in inactive companies gets a clear "company inactive" page instead of a workspace that 403s on every
+  // call; a user who also belongs to an active company lands there as usual. A failed companies read changes no
+  // routing here (every server-side authorization still fails closed).
+  const operationalCompanyIdSet = new Set(
+    ((companyRows || []) as Array<{ id: string; status?: string | null; deleted_at?: string | null }>)
+      .filter((row) => row.status === 'active' && !row.deleted_at)
+      .map((row) => String(row.id)),
+  );
+  const isPlatformRow = (row: { role?: string | null }) => String(row.role ?? '').toUpperCase() === 'SUPER_ADMIN';
+  const rawRoleRows = companyRowsError
+    ? memberRoleRows
+    : memberRoleRows.filter((row) => isPlatformRow(row) || (!!row.company_id && operationalCompanyIdSet.has(String(row.company_id))));
+  if (memberRoleRows.length > 0 && rawRoleRows.length === 0) {
+    return res.status(200).json({ route: '/company-inactive' });
+  }
   const companyById = new Map((companyRows || []).map((row: any) => [String(row.id), row]));
   const emailDomain = extractDomain(email);
   const roleRow = selectCompatibleCompanyRole({

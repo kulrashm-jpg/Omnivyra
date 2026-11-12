@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { companyRoleGate } from '../../../backend/services/rbacPrimitives';
 /**
  * POST /api/domain/regenerate-token
  *
@@ -116,7 +117,7 @@ async function handler(
   if (!domainRow) return res.status(404).json({ error: 'DOMAIN_NOT_FOUND' });
 
   // Authorization — COMPANY_ADMIN or SUPER_ADMIN in the owning company.
-  const { data: roleRow } = await supabase
+  const { data: roleRowMembership } = await supabase
     .from('user_company_roles')
     .select('role')
     .eq('user_id', internalUserId)
@@ -125,6 +126,9 @@ async function handler(
     .in('role', ['COMPANY_ADMIN', 'SUPER_ADMIN'])
     .limit(1)
     .maybeSingle();
+  // e1 2026-11-12 (BLOCKING safety): a membership in an INACTIVE / suspended / deleted company confers
+  // nothing (fail closed on a status read error) - see companyRoleGate.
+  const roleRow = roleRowMembership && (await companyRoleGate(domainRow.company_id)) === 'active' ? roleRowMembership : null;
   if (!roleRow) {
     return res.status(403).json({
       error: 'INSUFFICIENT_PERMISSIONS',

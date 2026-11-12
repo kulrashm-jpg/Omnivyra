@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { pickOperationalMembership } from '../../../backend/services/rbacPrimitives';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -85,14 +86,15 @@ async function handler(
     if (guard.ok !== true) return;
     actorUserId = guard.principal.userId || user.id;
   } else {
-    const { data: roleRow } = await supabase
+    const { data: roleRowCandidates } = await supabase
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', user.id)
       .eq('role', 'COMPANY_ADMIN')
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
+      .eq('status', 'active');
+    // e1 2026-11-12 (BLOCKING safety): never derive an INACTIVE / suspended company - pick the first
+    // membership whose company is operational (fail closed on a status read error).
+    const roleRow = await pickOperationalMembership(roleRowCandidates as Array<{ company_id?: string | null }> | null, { userId: user.id });
 
     if (!roleRow) {
       return res.status(403).json({ error: 'Only company admins can send invitations' });

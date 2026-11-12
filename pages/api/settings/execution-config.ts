@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { pickOperationalMembership } from '../../../backend/services/rbacPrimitives';
 
 /**
  * GET  /api/settings/execution-config   — read company execution flags
@@ -85,10 +86,10 @@ async function resolveCompanyId(userId: string): Promise<string | null> {
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', userId)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-    return data?.company_id ?? null;
+      .eq('status', 'active');
+    // e1 2026-11-12 (BLOCKING safety): memberships in INACTIVE / suspended / deleted companies confer nothing (fail closed).
+    const picked = await pickOperationalMembership(data as Array<{ company_id?: string | null }> | null, { userId: userId });
+    return picked?.company_id ?? null;
   } catch {
     return null;
   }

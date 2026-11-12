@@ -62,19 +62,24 @@ const companyAdminPrincipal = {
   principal: { userId: 'ca-1', organizations: [{ organizationId: OWN_COMPANY, role: 'COMPANY_ADMIN', status: 'active' }] },
 };
 
-function chain(result: unknown) {
+function chain(result: { data: unknown; error: unknown }, list?: { data: unknown[]; error: unknown }) {
   const q: any = {};
-  for (const m of ['select', 'eq', 'is', 'gt', 'limit', 'order']) q[m] = () => q;
+  for (const m of ['select', 'eq', 'is', 'gt', 'limit', 'order', 'in']) q[m] = () => q;
   q.maybeSingle = async () => result;
+  // e1 2026-11-12: the caller's company is now derived from the LIST of active memberships (first operational one)
+  q.then = (ok: any, ko: any) => Promise.resolve(list ?? { data: result.data ? [result.data] : [], error: result.error }).then(ok, ko);
   return q;
 }
 
 function tables(companyAdminRow: { company_id: string } | null) {
-  mockFrom.mockImplementation((t: string) =>
-    t === 'user_company_roles'
-      ? chain({ data: companyAdminRow, error: null })
-      : chain({ data: null, error: null }), // invitations: no active duplicate
-  );
+  mockFrom.mockImplementation((t: string) => {
+    if (t === 'user_company_roles') return chain({ data: companyAdminRow, error: null });
+    // e1 2026-11-12: only the caller's own company exists, and it is operational (status is proven elsewhere)
+    if (t === 'companies') {
+      return chain({ data: null, error: null }, { data: companyAdminRow ? [{ id: companyAdminRow.company_id, status: 'active', deleted_at: null }] : [], error: null });
+    }
+    return chain({ data: null, error: null }); // invitations: no active duplicate
+  });
 }
 
 function call(body: Record<string, unknown>) {

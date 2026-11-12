@@ -53,9 +53,11 @@ const BLOGS = [
   { id: 'b-own', created_by: MEMBER, company_id: COMPANY_A, content_type: 'blog' },
   { id: 'VICTIM_BLOG', created_by: NOBODY, company_id: VICTIM, content_type: 'blog' },
 ];
+// e1 2026-11-12: companies carry status - a membership authorizes only in an OPERATIONAL company (both are active
+// here; company status itself is proven in inactiveCompanyRoleGate.test.ts).
 const COMPANIES = [
-  { id: COMPANY_A, website: 'https://own.example' },
-  { id: VICTIM, website: 'https://VICTIM-SECRET.example' },
+  { id: COMPANY_A, website: 'https://own.example', status: 'active', deleted_at: null },
+  { id: VICTIM, website: 'https://VICTIM-SECRET.example', status: 'active', deleted_at: null },
 ];
 const SOCIAL = [
   { id: 's-own', company_id: COMPANY_A, is_active: true, platform: 'x' },
@@ -278,7 +280,10 @@ describe('CRITICAL — the authorized company is the operative company', () => {
   it('EVERY data read carries the authorized company predicate', async () => {
     await call(MEMBER, { company_id: COMPANY_A });
     const reads = dataReads();
-    expect(reads.map(r => r.table).sort()).toEqual(['blogs', 'companies', 'reports', 'social_accounts']);
+    // e1 2026-11-12: `companies` is now read twice - the membership gate's status read (by id) and the data read;
+    // the loop below still pins EVERY read, both companies reads included, to the authorized company.
+    expect([...new Set(reads.map(r => r.table))].sort()).toEqual(['blogs', 'companies', 'reports', 'social_accounts']);
+    expect(reads.filter(r => r.table === 'companies')).toHaveLength(2);
     for (const r of reads) {
       const company = r.table === 'companies' ? r.filters.id : r.filters.company_id;
       expect(company).toBe(COMPANY_A);

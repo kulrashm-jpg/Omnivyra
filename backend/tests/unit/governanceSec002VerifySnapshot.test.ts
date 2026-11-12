@@ -89,6 +89,9 @@ jest.mock('../../db/supabaseClient', () => {
           (filters.role === undefined || r.role === filters.role) &&
           (filters.status === undefined || r.status === filters.status));
       }
+      // e1 2026-11-12: the membership role gate now reads companies.status (companyRoleGate); every company in
+      // this suite is operational - company status itself is proven in inactiveCompanyRoleGate.test.ts.
+      if (table === 'companies') return [{ id: filters.id, status: 'active', deleted_at: null }];
       if (table === 'governance_snapshots') {
         const row = SNAPSHOTS[String(filters.id)];
         if (!row) return [];

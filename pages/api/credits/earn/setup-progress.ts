@@ -40,13 +40,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
-  const { data: roleRow } = await supabase
+  const { data: roleRowCandidates } = await supabase
     .from('user_company_roles')
     .select('company_id')
     .eq('user_id', user.id)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+    .eq('status', 'active');
+  // e1 2026-11-12 (BLOCKING safety): never derive an INACTIVE / suspended company - pick the first
+  // membership whose company is operational (fail closed on a status read error).
+  const roleRow = await pickOperationalMembership(roleRowCandidates as Array<{ company_id?: string | null }> | null, { userId: user.id });
 
   if (!roleRow) return res.status(400).json({ error: 'No active company' });
   const orgId = (roleRow as any).company_id as string;

@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
+import { operationalCompanyIds } from '../../backend/services/rbacPrimitives';
 // W4-1/W4-7 (Batch D cache stack): F-12 client + shared flag + SWR headers.
 import { registerCacheNamespace } from '../../lib/platform/cacheCore';
 import { createCache } from '../../lib/platform/cacheClient';
@@ -147,7 +148,10 @@ async function handler(
       .eq('status', 'active')
       .order('created_at', { ascending: false });
 
-    const allowedCompanyIds = (activeRoles || []).map((role) => role.company_id).filter(Boolean);
+    // e1 2026-11-12 (BLOCKING safety): memberships in INACTIVE / suspended / deleted companies confer nothing (fail closed).
+    const operationalIds = await operationalCompanyIds((activeRoles || []).map((role) => role.company_id));
+    const allowedCompanyIds = (activeRoles || []).map((role) => role.company_id)
+      .filter((id): id is string => !!id && !!operationalIds?.has(id));
     const companyId = requestedCompanyId && allowedCompanyIds.includes(requestedCompanyId)
       ? requestedCompanyId
       : allowedCompanyIds[0];

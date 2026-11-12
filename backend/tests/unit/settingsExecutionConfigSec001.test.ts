@@ -65,12 +65,25 @@ jest.mock('../../db/supabaseClient', () => {
     b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
     b.limit = () => b;
     b.order = () => b;
-    b.maybeSingle = () => {
+    b.in = (c: string, v: unknown) => { filters[c + '__in'] = v; return b; };
+    const membershipRows = () => {
       roleQueries.push({ table, ...filters });
-      const rows = ROLES.filter(r =>
+      return ROLES.filter(r =>
         (filters.user_id === undefined || r.user_id === filters.user_id) &&
         (filters.status === undefined || r.status === filters.status));
+    };
+    b.maybeSingle = () => {
+      const rows = membershipRows();
       return Promise.resolve({ data: rows[0] ? { company_id: rows[0].company_id } : null, error: null });
+    };
+    // e1 2026-11-12: the company is now derived from the LIST of active memberships (first OPERATIONAL company);
+    // OWN and VICTIM are active companies here (company status itself is proven in inactiveCompanyRoleGate.test.ts).
+    b.then = (ok: any, ko: any) => {
+      if (table === 'companies') {
+        const ids = (filters['id__in'] as string[] | undefined) ?? [];
+        return Promise.resolve({ data: [OWN, VICTIM].filter((id) => ids.includes(id)).map((id) => ({ id, status: 'active', deleted_at: null })), error: null }).then(ok, ko);
+      }
+      return Promise.resolve({ data: membershipRows().map((r) => ({ company_id: r.company_id })), error: null }).then(ok, ko);
     };
     return b;
   };

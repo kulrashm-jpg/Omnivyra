@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { companyRoleGate } from '../../../backend/services/rbacPrimitives';
 /**
  * GET /api/domain/verification-status
  *
@@ -102,7 +103,7 @@ async function handler(
   }
 
   // Authorization — COMPANY_ADMIN or SUPER_ADMIN in the target company.
-  const { data: roleRow } = await supabase
+  const { data: roleRowMembership } = await supabase
     .from('user_company_roles')
     .select('role')
     .eq('user_id', internalUserId)
@@ -111,6 +112,9 @@ async function handler(
     .in('role', ['COMPANY_ADMIN', 'SUPER_ADMIN'])
     .limit(1)
     .maybeSingle();
+  // e1 2026-11-12 (BLOCKING safety): a membership in an INACTIVE / suspended / deleted company confers
+  // nothing (fail closed on a status read error) - see companyRoleGate.
+  const roleRow = roleRowMembership && (await companyRoleGate(companyId)) === 'active' ? roleRowMembership : null;
   if (!roleRow) {
     return res.status(403).json({
       error: 'INSUFFICIENT_PERMISSIONS',

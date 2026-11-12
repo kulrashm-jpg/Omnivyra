@@ -94,6 +94,10 @@ describe('Recommendation simulation', () => {
         eq: jest.fn().mockReturnThis(),
         order: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
+        // e1 2026-11-12: the membership role gate reads companies.status - the company here is operational.
+        maybeSingle: async () => (table === 'companies'
+          ? { data: { status: 'active', deleted_at: null }, error: null }
+          : { data: null, error: null }),
         insert: jest.fn(() => {
           insertCalls.push(table);
           return { error: null };

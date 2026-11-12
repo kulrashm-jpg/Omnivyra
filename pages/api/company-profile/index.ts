@@ -195,18 +195,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         const rawRows = roleRows || [];
         const rawCompanyIds = Array.from(new Set(rawRows.map((r: { company_id?: string }) => r.company_id).filter(Boolean) as string[]));
-        const { data: companyRows } = rawCompanyIds.length
+        const { data: companyRowsAll, error: companyRowsError } = rawCompanyIds.length
           ? await timeStage(res, 'companies', async () => supabase
               .from('companies')
-              .select('id, name, website_domain, admin_email_domain')
+              .select('id, name, website_domain, admin_email_domain, status, deleted_at')
               .in('id', rawCompanyIds))
-          : { data: [] as any[] };
+          : { data: [] as any[], error: null };
+        // e1 2026-11-12 (BLOCKING safety): only OPERATIONAL companies are listed - a membership in an inactive /
+        // suspended / deleted company confers nothing (fail closed: an unreadable status lists nothing and answers
+        // the same retryable 500 as an unreadable role list). A two-company user keeps the active one.
+        if (companyRowsError) {
+          return res.status(500).json({ error: 'FAILED_TO_LOAD_COMPANIES' });
+        }
+        const companyRows = (companyRowsAll || []).filter((row: any) => row.status === 'active' && !row.deleted_at);
         const companyById = new Map(
           (companyRows || []).map((row: any) => [String(row.id), row])
         );
         const emailDomain = extractDomain(String(userRow?.email || user.email || ''));
         const rows = filterCompatibleCompanyRoleRows({
-          rows: rawRows,
+          rows: rawRows.filter((r: { company_id?: string }) => !!r.company_id && companyById.has(String(r.company_id))),
           companyById,
           userEmail: String(userRow?.email || user.email || ''),
         });

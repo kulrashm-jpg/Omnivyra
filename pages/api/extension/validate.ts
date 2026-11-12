@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { companyRoleGate } from '../../../backend/services/rbacPrimitives';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
@@ -54,13 +55,16 @@ async function handler(
   const isBypassSession = session.userId === '00000000-0000-4000-8000-000000000001';
 
   if (!isBypassSession) {
-    const { data: roleRow, error: roleError } = await supabase
+    const { data: roleRowMembership, error: roleError } = await supabase
       .from('user_company_roles')
       .select('company_id, status')
       .eq('user_id', session.userId)
       .eq('company_id', effectiveOrgId)
       .eq('status', 'active')
       .maybeSingle();
+    // e1 2026-11-12 (BLOCKING safety): a membership in an INACTIVE / suspended / deleted company confers
+    // nothing (fail closed on a status read error) - see companyRoleGate.
+    const roleRow = roleRowMembership && (await companyRoleGate(effectiveOrgId)) === 'active' ? roleRowMembership : null;
 
     if (roleError) {
       console.error('[api/extension/validate] role lookup failed:', roleError);

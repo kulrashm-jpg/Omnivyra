@@ -73,6 +73,7 @@ jest.mock('../../db/supabaseClient', () => {
     const b: any = {};
     b.select = () => b;
     b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
+    b.in = (c: string, v: unknown) => { filters[c] = v; return b; };
     b.limit = () => b;
     b.order = () => b;
     const companyOf = (p: any) =>
@@ -99,7 +100,11 @@ jest.mock('../../db/supabaseClient', () => {
           (filters.status === undefined || r.status === filters.status) &&
           (filters.role === undefined || r.role === filters.role));
       }
-      if (table === 'companies') return [{ id: COMPANY_A, name: 'A' }, { id: VICTIM, name: 'V' }];
+      // e1 2026-11-12: companies carry status (the membership role gate reads it); both are operational here.
+      if (table === 'companies') {
+        const all = [{ id: COMPANY_A, name: 'A', status: 'active', deleted_at: null }, { id: VICTIM, name: 'V', status: 'active', deleted_at: null }];
+        return Array.isArray(filters.id) ? all.filter((c) => (filters.id as unknown[]).includes(c.id)) : all;
+      }
       return [];
     };
     b.maybeSingle = () => Promise.resolve({ data: rows()[0] ?? null, error: null });

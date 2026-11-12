@@ -126,6 +126,10 @@ beforeEach(() => {
     assign('u-assign-global', PROSPECT_ICP_MANAGE, null),
   ];
   mockTables.users = [];
+  // e1 2026-11-12: memberships only authorize in OPERATIONAL companies (IdentityResolver); A, B and C are active
+  // here. The platform tenant P is deliberately absent - SUPER_ADMIN rows are exempt from the company gate.
+  // (Company status itself is proven in inactiveCompanyRoleGate.test.ts.)
+  mockTables.companies = [A, B, C].map((id) => ({ id, status: 'active', deleted_at: null }));
 });
 
 type Req = { headers: Record<string, string>; query: Record<string, unknown>; body: unknown; method?: string; url?: string; socket?: unknown };
