@@ -133,6 +133,16 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
     }
   }
 
+  // KEY-FORMAT CHANGE (minute bucket -> request key), why no business-identity
+  // guard (05): a GRANT has no business identity - two identical grants are a
+  // legitimate pair, so no ledger read can tell a retry from a second grant.
+  // What covers the change is withIdempotency on the routes (scope + caller +
+  // Idempotency-Key, present BEFORE this change): a cross-deploy retry with the
+  // same key replays the completed record and never reaches here. ACCEPTED GAP:
+  // a pre-deploy attempt that wrote the ledger row then answered 5xx leaves a
+  // `failed` record; retried after deploy it runs with the NEW key -> granted
+  // twice. Needs partial completion + 5xx + a retry spanning the deploy; admin
+  // grants are rare and audited (credit_admin_grants). Deploy with none in flight.
   const scope = opts.clientKey?.trim() || opts.requestIdempotencyKey?.trim() || null;
   if (!scope) {
     return { ok: false, error: 'An idempotency key (clientKey or Idempotency-Key) is required', code: 'IDEMPOTENCY_KEY_REQUIRED' };

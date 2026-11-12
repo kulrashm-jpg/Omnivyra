@@ -483,6 +483,8 @@ export async function grantCredits(params: {
   // MONEY (2026-11-12, class 2): keyed by the REQUEST, not a minute bucket. The
   // bucket granted twice on a retry after the minute rolled over, and collapsed
   // two distinct grants inside one minute into one while both reported success.
+  // Key-format change: covered by the route's withIdempotency, not by a ledger
+  // guard (a grant has no business identity) - see creditAdminGrantService.
   const reqKey = params.requestIdempotencyKey?.trim();
   if (!reqKey) return { ok: false, error: 'IDEMPOTENCY_KEY_REQUIRED' };
   const refId = `${params.organizationId}:req:${reqKey}`;
