@@ -7,8 +7,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * distributed attacks that are invisible to any single instance's in-process
  * counters.
  *
- * Schedule: every 2 minutes (configured in vercel.json).
- * Can also be triggered manually by a super admin.
+ * Schedule: every 2 minutes on the worker (backend/scheduler/cron.ts, label
+ * `anomalySweep`); it is NOT in vercel.json. This route stays for manual
+ * triggers by a super admin and for an external scheduler holding CRON_SECRET.
  *
  * Auth:
  *   - Vercel cron calls: validated via CRON_SECRET header
@@ -43,6 +44,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const result = await runAnomalySweep();
+    if (result.queryError) {
+      // The audit log was not read: zero counts here are not "no anomalies".
+      console.error('[anomaly-sweep] auth_audit_logs not read:', result.queryError);
+      return res.status(500).json({ error: 'Sweep failed', details: result.queryError });
+    }
     console.log(JSON.stringify({
       level: 'INFO',
       event: 'anomaly_sweep_complete',

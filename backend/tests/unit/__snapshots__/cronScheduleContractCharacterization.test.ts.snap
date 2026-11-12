@@ -3,6 +3,7 @@
 exports[`cron.ts scheduling contract (source characterization) locks every timing-constant definition: timing-constants 1`] = `
 {
   "ADS_ACQUISITION_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "ANOMALY_SWEEP_INTERVAL_MS": "2 * 60 * 1000",
   "AUTO_OPTIMIZATION_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "BASE_TICK_MS": "4 * 60 * 60 * 1000",
   "BUYER_INTENT_INTERVAL_MS": "30 * 60 * 1000",
@@ -51,12 +52,14 @@ exports[`cron.ts scheduling contract (source characterization) locks every timin
   "READINESS_SNAPSHOT_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS": "10 * 60 * 1000",
   "RECONCILIATION_INTERVAL_MS": "30 * 60 * 1000",
+  "RECOVER_STALE_REPORTS_INTERVAL_MS": "5 * 60 * 1000",
   "REPLY_INTELLIGENCE_AGGREGATION_INTERVAL_MS": "30 * 60 * 1000",
   "RESPONSE_PERFORMANCE_EVAL_INTERVAL_MS": "10 * 60 * 1000",
   "RESPONSE_STRATEGY_LEARNING_INTERVAL_MS": "15 * 60 * 1000",
   "RPA_ARTIFACT_PRUNE_INTERVAL_MS": "6 * 60 * 60 * 1000",
   "RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS": "60 * 1000",
   "RPA_RETRY_FLUSH_INTERVAL_MS": "90 * 1000",
+  "SCHEDULER_LOCK_SWEEP_INTERVAL_MS": "15 * 60 * 1000",
   "SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS": "10 * 60 * 1000",
   "SETTLEMENT_METRICS_RETENTION_INTERVAL_MS": "24 * 60 * 60 * 1000",
   "SIGNAL_CLUSTERING_INTERVAL_MS": "30 * 60 * 1000",
@@ -157,6 +160,18 @@ exports[`cron.ts scheduling contract (source characterization) locks the recurri
   {
     "interval": "COMMUNITY_AI_LEASE_REAP_INTERVAL_MS",
     "label": "communityAiLeaseReaper",
+  },
+  {
+    "interval": "ANOMALY_SWEEP_INTERVAL_MS",
+    "label": "anomalySweep",
+  },
+  {
+    "interval": "SCHEDULER_LOCK_SWEEP_INTERVAL_MS",
+    "label": "schedulerLockSweep",
+  },
+  {
+    "interval": "RECOVER_STALE_REPORTS_INTERVAL_MS",
+    "label": "recoverStaleReports",
   },
   {
     "interval": "COMMUNITY_AI_METRIC_DLQ_FLUSH_INTERVAL_MS",

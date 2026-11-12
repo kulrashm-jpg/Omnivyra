@@ -5,7 +5,7 @@ import {
   REPORT_GENERATION_TIMEOUT_MINUTES,
 } from '@/backend/services/reportCardService';
 import { config } from '@/config';
-import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
+import { bearerTokenMatches, constantTimeEqual } from '../../../backend/security/constantTimeEqual';
 
 /**
  * Phase 2 — Cron-driven recovery for reports stuck in `status='generating'`.
@@ -17,9 +17,17 @@ import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
  * partial unique index `unique_generating_report_per_company_domain` and
  * blocks every subsequent request for that (company_id, domain).
  *
- * This endpoint reaps those rows. It is:
- *   - Secured by INTERNAL_METRICS_SECRET (header `x-cron-secret`) and/or
- *     Vercel's signed cron header.
+ * This endpoint reaps those rows. The worker runs the same reaper on its own
+ * timer (backend/scheduler/cron.ts, label `recoverStaleReports`); this route
+ * stays for manual and external triggers. It is:
+ *   - Secured by EITHER secret, whichever the caller holds:
+ *       * INTERNAL_METRICS_SECRET, as header `x-cron-secret` or as the
+ *         authorization value (raw or `Bearer <secret>`);
+ *       * CRON_SECRET, as `Authorization: Bearer <CRON_SECRET>`: the shape
+ *         every other /api/cron route accepts and Vercel cron sends. Before
+ *         this, that Bearer was compared against INTERNAL_METRICS_SECRET, so
+ *         a scheduler holding CRON_SECRET was always refused.
+ *     Fails closed (401) when neither secret is configured.
  *   - Idempotent: rerunning when there is nothing to reap is a no-op.
  *   - Safe under concurrency: the UPDATE is a single statement.
  */
@@ -29,18 +37,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const secret = config.INTERNAL_METRICS_SECRET;
-  if (!secret) {
-    console.warn('[cron/recover-stale-reports] INTERNAL_METRICS_SECRET not configured; rejecting request to fail closed');
+  const cronSecret = config.CRON_SECRET;
+  if (!secret && !cronSecret) {
+    console.warn('[cron/recover-stale-reports] neither INTERNAL_METRICS_SECRET nor CRON_SECRET configured; rejecting request to fail closed');
     return res.status(401).json({ error: 'Unauthorised' });
   }
   const presented = req.headers['x-cron-secret'];
-  // Vercel's platform cron also injects an Authorization: Bearer <CRON_SECRET>
-  // header. Accept either to keep platform + manual triggers working.
   const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  // SEC-C4: constant-time; both shapes are evaluated so timing does not reveal which matched.
+  // SEC-C4: constant-time; every shape is evaluated so timing does not reveal
+  // which matched. Each helper fails closed on an unset/empty secret.
   const presentedOk = constantTimeEqual(presented, secret);
   const bearerOk = constantTimeEqual(bearer, secret);
-  if (!presentedOk && !bearerOk) {
+  const cronBearerOk = bearerTokenMatches(req.headers.authorization, cronSecret);
+  if (!presentedOk && !bearerOk && !cronBearerOk) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 

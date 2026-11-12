@@ -33,6 +33,12 @@ export interface SweepResult {
   anomaliesFound: number;
   counts: Record<string, number>;
   durationMs: number;
+  /**
+   * Set when auth_audit_logs could not be read (an error, or no data with no
+   * error, which is still no answer). The zero counts are then NOT "nothing
+   * happened", and the worker timer throws on this so the run counts as an error.
+   */
+  queryError?: string;
 }
 
 /**
@@ -53,7 +59,10 @@ export async function runAnomalySweep(): Promise<SweepResult> {
 
   if (error || !data) {
     console.warn('[sweepDetector] query failed:', error?.message);
-    return { checkedTypes: 0, anomaliesFound: 0, counts: {}, durationMs: Date.now() - start };
+    return {
+      checkedTypes: 0, anomaliesFound: 0, counts: {}, durationMs: Date.now() - start,
+      queryError: error?.message ?? 'auth_audit_logs read returned no data',
+    };
   }
 
   // Aggregate counts per auth event type

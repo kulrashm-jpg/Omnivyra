@@ -181,6 +181,12 @@ const LIFECYCLE_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // recovery. Sweep itself is idempotent (only flips started/running→failed).
 const STALE_EXECUTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 let lastStaleExecutionSweepRun = 0;
+// Platform sweeps that had an /api/cron route but NO scheduler (owner ruling
+// 2026-11-12). scheduleWorker timers, so they bypass the intent gate: they run
+// on an idle platform, and none needs ALWAYS_RUN_JOBS.
+const ANOMALY_SWEEP_INTERVAL_MS = 2 * 60 * 1000;          // every 2 minutes (the route's documented cadence)
+const SCHEDULER_LOCK_SWEEP_INTERVAL_MS = 15 * 60 * 1000;  // every 15 minutes
+const RECOVER_STALE_REPORTS_INTERVAL_MS = 5 * 60 * 1000;  // every 5 minutes (the removed vercel.json */5)
 // Lightweight detect-first reconciliation (orphan pending / expired media /
 // unresolved deps). Single-instance via CronGuard; no destructive auto-fix.
 const RECONCILIATION_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
@@ -760,6 +766,57 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
     },
     COMMUNITY_AI_LEASE_REAP_INTERVAL_MS, 'communityAiLeaseReaper',
     ['reaped_pending', 'reaped_dispatched', 'reaped_executing', 'lease_cleared', 'errors']
+  );
+
+  // ── Platform sweeps with no other scheduler (owner ruling 2026-11-12) ────
+  // Each had an /api/cron route and NOTHING calling it on a schedule: anomaly-
+  // sweep's vercel.json entry was dropped, the other two never had one. The
+  // routes stay for manual/external triggers; these timers are the schedule.
+  // A body that cannot do its work THROWS, so scheduleWorker counts the run as
+  // an error in the cron report (/api/super-admin/cron-metrics → workers[label]),
+  // which is what the post-deploy fire check reads.
+
+  // Cross-instance auth anomaly sweep. Reads auth_audit_logs (last 5 min);
+  // CRITICAL crossings alert ops on Slack with an in-process 1 h cooldown.
+  scheduleWorker(
+    async () => {
+      const { runAnomalySweep } = await import('../../lib/anomaly/sweepDetector');
+      const r = await runAnomalySweep();
+      if (r.queryError) throw new Error(`anomaly sweep could not read auth_audit_logs: ${r.queryError}`);
+      return { checked_types: r.checkedTypes, anomalies_found: r.anomaliesFound };
+    },
+    ANOMALY_SWEEP_INTERVAL_MS, 'anomalySweep',
+    ['anomalies_found']
+  );
+
+  // Deletes scheduler_locks rows older than 30 min (the same threshold each
+  // job's acquireLock already overrides), so liveness is unchanged; it only
+  // clears what crashed runs left behind. Throws on a read/delete error.
+  scheduleWorker(
+    async () => {
+      const { sweepStaleSchedulerLocks } = await import('../services/schedulerLockSweeper');
+      const r = await sweepStaleSchedulerLocks();
+      return { scanned: r.scanned, deleted: r.deleted };
+    },
+    SCHEDULER_LOCK_SWEEP_INTERVAL_MS, 'schedulerLockSweep',
+    ['deleted']
+  );
+
+  // Reaps reports stuck in status='generating' (stale heartbeat, or no
+  // heartbeat past the timeout) and RELEASES their credit reservation. MONEY:
+  // the UPDATE re-checks status='generating', so a row is released by at most
+  // one run even if two overlap. Throws on a scan/update error.
+  scheduleWorker(
+    async () => {
+      const { recoverStaleGeneratingReports } = await import('../services/reportCardService');
+      const r = await recoverStaleGeneratingReports();
+      if (r.recovered > 0) {
+        console.warn(`[recoverStaleReports] recovered=${r.recovered} timeoutMinutes=${r.timeoutMinutes} cutoff=${r.cutoffIso} ids=${r.recoveredIds.join(',')}`);
+      }
+      return { scanned: r.scanned, recovered: r.recovered };
+    },
+    RECOVER_STALE_REPORTS_INTERVAL_MS, 'recoverStaleReports',
+    ['recovered']
   );
 
   // ── Community AI metric-event DLQ flush (every 60s) ──────────────────────

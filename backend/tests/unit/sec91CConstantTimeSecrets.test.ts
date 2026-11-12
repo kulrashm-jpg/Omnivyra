@@ -274,11 +274,11 @@ describe('/api/platform/history/run', () => {
 describe('/api/cron/recover-stale-reports (x-cron-secret OR raw/Bearer authorization)', () => {
   const recoverStaleGeneratingReports = jest.fn().mockResolvedValue({ recovered: 0 });
   afterEach(() => { recoverStaleGeneratingReports.mockClear(); helper.constantTimeEqual.mockClear(); });
-  const load = (secret: string | undefined) => {
+  const load = (secret: string | undefined, cronSecret?: string) => {
     let handler: (req: unknown, res: unknown) => Promise<unknown> = async () => undefined;
     jest.isolateModules(() => {
       jest.doMock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
-      jest.doMock('@/config', () => ({ config: { INTERNAL_METRICS_SECRET: secret } }));
+      jest.doMock('@/config', () => ({ config: { INTERNAL_METRICS_SECRET: secret, CRON_SECRET: cronSecret } }));
       jest.doMock('@/backend/services/reportCardService', () => ({
         recoverStaleGeneratingReports,
         REPORT_GENERATION_TIMEOUT_MINUTES: 15,
@@ -307,6 +307,35 @@ describe('/api/cron/recover-stale-reports (x-cron-secret OR raw/Bearer authoriza
 
   it('refuses everything when the secret is unset', async () => {
     expect(await call(load(undefined), { 'x-cron-secret': 'undefined' })).toBe(401);
+    expect(recoverStaleGeneratingReports).not.toHaveBeenCalled();
+  });
+
+  // The documented cron shape. Before the fix this Bearer was compared against
+  // INTERNAL_METRICS_SECRET, so a scheduler holding CRON_SECRET was always refused.
+  it('accepts `Authorization: Bearer <CRON_SECRET>` and only that shape of CRON_SECRET', async () => {
+    const handler = load('metrics-secret-1', 'cron-secret-1');
+    expect(await call(handler, { authorization: 'Bearer cron-secret-1' })).toBe(200);
+    expect(helper.bearerTokenMatches).toHaveBeenCalled();
+    // CRON_SECRET is accepted only as a Bearer, never in x-cron-secret or raw.
+    expect(await call(handler, { 'x-cron-secret': 'cron-secret-1' })).toBe(401);
+    expect(await call(handler, { authorization: 'cron-secret-1' })).toBe(401);
+    expect(await call(handler, { authorization: 'Bearer cron-secret-2' })).toBe(401);
+    // The INTERNAL_METRICS_SECRET shapes keep working alongside it.
+    expect(await call(handler, { 'x-cron-secret': 'metrics-secret-1' })).toBe(200);
+    expect(recoverStaleGeneratingReports).toHaveBeenCalledTimes(2);
+  });
+
+  it('works with CRON_SECRET alone and still refuses the wrong Bearer', async () => {
+    const handler = load(undefined, 'cron-secret-1');
+    expect(await call(handler, { authorization: 'Bearer cron-secret-1' })).toBe(200);
+    expect(await call(handler, { authorization: 'Bearer undefined' })).toBe(401);
+    expect(await call(handler, { 'x-cron-secret': 'undefined' })).toBe(401);
+  });
+
+  it('refuses everything when NEITHER secret is set (fails closed before any comparison)', async () => {
+    const handler = load(undefined, undefined);
+    expect(await call(handler, { authorization: 'Bearer undefined' })).toBe(401);
+    expect(await call(handler, { authorization: 'Bearer ' })).toBe(401);
     expect(recoverStaleGeneratingReports).not.toHaveBeenCalled();
   });
 });

@@ -446,9 +446,10 @@
     },
     "pages/api/cron/recover-stale-reports.ts": {
       "kind": "machine-secret",
-      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_METRICS_SECRET shared secret; fails closed (401/403/503) when the secret is unset or wrong. Not a user-facing route.",
+      "reason": "Scheduler/worker endpoint authenticated by the INTERNAL_METRICS_SECRET shared secret (x-cron-secret or authorization) or by `Authorization: Bearer <CRON_SECRET>` like every other /api/cron route; fails closed (401) when neither secret is set or neither matches. Not a user-facing route.",
       "env": [
-        "INTERNAL_METRICS_SECRET"
+        "INTERNAL_METRICS_SECRET",
+        "CRON_SECRET"
       ]
     },
     "pages/api/cron/report-automation.ts": {

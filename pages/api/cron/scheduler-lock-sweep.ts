@@ -8,7 +8,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * it only deletes the abandoned rows that accumulate after worker
  * crashes.
  *
- * Recommended schedule: every 15 minutes.
+ * Schedule: every 15 minutes on the worker (backend/scheduler/cron.ts, label
+ * `schedulerLockSweep`). This route stays for manual and external triggers.
  *
  * Auth:
  *   - Cron host: CRON_SECRET bearer
