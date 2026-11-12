@@ -2,8 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
   deleteStrategyTemplate,
-  getStrategyTemplate,
-  toPublicTemplateView,
+  getStrategyTemplateForViewer,
   updateStrategyTemplate,
 } from '../../../backend/services/strategyTemplateService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -32,19 +31,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const template = await getStrategyTemplate(id);
-  const isOwner = Boolean(template) && template!.user_id === user.id;
-  const isVisible = isOwner || template?.is_public === true;
-  if (!template || !isVisible) {
+  // The service decides visibility AND redaction for this viewer (owner: full row; public: content only).
+  const viewed = await getStrategyTemplateForViewer(id, user.id);
+  if (!viewed) {
     return res.status(404).json({ error: 'Template not found' });
   }
 
   if (req.method === 'GET') {
-    // A non-owner sees a public template's content only - never who or which company published it.
-    return res.status(200).json({ success: true, data: isOwner ? template : toPublicTemplateView(template) });
+    return res.status(200).json({ success: true, data: viewed.template });
   }
 
-  if (!isOwner) {
+  if (!viewed.isOwner) {
     return res.status(403).json({ error: 'Only the template owner can modify it' });
   }
 

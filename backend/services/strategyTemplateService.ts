@@ -84,7 +84,8 @@ export async function listStrategyTemplates(
   return rows.sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
 }
 
-export async function getStrategyTemplate(
+/** Internal: the FULL row, for the ownership decision. Callers use getStrategyTemplateForViewer. */
+async function getStrategyTemplate(
   templateId: string
 ): Promise<StrategyTemplate | null> {
   // The ROUTE authorizes the returned row (owner, or public) before anything is disclosed.
@@ -95,6 +96,22 @@ export async function getStrategyTemplate(
     .single();
   if (error || !data) return null;
   return mapTemplate(data);
+}
+
+/**
+ * A template as THIS viewer may see it (05: the redaction decision lives here, once, not in each route):
+ * the owner gets the full row; anyone else gets a PUBLIC template as content only (toPublicTemplateView);
+ * another user's PRIVATE template is null (callers answer 404, the same as a missing one).
+ */
+export async function getStrategyTemplateForViewer(
+  templateId: string,
+  viewerUserId: string,
+): Promise<{ isOwner: true; template: StrategyTemplate } | { isOwner: false; template: PublicStrategyTemplate } | null> {
+  const row = await getStrategyTemplate(templateId);
+  if (!row) return null;
+  if (row.user_id === viewerUserId) return { isOwner: true, template: row };
+  if (row.is_public !== true) return null;
+  return { isOwner: false, template: toPublicTemplateView(row) };
 }
 
 export async function createStrategyTemplate(
