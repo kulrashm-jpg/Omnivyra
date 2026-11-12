@@ -195,6 +195,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const finalCompanyName = emailDomain ? emailDomain.split('.')[0] : 'Company';
 
     let companyId: string | null = null;
+    let createdHere = false;
 
     const { data: existingCompanies } = await supabase
       .from('companies')
@@ -244,6 +245,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Could not create company' });
       }
       companyId = newCompany.id;
+      createdHere = true;
 
       await supabase.from('company_profiles').upsert({
         company_id:  companyId,
@@ -300,18 +302,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // ── 6. Ensure company role — first registrant gets COMPANY_ADMIN ─────────
-    // Reached for a pre-existing company only with an active/invited membership (step 3), so the
-    // insert below runs only for the company THIS request created.
-    const { data: existingMembership } = await supabase
-      .from('user_company_roles')
-      .select('id, role')
-      .eq('user_id', userId)
-      .eq('company_id', companyId)
-      .maybeSingle();
-
-    if (!existingMembership) {
-      await supabase.from('user_company_roles').insert({
+    // ── 6. Company role — COMPANY_ADMIN only for the company THIS request created ──
+    // Stated by construction (createdHere), never inferred from the absence of a membership row:
+    // a read over two rows for the same (user, company) - allowed by the partial unique index -
+    // errors with data null, which previously read as "no membership" and promoted an invited
+    // user of a pre-existing company (05 review). A failed insert is refused, not ignored.
+    if (createdHere) {
+      const { error: roleErr } = await supabase.from('user_company_roles').insert({
         user_id:    userId,
         company_id: companyId,
         role:       'COMPANY_ADMIN',
@@ -319,6 +316,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
+      if (roleErr) {
+        console.error('[onboarding/complete] founder role insert failed:', roleErr.message);
+        return res.status(500).json({ error: 'Could not finish setting up your company. Please try again.' });
+      }
     }
 
     // ── 7. Grant initial free credits via the single shared service ─────────
