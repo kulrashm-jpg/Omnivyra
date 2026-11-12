@@ -450,17 +450,23 @@ describe('WS-3 M5A (5) — durable rate limiter', () => {
     expect(r.granted).toBe(false);
   });
 
-  it('reconciles Redis to the durable count and reports drift', async () => {
+  // CONTRACT CHANGED (CLASS-2 D7; owner ruling via e9, 2026-11-12): reconcile is RAISE-ONLY. It used
+  // to SET the counter to the durable count, which erased reservations other dispatchers held but had
+  // not yet recorded - a third dispatcher then passed the limit.
+  it('reconciles Redis UP to the durable count and reports drift; a counter above it is left alone (in-flight reservations)', async () => {
     configureTenant();
     const id = await approvedTask();
     await dispatchInternalOutreachTask('co-a', id, { now: NOW });
 
-    fakeRedis.store.set('ws3:quota:tenant:co-a', 99); // artificial drift
+    fakeRedis.store.set('ws3:quota:tenant:co-a', 99); // above the truth: reservations in flight (or leaked)
     const rec = await reconcileQuota('co-a', 'L1', NOW);
     expect(rec).toMatchObject({ reconciled: true, tenantCount: 1 });
     expect(rec.drift).toBe(98);
-    // SET to the truth, never adjusted by a delta.
-    expect(fakeRedis.store.get('ws3:quota:tenant:co-a')).toBe(1);
+    expect(fakeRedis.store.get('ws3:quota:tenant:co-a')).toBe(99); // never lowered
+
+    fakeRedis.store.set('ws3:quota:tenant:co-a', 0); // below the truth: reset / expired
+    await reconcileQuota('co-a', 'L1', NOW);
+    expect(fakeRedis.store.get('ws3:quota:tenant:co-a')).toBe(1); // raised to it
   });
 
   it('dispatch reconciles the fast path to the truth', async () => {

@@ -101,25 +101,32 @@ async function redisIncr(key: string): Promise<number | null> {
   }
 }
 
+/** Whether a Redis command could be issued now (reconcile reports `reconciled` by it when nothing needed raising). */
+async function redisUsableNow(): Promise<boolean> {
+  const redis = await getRedis();
+  return !!redis && redisUsable(redis);
+}
+
+/** Atomic raise by a positive delta (concurrent increments are kept, never overwritten). */
+async function redisIncrBy(key: string, delta: number): Promise<boolean> {
+  const redis = await getRedis();
+  if (!redis || !redisUsable(redis)) return false;
+  try {
+    const next = Number(await redis.incrby(key, delta));
+    if (next === delta) await redis.expire(key, TTL_SECONDS);
+    return Number.isFinite(next);
+  } catch {
+    return false;
+  }
+}
+
 async function redisDecr(key: string): Promise<void> {
   const redis = await getRedis();
   if (!redis || !redisUsable(redis)) return;
   try {
     await redis.decrby(key, 1);
   } catch {
-    /* a failed release self-corrects at the next reconciliation */
-  }
-}
-
-async function redisSet(key: string, value: number): Promise<boolean> {
-  const redis = await getRedis();
-  if (!redis || !redisUsable(redis)) return false;
-  try {
-    await redis.set(key, String(value));
-    await redis.expire(key, TTL_SECONDS);
-    return true;
-  } catch {
-    return false;
+    /* a failed release over-counts (refuses sooner) until the key expires; reconcile never lowers it (D7) */
   }
 }
 
@@ -263,10 +270,12 @@ export interface QuotaReconciliation {
 /**
  * Reconcile Redis to the database after an attempt is durably recorded.
  *
- * Deterministic: the database count is read and Redis is SET to it — never
- * adjusted by a delta, which would compound any existing drift. Reports the
- * drift it corrected so a persistent divergence is visible rather than silently
- * papered over on every dispatch.
+ * RAISE-ONLY (CLASS-2 D7; owner ruling via e9, 2026-11-12): the counter is brought UP to the durable
+ * count when it fell below it (reset, expiry) by an atomic INCRBY of the shortfall - never SET. A SET
+ * erased the reservations other dispatchers held but had not yet recorded as attempts, so a third
+ * dispatcher passed the limit. A counter ABOVE the durable count is left alone: the excess is
+ * reservations in flight, or leaked ones (a failed release), which over-count until the key expires
+ * (at most QUOTA_WINDOW_HOURS) - refusing sooner, never sending more. Reports the drift either way.
  */
 export async function reconcileQuota(companyId: string, leadId: string, at: string): Promise<QuotaReconciliation> {
   const durable = await readDurableUsage(companyId, leadId, at);
@@ -275,8 +284,15 @@ export async function reconcileQuota(companyId: string, leadId: string, at: stri
   }
 
   const before = await redisGet(tenantKey(companyId));
-  const wrote = await redisSet(tenantKey(companyId), durable.tenantCount);
-  await redisSet(leadKey(companyId, leadId), durable.leadCount);
+  const beforeLead = await redisGet(leadKey(companyId, leadId));
+  // INCRBY even when the key is absent: a dispatcher may create it between the GET and this write,
+  // and a SET would erase that reservation; an increment keeps it.
+  const raise = async (key: string, current: number | null, durableCount: number): Promise<boolean> => {
+    const shortfall = durableCount - (current ?? 0);
+    return shortfall > 0 ? redisIncrBy(key, shortfall) : redisUsableNow();
+  };
+  const wrote = await raise(tenantKey(companyId), before, durable.tenantCount);
+  await raise(leadKey(companyId, leadId), beforeLead, durable.leadCount);
 
   return {
     reconciled: wrote,
