@@ -200,6 +200,18 @@ describe('tenant-seam factories (S1): only the verbs a route CALLS are effects (
   return res.status(204).json(data);`, imports);
     expect(rules(src)).toContain('R6-ORDER');
   });
+  it('a handle declared with let and ASSIGNED inside try/catch (55: refusal -> uniform 404) is still attributed', () => {
+    const src = route(`const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) return res.status(401).end();
+  const ctx = tenantContextFor({ userId: user.id }, req.body.companyId);
+  let h;
+  try { h = tenantTable('notes', ctx); } catch (e) { return res.status(404).end(); }
+  await h.update({ title: req.body.title }).eq('id', req.body.id);
+  const access = await enforceCompanyAccess({ req, res, companyId: req.body.companyId });
+  if (!access) return;
+  return res.status(204).end();`, imports);
+    expect(rules(src)).toContain('R6-ORDER');
+  });
 });
 
 describe('R6-ORDER — side effects after authentication but before tenant authorization', () => {
