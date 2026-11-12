@@ -430,7 +430,7 @@ export async function generateCampaignAuditReport(
 }
 
 export const logUserManagementAudit = (
-  event: 'USER_INVITED' | 'USER_ROLE_UPDATED' | 'USER_REMOVED',
+  event: 'USER_INVITED' | 'USER_ROLE_UPDATED' | 'USER_REMOVED' | 'USER_ROLE_CHANGED_BY_INVITE',
   payload: {
     actor_user_id: string;
     target_user_id: string;

@@ -139,6 +139,16 @@ export const inviteUser = async (
       if (updateError) {
         return { ok: false as const, status: 503, error: 'MEMBERSHIP_UPDATE_FAILED' };
       }
+      // 05 (2026-11-12): an invite that OVERWRITES an existing member's role is a
+      // role CHANGE as a side effect - record it as such (USER_INVITED alone would
+      // say "invited" where the effect was e.g. a demotion).
+      logUserManagementAudit('USER_ROLE_CHANGED_BY_INVITE', {
+        actor_user_id: requester.userId,
+        target_user_id: user.id,
+        company_id: companyId,
+        role: normalizedRole,
+        previous_role: existingRow.role,
+      });
     }
   } else {
     const { error: insertError } = await ownedDbTable('user_company_roles').insert({

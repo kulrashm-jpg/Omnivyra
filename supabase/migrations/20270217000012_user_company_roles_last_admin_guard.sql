@@ -28,12 +28,28 @@
 -- HOW (05: a row-level IMMEDIATE check cannot hold a set invariant):
 --   * trg_company_admin_last_active_lock - BEFORE ROW: when OLD is an active
 --     COMPANY_ADMIN, takes a per-company transaction advisory lock, so two
---     transactions removing two different admins SERIALISE.
+--     transactions removing two different admins SERIALISE. THE LOCK IS
+--     LOAD-BEARING (05): without it, two transactions each demoting one of two
+--     admins can both reach their commit-time checks before either commits -
+--     neither sees the other, both pass, zero admins remain. "The later committer
+--     re-checks anyway" holds only when the commits are far apart; the lock makes
+--     the second block until the first ends. Do NOT remove it as redundant.
 --   * trg_company_admin_last_active_check - a CONSTRAINT trigger, DEFERRABLE
 --     INITIALLY DEFERRED: it runs at COMMIT and re-reads the post-state (READ
 --     COMMITTED: a fresh snapshot per statement), so a bulk statement demoting
 --     every admin is refused, a concurrent transaction that committed first is
 --     seen, and multi-statement legitimate flows (hard delete) see their end.
+-- "GONE" HAS ONE DEFINITION (05): a user that is is_deleted, has deleted_at, or
+-- status 'deleted' (or no longer exists). It applies to BOTH halves - the removed
+-- admin is exempt when gone, and a REMAINING admin counts only when NOT gone - so
+-- an active row whose user is deleted can never keep a company "administered".
+-- RESIDUAL (stated, not closed here): deleting / soft-deleting the last admin's
+-- USER row writes nothing to user_company_roles, so this trigger does not fire.
+-- User deletion is a Super-Admin-governed path (step-up, IDENTITY_ADMIN_DELETE);
+-- a companion trigger on users is a separate decision.
+-- BYPASS SURFACE: only ALTER TABLE ... DISABLE TRIGGER (table owner) or
+-- session_replication_role = replica (superuser) skip it; neither is available
+-- to service_role through the API (to be confirmed from the catalog by 83).
 -- The error is P0001 'LAST_COMPANY_ADMIN' with a HINT naming the fix; routes map
 -- it to 409.
 --
@@ -111,10 +127,13 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  -- The invariant: at least one active COMPANY_ADMIN remains.
+  -- The invariant: at least one active COMPANY_ADMIN remains whose USER is not
+  -- gone (the SAME liveness definition as above - 05).
   IF EXISTS (
     SELECT 1 FROM public.user_company_roles r
+      JOIN public.users ru ON ru.id = r.user_id
      WHERE r.company_id = OLD.company_id AND r.role = 'COMPANY_ADMIN' AND r.status = 'active'
+       AND NOT (ru.is_deleted OR ru.deleted_at IS NOT NULL OR ru.status = 'deleted')
   ) THEN
     RETURN NULL;
   END IF;
