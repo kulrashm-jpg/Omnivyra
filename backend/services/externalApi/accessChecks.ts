@@ -1,4 +1,5 @@
 import type { ExternalApiSource } from './types';
+import { tenantOrPlatformTable, type TenantContext } from '../../db/tenantTable';
 
 /**
  * Central execution gate — the single source of truth for whether an API source
@@ -33,4 +34,20 @@ export async function getEnabledApiIdsFromCompanyConfig(
   const { getCompanyConfigRows } = await import('../companyApiConfigCache');
   const rows = await getCompanyConfigRows(companyId, options);
   return rows.filter((r) => r.enabled).map((r) => r.api_source_id);
+}
+
+/**
+ * True when `sourceId` is this company's OWN external API source or a PLATFORM source (company_id IS NULL) -
+ * never another company's private source (e1 S2). Every write that stores a source id for a company
+ * (company_api_configs) must pass it: getPlatformConfigs used to return whatever source a config row named.
+ * A read error throws - "cannot tell" is never "allowed".
+ */
+export async function isSourceOwnOrPlatform(tenant: TenantContext, sourceId: string): Promise<boolean> {
+  if (typeof sourceId !== 'string' || sourceId.length === 0) return false;
+  const { data, error } = await tenantOrPlatformTable('external_api_sources', tenant)
+    .select('id')
+    .eq('id', sourceId)
+    .limit(1);
+  if (error) throw new Error(`external API source lookup failed: ${(error as { message?: string }).message ?? 'error'}`);
+  return ((data ?? []) as unknown[]).length > 0;
 }

@@ -8,6 +8,8 @@ import {
   getEnabledApiIdsFromCompanyConfig,
   getUserApiAccess,
 } from '../../../backend/services/externalApiService';
+import { isSourceOwnOrPlatform } from '../../../backend/services/externalApi/accessChecks';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import {
   invalidateCompanyConfigCache,
   getCompanyConfigRows,
@@ -470,6 +472,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!api_source_id) {
       return res.status(400).json({ error: 'api_source_id is required' });
+    }
+    // A company may enable only its OWN sources or PLATFORM sources - never another company's (S2).
+    if (!(await isSourceOwnOrPlatform(tenantContextFor({ userId: user.id }, companyId), String(api_source_id)))) {
+      return res.status(404).json({ error: 'API source not found' });
     }
 
     if (typeof is_enabled === 'boolean') {
