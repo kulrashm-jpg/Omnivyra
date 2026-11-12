@@ -11,18 +11,15 @@
  * Also here: the LIVE prod bodies of disable_company_cascade / soft_delete_company /
  * hard_delete_company (83's C26, stored LF under fixtures/c26-lifecycle-bodies; the
  * CRLF form is rebuilt and its md5 asserted equal to prod BEFORE use) run UNDER the
- * guard - the real production code against the new constraint. And a two-session
- * race proving the advisory lock serialises concurrent demotions.
+ * guard - the real production code against the new constraint. The two-session
+ * race (committing) is in *_concurrency_real.test.ts.
  */
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { Client } from 'pg';
 import { db } from './setup';
 
-const url = process.env.W6_DB_URL as string;
 const CO = '00000000-0000-4000-8000-0000000012c0';
-const CO_RACE = '00000000-0000-4000-8000-0000000012c9';
 const A1 = '00000000-0000-4000-8000-0000000012a1';
 const A2 = '00000000-0000-4000-8000-0000000012a2';
 const M1 = '00000000-0000-4000-8000-0000000012b1';
@@ -33,6 +30,8 @@ type Outcome = { ok: true } | { ok: false; code: string; message: string };
 
 /** The company with admins A1 (+ A2 when two) and member M1 - inserted INSIDE the scenario transaction. */
 const world = (twoAdmins: boolean, company = CO): Array<[string, unknown[]]> => [
+  // users are created INSIDE the rolled-back transaction: this pass-1 suite commits nothing (05).
+  ...USERS.map(([id, email]) => [`INSERT INTO public.users (id, email, name) VALUES ($1, $2, 'lag') ON CONFLICT (id) DO NOTHING`, [id, email]] as [string, unknown[]]),
   [`INSERT INTO public.companies (id, name) VALUES ($1, 'last-admin guard')`, [company]],
   [`INSERT INTO public.user_company_roles (user_id, company_id, role, status) VALUES ($1, $2, 'COMPANY_ADMIN', 'active')`, [A1, company]],
   ...(twoAdmins ? [[`INSERT INTO public.user_company_roles (user_id, company_id, role, status) VALUES ($1, $2, 'COMPANY_ADMIN', 'active')`, [A2, company]] as [string, unknown[]]] : []),
@@ -58,9 +57,8 @@ const demote = (u: string): [string, unknown[]] => [`UPDATE public.user_company_
 beforeAll(async () => {
   const fn = (await db.query(`SELECT to_regprocedure('public.company_admin_last_active_check()') AS f`)).rows[0].f;
   if (!fn) throw new Error('20270217000012 is NOT installed in this database - the replay did not apply it; refusing to pass vacuously');
-  for (const [id, email] of USERS) {
-    await db.query(`INSERT INTO public.users (id, email, name) VALUES ($1, $2, 'lag') ON CONFLICT (id) DO NOTHING`, [id, email]);
-  }
+  const deferred = (await db.query(`SELECT tgdeferrable AND tginitdeferred AS d FROM pg_trigger WHERE tgname = 'trg_company_admin_last_active_check'`)).rows[0]?.d;
+  if (deferred !== true) throw new Error('trg_company_admin_last_active_check is not DEFERRABLE INITIALLY DEFERRED');
 });
 
 describe('the invariant: the LAST active COMPANY_ADMIN of an active company cannot be removed', () => {
@@ -81,6 +79,15 @@ describe('the invariant: the LAST active COMPANY_ADMIN of an active company cann
   it('two statements in one transaction demoting both -> refused', async () => {
     expect(refusedByGuard(await scenario([...world(true), demote(A1), demote(A2)]))).toBe(true);
   });
+  it('DEFERRAL PINNED (05): ownership transfer in ONE transaction - demote the sole admin FIRST, then promote another -> succeeds', async () => {
+    // Under DEFERRED the commit-time end state has a live admin. A NOT DEFERRABLE check would
+    // fire at the end of the FIRST statement (zero admins) and refuse - so this case kills
+    // that mutant. (Promote-then-demote passes either way, so the order is the point.)
+    const o = await scenario([...world(false), demote(A1),
+      [`UPDATE public.user_company_roles SET role = 'COMPANY_ADMIN' WHERE user_id = $1 AND company_id = $2`, [M1, CO]]]);
+    expect(o).toEqual({ ok: true });
+  });
+
   it('a no-op touch of the last admin (status active -> active) succeeds', async () => {
     expect(await scenario([...world(false), [`UPDATE public.user_company_roles SET status = 'active' WHERE user_id = $1 AND company_id = $2`, [A1, CO]]])).toEqual({ ok: true });
   });
@@ -93,6 +100,7 @@ describe('the invariant: the LAST active COMPANY_ADMIN of an active company cann
   });
   it('an ADMINLESS company: removing a non-admin is untouched', async () => {
     const o = await scenario([
+      ...USERS.map(([id, email]) => [`INSERT INTO public.users (id, email, name) VALUES ($1, $2, 'lag') ON CONFLICT (id) DO NOTHING`, [id, email]] as [string, unknown[]]),
       [`INSERT INTO public.companies (id, name) VALUES ($1, 'adminless')`, [CO]],
       [`INSERT INTO public.user_company_roles (user_id, company_id, role, status) VALUES ($1, $2, 'VIEW_ONLY', 'active')`, [M1, CO]],
       [`DELETE FROM public.user_company_roles WHERE user_id = $1 AND company_id = $2`, [M1, CO]],
@@ -156,50 +164,8 @@ describe('the LIVE prod lifecycle bodies (83 C26, md5-verified) run UNDER the gu
   });
 });
 
-describe('the advisory lock serialises concurrent demotions (05: LOAD-BEARING)', () => {
-  const setupRace = async () => {
-    await db.query(`INSERT INTO public.companies (id, name) VALUES ($1, 'last-admin race') ON CONFLICT (id) DO NOTHING`, [CO_RACE]);
-    await db.query(`UPDATE public.companies SET status = 'active', deleted_at = NULL WHERE id = $1`, [CO_RACE]);
-    await db.query(`INSERT INTO public.user_company_roles (user_id, company_id, role, status) VALUES ($1, $3, 'COMPANY_ADMIN', 'active'), ($2, $3, 'COMPANY_ADMIN', 'active')`, [A1, A2, CO_RACE]);
-  };
-  const teardownRace = async () => {
-    // disable first: the guard exempts an inactive company, so the cleanup is not refused
-    await db.query(`UPDATE public.companies SET status = 'inactive' WHERE id = $1`, [CO_RACE]);
-    await db.query(`DELETE FROM public.user_company_roles WHERE company_id = $1`, [CO_RACE]);
-    await db.query(`DELETE FROM public.companies WHERE id = $1`, [CO_RACE]);
-  };
+// The COMMITTING race (05: the lock is load-bearing) lives in
+// user_company_roles_last_admin_guard_concurrency_real.test.ts - 83's harness rule:
+// committing cases run only in the *_concurrency_real second pass.
 
-  it('two sessions each demote a DIFFERENT admin: the second BLOCKS, then is refused; exactly one admin remains', async () => {
-    await setupRace();
-    const c1 = new Client({ connectionString: url });
-    const c2 = new Client({ connectionString: url });
-    await Promise.all([c1.connect(), c2.connect()]);
-    try {
-      await c1.query('BEGIN');
-      await c1.query(`UPDATE public.user_company_roles SET role = 'VIEW_ONLY' WHERE user_id = $1 AND company_id = $2`, [A1, CO_RACE]);
-      await c1.query('SET CONSTRAINTS ALL IMMEDIATE'); // c1's check passes now (A2 still admin) - the widened window
-      await c2.query('BEGIN');
-      let settled = false;
-      const pending = c2.query(`UPDATE public.user_company_roles SET role = 'VIEW_ONLY' WHERE user_id = $1 AND company_id = $2`, [A2, CO_RACE])
-        .then(() => c2.query('COMMIT')).then(() => ({ ok: true as const }), (e: any) => ({ ok: false as const, message: String(e.message) }))
-        .finally(() => { settled = true; });
-      await new Promise((r) => setTimeout(r, 400));
-      const blocked = !settled;
-      await c1.query('COMMIT');
-      const o2 = await pending;
-      await c2.query('ROLLBACK').catch(() => undefined);
-      expect(blocked).toBe(true); // the BEFORE ROW advisory lock held c2 until c1 ended
-      expect(o2.ok).toBe(false);
-      expect((o2 as { message: string }).message).toMatch(/LAST_COMPANY_ADMIN/);
-      const n = (await db.query(`SELECT count(*)::int AS n FROM public.user_company_roles WHERE company_id = $1 AND role = 'COMPANY_ADMIN' AND status = 'active'`, [CO_RACE])).rows[0].n;
-      expect(n).toBe(1);
-    } finally {
-      await Promise.all([c1.end(), c2.end()]);
-      await teardownRace();
-    }
-  });
-});
-
-afterAll(async () => {
-  await db.query(`DELETE FROM public.users WHERE id = ANY($1::uuid[])`, [USERS.map(([id]) => id)]).catch(() => undefined);
-});
+// No afterAll: this pass-1 suite commits nothing (every row lives in a rolled-back transaction).

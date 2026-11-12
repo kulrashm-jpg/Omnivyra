@@ -156,7 +156,7 @@ async function seed(): Promise<Fx> {
   for (const [uid, org, email] of [[ME, ORG_A, 'sec-a-me@example.invalid'], [OTHER, ORG_B, 'sec-a-other@example.invalid']]) {
     await db.query(`INSERT INTO auth.users (id, email) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, [uid, email]);
     await db.query(`INSERT INTO public.users (id, email, company_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`, [uid, email, org]);
-    await db.query(`INSERT INTO public.user_company_roles (user_id, company_id, role, status) VALUES ($1, $2, 'admin', 'active')`, [uid, org]);
+    await db.query(`INSERT INTO public.user_company_roles (user_id, company_id, role, status) VALUES ($1, $2, 'COMPANY_ADMIN', 'active')`, [uid, org]); // 20270217000011: the legacy 'admin' spelling is refused by user_company_roles_role_check (no RLS policy reads the role)
     await db.query(`INSERT INTO public.campaigns (id, name, company_id) VALUES (gen_random_uuid(), 'sec-a', $1)`, [org]);
     await db.query(`INSERT INTO public.canonical_domains (company_id, primary_domain) VALUES ($1, $2)`, [org, `sec-a-${org.slice(-1)}.example`]);
     await db.query(`INSERT INTO public.extension_sessions (user_id, org_id, session_token, expires_at) VALUES ($1, $2, $3, now() + interval '1 day')`,

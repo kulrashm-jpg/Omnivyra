@@ -54,6 +54,10 @@ async function race(a: string, aParams: unknown[], b: string, bParams: unknown[]
 }
 
 async function freshWorld() {
+  // 20270217000012 (last-admin guard): a company's memberships are cleared by DISABLING
+  // it first - the ruled path the guard exempts (deleting the last admin of an ACTIVE
+  // company is refused LAST_COMPANY_ADMIN).
+  await db.query(`UPDATE public.companies SET status = 'inactive' WHERE id = $1`, [CO]);
   await db.query('DELETE FROM public.user_company_roles WHERE company_id = $1', [CO]);
   await db.query('UPDATE public.users SET active_company_id = NULL WHERE id = ANY($1::uuid[])', [[U1, U2]]);
   await db.query('DELETE FROM public.company_profiles WHERE company_id = $1', [CO]);
@@ -404,7 +408,11 @@ describe('015M — direct writes cannot bypass the guard; ordinary operations re
   it('ordinary memberships: invite, activate, role change, deactivate, delete; even in a disabled company the trigger ignores them', async () => {
     await db.query(`UPDATE public.user_company_roles SET status = 'invited' WHERE id = '${ROW}'`);
     await db.query(`UPDATE public.user_company_roles SET status = 'active', role = 'VIEW_ONLY' WHERE id = '${ROW}'`);
-    await db.query(`UPDATE public.user_company_roles SET role = 'COMPANY_ADMIN' WHERE id = '${ROW}'`);
+    // 20270217000012: a role change that makes this row the company's SOLE admin and then
+    // deactivates/deletes it is refused LAST_COMPANY_ADMIN (pinned in
+    // user_company_roles_last_admin_guard.test.ts); this case pins that the 015L SUPER_ADMIN
+    // trigger ignores ORDINARY role changes, so it changes to a non-admin role.
+    await db.query(`UPDATE public.user_company_roles SET role = 'CONTENT_CREATOR' WHERE id = '${ROW}'`);
     await db.query(`UPDATE public.user_company_roles SET status = 'inactive' WHERE id = '${ROW}'`);
     await db.query(`DELETE FROM public.user_company_roles WHERE id = '${ROW}'`);
     await db.query(`UPDATE public.companies SET status = 'inactive' WHERE id = $1`, [CO]);

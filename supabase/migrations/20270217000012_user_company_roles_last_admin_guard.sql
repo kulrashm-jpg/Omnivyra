@@ -37,8 +37,12 @@
 --   * trg_company_admin_last_active_check - a CONSTRAINT trigger, DEFERRABLE
 --     INITIALLY DEFERRED: it runs at COMMIT and re-reads the post-state (READ
 --     COMMITTED: a fresh snapshot per statement), so a bulk statement demoting
---     every admin is refused, a concurrent transaction that committed first is
---     seen, and multi-statement legitimate flows (hard delete) see their end.
+--     every admin is refused and a concurrent transaction that committed first is
+--     seen. WHY DEFERRED (05, corrected): the flow that NEEDS it is an ownership
+--     transfer in one transaction that demotes the sole admin FIRST and promotes
+--     another SECOND - at end-of-statement the company briefly has zero admins.
+--     (hard_delete_company is ONE client statement, so it does not need deferral;
+--     an earlier header said it did.) Pinned by the realschema transfer case.
 -- NULL-SAFE BY CONSTRUCTION (05): users.is_deleted and users.status are NOT NULL
 -- (baseline.sql) and `deleted_at IS NOT NULL` is never NULL, so the liveness
 -- disjunction - and its NOT - can never be NULL (no three-valued-logic gap).

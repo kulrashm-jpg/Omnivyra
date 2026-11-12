@@ -436,6 +436,8 @@ export const logUserManagementAudit = (
     target_user_id: string;
     company_id: string;
     role: string | null;
+    /** USER_ROLE_CHANGED_BY_INVITE: the role the invite overwrote (05). */
+    previous_role?: string | null;
   }
 ) => {
   console.log(event, payload);

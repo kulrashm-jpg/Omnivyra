@@ -29,7 +29,7 @@
       "moved": "2026-09-15 STEP 3AH-91 integration: 108 → 110. SEC91-W2E added one import and one comment line above it (trusted client IP); the membership query is byte-identical and none of the readers listed above changed."
     },
     {
-      "site": "pages/api/admin/bootstrap-super-admin.ts:468",
+      "site": "pages/api/admin/bootstrap-super-admin.ts:483",
       "classification": "binding-target",
       "reason": "assignSuperAdmin falls back to the target user's most recent membership row (any status) only to choose WHICH company the SUPER_ADMIN membership row is bound to, when the caller gave no organizationId and the user has no active_company_id. It authorizes nothing: the grant itself is authorized by requireCapability(identity.admin.assign) + step-up in every mode before assignSuperAdmin runs.",
       "caveat": "A stale (inactive / invited / expired) membership can be chosen as the binding company. With the Closure-015L/015M database guard (supabase/proposals/closure015l/01_*, 02_*) a binding company that is missing, disabled, suspended or soft-deleted is refused by the trigger and by assign_super_admin.",
@@ -37,7 +37,7 @@
       "owner": "platform-security",
       "recorded": "2026-10-16",
       "audit": "CLOSURE-015M",
-      "note": "Previously classified SAFE only because the existing-row branch (row.status === 'active') fell inside the detector's 1600-character context window; Closure-015M inserted the governed assign_super_admin call between them, which moved it out of the window. The query itself is byte-identical (line 467 → 468 by one added import)."
+      "note": "Previously classified SAFE only because the existing-row branch (row.status === 'active') fell inside the detector's 1600-character context window; Closure-015M inserted the governed assign_super_admin call between them, which moved it out of the window. The query itself is byte-identical (line 467 → 468 by one added import). MOVED 2026-11-12 (468 → 483): class2 P1 1d7768eef (super-admin bootstrap fails closed) added error reads to two UNRELATED count queries above it; this binding-target query is byte-identical and its classification is unchanged."
     }
   ]
 }

@@ -80,6 +80,10 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  // 20270217000012 (last-admin guard): a company's memberships are cleared by DISABLING
+  // it first - the ruled path the guard exempts (deleting the last admin of an ACTIVE
+  // company is refused LAST_COMPANY_ADMIN).
+  await db.query(`UPDATE public.companies SET status = 'inactive' WHERE id = ANY($1::uuid[])`, [[CO, CO2]]);
   await db.query('DELETE FROM public.user_company_roles WHERE company_id = ANY($1::uuid[])', [[CO, CO2]]);
   await db.query('UPDATE public.users SET active_company_id = NULL WHERE id = ANY($1::uuid[])', [[U1, U2]]);
   await db.query('DELETE FROM public.company_profiles WHERE company_id = ANY($1::text[])', [[CO, CO2]]);
