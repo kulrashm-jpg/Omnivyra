@@ -53,6 +53,7 @@ import {
   type CreditReservationHandle,
 } from './creditExecutionService';
 import { getCreditEconomyExecutionMode } from './billing/creditEconomyActivation';
+import { recordMonetizationOperationalEvent } from './monetizationOpsService';
 import { runWithUsageCollection, type CollectedUsage } from './aiUsageCollector';
 import {
   type ReportRequestPayload,
@@ -148,14 +149,75 @@ async function confirmReportCreditReservation(report: ReportRecord, payload: Rep
   } as ReportCreditReservationMetadata);
 }
 
+/**
+ * A failed report's hold that was NOT released is loud (e9/e1, 2026-11-12): an ERROR log plus a
+ * monetization operational event (alert-ready, human review). Every caller swallows the rejection
+ * and the report row is already `failed`, so nothing retries the release; until the orphan-hold
+ * reaper runs (deliberately unscheduled pending owner approval) this event is the only witness.
+ * Never throws itself: a failed event insert must not mask the release outcome.
+ */
+async function reportUnreleasedHold(
+  report: ReportRecord,
+  reservation: ReportCreditReservationMetadata,
+  reason: string,
+  eventName: 'monetization.report_reservation_release_failed' | 'monetization.report_reservation_already_confirmed',
+  detail: string,
+): Promise<void> {
+  const fields = {
+    reportId: report.id,
+    orgId: reservation.orgId,
+    holdTransactionId: reservation.holdTransactionId,
+    idempotencyKey: reservation.idempotencyKey,
+    reason,
+    detail,
+  };
+  console.error(`[reportCardService] report credit hold NOT released (${eventName})`, fields);
+  try {
+    await recordMonetizationOperationalEvent({
+      eventName,
+      severity: 'ERROR',
+      organizationId: reservation.orgId,
+      reservationId: reservation.holdTransactionId,
+      alertKey: eventName.replace('monetization.', ''),
+      requiresHumanReview: true,
+      metadata: {
+        report_id: report.id,
+        hold_transaction_id: reservation.holdTransactionId,
+        idempotency_key: reservation.idempotencyKey,
+        failure_reason: reason.slice(0, 200),
+        detail: detail.slice(0, 500),
+      },
+    });
+  } catch (eventError) {
+    console.error('[reportCardService] could not record the unreleased-hold event', {
+      ...fields,
+      eventError: eventError instanceof Error ? eventError.message : String(eventError),
+    });
+  }
+}
+
 async function releaseReportCreditReservation(report: ReportRecord, reason: string): Promise<void> {
   const reservation = getReportCreditReservation(report);
   if (!reservation) return;
-  const result = await releaseCreditReservation({
-    ...reservation,
-    referenceId: report.id,
-    note: `${reservation.feature_key} report generation failed: ${reason.slice(0, 120)}`,
-  });
+  let result: Awaited<ReturnType<typeof releaseCreditReservation>>;
+  try {
+    result = await releaseCreditReservation({
+      ...reservation,
+      referenceId: report.id,
+      note: `${reservation.feature_key} report generation failed: ${reason.slice(0, 120)}`,
+    });
+  } catch (releaseError) {
+    await reportUnreleasedHold(report, reservation, reason, 'monetization.report_reservation_release_failed',
+      releaseError instanceof Error ? releaseError.message : String(releaseError));
+    throw releaseError; // callers' behaviour unchanged: each catches and logs
+  }
+  // `released` and `already_released` free the hold. `already_confirmed` means a FAILED report's
+  // hold was charged: nothing is released, and a person must look.
+  if (result.status !== 'released' && result.status !== 'already_released') {
+    await reportUnreleasedHold(report, reservation, reason, 'monetization.report_reservation_already_confirmed',
+      `release returned ${result.status}`);
+    return;
+  }
   console.warn('[reportCardService] report credit reservation released', {
     reportId: report.id,
     holdTransactionId: reservation.holdTransactionId,
