@@ -8,6 +8,7 @@ import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore
 import { publishNow } from '../../../backend/services/publishNowService';
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { resolvePostSocialAccount } from '../../../backend/services/postSocialAccountResolver';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 import {
@@ -236,25 +237,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
 
-      // Resolve social_account_id — fall back to user's connected account for this platform
+      // Resolve social_account_id when the post carries none. CROSS-TENANT FIX (BLOCKING): this used to take
+      // "the user's active account for the platform" in ANY company, so company A's post could be published
+      // through company B's account. The shared resolver takes it from the post's CAMPAIGN company only (a
+      // standalone post: only when the user's matching accounts are all in one company).
       let socialAccountId: string | null = post.social_account_id || null;
       if (!socialAccountId) {
         const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
-        const { data: acct } = await supabase
-          .from('social_accounts')
-          .select('id')
-          .eq('user_id', post.user_id)
-          .eq('is_active', true)
-          .in('platform', [post.platform, platformNorm])
-          .limit(1)
-          .maybeSingle();
-        socialAccountId = acct?.id ?? null;
-      }
-
-      if (!socialAccountId) {
-        return res.status(422).json({
-          error: `No connected ${post.platform} account found. Please connect your account in Settings → Social Accounts.`,
+        const resolved = await resolvePostSocialAccount({
+          userId: post.user_id,
+          platforms: [post.platform, platformNorm],
+          campaignId: post.campaign_id ?? null,
         });
+        if (!resolved.ok) {
+          return res.status(resolved.retryable ? 503 : 422).json({ error: resolved.message, code: resolved.code });
+        }
+        socialAccountId = resolved.socialAccountId;
       }
 
       // Patch the post row with the resolved account so publishNow and future jobs use it
