@@ -38,11 +38,13 @@ it('the side-table STATE and ATTRIBUTES win over the stale inline columns', asyn
   mockTables.payment_provider_event_attributes = [{ provider_event_pk: 'e1', provider_order_id: 'order_1', provider_payment_id: 'pay_1' }];
   const [r1] = await overlayPaymentEventState(ledger);
   expect(r1).toMatchObject({ processing_status: 'failed', error_message: 'fulfillment_error', provider_order_id: 'order_1', provider_payment_id: 'pay_1' });
+  expect((r1 as any).state_source).toBe('side_table');
 });
 
 it('TRANSITIONAL fallback: a row with no side-table rows keeps its inline values', async () => {
   const [, r2] = await overlayPaymentEventState(ledger);
   expect(r2).toMatchObject({ processing_status: 'recorded', provider_order_id: 'inline_o2' });
+  expect((r2 as any).state_source).toBe('inline'); // 05: distinguishable from an authoritative 'recorded'
 });
 
 it('a read error THROWS (a reader must not report a stale state as current)', async () => {

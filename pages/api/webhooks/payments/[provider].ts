@@ -178,20 +178,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           allocated = fulfillment.ok;
           if (fulfillment.ok) {
             await settle('processed');
-          } else if (fulfillment.detail === 'error') {
-            // MONEY (e9): the completion write / credit grant FAILED transiently -
-            // record 'failed' and answer NON-2xx so the provider redelivers.
-            logger.error('payment_webhook_fulfillment_failed', { provider, eventId: result.eventId, purchaseId: (purchase as any).id });
-            await settle('failed', 'fulfillment_error');
-            return res.status(500).json({ ok: false, error: 'webhook_money_action_failed', retryable: true });
-          } else {
-            // A DETERMINISTIC refusal (financial gate, not reopenable, provider not
-            // paid, ...): a retry cannot change it - terminal, with the reason.
+          } else if (fulfillment.detail && TERMINAL_FULFILLMENT_DETAILS.has(fulfillment.detail)) {
+            // An EXPLICITLY deterministic refusal (05): a retry cannot change it -
+            // terminal, with the reason. Still logged at ERROR.
             logger.error('payment_webhook_fulfillment_blocked', {
+              provider, eventId: result.eventId, purchaseId: (purchase as any).id,
+              code: fulfillment.code ?? null, detail: fulfillment.detail,
+            });
+            await settle('processed', `blocked:${fulfillment.detail}`);
+          } else {
+            // MONEY (05, BLOCKING): EVERYTHING ELSE fails SAFE - record 'failed' and
+            // answer NON-2xx so the provider redelivers. This includes the transient
+            // grant failure ('error'), a provider we could not ASK (provider_unknown /
+            // unreachable - NOT "not paid"), capture lag (provider_unpaid on a success
+            // webhook), a financial gate that could not DETERMINE the amount, and any
+            // new or renamed detail. Retrying a deterministic refusal is harmless (the
+            // grant is idempotent); making a transient failure terminal loses a paid
+            // customer's credits and discards the provider's retry.
+            logger.error('payment_webhook_fulfillment_failed', {
               provider, eventId: result.eventId, purchaseId: (purchase as any).id,
               code: fulfillment.code ?? null, detail: fulfillment.detail ?? null,
             });
-            await settle('processed', `blocked:${fulfillment.detail ?? fulfillment.code ?? 'unknown'}`);
+            await settle('failed', `fulfillment_${fulfillment.detail ?? 'unknown'}`);
+            return res.status(500).json({ ok: false, error: 'webhook_money_action_failed', retryable: true });
           }
         }
       } else {
@@ -212,4 +221,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+/**
+ * 05 (2026-11-12): the ONLY fulfillment outcomes that are TERMINAL (a retry cannot
+ * change them). Everything else defaults to failed + 500 + redelivery - the safe
+ * direction for money. Keep this list EXPLICIT; never widen it by pattern.
+ *   purchase_not_found, no_provider_reference, purchase_not_reopenable - the local
+ *     purchase cannot be fulfilled by this event;
+ *   provider_amount_differs, provider_currency_differs - the financial gate's
+ *     DETERMINED mismatches (its 'UNKNOWN'-coded details mean "could not
+ *     determine" and are retried);
+ *   not_found, already_failed - completePurchase's deterministic refusals;
+ *   already_completed - the status CAS lost to a concurrent completer, who grants.
+ * WHY A RETRY WORKS AT ALL (05): completePurchase runs its status CAS only when the
+ * purchase is still 'pending'; a completed-but-ungranted purchase SKIPS the CAS and
+ * falls through to the idempotent grant (apply_credit_reservation's idempotency-key
+ * pre-read; the key is a deterministic sha256 of the purchase). Making that CAS
+ * unconditional would silently break every redelivery this route depends on.
+ */
+const TERMINAL_FULFILLMENT_DETAILS: ReadonlySet<string> = new Set([
+  'purchase_not_found', 'no_provider_reference', 'purchase_not_reopenable',
+  'provider_amount_differs', 'provider_currency_differs',
+  'not_found', 'already_failed', 'already_completed',
+]);
+
 export default __createApiRoute(handler, { route: '/api/webhooks/payments/:provider' });

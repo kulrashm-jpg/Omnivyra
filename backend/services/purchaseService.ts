@@ -135,6 +135,13 @@ export async function completePurchase(
   }
 
   // ── 3. Grant credits (idempotent on purchaseId) ────────────────────────────
+  // LOAD-BEARING CONDITION (05/e9, 2026-11-12): the status CAS runs ONLY while the
+  // purchase is still 'pending'. A redelivered webhook for a purchase that is
+  // already 'completed' but whose grant FAILED (fulfillment_status != completed)
+  // SKIPS the CAS and falls through to the idempotent grant below - that is what
+  // makes every webhook retry (20270217000003) able to credit at all. Making this
+  // CAS unconditional would answer 'already_completed' and silently kill retries.
+  // Pinned by paymentRetryInvariants.test.ts.
   if (purchaseRow.status === 'pending') {
     const completionFields: Record<string, any> = {
       status: 'completed',

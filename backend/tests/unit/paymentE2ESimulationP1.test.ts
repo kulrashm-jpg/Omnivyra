@@ -512,15 +512,56 @@ describe('S16 — malformed financials never settle', () => {
     ['amount NaN',      (e: any) => { e.payload.payment.entity.amount = 'not-a-number'; }],
     ['amount Infinity', (e: any) => { e.payload.payment.entity.amount = Infinity; }],
     ['amount zero',     (e: any) => { e.payload.payment.entity.amount = 0; }],
-  ])('%s → blocked, no credits, no invoice', async (_label, mutate) => {
+  ])('%s → no credits, no invoice; the gate could not DETERMINE the amount -> failed + 500 (05/e9: fails SAFE, redelivered)', async (_label, mutate) => {
     const o = simCreateOrder(); simProviderPaid(o);
     const evt: any = rzpEvent(o); mutate(evt);
     const r = await simDeliverWebhook(evt);
-    expect((r.body as any).allocated).toBe(false);
+    // 05/e9 (2026-11-12): an 'UNKNOWN'-coded gate result means "could not determine",
+    // not a deterministic refusal - it is retried, never made terminal. Still no money moves.
+    expect(r.status).toBe(500);
+    expect(r.body).toMatchObject({ error: 'webhook_money_action_failed', retryable: true });
+    expect(eventState(String((db.payment_provider_events[0] as Row).provider_event_id))).toBe('failed');
     expect(get(o.purchaseId).status).toBe('pending');
     expect(grantsFor(o.purchaseId)).toHaveLength(0);
     expect(invoicesFor(o.purchaseId)).toHaveLength(0);
   });
+});
+
+// ═══ 16b — 05/e9 (2026-11-12): the fulfillment split FAILS SAFE ═════════════
+// TERMINAL only for the explicit deterministic allowlist; everything else -
+// provider unreachable, any unknown / future detail - is failed + 500 and the
+// provider's redelivery grants exactly once.
+describe('S16b — transient vs deterministic fulfillment outcomes on the LIVE webhook', () => {
+  const closure = () => require('../../services/billing/purchaseClosureService') as typeof import('../../services/billing/purchaseClosureService');
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(['provider_unknown', 'provider_unreachable', 'zz_new_reason_nobody_classified'])(
+    "%s -> failed + 500 (never terminal); the REDELIVERY grants exactly once", async (detail) => {
+      const o = simCreateOrder(); simProviderPaid(o);
+      const evt = rzpEvent(o);
+      jest.spyOn(closure(), 'fulfillProviderConfirmedPurchase').mockResolvedValueOnce({ ok: false, detail, code: 'UNKNOWN' } as any);
+      const first = await simDeliverWebhook(evt);
+      expect(first.status).toBe(500);
+      expect(first.body).toMatchObject({ error: 'webhook_money_action_failed', retryable: true });
+      const evId = String((db.payment_provider_events[0] as Row).provider_event_id);
+      expect(eventState(evId)).toBe('failed');
+      expect(grantsFor(o.purchaseId)).toHaveLength(0);
+      const again = await simRedeliverWebhook(evt); // the real fulfillment this time
+      expect(again.status).toBe(200);
+      expect(grantsFor(o.purchaseId)).toHaveLength(1);
+      expect(eventState(evId)).toBe('processed');
+    });
+
+  it.each(['provider_amount_differs', 'provider_currency_differs', 'purchase_not_reopenable', 'already_failed'])(
+    "an EXPLICITLY deterministic refusal (%s) is terminal: 200, processed with the reason, no grant", async (detail) => {
+      const o = simCreateOrder(); simProviderPaid(o);
+      jest.spyOn(closure(), 'fulfillProviderConfirmedPurchase').mockResolvedValueOnce({ ok: false, detail, code: 'AMOUNT_MISMATCH' } as any);
+      const r = await simDeliverWebhook(rzpEvent(o));
+      expect(r.status).toBe(200);
+      expect((r.body as any).allocated).toBe(false);
+      expect(eventState(String((db.payment_provider_events[0] as Row).provider_event_id))).toBe('processed');
+      expect(grantsFor(o.purchaseId)).toHaveLength(0);
+    });
 });
 
 // ═══ 17 — PROVIDER UNKNOWN / TIMEOUT ═══════════════════════════════════════

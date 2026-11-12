@@ -517,8 +517,18 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
 
   if (error) {
     const msg = (error as any).message ?? '';
-    if (msg.includes('unique_violation') || msg.includes('already exists')) {
-      // Idempotent — already granted
+    // 05/e9 (2026-11-12): branch on the SQLSTATE, never on message text. Postgres's
+    // 23505 message is 'duplicate key value violates unique constraint "..."' (no
+    // 'unique_violation' - that is a PL/pgSQL condition name), and 'already exists'
+    // appears only in PostgREST's DETAILS field - so this hatch NEVER fired: a
+    // concurrent double delivery threw, and completePurchase stamped a FALSE
+    // fulfillment failure on a purchase whose credits WERE granted. It must also
+    // NAME the idempotency key: a unique violation on any other constraint is a real
+    // failure, not "already granted".
+    const code = (error as any).code;
+    const named = /idempotency_key/.test(`${msg} ${(error as any).details ?? ''}`);
+    if (code === '23505' && named) {
+      // Idempotent - this grant already exists (same deterministic key).
       return;
     }
     throw new Error(`[createCredit] grant failed: ${msg}`);

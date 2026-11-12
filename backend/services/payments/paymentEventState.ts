@@ -100,10 +100,16 @@ export async function overlayPaymentEventState<T extends { id: string; processin
   if (at.error) throw new Error(`[paymentEventState] attributes overlay read failed: ${at.error.message}`);
   const sMap = new Map((st.data ?? []).map((r: any) => [r.provider_event_pk, r]));
   const aMap = new Map((at.data ?? []).map((r: any) => [r.provider_event_pk, r]));
+  // 05: the fallback must be DISTINGUISHABLE (state writes are best-effort, so a new
+  // event can legitimately lack a state row) and MEASURED (the backfill item retires
+  // it on evidence: when this count is zero across the history, remove the fallback).
+  const inlineFallbacks = rows.filter((r) => !sMap.has(r.id)).length;
+  if (inlineFallbacks > 0) logger.info('payment_event_state_inline_fallback', { rows: rows.length, inlineFallbacks });
   return rows.map((r) => {
     const s: any = sMap.get(r.id); const a: any = aMap.get(r.id);
     return {
       ...r,
+      state_source: s ? 'side_table' : 'inline',
       processing_status: s?.processing_status ?? r.processing_status ?? 'recorded',
       error_message: s ? s.error_message : r.error_message,
       processed_at: s ? s.processed_at : r.processed_at,
