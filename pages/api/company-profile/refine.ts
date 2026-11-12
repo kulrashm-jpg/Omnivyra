@@ -93,6 +93,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           ...profile,
           ...req.body,
           company_id: profile.company_id,
+          // e1 2026-11-13 (owner ruling, BLOCKING): refine never changes the website - a body website_url used to
+          // overwrite the stored one with no email-domain check. Website edits go ONLY through
+          // POST /api/company-profile, which enforces website domain == the editor's email domain at eTLD+1.
+          website_url: profile.website_url ?? null,
           ...(canonicalWebsite
             ? {
                 website_url: canonicalWebsite,

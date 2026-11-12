@@ -23,6 +23,7 @@ import {
   resolveAuthenticatedUser,
 } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
+import { recordSignupWithoutIntentIfMissing } from '../../../backend/services/signupWithoutIntentTelemetry';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 import {
@@ -111,6 +112,14 @@ async function handler(
     }
 
     const email = identity.email?.toLowerCase() ?? '';
+
+    // P1 telemetry: flag a brand-new identity with no signup_intents row at all
+    // (possible GoTrue-direct signup). Never blocks; never throws.
+    await recordSignupWithoutIntentIfMissing({
+      email,
+      endpoint:    'verify-email',
+      supabaseUid: identity.supabaseUid,
+    });
 
     const insertResult = await supabase
       .from('users')
