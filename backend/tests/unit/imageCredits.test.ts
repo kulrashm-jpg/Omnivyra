@@ -151,7 +151,7 @@ describe('image credits - the five owner cases', () => {
     const one = world({ balance: 7, priceCredits: 5 });
     const outs = await Promise.all([render(one, 'b1', async () => true), render(one, 'b2', async () => true)]);
     expect(outs.filter((o) => o.called)).toHaveLength(1);
-    expect(outs.filter((o) => !o.reserved.ok && o.reserved.reason === 'insufficient_credits')).toHaveLength(1);
+    expect(outs.filter((o) => o.reserved.ok === false && (o.reserved as { reason: string }).reason === 'insufficient_credits')).toHaveLength(1);
     expect(one.balance).toBe(2);
     expect(one.balance).toBeGreaterThanOrEqual(0);
   });
