@@ -24,6 +24,13 @@ const TENANT_COLUMNS = ['company_id', 'organization_id', 'tenant_id'];
 const COLUMN_OVERRIDES = {
   community_ai_actions: 'organization_id', // tenant_id is legacy; every reader and the C19/C22 keys use organization_id
 };
+/**
+ * VIEWS with a tenant column (the scan reads CREATE TABLE only). Registered as DIRECT tenancy on that column, so
+ * tenantTable filters them like a table. Each entry is a reviewed decision (e1 S2, 2026-11-13).
+ */
+const TENANT_VIEWS = {
+  company_blog_performance_summary: 'company_id',
+};
 /** Indirect tenancy declared by hand where the schema has the column but no FOREIGN KEY constraint. */
 const VIA_OVERRIDES = {
   daily_content_plans: ['campaign_id', 'campaigns'],
@@ -158,6 +165,9 @@ function build() {
   const tagOf = (t) => TAG_OVERRIDES[t] || (TAG_RULES.find(([, re]) => re.test(t)) || ['other'])[0];
   const rows = [], via = [], direct = new Set();
   const sorted = [...tables].sort((a, b) => a[0].localeCompare(b[0]));
+  for (const [v, col] of Object.entries(TENANT_VIEWS)) tables.set(v, new Set([...(tables.get(v) || []), col]));
+  const sortedAll = [...tables].sort((a, b) => a[0].localeCompare(b[0]));
+  sorted.length = 0; sorted.push(...sortedAll);
   for (const [t, cols] of sorted) {
     if (NOT_TENANT.has(t)) continue;
     const column = COLUMN_OVERRIDES[t] || TENANT_COLUMNS.find((c) => cols.has(c));

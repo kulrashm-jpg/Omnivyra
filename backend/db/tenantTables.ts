@@ -117,6 +117,7 @@ export const TENANT_TABLES = {
   company_api_configs: { column: 'company_id', tag: 'other' },
   company_billing_profiles: { column: 'organization_id', tag: 'money' },
   company_blog_comments: { column: 'company_id', tag: 'content' },
+  company_blog_performance_summary: { column: 'company_id', tag: 'content' },
   company_blog_pillars: { column: 'company_id', tag: 'content' },
   company_blog_read_sessions: { column: 'company_id', tag: 'content' },
   company_blog_relationships: { column: 'company_id', tag: 'content' },
