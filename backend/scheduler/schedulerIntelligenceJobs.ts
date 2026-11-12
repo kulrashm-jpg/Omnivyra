@@ -270,8 +270,16 @@ export async function runContentOpportunityEngine() {
 
 /** Companies with content opportunities created in this window are the narrative engine's work set. */
 const NARRATIVE_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-/** Bounds the discovery read (ids only); a company with no opportunity in this sample waits for the next run. */
-const NARRATIVE_DISCOVERY_ROW_CAP = 5000;
+/** Discovery pages through the window in created_at order; past this many pages it stops and REPORTS truncation. */
+const NARRATIVE_DISCOVERY_PAGE = 1000;
+const NARRATIVE_DISCOVERY_MAX_PAGES = 20;
+/**
+ * OPT-IN (e9 ruling, 2026-11-12): the narrative engine writes campaign_narratives (AI-style content) for every company
+ * with recent opportunities, and stays OFF for launch. Absent or anything but 'true' and runNarrativeEngine reads and
+ * writes nothing. This is the switch - NOT the intent/activity gate, which never opens today only because
+ * recordUserActivity has no callers: fixing that gate must not wake this job by accident (05).
+ */
+export const NARRATIVE_ENGINE_FLAG = 'NARRATIVE_ENGINE_ENABLED';
 
 /**
  * Run narrative engine: convert content opportunities into campaign narratives.
@@ -283,24 +291,41 @@ const NARRATIVE_DISCOVERY_ROW_CAP = 5000;
  * 'narrative_engine' config now apply. The cap of 100 opportunities is per company.
  */
 /** The narrative engine's work set: companies with a content opportunity created in the discovery window. */
-export async function discoverNarrativeWorkCompanies(now: number = Date.now()): Promise<string[]> {
+export async function discoverNarrativeWorkCompanies(
+  now: number = Date.now(),
+): Promise<{ companyIds: string[]; truncated: boolean }> {
   const since = new Date(now - NARRATIVE_DISCOVERY_WINDOW_MS).toISOString();
-  // cross-tenant: narrative-cron-company-discovery
-  const { data: recent, error } = await ownedDbTable('content_opportunities')
-    .select('company_id')
-    .gte('created_at', since)
-    .not('company_id', 'is', null)
-    .limit(NARRATIVE_DISCOVERY_ROW_CAP);
-  if (error) throw new Error(`narrative engine: company discovery failed (${error.message})`);
-  return [...new Set(((recent ?? []) as Array<{ company_id: string | null }>)
-    .map((r) => r.company_id)
-    .filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  const ids = new Set<string>();
+  // Paged in a stable order (newest first) to the END of the window - never a silent row cap (05). If the page
+  // limit is reached the result says so, and the caller reports it.
+  for (let page = 0; page < NARRATIVE_DISCOVERY_MAX_PAGES; page++) {
+    const from = page * NARRATIVE_DISCOVERY_PAGE;
+    // cross-tenant: narrative-cron-company-discovery
+    const { data, error } = await ownedDbTable('content_opportunities')
+      .select('company_id')
+      .gte('created_at', since)
+      .not('company_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .range(from, from + NARRATIVE_DISCOVERY_PAGE - 1);
+    if (error) throw new Error(`narrative engine: company discovery failed (${error.message})`);
+    const rows = (data ?? []) as Array<{ company_id: string | null }>;
+    for (const r of rows) if (typeof r.company_id === 'string' && r.company_id.length > 0) ids.add(r.company_id);
+    if (rows.length < NARRATIVE_DISCOVERY_PAGE) return { companyIds: [...ids], truncated: false };
+  }
+  return { companyIds: [...ids], truncated: true };
 }
 
 export async function runNarrativeEngine() {
-  const companyIds = await discoverNarrativeWorkCompanies();
+  // Checked FIRST: while off, nothing is read or written (fail closed: only the exact string 'true' enables it).
+  if (process.env[NARRATIVE_ENGINE_FLAG] !== 'true') {
+    return { skipped: true as const, reason: 'narrative_engine_flag_off' };
+  }
+  const { companyIds, truncated } = await discoverNarrativeWorkCompanies();
 
   const total = { opportunities_processed: 0, narratives_created: 0, narratives_skipped: 0, companies_processed: companyIds.length, errors: [] as string[] };
+  if (truncated) {
+    total.errors.push(`company discovery hit ${NARRATIVE_DISCOVERY_MAX_PAGES * NARRATIVE_DISCOVERY_PAGE} rows; the oldest companies in the window were not reached this run`);
+  }
   if (companyIds.length === 0) return total;
 
   const preloadedGlobal = await getGlobalConfig('narrative_engine');

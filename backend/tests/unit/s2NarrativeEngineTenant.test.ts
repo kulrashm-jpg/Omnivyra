@@ -12,7 +12,7 @@ const mockSelects: Array<{ table: string; cols: string }> = [];
 const mockInserts: Array<{ table: string; rows: Row[] }> = [];
 function mockTable(table: string) {
   const tests: Array<(r: Row) => boolean> = []; let cap = Infinity; let op = 'select'; let payload: Row[] = [];
-  let orderBy: [string, boolean] | null = null;
+  let orderBy: [string, boolean] | null = null; let range: [number, number] | null = null;
   const b: any = {
     select: (cols?: string) => { mockSelects.push({ table, cols: cols ?? '*' }); return b; },
     eq: (c: string, v: unknown) => { tests.push((r) => r[c] === v); return b; },
@@ -21,6 +21,7 @@ function mockTable(table: string) {
     not: (c: string, _o: string, v: unknown) => { tests.push((r) => (r[c] ?? null) !== v); return b; },
     order: (c: string, o?: { ascending?: boolean }) => { orderBy = [c, o?.ascending !== false]; return b; },
     limit: (n: number) => { cap = n; return b; },
+    range: (from: number, to: number) => { range = [from, to]; return b; },
     insert: (p: Row | Row[]) => { op = 'insert'; payload = Array.isArray(p) ? p : [p]; return b; },
     then: (ok: any, ko: any) => {
       if (op === 'insert') {
@@ -30,7 +31,9 @@ function mockTable(table: string) {
       }
       let hit = (mockDb[table] ?? []).filter((r) => tests.every((t) => t(r)));
       if (orderBy) { const [k, asc] = orderBy; hit = [...hit].sort((x, y) => (asc ? 1 : -1) * String(x[k]).localeCompare(String(y[k]))); }
-      return Promise.resolve({ data: hit.slice(0, cap), error: null }).then(ok, ko);
+      // PostgREST: at most max-rows (1000) unless a range is requested.
+      const out = range ? hit.slice(range[0], range[1] + 1) : hit.slice(0, Math.min(cap, 1000));
+      return Promise.resolve({ data: out, error: null }).then(ok, ko);
     },
   };
   return b;
@@ -65,7 +68,7 @@ jest.mock('../../queue/jobQueue', () => ({ jobQueue: { add: jest.fn(), addBulk: 
 jest.mock('../../queue/leadQueueObservability', () => ({ recordLeadQueueEnqueue: jest.fn() }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
-const { runNarrativeEngine, discoverNarrativeWorkCompanies } = require('../../scheduler/schedulerIntelligenceJobs');
+const { runNarrativeEngine, discoverNarrativeWorkCompanies, NARRATIVE_ENGINE_FLAG } = require('../../scheduler/schedulerIntelligenceJobs');
 /* eslint-enable @typescript-eslint/no-var-requires */
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -75,6 +78,7 @@ const old = new Date(Date.now() - 30 * 86400_000).toISOString();
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
   mockSelects.length = 0; mockInserts.length = 0;
+  process.env[NARRATIVE_ENGINE_FLAG] = 'true';
   mockDb.content_opportunities = [
     { id: 'opp-a', company_id: A, created_at: recent, opportunity_title: 'A topic', opportunity_description: 'A secret plan', opportunity_type: 't' },
     { id: 'opp-b', company_id: B, created_at: recent, opportunity_title: 'B topic', opportunity_description: 'B secret plan', opportunity_type: 't' },
@@ -83,8 +87,32 @@ beforeEach(() => {
   mockDb.campaign_narratives = [];
 });
 
+afterAll(() => { delete process.env[NARRATIVE_ENGINE_FLAG]; });
+
+it('OFF unless the flag is exactly "true": reads and writes nothing (the activity gate is not the switch)', async () => {
+  for (const v of [undefined, '', 'false', 'TRUE', '1', 'yes']) {
+    if (v === undefined) delete process.env[NARRATIVE_ENGINE_FLAG]; else process.env[NARRATIVE_ENGINE_FLAG] = v;
+    mockSelects.length = 0;
+    // runNarrativeEngine is called directly here - i.e. as if the cron's activity gate were OPEN.
+    expect([v, await runNarrativeEngine()]).toEqual([v, { skipped: true, reason: 'narrative_engine_flag_off' }]);
+    expect(mockSelects).toEqual([]);
+  }
+  expect(mockInserts).toEqual([]);
+});
+
+it('discovery pages to the end of the window - a company past the first 1000 rows is still found', async () => {
+  const newer = new Date(Date.now() - 1 * 86400_000).toISOString();
+  mockDb.content_opportunities = [
+    ...Array.from({ length: 1000 }, (_, i) => ({ id: `opp-a${i}`, company_id: A, created_at: newer })),
+    { id: 'opp-b', company_id: B, created_at: recent },
+  ];
+  const r = await discoverNarrativeWorkCompanies();
+  expect(r.truncated).toBe(false);
+  expect(r.companyIds.sort()).toEqual([A, B].sort());
+});
+
 it('discovery reads company_id only, and only companies with recent work', async () => {
-  const ids = await discoverNarrativeWorkCompanies();
+  const { companyIds: ids } = await discoverNarrativeWorkCompanies();
   expect(ids.sort()).toEqual([A, B].sort());
   const discovery = mockSelects.filter((s) => s.table === 'content_opportunities');
   expect(discovery.map((s) => s.cols)).toEqual(['company_id']);
