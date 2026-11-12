@@ -200,10 +200,16 @@ export async function measureOutcomeScore(campaignId: string, companyId: string)
     snapshot_at:         new Date().toISOString(),
   };
 
-  // Persist — upsert on campaign_id
-  void ownedDbTable('campaign_outcomes').upsert({
+  // Persist — upsert on campaign_id. AWAITED and checked: this used to be `void`, which throws
+  // the lazy PostgREST builder away so the request was never sent, and getOutcomeSnapshot /
+  // getCompanyOutcomeStats read an always-empty table. Readers rely on this row, so a failed
+  // write is an error, not a silent gap.
+  const { error: persistError } = await ownedDbTable('campaign_outcomes').upsert({
     ...snapshot,
   }, { onConflict: 'campaign_id' });
+  if (persistError) {
+    throw new Error(`campaign_outcomes upsert failed for campaign ${campaignId}: ${persistError.message}`);
+  }
 
   return snapshot;
 }

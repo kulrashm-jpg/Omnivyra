@@ -177,7 +177,8 @@ function tryParseJson<T>(v: unknown): T | null {
 // Cache helpers
 // ---------------------------------------------------------------------------
 
-async function getCachedMaster(
+/** Exported for its test (voidWritesIssued); the job processor is its only production caller. */
+export async function getCachedMaster(
   companyId: string | null,
   topic: string
 ): Promise<string | null> {
@@ -185,17 +186,27 @@ async function getCachedMaster(
   try {
     const hash = buildTopicHash(topic, companyId);
     const { data } = await ownedDbTable('master_content_cache')
-      .select('master_content, expires_at')
+      .select('master_content, expires_at, hit_count')
       .eq('company_id', companyId)
       .eq('topic_hash', hash)
       .maybeSingle();
     if (!data) return null;
     if (data.expires_at && new Date(data.expires_at) < new Date()) return null;
-    // Increment hit count (fire-and-forget)
-    void ownedDbTable('master_content_cache')
-      .update({ hit_count: (data as any).hit_count + 1 })
-      .eq('company_id', companyId)
-      .eq('topic_hash', hash);
+    // best-effort: a usage counter; the cache hit is served whatever happens here. AWAITED: this
+    // used to be `void`, which discards the lazy builder, so the counter never moved; and
+    // hit_count was not selected, so `undefined + 1` would have written NaN. Its own try/catch,
+    // so a counter failure can never turn a HIT into a miss (a miss regenerates and costs credits).
+    // Read-modify-write: concurrent hits can under-count, acceptable for a usage counter.
+    try {
+      const current = Number((data as { hit_count?: unknown }).hit_count);
+      const { error } = await ownedDbTable('master_content_cache')
+        .update({ hit_count: (Number.isFinite(current) ? current : 0) + 1 })
+        .eq('company_id', companyId)
+        .eq('topic_hash', hash);
+      if (error) console.error('[boltContent] master_content_cache hit_count update failed', { companyId, message: error.message });
+    } catch (err) {
+      console.error('[boltContent] master_content_cache hit_count update threw', { companyId, message: err instanceof Error ? err.message : String(err) });
+    }
     return data.master_content ?? null;
   } catch {
     return null;

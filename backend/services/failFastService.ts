@@ -81,17 +81,25 @@ async function logFailFast(
   campaignId: string,
   decision: ContentTypeDecision,
 ): Promise<void> {
-  void ownedDbTable('fail_fast_log').insert({
-    company_id:           companyId,
-    campaign_id:          campaignId,
-    content_type:         decision.content_type,
-    platform:             decision.platform,
-    stopped_reason:       decision.reason,
-    engagement_rate:      decision.engagement_rate,
-    credits_reallocated:  decision.credits_reallocated,
-    reallocated_to:       decision.reallocated_to,
-    stopped_at:           new Date().toISOString(),
-  });
+  // best-effort: an audit trail of the fail-fast decision; the decision itself is already made
+  // and returned. AWAITED: this used to be `void`, which discards the lazy builder, so no row
+  // was ever written. A failed insert is logged, never thrown.
+  try {
+    const { error } = await ownedDbTable('fail_fast_log').insert({
+      company_id:           companyId,
+      campaign_id:          campaignId,
+      content_type:         decision.content_type,
+      platform:             decision.platform,
+      stopped_reason:       decision.reason,
+      engagement_rate:      decision.engagement_rate,
+      credits_reallocated:  decision.credits_reallocated,
+      reallocated_to:       decision.reallocated_to,
+      stopped_at:           new Date().toISOString(),
+    });
+    if (error) console.error('[failFast] fail_fast_log insert failed', { companyId, campaignId, message: error.message });
+  } catch (err) {
+    console.error('[failFast] fail_fast_log insert threw', { companyId, campaignId, message: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

@@ -152,9 +152,17 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
     creditsSavedEstimate += predictionCost * 2;
   }
 
-  void ownedDbTable('credit_efficiency_scores')
-    .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
-    .eq('organization_id', companyId);
+  // best-effort: a displayed estimate (credits_saved_total), not the tier or discount, which
+  // upsertEfficiencyTier wrote above, awaited. AWAITED: this used to be `void`, which discards
+  // the lazy builder, so the estimate stayed at the 0 the tier upsert writes. Logged, never thrown.
+  try {
+    const { error } = await ownedDbTable('credit_efficiency_scores')
+      .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
+      .eq('organization_id', companyId);
+    if (error) console.error('[creditEfficiency] credits_saved_total update failed', { companyId, message: error.message });
+  } catch (err) {
+    console.error('[creditEfficiency] credits_saved_total update threw', { companyId, message: err instanceof Error ? err.message : String(err) });
+  }
 
   return {
     company_id: companyId,
