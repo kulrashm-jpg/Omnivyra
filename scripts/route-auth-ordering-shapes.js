@@ -50,6 +50,29 @@ function chainOf(expr) {
   return { names, root };
 }
 
+/**
+ * Names bound to a tenant-seam handle in this module (05: `const h = await tenantChildTableOf(...); await h.delete()`
+ * must still be a write). Single level, module-wide (name-based, like R10's trace): a handle bound in one function
+ * makes the same name a table root everywhere in the module - a possible false positive, never a miss.
+ */
+function seamHandleNames(sf, imports) {
+  const out = new Set();
+  const visit = (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      let e = unwrap(n.initializer);
+      while (e && ts.isAwaitExpression(e)) e = unwrap(e.expression);
+      if (e && ts.isCallExpression(e)) {
+        const c = unwrap(e.expression);
+        const imp = ts.isIdentifier(c) ? imports.get(c.text) : null;
+        if (imp && SEAM_TABLE_FACTORIES.has(imp.imported) && SEAM_MODULE.test(imp.spec.replace(/\.(?:ts|js)$/, ''))) out.add(n.name.text);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 /** Side-effect category of a single call (not following functions), or null. */
 function sinkOf(call, m) {
   const c = unwrap(call.expression);
@@ -65,7 +88,8 @@ function sinkOf(call, m) {
   if (!ts.isPropertyAccessExpression(c)) return null;
   const name = c.name.text;
   const { names, root } = chainOf(c.expression);
-  const tableRoot = names.has('from') || names.has('ownedDbTable') || names.has('dbTable') || [...SEAM_TABLE_FACTORIES].some((f) => names.has(f));
+  const tableRoot = names.has('from') || names.has('ownedDbTable') || names.has('dbTable') || [...SEAM_TABLE_FACTORIES].some((f) => names.has(f))
+    || Boolean(root && m.seamHandles && m.seamHandles.has(root));
   if (names.has('storage') && STORAGE_METHODS.has(name)) return { kind: 'storage', detail: `storage.${name}()` };
   if (WRITE_METHODS.has(name) && tableRoot && !names.has('storage')) return { kind: 'db-write', detail: `.${name}()` };
   if (name === 'rpc' && root) return { kind: 'db-rpc', detail: `.rpc(${call.arguments[0] && ts.isStringLiteral(call.arguments[0]) ? call.arguments[0].text : '…'})` };
@@ -174,7 +198,7 @@ function invokesParam(fn, i) {
   return direct(fn.body.statements);
 }
 
-module.exports = { SEAM_TABLE_FACTORIES, SEAM_MODULE,
+module.exports = { SEAM_TABLE_FACTORIES, SEAM_MODULE, seamHandleNames,
   CALLER_PRINCIPAL, isFnLike, unwrap, calleeName, chainOf, sinkOf, operands,
   isMethodExpr, methodTest, underMethods, requestDerived, enclosingFn, optionalBinding, invokesParam,
 };
