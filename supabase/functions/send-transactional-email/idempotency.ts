@@ -9,10 +9,13 @@
  *   (INSERT ... ON CONFLICT DO NOTHING). Only the call that inserted it sends. Every other call is a duplicate:
  *     - 'sent'      -> answered as a duplicate success, nothing sent;
  *     - 'sending'   -> another call is sending right now: refused, retryable later;
- *     - 'uncertain' -> the provider may have it: NEVER resent (CMS / D3 verdict);
+ *     - 'uncertain' -> the provider may have it: never AUTO-resent within its window (CMS / D3 verdict);
  *     - a 'sending' reservation older than the stale bound (a crash mid-send) becomes 'uncertain' - never
  *       auto-resent, and reported as an alert-ready event for ops.
- *   An expired 'sent' key may be taken over (its window is over); an 'uncertain' one never.
+ *   An expired 'sent' key may be taken over (its window is over). An 'uncertain' key has the LONGER window
+ *   max(type TTL, 7 days) from when it became uncertain (e9 ruling, 05 review): within it, never resent; after it,
+ *   taken over like a sent one. The alert says when the key frees; an operator may resolve it sooner
+ *   (transactional_email_resolve_uncertain, see docs/TRANSACTIONAL-EMAIL-IDEMPOTENCY-RUNBOOK.md).
  *   AFTER the send: success -> 'sent' + message id; a DEFINITE failure (nothing can have reached the provider)
  *   -> the reservation is DELETED, so a retry sends; an UNCERTAIN failure -> 'uncertain'.
  *
@@ -26,10 +29,12 @@ export type ReserveOutcome = 'reserved' | 'duplicate_sent' | 'duplicate_inflight
 
 /** The database side, one RPC each (see the migration). Every method throws on a database error. */
 export interface IdempotencyStore {
-  reserve(input: { key: string; emailType: string; recipientSha256: string; ttlSeconds: number; staleSeconds: number }): Promise<{ outcome: ReserveOutcome; messageId: string | null }>;
+  /** `freesAt`: for an uncertain outcome, when its window closes (ISO), else null. */
+  reserve(input: { key: string; emailType: string; recipientSha256: string; ttlSeconds: number; staleSeconds: number }): Promise<{ outcome: ReserveOutcome; messageId: string | null; freesAt: string | null }>;
   confirm(input: { key: string; messageId: string | null }): Promise<void>;
   release(input: { key: string }): Promise<void>;
-  markUncertain(input: { key: string; reason: string }): Promise<void>;
+  /** Returns when the key frees (ISO), or null when no 'sending' row moved. */
+  markUncertain(input: { key: string; reason: string }): Promise<string | null>;
 }
 
 export type SendOnceResult =
@@ -125,7 +130,7 @@ export async function sendOnce(input: {
   const { ttlSeconds, known } = ttlSecondsFor(input.emailType, key);
   if (!known) log('TRANSACTIONAL_EMAIL_TTL_DEFAULTED', { emailType: input.emailType, ttlSeconds });
 
-  let reserved: { outcome: ReserveOutcome; messageId: string | null };
+  let reserved: { outcome: ReserveOutcome; messageId: string | null; freesAt: string | null };
   try {
     reserved = await input.store.reserve({
       key, emailType: input.emailType, recipientSha256: await recipientSha256(input.recipient), ttlSeconds, staleSeconds: STALE_SENDING_SECONDS,
@@ -142,7 +147,7 @@ export async function sendOnce(input: {
     case 'duplicate_inflight':
       return { status: 409, body: { ok: false, error: 'IDEMPOTENCY_IN_FLIGHT', duplicate: true, retryable: true } };
     case 'stale_marked_uncertain':
-      log('TRANSACTIONAL_EMAIL_UNCERTAIN', { emailType: input.emailType, reason: 'stale_sending_reservation', key });
+      log('TRANSACTIONAL_EMAIL_UNCERTAIN', { emailType: input.emailType, reason: 'stale_sending_reservation', key, freesAt: reserved.freesAt });
       return { status: 409, body: { ok: false, error: 'IDEMPOTENCY_UNCERTAIN', duplicate: true, retryable: false } };
     case 'duplicate_uncertain':
       return { status: 409, body: { ok: false, error: 'IDEMPOTENCY_UNCERTAIN', duplicate: true, retryable: false } };
@@ -163,12 +168,13 @@ export async function sendOnce(input: {
       }
       return { status: 500, body: { ok: false, error: asMessage(err), retryable: true } };
     }
+    let freesAt: string | null = null;
     try {
-      await input.store.markUncertain({ key, reason: asMessage(err).slice(0, 500) });
+      freesAt = await input.store.markUncertain({ key, reason: asMessage(err).slice(0, 500) });
     } catch (markErr) {
       log('TRANSACTIONAL_EMAIL_MARK_UNCERTAIN_FAILED', { emailType: input.emailType, key, error: asMessage(markErr) });
     }
-    log('TRANSACTIONAL_EMAIL_UNCERTAIN', { emailType: input.emailType, reason: 'send_outcome_unknown', key });
+    log('TRANSACTIONAL_EMAIL_UNCERTAIN', { emailType: input.emailType, reason: 'send_outcome_unknown', key, freesAt });
     return { status: 502, body: { ok: false, error: asMessage(err), uncertain: true, retryable: false } };
   }
 

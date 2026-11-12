@@ -18,10 +18,10 @@ function fetchReturning(status: number, body: unknown) {
 }
 
 it('reserve: POSTs the RPC with the secret key and p_* arguments; reads the set-returning answer', async () => {
-  const f = fetchReturning(200, [{ outcome: 'duplicate_sent', message_id: 'mid-1' }]);
+  const f = fetchReturning(200, [{ outcome: 'duplicate_sent', message_id: 'mid-1', frees_at: null }]);
   const store = rpcStore({ url: 'https://proj.supabase.co/', key: KEY, fetchImpl: f.impl });
   expect(await store.reserve({ key: 'k', emailType: 'team_invite', recipientSha256: 'h', ttlSeconds: 3600, staleSeconds: 900 }))
-    .toEqual({ outcome: 'duplicate_sent', messageId: 'mid-1' });
+    .toEqual({ outcome: 'duplicate_sent', messageId: 'mid-1', freesAt: null });
   expect(f.calls[0].url).toBe('https://proj.supabase.co/rest/v1/rpc/transactional_email_reserve');
   expect(f.calls[0].init.method).toBe('POST');
   expect(f.calls[0].init.headers).toEqual(expect.objectContaining({ apikey: KEY, Authorization: `Bearer ${KEY}` }));
@@ -67,4 +67,14 @@ it('a hung call is ABORTED at the timeout and throws (never holds the send open)
 it('no URL or no key: refused at construction (the handler turns that into 503, nothing sent)', () => {
   expect(() => rpcStore({ url: '', key: KEY })).toThrow(/NOT_CONFIGURED/);
   expect(() => rpcStore({ url: 'https://p', key: '' })).toThrow(/NOT_CONFIGURED/);
+});
+
+it('an uncertain answer carries when the key frees: reserve frees_at and markUncertain\'s return value', async () => {
+  const at = '2026-11-20T10:00:00.123456+00:00';
+  const r = rpcStore({ url: 'https://p', key: KEY, fetchImpl: fetchReturning(200, [{ outcome: 'duplicate_uncertain', message_id: null, frees_at: at }]).impl });
+  expect((await r.reserve({ key: 'k', emailType: 't', recipientSha256: 'h', ttlSeconds: 3600, staleSeconds: 900 })).freesAt).toBe(at);
+  const m = rpcStore({ url: 'https://p', key: KEY, fetchImpl: fetchReturning(200, at).impl });
+  expect(await m.markUncertain({ key: 'k', reason: 'x' })).toBe(at);
+  const none = rpcStore({ url: 'https://p', key: KEY, fetchImpl: fetchReturning(200, null).impl });
+  expect(await none.markUncertain({ key: 'k', reason: 'x' })).toBeNull();
 });
