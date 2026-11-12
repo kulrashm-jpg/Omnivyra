@@ -402,6 +402,15 @@ export async function runSourceRecommendation(
     }
   } else {
     const newCampaignId = crypto.randomUUID();
+    // TENANT: a campaign is never created company-less (this was `companyId ?? null`). Refused
+    // before anything is written.
+    if (typeof companyId !== 'string' || !companyId.trim()) {
+      throw new BoltError(
+        BOLT_ERROR_CODES.STRATEGY_MISSING_COMPANY_ID,
+        'STRATEGY_MISSING_COMPANY_ID: a campaign cannot be created without its company',
+        { details: { campaign_id: null } },
+      );
+    }
     const tentativeStart = executionConfig.tentative_start as string | undefined;
     const startDate = tentativeStart ? (tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`) : null;
     const { error: campaignError } = await ownedDbTable('campaigns').insert({
@@ -409,7 +418,7 @@ export async function runSourceRecommendation(
       name: title || 'Campaign from themes',
       description: description ?? null,
       user_id: safeUserId,
-      company_id: companyId ?? null,
+      company_id: companyId,
       status: 'planning',
       current_stage: 'planning',
       start_date: startDate,

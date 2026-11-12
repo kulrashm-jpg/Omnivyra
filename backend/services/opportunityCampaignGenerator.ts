@@ -142,6 +142,9 @@ export async function generateCampaignFromOpportunity(
     status: 'draft',
     current_stage: 'planning',
     user_id: userId,
+    // TENANT: owned by the company the route authorized (create-from-opportunity: enforceCompanyAccess),
+    // never left NULL (companyId was used only for the duplicate check).
+    company_id: companyId,
     created_at: now,
     updated_at: now,
     duration_weeks: null,

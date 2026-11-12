@@ -88,6 +88,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (!campaign) {
+      // TENANT: a new campaign is owned by an AUTHORIZED company, never created company-less. The
+      // tenant guard's doctrine is "no active_company_id inference", so the caller must name the
+      // company (the shipped caller does); without it nothing is written.
+      if (!authorizedCompanyId) {
+        return res.status(400).json({
+          code: 'COMPANY_REQUIRED',
+          error: 'companyId is required to create a campaign. Nothing was created.',
+        });
+      }
       console.log('Campaign does not exist, creating new one');
       // Create the campaign with the provided campaignId
       const summary = (aiContent || JSON.stringify(structuredPlan?.weeks || []).slice(0, 200)) + '...';
@@ -103,6 +112,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           start_date: startDate,
           ai_generated_summary: aiContent || summary,
           user_id: user.id,
+          company_id: authorizedCompanyId,
           thread_id: 'thread_' + Date.now(),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()

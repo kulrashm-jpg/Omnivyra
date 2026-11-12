@@ -195,6 +195,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const finalCompanyName = emailDomain ? emailDomain.split('.')[0] : 'Company';
 
     let companyId: string | null = null;
+    let createdHere = false;
 
     const { data: existingCompanies } = await supabase
       .from('companies')
@@ -203,7 +204,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .limit(1);
 
     if (existingCompanies && existingCompanies.length > 0) {
-      companyId = existingCompanies[0].id;
+      // SECURITY (e1, 2026-11-12): a NAME match is not authorization. Previously any verified signup
+      // whose domain label matched an existing company's name (x@acme.io -> 'acme') was bound to it,
+      // and - if that company had no initial credit claim - inserted as its COMPANY_ADMIN (step 6).
+      // Now a pre-existing company is reachable ONLY by a user who already holds an active or invited
+      // membership in it; anyone else must be invited. Decided BEFORE any write that binds the user
+      // to the company (free_credit_profiles, roles, credits, active_company_id).
+      const matchedCompanyId: string = existingCompanies[0].id;
+      const { data: priorMembership } = await supabase
+        .from('user_company_roles')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('company_id', matchedCompanyId)
+        .in('status', ['active', 'invited'])
+        .limit(1)
+        .maybeSingle();
+      if (!priorMembership) {
+        return res.status(403).json({
+          code:  'INVITE_REQUIRED',
+          error: 'This company is already registered. Ask your company admin to invite you.',
+        });
+      }
+      companyId = matchedCompanyId;
     } else {
       const website = emailDomain ? `https://${emailDomain}` : 'https://example.com';
       const { data: newCompany, error: createError } = await supabase
@@ -223,6 +245,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Could not create company' });
       }
       companyId = newCompany.id;
+      createdHere = true;
 
       await supabase.from('company_profiles').upsert({
         company_id:  companyId,
@@ -279,16 +302,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // ── 6. Ensure company role — first registrant gets COMPANY_ADMIN ─────────
-    const { data: existingMembership } = await supabase
-      .from('user_company_roles')
-      .select('id, role')
-      .eq('user_id', userId)
-      .eq('company_id', companyId)
-      .maybeSingle();
-
-    if (!existingMembership) {
-      await supabase.from('user_company_roles').insert({
+    // ── 6. Company role — COMPANY_ADMIN only for the company THIS request created ──
+    // Stated by construction (createdHere), never inferred from the absence of a membership row:
+    // a read over two rows for the same (user, company) - allowed by the partial unique index -
+    // errors with data null, which previously read as "no membership" and promoted an invited
+    // user of a pre-existing company (05 review). A failed insert is refused, not ignored.
+    if (createdHere) {
+      const { error: roleErr } = await supabase.from('user_company_roles').insert({
         user_id:    userId,
         company_id: companyId,
         role:       'COMPANY_ADMIN',
@@ -296,6 +316,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
+      if (roleErr) {
+        console.error('[onboarding/complete] founder role insert failed:', roleErr.message);
+        return res.status(500).json({ error: 'Could not finish setting up your company. Please try again.' });
+      }
     }
 
     // ── 7. Grant initial free credits via the single shared service ─────────
