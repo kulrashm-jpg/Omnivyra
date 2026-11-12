@@ -23,6 +23,22 @@
 import { seed, invoke, CO_A, CO_B, USER_A, USER_SUPER } from '../helpers/routeAuthHarness';
 import { as, roleRows, USER_PUBLISHER, USER_CREATOR } from '../helpers/sec91W2AHarness';
 
+// Owner principle 2026-11-12 (b901a15f5 / bc88d9d9e): a Super Admin WRITE into
+// a company where the AUTHENTICATED actor holds no active role needs a step-up.
+// The REAL superAdminCrossTenantStepUp helper runs here (it decides membership
+// itself); only the step-up CHECK is faked - a cross-tenant write passes only
+// when the case sets mockStepUpOk. (The step-up mechanism itself is proven in
+// superAdminCrossTenantStepUp.test.ts / closure015dGlobalRouteStepUp.)
+let mockStepUpOk = false;
+jest.mock('../../security/requireStepUp', () => ({
+  ...jest.requireActual('../../security/requireStepUp'),
+  requireStepUp: async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }) => {
+    if (mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
 jest.mock('../../db/supabaseClient', () => require('../helpers/routeAuthHarness').supabaseModule());
 jest.mock('../../db/writeOwner', () => require('../helpers/routeAuthHarness').writeOwnerModule());
@@ -114,7 +130,14 @@ describe('POST /api/enterprise-governance/approvals/decide', () => {
     expect(mockOnApprovalDecision.mock.calls[0][0].actorUserId).toBe(USER_A);
   });
 
-  it('super admin approving for a company it is not a member of acts as executive_reviewer', async () => {
+  it('super admin deciding for a company it is not a member of WITHOUT step-up is REFUSED → 401, no decision recorded', async () => {
+    const r = await decideAs('SUPER', CO_B, { assetId: ASSET_B, decision: 'reject' });
+    expect(r.status).toBe(401);
+    expect(mockOnApprovalDecision).not.toHaveBeenCalled();
+  });
+
+  it('super admin WITH step-up deciding for a company it is not a member of acts as executive_reviewer', async () => {
+    mockStepUpOk = true;
     const r = await decideAs('SUPER', CO_B, { assetId: ASSET_B, decision: 'reject' });
     expect(r.status).toBe(200);
     expect(mockOnApprovalDecision.mock.calls[0][0]).toMatchObject({ to: 'rejected', actorRole: 'executive_reviewer', actorUserId: USER_SUPER });

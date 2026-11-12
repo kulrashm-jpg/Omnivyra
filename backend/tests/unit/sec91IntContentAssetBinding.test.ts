@@ -19,6 +19,22 @@ import { seed, invoke, writeCalls, CO_A, CO_B, CAMPAIGN_A, CAMPAIGN_B } from '..
 import { roleRows } from '../helpers/sec91W2AHarness';
 import { as, w2gRoleRows, type W2GPrincipal } from '../helpers/sec91W2GHarness';
 
+// Owner principle 2026-11-12 (b901a15f5 / bc88d9d9e): a Super Admin WRITE into
+// a company where the AUTHENTICATED actor holds no active role needs a step-up.
+// The REAL superAdminCrossTenantStepUp helper runs here (it decides membership
+// itself); only the step-up CHECK is faked - a cross-tenant write passes only
+// when the case sets mockStepUpOk. (The step-up mechanism itself is proven in
+// superAdminCrossTenantStepUp.test.ts / closure015dGlobalRouteStepUp.)
+let mockStepUpOk = false;
+jest.mock('../../security/requireStepUp', () => ({
+  ...jest.requireActual('../../security/requireStepUp'),
+  requireStepUp: async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }) => {
+    if (mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
 jest.mock('../../db/supabaseClient', () => require('../helpers/routeAuthHarness').supabaseModule());
 jest.mock('../../db/writeOwner', () => require('../helpers/routeAuthHarness').writeOwnerModule());
@@ -103,7 +119,8 @@ describe('SEC91-W2G-N1 — content approve/reject bind the asset to the authoriz
     expect(sink()).not.toHaveBeenCalled();
   });
 
-  it('LEGITIMATE: the asset under its own company is approved; the approver is the principal, never the body', async () => {
+  it('LEGITIMATE: the asset under its own company is approved (Super Admin cross-tenant WITH step-up); the approver is the principal, never the body', async () => {
+    mockStepUpOk = true;
     const r = await post(approve, 'SUPER', { companyId: CO_B, assetId: ASSET_B, approver: 'someone-else' });
     expect(r.status).toBe(200);
     expect(mockApprove).toHaveBeenCalledTimes(1);
@@ -111,6 +128,12 @@ describe('SEC91-W2G-N1 — content approve/reject bind the asset to the authoriz
     expect(arg.assetId).toBe(ASSET_B);
     expect(arg.approver).not.toBe('someone-else');
     expect(arg.approver).toBe('user-s-00-0000-0000-00000000000s');
+  });
+
+  it('Super Admin WITHOUT step-up cannot approve an asset in a company it is not a member of → 401, nothing approved', async () => {
+    const r = await post(approve, 'SUPER', { companyId: CO_B, assetId: ASSET_B });
+    expect(r.status).toBe(401);
+    expect(mockApprove).not.toHaveBeenCalled();
   });
 
   it('LEGITIMATE: the asset under its own company is rejected', async () => {

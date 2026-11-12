@@ -22,6 +22,22 @@ import crypto from 'crypto';
 import { seed, invoke, rows, writeCalls, CO_A, CO_B } from '../helpers/routeAuthHarness';
 import { bearer } from '../helpers/sec91AHarness';
 
+// Owner principle 2026-11-12 (b901a15f5 / bc88d9d9e): a Super Admin WRITE into
+// a company where the AUTHENTICATED actor holds no active role needs a step-up.
+// The REAL superAdminCrossTenantStepUp helper runs here (it decides membership
+// itself); only the step-up CHECK is faked - a cross-tenant write passes only
+// when the case sets mockStepUpOk. (The step-up mechanism itself is proven in
+// superAdminCrossTenantStepUp.test.ts / closure015dGlobalRouteStepUp.)
+let mockStepUpOk = false;
+jest.mock('../../security/requireStepUp', () => ({
+  ...jest.requireActual('../../security/requireStepUp'),
+  requireStepUp: async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }) => {
+    if (mockStepUpOk) return true;
+    res.status(401).json({ error: 'Step-up authentication required', code: 'STEP_UP_REQUIRED' });
+    return false;
+  },
+}));
+beforeEach(() => { mockStepUpOk = false; });
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
 jest.mock('../../db/supabaseClient', () => require('../helpers/routeAuthHarness').supabaseModule());
 jest.mock('../../db/writeOwner', () => require('../helpers/routeAuthHarness').writeOwnerModule());
@@ -93,10 +109,17 @@ describe('POST /api/wordpress-plugin/revoke — user (dashboard) path', () => {
     expect(reg(REG_B).status).toBe('connected');
   });
 
-  it('platform super admin (override) revokes B\'s registration under company B → 200', async () => {
+  it('platform super admin (override) WITH step-up revokes B\'s registration under company B → 200', async () => {
+    mockStepUpOk = true;
     const r = await invoke(revoke, { method: 'POST', body: { company_id: CO_B, registration_id: REG_B }, headers: bearer('SUPER') });
     expect(r.status).toBe(200);
     expect(reg(REG_B).status).toBe('revoked');
+  });
+
+  it('platform super admin WITHOUT step-up cannot revoke B\'s registration (cross-tenant write) → 401, nothing revoked', async () => {
+    const r = await invoke(revoke, { method: 'POST', body: { company_id: CO_B, registration_id: REG_B }, headers: bearer('SUPER') });
+    expect(r.status).toBe(401);
+    expect(reg(REG_B).status).toBe('connected');
   });
 });
 
