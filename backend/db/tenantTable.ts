@@ -174,14 +174,63 @@ export function tenantOrPlatformTable(table: TenantTableName, ctx: TenantContext
  * payload naming another parent. Unknown / foreign / unreadable parent → TENANT_MISMATCH (fail closed: a read
  * error is never "no parent, so no check").
  */
+type ChildSpec = { via: string; parent: string; parentKey?: string };
+const childSpec = (t: string): ChildSpec | undefined => (TENANT_CHILD_TABLES as Record<string, ChildSpec | undefined>)[t];
+/** Deepest parent chain the seam will walk (e.g. platform_override -> attachment -> core_asset is 2). */
+const MAX_HOPS = 4;
+/** A non-unique parent key may match several parent rows; more than this is refused (fail closed, never truncated). */
+const MAX_PARENT_ROWS = 50;
+
+/**
+ * Proves that the parent row(s) identified by `key = value` in `parentTable` belong to the tenant.
+ *  - direct parent keyed by 'id' (unique): one read UNDER the tenant (unchanged S1 behaviour).
+ *  - direct parent keyed by a NON-id column (may be non-unique, e.g. content_core_asset.content_core_id): every
+ *    row carrying that key is read and EVERY one must be this tenant's (a key shared with another tenant, or a NULL
+ *    tenant, is refused: the child filter `.eq(via, value)` cannot tell whose parent a child hangs off).
+ *  - CHILD parent (multi-hop, e.g. content_asset_versions -> content_assets -> campaigns): the parent rows' own link
+ *    values are read and each is verified recursively against ITS parent, up to MAX_HOPS.
+ * Missing, unreadable, over-wide or NULL-linked parents all throw TENANT_MISMATCH (fail closed).
+ */
+async function verifyParent(child: string, c: TenantContext, parentTable: string, key: string, value: string, hop: number): Promise<void> {
+  if (hop > MAX_HOPS) throw new TenantSeamError('TENANT_MISMATCH', `${child}: parent chain deeper than ${MAX_HOPS}`);
+  const unreadable = (e: unknown) => new TenantSeamError('TENANT_MISMATCH', `${child}: parent ${parentTable} unreadable (${(e as { code?: string }).code ?? 'error'})`);
+  const absent = () => new TenantSeamError('TENANT_MISMATCH', `${child}: parent ${parentTable} is not in this tenant`);
+  const parentSpec = childSpec(parentTable);
+  if (!parentSpec) {
+    if (!(parentTable in TENANT_TABLES)) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${child}: parent ${parentTable} is not a registered tenant table`);
+    if (key === 'id') {
+      const { data, error } = await tenantTable(parentTable as TenantTableName, c).select('id').eq('id', value).maybeSingle();
+      if (error) throw unreadable(error);
+      if (!data) throw absent();
+      return;
+    }
+    const column = columnOf(parentTable as TenantTableName);
+    const { data, error } = await (ownedDbTable(parentTable as TenantTableName) as any).select(column).eq(key, value).limit(MAX_PARENT_ROWS + 1);
+    if (error) throw unreadable(error);
+    const rows = (data ?? []) as Row[];
+    if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) throw absent();
+    if (!rows.every((r) => typeof r[column] === 'string' && String(r[column]).toLowerCase() === c.companyId)) throw absent();
+    return;
+  }
+  const { data, error } = await (ownedDbTable(parentTable as TenantTableName) as any).select(parentSpec.via).eq(key, value).limit(MAX_PARENT_ROWS + 1);
+  if (error) throw unreadable(error);
+  const rows = (data ?? []) as Row[];
+  if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) throw absent();
+  const links = new Set<string>();
+  for (const r of rows) {
+    const v = r[parentSpec.via];
+    if (v === null || v === undefined || String(v).length === 0) throw absent();
+    links.add(String(v));
+  }
+  for (const v of links) await verifyParent(child, c, parentSpec.parent, parentSpec.parentKey ?? 'id', v, hop + 1);
+}
+
 export async function tenantChildTable(table: TenantChildTableName, ctx: TenantContext, parentId: string) {
   const c = requireCtx(ctx);
-  const spec = (TENANT_CHILD_TABLES as Record<string, { via: string; parent: TenantTableName } | undefined>)[table];
+  const spec = childSpec(table);
   if (!spec) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is not a registered child tenant table`);
   if (typeof parentId !== 'string' || parentId.length === 0) throw new TenantSeamError('TENANT_MISMATCH', `${table}: no parent id`);
-  const { data, error } = await tenantTable(spec.parent, c).select('id').eq('id', parentId).maybeSingle();
-  if (error) throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ${spec.parent} unreadable (${(error as { code?: string }).code ?? 'error'})`);
-  if (!data) throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ${spec.parent} is not in this tenant`);
+  await verifyParent(table, c, spec.parent, spec.parentKey ?? 'id', parentId, 1);
   const via = spec.via;
   const pin = (rows: Row | Row[]): Row | Row[] => {
     const one = (r: Row): Row => {

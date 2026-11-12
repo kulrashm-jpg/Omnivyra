@@ -37,6 +37,17 @@ const VIA_OVERRIDES = {
   media_files: ['campaign_id', 'campaigns'],
   content_assets: ['campaign_id', 'campaigns'],
   company_blog_series_posts: ['series_id', 'company_blog_series'], // e1 S2: every route op is keyed by SERIES (series/[id], series/index); the series is company-scoped. Blog ownership of referenced posts stays SEC-1's check.
+  // e9 S2 interim: via the CAMPAIGN, not social_account_id (NULL for Connect-flow rows, and an account in another
+  // company is exactly the cross-company publish class). campaign_id is NULLABLE: a campaign-less row is unreachable
+  // through the seam (fail closed) until 20270217000028 denormalises scheduled_posts.company_id.
+  scheduled_posts: ['campaign_id', 'campaigns'],
+  // 55 S2 (e9 ruling): multi-hop and non-id-key parents. [via, parent, parentKey] - parentKey defaults to 'id'.
+  content_asset_versions: ['asset_id', 'content_assets', 'asset_id'],
+  content_reviews: ['asset_id', 'content_assets', 'asset_id'],
+  content_asset_attachment: ['content_core_id', 'content_core_asset', 'content_core_id'], // NON-unique key: every core row must be the tenant's
+  content_asset_platform_override: ['attachment_id', 'content_asset_attachment'],
+  creator_render_attempt: ['variant_id', 'creator_render_variant'], // not the NULLABLE billing_operation_id
+  creator_render_output: ['attempt_id', 'creator_render_attempt'], // until 20270217000027 denormalises the tenant
 };
 /**
  * GLOBAL tables: no tenant at all (platform-wide content or system state). Reads/writes stay on ownedDbTable
@@ -157,7 +168,8 @@ function build() {
   }
   for (const [t] of sorted) {
     if (direct.has(t) || NOT_TENANT.has(t)) continue;
-    if (VIA_OVERRIDES[t] && direct.has(VIA_OVERRIDES[t][1])) { via.push([t, VIA_OVERRIDES[t][0], VIA_OVERRIDES[t][1], tagOf(t)]); continue; }
+    if (VIA_OVERRIDES[t] && direct.has(VIA_OVERRIDES[t][1])) { via.push([t, VIA_OVERRIDES[t][0], VIA_OVERRIDES[t][1], tagOf(t), VIA_OVERRIDES[t][2]]); continue; }
+    if (VIA_OVERRIDES[t]) continue; // multi-hop: resolved after the first pass
     const cands = (fks.get(t) || []).filter(([, parent]) => direct.has(parent));
     if (!cands.length) continue;
     const rank = (p) => { const i = PARENT_PREFERENCE.indexOf(p); return i < 0 ? 99 : i; };
@@ -166,7 +178,18 @@ function build() {
   }
   const body = rows.map(([t, c, g]) => `  ${t}: { column: '${c}', tag: '${g}' },`).join('\n');
   const globalBody = Object.entries(GLOBAL_TABLES).sort().map(([t, why]) => `  ${t}: ${JSON.stringify(why)},`).join('\n');
-  const viaBody = via.map(([t, c, p, g]) => `  ${t}: { via: '${c}', parent: '${p}', tag: '${g}' },`).join('\n');
+  // Multi-hop overrides: a parent that is itself a child. Iterate to a fixpoint; an override whose chain never
+  // reaches a direct table stays unclassified (and --strict refuses), never silently direct.
+  for (let changed = true; changed;) {
+    changed = false;
+    const viaSet = new Set(via.map((v) => v[0]));
+    for (const [t, ov] of Object.entries(VIA_OVERRIDES)) {
+      if (direct.has(t) || viaSet.has(t) || !tables.has(t) || !viaSet.has(ov[1])) continue;
+      via.push([t, ov[0], ov[1], tagOf(t), ov[2]]); changed = true;
+    }
+  }
+  via.sort((a, b) => a[0].localeCompare(b[0]));
+  const viaBody = via.map(([t, c, p, g, k]) => `  ${t}: { via: '${c}', parent: '${p}', ${k && k !== 'id' ? `parentKey: '${k}', ` : ''}tag: '${g}' },`).join('\n');
   // 05 (S1 review): a table in NO class is invisible to the gate, so a fall-through is never silent. It is listed
   // explicitly here, and --strict refuses the build until every table is classified with a reason.
   const classified = new Set([...direct, ...via.map((v) => v[0]), ...Object.keys(GLOBAL_TABLES), ...NOT_TENANT]);
@@ -190,7 +213,7 @@ export type TenantTableName = keyof typeof TENANT_TABLES;
  */
 export const TENANT_CHILD_TABLES = {
 ${viaBody}
-} as const satisfies Record<string, { via: string; parent: TenantTableName; tag: TenantTag }>;
+} as const satisfies Record<string, { via: string; parent: TenantTableName | string; parentKey?: string; tag: TenantTag }>;
 export type TenantChildTableName = keyof typeof TENANT_CHILD_TABLES;
 /** GLOBAL tables (no tenant): platform-wide rows; the reason is the review record. */
 export const GLOBAL_TABLES: Record<string, string> = {

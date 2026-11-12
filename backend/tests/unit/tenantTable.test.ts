@@ -5,6 +5,8 @@
 const calls: Array<{ table: string; op: string; args: unknown[] }> = [];
 let parentRow: unknown = { id: 'p-1' };
 let parentError: unknown = null;
+let limitRows: Record<string, unknown[]> = {};
+let limitError: Record<string, unknown> = {};
 
 function builder(table: string): any {
   const record = (op: string) => (...args: unknown[]) => { calls.push({ table, op, args }); return b; };
@@ -12,6 +14,7 @@ function builder(table: string): any {
     get(_t, prop: string) {
       if (['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'or'].includes(prop)) return record(prop);
       if (prop === 'maybeSingle') return async () => { calls.push({ table, op: 'maybeSingle', args: [] }); return { data: parentRow, error: parentError }; };
+      if (prop === 'limit') return async (...args: unknown[]) => { calls.push({ table, op: 'limit', args }); return { data: limitRows[table] ?? [], error: limitError[table] ?? null }; };
       if (prop === 'then') return undefined;
       throw new Error(`hostile double: unexpected builder member ${String(prop)}`);
     },
@@ -31,7 +34,7 @@ const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 const ctxA = tenantContextFor({ userId: 'user-1' }, A);
 
-beforeEach(() => { calls.length = 0; rpcCalls.length = 0; parentRow = { id: 'p-1' }; parentError = null; });
+beforeEach(() => { calls.length = 0; rpcCalls.length = 0; parentRow = { id: 'p-1' }; parentError = null; limitRows = {}; limitError = {}; });
 
 describe('tenant context', () => {
   it('requires an authenticated principal and a uuid company', () => {
@@ -96,6 +99,59 @@ describe('tenantChildTable (indirect tenancy)', () => {
   it('a child payload naming another parent is refused', async () => {
     const t = await tenantChildTable('daily_content_plans', ctxA, 'p-1');
     expect(() => t.insert({ [spec.via]: 'p-2' })).toThrow(/TENANT_MISMATCH/);
+  });
+});
+
+describe('tenantChildTable multi-hop and non-id-key parents (55 S2)', () => {
+  it('registry: the asset chain and render chain are children of children, keyed as declared', () => {
+    expect(TENANT_CHILD_TABLES.content_asset_versions).toMatchObject({ via: 'asset_id', parent: 'content_assets', parentKey: 'asset_id' });
+    expect(TENANT_CHILD_TABLES.content_asset_platform_override).toMatchObject({ via: 'attachment_id', parent: 'content_asset_attachment' });
+    expect(TENANT_CHILD_TABLES.creator_render_attempt).toMatchObject({ via: 'variant_id', parent: 'creator_render_variant' });
+    expect(TENANT_CHILD_TABLES.scheduled_posts).toMatchObject({ via: 'campaign_id', parent: 'campaigns' });
+  });
+  it('two hops: content_assets is read by asset_id for its campaign, the campaign is verified UNDER the tenant, then the child is pinned', async () => {
+    limitRows.content_assets = [{ campaign_id: 'c-1' }];
+    parentRow = { id: 'c-1' };
+    const t = await tenantChildTable('content_asset_versions', ctxA, 'a-1');
+    t.select('version_id');
+    expect(calls.filter((c) => c.table === 'content_assets').map((c) => [c.op, c.args])).toEqual([['select', ['campaign_id']], ['eq', ['asset_id', 'a-1']], ['limit', [51]]]);
+    const camp = calls.filter((c) => c.table === 'campaigns');
+    expect(camp.map((c) => c.op)).toEqual(['select', 'eq', 'eq', 'maybeSingle']);
+    expect(camp[1].args).toEqual([TENANT_TABLES.campaigns.column, A]);
+    expect(camp[2].args).toEqual(['id', 'c-1']);
+    expect(calls.filter((c) => c.table === 'content_asset_versions').map((c) => [c.op, c.args])).toEqual([['select', ['version_id', undefined]], ['eq', ['asset_id', 'a-1']]]);
+  });
+  it('two hops: a foreign grandparent, a NULL link, a missing parent or an unreadable parent are all refused', async () => {
+    limitRows.content_assets = [{ campaign_id: 'c-9' }]; parentRow = null;
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_assets = [{ campaign_id: null }]; parentRow = { id: 'c-1' };
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_assets = [];
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_assets = [{ campaign_id: 'c-1' }]; limitError.content_assets = { code: '57014' };
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/unreadable/);
+  });
+  it('a NON-unique direct key: every parent row must be this tenant\'s (shared with another tenant, or NULL, is refused)', async () => {
+    const col = TENANT_TABLES.content_core_asset.column;
+    limitRows.content_core_asset = [{ [col]: A }, { [col]: A.toUpperCase() }];
+    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).resolves.toBeDefined();
+    expect(calls.filter((c) => c.table === 'content_core_asset').map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['content_core_id', 'core-1']], ['limit', [51]]]);
+    limitRows.content_core_asset = [{ [col]: A }, { [col]: B }];
+    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_core_asset = [{ [col]: A }, { [col]: null }];
+    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_core_asset = Array.from({ length: 51 }, () => ({ [col]: A }));
+    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+  });
+  it('three hops end to end: platform_override -> attachment -> core_asset', async () => {
+    const col = TENANT_TABLES.content_core_asset.column;
+    limitRows.content_asset_attachment = [{ content_core_id: 'core-1' }];
+    limitRows.content_core_asset = [{ [col]: A }];
+    const t = await tenantChildTable('content_asset_platform_override', ctxA, 'att-1');
+    expect(calls.filter((c) => c.table === 'content_asset_attachment').map((c) => [c.op, c.args])).toEqual([['select', ['content_core_id']], ['eq', ['id', 'att-1']], ['limit', [51]]]);
+    expect(() => t.insert({ attachment_id: 'att-2' })).toThrow(/TENANT_MISMATCH/);
+    limitRows.content_core_asset = [{ [col]: B }];
+    await expect(tenantChildTable('content_asset_platform_override', ctxA, 'att-1')).rejects.toThrow(/TENANT_MISMATCH/);
   });
 });
 
