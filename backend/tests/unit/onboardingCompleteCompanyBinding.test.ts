@@ -17,6 +17,7 @@ function mockTable(table: string) {
     const rows = (mockDb[table] ??= []);
     if (op === 'insert' || op === 'upsert') {
       const row = { id: `00000000-0000-4000-8000-${String(++mockSeq).padStart(12, '0')}`, ...payload };
+      if (table === 'companies' && rows.some((r) => r.id === row.id)) return { data: null, error: { code: '23505', message: 'duplicate key' } };
       rows.push(row); mockWrites.push({ table, op, row });
       return { data: one ? row : [row], error: null };
     }
@@ -31,6 +32,7 @@ function mockTable(table: string) {
     limit: (n: number) => { cap = n; return b; },
     eq: (c: string, v: unknown) => { tests.push((r) => r[c] === v); return b; },
     in: (c: string, v: unknown[]) => { tests.push((r) => v.includes(r[c])); return b; },
+    gt: (c: string, v: string) => { tests.push((r) => String(r[c] ?? '') > v); return b; },
     not: (c: string, _o: string, v: unknown) => { tests.push((r) => (r[c] ?? null) !== v); return b; },
     ilike: (c: string, v: string) => { tests.push((r) => String(r[c] ?? '').toLowerCase() === v.toLowerCase()); return b; },
     or: (expr: string) => {
@@ -132,11 +134,26 @@ it('filter syntax inside the verified email never resolves to ANOTHER user row (
   expect(mockWrites.filter((w) => w.table === 'users' && w.row.id === 'u-victim')).toEqual([]);
 });
 
-it('control: the first registrant of a NEW company is its COMPANY_ADMIN', async () => {
+const newcoIntent = () => ({
+  id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', email: 'founder@newco.io', status: 'completed',
+  created_at: new Date(Date.now() - 3600_000).toISOString(), expires_at: new Date(Date.now() + 3600_000).toISOString(),
+  intent_data: { validated_company_domain: 'newco.io', validated_website_url: 'https://www.newco.io', verdict: 'eligible' },
+});
+
+it('P1: a verified identity with NO server-minted signup intent (the GoTrue-bypass signature) creates NO company', async () => {
   mockEmail = 'founder@newco.io';
+  const r = await post();
+  expect([r.statusCode, r.body?.code]).toEqual([409, 'SIGNUP_REVALIDATION_REQUIRED']);
+  expect((mockDb.companies ?? []).find((c) => c.name === 'newco')).toBeUndefined();
+  expect((mockDb.user_company_roles ?? []).filter((r) => r.user_id === USER)).toEqual([]);
+});
+
+it('control: the first registrant of a NEW company is its COMPANY_ADMIN (company id = the bound intent id, validated website)', async () => {
+  mockEmail = 'founder@newco.io';
+  mockDb.signup_intents = [newcoIntent()];
   const r = await post();
   expect(r.statusCode).toBe(200);
   const created = mockDb.companies.find((c) => c.name === 'newco');
-  expect(created).toBeTruthy();
+  expect(created).toMatchObject({ id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', website: 'https://www.newco.io' });
   expect(mockDb.user_company_roles).toEqual([expect.objectContaining({ user_id: USER, company_id: created!.id, role: 'COMPANY_ADMIN' })]);
 });

@@ -71,8 +71,15 @@ it('repairOnly: a company WITH a ledger grant but a missing claim gets the claim
   expect(mockDb.companies[0].free_credit_granted_at).not.toBeNull();
 });
 
-it('control: the onboarding grant (no repairOnly) still grants once', async () => {
+it('control: the onboarding grant (no repairOnly) still grants once - for an INTENT-BORN company (P1)', async () => {
+  mockDb.signup_intents = [{ id: ORG }];
   const r = await grantInitialFreeCredit({ orgId: ORG, userId: 'u1', emailDomain: 'acme.com' });
   expect(r).toMatchObject({ granted: true, credits: 300 });
   expect(mockCredits).toHaveLength(1);
+});
+
+it('P1 credit chokepoint: a company NOT born from a server-minted signup intent gets NO new grant', async () => {
+  const r = await grantInitialFreeCredit({ orgId: ORG, userId: 'u1', emailDomain: 'acme.com' });
+  expect(r).toEqual({ granted: false, reason: 'not_signup_company' });
+  expect(mockCredits).toEqual([]);
 });

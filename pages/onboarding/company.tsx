@@ -219,7 +219,7 @@ export default function CompanySetupPage() {
     setStep('saving');
 
     try {
-      const res = await apiFetch('/api/onboarding/setup-company', {
+      const postSetup = () => apiFetch('/api/onboarding/setup-company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -235,7 +235,24 @@ export default function CompanySetupPage() {
         }),
       });
 
-      const json = await res.json();
+      let res = await postSetup();
+      let json = await res.json();
+      // P1 (e1 2026-11-13): no current signup intent (expired / never minted) -> RESUME, never an error: re-run the
+      // signup checks server-side (revalidate-signup mints a fresh intent), then retry ONCE. A refusal from the
+      // checks (e.g. the domain already has a company) surfaces its own message.
+      if (res.status === 409 && json?.code === 'SIGNUP_REVALIDATION_REQUIRED') {
+        const reval = await apiFetch('/api/onboarding/revalidate-signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyName: companyName.trim() }),
+        });
+        const revalJson = await reval.json().catch(() => ({}));
+        if (!reval.ok) {
+          throw new Error(revalJson?.error ?? 'We could not confirm your company details. Please try again.');
+        }
+        res = await postSetup();
+        json = await res.json();
+      }
       if (!res.ok) {
         if (res.status === 409 && String(json.error || '').toLowerCase().includes('personal profile')) {
           router.replace('/onboarding/profile');
