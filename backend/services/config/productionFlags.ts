@@ -18,17 +18,23 @@ interface ProductionFlags {
   readonly USE_UNIFIED_LEDGER_ONLY: boolean;
   readonly NODE_ENV: string;
   readonly IS_PRODUCTION: boolean;
+  readonly IS_NON_PRODUCTION: boolean;
 }
 
 function readFlags(): ProductionFlags {
   const useUnifiedLedger = process.env.USE_UNIFIED_LEDGER_ONLY === 'true';
-  const nodeEnv          = process.env.NODE_ENV ?? 'development';
+  const rawNodeEnv       = process.env.NODE_ENV;
+  const nodeEnv          = rawNodeEnv ?? 'development';
   const isProd           = nodeEnv === 'production';
+  // Strict, fail-CLOSED: the RAW value must be exactly one of these. Unset is NOT non-production here (the
+  // 'development' default above is for the legacy flags only).
+  const isNonProd        = rawNodeEnv === 'development' || rawNodeEnv === 'test';
 
   return Object.freeze({
     USE_UNIFIED_LEDGER_ONLY: useUnifiedLedger,
     NODE_ENV:                nodeEnv,
     IS_PRODUCTION:           isProd,
+    IS_NON_PRODUCTION:       isNonProd,
   });
 }
 
@@ -51,6 +57,16 @@ export function isUnifiedLedgerOnly(): boolean {
 /** Convenience accessor for prod-gating code paths. */
 export function isProduction(): boolean {
   return _frozenFlags.IS_PRODUCTION;
+}
+
+/**
+ * Strict companion for SECURITY gates on dev-only / debug routes (e9 ruling 2026-11-13): true ONLY when NODE_ENV
+ * was exactly 'development' or 'test' at module load. Unset, 'Production', 'prod', 'staging' or anything else ->
+ * false, so such a gate fails CLOSED. Serve a debug route only when this is true; 404 otherwise. Do not use
+ * `!isProduction()` for that - it fails open on any value other than the exact string 'production'.
+ */
+export function isNonProduction(): boolean {
+  return _frozenFlags.IS_NON_PRODUCTION;
 }
 
 /**
