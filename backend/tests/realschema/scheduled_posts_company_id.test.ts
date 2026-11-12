@@ -215,3 +215,36 @@ describe('the migration itself', () => {
     expect(await attemptIn(c, unwrapped(MIGRATION_FILE))).toMatchObject({ ok: true });
   }));
 });
+
+describe('social_accounts never move between companies (e9 option B)', () => {
+  it('X -> Y is REFUSED (23514); X -> NULL is REFUSED', () => rolledBack(async (c) => {
+    const w = await seed(c);
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saA, w.B]))
+      .toMatchObject({ ok: false, code: '23514' });
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = NULL WHERE id = $1`, [w.saA]))
+      .toMatchObject({ ok: false, code: '23514' });
+  }));
+  it('CONTROL: NULL -> X adoption is ALLOWED (linkedin / x / youtube legacy rows)', () => rolledBack(async (c) => {
+    const w = await seed(c);
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saNone, w.A]))
+      .toMatchObject({ ok: true });
+  }));
+  it('CONTROL: unrelated column updates (and re-asserting the same company) are unaffected', () => rolledBack(async (c) => {
+    const w = await seed(c);
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET account_name = 'renamed', company_id = $2 WHERE id = $1`, [w.saA, w.A]))
+      .toMatchObject({ ok: true });
+  }));
+  it('HEAD CONTROL: without 028 an account CAN move company; with it, it cannot', () => rolledBack(async (c) => {
+    const w = await seed(c);
+    await c.query(unwrapped(ROLLBACK_FILE));
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saA, w.B])).toMatchObject({ ok: true });
+    await c.query(`UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saA, w.A]);
+    await c.query(unwrapped(MIGRATION_FILE));
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saA, w.B]))
+      .toMatchObject({ ok: false, code: '23514' });
+  }));
+  it('the trigger function is SECURITY INVOKER, search_path empty, not executable by anon/authenticated', async () => {
+    const r = (await db.query(`SELECT prosecdef, proconfig, has_function_privilege('anon', oid, 'EXECUTE') AS anon, has_function_privilege('authenticated', oid, 'EXECUTE') AS auth FROM pg_proc WHERE oid = 'public.social_accounts_company_id_immutable()'::regprocedure`)).rows[0];
+    expect(r).toEqual({ prosecdef: false, proconfig: ['search_path=""'], anon: false, auth: false });
+  });
+});

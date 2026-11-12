@@ -98,7 +98,18 @@ describe('behaviour', () => {
     expect(r).toMatchObject({ ok: false, code: '23502' });
   });
 
-  it('hard_delete_company on a company WITH a campaign aborts (23503) and deletes NOTHING', async () => {
+  it('a direct DELETE of a company WITH a campaign is RESTRICTed (23503)', async () => {
+    const r = await rolledBack(async (c) => {
+      await seedCompany(c);
+      await seedCampaign(c, CO);
+      return attemptIn(c, 'DELETE FROM public.companies WHERE id = $1', [CO]);
+    });
+    expect(r).toMatchObject({ ok: false, code: '23503' });
+  });
+
+  // With 20270217000029 applied (it ships on the same branch as 028, after 025), hard_delete_company
+  // refuses by NAME before any delete instead of surfacing the bare 23503.
+  it('hard_delete_company on a company WITH a campaign refuses (COMPANY_HAS_CONTENT) and deletes NOTHING', async () => {
     const r = await rolledBack(async (c) => {
       await seedCompany(c);
       await seedCampaign(c, CO);
@@ -109,7 +120,7 @@ describe('behaviour', () => {
         campaign: await count(c, 'SELECT count(*) AS n FROM public.campaigns WHERE id = $1', [CAMP]),
       };
     });
-    expect(r.del).toMatchObject({ ok: false, code: '23503' });
+    expect(r.del).toMatchObject({ ok: false, code: 'P0001', message: 'COMPANY_HAS_CONTENT' });
     expect(r).toMatchObject({ company: 1, campaign: 1 });
   });
 

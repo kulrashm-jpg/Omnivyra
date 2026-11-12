@@ -9,8 +9,9 @@
 -- company, a re-apply RAISEs instead of reproducing it. Rows the trigger filled after apply whose
 -- campaign or account was later removed are likewise not re-derivable. Export
 -- (id, company_id) before running this if those values must survive.
+-- ORDER: roll back 20270217000029 FIRST (its hard_delete_company body reads scheduled_posts.company_id).
 -- WARNING: after this, the database no longer refuses a post whose campaign and social account are
--- in different companies; only the application resolver does.
+-- in different companies, nor a social account moving between companies; only application code does.
 
 BEGIN;
 
@@ -24,6 +25,8 @@ BEGIN
 END
 $provenance$;
 
+DROP TRIGGER IF EXISTS social_accounts_company_id_immutable ON public.social_accounts;
+DROP FUNCTION IF EXISTS public.social_accounts_company_id_immutable();
 DROP TRIGGER IF EXISTS scheduled_posts_company_id_guard_ins ON public.scheduled_posts;
 DROP TRIGGER IF EXISTS scheduled_posts_company_id_guard_upd ON public.scheduled_posts;
 DROP FUNCTION IF EXISTS public.scheduled_posts_company_id_guard();

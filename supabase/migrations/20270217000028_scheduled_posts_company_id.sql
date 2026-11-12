@@ -8,11 +8,13 @@
 -- 20261113) attached a post to ANOTHER company's social account, publishing company A's post through
 -- company B's account. The tenant seam (S2) also needs a column to key on: campaign-less posts are
 -- unreachable through the campaign parent. This makes the company explicit, and makes the defect
--- impossible AT WRITE TIME of the post. NOT covered (05 review): a social account can later move to
--- another company (OAuth re-connect writes social_accounts.company_id), and a post that already
--- carries an account is published without re-resolving it. Closing that is an application change
--- this column enables (compare the persisted account's company with scheduled_posts.company_id at
--- publish time), tracked as a follow-up, not part of this migration.
+-- impossible AT WRITE TIME of the post. The other way in, a social account MOVING to another company
+-- after posts were attached, is closed by a second trigger (social_accounts_company_id_immutable,
+-- e9 option B): once social_accounts.company_id is set it can never change (NULL -> X adoption, which
+-- the linkedin / x / youtube callbacks use for legacy rows, stays allowed). Verified 2026-11-13: no
+-- app path moves an account today (every reconnect looks up WITHIN the connecting company and inserts
+-- a new row otherwise); the trigger turns that accidental safety into an enforced one. A publish-time
+-- check (account company vs scheduled_posts.company_id) ships as application code after this.
 --
 -- THE THREE POPULATIONS (each backfilled from one source; any row that cannot be derived honestly
 -- makes the preflight RAISE, listing ids; a NULL company is never written):
@@ -35,6 +37,14 @@
 --   Insert paths that do not write company_id keep working: the trigger fills it.
 --   NOT re-checked: a later change of campaigns.company_id or social_accounts.company_id (no trigger
 --   on those tables; campaigns.company_id is NOT NULL + RESTRICT since 025).
+--
+-- COMPANY DELETE (deliberate; e9 ruling under the owner's campaigns ruling, 2026-11-13). ON DELETE
+-- RESTRICT: nothing is ever deleted silently, and published history never vanishes with a company.
+-- OPERATOR-VISIBLE CHANGE of 025 + 028 + 029 TOGETHER (all three unapplied as of writing): a company
+-- with ANY campaign OR ANY scheduled post cannot be hard-deleted. 029 (applied right after this)
+-- re-authors public.hard_delete_company to refuse that up front with the named COMPANY_HAS_CONTENT
+-- (counts per table) before any delete; between this apply and 029 the refusal is a bare 23503 that
+-- still deletes nothing. Soft-delete / disable stays the normal way to retire a company.
 --
 -- ORDER. Apply AFTER 20270217000025 (campaigns.company_id NOT NULL) and BEFORE any S2 conversion of
 -- scheduled_posts goes live. The fast-track code (resolver) should be deployed first so no new
@@ -240,6 +250,29 @@ CREATE TRIGGER scheduled_posts_company_id_guard_upd
      OR OLD.company_id IS DISTINCT FROM NEW.company_id)
   EXECUTE FUNCTION public.scheduled_posts_company_id_guard();
 
+-- A social account never moves between companies (closes the publish-through-a-moved-account path).
+CREATE OR REPLACE FUNCTION public.social_accounts_company_id_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $fn$
+BEGIN
+  RAISE EXCEPTION 'social_accounts: account % belongs to company % and cannot move to company %; connect it under the other company instead (a new row)',
+    OLD.id, OLD.company_id, coalesce(NEW.company_id::text, 'none')
+    USING ERRCODE = '23514';
+END
+$fn$;
+
+REVOKE ALL ON FUNCTION public.social_accounts_company_id_immutable() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS social_accounts_company_id_immutable ON public.social_accounts;
+CREATE TRIGGER social_accounts_company_id_immutable
+  BEFORE UPDATE ON public.social_accounts
+  FOR EACH ROW
+  WHEN (OLD.company_id IS NOT NULL AND NEW.company_id IS DISTINCT FROM OLD.company_id)
+  EXECUTE FUNCTION public.social_accounts_company_id_immutable();
+
 ALTER TABLE public.scheduled_posts ALTER COLUMN company_id SET NOT NULL;
 
 DO $verify$
@@ -274,6 +307,15 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
                  WHERE p.oid = v_fn AND a.grantee = 0 AND a.privilege_type = 'EXECUTE') THEN
     RAISE EXCEPTION 'SP-COMPANY verify: guard function is executable by PUBLIC/anon/authenticated';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                  WHERE t.tgrelid = 'public.social_accounts'::regclass
+                    AND t.tgname = 'social_accounts_company_id_immutable' AND t.tgenabled = 'O'
+                    AND p.oid = 'public.social_accounts_company_id_immutable()'::regprocedure
+                    AND NOT p.prosecdef AND p.proconfig @> ARRAY['search_path=""']::text[]
+                    AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+                    AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')) THEN
+    RAISE EXCEPTION 'SP-COMPANY verify: social_accounts_company_id_immutable trigger/function missing, disabled, DEFINER, wrong search_path or executable by anon/authenticated';
   END IF;
   SELECT count(*) INTO v_n FROM public.scheduled_posts sp
     JOIN public.campaigns c ON c.id = sp.campaign_id
