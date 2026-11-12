@@ -130,7 +130,10 @@ function hashPayloadForDedupe(templateKey: string, recipientEmail: string, invit
   // `discriminator` separates jobs that share a recipient and have no invitation: two notices to one
   // admin about DIFFERENT prospects must not collapse on the pending-payload unique index.
   return createHash('sha256')
-    .update([templateKey, recipientEmail.toLowerCase(), invitationId ?? '', discriminator].filter((p, i) => i < 3 || p !== '').join(':'))
+    .update([templateKey, recipientEmail.toLowerCase(), invitationId ?? '', discriminator]
+      // Parts from index 3 join only when present: '' AND null/undefined are dropped (05), so the
+      // existing templates' hash stays exactly the legacy one (pending rows keep deduping).
+      .filter((p, i) => i < 3 || (p !== null && p !== undefined && p !== '')).join(':'))
     .digest('hex');
 }
 

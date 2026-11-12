@@ -54,6 +54,7 @@ it('the worker builds the edge function\'s inbound_signup_notice body from the q
 });
 
 it('NEGATIVE CONTROL: the existing invite templates keep their payload hash (pending rows still dedupe against new ones)', async () => {
+  // The discriminator is absent for them; it must never join the hash, whether '' or undefined (05).
   const { enqueueEmailJob } = require('../../services/emailJobsService');
   await enqueueEmailJob({
     templateKey: 'team_invite_magic_link', recipientEmail: 'u@x.test', invitationId: 'inv-1', correlationId: 'c',
@@ -61,4 +62,14 @@ it('NEGATIVE CONTROL: the existing invite templates keep their payload hash (pen
   });
   const legacy = createHash('sha256').update(['team_invite_magic_link', 'u@x.test', 'inv-1'].join(':')).digest('hex');
   expect(jobs()[0].payload_hash).toBe(legacy);
+});
+
+it('an inbound notice with NO prospect (undefined) never hashes the literal "undefined" - it hashes as if absent', async () => {
+  const { enqueueEmailJob } = require('../../services/emailJobsService');
+  await enqueueEmailJob({
+    templateKey: 'inbound_signup_notice', recipientEmail: ADMIN, invitationId: null, correlationId: 'c', idempotencyKey: 'k-undef',
+    payload: { recipientEmail: ADMIN, prospectEmail: undefined, companyName: null, supportEmail: 's@x.test', correlationId: 'c' },
+  });
+  const absent = createHash('sha256').update(['inbound_signup_notice', ADMIN, ''].join(':')).digest('hex');
+  expect(jobs()[0].payload_hash).toBe(absent);
 });

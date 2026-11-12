@@ -376,7 +376,10 @@ async function sendViaSES(envelope: Envelope, progress: SendProgress): Promise<s
     },
   });
 
-  progress.providerCalled = true; // CLASS-2 D3: from here a failure may be a lost answer (outcome.ts)
+  // CLASS-2 D3: from here a failure may be a lost answer (outcome.ts). Set deliberately BEFORE the
+  // call (05): a synchronous SDK throw then reads `uncertain` - a false uncertain is SAFE (reviewed,
+  // never resent). Moving this AFTER the call would make a lost answer read `not_sent` and RESEND.
+  progress.providerCalled = true;
   const result = await client.send(command);
   return typeof result?.MessageId === "string" ? result.MessageId : null;
 }
@@ -423,7 +426,10 @@ async function sendOutreachViaSESv2(envelope: Envelope, progress: SendProgress):
     },
   });
 
-  progress.providerCalled = true; // CLASS-2 D3: from here a failure may be a lost answer (outcome.ts)
+  // CLASS-2 D3: from here a failure may be a lost answer (outcome.ts). Set deliberately BEFORE the
+  // call (05): a synchronous SDK throw then reads `uncertain` - a false uncertain is SAFE (reviewed,
+  // never resent). Moving this AFTER the call would make a lost answer read `not_sent` and RESEND.
+  progress.providerCalled = true;
   const result = await client.send(command);
   return typeof result?.MessageId === "string" ? result.MessageId : null;
 }
