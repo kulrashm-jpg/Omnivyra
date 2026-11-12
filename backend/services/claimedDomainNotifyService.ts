@@ -6,13 +6,19 @@
  * emailed:
  *   1) the prospect gets the existing admin's contact details so they know
  *      who to ask for an invite;
- *   2) the company admin gets a notice that a real, verified person from
- *      their domain just tried to sign up.
+ *   2) EVERY active company admin (bounded) gets a notice that a real, verified
+ *      person from their domain just tried to sign up, with a link to invite them.
  *
  * Both emails are deduped per prospect email via `signup_referrals` (one row per prospect):
- *   - the prospect email by `admin_email_sent_at` (it carries the ADMIN's contact - hence the name);
- *   - the admin notice by `admin_user_id`, written ONLY after the notice was actually sent - so a
+ *   - the PROSPECT email by `admin_email_sent_at`;
+ *   - the ADMIN notice by `admin_user_id`, written ONLY after the notice was actually sent - so a
  *     failed send is retried on the next attempt, and a sent one is never repeated.
+ * WARNING - BOTH COLUMN NAMES SAY THE OPPOSITE OF WHAT THEY MARK (a rename is pending; it needs a
+ * migration). Do NOT "correct" the code to match the names: that reintroduces the re-notify bug.
+ * `admin_user_id` references users(id) ON DELETE SET NULL, so hard-deleting the notified admin's users
+ * row would reset the marker and re-enable the notice (no app path hard-deletes users today).
+ * Because callers notify only on a VERIFIED email-domain match, one prospect maps to one company, so
+ * per-prospect dedupe is per (company, prospect) by construction.
  * (e1 2026-11-12, 05 review: the admin notice used to be gated only by `if (adminEmail)`, and its
  * `inbound-signup-notice:<company>:<prospect>` idempotency key is never applied by the email
  * function - it only reaches a log context - so every attempt re-notified the admin.)
@@ -55,6 +61,9 @@ export interface ClaimedDomainNotifyInput {
  *   'no_admin' - the company has no active COMPANY_ADMIN with an email (a recovery case);
  *   'failed'   - the send (or a lookup) failed.
  */
+/** Upper bound on how many active admins one join request emails. */
+const MAX_ADMINS_NOTIFIED = 10;
+
 export type ClaimedDomainAdminNotice = 'sent' | 'already_sent' | 'no_admin' | 'failed';
 export interface ClaimedDomainNotifyOutcome { adminNotice: ClaimedDomainAdminNotice }
 
@@ -69,25 +78,34 @@ export async function notifyAdminAndProspectOfClaimedDomain(
 ): Promise<ClaimedDomainNotifyOutcome> {
   let adminNotice: ClaimedDomainAdminNotice = 'failed';
   try {
-    // Find an active COMPANY_ADMIN of the claimed company.
-    const { data: adminRoleRow, error: adminRoleErr } = await db
+    // ALL active COMPANY_ADMINs of the claimed company, oldest first (owner ruling 2026-11-12: the
+    // join request goes to the company's admins). Fan-out bounded by MAX_ADMINS_NOTIFIED.
+    const { data: adminRoleRows, error: adminRoleErr } = await db
       .from('user_company_roles')
       .select('user_id, created_at')
       .eq('company_id', input.companyId)
       .eq('status', 'active')
       .eq('role', 'COMPANY_ADMIN')
       .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    const adminUserId = (adminRoleRow as { user_id?: string } | null)?.user_id ?? null;
-    const { data: adminUser, error: adminUserErr } = adminUserId
-      ? await db.from('users').select('name, email').eq('id', adminUserId).maybeSingle()
-      : { data: null, error: null };
-    const adminEmail = (adminUser as { email?: string } | null)?.email ?? null;
-    const adminName = (adminUser as { name?: string | null } | null)?.name ?? null;
+      .limit(MAX_ADMINS_NOTIFIED);
+    const adminIds = [...new Set(
+      ((adminRoleRows ?? []) as Array<{ user_id?: string | null }>)
+        .map((r) => r.user_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    )];
+    const { data: adminUsers, error: adminUserErr } = adminIds.length
+      ? await db.from('users').select('id, name, email').in('id', adminIds)
+      : { data: [], error: null };
+    type AdminUser = { id: string; name?: string | null; email?: string | null };
+    const byId = new Map(((adminUsers ?? []) as AdminUser[]).map((u) => [u.id, u]));
+    const admins = adminIds
+      .map((id) => byId.get(id))
+      .filter((u): u is AdminUser & { email: string } => typeof u?.email === 'string' && u.email.length > 0);
+    // The prospect's email carries ONE contact: the oldest active admin.
+    const adminEmail = admins[0]?.email ?? null;
+    const adminName = admins[0]?.name ?? null;
     // A failed admin lookup is 'failed', never 'no_admin' (a null error is not an answer).
-    if (!adminRoleErr && !adminUserErr && !adminEmail) adminNotice = 'no_admin';
+    if (!adminRoleErr && !adminUserErr && admins.length === 0) adminNotice = 'no_admin';
 
     // Dedupe via signup_referrals — one row per (prospect email). Tracks
     // separately whether each of the two emails has already gone out.
@@ -166,30 +184,39 @@ export async function notifyAdminAndProspectOfClaimedDomain(
     const priorNotifiedAdmin = (existingReferral as { admin_user_id?: string | null } | null)?.admin_user_id ?? null;
     if (priorNotifiedAdmin) {
       adminNotice = 'already_sent';
-    } else if (adminEmail) {
-      try {
-        await sendInboundSignupNoticeToAdmin(
-          adminEmail,
-          {
+    } else if (admins.length > 0) {
+      // Every active admin is told. The request counts as made once ANY admin was notified; the marker
+      // then records the first one, so later attempts never re-send (an admin whose individual send
+      // failed while another succeeded is not retried - logged below).
+      let firstNotified: string | null = null;
+      for (const admin of admins) {
+        try {
+          await sendInboundSignupNoticeToAdmin(
+            admin.email,
+            {
+              prospectEmail: input.prospectEmail,
+              companyName:   input.companyName,
+              supportEmail:  SUPPORT_EMAIL,
+            },
+            `inbound-signup-notice:${input.companyId}:${input.prospectEmail}:${admin.id}`,
+          );
+          firstNotified ??= admin.id;
+        } catch (err) {
+          logger.warn('claimed_domain_admin_notice_send_failed', {
+            adminUserId:   admin.id,
             prospectEmail: input.prospectEmail,
-            companyName:   input.companyName,
-            supportEmail:  SUPPORT_EMAIL,
-          },
-          `inbound-signup-notice:${input.companyId}:${input.prospectEmail}`,
-        );
+            message:       err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (firstNotified) {
         adminNotice = 'sent';
         if (referralId) {
           await db
             .from('signup_referrals')
-            .update({ admin_user_id: adminUserId })
+            .update({ admin_user_id: firstNotified })
             .eq('id', referralId);
         }
-      } catch (err) {
-        logger.warn('claimed_domain_admin_notice_send_failed', {
-          adminUserId,
-          prospectEmail: input.prospectEmail,
-          message: err instanceof Error ? err.message : String(err),
-        });
       }
     }
   } catch (err) {
