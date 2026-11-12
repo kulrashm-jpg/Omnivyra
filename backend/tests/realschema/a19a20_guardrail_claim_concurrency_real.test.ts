@@ -86,21 +86,28 @@ beforeAll(async () => {
   await c2.connect();
   pid2 = Number((await c2.query('SELECT pg_backend_pid() AS pid')).rows[0].pid);
 });
+// Cleanup runs on OUR connection: setup.ts closes the shared `db` in its own afterAll, which runs
+// first - a cleanup through `db` silently did nothing (05/e9 audit of committing suites, 2026-11-12).
 afterAll(async () => {
   await c1?.query('ROLLBACK').catch(() => undefined);
   await c2?.query('ROLLBACK').catch(() => undefined);
+  if (c1) {
+    // Restore the migrated functions (a failed control may have left the no-lock copy): must succeed.
+    await c1.query(functionSql('community_ai_claim_within_limits'));
+    await c1.query(functionSql('usage_execution_reserve'));
+    await c1.query(`DELETE FROM public.usage_execution_reservations WHERE organization_id = $1`, [ORG_A]);
+    await c1.query(`DELETE FROM public.execution_guardrails WHERE company_id = $1`, [ORG_A]);
+    await c1.query(`DELETE FROM public.usage_meter_monthly WHERE organization_id = $1`, [ORG_A]);
+    if (created.length) {
+      // Governance logs may be append-only in the real schema: reported, not hidden, if they refuse.
+      await c1.query(`DELETE FROM public.community_ai_action_logs WHERE action_id = ANY($1::uuid[])`, [created])
+        .catch((e) => console.warn('[a19a20 cleanup] action logs kept:', e?.message));
+      await c1.query(`DELETE FROM public.community_ai_actions WHERE id = ANY($1::uuid[])`, [created])
+        .catch((e) => console.warn('[a19a20 cleanup] actions kept:', e?.message));
+    }
+  }
   await c1?.end().catch(() => undefined);
   await c2?.end().catch(() => undefined);
-  // Restore the migrated functions (a failed control may have left the no-lock copy).
-  await db.query(functionSql('community_ai_claim_within_limits')).catch(() => undefined);
-  await db.query(functionSql('usage_execution_reserve')).catch(() => undefined);
-  await db.query(`DELETE FROM public.usage_execution_reservations WHERE organization_id = $1`, [ORG_A]).catch(() => undefined);
-  await db.query(`DELETE FROM public.execution_guardrails WHERE company_id = $1`, [ORG_A]).catch(() => undefined);
-  await db.query(`DELETE FROM public.usage_meter_monthly WHERE organization_id = $1`, [ORG_A]).catch(() => undefined);
-  if (created.length) {
-    await db.query(`DELETE FROM public.community_ai_action_logs WHERE action_id = ANY($1::uuid[])`, [created]).catch(() => undefined);
-    await db.query(`DELETE FROM public.community_ai_actions WHERE id = ANY($1::uuid[])`, [created]).catch(() => undefined);
-  }
 });
 
 describe('A19 community_ai_claim_within_limits - two connections', () => {
