@@ -151,22 +151,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       note: 'no BRIDGE_COOKIE_SECRET/SESSION_COOKIE_SECRET; canonical auth_session is the supported path',
     });
   }
-  const scopedCompanyId = String(process.env.CONTENT_ARCHITECT_COMPANY_ID ?? '').trim();
-  const companyCookie = scopedCompanyId
-    ? [
-        `content_architect_company_id=${encodeURIComponent(scopedCompanyId)}`,
-        'Path=/',
-        'HttpOnly',
-        'SameSite=Lax',
-        'Max-Age=86400',
-      ].join('; ')
-    : [
-        'content_architect_company_id=',
-        'Path=/',
-        'HttpOnly',
-        'SameSite=Lax',
-        'Max-Age=0',
-      ].join('; ');
+  // 2026-11-11: the pinned-company cookie is no longer issued - nothing reads
+  // it (its pre-auth reader in company-profile list was removed), and it never
+  // carried a signature, session binding or expiry. Always CLEAR it.
+  const companyCookie = [
+    'content_architect_company_id=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
   const clearSuperAdmin = [
     'super_admin_session=',
     'Path=/',

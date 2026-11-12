@@ -210,3 +210,44 @@ describe('W0-C — WhatsApp broadcast is governed before the external send', () 
     expect(db.recipients.find((r) => r.id === 'r2')!.status).toBe('sent');
   });
 });
+
+describe('processBatch is idempotent under re-entry: only PENDING recipients are sent', () => {
+  const PHONE2 = '+15550100002';
+  const status = (id: string) => db.recipients.find((r) => r.id === id)!.status;
+  const two = () => {
+    seed();
+    db.recipients.push({ id: 'r2', encrypted_phone: encrypt(PHONE2), contact_name: 'B', status: 'pending', retry_count: 0 });
+  };
+
+  it('calling processBatch twice with the same ids sends each recipient exactly once', async () => {
+    two();
+    await processBatch('b1', ['r1', 'r2']);
+    expect(fetchCalls).toHaveLength(2);
+    await processBatch('b1', ['r1', 'r2']); // a job retry re-enters with the same recipient_ids
+    expect(fetchCalls).toHaveLength(2);
+    expect([status('r1'), status('r2')]).toEqual(['sent', 'sent']);
+  });
+
+  it('a half-sent batch re-entered sends only the recipient still pending', async () => {
+    two();
+    db.recipients.find((r) => r.id === 'r1')!.status = 'sent';
+    await processBatch('b1', ['r1', 'r2']);
+    expect(fetchCalls).toHaveLength(1);
+    expect(status('r2')).toBe('sent');
+  });
+
+  it.each([['blocked_governance'], ['failed'], ['delivered'], ['read']])('a recipient already %s is not sent again', async (st) => {
+    seed();
+    db.recipients[0].status = st;
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(0);
+    expect(status('r1')).toBe(st);
+  });
+
+  it('NEGATIVE CONTROL: a pending recipient in the same position IS sent', async () => {
+    seed();
+    await processBatch('b1', ['r1']);
+    expect(fetchCalls).toHaveLength(1);
+    expect(status('r1')).toBe('sent');
+  });
+});

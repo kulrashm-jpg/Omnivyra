@@ -37,7 +37,6 @@ jest.mock('../../services/rbacService', () => ({
 }));
 jest.mock('../../services/contentArchitectService', () => ({
   resolveCompanyAccess: jest.fn().mockResolvedValue({ userId: 'user-1', role: 'SUPER_ADMIN' }),
-  getContentArchitectCompanyId: jest.fn().mockReturnValue(null),
   isContentArchitectSession: jest.fn().mockReturnValue(false),
 }));
 
