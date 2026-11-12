@@ -4,11 +4,12 @@ import { ownedDbTable } from '../db/writeOwner';
  * free-credit grant a brand-new organization receives at signup.
  *
  * Called from:
- *   pages/api/auth/sync-supabase-user.ts   (work-email self-serve signup,
- *                                           on first email verification)
- *   pages/api/onboarding/setup-company.ts  (free-email + invited paths,
- *                                           when the user creates/joins
- *                                           the company explicitly)
+ *   pages/api/onboarding/complete.ts / setup-company.ts - the GRANT, after onboarding's eligibility checks
+ *                                           (owner rule: the initial credits come VIA ONBOARDING);
+ *   pages/api/auth/sync-supabase-user.ts   - login-time bookkeeping RECONCILE only, with repairOnly: true
+ *                                           (e9 ruling 2026-11-12, BLOCKING money): it may repair claim /
+ *                                           stamp / category drift for a company that ALREADY has a ledger
+ *                                           grant, and never creates one.
  *
  * The model:
  *   • Default amount: configurable via free_credit_config (category =
@@ -37,7 +38,7 @@ export type InitialFreeCreditResult =
   | { granted: true; credits: number; expiresAt: string }
   | {
       granted: false;
-      reason: 'already_claimed' | 'config_disabled' | 'grant_failed';
+      reason: 'already_claimed' | 'config_disabled' | 'grant_failed' | 'no_existing_grant';
       message?: string;
     };
 
@@ -45,6 +46,13 @@ export async function grantInitialFreeCredit(input: {
   orgId: string;
   userId: string;
   emailDomain?: string | null;
+  /**
+   * REPAIR ONLY (e9 ruling 2026-11-12): when the ledger already has this org's grant, repair the claim / stamp /
+   * category exactly as before - but when it does NOT, return 'no_existing_grant' and write NOTHING (no wallet row,
+   * no ledger credit, no claim). For callers that are not the onboarding grant (the login reconcile), which run none
+   * of onboarding's eligibility checks.
+   */
+  repairOnly?: boolean;
 }): Promise<InitialFreeCreditResult> {
   // ── Read amount + expiry from config; fall back to defaults ──────────────
   // Read first so the self-healing branch below has everything it needs to
@@ -144,6 +152,11 @@ export async function grantInitialFreeCredit(input: {
   // Claim row present but no ledger row — defensive. Don't double-grant.
   if (existingClaim) {
     return { granted: false, reason: 'already_claimed' };
+  }
+
+  // No ledger grant exists: a repair-only caller must NEVER create one (it skipped onboarding's eligibility).
+  if (input.repairOnly) {
+    return { granted: false, reason: 'no_existing_grant' };
   }
 
   // ── Ensure organization_credits row exists for the org ───────────────────
