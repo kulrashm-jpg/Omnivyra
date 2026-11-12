@@ -28,6 +28,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (id) {
     // System: catalog metadata, any authenticated tenant. User: authorize on the OWNING company.
+    // For a SYSTEM template `scope` is never read (isSystemTemplate short-circuits inside the
+    // service) - the caller's company does not affect a system template's answer.
     let scope = user.defaultCompanyId;
     if (!isSystemTemplate(id)) {
       const owner = await getUserTemplateCompanyId(id);
