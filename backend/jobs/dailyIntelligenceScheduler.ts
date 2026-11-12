@@ -28,7 +28,6 @@ import { generateGrowthIntelligenceDecisions } from '../services/growthIntellige
 import { generateBusinessDecisionObjects } from '../services/businessIntelligenceService';
 import { runInBackgroundJobContext } from '../services/intelligenceExecutionContext';
 import { listDecisionObjects } from '../services/decisionObjectService';
-import { enforceDecisionGenerationThrottle } from '../services/decisionGenerationControlService';
 import { runDataDrivenIntelligenceForCompany } from '../services/dataDrivenIntelligenceScheduler';
 import { executeWithRetry } from '../services/workerRetryService';
 import { recomputePrioritiesForCompany } from '../services/prioritizationService';
@@ -172,6 +171,12 @@ export type DailyIntelligenceResult = {
   geo_strategy_decisions_generated: number;
   advanced_revenue_attribution_decisions_generated: number;
   failed_campaigns: number;
+  /** Company jobs whose step body ran this run. */
+  companies_ran: number;
+  /** Company steps that still failed after their own retry, across all companies. */
+  company_step_failures: number;
+  /** Companies where EVERY one of the five steps failed. */
+  companies_all_steps_failed: number;
   errors: string[];
 };
 
@@ -202,6 +207,9 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
   let geoStrategyDecisionsGenerated = 0;
   let advancedRevenueAttributionDecisionsGenerated = 0;
   let failedCampaigns = 0;
+  let companiesRan = 0;
+  let companyStepFailures = 0;
+  let companiesAllStepsFailed = 0;
   let eventsEmittedCount = 0;
   let duplicateEventsBlocked = 0;
   let alertsSentCount = 0;
@@ -233,6 +241,9 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
       geo_strategy_decisions_generated: 0,
       advanced_revenue_attribution_decisions_generated: 0,
       failed_campaigns: 0,
+      companies_ran: 0,
+      company_step_failures: 0,
+      companies_all_steps_failed: 0,
       errors: ['Skipped: job already locked (run in progress, lock < 30min)'],
     };
   }
@@ -258,6 +269,12 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
     const dayBucket = startedAt.toISOString().slice(0, 10);
     let tenantInvalidCampaigns = 0;
 
+    // Daily intelligence does NOT consult or write the decision throttle (e9, 2026-11-12). It runs
+    // once per company per day, so it needs no rate limit. The throttle is keyed by company alone
+    // and shared by every source, so daily's write used to (1) refuse every campaign of a company
+    // after the first (its campaigns run one at a time against a 60-minute minimum), and (2) block
+    // feedbackIntelligence and insightLearning for that company for the next hour.
+    // Remaining feedback <-> insightLearning cross-blocking is post-launch: a (company, source) key.
     for (const { campaignId, companyId } of pairs) {
       const outcome = await runJob(
         {
@@ -277,8 +294,6 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
           },
         },
         async () => {
-        await enforceDecisionGenerationThrottle(companyId, 'dailyIntelligenceScheduler');
-
         const skipHealth = await wasEvaluatedRecently(campaignId);
         if (!skipHealth) {
           await evaluateAndPersistCampaignHealth(campaignId, companyId);
@@ -530,11 +545,20 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
         // (executeWithRetry, the same policy runJob applies to the whole body), so a failing step is
         // retried alone and never re-runs the steps that succeeded. A step that still fails is logged,
         // recorded in this run's errors[], and the next step runs. The company body itself no longer
-        // throws for a step failure: throwing would make runJob's retry re-run ALL five steps.
+        // throws for a step failure: runJob's inner retry would then re-run ALL five steps, 3 attempts
+        // by each step's 3, turning one bad run into nine. Failures are COUNTED instead, and the run's
+        // status says so (completed_with_errors / failed below).
+        // Dead letters: worker_name job:daily-intelligence:company:<step>, payload {company_id, step}.
+        // There is no per-step replayer; RECOVERY is re-running the daily job, which is safe because
+        // the company job is idempotent per day bucket (idempotencyKey ...:<companyId>:<dayBucket>).
+        // Re-examine that if the bucket changes.
+        let failedSteps = 0;
         const step = async (name: string, fn: () => Promise<void>): Promise<void> => {
           try {
             await executeWithRetry(`job:daily-intelligence:company:${name}`, { company_id: companyId, step: name }, fn);
           } catch (err) {
+            failedSteps += 1;
+            companyStepFailures += 1;
             const message = err instanceof Error ? err.message : String(err);
             errors.push(`Opportunity company ${companyId}: step ${name}: ${message}`);
             console.error('[dailyIntelligence] company step failed; continuing with the next step', { companyId, step: name, message });
@@ -646,6 +670,13 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
           await evaluateBehaviorActionOutcomes(companyId);
         });
 
+        companiesRan += 1;
+        if (failedSteps === 5) {
+          companiesAllStepsFailed += 1;
+          errors.push(`Opportunity company ${companyId}: ALL 5 steps failed`);
+          console.error('[dailyIntelligence] every company step failed', { companyId });
+        }
+
         },
       );
       if (companyOutcome.status === 'tenant_invalid') {
@@ -663,12 +694,27 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
     await releaseLock();
 
     const executionTimeMs = Date.now() - startTime;
+    // The run's status is TRUTHFUL (05/e9, 2026-11-12); it used to be a hard-coded 'completed'.
+    //   failed                 every company job that RAN failed all five steps. companies_ran > 0:
+    //                          over zero companies "every one failed" is vacuously true, and a quiet
+    //                          run must not read as a failure.
+    //   completed_with_errors  any company step or campaign job failed
+    //   completed              otherwise (including a run with no eligible company)
+    // Nothing reads intelligence_job_runs today, so this record alone is NOT detection: the 'failed'
+    // branch also logs at ERROR, because logs are watched and this table is not.
+    const runStatus: 'completed' | 'completed_with_errors' | 'failed' =
+      companiesRan > 0 && companiesAllStepsFailed === companiesRan ? 'failed'
+        : (companyStepFailures > 0 || failedCampaigns > 0) ? 'completed_with_errors'
+          : 'completed';
+    if (runStatus === 'failed') {
+      console.error('[dailyIntelligence] run FAILED: every company job that ran failed all five steps', { companiesRan, companyStepFailures });
+    }
     if (runId) {
       await supabase
         .from('intelligence_job_runs')
         .update({
           completed_at: new Date().toISOString(),
-          status: 'completed',
+          status: runStatus,
           campaigns_processed: campaignsProcessed,
           execution_duration_ms: executionTimeMs,
           strategic_insights_generated: strategicInsightsGenerated,
@@ -686,7 +732,7 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
         started_at: startedAt.toISOString(),
         completed_at: new Date().toISOString(),
         campaigns_processed: campaignsProcessed,
-        status: 'completed',
+        status: runStatus,
         execution_duration_ms: executionTimeMs,
         strategic_insights_generated: strategicInsightsGenerated,
         opportunities_generated: opportunitiesGenerated,
@@ -726,6 +772,9 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
       geo_strategy_decisions_generated: geoStrategyDecisionsGenerated,
       advanced_revenue_attribution_decisions_generated: advancedRevenueAttributionDecisionsGenerated,
       failed_campaigns: failedCampaigns,
+      companies_ran: companiesRan,
+      company_step_failures: companyStepFailures,
+      companies_all_steps_failed: companiesAllStepsFailed,
       errors,
     };
   } catch (err) {

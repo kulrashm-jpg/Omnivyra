@@ -20,11 +20,15 @@ import { DecisionGenerationThrottledError } from '../../services/decisionGenerat
 
 // ── shared doubles ────────────────────────────────────────────────────────────
 const tables: Record<string, () => { data: unknown; error: unknown }> = {};
+const writes: Array<{ table: string; method: string; arg: Record<string, unknown> }> = [];
 function chain(table: string) {
   if (!(table in tables)) throw new Error(`undeclared table ${table}`);
   const b: Record<string, unknown> = {};
-  for (const m of ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'not', 'order', 'limit', 'in', 'maybeSingle', 'single', 'gte', 'lt']) {
+  for (const m of ['select', 'delete', 'eq', 'not', 'order', 'limit', 'in', 'maybeSingle', 'single', 'gte', 'lt']) {
     b[m] = () => b;
+  }
+  for (const m of ['insert', 'update', 'upsert']) {
+    b[m] = (arg: Record<string, unknown>) => { writes.push({ table, method: m, arg }); return b; };
   }
   b.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => Promise.resolve(tables[table]()).then(res, rej);
   return b;
@@ -192,8 +196,15 @@ jest.mock('../../services/workerRetryService', () => ({
 jest.mock('../../services/jobRunner', () => ({
   // The campaign job FAILS without running (as a 23502 on its strategic-insight write would);
   // the company job runs its body.
-  runJob: async (spec: { jobName: string }, body: () => Promise<unknown>) => {
-    if (spec.jobName === 'job:daily-intelligence:campaign') return { status: 'failed', error: new Error('campaign failed (23502)') };
+  runJob: async (spec: { jobName: string; idempotencyKey: string }, body: () => Promise<unknown>) => {
+    if (spec.jobName === 'job:daily-intelligence:campaign') {
+      calls.push(`campaign_job:${spec.idempotencyKey.split(':')[3]}`);
+      // The campaign body RUNS (until its first fault), so anything it does first, such as a throttle
+      // call, is exercised rather than skipped by this double. Its later I/O is undeclared and throws,
+      // so the job FAILS, as a 23502 on its strategic-insight write would.
+      try { await body(); } catch (e) { return { status: 'failed', error: e }; }
+      return { status: 'failed', error: new Error('campaign failed (23502)') };
+    }
     await body();
     return { status: 'completed' };
   },
@@ -203,8 +214,13 @@ jest.mock('../../services/dataDrivenIntelligenceScheduler', () => {
   const actual = jest.requireActual('../../services/dataDrivenIntelligenceScheduler');
   return { ...actual, runDataDrivenIntelligenceForCompany: (...a: unknown[]) => runDataDriven(...a) };
 });
-jest.mock('../../services/prioritizationService', () => ({ recomputePrioritiesForCompany: async () => { calls.push('priority_recompute'); } }));
-jest.mock('../../services/behaviorAlertService', () => ({ evaluateBehaviorAlerts: async () => { calls.push('behavior_alerts'); return { sent: 1, deduplicated: 0 }; } }));
+const failStep = { priority_recompute: false, behavior_alerts: false };
+jest.mock('../../services/prioritizationService', () => ({
+  recomputePrioritiesForCompany: async () => { calls.push('priority_recompute'); if (failStep.priority_recompute) throw new Error('prio down'); },
+}));
+jest.mock('../../services/behaviorAlertService', () => ({
+  evaluateBehaviorAlerts: async () => { calls.push('behavior_alerts'); if (failStep.behavior_alerts) throw new Error('alerts down'); return { sent: 1, deduplicated: 0 }; },
+}));
 const outcomesFail = jest.fn();
 jest.mock('../../services/behaviorActionTrackingService', () => ({
   evaluateBehaviorActionOutcomes: async () => { calls.push('behavior_action_outcomes'); await outcomesFail(); },
@@ -245,13 +261,71 @@ describe('3. dailyIntelligence: a failed campaign still queues its company; comp
     detectOpportunities.mockReset().mockImplementation(async () => { calls.push('opportunities'); return []; });
     runDataDriven.mockReset().mockImplementation(async () => { calls.push('data_driven_engines'); return summary(); });
     outcomesFail.mockReset().mockResolvedValue(undefined);
+    failStep.priority_recompute = false;
+    failStep.behavior_alerts = false;
+    writes.length = 0;
+    // Like the REAL throttle: keyed by COMPANY ONLY (decision_generation_controls PK company_id),
+    // shared by every source, refusing a second generation inside the 60-minute minimum.
+    const generatedRecently = new Set<string>();
+    throttle.mockImplementation(async (co: string, source: string) => {
+      calls.push(`throttle:${co}:${source}`);
+      if (generatedRecently.has(co)) throw new DecisionGenerationThrottledError(`${source} blocked by min_refresh_interval for company ${co}.`, co, source);
+      generatedRecently.add(co);
+    });
   });
-  const ran = () => calls.filter((c) => !c.startsWith('attempt:'));
+  const ran = () => calls.filter((c) => !c.startsWith('attempt:') && !c.startsWith('campaign_job:') && !c.startsWith('throttle:'));
   const attempts = (n: string) => calls.filter((c) => c === `attempt:job:daily-intelligence:company:${n}`).length;
 
   it('QUEUE: the company job runs although its only campaign job FAILED', async () => {
     await runDailyIntelligence();
-    expect(ran()).toEqual(['opportunities', 'data_driven_engines', 'priority_recompute', 'behavior_alerts', 'behavior_action_outcomes']);
+    expect(ran().filter((c) => !c.startsWith('campaign_job:') && !c.startsWith('throttle:'))).toEqual(
+      ['opportunities', 'data_driven_engines', 'priority_recompute', 'behavior_alerts', 'behavior_action_outcomes']);
+  });
+
+  it('NO THROTTLE: both campaigns of one company are processed, and daily never consults the throttle', async () => {
+    tables.campaign_versions = () => ({ data: [{ campaign_id: 'camp-1', company_id: 'co-a' }, { campaign_id: 'camp-2', company_id: 'co-a' }], error: null });
+    tables.campaigns = () => ({ data: [{ id: 'camp-1', status: 'active' }, { id: 'camp-2', status: 'active' }], error: null });
+    const r = await runDailyIntelligence();
+    expect(calls.filter((c) => c.startsWith('campaign_job:')).sort()).toEqual(['campaign_job:camp-1', 'campaign_job:camp-2']);
+    expect(calls.filter((c) => c.startsWith('throttle:'))).toEqual([]);
+    expect(r.errors.some((e: string) => /throttl|blocked by/.test(e))).toBe(false);
+  });
+
+  it('FEEDBACK NOT BLOCKED: a daily run for a company does not throttle feedbackIntelligence for it', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { generateFeedbackInsights } = require('../../services/feedbackIntelligenceEngine');
+    await runDailyIntelligence();
+    signals = [{ id: 's1', company_id: 'co-a', post_id: 'p', platform: 'linkedin', engagement_type: 'like', engagement_count: 0 }];
+    const fb = await generateFeedbackInsights();
+    expect(fb).toMatchObject({ companies_throttled: 0, companies_failed: 0, decisions_archived: 1 });
+  });
+
+  const runStatus = () => writes.filter((w) => w.table === 'intelligence_job_runs' && w.method === 'update').map((w) => w.arg.status);
+
+  it('STATUS failed: every company that ran failed all five steps (and it is logged at ERROR)', async () => {
+    detectOpportunities.mockImplementation(async () => { throw new Error('opp down'); });
+    runDataDriven.mockImplementation(async () => { throw new Error('engines down'); });
+    failStep.priority_recompute = true;
+    failStep.behavior_alerts = true;
+    outcomesFail.mockRejectedValue(new Error('outcomes down'));
+    const r = await runDailyIntelligence();
+    expect(r).toMatchObject({ companies_ran: 1, company_step_failures: 5, companies_all_steps_failed: 1 });
+    expect(runStatus()).toEqual(['failed']);
+    expect((console.error as jest.Mock).mock.calls.some((c) => String(c[0]).includes('run FAILED'))).toBe(true);
+  });
+
+  it('STATUS completed_with_errors: a partial failure is not reported as clean', async () => {
+    failStep.behavior_alerts = true;
+    const r = await runDailyIntelligence();
+    expect(r).toMatchObject({ companies_ran: 1, company_step_failures: 1, companies_all_steps_failed: 0 });
+    expect(runStatus()).toEqual(['completed_with_errors']);
+  });
+
+  it('STATUS EMPTY RUN: no eligible company is NOT failed (no vacuous "all failed")', async () => {
+    tables.campaign_versions = () => ({ data: [], error: null });
+    const r = await runDailyIntelligence();
+    expect(r).toMatchObject({ companies_ran: 0, companies_all_steps_failed: 0 });
+    expect(runStatus()).toEqual(['completed']);
   });
 
   it('ISOLATION: a failing detectOpportunities no longer skips the engines, priorities or behaviour alerts', async () => {

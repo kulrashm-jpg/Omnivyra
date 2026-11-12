@@ -7,6 +7,9 @@
 -- KEPT: they match 20270111000003 and are not part of the defect.
 -- The body is the 20260411 body BYTE FOR BYTE (LF; md5 8bad7afa08dc1226d6982f268ed92a28), so the
 -- forward migration's preflight accepts it and the fix can be re-applied after a rollback.
+-- CONSTRAINT (05): after a rollback the body is LF regardless of what prod started with (prod's
+-- original is CRLF, md5 64faad0ef8a81658661c1dbef94e5ddf), so any future preflight on this function
+-- must accept BOTH forms. CR is whitespace inside a plpgsql body; the two behave identically.
 
 BEGIN;
 
