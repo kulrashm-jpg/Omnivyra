@@ -3,8 +3,9 @@
  * IGNORE `idempotencyKey`, so every keyed caller was silently not deduplicated. idempotency.ts reserves first and
  * sends only on its own reservation.
  *
- * The fake store implements the SAME state machine as the SQL functions (reserve / take over an expired 'sent' /
- * stale 'sending' -> 'uncertain' / 'uncertain' never reopened); realschema/transactional_email_idempotency_real
+ * The fake store implements the SAME state machine as the SQL functions (reserve / take over an expired 'sent' or
+ * 'uncertain' - an uncertain row's window being max(type TTL, 7 days) from when it became uncertain / stale
+ * 'sending' -> 'uncertain' / confirm-release-mark move only 'sending'); realschema/transactional_email_idempotency_real
  * holds the SQL to it, so the fake is no kinder than the real thing.
  */
 import {
@@ -23,16 +24,25 @@ function fakeStore(clock: { now: number }) {
       const fresh = (): Row => ({ state: 'sending', messageId: null, createdAt: clock.now, expiresAt: clock.now + ttlSeconds * 1000, recipientSha256: r, emailType });
       let outcome: ReserveOutcome;
       if (!cur) { rows.set(key, fresh()); outcome = 'reserved'; }
-      else if (cur.state === 'sent' && cur.expiresAt <= clock.now) { rows.set(key, fresh()); outcome = 'reserved'; }
+      else if ((cur.state === 'sent' || cur.state === 'uncertain') && cur.expiresAt <= clock.now) { rows.set(key, fresh()); outcome = 'reserved'; }
       else if (cur.state === 'sent') outcome = 'duplicate_sent';
       else if (cur.state === 'uncertain') outcome = 'duplicate_uncertain';
-      else if (clock.now - cur.createdAt > staleSeconds * 1000) { cur.state = 'uncertain'; outcome = 'stale_marked_uncertain'; }
+      else if (clock.now - cur.createdAt > staleSeconds * 1000) { cur.state = 'uncertain'; cur.expiresAt = Math.max(cur.expiresAt, clock.now + 7 * 24 * 3600 * 1000); outcome = 'stale_marked_uncertain'; }
       else outcome = 'duplicate_inflight';
-      return { outcome, messageId: rows.get(key)?.messageId ?? null };
+      const row = rows.get(key);
+      const freesAt = row && row.state === 'uncertain' && outcome !== 'reserved' ? new Date(row.expiresAt).toISOString() : null;
+      return { outcome, messageId: row?.messageId ?? null, freesAt };
     },
     async confirm({ key, messageId }) { calls.push(`confirm:${key}`); const r = rows.get(key); if (r && r.state === 'sending') { r.state = 'sent'; r.messageId = messageId; } },
     async release({ key }) { calls.push(`release:${key}`); if (rows.get(key)?.state === 'sending') rows.delete(key); },
-    async markUncertain({ key }) { calls.push(`uncertain:${key}`); const r = rows.get(key); if (r && r.state === 'sending') r.state = 'uncertain'; },
+    async markUncertain({ key }) {
+      calls.push(`uncertain:${key}`);
+      const r = rows.get(key);
+      if (!r || r.state !== 'sending') return null;
+      r.state = 'uncertain';
+      r.expiresAt = Math.max(r.expiresAt, clock.now + 7 * 24 * 3600 * 1000);
+      return new Date(r.expiresAt).toISOString();
+    },
   };
   return { store, rows, calls };
 }
@@ -97,12 +107,27 @@ describe('an UNCERTAIN send is never resent', () => {
     expect(h.logs.map(([e]) => e)).toContain('TRANSACTIONAL_EMAIL_UNCERTAIN');
   });
 
-  it('even after the window, an uncertain key is NEVER taken over', async () => {
-    const h = harness();
+  it('the UNCERTAIN WINDOW is max(type TTL, 7 days): never resent inside it; after it the key frees (e9 ruling, 05)', async () => {
+    const h = harness(); // team_invite: TTL 1h, so the 7-day floor rules
+    const markedAt = h.clock.now;
     await h.run('k', async () => { throw net(); });
-    h.clock.now += 400 * 24 * 3600 * 1000;
-    expect((await h.run('k', async () => 'x')).status).toBe(409);
-    expect(h.sends).toEqual(['k']);
+    const alert = h.logs.find(([e]) => e === 'TRANSACTIONAL_EMAIL_UNCERTAIN')![1];
+    expect(alert.freesAt).toBe(new Date(markedAt + 7 * 24 * 3600 * 1000).toISOString()); // the alert says WHEN the key frees
+    h.clock.now = markedAt + 7 * 24 * 3600 * 1000 - 1;
+    expect((await h.run('k', async () => 'x')).status).toBe(409);       // still inside: never resent
+    h.clock.now = markedAt + 7 * 24 * 3600 * 1000 + 1;
+    expect(await h.run('k', async () => 'mid-2')).toEqual({ status: 200, body: { ok: true, messageId: 'mid-2' } }); // freed
+    expect(h.sends).toEqual(['k', 'k']);
+  });
+
+  it('a type TTL LONGER than 7 days keeps the uncertain window that long (lead_outreach: 30 days)', async () => {
+    const h = harness();
+    const at = h.clock.now;
+    await h.run('k', async () => { throw net(); }, 'lead_outreach');
+    h.clock.now = at + 8 * 24 * 3600 * 1000;
+    expect((await h.run('k', async () => 'x', 'lead_outreach')).status).toBe(409);
+    h.clock.now = at + 30 * 24 * 3600 * 1000 + 1;
+    expect((await h.run('k', async () => 'y', 'lead_outreach')).status).toBe(200);
   });
 
   it('a reservation stuck in sending (crash mid-send) past the stale bound becomes uncertain, is never resent, and raises an alert-ready event', async () => {
@@ -112,7 +137,7 @@ describe('an UNCERTAIN send is never resent', () => {
     expect(await h.run('k', async () => 'x')).toEqual({ status: 409, body: { ok: false, error: 'IDEMPOTENCY_UNCERTAIN', duplicate: true, retryable: false } });
     expect(h.rows.get('k')?.state).toBe('uncertain');
     expect(h.sends).toEqual([]);
-    expect(h.logs).toEqual(expect.arrayContaining([['TRANSACTIONAL_EMAIL_UNCERTAIN', expect.objectContaining({ reason: 'stale_sending_reservation' })]]));
+    expect(h.logs).toEqual(expect.arrayContaining([['TRANSACTIONAL_EMAIL_UNCERTAIN', expect.objectContaining({ reason: 'stale_sending_reservation', freesAt: expect.any(String) })]]));
   });
 });
 

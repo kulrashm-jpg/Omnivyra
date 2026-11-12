@@ -41,9 +41,13 @@ export function rpcStore(opts: { url: string; key: string; fetchImpl?: typeof fe
       const data = await rpc("transactional_email_reserve", {
         p_key: key, p_email_type: emailType, p_recipient_sha256: recipientSha256, p_ttl_seconds: ttlSeconds, p_stale_seconds: staleSeconds,
       });
-      const row = (Array.isArray(data) ? data[0] : data) as { outcome?: unknown; message_id?: unknown } | null;
+      const row = (Array.isArray(data) ? data[0] : data) as { outcome?: unknown; message_id?: unknown; frees_at?: unknown } | null;
       if (!row || typeof row.outcome !== "string" || !OUTCOMES.has(row.outcome)) throw new Error("IDEMPOTENCY_STORE_RESERVE_UNREADABLE");
-      return { outcome: row.outcome as ReserveOutcome, messageId: typeof row.message_id === "string" ? row.message_id : null };
+      return {
+        outcome: row.outcome as ReserveOutcome,
+        messageId: typeof row.message_id === "string" ? row.message_id : null,
+        freesAt: typeof row.frees_at === "string" ? row.frees_at : null,
+      };
     },
     async confirm({ key, messageId }) {
       await rpc("transactional_email_confirm", { p_key: key, p_message_id: messageId });
@@ -52,7 +56,8 @@ export function rpcStore(opts: { url: string; key: string; fetchImpl?: typeof fe
       await rpc("transactional_email_release", { p_key: key });
     },
     async markUncertain({ key, reason }) {
-      await rpc("transactional_email_mark_uncertain", { p_key: key, p_reason: reason });
+      const freesAt = await rpc("transactional_email_mark_uncertain", { p_key: key, p_reason: reason });
+      return typeof freesAt === "string" ? freesAt : null;
     },
   };
 }
