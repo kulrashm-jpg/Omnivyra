@@ -75,6 +75,7 @@ export const updateApiHealth = async (input: {
   accountId?: string | null;
 }): Promise<ApiHealthSnapshot | null> => {
   try {
+    // cross-tenant: external-api-health-system-metrics
     const { data, error } = await ownedDbTable('external_api_health')
       .select('*')
       .eq('api_source_id', input.apiId)
@@ -116,6 +117,7 @@ export const updateApiHealth = async (input: {
       ...(input.accountId !== undefined ? { account_id: input.accountId ?? null } : {}),
     };
 
+    // cross-tenant: external-api-health-system-metrics
     let upsertError = (await ownedDbTable('external_api_health')
       .upsert(payloadWithLastTest, { onConflict: 'api_source_id' })).error;
 
@@ -130,6 +132,7 @@ export const updateApiHealth = async (input: {
         reliability_score: reliabilityScore,
         ...(input.accountId !== undefined ? { account_id: input.accountId ?? null } : {}),
       };
+      // cross-tenant: external-api-health-system-metrics
       upsertError = (await ownedDbTable('external_api_health')
         .upsert(payloadWithoutLastTest, { onConflict: 'api_source_id' })).error;
     }
@@ -178,6 +181,7 @@ export const updateApiHealth = async (input: {
 
 export const getHealthSnapshot = async (apiIds: string[]): Promise<ApiHealthSnapshot[]> => {
   if (!apiIds.length) return [];
+  // cross-tenant: external-api-health-system-metrics
   const { data, error } = await ownedDbTable('external_api_health')
     .select('*')
     .in('api_source_id', apiIds);

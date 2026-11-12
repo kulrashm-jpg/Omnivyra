@@ -76,6 +76,9 @@ export async function handleExternalApisGet(req: NextApiRequest, res: NextApiRes
       const apiIds = apis.map((api) => api.id);
       let healthMap: Record<string, any> = {};
       if (apiIds.length > 0) {
+        // Health METRICS for exactly the sources listed above: the company's own + platform sources
+        // (getPlatformConfigs, tenantOrPlatformTable), platform presets only (catalog), or all for a platform admin.
+        // cross-tenant: external-api-health-tenant-view
         const { data: healthData, error: healthError } = await supabase
           .from('external_api_health')
           .select('*')

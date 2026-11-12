@@ -14,6 +14,7 @@ import {
   DEFAULT_RATE_LIMIT_PER_MIN,
 } from './requestValidation';
 import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantOrPlatformTable } from '../../db/tenantTable';
 
 // ── Re-export validatePlatformConfig so callers can import from here ──────────
 export { validatePlatformConfig } from './requestValidation';
@@ -23,6 +24,8 @@ async function fetchHealthMapForApiIds(
   apiIds: string[]
 ): Promise<Record<string, ExternalApiHealth>> {
   if (apiIds.length === 0) return {};
+  // Health METRICS only, for source ids the caller already read through its own scope (tenant-or-platform).
+  // cross-tenant: external-api-health-metrics-config
   const { data: healthData, error: healthError } = await ownedDbTable('external_api_health')
     .select('*')
     .in('api_source_id', apiIds);
@@ -156,21 +159,18 @@ export async function getPlatformConfigs(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  const createQuery = () =>
-    ownedDbTable('external_api_sources')
-      .select('*')
-      .order('created_at', { ascending: true });
+  // S2 tenant seam (e1, 83 ruling): EVERY source read below is the company's OWN sources or PLATFORM sources
+  // (company_id IS NULL), through tenantOrPlatformTable. Callers have already authorized companyId (a route after
+  // its access check, or a system path acting for the company); a non-uuid id throws TENANT_CONTEXT_MISSING.
+  // Previously: an interpolated .or() of the request companyId, an error fallback that re-read the table with NO
+  // filter, and two `.in('id', enabledIds)` reads that returned ANY source a company config row named - including
+  // another company's private source.
+  const tenant = systemTenantContext(companyId, 'external API platform configs for an authorized company');
+  const sourcesOf = () => tenantOrPlatformTable('external_api_sources', tenant);
 
-  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  let sources: any[] = scopedResult.error ? [] : (scopedResult.data || []);
-  if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to load platform configs: ${scopedResult.error.message}`);
-  }
-  if (scopedResult.error) {
-    const fallbackResult = await createQuery();
-    if (fallbackResult.error) throw new Error(`Failed to load platform configs: ${fallbackResult.error.message}`);
-    sources = fallbackResult.data || [];
-  }
+  const scopedResult = await sourcesOf().select('*').order('created_at', { ascending: true });
+  if (scopedResult.error) throw new Error(`Failed to load platform configs: ${scopedResult.error.message}`);
+  const sources: any[] = scopedResult.data || [];
 
   const companyScoped = sources.some((row: any) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
   const companySpecific = companyScoped
@@ -186,7 +186,7 @@ export async function getPlatformConfigs(
   let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
 
   if (enabledIds.length > 0 && selectedPresets.length === 0) {
-    const { data: enabledSources } = await ownedDbTable('external_api_sources')
+    const { data: enabledSources } = await sourcesOf()
       .select('*')
       .eq('is_active', true)
       .in('id', enabledIds);
@@ -198,7 +198,7 @@ export async function getPlatformConfigs(
 
   let data = [...companySpecific, ...selectedPresets];
   if (companyId && data.length === 0 && enabledIds.length > 0) {
-    const { data: fallbackSources } = await ownedDbTable('external_api_sources')
+    const { data: fallbackSources } = await sourcesOf()
       .select('*')
       .eq('is_active', true)
       .in('id', enabledIds);
@@ -284,6 +284,28 @@ export async function getPlatformStrategies(companyId?: string | null): Promise<
   });
 }
 
+/**
+ * The company's OWN source for a platform (e1 S2): an exact category match first, then a name that CONTAINS the
+ * platform with its LIKE characters escaped (matched literally). Two ordered reads - never an interpolated .or()
+ * filter - and NEVER an unscoped fallback: a failed read is an error, not "read every company's sources".
+ */
+async function findOwnSourceByPlatform(companyId: string, platform: string): Promise<{ data: any[] | null; error: any }> {
+  const byCategory = await ownedDbTable('external_api_sources')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('category', platform)
+    .order('created_at', { ascending: true })
+    .limit(1);
+  if (byCategory.error || (byCategory.data?.length ?? 0) > 0) return byCategory;
+  const literal = platform.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
+  return ownedDbTable('external_api_sources')
+    .select('*')
+    .eq('company_id', companyId)
+    .ilike('name', `%${literal}%`)
+    .order('created_at', { ascending: true })
+    .limit(1);
+}
+
 export async function getPlatformConfigByPlatform(
   companyId: string | null | undefined,
   platform: string
@@ -292,28 +314,14 @@ export async function getPlatformConfigByPlatform(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return null;
   }
-  const createQuery = () =>
-    ownedDbTable('external_api_sources')
-      .select('*')
-      .or(`category.eq.${platform},name.ilike.%${platform}%`)
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-  const scopedResult = await createQuery().eq('company_id', companyId);
-  let record = scopedResult.data?.[0];
+  // Previously an error mentioning company_id fell back to the SAME query with NO company filter - i.e. any
+  // company's source for this platform. Now a failed read is just a failure.
+  const scopedResult = await findOwnSourceByPlatform(companyId, platform);
   if (scopedResult.error) {
-    const message = scopedResult.error.message || '';
-    if (!message.toLowerCase().includes('company_id')) {
-      console.warn('Failed to load platform config', { platform });
-      return null;
-    }
-    const fallbackResult = await createQuery();
-    if (fallbackResult.error) {
-      console.warn('Failed to load platform config', { platform });
-      return null;
-    }
-    record = fallbackResult.data?.[0];
+    console.warn('Failed to load platform config', { platform });
+    return null;
   }
+  const record = scopedResult.data?.[0];
   if (!record) return null;
   if (!isApiSourceExecutable(record as ExternalApiSource)) {
     console.warn('EXTERNAL_API_SKIPPED_BY_FILTER', {
@@ -341,12 +349,7 @@ export async function getApiConfigByPlatform(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return null;
   }
-  const { data, error } = await ownedDbTable('external_api_sources')
-    .select('*')
-    .eq('company_id', companyId)
-    .or(`category.eq.${platform},name.ilike.%${platform}%`)
-    .order('created_at', { ascending: true })
-    .limit(1);
+  const { data, error } = await findOwnSourceByPlatform(companyId, platform);
 
   if (error) {
     console.warn('Failed to load external API config', { platform });
@@ -373,6 +376,8 @@ export async function getApiHealthByPlatform(
 ): Promise<ExternalApiHealth | null> {
   const config = await getApiConfigByPlatform(companyId, platform);
   if (!config) return null;
+  // Health METRICS for the company's OWN source just read above (getApiConfigByPlatform is .eq('company_id')).
+  // cross-tenant: external-api-health-metrics-config
   const { data, error } = await ownedDbTable('external_api_health')
     .select('*')
     .eq('api_source_id', config.id)
