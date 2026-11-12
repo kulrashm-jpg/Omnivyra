@@ -257,9 +257,10 @@ function scan() {
         if (why) findings.push({ rule: 'R9', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
       }
     }
-    // R10 (derive-then-authorize, e1/83 2026-11-13): ownerCompanyOfRow returns only the owning company; same shape rule.
+    // R10 (derive-then-authorize, e1/83 2026-11-13): ownerCompanyOfRow / ownerOfChildRow return only the owner (and, for
+    // the child form, the parent link); same shape rule - authorize the bound result before any seam/DB use.
     if (rel.startsWith('pages/api/')) {
-      for (const m of code.matchAll(/\bownerCompanyOfRow\s*\(/g)) {
+      for (const m of code.matchAll(/\b(?:ownerCompanyOfRow|ownerOfChildRow)\s*\(/g)) {
         const why = deriveThenAuthorize(m);
         if (why) findings.push({ rule: 'R10', file: rel, line: lineAt(m.index), table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
       }
