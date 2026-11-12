@@ -16,8 +16,9 @@ let mockNextId = 1;
 
 function mockTable(table: string) {
   const tests: Array<(r: Row) => boolean> = [];
-  let op: 'select' | 'insert' | 'delete' = 'select';
+  let op: 'select' | 'insert' | 'delete' | 'update' = 'select';
   let payload: Row[] = [];
+  let patch: Row = {};
   let mode: 'many' | 'one' = 'many';
   const run = () => {
     const rows = (mockDb[table] = mockDb[table] ?? []);
@@ -27,6 +28,7 @@ function mockTable(table: string) {
       return { data: mode === 'one' ? ins[0] : ins, error: null };
     }
     const hit = rows.filter((r) => tests.every((t) => t(r)));
+    if (op === 'update') { for (const r of hit) Object.assign(r, patch); return { data: null, error: null }; }
     if (op === 'delete') { mockDb[table] = rows.filter((r) => !hit.includes(r)); return { data: null, error: null }; }
     return { data: mode === 'one' ? hit[0] ?? null : hit, error: null };
   };
@@ -37,6 +39,7 @@ function mockTable(table: string) {
     in: (c: string, v: unknown[]) => { tests.push((r) => v.includes(r[c])); return b; },
     insert: (v: Row | Row[]) => { op = 'insert'; payload = Array.isArray(v) ? v : [v]; return b; },
     delete: () => { op = 'delete'; return b; },
+    update: (p: Row) => { op = 'update'; patch = p; return b; },
     single: () => { mode = 'one'; return b; },
     maybeSingle: () => { mode = 'one'; return b; },
     then: (ok: any, ko: any) => Promise.resolve(run()).then(ok, ko),
@@ -57,6 +60,8 @@ jest.mock('../../services/userContextService', () => ({
 /* eslint-disable @typescript-eslint/no-var-requires */
 const relationships = require('../../../pages/api/company/blog/relationships').default;
 const intelligence = require('../../../pages/api/company/blog/intelligence').default;
+const seriesItem = require('../../../pages/api/company/blog/series/[id]').default;
+const seriesIndex = require('../../../pages/api/company/blog/series/index').default;
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 async function call(handler: any, method: string, query: Row, body: Row = {}) {
@@ -84,6 +89,14 @@ beforeEach(() => {
     { id: 'c-b', company_id: B, blog_id: 'b1' },
     // a B-owned row pointing at A's blog id: a blog-id-only read would count it
     { id: 'c-bx', company_id: B, blog_id: 'a1' },
+  ];
+  mockDb.company_blog_series = [
+    { id: 's-a', company_id: A, title: 'A series' },
+    { id: 's-b', company_id: B, title: 'B series' },
+  ];
+  mockDb.company_blog_series_posts = [
+    { id: 'p-a', series_id: 's-a', blog_id: 'a1', position: 0 },
+    { id: 'p-b', series_id: 's-b', blog_id: 'b1', position: 0 },
   ];
 });
 
@@ -123,5 +136,47 @@ describe('intelligence', () => {
     expect(text).toContain('A one');
     const a1 = (r.body.posts ?? r.body.blogs ?? []).find((p: Row) => p.id === 'a1');
     expect(a1?.comments_count).toBe(1); // A's own comment only
+  });
+});
+
+describe('blog series (series_posts is a child of company_blog_series, S1 f285c998a)', () => {
+  it("GET another tenant's series -> 404, nothing of B returned", async () => {
+    const r = await call(seriesItem, 'GET', { company_id: A, id: 's-b' });
+    expect(r.statusCode).toBe(404);
+    expect(JSON.stringify(r.body)).not.toContain('B series');
+  });
+
+  it("PATCH another tenant's series -> 404; B's posts are NOT wiped or rewritten", async () => {
+    const r = await call(seriesItem, 'PATCH', { company_id: A, id: 's-b' }, { posts: [{ blog_id: 'a1', position: 0 }] });
+    expect(r.statusCode).toBe(404);
+    expect(mockDb.company_blog_series_posts.filter((p) => p.series_id === 's-b')).toEqual([{ id: 'p-b', series_id: 's-b', blog_id: 'b1', position: 0 }]);
+  });
+
+  it("own series GET returns its posts with A's blog details", async () => {
+    const r = await call(seriesItem, 'GET', { company_id: A, id: 's-a' });
+    expect(r.statusCode).toBe(200);
+    expect(r.body.company_blog_series_posts).toEqual([expect.objectContaining({ blog_id: 'a1', title: 'A one' })]);
+  });
+
+  it("own series PATCH replaces ONLY that series' posts", async () => {
+    const r = await call(seriesItem, 'PATCH', { company_id: A, id: 's-a' }, { posts: [{ blog_id: 'a2', position: 1 }] });
+    expect(r.statusCode).toBe(200);
+    expect(mockDb.company_blog_series_posts.filter((p) => p.series_id === 's-a').map((p) => p.blog_id)).toEqual(['a2']);
+    expect(mockDb.company_blog_series_posts.filter((p) => p.series_id === 's-b')).toHaveLength(1);
+  });
+
+  it("the series list holds only A's series and posts; a create is stamped with A", async () => {
+    const list = await call(seriesIndex, 'GET', { company_id: A });
+    expect(list.statusCode).toBe(200);
+    expect(list.body.series.map((x: Row) => x.id)).toEqual(['s-a']);
+    expect(JSON.stringify(list.body)).not.toContain('b1');
+    const made = await call(seriesIndex, 'POST', { company_id: A }, { title: 'New' });
+    expect(made.statusCode).toBe(201);
+    expect(mockDb.company_blog_series.find((x) => x.title === 'New')).toMatchObject({ company_id: A });
+  });
+
+  it("intelligence: series carry only A's series and their posts", async () => {
+    const r = await call(intelligence, 'GET', { company_id: A });
+    expect(r.body.series.map((x: Row) => x.id)).toEqual(['s-a']);
   });
 });

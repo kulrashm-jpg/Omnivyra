@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
+import { tenantChildTable, tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -27,11 +27,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (postsErr) return res.status(500).json({ error: postsErr.message });
 
     // ── 2. Series (company_blog_series — FK → blogs(id)) ─────────────────
-    const { data: seriesRows } = await supabase
-      .from('company_blog_series')
-      .select(`id, title, slug, description, cover_url, created_at, company_blog_series_posts(blog_id, position)`)
-      .eq('company_id', company_id)
+    // No embed through the seam (S1): series, then each one's posts as its child.
+    const { data: seriesBase } = await tenantTable('company_blog_series', tenant)
+      .select('id, title, slug, description, cover_url, created_at')
       .order('created_at', { ascending: false });
+    const seriesRows = await Promise.all(((seriesBase ?? []) as Array<{ id: string }>).map(async (s) => {
+      const { data: sp } = await (await tenantChildTable('company_blog_series_posts', tenant, s.id)).select('blog_id, position');
+      return { ...s, company_blog_series_posts: sp ?? [] };
+    }));
 
     // ── 3. Relationships (company_blog_relationships — FK → blogs(id)) ────
     const { data: relRows } = await tenantTable('company_blog_relationships', tenant)
