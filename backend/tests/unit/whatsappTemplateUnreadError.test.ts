@@ -6,6 +6,7 @@
  */
 const mockFetch = { calls: 0 };
 const mockRpc = { fail: false };
+const AT = new Date('2026-01-01T10:00:00Z'); // in the PAST: a mutant stamping "now" must look NEWER
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => require('../helpers/fakeWhatsappDb').fakeTable(t),
@@ -19,6 +20,9 @@ jest.mock('../../db/writeOwner', () => ({
     const t = rows.find((r) => r.id === a.p_template_id);
     if (!t) return { data: 'not_found', error: null };
     if (t.status_event_at && String(a.p_event_at) < String(t.status_event_at)) return { data: 'stale', error: null };
+    const rank = ['APPROVED', 'PAUSED', 'REJECTED', 'DISABLED'];
+    if (t.status_event_at && String(a.p_event_at) === String(t.status_event_at)
+        && rank.indexOf(String(a.p_event)) + 1 < rank.indexOf(String(t.status)) + 1) return { data: 'stale', error: null };
     if (a.p_event === 'APPROVED') {
       for (const r of rows) if (r.id !== t.id && r.company_id === t.company_id && r.template_name === t.template_name && r.is_active) Object.assign(r, { is_active: false, status: 'DEPRECATED' });
       Object.assign(t, { is_active: true, status: 'APPROVED', status_event_at: a.p_event_at });
@@ -58,7 +62,7 @@ describe('webhook: a PAUSED / DISABLED template must stop being sendable', () =>
   it.each(['PAUSED', 'DISABLED', 'REJECTED'] as const)('%s whose status apply FAILS: the job throws (retries); never silently left sendable', async (event) => {
     seed([tpl({ id: 't1' })]);
     mockRpc.fail = true;
-    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event })).rejects.toThrow('not applied');
+    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event, event_at: AT })).rejects.toThrow('not applied');
     expect(row('t1')).toMatchObject({ is_active: true }); // unchanged: the retry will apply it
   });
 
@@ -70,19 +74,44 @@ describe('webhook: a PAUSED / DISABLED template must stop being sendable', () =>
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('older status event arrived late'), expect.objectContaining({ template_id: 't1' }));
   });
 
+  it('05 (a): an event with NO time is REFUSED (never stamped "now"): status untouched, logged by name', async () => {
+    seed([tpl({ id: 't1' })]);
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'PAUSED', event_at: AT });
+    // an old APPROVED of unknown time must NOT be applied over the PAUSED as if it were newest
+    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'APPROVED' })).resolves.toBeUndefined();
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'APPROVED', event_at: new Date('invalid') });
+    expect(row('t1')).toMatchObject({ status: 'PAUSED', is_active: false });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('TEMPLATE_STATUS_NO_EVENT_TIME'), expect.objectContaining({ template_id: 't1', event: 'APPROVED' }));
+  });
+
+  it('05 (b): at an EQUAL event time the more restrictive outcome wins, whichever arrives second', async () => {
+    seed([tpl({ id: 't1' }), tpl({ id: 't2', meta_template_id: 'meta-2', template_name: 'other' })]);
+    // REJECTED then APPROVED (same second): APPROVED is stale
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'REJECTED', event_at: AT });
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'APPROVED', event_at: AT });
+    expect(row('t1')).toMatchObject({ status: 'REJECTED', is_active: false });
+    // APPROVED then PAUSED (same second): PAUSED applies
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-2', message_template_name: 'other', event: 'APPROVED', event_at: AT });
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-2', message_template_name: 'other', event: 'PAUSED', event_at: AT });
+    expect(row('t2')).toMatchObject({ status: 'PAUSED', is_active: false });
+    // a duplicate delivery of the same event re-applies (idempotent)
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-2', message_template_name: 'other', event: 'PAUSED', event_at: AT });
+    expect(row('t2')).toMatchObject({ status: 'PAUSED', is_active: false });
+  });
+
   it('the LOOKUP fails: the job throws (retries) - not "not our template, ignore"', async () => {
     seed([tpl({ id: 't1' })]);
     failNext('whatsapp_templates', 'select');
-    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'PAUSED' })).rejects.toThrow('Template lookup failed');
+    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'PAUSED', event_at: AT })).rejects.toThrow('Template lookup failed');
     expect(row('t1')).toMatchObject({ is_active: true }); // unchanged: the retry will apply it
   });
 
   it('NEGATIVE CONTROL: PAUSED recorded -> no longer sendable; an unknown template id is still ignored', async () => {
     seed([tpl({ id: 't1' })]);
-    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'PAUSED' });
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'PAUSED', event_at: AT });
     expect(row('t1')).toMatchObject({ status: 'PAUSED', is_active: false });
     await expect(getActiveTemplate(ORG, 'hello')).rejects.toThrow('No active approved template');
-    await expect(handleTemplateStatusWebhook({ message_template_id: 'not-ours', message_template_name: 'x', event: 'PAUSED' })).resolves.toBeUndefined();
+    await expect(handleTemplateStatusWebhook({ message_template_id: 'not-ours', message_template_name: 'x', event: 'PAUSED', event_at: AT })).resolves.toBeUndefined();
   });
 });
 
@@ -92,14 +121,14 @@ describe('activation never leaves zero or two active versions silently', () => {
   it('the activation FAILS: throws (the webhook retries), and nothing changed - the old version stays the active one', async () => {
     seed([tpl({ id: 'old', version: 1 }), tpl({ id: 'new', version: 2, status: 'PENDING', is_active: false, meta_template_id: 'meta-2' })]);
     mockRpc.fail = true;
-    await expect(activateTemplate('new')).rejects.toThrow('not applied');
+    await expect(activateTemplate('new', AT)).rejects.toThrow('not applied');
     expect(row('new')).toMatchObject({ is_active: false });
     expect(row('old')).toMatchObject({ is_active: true });
   });
 
   it('NEGATIVE CONTROL: activation succeeds -> exactly one active version, the new one', async () => {
     seed([tpl({ id: 'old', version: 1 }), tpl({ id: 'new', version: 2, status: 'PENDING', is_active: false, meta_template_id: 'meta-2' })]);
-    await activateTemplate('new');
+    await activateTemplate('new', AT);
     expect(fakeDb.tables.whatsapp_templates.filter((r) => r.is_active).map((r) => r.id)).toEqual(['new']);
   });
 });

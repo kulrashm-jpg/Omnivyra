@@ -17,7 +17,11 @@
 -- NULLS NOT DISTINCT: company_id is nullable; a NULL company must not escape the rule.
 --
 -- whatsapp_apply_template_status(template, event, event_at, reason): locks the template's name group
--- (FOR UPDATE), ignores an event older than the template's status_event_at, and applies APPROVED
+-- (FOR UPDATE), ignores an event older than the template's status_event_at - and, at an EQUAL time
+-- (Meta stamps whole seconds, so time cannot order them), one LESS restrictive than the status it
+-- holds (APPROVED < PAUSED < REJECTED < DISABLED): wrongly restricting blocks a send, visibly and
+-- recoverably; wrongly permitting sends on a template Meta stopped. Equal and as restrictive is
+-- re-applied (a duplicate delivery is idempotent; a real same-second transition is not lost). It applies APPROVED
 -- (deprecate the other active versions, then activate this one) or PAUSED / DISABLED / REJECTED
 -- (deactivate) in the same transaction. Returns 'applied' | 'stale' | 'not_found'.
 -- SECURITY INVOKER (the service role already writes this table), search_path pinned, EXECUTE by full
@@ -69,6 +73,7 @@ DECLARE
   v_company  uuid;
   v_name     text;
   v_last     timestamptz;
+  v_status   text;
 BEGIN
   IF p_template_id IS NULL OR p_event IS NULL OR p_event_at IS NULL
      OR p_event NOT IN ('APPROVED', 'REJECTED', 'PAUSED', 'DISABLED') THEN
@@ -86,9 +91,14 @@ BEGIN
    WHERE company_id IS NOT DISTINCT FROM v_company AND template_name = v_name
    ORDER BY id FOR UPDATE;
 
-  SELECT status_event_at INTO v_last FROM public.whatsapp_templates WHERE id = p_template_id;
+  SELECT status_event_at, status INTO v_last, v_status FROM public.whatsapp_templates WHERE id = p_template_id;
   IF v_last IS NOT NULL AND p_event_at < v_last THEN
     RETURN 'stale'; -- an older event, delivered late: Meta's later decision stands
+  END IF;
+  IF v_last IS NOT NULL AND p_event_at = v_last
+     AND array_position(ARRAY['APPROVED', 'PAUSED', 'REJECTED', 'DISABLED'], p_event)
+       < coalesce(array_position(ARRAY['APPROVED', 'PAUSED', 'REJECTED', 'DISABLED'], v_status), 0) THEN
+    RETURN 'stale'; -- same second, less restrictive than what is held: the restrictive outcome stands
   END IF;
 
   IF p_event = 'APPROVED' THEN

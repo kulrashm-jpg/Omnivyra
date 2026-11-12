@@ -25,8 +25,12 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
 
   const entries: any[] = payload?.entry ?? [];
   // A template status event that failed to apply is RETRIED (the job throws after the loop), never
-  // dropped: a lost PAUSED / DISABLED left the template sendable (CLASS-2 B9).
+  // dropped: a lost PAUSED / DISABLED left the template sendable (CLASS-2 B9). The retry carries ONLY
+  // the failed template changes (job.updateData below), so its safety does not rest on the other
+  // handlers being idempotent - updateRecipientDelivery is not (each run increments the broadcast's
+  // delivered / read counters again).
   let templateFailure: unknown = null;
+  const failedTemplateEntries: Array<{ id?: unknown; time?: unknown; changes: unknown[] }> = [];
 
   for (const entry of entries) {
     for (const change of entry?.changes ?? []) {
@@ -73,12 +77,22 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
           });
         } catch (err) {
           console.error('[wa-webhook-processor] template status failed', err);
-          templateFailure = err;
+          templateFailure = templateFailure ?? err;
+          failedTemplateEntries.push({ id: entry?.id, time: entry?.time, changes: [change] });
         }
       }
     }
   }
-  if (templateFailure) throw templateFailure;
+  if (templateFailure) {
+    try {
+      await job.updateData({ ...job.data, payload: { ...payload, entry: failedTemplateEntries } });
+    } catch (err) {
+      // The retry then re-runs the WHOLE payload (delivery counters may count twice) - still thrown:
+      // a template left sendable after Meta stopped it is the worse outcome.
+      console.error('[wa-webhook-processor] WA_WEBHOOK_RETRY_NARROW_FAILED: retry will re-run the whole payload', err);
+    }
+    throw templateFailure;
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

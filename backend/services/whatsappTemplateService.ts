@@ -196,7 +196,8 @@ async function applyTemplateStatus(
   return outcome;
 }
 
-export async function activateTemplate(templateId: string, eventAt: Date = new Date()): Promise<void> {
+/** `eventAt`: when Meta says the approval happened - never "now" for an event of unknown time. */
+export async function activateTemplate(templateId: string, eventAt: Date): Promise<void> {
   const outcome = await applyTemplateStatus(templateId, 'APPROVED', eventAt, null);
   if (outcome === 'not_found') throw new Error(`Template not found: ${templateId}`);
 }
@@ -265,8 +266,13 @@ export async function handleTemplateStatusWebhook(event: {
 
   const eventAt = event.event_at instanceof Date && !Number.isNaN(event.event_at.getTime()) ? event.event_at : null;
   if (!eventAt) {
-    console.warn('[whatsappTemplate] status event without a time; applied at receipt time (its order cannot be checked)', { meta_template_id: event.message_template_id, event: event.event });
+    // REFUSED, never stamped "now": an old event of unknown time stamped as the newest would be applied
+    // OVER a newer decision (a stale APPROVED over a true REJECTED leaves a rejected template sendable).
+    // An unapplied event is recoverable (the next event, a resync, an operator); a stale one applied as
+    // current is indistinguishable afterwards. Not thrown: a retry would not give it a time.
+    console.error('[whatsappTemplate] TEMPLATE_STATUS_NO_EVENT_TIME: status event refused - no event time, its order cannot be checked; status left unchanged', { template_id: data.id, meta_template_id: event.message_template_id, event: event.event });
+    return;
   }
   // A PAUSED / DISABLED / REJECTED that failed to apply left the template sendable: thrown (retried).
-  await applyTemplateStatus(data.id, event.event, eventAt ?? new Date(), event.reason ?? null);
+  await applyTemplateStatus(data.id, event.event, eventAt, event.reason ?? null);
 }
