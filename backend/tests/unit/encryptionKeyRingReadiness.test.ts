@@ -28,7 +28,17 @@ import { decryptCredential, encryptCredential } from '../../auth/credentialEncry
 import { decryptPhone } from '../../services/whatsappBroadcastService';
 
 const newKey = (): string => crypto.randomBytes(32).toString('hex');
-const KEY_A = newKey();
+// KEY_A's id must contain a hex LETTER: the "uppercase key id" case relies on toUpperCase() changing the id, and an
+// all-digit id (~2.3% of random keys) left it unchanged, so that case passed vacuously or failed at random
+// (FLAKY-KEYRING-001, S1 CI-198 run 43226420375). Draw until the id has a letter - deterministic in effect.
+const keyWithLetteredId = (): string => {
+  for (let i = 0; i < 1000; i++) {
+    const k = newKey();
+    if (/[a-f]/.test(encryptionKeyId(Buffer.from(k, 'hex')))) return k;
+  }
+  throw new Error('no key with a lettered id in 1000 draws');
+};
+const KEY_A = keyWithLetteredId();
 const KEY_B = newKey();
 
 function setKeys(current: string | undefined, previous?: string): void {
@@ -70,6 +80,9 @@ describe('malformed ciphertext fails closed', () => {
     ['non-hex iv', () => `zz${valid().slice(2)}`],
     ['odd-length body', () => `${valid()}a`],
   ];
+  it('precondition: the uppercase-key-id case really changes the id (never vacuous)', () => {
+    expect(idA().toUpperCase()).not.toBe(idA());
+  });
   it.each(cases)('%s → typed malformed/unknown error, input never returned', (_name, make) => {
     const data = make();
     const err = thrown(() => decryptWithKeyRing(data));
