@@ -93,11 +93,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     // ── 0. Resolve user row ─────────────────────────────────────────────────
-    const { data: userRow } = await supabase
+    // Two exact reads - never an interpolated .or() filter string (a value containing ',' or '.'
+    // would be parsed as filter syntax; an RFC-legal quoted local part can contain both). The
+    // auth uid wins; the email is the fallback. A read error refuses rather than reading as "no row".
+    const byUid = await supabase
       .from('users')
       .select('id, is_deleted')
-      .or(`supabase_uid.eq.${supabaseUid},email.eq.${authEmail.toLowerCase()}`)
+      .eq('supabase_uid', supabaseUid)
       .maybeSingle();
+    const byEmail = byUid.data || byUid.error
+      ? { data: null, error: null }
+      : await supabase
+          .from('users')
+          .select('id, is_deleted')
+          .eq('email', authEmail.toLowerCase())
+          .maybeSingle();
+    if (byUid.error || byEmail.error) {
+      console.error('[onboarding/complete] user lookup failed:', (byUid.error ?? byEmail.error)?.message);
+      return res.status(500).json({ error: 'Could not resolve user account. Please try again.' });
+    }
+    const userRow = byUid.data ?? byEmail.data;
 
     if (userRow && (userRow as any).is_deleted) {
       return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
