@@ -177,6 +177,19 @@ export const generateNetworkActionCandidates = async (input: CandidateInput) => 
   }
 
   const { error: insertError } = await ownedDbTable('community_ai_actions').insert(rows);
+  if (insertError && (insertError as { code?: string }).code === '23505') {
+    // CLASS-2 (migration 20270217000008): a concurrent run already created a pending action for at
+    // least one of these targets, and the batch insert is all-or-nothing. Insert one by one: a
+    // duplicate is skipped (it is already pending), every other row is still created.
+    let created = 0;
+    for (const row of rows) {
+      const { error: rowError } = await ownedDbTable('community_ai_actions').insert(row);
+      if (!rowError) { created += 1; continue; }
+      if ((rowError as { code?: string }).code === '23505') { skipped += 1; continue; }
+      throw new Error(`Failed to insert network actions: ${rowError.message}`);
+    }
+    return { created_count: created, skipped_count: skipped };
+  }
   if (insertError) {
     throw new Error(`Failed to insert network actions: ${insertError.message}`);
   }

@@ -190,7 +190,7 @@ const resolveActionRecord = async (
   }
 
   const id = action?.id || randomUUID();
-  const { data: created } = await ownedDbTable('community_ai_actions')
+  const { data: created, error: insertError } = await ownedDbTable('community_ai_actions')
     .insert({
       id,
       tenant_id: tenantId,
@@ -217,8 +217,31 @@ const resolveActionRecord = async (
     .select('*')
     .limit(1);
 
+  if (insertError) {
+    // CLASS-2 (migration 20270217000008): a concurrent evaluation inserted the same pending action
+    // first - community_ai_actions_one_pending refuses ours. That row IS this action: return it, so
+    // exactly one pending action (and at most one send) exists for the target.
+    if ((insertError as { code?: string }).code === '23505' && status === 'pending') {
+      const { data: winner } = await ownedDbTable('community_ai_actions')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .eq('organization_id', organizationId)
+        .eq('platform', platform)
+        .eq('action_type', actionType)
+        .eq('target_id', targetId)
+        .eq('status', 'pending')
+        .limit(1);
+      if (winner && winner.length > 0) return winner[0];
+    }
+    console.warn('[communityAiAutoRule] action record not created', { code: (insertError as { code?: string }).code, message: insertError.message });
+    return null;
+  }
+
   return created?.[0] || null;
 };
+
+/** Test seam: the pending-action writer (CLASS-2, migration 20270217000008). Not for production use. */
+export const __resolveActionRecordForTests = resolveActionRecord;
 
 export const evaluateAutoRules = async (input: AutoRuleInput) => {
   if (!input?.tenant_id || !input?.organization_id) {

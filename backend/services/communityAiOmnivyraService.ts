@@ -234,7 +234,7 @@ export const evaluateEngagement = async (
             .in('status', ['pending', 'approved'])
             .limit(1);
           if (!existing || existing.length === 0) {
-            await ownedDbTable('community_ai_actions').insert({
+            const { error: insertError } = await ownedDbTable('community_ai_actions').insert({
               tenant_id: input.tenant_id,
               organization_id: input.organization_id,
               platform,
@@ -255,6 +255,12 @@ export const evaluateEngagement = async (
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             });
+            // 23505: a concurrent request already created this pending action
+            // (community_ai_actions_one_pending, migration 20270217000008) - the
+            // outcome this insert wanted. Any other failure is reported, not silent.
+            if (insertError && (insertError as { code?: string }).code !== '23505') {
+              console.warn('[communityAiOmnivyra] pending action not created', { code: (insertError as { code?: string }).code, message: insertError.message });
+            }
           }
         }
       }

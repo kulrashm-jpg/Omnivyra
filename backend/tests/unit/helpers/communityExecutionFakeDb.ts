@@ -21,6 +21,12 @@ export type FakeDb = {
   statusCheck: Record<string, Set<string> | undefined>;
   /** Unique columns per table (single-column uniqueness, 23505 on conflict). */
   unique: Record<string, string[] | undefined>;
+  /**
+   * Composite (optionally PARTIAL) unique indexes per table, 23505 on conflict - e.g.
+   * community_ai_actions_one_pending: cols (tenant_id, organization_id, platform, action_type,
+   * target_id), where status = 'pending'. NULLS NOT DISTINCT (NULLs compare equal), as the index.
+   */
+  uniqueIndexes: Record<string, Array<{ cols: string[]; where?: (r: Row) => boolean }> | undefined>;
   ops: Array<{ table: string; op: string; patch?: Row }>;
 };
 
@@ -31,6 +37,7 @@ export function createFakeDb(seed: Record<string, Row[]> = {}): FakeDb {
     tables: {},
     statusCheck: {},
     unique: {},
+    uniqueIndexes: {},
     ops: [],
     from: (table: string) => builder(db, table),
   };
@@ -116,11 +123,18 @@ function builder(db: FakeDb, table: string) {
     return null;
   }
 
-  function uniqueViolation(candidate: Row, self: Row | null): boolean {
+  function uniqueViolation(candidate: Row, self: Row | null, also: Row[] = []): boolean {
+    const others = [...tableOf(db, table), ...also].filter((o) => o !== self);
     const cols = db.unique[table] || [];
-    return cols.some((c) =>
+    if (cols.some((c) =>
       candidate[c] !== null && candidate[c] !== undefined &&
-      tableOf(db, table).some((o) => o !== self && o[c] === candidate[c]));
+      others.some((o) => o[c] === candidate[c]))) return true;
+    for (const idx of db.uniqueIndexes[table] || []) {
+      if (idx.where && !idx.where(candidate)) continue;
+      const norm = (v: unknown) => (v === undefined ? null : v);
+      if (others.some((o) => (!idx.where || idx.where(o)) && idx.cols.every((c) => norm(o[c]) === norm(candidate[c])))) return true;
+    }
+    return false;
   }
 
   function execute() {
@@ -136,18 +150,24 @@ function builder(db: FakeDb, table: string) {
       return shape(out);
     }
     if (op === 'insert') {
+      // ALL-OR-NOTHING, as one INSERT statement: every row is checked (against the table AND the
+      // rows before it in this batch) before any is written.
       const list = Array.isArray(patch) ? patch : [patch as Row];
+      const accepted: Row[] = [];
       for (const r of list) {
         const row = { id: r.id ?? `fake-${++idSeq}`, ...r };
         const bad = checkRow(row);
         if (bad) return { data: null, error: bad };
-        if (uniqueViolation(row, null) || rows.some((o) => o.id === row.id)) {
+        if (uniqueViolation(row, null, accepted) || [...rows, ...accepted].some((o) => o.id === row.id)) {
           return { data: null, error: { message: 'duplicate key value violates unique constraint', code: '23505' } };
         }
+        accepted.push(row);
+      }
+      for (const row of accepted) {
         rows.push(row);
         db.ops.push({ table, op: 'insert', patch: row });
       }
-      return { data: returning ? list : null, error: null };
+      return { data: returning ? accepted.map((r) => ({ ...r })) : null, error: null };
     }
     if (op === 'update') {
       const hit = rows.filter(matches);
