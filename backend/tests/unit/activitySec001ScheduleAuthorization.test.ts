@@ -42,10 +42,20 @@ const CAMPAIGN_OWNER: Record<string, string> = {
   [CAMPAIGN_A]: COMPANY_A,
   [CAMPAIGN_B]: COMPANY_B,
 };
+/** A user who belongs to BOTH companies (S2: the cross-company social-account fallback). */
+const DUAL = 'user-dual';
 const MEMBERSHIP: Record<string, string[]> = {
   [ATTACKER]: [COMPANY_A],
   [VICTIM]: [COMPANY_B],
+  [DUAL]: [COMPANY_A, COMPANY_B],
 };
+/** Connected social accounts, by owner and company (faithful: the route's filters must all match). */
+const ACCOUNTS: Row[] = [
+  { id: `account-of-${ATTACKER}`, user_id: ATTACKER, company_id: COMPANY_A, platform: 'linkedin', is_active: true },
+  { id: `account-of-${VICTIM}`, user_id: VICTIM, company_id: COMPANY_B, platform: 'linkedin', is_active: true },
+  // DUAL has a LinkedIn account ONLY in company B.
+  { id: 'account-of-dual-in-B', user_id: DUAL, company_id: COMPANY_B, platform: 'linkedin', is_active: true },
+];
 
 let authUser: string | null = ATTACKER;
 /** The victim's existing scheduled post — the takeover target. */
@@ -111,8 +121,9 @@ function makeQuery(table: string) {
       return { data: { company_id: CAMPAIGN_OWNER[String(f.campaign_id)] ?? null }, error: null };
     }
     if (table === 'social_accounts') {
-      // Always scoped by user_id in the route; model that faithfully.
-      return { data: { id: `account-of-${f.user_id}` }, error: null };
+      // Faithful: a row matches only if EVERY supplied filter matches (eq, or membership for .in).
+      const hit = ACCOUNTS.find((a) => Object.entries(f).every(([k, v]) => (Array.isArray(v) ? v.includes(a[k]) : a[k] === v)));
+      return { data: hit ? { id: hit.id } : null, error: null };
     }
     if (table === 'scheduled_posts') {
       // The dedup lookups. A row matches only if EVERY supplied filter matches.
@@ -310,5 +321,24 @@ describe('G — an unknown campaign', () => {
     const res = await schedule(ATTACKER, { title: 'x' });
     expect(res.statusCode).toBe(400);
     expect(writes).toEqual([]);
+  });
+});
+
+/* ── S2 (55): the social account is chosen IN THE CAMPAIGN'S COMPANY only ── */
+
+describe('S2 — social account resolution is tenant-scoped (cross-company fallback removed)', () => {
+  it("CRITICAL: a two-company user scheduling into A's campaign never gets their company-B account attached", async () => {
+    const res = await schedule(DUAL, { campaignId: CAMPAIGN_A, title: 'dual post' });
+    expect(res.statusCode).toBe(200);
+    const inserts = postWrites().filter((w) => w.op === 'insert');
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].row.social_account_id).toBeNull();
+  });
+
+  it("CONTROL: the same user scheduling into B's campaign gets their company-B account", async () => {
+    const res = await schedule(DUAL, { campaignId: CAMPAIGN_B, title: 'dual post B' });
+    expect(res.statusCode).toBe(200);
+    const inserts = postWrites().filter((w) => w.op === 'insert');
+    expect(inserts[0].row.social_account_id).toBe('account-of-dual-in-B');
   });
 });
