@@ -93,6 +93,10 @@ jest.mock('../../services/rbacService', () => ({
   enforceRole: async () => true,
   Role: { COMPANY_ADMIN: 'COMPANY_ADMIN', SUPER_ADMIN: 'SUPER_ADMIN' },
 }));
+// The create route requires an Idempotency-Key (CLASS-2). This suite tests the handler's own
+// gates, so the middleware passes through here; the key requirement on the REAL middleware is
+// pinned by whatsappBroadcastCreateIdempotency.test.ts.
+jest.mock('../../middleware/withIdempotency', () => ({ withIdempotency: (h: unknown) => h }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../auth/metaAuthService', () => ({
   getValidAccessToken: async (id: string) => { tokenReads.push(id); return `token-of-${id}`; },

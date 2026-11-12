@@ -5,9 +5,16 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *
  * Query params (GET): company_id, status (optional filter), limit, offset
  * Body (POST): CreateBroadcastInput + contacts[] + enqueue? (bool) + plan?
+ *
+ * POST requires an Idempotency-Key header (CLASS-2, e9): a double-clicked or re-sent create with
+ * enqueue:true used to create TWO broadcasts and message every contact twice. withIdempotency
+ * reserves the key (api_idempotency_keys, unique) before the handler runs, so the second request
+ * replays the first's answer or is refused while it runs. The page mints one key per form
+ * submission (useIdempotencyKey). GET is unaffected.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -148,4 +155,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/whatsapp/broadcasts' });
+export default __createApiRoute(withIdempotency(handler, { methods: ['POST'], scope: 'whatsapp-broadcast-create' }), { route: '/api/whatsapp/broadcasts' });

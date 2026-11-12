@@ -15,6 +15,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useCompanyContext } from '@/components/CompanyContext';
+import { useIdempotencyKey } from '@/hooks/useIdempotencyKey';
 import { broadcastActions, describeBroadcastCreateOutcome, partialEnqueueMessage } from '@/lib/whatsapp/broadcastCreateOutcome';
 import {
   Send,
@@ -120,6 +121,10 @@ export default function WhatsAppBroadcastsPage() {
     body: '',
     recipients: '',        // one E.164 phone per line
   });
+  // One Idempotency-Key per create (CLASS-2): a double click or a re-sent submit of the SAME form
+  // reuses it, so the server creates and sends ONE broadcast. A changed form is a new key; reset()
+  // after a success, so creating an identical broadcast again on purpose is a new operation.
+  const createOp = useIdempotencyKey('wa-broadcast-create', [companyId, form]);
 
   // Load WA accounts + active templates
   useEffect(() => {
@@ -233,7 +238,7 @@ export default function WhatsAppBroadcastsPage() {
     try {
       const res = await fetch('/api/whatsapp/broadcasts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...createOp.headers },
         credentials: 'include',
         body: JSON.stringify({
           company_id: companyId,
@@ -249,6 +254,9 @@ export default function WhatsAppBroadcastsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to create broadcast');
+      // Today the form is cleared just below, which already changes the key; reset() keeps a
+      // deliberate identical second create a NEW operation even if the form stops clearing.
+      createOp.reset();
       setShowForm(false);
       setForm((f) => ({ ...f, name: '', body: '', recipients: '', template_params: '' }));
       setRecipientErrors([]);

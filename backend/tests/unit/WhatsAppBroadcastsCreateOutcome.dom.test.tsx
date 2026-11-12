@@ -23,14 +23,18 @@ let createAnswer: { status: number; body: Record<string, unknown> };
 let listed: Array<Record<string, unknown>> = [];
 let resumeAnswer: { status: number; body: Record<string, unknown> };
 const posted: string[] = [];
+/** The Idempotency-Key each create POST carried (CLASS-2). */
+const createKeys: Array<string | undefined> = [];
 
 const json = (status: number, body: unknown) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => body });
 
 beforeEach(() => {
   listed = [];
   posted.length = 0;
-  (global as unknown as { fetch: unknown }).fetch = jest.fn((url: string, init?: { method?: string }) => {
+  createKeys.length = 0;
+  (global as unknown as { fetch: unknown }).fetch = jest.fn((url: string, init?: { method?: string; headers?: Record<string, string> }) => {
     if (init?.method === 'POST') posted.push(url);
+    if (url === '/api/whatsapp/broadcasts' && init?.method === 'POST') createKeys.push(init.headers?.['Idempotency-Key']);
     if (url.includes('?action=enqueue')) return json(resumeAnswer.status, resumeAnswer.body);
     if (url.startsWith('/api/social-accounts/status')) {
       return json(200, { accounts: [{ platform_key: 'whatsapp', connected: true, expired: false, social_account_id: 'sa-1', account_name: 'WA' }] });
@@ -119,5 +123,30 @@ describe('WhatsApp broadcasts page: stranded recipients always have an action', 
     expect(await screen.findByText('Spring')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /resume/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('CLASS-2: one Idempotency-Key per create, so a re-sent submit creates ONE broadcast', () => {
+  it('a failed create re-sent with the SAME form carries the SAME key (the server answers it once)', async () => {
+    createAnswer = { status: 500, body: { error: 'temporarily unavailable' } };
+    await createBroadcast();
+    await screen.findByText(/temporarily unavailable/);
+    fireEvent.click(screen.getByRole('button', { name: /send broadcast/i }));
+    await waitFor(() => expect(createKeys).toHaveLength(2));
+    expect(createKeys[0]).toMatch(/^wa-broadcast-create-/);
+    expect(createKeys[1]).toBe(createKeys[0]);
+  });
+
+  it('after a SUCCESS, creating the identical broadcast again on purpose is a NEW key', async () => {
+    createAnswer = { status: 201, body: { broadcast_id: 'b1', inserted: 1, skipped: 0, enqueued: true, batches: 1 } };
+    await createBroadcast();
+    await waitFor(() => expect(screen.queryByPlaceholderText('April promo blast')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /new broadcast/i }));
+    fireEvent.change(await screen.findByPlaceholderText('April promo blast'), { target: { value: 'Promo' } });
+    fireEvent.change(screen.getByPlaceholderText(/\+14155552671/), { target: { value: '+14155552671' } });
+    fireEvent.click(screen.getByRole('button', { name: /send broadcast/i }));
+    await waitFor(() => expect(createKeys).toHaveLength(2));
+    expect(createKeys[1]).toMatch(/^wa-broadcast-create-/);
+    expect(createKeys[1]).not.toBe(createKeys[0]);
   });
 });

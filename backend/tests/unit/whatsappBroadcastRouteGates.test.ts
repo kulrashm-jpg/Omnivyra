@@ -7,6 +7,10 @@
 const gates = { roleAllowed: true, accessAllowed: true, roleCalls: [] as unknown[][], accessCalls: [] as unknown[] };
 const mockSvc = { enqueue: jest.fn(), retry: jest.fn(), create: jest.fn() };
 
+// The create route requires an Idempotency-Key (CLASS-2). This suite tests the handler's own
+// gates, so the middleware passes through here; the key requirement on the REAL middleware is
+// pinned by whatsappBroadcastCreateIdempotency.test.ts.
+jest.mock('../../middleware/withIdempotency', () => ({ withIdempotency: (h: unknown) => h }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 const stats = { fail: false };
 jest.mock('../../db/supabaseClient', () => ({
