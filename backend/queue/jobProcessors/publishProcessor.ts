@@ -903,6 +903,11 @@ async function processPublishJobInner(params: {
 
       // The code lands in the same update as the status (and replaces the
       // PUBLISH_CALL_STARTED marker), so the row is never failed-without-code.
+      // Unpinned BY DESIGN (05, CLASS-2): this is the platform's own answer after OUR call started, and
+      // at this moment the row is either publishing + PUBLISH_CALL_STARTED (refused `call_in_flight` by
+      // the claim) or failed + PUBLISH_OUTCOME_UNCERTAIN, the sweeper's relabel (refused
+      // `outcome_uncertain`). Neither is claimable, so no other execution can hold it. If either code is
+      // ever made claimable, this write becomes a D5 instance and must be pinned.
       await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message, undefined, platformError.code);
       
       // CLASS-2 D6: a second, blind write of the same error_code/message used to follow. It was

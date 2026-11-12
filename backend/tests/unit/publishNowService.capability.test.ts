@@ -11,6 +11,15 @@
  * are rejected at the orchestration layer, before adapter selection.
  */
 
+// The suite must load in ANY environment (05): publishNowService pulls config/index.ts, which
+// validates env vars at MODULE LOAD and throws without them - the suite then "failed to run" and
+// counted ZERO tests. Hermetic placeholders, only where absent, before the module is required below.
+for (const [k, v] of Object.entries({
+  SUPABASE_URL: 'http://127.0.0.1:54321', SUPABASE_SERVICE_ROLE_KEY: 'x', SUPABASE_SECRET_KEY: 'x',
+  NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'x',
+  REDIS_URL: 'redis://127.0.0.1:6379', OPENAI_API_KEY: 'sk-ci-hermetic-placeholder', ENCRYPTION_KEY: require('crypto').randomBytes(32).toString('hex'),
+})) process.env[k] ??= v;
+
 jest.mock('../../db/queries', () => ({
   getScheduledPost: jest.fn(),
   updateScheduledPostOnPublish: jest.fn(),
@@ -48,7 +57,9 @@ jest.mock('../../services/CampaignCompletionService', () => ({
   checkAndCompleteCampaignIfEligible: jest.fn(),
 }));
 
-import { publishNow } from '../../services/publishNowService';
+// require, not import: it must load AFTER the env placeholders above (an import would be hoisted).
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { publishNow } = require('../../services/publishNowService') as typeof import('../../services/publishNowService');
 import { getScheduledPost, updateScheduledPostOnFailure } from '../../db/queries';
 import { publishToPlatform } from '../../adapters/platformAdapter';
 

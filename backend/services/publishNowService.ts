@@ -515,6 +515,9 @@ export async function refreshScheduledPostMediaFromRefs(input: {
       const changed = current.length !== mediaUrls.length || mediaUrls.some((u, i) => u !== current[i]);
       if (changed) {
         // best-effort: a media snapshot refresh; the caller's in-memory row (below) is what this publish uses
+        // Unpinned, and not a CLASS-2 D5 instance (05): it writes neither status nor error_code, so it
+        // cannot erase a claim fence or a PUBLISH_CALL_STARTED marker; on a taken-over row it only
+        // replaces media URLs with freshly refreshed ones. Its error is read.
         const { error: mediaError } = await ownedDbTable('scheduled_posts').update({ media_urls: mediaUrls }).eq('id', input.scheduledPostId);
         if (mediaError) console.warn('[publishNow] media_urls snapshot not persisted', { scheduled_post_id: input.scheduledPostId, error: mediaError.message });
       }
@@ -1063,6 +1066,11 @@ async function runSingleRowPublish(
 
   // Code and message already land in this one write (it throws on error); the separate, unread
   // mirror of the same two columns is removed (unread-error census).
+  // Unpinned BY DESIGN (05, CLASS-2): this is the platform's own answer after OUR call started, and
+  // at this moment the row is either publishing + PUBLISH_CALL_STARTED (refused `call_in_flight` by
+  // the claim) or failed + PUBLISH_OUTCOME_UNCERTAIN, the sweeper's relabel (refused
+  // `outcome_uncertain`). Neither is claimable, so no other execution can hold it. If either code is
+  // ever made claimable, this write becomes a D5 instance and must be pinned.
   await updateScheduledPostOnFailure(scheduled_post_id, errorDetail, undefined, platformError.code);
   attempt.platformCallInFlight = false;
 
