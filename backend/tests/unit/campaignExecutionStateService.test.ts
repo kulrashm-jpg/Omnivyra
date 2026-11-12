@@ -181,3 +181,15 @@ describe('campaign_execution_resilience', () => {
     expect(after?.status).toBe('completed');
   });
 });
+
+describe('startCampaign: unread-error pkg 2', () => {
+  it('an UNREADABLE existing state throws and never inserts a fresh one over it', async () => {
+    const insert = jest.fn();
+    (supabase.from as jest.Mock).mockImplementation(() => ({
+      select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: { message: 'boom' } }) }) }),
+      insert,
+    }));
+    await expect(startCampaign('campaign-unread', 4)).rejects.toThrow(/Failed to read campaign execution state: boom/);
+    expect(insert).not.toHaveBeenCalled();
+  });
+});

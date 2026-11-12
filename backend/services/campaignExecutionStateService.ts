@@ -130,10 +130,13 @@ export async function startCampaign(
   const dur = clampDuration(duration);
   if (!DURATION_VALUES.includes(dur)) return null;
 
-  const { data: existing } = await ownedDbTable('campaign_execution_state')
+  const { data: existing, error: existingError } = await ownedDbTable('campaign_execution_state')
     .select('*')
     .eq('campaign_id', campaignId)
     .maybeSingle();
+  // A failed read is not "no state": inserting would start the campaign over an existing state
+  // (unread-error pkg 2). PostgREST returns the error, never throws.
+  if (existingError) throw new Error(`Failed to read campaign execution state: ${existingError.message}`);
 
   if (existing) {
     return toState(existing);
