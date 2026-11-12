@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
 import {
   type CompanyExecutionFlags,
 } from '@/backend/services/intentExecutionService';
@@ -215,18 +216,19 @@ async function getCompanyUnitOverrides(companyId: string): Promise<Map<string, {
   return new Map(rows.map((r) => [r.iu_id, { enabled: r.enabled }]));
 }
 
-async function setCompanyUnitOverrides(companyId: string, units: Array<{ id: string; enabled: boolean }>): Promise<void> {
+async function setCompanyUnitOverrides(userId: string, companyId: string, units: Array<{ id: string; enabled: boolean }>): Promise<void> {
   if (!units.length) return;
-  const payload = units.map((u) => ({
-    company_id: companyId,
-    iu_id: u.id,
-    enabled: u.enabled,
-    priority_override: null,
-  }));
+  const rows = units.map((u) => ({ iu_id: u.id, enabled: u.enabled, priority_override: null }));
 
-  await supabase
-    .from('company_intelligence_config')
-    .upsert(payload, { onConflict: 'company_id,iu_id' });
+  if (companyId === GLOBAL_DEFAULT_PROFILE_ID) {
+    // The PLATFORM default profile (super-admin, global mode): keyed by a sentinel, not a tenant.
+    // cross-tenant: intelligence-access-global-defaults
+    await supabase.from('company_intelligence_config').upsert(rows.map((r) => ({ ...r, company_id: companyId })), { onConflict: 'company_id,iu_id' });
+    return;
+  }
+  // S2: a company's overrides are written through the seam, pinned to the resolved company.
+  await tenantTable('company_intelligence_config', tenantContextFor({ userId }, companyId))
+    .upsert(rows, { onConflict: 'company_id,iu_id' });
 }
 
 async function resetCompanyOverrides(companyId: string): Promise<void> {
@@ -382,6 +384,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       if (Array.isArray(body.units) && body.units.length > 0) {
         await setCompanyUnitOverrides(
+          user.id,
           access.companyId,
           body.units.filter((u) => typeof u?.id === 'string' && typeof u?.enabled === 'boolean')
         );

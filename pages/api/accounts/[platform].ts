@@ -3,6 +3,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 // API Endpoint for Platform Account Management
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 import { getPlatformRules } from '@/backend/services/platformIntelligenceService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
@@ -112,7 +113,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         const { data: accountRow, error: findError } = await supabase
           .from('social_accounts')
-          .select('id')
+          .select('id, company_id')
           .eq('user_id', deleteUserId)
           .in('platform', platformCandidates)
           .eq('is_active', true)
@@ -126,8 +127,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           return res.status(404).json({ success: false, error: 'Account not found' });
         }
 
-        const { error: updateError } = await supabase
-          .from('social_accounts')
+        // S2: the write is pinned to the tenant of the row this principal provably owns (found by
+        // its own user_id above), and stays bound to that user.
+        const { error: updateError } = await tenantTable('social_accounts', tenantContextFor({ userId: deleteUserId }, String(accountRow.company_id)))
           .update({
             is_active: false,
             access_token: null,
@@ -135,7 +137,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             token_expires_at: null,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', accountRow.id);
+          .eq('id', accountRow.id)
+          .eq('user_id', deleteUserId);
 
         if (updateError) {
           return res.status(500).json({ success: false, error: updateError.message });

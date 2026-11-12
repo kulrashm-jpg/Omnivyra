@@ -15,6 +15,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
 import { getUserRole, isPlatformSuperAdmin, Role } from '@/backend/services/rbacService';
@@ -91,9 +92,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (risk_tolerance    !== undefined) updates.risk_tolerance    = risk_tolerance;
 
     // Single upsert — eliminates the read-then-write race condition
-    const { error: upsertError } = await supabase
-      .from('company_settings')
-      .upsert({ company_id, ...updates }, { onConflict: 'company_id' });
+    // S2: company_id stamped by the seam with the company the access + admin checks authorized.
+    const { error: upsertError } = await tenantTable('company_settings', tenantContextFor({ userId: auth.user.id }, company_id as string))
+      .upsert({ ...updates }, { onConflict: 'company_id' });
 
     if (upsertError) return res.status(500).json({ error: upsertError.message });
 
