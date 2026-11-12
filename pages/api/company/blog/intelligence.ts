@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -14,13 +15,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
+  // S2: tenant reads are pinned to the company the access check resolved.
+  const tenant = tenantContextFor(auth, company_id);
 
   try {
     // ── 1. All posts with block-level metadata ────────────────────────────
-    const { data: posts, error: postsErr } = await supabase
-      .from('blogs')
+    const { data: posts, error: postsErr } = await tenantTable('blogs', tenant)
       .select('id, title, slug, category, tags, status, views_count, likes_count, published_at, created_at, content_blocks, angle_type')
-      .eq('company_id', company_id)
       .order('published_at', { ascending: false, nullsFirst: false });
 
     if (postsErr) return res.status(500).json({ error: postsErr.message });
@@ -33,10 +34,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .order('created_at', { ascending: false });
 
     // ── 3. Relationships (company_blog_relationships — FK → blogs(id)) ────
-    const { data: relRows } = await supabase
-      .from('company_blog_relationships')
+    const { data: relRows } = await tenantTable('company_blog_relationships', tenant)
       .select('id, source_blog_id, target_blog_id, relationship_type, created_at')
-      .eq('company_id', company_id)
       .order('created_at', { ascending: false });
 
     // ── 4. Performance summaries ──────────────────────────────────────────
@@ -66,8 +65,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let commentMap = new Map<string, number>();
 
     if (postIds.length > 0) {
-      const { data: commentRows } = await supabase
-        .from('company_blog_comments')
+      // Tenant-pinned (S2): the blog ids are this company's, and so must the comments be.
+      const { data: commentRows } = await tenantTable('company_blog_comments', tenant)
         .select('blog_id')
         .in('blog_id', postIds);
 
