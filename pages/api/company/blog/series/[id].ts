@@ -80,10 +80,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Every referenced blog must be this company's own: a foreign blog id would
     // otherwise be readable back through the GET above.
     if (Array.isArray(body.posts) && body.posts.length > 0) {
-      const wanted = [...new Set((body.posts as { blog_id?: unknown }[]).map((p) => p?.blog_id))];
-      if (!wanted.every((b) => typeof b === 'string' && b.trim() !== '')) {
+      const raw = (body.posts as { blog_id?: unknown }[]).map((p) => p?.blog_id);
+      if (!raw.every((b) => typeof b === 'string' && b.trim() !== '')) {
         return res.status(400).json({ error: 'every post needs a blog_id' });
       }
+      // Compared as a SET of normalised ids (05/e9 2026-11-12): a repeated id - or the same id
+      // with surrounding whitespace - is one blog, never misreported as a foreign reference.
+      const wanted = [...new Set((raw as string[]).map((b) => b.trim()))];
       const { data: mine, error: mineErr } = await tenantTable('blogs', tenant)
         .select('id')
         .in('id', wanted as string[]);
@@ -112,7 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { error: clearErr } = await seriesPostsTable.delete();
       if (clearErr) return res.status(500).json({ error: clearErr.message });
       const rows = (body.posts as { blog_id: string; position: number }[]).map(p => ({
-        blog_id: p.blog_id, position: p.position ?? 0,
+        blog_id: String(p.blog_id).trim(), position: p.position ?? 0,
       }));
       if (rows.length > 0) {
         const { error: insertErr } = await seriesPostsTable.insert(rows);

@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext, UNIFORM_NOT_FOUND } from '../../../backend/services/userContextService';
 import { getCreatorObservabilityReport } from '../../../backend/services/creator/creatorObservabilityService';
 import { getUserTemplate, getUserTemplateCompanyId } from '../../../backend/services/creator/userTemplateService';
 import { enqueueUserTemplatePreview } from '../../../backend/services/creator/userTemplatePreviewService';
@@ -32,12 +32,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
 
     if (String(body.action) === 'retry_preview' && typeof body.template_id === 'string') {
-      // The template must belong to the authorized company (no cross-tenant retry).
+      // The template must belong to the authorized company (no cross-tenant retry). Unknown and
+      // another tenant's id get the SAME 404 (no existence oracle; 05/e9 2026-11-12).
       const templateCompanyId = await getUserTemplateCompanyId(body.template_id);
-      if (!templateCompanyId) return res.status(404).json({ error: 'template not found' });
-      if (templateCompanyId !== companyId) return res.status(403).json({ error: 'cross-tenant retry denied' });
+      if (!templateCompanyId || templateCompanyId !== companyId) return res.status(404).json(UNIFORM_NOT_FOUND);
       const template = await getUserTemplate(body.template_id);
-      if (!template) return res.status(404).json({ error: 'template not found' });
+      if (!template) return res.status(404).json(UNIFORM_NOT_FOUND);
       void enqueueUserTemplatePreview({ template, companyId });
       return res.status(202).json({ ok: true, retried: body.template_id });
     }
