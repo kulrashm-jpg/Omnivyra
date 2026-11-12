@@ -372,7 +372,14 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   if (!effectiveStartDate && campaignStartDateFromInput && String(campaignStartDateFromInput).trim()) {
     const startVal = String(campaignStartDateFromInput).trim();
     effectiveStartDate = startVal.includes('T') ? startVal : `${startVal}T00:00:00.000Z`;
-    await supabase.from('campaigns').update({ start_date: effectiveStartDate }).eq('id', campaignId);
+    // Daily plans are dated from this start date: an unpersisted one must not look saved.
+    const { error: startDateError } = await supabase.from('campaigns').update({ start_date: effectiveStartDate }).eq('id', campaignId);
+    if (startDateError) {
+      throw new BoltError(BOLT_ERROR_CODES.WEEK_STRUCTURE_PERSISTENCE_FAILED, undefined, {
+        details: { step: 'start_date', campaign_id: campaignId },
+        cause: startDateError,
+      });
+    }
   }
   if (!effectiveStartDate) {
     throw new BoltError(
@@ -488,13 +495,20 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
 
     const allFinalItems: any[] = [];
     const allRowsToInsert: any[] = [];
-    const { data: latestCampaignVersion } = await supabase
+    const { data: latestCampaignVersion, error: latestVersionError } = await supabase
       .from('campaign_versions')
       .select('version')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    // A failed read used to default the plan version to 1 and stamp every generated row with it.
+    if (latestVersionError) {
+      throw new BoltError(BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED, undefined, {
+        details: { step: 'plan_version', campaign_id: campaignId },
+        cause: latestVersionError,
+      });
+    }
     const currentPlanVersion = Math.max(1, Number((latestCampaignVersion as any)?.version || 1));
     let lastTopicDayMap: { dayIndex: number; day: string; topics: string[] }[] = [];
     let lastValidation: any = {};
@@ -506,20 +520,24 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     // Cross-campaign conflict avoidance: gather the platform-days this company's
     // OTHER campaigns have already scheduled, so day-placement below schedules
     // around them (never double-books a platform on a day across campaigns).
-    // Best-effort — any lookup failure degrades to the prior single-campaign behavior.
+    // NOT best-effort (e9, 2026-11-12): a schedule built without its conflict data double-books
+    // platforms across campaigns and ships silently. A failed lookup fails the run with a retryable
+    // error. PostgREST reports a failed read in `error` and never throws, so each read checks it.
     const existingScheduledByPlatform = new Map<string, Set<string>>();
     try {
-      const { data: siblingCampaigns } = await supabase
+      const { data: siblingCampaigns, error: siblingError } = await supabase
         .from('campaigns')
         .select('id')
         .eq('company_id', cid)
         .neq('id', campaignId);
+      if (siblingError) throw new Error(`sibling campaigns: ${siblingError.message}`);
       const siblingIds = (siblingCampaigns ?? []).map((c: { id: string }) => c.id).filter(Boolean);
       if (siblingIds.length > 0) {
-        const { data: existingRows } = await supabase
+        const { data: existingRows, error: existingRowsError } = await supabase
           .from('daily_content_plans')
           .select('platforms, date')
           .in('campaign_id', siblingIds);
+        if (existingRowsError) throw new Error(`sibling daily plans: ${existingRowsError.message}`);
         for (const row of existingRows ?? []) {
           const rowDate = String((row as { date?: unknown }).date ?? '').trim();
           if (!rowDate) continue;
@@ -540,7 +558,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         occupied: [...existingScheduledByPlatform.entries()].map(([p, s]) => ({ platform: p, days: s.size })),
       });
     } catch (e) {
-      console.warn('[weekly-structure] cross-campaign conflict lookup failed (continuing):', (e as Error)?.message);
+      console.error('[weekly-structure] cross-campaign conflict lookup failed; refusing to schedule without it:', (e as Error)?.message);
+      throw new BoltError(BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED, undefined, {
+        details: { step: 'cross_campaign_conflicts', campaign_id: campaignId },
+        cause: e,
+      });
     }
 
     for (const weekNumber of weekNumbers) {
@@ -1117,11 +1139,19 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       }
     }
 
-    await supabase
+    // The week's old rows are replaced below: if the delete failed, inserting would DUPLICATE every
+    // scheduled activity of the week. Stop instead.
+    const { error: weekDeleteError } = await supabase
       .from('daily_content_plans')
       .delete()
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber);
+    if (weekDeleteError) {
+      throw new BoltError(BOLT_ERROR_CODES.WEEK_STRUCTURE_PERSISTENCE_FAILED, undefined, {
+        details: { step: 'replace_week_rows', campaign_id: campaignId, week_number: weekNumber },
+        cause: weekDeleteError,
+      });
+    }
 
     const finalItems = dailyItemsDeterministic;
     const validation = { ok: true, errors: [] as string[] };

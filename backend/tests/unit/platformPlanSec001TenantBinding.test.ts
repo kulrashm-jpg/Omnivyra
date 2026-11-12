@@ -82,6 +82,9 @@ const CAMPAIGN_OWNER: Record<string, string> = {
 };
 
 let authUser: string | null = ADMIN_A;
+/** unread-error pkg 2: a PostgREST error (returned, never thrown) on the stage read (`.single()` on
+ *  campaigns scoped by company) or on the campaigns stage UPDATE. Reset before every case. */
+let stageFaults: { read?: { message: string }; write?: { message: string } } = {};
 
 const queries: Array<{ table: string; filters: Record<string, unknown> }> = [];
 const writes: Array<{ table: string; payload: unknown; filters: Record<string, unknown> }> = [];
@@ -148,6 +151,7 @@ jest.mock('../../db/supabaseClient', () => {
         writes.push({ table, payload: b.__pendingUpdate, filters: { ...filters } });
         b.__pendingUpdate = undefined;
         queries.push({ table, filters: { ...filters } });
+        if (table === 'campaigns' && stageFaults.write) return { data: null, count: null, error: stageFaults.write };
         return { data: [], count: 0, error: null };
       }
       queries.push({ table, filters: { ...filters } });
@@ -159,6 +163,10 @@ jest.mock('../../db/supabaseClient', () => {
       return Promise.resolve({ data: r.data[0] ?? null, error: null });
     };
     b.single = () => {
+      if (table === 'campaigns' && filters.company_id !== undefined && stageFaults.read) {
+        queries.push({ table, filters: { ...filters } });
+        return Promise.resolve({ data: null, error: stageFaults.read });
+      }
       const r = resolve();
       return Promise.resolve({ data: r.data[0] ?? null, error: r.data.length ? null : { message: 'no rows' } });
     };
@@ -313,6 +321,7 @@ const noTenantReadBeforeAuth = () => {
 
 beforeEach(() => {
   authUser = ADMIN_A;
+  stageFaults = {};
   queries.length = 0;
   writes.length = 0;
   profileCalls.length = 0;
@@ -567,5 +576,39 @@ describe('PLATFORM-PLAN-SEC-001 — SUPER_ADMIN semantics preserved', () => {
     });
     expect(res.statusCode).toBe(403);
     noWriteSink();
+  });
+});
+
+describe('unread-error pkg 2: the stage advance after the plan is saved', () => {
+  const build = () => call(ADMIN_A, { body: { companyId: COMPANY_A, campaignId: CAMPAIGN_A, weekNumber: 1 } });
+  const stageWrites = () => writes.filter((w) => w.table === 'campaigns');
+
+  it('CONTROL: a healthy build advances the stage, syncs the version stage, and says so', async () => {
+    const res = await build();
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.stage_advance).toBe('advanced');
+    expect(stageWrites()).toHaveLength(1);
+    expect(syncStageCalls).toEqual([{ campaignId: CAMPAIGN_A, companyId: COMPANY_A }]);
+  });
+
+  it('an UNREADABLE stage still returns the saved plan, says "unreadable", and neither writes nor syncs the stage', async () => {
+    stageFaults.read = { message: 'boom' };
+    const res = await build();
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.plan).toEqual({ platforms: ['linkedin'] });
+    expect(res.body?.stage_advance).toBe('unreadable');
+    expect(saveCalls).toHaveLength(1);
+    expect(stageWrites()).toEqual([]);
+    expect(syncStageCalls).toEqual([]);
+  });
+
+  it('a FAILED stage write returns the saved plan, says "write_failed", and does not sync a stage the campaign did not reach', async () => {
+    stageFaults.write = { message: 'boom' };
+    const res = await build();
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.plan).toEqual({ platforms: ['linkedin'] });
+    expect(res.body?.stage_advance).toBe('write_failed');
+    expect(stageWrites()).toHaveLength(1);
+    expect(syncStageCalls).toEqual([]);
   });
 });

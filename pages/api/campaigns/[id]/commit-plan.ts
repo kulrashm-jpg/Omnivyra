@@ -17,15 +17,18 @@ import { fromStructuredPlan } from '../../../../backend/services/campaignBluepri
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../../backend/services/campaignBlueprintService';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { activateScheduledCampaign } from '../../../../backend/services/campaignScheduleActivation';
 
-async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data } = await supabase
+/** error is the PostgREST read error (returned, never thrown): a failed read is not "no company". */
+async function getCompanyId(campaignId: string): Promise<{ companyId: string | null; error: { message: string } | null }> {
+  const { data, error } = await supabase
     .from('campaign_versions')
     .select('company_id')
     .eq('campaign_id', campaignId)
     .limit(1)
     .maybeSingle();
-  return (data as any)?.company_id ?? null;
+  if (error) return { companyId: null, error: { message: error.message } };
+  return { companyId: (data as any)?.company_id ?? null, error: null };
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -50,7 +53,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Structured plan with weeks is required' });
   }
 
-  const companyId = typeof req.body.companyId === 'string' ? req.body.companyId : await getCompanyId(id);
+  let companyId: string | null;
+  if (typeof req.body.companyId === 'string') {
+    companyId = req.body.companyId;
+  } else {
+    const companyRead = await getCompanyId(id);
+    // Unread, the company would be '' and access would answer a misleading 403 (unread-error pkg 2).
+    if (companyRead.error) {
+      console.error('[commit-plan] company lookup failed; nothing saved', { campaignId: id, message: companyRead.error.message });
+      return res.status(503).json({
+        code: 'CAMPAIGN_COMPANY_READ_FAILED',
+        message: 'Could not read the company for this campaign. Nothing was saved. Please try again.',
+      });
+    }
+    companyId = companyRead.companyId;
+  }
   const access = await enforceCompanyAccess({
     req,
     res,
@@ -119,15 +136,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       source: 'ai-commit-plan',
     });
 
-    await supabase
-      .from('campaigns')
-      .update({
-        status: 'active',
-        current_stage: 'schedule',
-        blueprint_status: 'ACTIVE',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+    // The same activation write as schedule-structured-plan (one implementation: retried, and an
+    // alert-ready event on final failure). It was unchecked here, so a failed write answered 200 while
+    // the campaign stayed inactive, and publishAuthorization refuses every post of an inactive campaign
+    // (unread-error pkg 2). The blueprint IS saved; re-sending is safe: it re-commits the same draft,
+    // and an inactive campaign's blueprint is still mutable.
+    const activated = await activateScheduledCampaign(id, { companyId, source: 'commit-plan' });
+    if (!activated.ok) {
+      console.error('[commit-plan] blueprint saved but the campaign was not activated', { campaignId: id, message: activated.error?.message, attempts: activated.attempts });
+      return res.status(503).json({
+        code: 'CAMPAIGN_ACTIVATION_FAILED',
+        saved: true,
+        error: 'The plan was saved, but the campaign could not be activated, so its posts will not publish yet. Please commit again; it is safe to retry.',
+      });
+    }
 
     if (companyId) {
       void syncCampaignVersionStage(id, 'schedule', companyId).catch(() => {});

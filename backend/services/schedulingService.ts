@@ -28,7 +28,12 @@ export async function setPostPriority(
 }
 
 /**
- * Adjust dates when campaign start date changes
+ * Adjust dates when campaign start date changes.
+ *
+ * DO NOT CALL (e9 ruling, 2026-11-12): its only route, POST /api/campaigns/[id]/adjust-dates, is
+ * retired (410). This never updates campaigns.start_date, so every call re-shifts the scheduled posts;
+ * it shifts row by row with no transaction; and its PostgREST results are unread. The replacement is an
+ * atomic RPC (post-launch item); see the retired route's header.
  */
 export async function adjustCampaignDates(
   campaignId: string,
@@ -138,7 +143,20 @@ export async function adjustCampaignDates(
 }
 
 /**
- * Detect campaign conflicts (overlapping date ranges)
+ * The campaigns read behind a conflict check failed (PostgREST returns the error, never throws). Thrown
+ * instead of answering "no conflicts" / "free from today", which a failed read is not (unread-error pkg 2).
+ */
+export class ConflictCheckReadError extends Error {
+  readonly code = 'CONFLICT_CHECK_READ_FAILED';
+  constructor(readonly operation: 'detect' | 'suggest', cause: { message: string }) {
+    super(`Campaign conflict check could not read campaigns (${operation}): ${cause.message}`);
+    this.name = 'ConflictCheckReadError';
+  }
+}
+
+/**
+ * Detect campaign conflicts (overlapping date ranges). Throws ConflictCheckReadError when the
+ * campaigns cannot be read.
  */
 export async function detectCampaignConflicts(
   userId: string,
@@ -164,9 +182,8 @@ export async function detectCampaignConflicts(
 
   const { data: campaigns, error } = await query;
 
-  if (error || !campaigns) {
-    return [];
-  }
+  if (error) throw new ConflictCheckReadError('detect', error);
+  if (!campaigns) return [];
 
   const conflicts: Array<{
     campaign_id: string;
@@ -210,12 +227,14 @@ export async function suggestAvailableDateRange(
   durationDays: number,
   preferredStart?: Date
 ): Promise<{ start_date: Date; end_date: Date } | null> {
-  const { data: campaigns } = await ownedDbTable('campaigns')
+  const { data: campaigns, error } = await ownedDbTable('campaigns')
     .select('start_date, end_date')
     .eq('user_id', userId)
     .not('status', 'eq', 'completed')
     .not('status', 'eq', 'cancelled')
     .order('start_date', { ascending: true });
+  // Unread, a failed read was "no campaigns", and the suggestion was "start now" over real ones.
+  if (error) throw new ConflictCheckReadError('suggest', error);
 
   if (!campaigns || campaigns.length === 0) {
     const start = preferredStart || new Date();

@@ -75,6 +75,17 @@ export async function evaluateCampaignReadiness(
     .eq('id', campaignId)
     .single();
 
+  // unread-error pkg 2: `.single()` reports "no row" as PGRST116; any OTHER error is an unreadable
+  // campaign, not a missing one. Like DAILY_PLANS_UNAVAILABLE below, it is returned, never persisted.
+  if (campaignError && (campaignError as { code?: string }).code !== 'PGRST116') {
+    return {
+      campaign_id: campaignId,
+      readiness_percentage: 0,
+      readiness_state: 'not_ready',
+      blocking_issues: [{ code: 'CAMPAIGN_UNAVAILABLE', message: 'Could not load the campaign; readiness could not be evaluated. Try again shortly.' }],
+      last_evaluated_at: new Date().toISOString(),
+    };
+  }
   if (campaignError || !campaign) {
     return {
       campaign_id: campaignId,
@@ -96,9 +107,21 @@ export async function evaluateCampaignReadiness(
     .eq('campaign_id', campaignId);
 
   if (weeklyError) {
-    const { data: refinements } = await ownedDbTable('weekly_content_refinements')
+    const { data: refinements, error: refinementsError } = await ownedDbTable('weekly_content_refinements')
       .select('week_number')
       .eq('campaign_id', campaignId);
+    // unread-error pkg 2: unread, a failure became "no weeks" and a MISSING_WEEKLY_PLANS readiness was
+    // computed and PERSISTED. Returned, never persisted (as DAILY_PLANS_UNAVAILABLE below).
+    if (refinementsError) {
+      console.warn('[campaignReadinessService] weekly plans unreadable; readiness not evaluated:', refinementsError.message);
+      return {
+        campaign_id: campaignId,
+        readiness_percentage: 0,
+        readiness_state: 'not_ready',
+        blocking_issues: [{ code: 'WEEKLY_PLANS_UNAVAILABLE', message: 'Could not load weekly plans; readiness could not be evaluated. Try again shortly.' }],
+        last_evaluated_at: new Date().toISOString(),
+      };
+    }
     weekNumbers = (refinements || []).map((r: any) => r.week_number);
   } else {
     weekNumbers = (weeklyPlans || []).map((plan: any) => plan.week_number);

@@ -82,6 +82,8 @@ jest.mock('../../services/campaignPlanParser', () => ({ parseAiPlanToWeeks: (...
 const mockDetectConflicts = jest.fn(async () => []);
 const mockSuggestRange = jest.fn(async () => null);
 jest.mock('../../services/schedulingService', () => ({
+  // The REAL error class: the route branches on instanceof (unread-error pkg 2).
+  ConflictCheckReadError: jest.requireActual('../../services/schedulingService').ConflictCheckReadError,
   detectCampaignConflicts: (...a: any[]) => mockDetectConflicts(...(a as [])),
   suggestAvailableDateRange: (...a: any[]) => mockSuggestRange(...(a as [])),
 }));
@@ -350,6 +352,13 @@ describe('conflicts', () => {
     const r = await invoke(conflicts, { method: 'GET', as: 'A', query: { ...q, user_id: USER_A } });
     expect(r.status).toBe(200);
     expect(mockDetectConflicts).toHaveBeenCalledWith(USER_A, expect.any(Date), expect.any(Date), undefined);
+  });
+  it('an UNREADABLE campaigns list is 503, never a 200 with no conflicts (unread-error pkg 2)', async () => {
+    const { ConflictCheckReadError } = jest.requireActual('../../services/schedulingService');
+    mockDetectConflicts.mockImplementationOnce(async () => { throw new ConflictCheckReadError('detect', { message: 'boom' }); });
+    const r = await invoke(conflicts, { method: 'GET', as: 'A', query: { ...q } });
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ code: 'CONFLICT_CHECK_READ_FAILED' });
   });
 });
 

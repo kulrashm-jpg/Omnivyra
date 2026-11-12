@@ -224,19 +224,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     activityDate.setDate(weekStartDate.getDate() + dayIndex);
 
     // Get weekly_refinement_id for FK link
-    const { data: refinement } = await supabase
+    const { data: refinement, error: refinementReadError } = await supabase
       .from('weekly_content_refinements')
       .select('id')
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber)
       .maybeSingle();
+    // A failed read is not "no refinement": the rows would be saved without their FK link
+    // (unread-error pkg 2). Nothing has been written yet, so the request is safe to retry.
+    if (refinementReadError) {
+      console.error('[commit-daily-plan] weekly refinement unreadable; nothing saved', { campaignId, weekNumber, message: refinementReadError.message });
+      return res.status(503).json({
+        code: 'WEEK_REFINEMENT_READ_FAILED',
+        error: 'Could not read the plan for this week. Nothing was saved. Please try again.',
+      });
+    }
 
     // Replace day via execution engine: fetch existing week, merge, saveWeekPlans
-    const { data: existingWeek } = await supabase
+    const { data: existingWeek, error: existingWeekError } = await supabase
       .from('daily_content_plans')
       .select('*')
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber);
+    // saveWeekPlans REPLACES the whole week, so a failed read taken as an empty week would DELETE
+    // every other day's plan (unread-error pkg 2). Refuse before anything is written.
+    if (existingWeekError) {
+      console.error('[commit-daily-plan] existing week unreadable; refusing to replace it', { campaignId, weekNumber, message: existingWeekError.message });
+      return res.status(503).json({
+        code: 'WEEK_PLAN_READ_FAILED',
+        error: 'Could not read the plans already saved for this week. Nothing was changed. Please try again.',
+      });
+    }
 
     const refinementId = refinement?.id ?? null;
     const newDayRows = activities.map((activity: any) => {
@@ -258,8 +276,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
     await saveWeekPlans(campaignId, Number(weekNumber), mergedRows as any, 'manual');
 
+    // The day is saved from here on. Re-sending the same day replaces it again, so a retry after a
+    // failed follow-up write below is safe (unread-error pkg 2).
     // Update weekly refinement to mark daily plan as populated
-    await supabase
+    const { error: populatedError } = await supabase
       .from('weekly_content_refinements')
       .update({
         daily_plan_populated: true,
@@ -268,14 +288,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber);
 
+    if (populatedError) {
+      console.error('[commit-daily-plan] day saved but the week was not marked populated', { campaignId, weekNumber, message: populatedError.message });
+      return res.status(503).json({
+        code: 'DAILY_PLAN_FOLLOWUP_FAILED',
+        saved: true,
+        error: `${day} was saved, but the week could not be marked as planned. Please submit again; it is safe to retry.`,
+      });
+    }
+
     // Advance campaign to daily_plan stage
-    await supabase
+    const { error: stageError } = await supabase
       .from('campaigns')
       .update({
         current_stage: 'daily_plan',
         updated_at: new Date().toISOString()
       })
       .eq('id', campaignId);
+    if (stageError) {
+      console.error('[commit-daily-plan] day saved but the campaign stage did not advance', { campaignId, weekNumber, message: stageError.message });
+      return res.status(503).json({
+        code: 'DAILY_PLAN_FOLLOWUP_FAILED',
+        saved: true,
+        error: `${day} was saved, but the campaign could not move to the daily-plan stage. Please submit again; it is safe to retry.`,
+      });
+    }
     void syncCampaignVersionStage(campaignId, 'daily_plan').catch(() => {});
 
     res.status(200).json({

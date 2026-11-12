@@ -65,7 +65,7 @@ interface Props {
   governanceSnapshotAt: string | null;
   governanceSnapshotCount: number;
   governanceLatestSnapshotId: string | null;
-  governanceLedgerIntegrity: 'VALID' | 'CORRUPTED' | null;
+  governanceLedgerIntegrity: 'VALID' | 'CORRUPTED' | 'UNVERIFIABLE' | null;
   governanceLoadGuardCounts: { replayRateLimitedCount: number; snapshotRestoreBlockedCount: number; projectionRebuildBlockedCount: number };
   governanceEvents: GovernanceEvent[];
   negotiationMessage: string;

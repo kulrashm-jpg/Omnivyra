@@ -208,6 +208,10 @@
       "reason": "3AH-116 (WS-D): company is the canonical owner (resolveCampaignOwnership over every owner record; only OWNED proceeds), enforceCompanyAccess on it; PUT/DELETE also filter company_id.",
       "evidence": "resolveCampaignOwnership\\(id\\)[\\s\\S]*?const campaignCompanyId = ownership\\.companyId;[\\s\\S]*?enforceCompanyAccess\\("
     },
+    "pages/api/campaigns/[id]/adjust-dates.ts": {
+      "kind": "retired",
+      "reason": "Retired endpoint (e9 ruling 2026-11-12): answers 410 Gone for every request and performs no reads or writes. The service it called re-shifted every scheduled post on each call; see the route header."
+    },
     "pages/api/campaigns/[id]/ai-improvements.ts": {
       "kind": "inline-binding",
       "reason": "Company derived from the campaign's campaign_versions row; getUserRole requires membership in THAT company.",

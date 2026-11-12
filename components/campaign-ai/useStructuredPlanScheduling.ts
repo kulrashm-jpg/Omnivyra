@@ -1,6 +1,33 @@
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { createIdempotentOperation } from '../../lib/idempotency';
 import type { StructuredPlan } from './types';
+import { setActivationRetry } from './activationRetryStore';
+
+/**
+ * The "Retry status update" action: POSTs ONLY to retry-activation (the idempotent activation
+ * write). It never calls schedule-structured-plan: a re-schedule would duplicate every post.
+ */
+export function makeActivationRetry(
+  campaignId: string,
+  setUiErrorMessage: (value: string | null) => void,
+  setUiSuccessMessage: (value: string | null) => void,
+): () => Promise<void> {
+  return async () => {
+    try {
+      const response = await fetchWithAuth(`/api/campaigns/${campaignId}/retry-activation`, { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        setUiErrorMessage(errorData.message || errorData.error || 'The campaign status still could not be updated. Please try again shortly.');
+        return;
+      }
+      setActivationRetry(campaignId, null);
+      setUiErrorMessage(null);
+      setUiSuccessMessage('Campaign activated. Your scheduled posts will now publish as planned; none were re-scheduled.');
+    } catch {
+      setUiErrorMessage('The campaign status still could not be updated. Please try again shortly.');
+    }
+  };
+}
 
 type Params = {
   campaignId?: string;
@@ -51,6 +78,17 @@ export function useStructuredPlanScheduling({
       setUiSuccessMessage(
         `Scheduled ${data.scheduled_count || 0} posts. Skipped ${data.skipped_count || 0}. Use **View submitted plan** above to open your plan.`
       );
+      // The posts ARE scheduled; only the campaign's status update failed. Say so, and do not invite
+      // a second schedule (that would duplicate every post). The way out is "Retry status update",
+      // which calls ONLY the activation route (e9, 2026-11-12).
+      if (data.activation && data.activation.ok === false) {
+        setUiErrorMessage(
+          'Your posts were scheduled, but the campaign could not be activated, so they will NOT publish until it is. Do not schedule again (that would duplicate them). Use "Retry status update" below.'
+        );
+        setActivationRetry(campaignId, makeActivationRetry(campaignId, setUiErrorMessage, setUiSuccessMessage));
+      } else {
+        setActivationRetry(campaignId, null);
+      }
 
       const refetchRes = await fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`);
       if (refetchRes.ok) {

@@ -617,11 +617,14 @@ export async function getResolvedCampaignPlanContext(
   requireActiveBlueprint = false
 ): Promise<ResolvedCampaignPlanContext | null> {
   // Stage 11: Pre-planning gate — duration_weeks must be set before blueprint resolution
-  const { data: durationRow } = await supabase
+  const { data: durationRow, error: durationError } = await supabase
     .from('campaigns')
     .select('duration_weeks')
     .eq('id', campaignId)
     .maybeSingle();
+  // unread-error pkg 2: a failed read is not "duration not initialized" (which told the user to run
+  // pre-planning). Routes map this error to 503 BLUEPRINT_STATE_READ_FAILED.
+  if (durationError) throw new BlueprintMutabilityReadError('campaigns.duration_weeks', durationError);
   if (durationRow?.duration_weeks == null) {
     throw new PrePlanningRequiredError('Campaign duration not initialized. Run pre-planning first.');
   }
@@ -642,11 +645,13 @@ export async function getResolvedCampaignPlanContext(
   const daily_plan = campaignVersion?.campaign_snapshot?.daily_plan ?? [];
 
   if (!campaignVersion && (!campaign || !campaign.id)) {
-    const { data: campRow } = await supabase
+    const { data: campRow, error: campError } = await supabase
       .from('campaigns')
       .select('*')
       .eq('id', campaignId)
       .maybeSingle();
+    // unread-error pkg 2: unread, a failure resolved the plan context with an EMPTY campaign ({}).
+    if (campError) throw new BlueprintMutabilityReadError('campaigns', campError);
     if (campRow) campaign = campRow;
   }
 

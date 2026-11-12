@@ -595,3 +595,71 @@ describe('Next handler adapter', () => {
     expect(res.body).toMatchObject({ error: 'campaignId and week (or weeks array) are required' });
   });
 });
+
+// ── Unread errors fail closed (unread-error package 2, e9 2026-11-12) ──
+// PostgREST reports a failed read/write in `error` and never throws. Each site below used to read
+// `data` only and carry on: plan version 1 stamped on every row, a schedule built without other
+// campaigns' occupancy (double-booking), a start date that looked saved but was not, and a week
+// re-inserted on top of rows whose delete had failed (duplicates). ONE fault per case; reverting a
+// site's check fails exactly its own case.
+describe('unread errors fail closed (no silent scheduling on a failed read or write)', () => {
+  const input = {
+    campaignId: 'camp-1',
+    companyId: 'co-1',
+    week: 1,
+    eligible_platforms: ['linkedin', 'x'],
+    format_frequency: { post: 2, image: 2 },
+  } as any;
+  const fail = { data: null, error: { message: 'boom', code: '08006' } };
+
+  it('start_date backfill write fails: WEEK_STRUCTURE_PERSISTENCE_FAILED (start_date), nothing saved', async () => {
+    setDefaultDbResponders({
+      campaigns: (chain) =>
+        chain.some((c) => c.op === 'neq') ? { data: [], error: null }
+          : chain.some((c) => c.op === 'update') ? fail
+            : { data: { ...CAMPAIGN, start_date: null }, error: null },
+    });
+    await expect(generateWeeklyStructure({ ...input, campaign_start_date: '2026-07-06' }))
+      .rejects.toMatchObject({ code: BOLT_ERROR_CODES.WEEK_STRUCTURE_PERSISTENCE_FAILED, details: { step: 'start_date' } });
+    expect(saveWeekPlans as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it('plan-version read fails: WEEK_STRUCTURE_CONTEXT_READ_FAILED (plan_version), not version 1 on every row', async () => {
+    setDefaultDbResponders({ campaign_versions: () => fail });
+    await expect(generateWeeklyStructure(input))
+      .rejects.toMatchObject({ code: BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED, details: { step: 'plan_version' } });
+    expect(saveWeekPlans as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it('sibling-campaign read fails: CONTEXT_READ_FAILED (cross_campaign_conflicts), no schedule without conflict data', async () => {
+    setDefaultDbResponders({
+      campaigns: (chain) =>
+        chain.some((c) => c.op === 'neq') ? fail : { data: { ...CAMPAIGN }, error: null },
+    });
+    const err = await generateWeeklyStructure(input).catch((e) => e);
+    expect(err).toMatchObject({ code: BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED, details: { step: 'cross_campaign_conflicts' } });
+    expect(String((err.cause as Error)?.message)).toContain('sibling campaigns');
+    expect(saveWeekPlans as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it("sibling daily-plan read fails: CONTEXT_READ_FAILED (cross_campaign_conflicts), not an empty occupancy map", async () => {
+    setDefaultDbResponders({
+      campaigns: (chain) =>
+        chain.some((c) => c.op === 'neq') ? { data: [{ id: 'sibling-1' }], error: null } : { data: { ...CAMPAIGN }, error: null },
+      daily_content_plans: (chain) => (chain.some((c) => c.op === 'delete') ? { data: null, error: null } : fail),
+    });
+    const err = await generateWeeklyStructure(input).catch((e) => e);
+    expect(err).toMatchObject({ code: BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED, details: { step: 'cross_campaign_conflicts' } });
+    expect(String((err.cause as Error)?.message)).toContain('sibling daily plans');
+    expect(saveWeekPlans as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it("the week's delete fails: PERSISTENCE_FAILED (replace_week_rows), and the week is NOT re-inserted (no duplicates)", async () => {
+    setDefaultDbResponders({
+      daily_content_plans: (chain) => (chain.some((c) => c.op === 'delete') ? fail : { data: [], error: null }),
+    });
+    await expect(generateWeeklyStructure(input))
+      .rejects.toMatchObject({ code: BOLT_ERROR_CODES.WEEK_STRUCTURE_PERSISTENCE_FAILED, details: { step: 'replace_week_rows', week_number: 1 } });
+    expect(saveWeekPlans as jest.Mock).not.toHaveBeenCalled();
+  });
+});

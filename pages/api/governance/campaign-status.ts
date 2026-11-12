@@ -8,7 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
+import { getLatestCampaignVersionByCampaignId, CampaignVersionReadError } from '../../../backend/db/campaignVersionStore';
 import { getBlueprintBlockReason } from '../../../backend/services/campaignBlueprintService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
@@ -177,9 +177,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json(response);
   } catch (err) {
     console.error('[governance/campaign-status]', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'Internal server error',
-    });
+    // Never the raw error text to the client (it can carry PostgREST / SQL detail). A failed
+    // campaign_versions read is retryable (unread-error pkg 2: those readers now throw).
+    if (err instanceof CampaignVersionReadError) {
+      return res.status(503).json({ code: err.code, error: 'Campaign data is temporarily unavailable. Please try again.' });
+    }
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 

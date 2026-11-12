@@ -106,10 +106,13 @@ async function loadVersionContext(campaignId: string): Promise<{
   companyId: string | null;
   executionProfile: string;
   weeks: unknown[];
+  readError: string | null;
 }> {
-  // Fail-safe: a missing/unreadable version row degrades to text profile with
-  // no snapshot plan (the daily-plan path still drives the run). It must never
-  // reject the release before the guarded try block below.
+  // A MISSING version row degrades to the text profile with no snapshot plan (the daily-plan path
+  // still drives the run). An UNREADABLE one does not (e9, 2026-11-12): defaulting to 'text' would
+  // SKIP the creator governance gate, a safety bypass. It is reported as readError, and the caller
+  // answers 503 BEFORE the guarded try block (nothing locked or written yet). This function never
+  // throws.
   let data: Record<string, unknown> | null = null;
   try {
     const result = await supabase
@@ -119,9 +122,12 @@ async function loadVersionContext(campaignId: string): Promise<{
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (result?.error) {
+      return { companyId: null, executionProfile: '', weeks: [], readError: result.error.message ?? 'version read failed' };
+    }
     data = (result?.data ?? null) as Record<string, unknown> | null;
-  } catch {
-    data = null;
+  } catch (e) {
+    return { companyId: null, executionProfile: '', weeks: [], readError: e instanceof Error ? e.message : String(e) };
   }
   const snapshot = ((data as Record<string, unknown> | null)?.campaign_snapshot ?? {}) as Record<string, unknown>;
   const executionConfig = (snapshot.execution_config ?? snapshot.executionConfig ?? {}) as Record<string, unknown>;
@@ -132,6 +138,7 @@ async function loadVersionContext(campaignId: string): Promise<{
       executionConfig.campaign_mode ?? executionConfig.campaignMode ?? 'text',
     ).trim().toLowerCase(),
     weeks: Array.isArray(plan.weeks) ? (plan.weeks as unknown[]) : [],
+    readError: null,
   };
 }
 
@@ -284,7 +291,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scope: ReleaseScope = parsedScope.scope;
 
   let lockId: string | null = null;
-  const { companyId, executionProfile, weeks: snapshotWeeks } = await loadVersionContext(id);
+  const { companyId, executionProfile, weeks: snapshotWeeks, readError: versionReadError } = await loadVersionContext(id);
+  if (versionReadError) {
+    console.error('[release] version context unreadable; refusing to release without the governance gate', { campaignId: id, message: versionReadError });
+    return res.status(503).json({
+      code: 'RELEASE_VERSION_READ_FAILED',
+      message: 'Could not read the campaign version to check release rules. Nothing was released. Please try again.',
+    });
+  }
 
   try {
     // ── Guards: blueprint must be active + mutable, campaign not finalized ──
@@ -457,15 +471,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Same P1.2 rule for the post-release read: canonical fields only, with
     // the optional legacy field carried over from the pre-release read (its
     // value is execution-owned and untouched by this route).
-    const { data: after } = await supabase
+    // The release is DONE here, so a failed read must not fail the request (that would invite a
+    // second release). It must not invent a stage either (computed from {} it was a plausible lie):
+    // the governance event records 'unreadable' (05's audit rule) and the response stage is null.
+    const { data: after, error: afterError } = await supabase
       .from('campaigns')
       .select('status, current_stage, blueprint_status, thread_id')
       .eq('id', id)
       .maybeSingle();
-    const stageAfter = resolveCampaignStage({
-      ...((after ?? {}) as Record<string, unknown>),
-      ...(execStatusValue !== null ? { execution_status: execStatusValue } : {}),
-    }).stage;
+    if (afterError) {
+      console.error('[release] post-release campaign read failed; stage_after recorded as unreadable', { campaignId: id, message: afterError.message });
+    }
+    const stageAfter = afterError
+      ? null
+      : resolveCampaignStage({
+        ...((after ?? {}) as Record<string, unknown>),
+        ...(execStatusValue !== null ? { execution_status: execStatusValue } : {}),
+      }).stage;
 
     if (companyId) {
       await recordGovernanceEvent({
@@ -480,7 +502,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           scheduled_count: result.scheduled_count,
           skipped_count: result.skipped_count,
           stage_before: stageBefore,
-          stage_after: stageAfter,
+          stage_after: stageAfter ?? 'unreadable',
         },
       });
     }

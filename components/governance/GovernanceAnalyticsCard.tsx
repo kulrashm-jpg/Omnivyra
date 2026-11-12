@@ -56,7 +56,7 @@ interface GovernanceAnalyticsCardProps {
   /** Stage 30: Latest snapshot id for verify (optional) */
   latestSnapshotId?: string | null;
   /** Stage 31: Ledger hash chain integrity */
-  ledgerIntegrity?: 'VALID' | 'CORRUPTED';
+  ledgerIntegrity?: 'VALID' | 'CORRUPTED' | 'UNVERIFIABLE';
   /** Stage 32: Read model projection status */
   projectionStatus?: 'ACTIVE' | 'REBUILDING' | 'MISSING';
   /** Stage 33: Governance load guard counters — show badge when any > 0 */
@@ -313,6 +313,11 @@ export function GovernanceAnalyticsCard({
           {ledgerIntegrity === 'CORRUPTED' && (
             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
               Ledger Corruption Detected
+            </span>
+          )}
+          {ledgerIntegrity === 'UNVERIFIABLE' && (
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+              Ledger Not Verified
             </span>
           )}
           {projectionStatus === 'ACTIVE' && (

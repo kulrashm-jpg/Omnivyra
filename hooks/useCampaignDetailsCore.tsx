@@ -201,7 +201,7 @@ export function useCampaignDetailsCore() {
   const [governanceSnapshotAt, setGovernanceSnapshotAt] = useState<string | null>(null);
   const [governanceSnapshotCount, setGovernanceSnapshotCount] = useState(0);
   const [governanceLatestSnapshotId, setGovernanceLatestSnapshotId] = useState<string | null>(null);
-  const [governanceLedgerIntegrity, setGovernanceLedgerIntegrity] = useState<'VALID' | 'CORRUPTED' | null>(null);
+  const [governanceLedgerIntegrity, setGovernanceLedgerIntegrity] = useState<'VALID' | 'CORRUPTED' | 'UNVERIFIABLE' | null>(null);
   const [governanceLoadGuardCounts, setGovernanceLoadGuardCounts] = useState({
     replayRateLimitedCount: 0,
     snapshotRestoreBlockedCount: 0,

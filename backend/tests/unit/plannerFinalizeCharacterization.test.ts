@@ -22,6 +22,10 @@ let versionInserts: Row[] = [];
 const saveWeekPlansCalls: Array<{ campaignId: string; week: number; rows: Row[]; source: string }> = [];
 const savedStructuredPlans: Row[] = [];
 const committedBlueprints: Row[] = [];
+// unread-error pkg 2: switchable faults (PostgREST reports a failure in `error`, never throws).
+let dailySlotsReadError: { message: string } | null = null;
+let startDateWriteError: { message: string } | null = null;
+let existingCampaignRow: Row | null = null;
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -43,11 +47,16 @@ jest.mock('../../db/supabaseClient', () => ({
       };
       builder.update = (payload: Row) => {
         if (table === 'campaigns') campaignUpdates.push(payload);
-        const upd: any = { eq: () => upd, then: (res: any) => Promise.resolve({ error: null }).then(res) };
+        const err = table === 'campaigns' && 'start_date' in payload ? startDateWriteError : null;
+        const upd: any = { eq: () => upd, then: (res: any) => Promise.resolve({ error: err }).then(res) };
         return upd;
       };
       builder.then = (res: any) =>
-        Promise.resolve({ data: table === 'daily_content_plans' ? dailySlotRows : [], error: null }).then(res);
+        Promise.resolve(
+          table === 'daily_content_plans' && dailySlotsReadError
+            ? { data: null, error: dailySlotsReadError }
+            : { data: table === 'daily_content_plans' ? dailySlotRows : [], error: null },
+        ).then(res);
       return builder;
     },
   },
@@ -78,7 +87,9 @@ jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async (req: { headers?: Record<string, string> }) =>
     req.headers?.authorization ? { user: { id: 'user-1' }, error: null } : { user: null, error: 'no auth' }),
 }));
-jest.mock('../../db/campaignStore', () => ({ getCampaignById: jest.fn(async () => null) }));
+jest.mock('../../db/campaignStore', () => ({ getCampaignById: jest.fn(async () => existingCampaignRow) }));
+// Only the existing-campaign path reaches this; the cases using it need the binding to pass.
+jest.mock('../../services/userContextService', () => ({ enforceCompanyAccess: jest.fn(async () => ({ ok: true })) }));
 jest.mock('../../services/campaignBlueprintAdapter', () => ({
   fromStructuredPlan: jest.fn((input: unknown) => ({ blueprint: true, input })),
 }));
@@ -141,6 +152,9 @@ const post = (body: Row, authed = true) =>
   ({ method: 'POST', body, headers: authed ? { authorization: 'Bearer t' } : {} }) as any;
 
 beforeEach(() => {
+  dailySlotsReadError = null;
+  startDateWriteError = null;
+  existingCampaignRow = null;
   dailySlotRows = [];
   campaignInserts = [];
   campaignUpdates = [];
@@ -344,5 +358,47 @@ describe('R3-P1 — Content Workspace copy rides the SAME pipeline (additive pas
     const content = JSON.parse(String(saveWeekPlansCalls[0].rows[0].content));
     expect(content.draft_content).toBeUndefined();
     expect(content.content_planning_status).toBe('draft');
+  });
+});
+
+// ── Unread errors fail closed (unread-error pkg 2, e9 2026-11-12) ────────────
+// A failed duplicate-slot read used to read as "no slots" and insert a duplicate schedule; a failed
+// start_date write used to look saved. ONE fault per case; reverting a site's check fails exactly
+// its own case.
+describe('planner-finalize — unread errors fail closed', () => {
+  it('ADAPTER path: an unreadable duplicate-slot guard is 503 SLOT_GUARD_UNREADABLE, nothing scheduled', async () => {
+    dailySlotsReadError = { message: 'boom' };
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody({ source: 'planner' })), res);
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ code: 'SLOT_GUARD_UNREADABLE' });
+    expect(saveWeekPlansCalls).toHaveLength(0);
+  });
+
+  it('INLINE path: an unreadable duplicate-slot guard is 503 SLOT_GUARD_UNREADABLE, nothing scheduled', async () => {
+    dailySlotsReadError = { message: 'boom' };
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody()), res);
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ code: 'SLOT_GUARD_UNREADABLE' });
+    expect(saveWeekPlansCalls).toHaveLength(0);
+  });
+
+  it('existing campaign without a start date: a failed start_date write is 503, nothing scheduled', async () => {
+    existingCampaignRow = { id: 'camp-existing', status: 'planning', current_stage: 'planning', start_date: null };
+    startDateWriteError = { message: 'boom' };
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody({ campaignId: 'camp-existing' })), res);
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ code: 'START_DATE_WRITE_FAILED' });
+    expect(saveWeekPlansCalls).toHaveLength(0);
+  });
+
+  it('CONTROL: the same existing campaign with a successful write proceeds (the fault, not the path, causes the 503)', async () => {
+    existingCampaignRow = { id: 'camp-existing', status: 'planning', current_stage: 'planning', start_date: null };
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody({ campaignId: 'camp-existing' })), res);
+    expect(res.statusCode).not.toBe(503);
+    expect(campaignUpdates.some((u) => 'start_date' in u)).toBe(true);
   });
 });

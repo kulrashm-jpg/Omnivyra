@@ -10,6 +10,14 @@ import { ownedDbTable } from '../db/writeOwner';
  *   - Drop underperforming content types
  *   - Use conservative posting frequency
  *   - Short 4-week duration (rapid test)
+ *
+ * NO PRODUCTION CALLER since fbea17a88 (campaign health is SUGGEST-ONLY, e9 2026-11-12): the health
+ * monitor no longer pauses campaigns, and this service's user notification says the campaign "was
+ * paused". Re-wire it only together with a truthful notification.
+ *
+ * unread-error pkg 2: a failed read or write is never a silent "nothing to recover". The campaign read
+ * and the pending-campaign insert THROW (the insert's failure used to be swallowed by the catch below,
+ * so a caller saw a normal result); the notification, after the pending row exists, is logged.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -25,10 +33,11 @@ export type RecoveryResult = {
 
 /** Get company_id and name for a campaign. */
 async function getCampaignMeta(campaignId: string): Promise<{ company_id: string; name: string } | null> {
-  const { data } = await ownedDbTable('campaigns')
+  const { data, error } = await ownedDbTable('campaigns')
     .select('company_id, name')
     .eq('id', campaignId)
     .maybeSingle();
+  if (error) throw new Error(`Recovery: campaign unreadable: ${error.message}`);
   return data as { company_id: string; name: string } | null;
 }
 
@@ -118,8 +127,8 @@ export async function generateRecoveryCampaign(
     if (error) throw new Error(error.message);
     result.recovery_pending_id = (data as { id: string }).id;
 
-    // Notify user
-    await ownedDbTable('notifications').insert({
+    // Notify user (the pending row exists; a failed notification is logged, not fatal)
+    const { error: notifyError } = await ownedDbTable('notifications').insert({
       company_id: companyId,
       type:       'campaign_recovery_generated',
       title:      'Recovery campaign ready',
@@ -132,6 +141,9 @@ export async function generateRecoveryCampaign(
       created_at: new Date().toISOString(),
       read:       false,
     });
+    if (notifyError) {
+      console.error('[campaignRecoveryService] recovery campaign stored but the user was not notified', { campaignId, pendingId: result.recovery_pending_id, message: notifyError.message });
+    }
 
     await logDecision({
       company_id:    companyId,
@@ -147,6 +159,7 @@ export async function generateRecoveryCampaign(
     });
   } catch (err) {
     console.warn('[campaignRecoveryService] Failed to generate recovery campaign', err);
+    throw err; // never a normal result for a recovery that was not stored
   }
 
   return result;

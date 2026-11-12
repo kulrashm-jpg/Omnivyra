@@ -135,6 +135,10 @@ function wireSupabase(opts: {
   hasExecutionStatusColumn?: boolean;
   /** Simulate an unrelated, genuine database failure on the campaigns read. */
   campaignsError?: { code?: string; message: string };
+  /** unread-error pkg 2: the version-context read fails (PostgREST error, not thrown). */
+  versionError?: { code?: string; message: string };
+  /** unread-error pkg 2: the POST-release campaign read fails. */
+  afterError?: { code?: string; message: string };
 }) {
   const campaign = opts.campaign === undefined
     ? {
@@ -166,10 +170,12 @@ function wireSupabase(opts: {
           eq: () => ({
             order: () => ({
               limit: () => ({
-                maybeSingle: async () => ({
-                  data: { company_id: COMPANY_ID, campaign_snapshot: { execution_config: { campaign_mode: 'text' }, plan: { weeks: [{ week_number: 1 }] } } },
-                  error: null,
-                }),
+                maybeSingle: async () => (opts.versionError
+                  ? { data: null, error: opts.versionError }
+                  : {
+                    data: { company_id: COMPANY_ID, campaign_snapshot: { execution_config: { campaign_mode: 'text' }, plan: { weeks: [{ week_number: 1 }] } } },
+                    error: null,
+                  }),
               }),
             }),
           }),
@@ -205,6 +211,7 @@ function wireSupabase(opts: {
               }
               // Canonical reads: pre-release, then post-release.
               campaignSelectCount += 1;
+              if (campaignSelectCount > 1 && opts.afterError) return { data: null, error: opts.afterError };
               const row = campaignSelectCount === 1 ? campaign : after;
               if (!row) return { data: null, error: null };
               // Only return columns the mock schema actually has.
@@ -708,5 +715,27 @@ describe('publish-worker regression (the audit P0 blocker)', () => {
     wireSupabase({ planRows: [draftRow('d', 1, 'linkedin')] });
     await post();
     expect(mockOwnedUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ── Unread errors (unread-error pkg 2, e9 2026-11-12) ────────────────────────
+describe('unread errors', () => {
+  it('version-context read fails: 503 RELEASE_VERSION_READ_FAILED, nothing locked or scheduled (no "text" default skipping the creator gate)', async () => {
+    wireSupabase({ versionError: { code: '08006', message: 'boom' } });
+    const res = await post();
+    expect(res.statusCode).toBe(503);
+    expect(res.body.code).toBe('RELEASE_VERSION_READ_FAILED');
+    expect(mockAcquireLock).not.toHaveBeenCalled();
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('post-release read fails: still 200 (the release happened), stage null, governance stage_after "unreadable" (not a stage computed from {})', async () => {
+    wireSupabase({ afterError: { code: '08006', message: 'boom' } });
+    const res = await post();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.stage).toBeNull();
+    const completed = mockRecordGovernanceEvent.mock.calls.map((c) => c[0] as { eventType: string; metadata: Record<string, unknown> })
+      .find((e) => e.eventType === 'SCHEDULE_COMPLETED');
+    expect(completed?.metadata.stage_after).toBe('unreadable');
   });
 });

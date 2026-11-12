@@ -74,7 +74,8 @@ export interface GovernanceCompanyAnalytics {
   /** Stage 30: Total snapshot count for company */
   snapshotCount: number;
   /** Stage 31: Ledger hash chain integrity */
-  ledgerIntegrity: 'VALID' | 'CORRUPTED';
+  /** UNVERIFIABLE: the ledger could not be read, so it was neither verified nor found corrupted. */
+  ledgerIntegrity: 'VALID' | 'CORRUPTED' | 'UNVERIFIABLE';
   /** Stage 32: Projection status for company (aggregate of campaign projections) */
   projectionStatus?: ProjectionStatus;
   /** Stage 33: Rate limit / backpressure counters */
@@ -398,7 +399,7 @@ export async function getCompanyGovernanceAnalytics(companyId: string): Promise<
     let lastSnapshotAt: string | undefined;
     let lastSnapshotId: string | undefined;
     let snapshotCount = 0;
-    let ledgerIntegrity: 'VALID' | 'CORRUPTED' = 'VALID';
+    let ledgerIntegrity: 'VALID' | 'CORRUPTED' | 'UNVERIFIABLE' = 'VALID';
     try {
       const { data: snapshotRow } = await supabase
         .from('governance_snapshots')
@@ -420,9 +421,10 @@ export async function getCompanyGovernanceAnalytics(companyId: string): Promise<
 
     try {
       const ledgerResult = await verifyCompanyLedger(companyId);
-      ledgerIntegrity = ledgerResult.valid ? 'VALID' : 'CORRUPTED';
+      ledgerIntegrity = ledgerResult.status === 'verified' ? 'VALID'
+        : ledgerResult.status === 'corrupted' ? 'CORRUPTED' : 'UNVERIFIABLE';
     } catch {
-      ledgerIntegrity = 'CORRUPTED';
+      ledgerIntegrity = 'UNVERIFIABLE';
     }
 
     let projectionStatus: ProjectionStatus = 'MISSING';
@@ -473,7 +475,7 @@ export async function getCompanyGovernanceAnalytics(companyId: string): Promise<
       lastSnapshotAt: undefined,
       lastSnapshotId: undefined,
       snapshotCount: 0,
-      ledgerIntegrity: 'VALID',
+      ledgerIntegrity: 'UNVERIFIABLE',
       projectionStatus: 'MISSING' as ProjectionStatus,
       replayRateLimitedCount: 0,
       snapshotRestoreBlockedCount: 0,

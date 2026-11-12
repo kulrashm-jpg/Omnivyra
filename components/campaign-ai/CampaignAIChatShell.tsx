@@ -9,6 +9,7 @@ import { ExistingPlanBanner } from './ExistingPlanBanner';
 import { PlanOverviewOverlay } from './PlanOverviewOverlay';
 import { PlanPreviewModal } from './PlanPreviewModal';
 import { SchedulePlanConfirmModal } from './SchedulePlanConfirmModal';
+import { ActivationRetryNotice } from './ActivationRetryNotice';
 
 export function CampaignAIChatShell(props: any) {
   const {
@@ -126,6 +127,8 @@ export function CampaignAIChatShell(props: any) {
               {uiErrorMessage}
             </div>
           )}
+          <ActivationRetryNotice campaignId={campaignId} />
+
           {uiSuccessMessage && (
             <div className="bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg p-3">
               {uiSuccessMessage}
