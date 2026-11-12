@@ -117,13 +117,18 @@ interface EvalOptions {
   source?:     'local' | 'sweep';
 }
 
+/**
+ * Returns true when `effectiveCount` crosses the adaptive threshold, i.e. an
+ * anomaly is present, whether or not dedup suppresses the row/alert this time.
+ * False for an unknown type or a count below threshold.
+ */
 export async function evaluateAnomalyCount(
   type: string,
   effectiveCount: number,
   opts: EvalOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const config = ANOMALY_CONFIGS[type];
-  if (!config) return;
+  if (!config) return false;
 
   // Adaptive threshold
   const baseline  = await getHourlyBaseline(type);
@@ -131,7 +136,7 @@ export async function evaluateAnomalyCount(
   const baselinePer5Min = baseline / 12;
   const threshold = computeThreshold(baselinePer5Min, config.multiplier, config.minThreshold);
 
-  if (effectiveCount < threshold) return;
+  if (effectiveCount < threshold) return false;
 
   const dedupeKey = `${type}:${opts.entityId ?? 'global'}`;
 
@@ -173,6 +178,7 @@ export async function evaluateAnomalyCount(
       detectedAt:  new Date().toISOString(),
     });
   }
+  return true;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

@@ -80,15 +80,13 @@ export async function runAnomalySweep(): Promise<SweepResult> {
     .map(async ([authEvent, count]) => {
       const anomalyType = SWEEP_EVENT_MAP[authEvent];
       checkedTypes++;
-      // We pass the raw count — evaluateAnomalyCount computes threshold and dedup
-      const before = anomaliesFound;
-      await evaluateAnomalyCount(anomalyType, count, {
+      // We pass the raw count — evaluateAnomalyCount computes threshold and dedup,
+      // and returns whether the threshold was crossed (dedup does not hide it).
+      const crossed = await evaluateAnomalyCount(anomalyType, count, {
         source:   'sweep',
         metadata: { window_mins: SWEEP_WINDOW_MINS, global_count: count },
       });
-      // evaluateAnomalyCount doesn't return a bool, but threshold crossing is
-      // observable indirectly — we log separately in the API handler if needed
-      void before; // suppress unused warning
+      if (crossed) anomaliesFound++;
     });
 
   await Promise.allSettled(evalPromises);

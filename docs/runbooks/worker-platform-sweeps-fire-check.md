@@ -47,14 +47,12 @@ cause. In particular:
   reports table. No credit hold was released by that run.
 
 Quiet runs log nothing. Activity logs only on work:
-`[anomalySweep] anomalies_found=N` (see the note below), `[schedulerLockSweep] deleted=N`,
+`[anomalySweep] anomalies_found=N` (event types over threshold this run, counted
+even when dedup suppresses the `system_anomalies` row or Slack alert),
+`[schedulerLockSweep] deleted=N`,
 `[recoverStaleReports] recovered=N timeoutMinutes=... cutoff=... ids=...` then
 `[recoverStaleReports] recovered=N` (each recovered report's credit hold is
 released; e1 owns that path).
-
-Note: `anomalies_found` is currently always 0 (`runAnomalySweep` never
-increments it; `evaluateAnomalyCount` returns nothing). Crossings show up as
-`system_anomalies` rows and CRITICAL Slack alerts, not in this log line.
 
 ## Not scheduled (owner, launch)
 
