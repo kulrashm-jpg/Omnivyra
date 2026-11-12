@@ -1,8 +1,9 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase as sb } from '@/backend/db/supabaseClient';
 import { withOrgAccess } from '../../../backend/middleware/withOrgAccess';
 import { logger } from '../../../backend/services/logger';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
+import type { OrgAccessContext } from '../../../backend/middleware/withOrgAccess';
 
 export interface ActionBreakdown {
   action: string;
@@ -40,10 +41,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const now = new Date();
     const from = new Date(now.getTime() - days * 86400_000);
 
-    const { data, error } = await sb
-      .from('credit_usage_log')
+    // S2: pinned to the org withOrgAccess VALIDATED (req.orgAccess), not the raw query value.
+    const orgAccess = (req as unknown as { orgAccess: OrgAccessContext }).orgAccess;
+    const { data, error } = await tenantTable('credit_usage_log', tenantContextFor(orgAccess, orgAccess.orgId))
       .select('action, credits_used, created_at')
-      .eq('organization_id', orgId)
       .gte('created_at', from.toISOString())
       .order('created_at', { ascending: true });
 

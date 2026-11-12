@@ -14,8 +14,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { assertOrgAccess } from '../../../../backend/services/requestAccessService';
+import { tenantContextFor, tenantTable } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -31,10 +31,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // organization_id is pinned to the access-validated companyId. There is
   // no code path that lets a company user read another org's rows.
-  let q = supabase
-    .from('credit_transactions')
+  // S2: through the seam with the context of the access-validated company.
+  let q = tenantTable('credit_transactions', tenantContextFor(access, companyId))
     .select('id, execution_phase, credits_delta, balance_after, usd_equivalent, reference_type, reference_id, note, idempotency_key, parent_transaction_id, category, created_at', { count: 'exact' })
-    .eq('organization_id', companyId)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
 

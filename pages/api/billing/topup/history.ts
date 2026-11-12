@@ -8,9 +8,10 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase as sb } from '@/backend/db/supabaseClient';
 import { withOrgAccess } from '../../../../backend/middleware/withOrgAccess';
 import { logger } from '../../../../backend/services/logger';
+import { tenantContextFor, tenantTable } from '../../../../backend/db/tenantTable';
+import type { OrgAccessContext } from '../../../../backend/middleware/withOrgAccess';
 
 export interface TopupHistoryRow {
   id: string;
@@ -29,10 +30,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!orgId) return res.status(400).json({ error: 'org_id required' });
 
   try {
-    const { data, error } = await sb
-      .from('credit_purchases')
+    // S2: pinned to the org withOrgAccess VALIDATED (req.orgAccess), not the raw query value.
+    const orgAccess = (req as unknown as { orgAccess: OrgAccessContext }).orgAccess;
+    const { data, error } = await tenantTable('credit_purchases', tenantContextFor(orgAccess, orgAccess.orgId))
       .select('id, credits, amount_paid, currency, status, fulfillment_status, provider_order_id, created_at')
-      .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .limit(100);
     if (error) throw error;

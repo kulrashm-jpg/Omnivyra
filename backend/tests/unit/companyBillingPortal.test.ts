@@ -117,10 +117,12 @@ describe('Company billing portal — org isolation', () => {
     const captured: Array<[string, unknown]> = [];
     installSupabase(captured);
     const res = makeRes();
-    await ledgerHandler({ method: 'GET', query: { companyId: 'my-org' } } as any, res as any);
+    // S2: the ledger reads through the tenant seam, which takes only a real (uuid) company id.
+    const MY_ORG = '00000000-0000-4000-8000-00000000a0a0';
+    await ledgerHandler({ method: 'GET', query: { companyId: MY_ORG } } as any, res as any);
     const orgFilters = captured.filter(([c]) => c === 'organization_id');
     expect(orgFilters.length).toBeGreaterThan(0);
-    expect(orgFilters.every(([, v]) => v === 'my-org')).toBe(true);
+    expect(orgFilters.every(([, v]) => v === MY_ORG)).toBe(true);
   });
 
   it('export: rejects export type not in the company allowlist', async () => {
