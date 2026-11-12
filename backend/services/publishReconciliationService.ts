@@ -36,23 +36,47 @@ export async function enqueuePublishReconciliation(input: {
   metadata?: Record<string, unknown>;
 }) {
   const key = input.idempotencyKey ?? `publish-integrity:${input.publishingJobId ?? input.externalId ?? cryptoSafeKey(input.provider)}`;
-  const { data, error } = await ownedDbTable('reconciliation_jobs')
-    .upsert({
-      company_id: input.companyId,
-      website_id: input.websiteId ?? null,
-      publishing_job_id: input.publishingJobId ?? null,
-      provider: input.provider,
-      external_id: input.externalId ?? null,
-      idempotency_key: key,
-      run_after: input.runAfter ?? new Date().toISOString(),
-      status: 'queued',
-      metadata: input.metadata ?? {},
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'company_id,idempotency_key' })
-    .select('*')
-    .single();
+  const fields = {
+    website_id: input.websiteId ?? null,
+    publishing_job_id: input.publishingJobId ?? null,
+    provider: input.provider,
+    external_id: input.externalId ?? null,
+    run_after: input.runAfter ?? new Date().toISOString(),
+    status: 'queued',
+    metadata: input.metadata ?? {},
+    updated_at: new Date().toISOString(),
+  };
+  // CLASS-2 (e9 sweep): this was an upsert ON CONFLICT DO UPDATE, so the cron's periodic re-enqueue
+  // reset a job a worker was PROCESSING back to `queued` - a second worker verified it at the same
+  // time (double reads, a double integrity write). Now: insert ON CONFLICT DO NOTHING
+  // (uq_reconciliation_jobs_company_idempotency); an existing job is re-armed for re-verification by
+  // a compare-and-set on the status read - never one that is `processing`.
+  const { data: inserted, error } = await ownedDbTable('reconciliation_jobs')
+    .upsert({ ...fields, company_id: input.companyId, idempotency_key: key }, { onConflict: 'company_id,idempotency_key', ignoreDuplicates: true })
+    .select('*');
   if (error) throw new Error(error.message);
-  return data;
+  if (Array.isArray(inserted) && inserted.length > 0) return inserted[0];
+
+  const readByKey = async () => {
+    const { data: row, error: readError } = await ownedDbTable('reconciliation_jobs')
+      .select('*')
+      .eq('company_id', input.companyId)
+      .eq('idempotency_key', key)
+      .maybeSingle();
+    if (readError) throw new Error(`Reconciliation job unreadable: ${readError.message}`);
+    if (!row) throw new Error('Reconciliation job neither created nor found by its idempotency key');
+    return row as Record<string, unknown>;
+  };
+  const existing = await readByKey();
+  if (existing.status === 'processing') return existing;
+  const { data: rearmed, error: rearmError } = await ownedDbTable('reconciliation_jobs')
+    .update(fields)
+    .eq('id', existing.id)
+    .eq('status', existing.status)
+    .select('*');
+  if (rearmError) throw new Error(`Reconciliation job not re-armed: ${rearmError.message}`);
+  if (Array.isArray(rearmed) && rearmed.length === 1) return rearmed[0];
+  return readByKey(); // claimed or changed meanwhile: returned as it is now, untouched
 }
 
 export async function enqueuePublishedJobsForReconciliation(input: {
