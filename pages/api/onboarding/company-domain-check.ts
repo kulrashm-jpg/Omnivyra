@@ -25,13 +25,12 @@ import { extractDomain, isFreeEmailDomain } from '../../../backend/services/comp
 
 type MatchedResponse = {
   matched: true;
-  companyId: string;
   companyName: string;
   /** Display name of the first active COMPANY_ADMIN, or null if none found */
   adminName: string | null;
 };
 type NoMatchResponse  = { matched: false };
-type ErrorResponse    = { error: string };
+type ErrorResponse    = { error: string; code?: string };
 
 async function handler(
   req: NextApiRequest,
@@ -46,6 +45,12 @@ async function handler(
   }
   const supabaseUid: string = authResult.user.supabaseUid;
   const email: string = authResult.user.email;
+
+  // SECURITY (e1, 2026-11-12): the email domain is the ONLY evidence this endpoint uses, so it must be
+  // VERIFIED - an unverified session at someone else's domain learned their company and admin.
+  if (!authResult.user.emailVerified) {
+    return res.status(403).json({ error: 'Please verify your email address first.', code: 'EMAIL_NOT_VERIFIED' });
+  }
 
   // ── 2. Skip free / public email domains ───────────────────────────────────
   const emailDomain = extractDomain(email);
@@ -104,20 +109,16 @@ async function handler(
   if (adminRole?.user_id) {
     const { data: adminUser } = await supabase
       .from('users')
-      .select('name, email')
+      .select('name')
       .eq('id', adminRole.user_id)
       .maybeSingle();
 
-    // Prefer stored name; fall back to the email local-part
-    adminName =
-      (adminUser as any)?.name?.trim() ||
-      ((adminUser as any)?.email as string | undefined)?.split('@')[0] ||
-      null;
+    // Display name only - never the email (nor its local-part).
+    adminName = (adminUser as any)?.name?.trim() || null;
   }
 
   return res.status(200).json({
     matched: true,
-    companyId:   company.id,
     companyName: company.name,
     adminName,
   });

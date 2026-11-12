@@ -59,7 +59,11 @@ import {
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
-  | { companyExists: true; matchedCompanyId: string; matchedCompanyName: string; adminName: string | null }
+  // Disclosure follows the binding evidence (e1, 2026-11-12): only a VERIFIED email-domain match names
+  // the company and its admin (display name only) and notifies the admin; a typed-website or name match
+  // says only that it is taken. The company id is never returned (the client never used it).
+  | { companyExists: true; matchedCompanyName: string; adminName: string | null; joinRequested: boolean }
+  | { companyExists: true; taken: true }
   | { code: string; error: string; limit?: number; current?: number | null }
   | { error: string };
 
@@ -86,15 +90,12 @@ async function fetchAdminName(
 
   const { data: adminUser } = await db
     .from('users')
-    .select('name, email')
+    .select('name')
     .eq('id', userId)
     .maybeSingle();
 
-  return (
-    (adminUser as any)?.name?.trim() ||
-    ((adminUser as any)?.email as string | undefined)?.split('@')[0] ||
-    null
-  );
+  // Display name only - never the email (nor its local-part).
+  return (adminUser as any)?.name?.trim() || null;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
@@ -148,13 +149,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
    * "consult your admin" message; this adds the two emails. Best-effort: the
    * shared service never throws, so onboarding is never blocked by it.
    */
+  // Called ONLY for a verified email-domain match: a name / typed-website probe must never email a
+  // company's admin (that was the probe-notification vector - each probed company was notified once).
   const notifyClaimedDomain = async (
     matchedCompanyId: string,
     matchedCompanyName: string | null,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const emailDomain = extractDomain(user.email ?? '') ?? '';
-    if (!user.email || !emailDomain || isFreeEmailDomain(emailDomain)) return;
-    await notifyAdminAndProspectOfClaimedDomain(supabase, {
+    if (!user.email || !emailDomain || isFreeEmailDomain(emailDomain)) return false;
+    const notice = await notifyAdminAndProspectOfClaimedDomain(supabase, {
       prospectUserId: user.id,
       prospectEmail:  user.email,
       emailDomain,
@@ -162,6 +165,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       companyName:    matchedCompanyName,
       nowIso:         new Date().toISOString(),
     });
+    return notice.adminNotice === 'sent';
   };
 
   // Service role bypasses RLS — required for inserts into companies,
@@ -404,14 +408,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
         return res.status(200).json({ companyId: matched.company_id });
       }
 
-      const adminName = await fetchAdminName(supabase, matched.company_id);
-      await notifyClaimedDomain(matched.company_id, matched.company_name);
       await emitCompanyEvent('CompanyExists', 'denied', 'MATCHED_EXISTING_COMPANY', matched.company_id);
+      if (matched.evidence !== 'verified_email_domain') {
+        return res.status(200).json({ companyExists: true, taken: true });
+      }
+      const adminName = await fetchAdminName(supabase, matched.company_id);
+      const joinRequested = await notifyClaimedDomain(matched.company_id, matched.company_name);
       return res.status(200).json({
         companyExists:      true,
-        matchedCompanyId:   matched.company_id,
         matchedCompanyName: matched.company_name,
         adminName,
+        joinRequested,
       });
     }
 
@@ -491,14 +498,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
 
         // Not a member — do NOT auto-join. Only the first user creates the
         // company; everyone else must be invited by the company admin.
-        const adminName = await fetchAdminName(supabase, domainCompany.id);
-        await notifyClaimedDomain(domainCompany.id, domainCompany.name);
         await emitCompanyEvent('CompanyExists', 'denied', 'DOMAIN_ALREADY_CLAIMED', domainCompany.id);
+        // Verified only when the match came from the user's own email domain (the typed website
+        // proves nothing unless it IS that domain).
+        const verifiedMatch = !websiteDomainMatch || websiteDomain === adminEmailDomain;
+        if (!verifiedMatch) {
+          return res.status(200).json({ companyExists: true, taken: true });
+        }
+        const adminName = await fetchAdminName(supabase, domainCompany.id);
+        const joinRequested = await notifyClaimedDomain(domainCompany.id, domainCompany.name);
         return res.status(200).json({
           companyExists:      true,
-          matchedCompanyId:   domainCompany.id,
           matchedCompanyName: domainCompany.name,
           adminName,
+          joinRequested,
         });
       }
     }
