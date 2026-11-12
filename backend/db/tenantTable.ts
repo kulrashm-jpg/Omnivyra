@@ -73,6 +73,18 @@ function requireCtx(ctx: TenantContext | null | undefined): TenantContext {
 }
 
 type Row = Record<string, unknown>;
+
+/**
+ * Embedded selects (`'*, other(*)'`) are REFUSED (05, S1 review): the tenant predicate constrains the base
+ * table only, and an embed of a PARENT / belongs-to row (outbound FK) returns that row whatever tenant it
+ * belongs to; `!inner` does not help. Read the other table through its own tenantTable / tenantChildTable.
+ * A `->` JSON path is not an embed and stays allowed.
+ */
+function refuseEmbed(table: string, columns: string | undefined) {
+  if (typeof columns === 'string' && /\(/.test(columns.replace(/->>?/g, ''))) {
+    throw new TenantSeamError('TENANT_PAYLOAD_INVALID', `${table}: embedded selects are not allowed through the tenant seam (read the related table through its own seam)`);
+  }
+}
 function stamp(rows: Row | Row[], column: string, companyId: string): Row | Row[] {
   const one = (r: Row): Row => {
     if (!r || typeof r !== 'object' || Array.isArray(r)) throw new TenantSeamError('TENANT_PAYLOAD_INVALID', 'insert/upsert payload must be an object');
@@ -94,6 +106,7 @@ export function tenantTable(table: TenantTableName, ctx: TenantContext) {
   const column = columnOf(table);
   return {
     select(columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
+      refuseEmbed(table, columns);
       return (ownedDbTable(table) as any).select(columns ?? '*', options).eq(column, c.companyId);
     },
     update(values: Row, options?: Record<string, unknown>) {
@@ -140,6 +153,7 @@ export async function tenantChildTable(table: TenantChildTableName, ctx: TenantC
   };
   return {
     select(columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
+      refuseEmbed(table, columns);
       return (ownedDbTable(table) as any).select(columns ?? '*', options).eq(via, parentId);
     },
     update(values: Row, options?: Record<string, unknown>) {

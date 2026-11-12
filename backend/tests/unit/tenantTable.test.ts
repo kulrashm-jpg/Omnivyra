@@ -65,6 +65,13 @@ describe('tenantTable (direct tenancy)', () => {
     expect(() => tenantTable('campaigns', ctxA).upsert({ name: 'c', [col]: B })).toThrow(/TENANT_MISMATCH/);
     expect(calls).toHaveLength(1); // the refused upsert never reached the builder
   });
+  it('an embedded select is refused (an outbound embed escapes the tenant predicate); a JSON path is allowed', () => {
+    expect(() => tenantTable('campaigns', ctxA).select('id, social_accounts(company_id)')).toThrow(/embedded selects/);
+    expect(() => tenantTable('campaigns', ctxA).select('id, websites!inner(company_id)')).toThrow(/embedded selects/);
+    expect(calls).toHaveLength(0);
+    tenantTable('campaigns', ctxA).select('id, meta->score');
+    expect(calls[0].op).toBe('select');
+  });
   it('an unregistered table is refused', () => {
     expect(() => tenantTable('no_such_table' as never, ctxA)).toThrow(/TENANT_TABLE_UNKNOWN/);
   });

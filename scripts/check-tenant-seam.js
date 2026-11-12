@@ -83,7 +83,7 @@ function scan() {
   const allow = loadAllowList();
   const files = [];
   for (const d of ['backend', 'pages', 'lib']) walk(path.join(ROOT, d), files);
-  const findings = [], unclassified = new Map();
+  const findings = [], unclassified = new Map(), markerUse = new Map();
   const SEAM = new Set(['backend/db/tenantTable.ts', 'backend/db/writeOwner.ts']);
   for (const f of files) {
     const rel = path.relative(ROOT, f).replace(/\\/g, '/');
@@ -98,22 +98,39 @@ function scan() {
       const table = m[1];
       if (reg.global.has(table)) continue;
       const spec = reg.direct.get(table) || reg.child.get(table);
-      if (!spec) { unclassified.set(table, (unclassified.get(table) || 0) + 1); continue; }
+      if (!spec) {
+        unclassified.set(table, (unclassified.get(table) || 0) + 1);
+        const kindU = /\.(insert|update|upsert|delete)\(/.test(code.slice(m.index, m.index + 600).split(/;\s*\n/)[0]) ? 'write' : 'read';
+        findings.push({ rule: 'U', file: rel, line: lineAt(m.index), table, kind: kindU, tag: 'unclassified', area: areaOf(rel), mode: '-', predicated: false });
+        continue;
+      }
       const line = lineAt(m.index);
-      const chain = code.slice(m.index, m.index + 600).split(/;\s*\n/)[0];
+      const window = code.slice(m.index, m.index + 600);
+      const term = window.search(/;\s*\n/);
+      if (term < 0) stats.windowCapHits++; // 05: a chain longer than the window may hide its write verb
+      const chain = term < 0 ? code.slice(m.index, m.index + 2000) : window.slice(0, term);
       const kind = /\.(insert|update|upsert|delete)\(/.test(chain) ? 'write' : 'read';
-      // marker: within the 3 raw lines above the call line or the statement's first line
-      let marker = null;
+      // marker: within the 3 raw lines above the call line
+      let marker = null, markerLine = 0;
       for (let k = line - 1; k >= Math.max(1, line - 4); k--) {
         const mm = (rawLines[k - 1] || '').match(/\/\/\s*cross-tenant:\s*([a-z0-9][a-z0-9-]*)/i);
-        if (mm) { marker = mm[1]; break; }
+        if (mm) { marker = mm[1]; markerLine = k; break; }
       }
-      // Does the chain already carry a tenant predicate by hand (.eq/.match/.in on the tenant column or the
-      // child's parent FK; or, for inserts, the column in the payload)? Informational: still an R1 finding
-      // (the seam must own it), but "unpredicated" sites are the ones open TODAY.
+      if (marker) { const key = `${rel}:${markerLine}`; markerUse.set(key, (markerUse.get(key) || 0) + 1); }
+      // Tenant predicate by hand (.eq/.in/.match on the tenant column or the child's parent FK; or the column in
+      // a payload). 05: PRESENCE is triage only; the VALUE's SOURCE decides safety. A predicate whose value is
+      // reachable from req.body / req.query / params is a FINDING (R6), not a pass.
       const tcol = reg.direct.has(table) ? spec.column : spec.via;
-      const predicated = new RegExp(`\\.(eq|in|match)\\(\\s*['"\`]${tcol}['"\`]|\\b${tcol}\\s*:`).test(chain);
-      const base = { file: rel, line, table, kind, tag: spec.tag, area: areaOf(rel), mode: reg.direct.has(table) ? 'direct' : 'child', predicated };
+      const predRe = new RegExp(`\\.(?:eq|in|match)\\(\\s*['"\`]${tcol}['"\`]\\s*,\\s*([^)]{0,160})\\)|\\b${tcol}\\s*:\\s*([^,}\\n]{0,160})`);
+      const pm = chain.match(predRe);
+      const predicated = !!pm;
+      const valueExpr = pm ? (pm[1] || pm[2] || '') : '';
+      const requestSourced = predicated && /\breq\.(body|query|params)\b|\bquery\.|\bbody\.|\bparams\./.test(valueExpr);
+      // 05: an EMBEDDED select on a tenant chain escapes the predicate for outbound (belongs-to) embeds.
+      const embed = /\.select\(\s*(['"`])((?:(?!\1).)*\()/.test(chain.replace(/->>?/g, ''));
+      const base = { file: rel, line, table, kind, tag: spec.tag, area: areaOf(rel), mode: reg.direct.has(table) ? 'direct' : 'child', predicated, requestSourced, embed };
+      if (embed) findings.push({ rule: 'E', ...base });
+      if (requestSourced) findings.push({ rule: 'R6', ...base });
       if (!marker) { findings.push({ rule: 'R1', ...base }); continue; }
       const e = allow.get(marker);
       if (!e || e.file !== rel || !e.tables.includes(table)) findings.push({ rule: 'R2', marker, ...base });
@@ -122,16 +139,40 @@ function scan() {
       if (/req\.body/.test(m[1])) findings.push({ rule: 'R4', file: rel, line: lineAt(m.index), table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-' });
     }
   }
+  stats.markersCoveringSeveralCalls = [...markerUse.values()].filter((n) => n > 1).length;
   return { findings, unclassified, files: files.length };
 }
 
-const prelaunch = (f) => f.kind === 'write' || f.kind === 'context' || f.tag !== 'other';
+const stats = { windowCapHits: 0, markersCoveringSeveralCalls: 0 };
+// Pre-launch (owner 2026-11-12): all writes, money/pii/content reads, request-sourced predicates, embeds, and
+// unclassified tables (unknown until classified).
+const prelaunch = (f) => f.kind === 'write' || f.kind === 'context' || f.tag !== 'other' || f.rule === 'R6' || f.rule === 'E';
 const { findings, unclassified, files } = scan();
 const by = (keyFn) => { const m = new Map(); for (const f of findings) { const k = keyFn(f); m.set(k, (m.get(k) || 0) + 1); } return [...m].sort((a, b) => b[1] - a[1]); };
 console.log(`[tenant-seam] scanned ${files} files: ${findings.length} findings (${findings.filter(prelaunch).length} pre-launch), ${[...unclassified.values()].reduce((a, b) => a + b, 0)} unclassified sites over ${unclassified.size} tables`);
 console.log(`  without ANY tenant predicate in the call chain: ${findings.filter((f) => f.rule === 'R1' && !f.predicated).length} (pre-launch ${findings.filter((f) => f.rule === 'R1' && !f.predicated && prelaunch(f)).length}; writes ${findings.filter((f) => f.rule === 'R1' && !f.predicated && f.kind === 'write').length})`);
+console.log(`  request-sourced tenant predicates (R6): ${findings.filter((f) => f.rule === 'R6').length}; embedded selects on tenant chains (E): ${findings.filter((f) => f.rule === 'E').length}; unclassified-table sites (U): ${findings.filter((f) => f.rule === 'U').length}`);
+console.log(`  window self-check: ${stats.windowCapHits} chains hit the 600-char window with no terminator (rescanned to 2000), ${stats.markersCoveringSeveralCalls} markers sit within 3 lines of more than one tenant call`);
 console.log('  by area:', by((f) => f.area).map(([k, v]) => `${k}=${v}`).join(' '));
 console.log('  by rule/kind/tag:', by((f) => `${f.rule}/${f.kind}/${f.tag}`).map(([k, v]) => `${k}=${v}`).join(' '));
+// FROZEN BASELINE (owner: "block new" from day one). Keyed by rule|file|table|kind (line-insensitive), counted:
+// a key whose count rises above the baseline is NEW. --write-baseline records today; --block-new enforces.
+const keyOf = (f) => `${f.rule}|${f.file}|${f.table}|${f.kind}`;
+const counts = new Map(); for (const f of findings) counts.set(keyOf(f), (counts.get(keyOf(f)) || 0) + 1);
+const wb = arg('--write-baseline');
+if (wb) { fs.writeFileSync(wb, JSON.stringify(Object.fromEntries([...counts].sort()), null, 0).replace(/,"/g, ',\n"') + '\n'); console.log(`  baseline written → ${wb} (${counts.size} keys, ${findings.length} findings)`); }
+const bf = arg('--baseline');
+if (bf) {
+  const base = JSON.parse(fs.readFileSync(bf, 'utf8'));
+  const added = [];
+  for (const [k, n] of counts) if (n > (base[k] || 0)) added.push(`${k} (+${n - (base[k] || 0)})`);
+  const gone = Object.keys(base).reduce((s, k) => s + Math.max(0, base[k] - (counts.get(k) || 0)), 0);
+  console.log(`  vs baseline: ${added.length} keys grew, ${gone} findings resolved`);
+  if (added.length) {
+    for (const a of added.slice(0, 40)) console.log('    NEW ' + a);
+    if (process.argv.includes('--block-new')) { console.error(`[tenant-seam] BLOCK: ${added.length} new unseamed sites since the frozen baseline (use tenantTable / tenantChildTable, or a cross-tenant marker)`); process.exit(1); }
+  }
+}
 const out = arg('--list');
 if (out) {
   fs.writeFileSync(out, JSON.stringify({ findings, unclassified: Object.fromEntries([...unclassified].sort((a, b) => b[1] - a[1])) }, null, 1));
