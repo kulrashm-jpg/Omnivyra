@@ -12,10 +12,17 @@ export {};
 type Res = { data: unknown; error: { message: string } | null };
 let mockClean = new Set<string>();
 let mockRows: Record<string, unknown> = {};
+/** Fail ONLY the completed-campaigns read (campaigns filtered by status IN completed/ended). */
+let mockFailCompleted = false;
 function builder(table: string) {
   const b: any = {};
-  const result = (): Res => (mockClean.has(table) ? { data: mockRows[table] ?? [], error: null } : { data: null, error: { message: `${table} down` } });
-  for (const m of ['select', 'eq', 'in', 'or', 'limit', 'lt', 'gte', 'update', 'insert']) b[m] = () => b;
+  let completedRead = false;
+  const result = (): Res => {
+    if (completedRead && mockFailCompleted) return { data: null, error: { message: 'completed down' } };
+    return mockClean.has(table) ? { data: mockRows[table] ?? [], error: null } : { data: null, error: { message: `${table} down` } };
+  };
+  for (const m of ['select', 'eq', 'or', 'limit', 'lt', 'gte', 'update', 'insert']) b[m] = () => b;
+  b.in = (_c: string, v: unknown[]) => { if (Array.isArray(v) && v.includes('completed')) completedRead = true; return b; };
   b.maybeSingle = async () => result();
   b.then = (ok: (v: Res) => unknown, ko: (e: unknown) => unknown) => Promise.resolve(result()).then(ok, ko);
   return b;
@@ -44,6 +51,7 @@ let errSpy: jest.SpyInstance;
 beforeEach(() => {
   gen.mockClear();
   credits.mockReset();
+  mockFailCompleted = false;
   mockClean = new Set(['pending_campaigns', 'campaigns', 'company_settings', 'notifications']);
   mockRows = { company_settings: [{ company_id: 'org1', autonomous_mode: true, approval_required: true }], campaigns: [], pending_campaigns: [{ id: 'pc1' }] };
   errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -109,4 +117,14 @@ it('control: clean expiry reports the real count', async () => {
   mockRows.pending_campaigns = [{ id: 'a' }, { id: 'b' }];
   const r = await runAutonomousScheduler();
   expect(r.expired_pending).toBe(2);
+});
+
+// MUTANT SURVIVOR (2026-11-12): campaigns is read TWICE (active check, completed
+// list); the completed read now fails ALONE.
+it('completed-campaigns read error ALONE -> distillation skipped and reported (never "nothing completed")', async () => {
+  credits.mockResolvedValue({ sufficient: true, balance: 1000, required: 50 });
+  mockFailCompleted = true;
+  const r = await runAutonomousScheduler();
+  expect(r.errors.join(' ')).toMatch(/completed campaigns read failed/);
+  expect(gen).toHaveBeenCalledTimes(1); // the active-campaign read was clean: generation proceeds
 });

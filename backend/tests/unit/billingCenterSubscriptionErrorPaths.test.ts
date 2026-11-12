@@ -43,3 +43,32 @@ it('subscription expiry: unread update is never reported as expired', async () =
   });
   await expect(markExpiredSubscriptions({ db: d as never })).rejects.toThrow(/expiry update failed/);
 });
+
+// MUTANT SURVIVORS (2026-11-12): resolvePlanId reads pricing_plans up to THREE
+// times (by id, by provider_price_id, by plan_key); a table-keyed fake failed
+// them all at once. This fake fails ONE read by its filter column, and the
+// others answer with a real plan - so a skipped error check falls through to a
+// later tier and returns a plan instead of read_failed.
+function planDb(failCol: string) {
+  return {
+    from: () => {
+      let col = '';
+      const b: any = {
+        select: () => b,
+        eq: (c: string) => { if (!col) col = c; return b; },
+        maybeSingle: async () => (col === failCol ? { data: null, error: { message: 'down' } } : { data: { id: `plan-by-${col}` }, error: null }),
+      };
+      return b;
+    },
+  };
+}
+it.each([
+  ['metadata (by id)', 'id'],
+  ['legacy plan_key', 'plan_key'],
+])('plan resolution: the %s read failing ALONE -> read_failed (never a later tier\'s plan)', async (_l, col) => {
+  const sub = col === 'id'
+    ? { items: { data: [{ price: { id: 'price_1' } }] }, metadata: { plan_id: '11111111-1111-4111-8111-111111111111' } }
+    : { items: { data: [] }, metadata: { plan_key: 'pro' } };
+  const r = await resolvePlanId(sub as never, { db: planDb(col) as never });
+  expect(r).toMatchObject({ planId: null, source: 'read_failed' });
+});
