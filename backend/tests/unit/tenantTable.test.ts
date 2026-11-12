@@ -27,7 +27,7 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: (fn: string, args: Record<string, unknown>) => { rpcCalls.push({ fn, args }); return Promise.resolve({ data: null, error: null }); },
 }));
 
-import { tenantTable, tenantChildTable, tenantOrPlatformTable, resolveTenantOfRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
+import { tenantTable, tenantChildTable, tenantOrPlatformTable, resolveTenantOfRow, ownerCompanyOfRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
 import { TENANT_TABLES, TENANT_CHILD_TABLES } from '../../db/tenantTables';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -133,15 +133,31 @@ describe('tenantChildTable multi-hop and non-id-key parents (55 S2)', () => {
   });
   it('a NON-unique direct key: every parent row must be this tenant\'s (shared with another tenant, or NULL, is refused)', async () => {
     const col = TENANT_TABLES.content_core_asset.column;
-    limitRows.content_core_asset = [{ [col]: A }, { [col]: A.toUpperCase() }];
+    const HEX = 'abcdef12-3456-4789-8abc-def012345678'; // letters, so the case-insensitive match is really exercised
+    limitRows.content_core_asset = [{ [col]: HEX }, { [col]: HEX.toUpperCase() }];
+    await expect(tenantChildTable('content_asset_attachment', tenantContextFor({ userId: 'u' }, HEX), 'core-1')).resolves.toBeDefined();
+    calls.length = 0;
+    limitRows.content_core_asset = [{ [col]: A }, { [col]: A }];
     await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).resolves.toBeDefined();
     expect(calls.filter((c) => c.table === 'content_core_asset').map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['content_core_id', 'core-1']], ['limit', [51]]]);
     limitRows.content_core_asset = [{ [col]: A }, { [col]: B }];
     await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
     limitRows.content_core_asset = [{ [col]: A }, { [col]: null }];
     await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    // Over-wide is an AVAILABILITY refusal with its own code, never reported as a tenant mismatch (05).
     limitRows.content_core_asset = Array.from({ length: 51 }, () => ({ [col]: A }));
-    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    const wide = tenantChildTable('content_asset_attachment', ctxA, 'core-1');
+    await expect(wide).rejects.toThrow(/TENANT_PARENT_FANOUT/);
+    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.not.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_assets = Array.from({ length: 51 }, () => ({ campaign_id: 'c-1' }));
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/TENANT_PARENT_FANOUT/);
+  });
+  it('a hand-built context whose company id is not lowercase is refused at the seam (05 NOTE 2)', () => {
+    const HEX = 'abcdef12-3456-4789-8abc-def012345678'; // has letters, so upper-casing changes it (A is all digits)
+    const upper = { companyId: HEX.toUpperCase(), origin: 'request', reason: null } as unknown as TenantContext;
+    expect(HEX.toUpperCase()).not.toBe(HEX);
+    expect(() => tenantTable('campaigns', upper)).toThrow(/lowercase/);
+    expect(tenantContextFor({ userId: 'u' }, HEX.toUpperCase()).companyId).toBe(HEX);
   });
   it('three hops end to end: platform_override -> attachment -> core_asset', async () => {
     const col = TENANT_TABLES.content_core_asset.column;
@@ -167,6 +183,28 @@ describe('tenantOrPlatformTable (e9 on C28)', () => {
     expect(calls.filter((c) => c.op === 'eq').map((c) => c.args)).toEqual([['company_id', A]]);
     expect(() => tenantOrPlatformTable('external_api_sources' as never, ctxA).update({ company_id: null })).toThrow(/TENANT_MISMATCH/);
     expect(() => tenantOrPlatformTable('campaigns' as never, ctxA)).toThrow(/not TENANT_OR_PLATFORM/);
+  });
+});
+
+describe('ownerCompanyOfRow (derive-then-authorize, R10)', () => {
+  const col = TENANT_TABLES.campaigns.column;
+  it('returns ONLY the owning company id (lowercase), read by id, never row data', async () => {
+    const HEX = 'abcdef12-3456-4789-8abc-def012345678';
+    parentRow = { [col]: HEX.toUpperCase() };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'playbook by id')).resolves.toBe(HEX);
+    expect(calls.map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['id', 'c-1']], ['maybeSingle', []]]);
+  });
+  it('missing, unreadable, NULL-tenant or non-uuid tenant -> null (uniform 404); a reason is required', async () => {
+    parentRow = null;
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    parentRow = { [col]: A }; parentError = { code: '57014' };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    parentError = null; parentRow = { [col]: null };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    parentRow = { [col]: 'not-a-uuid' };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    await expect(ownerCompanyOfRow('campaigns', '', 'by id')).resolves.toBeNull();
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', '')).rejects.toThrow(/reason/);
   });
 });
 
