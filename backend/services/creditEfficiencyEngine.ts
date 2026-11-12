@@ -52,10 +52,13 @@ export type EfficiencyReport = {
 };
 
 async function getContentTypeROI(companyId: string): Promise<ContentTypeROI[]> {
-  const { data } = await ownedDbTable('content_type_efficiency')
+  // A failed read is not "no ROI data". Throw (the efficiency route / cron
+  // reports the failure instead of an empty analysis).
+  const { data, error } = await ownedDbTable('content_type_efficiency')
     .select('content_type, avg_outcome_score, avg_credits_per_outcome, sample_count, recommendation')
     .eq('company_id', companyId)
     .order('avg_credits_per_outcome', { ascending: true });
+  if (error) throw new Error(`[creditEfficiency] content ROI read failed for ${companyId}: ${error.message}`);
 
   if (data?.length) return data as ContentTypeROI[];
 
@@ -77,7 +80,9 @@ async function upsertEfficiencyTier(
   totalOutcomes: number,
   creditsSaved: number,
 ): Promise<void> {
-  await ownedDbTable('credit_efficiency_scores').upsert(
+  // best-effort: the computed tier is still returned to the caller; a failed
+  // persist only leaves the stored score stale. Logged.
+  const { error: upsertErr } = await ownedDbTable('credit_efficiency_scores').upsert(
     {
       organization_id: orgId,
       efficiency_tier: tier,
@@ -89,6 +94,7 @@ async function upsertEfficiencyTier(
     },
     { onConflict: 'organization_id' },
   );
+  if (upsertErr) console.error('[creditEfficiency] score persist failed:', orgId, upsertErr.message);
 }
 
 function determineTier(avgCPO: number, totalOutcomes: number): { tier: string; discount: number } {
@@ -99,7 +105,19 @@ function determineTier(avgCPO: number, totalOutcomes: number): { tier: string; d
   return { tier: 'standard', discount: TIER_DISCOUNTS.standard };
 }
 
-export async function optimizeCreditEfficiency(companyId: string): Promise<EfficiencyReport> {
+/**
+ * PRICING (e9, 2026-11-12):
+ *  - the tier is computed ONLY from campaigns with a real outcome (outcome_score
+ *    > 0); empty campaigns (cpo = credits_used, a small number) used to earn
+ *    ELITE (a 40% discount) after 3 of them. The 3-campaign floor applies to
+ *    SCORED campaigns.
+ *  - the price-bearing write (credit_efficiency_scores tier / discount) happens
+ *    ONLY when `persistTier` is true - the server-side cron. A member-triggered
+ *    run (POST /api/companies/:id/efficiency) computes a preview and writes
+ *    nothing price-bearing.
+ */
+export async function optimizeCreditEfficiency(companyId: string, opts?: { persistTier?: boolean }): Promise<EfficiencyReport> {
+  const persistTier = opts?.persistTier === true;
   const computedAt = new Date().toISOString();
   const actionsTaken: string[] = [];
   let creditsSavedEstimate = 0;
@@ -110,10 +128,10 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
   ]);
 
   const outcomeStats = await getCompanyOutcomeStats(companyId);
-  const { avg_credits_per_outcome: avgCPO, total_outcomes: totalOutcomes } = outcomeStats;
+  const { avg_scored_credits_per_outcome: avgCPO, scored_outcomes: totalOutcomes } = outcomeStats;
 
   const { tier, discount } = determineTier(avgCPO, totalOutcomes);
-  await upsertEfficiencyTier(companyId, tier, discount, avgCPO, totalOutcomes, 0);
+  if (persistTier) await upsertEfficiencyTier(companyId, tier, discount, avgCPO, totalOutcomes, 0);
 
   if (tier !== 'standard') {
     const savedPct = Math.round((1 - discount) * 100);
@@ -152,9 +170,15 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
     creditsSavedEstimate += predictionCost * 2;
   }
 
-  void ownedDbTable('credit_efficiency_scores')
-    .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
-    .eq('organization_id', companyId);
+  // (2026-11-12) This was `void <builder>` - a supabase query builder is LAZY
+  // and only executes when awaited / then-ed, so credits_saved_total was NEVER
+  // written. Awaited now; best-effort (the report is returned either way), logged.
+  if (persistTier) {
+    const { error: savedErr } = await ownedDbTable('credit_efficiency_scores')
+      .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
+      .eq('organization_id', companyId);
+    if (savedErr) console.error('[creditEfficiency] credits-saved persist failed:', companyId, savedErr.message);
+  }
 
   return {
     company_id: companyId,
@@ -170,17 +194,22 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
 }
 
 export async function getEfficiencyDiscount(orgId: string): Promise<number> {
-  const { data } = await ownedDbTable('credit_efficiency_scores')
+  // A failed read is not "no discount" - throw. (2026-11-12: the only consumer,
+  // creditPriorityEngine.prioritizeActions, has no callers, so no charge uses
+  // this today; it must still never price on an unread multiplier.)
+  const { data, error } = await ownedDbTable('credit_efficiency_scores')
     .select('discount_multiplier')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[creditEfficiency] discount read failed for ${orgId}: ${error.message}`);
   return (data as any)?.discount_multiplier ?? 1.0;
 }
 
 export async function getEfficiencyTier(orgId: string): Promise<string> {
-  const { data } = await ownedDbTable('credit_efficiency_scores')
+  const { data, error } = await ownedDbTable('credit_efficiency_scores')
     .select('efficiency_tier')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[creditEfficiency] tier read failed for ${orgId}: ${error.message}`);
   return (data as any)?.efficiency_tier ?? 'standard';
 }

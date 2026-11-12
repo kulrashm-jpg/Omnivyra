@@ -27,6 +27,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (req.method === 'POST') {
+      // PREVIEW ONLY (e9, 2026-11-12): a member-triggered run computes the report
+      // but writes nothing price-bearing; the tier/discount is written only by
+      // the server-side cron (leverage-optimizer, persistTier: true).
       const report = await optimizeCreditEfficiency(companyId);
       return res.status(200).json(report);
     }

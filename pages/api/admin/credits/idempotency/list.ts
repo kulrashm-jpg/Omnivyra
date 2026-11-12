@@ -69,10 +69,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .map(s => s.id);
     let heartbeats: Record<string, { lastSeenAt: string | null; ageSec: number }> = {};
     if (jerIds.length > 0) {
-      const { data: jer } = await supabase
+      // A failed read is not "no heartbeat" (which reads as a dead job and
+      // invites a manual recovery of a live one). Throw -> 5xx.
+      const { data: jer, error: jerErr } = await supabase
         .from('job_execution_registry')
         .select('id, last_seen_at')
         .in('id', jerIds);
+      if (jerErr) throw new Error(`job heartbeat read failed: ${jerErr.message}`);
       for (const row of ((jer ?? []) as Array<{ id: string; last_seen_at: string | null }>)) {
         const ls = row.last_seen_at;
         heartbeats[row.id] = {

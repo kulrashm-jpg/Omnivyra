@@ -126,11 +126,22 @@ export async function notifyConsumptionWarnings(orgId: string): Promise<WarningO
   const appUrl = (config.NEXT_PUBLIC_APP_URL || config.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
 
   const resolveAdminEmail = async (): Promise<string | null> => {
-    const roles = (await supabase.from('user_company_roles').select('user_id, role, created_at').eq('company_id', orgId).eq('status', 'active')).data ?? [];
+    // A failed read sends no email (logged) - never a guessed recipient.
+    const rolesRes = await supabase.from('user_company_roles').select('user_id, role, created_at').eq('company_id', orgId).eq('status', 'active');
+    if (rolesRes.error) {
+      console.warn(`[creditConsumptionWarning] admin lookup failed for org ${orgId} - no email`, rolesRes.error.message);
+      return null;
+    }
+    const roles = rolesRes.data ?? [];
     const sorted = roles.slice().sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)));
     const admin = sorted.find((r: any) => /owner|admin/i.test(String(r.role ?? ''))) ?? sorted[0];
     if (!admin?.user_id) return null;
-    const u = (await supabase.from('users').select('email').eq('id', admin.user_id).maybeSingle()).data;
+    const userRes = await supabase.from('users').select('email').eq('id', admin.user_id).maybeSingle();
+    if (userRes.error) {
+      console.warn(`[creditConsumptionWarning] admin email read failed for org ${orgId} - no email`, userRes.error.message);
+      return null;
+    }
+    const u = userRes.data;
     return (u as any)?.email ?? null;
   };
 

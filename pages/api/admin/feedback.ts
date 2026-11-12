@@ -57,25 +57,46 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'action must be "approve" or "reject"' });
     }
 
-    const { data: fb } = await supabase
+    const { data: fb, error: fbErr } = await supabase
       .from('feedback_submissions')
-      .select('id, user_id, organization_id, status, feedback_text')
+      .select('id, user_id, organization_id, status, feedback_text, credits_granted')
       .eq('id', id)
       .maybeSingle();
 
+    // A failed read is not "not found". (2026-11-12)
+    if (fbErr) return res.status(503).json({ error: 'Could not read the feedback', retryable: true });
     if (!fb) return res.status(404).json({ error: 'Feedback not found' });
-    if ((fb as any).status !== 'pending') {
+    // RETRYABLE (05, 2026-11-12): 'pending', or - for an APPROVE only -
+    // 'approved' with credits_granted = false: a crash between a failed grant
+    // and its revert (or a failed revert / flag write) must not strand a row
+    // that no admin can ever retry. grantEarnCredit is idempotent per feedback
+    // id, so re-approving an actually-credited row just sets the flag.
+    // (credits_granted is boolean NOT NULL DEFAULT false - no IS NULL case.)
+    const stuckApproved = (fb as any).status === 'approved' && (fb as any).credits_granted === false;
+    if ((fb as any).status !== 'pending' && !(action === 'approve' && stuckApproved)) {
       return res.status(409).json({ error: `Already ${(fb as any).status}` });
     }
 
     const now = new Date().toISOString();
 
-    await supabase.from('feedback_submissions').update({
+    // CLASS 2 (2026-11-12): the decision is a CAS on 'pending' with a row count.
+    // Unconditioned, a concurrent approve and reject both passed the read and
+    // the LAST write won (an approved-and-credited submission could end up
+    // 'rejected'); the update's error was never read either. credits_granted is
+    // set only once the credit is actually granted.
+    const { data: decided, error: decideErr } = await supabase.from('feedback_submissions').update({
       status:      action === 'approve' ? 'approved' : 'rejected',
       reviewed_at: now,
       reviewed_by: adminId,
-      ...(action === 'approve' ? { credits_granted: true } : {}),
-    }).eq('id', id);
+    }).eq('id', id)
+      .or(action === 'approve'
+        ? 'status.eq.pending,and(status.eq.approved,credits_granted.eq.false)'
+        : 'status.eq.pending')
+      .select('id');
+    if (decideErr) return res.status(500).json({ error: 'Could not record the decision' });
+    if (!Array.isArray(decided) || decided.length !== 1) {
+      return res.status(409).json({ error: 'This feedback was already reviewed by someone else', code: 'ALREADY_REVIEWED' });
+    }
 
     let creditsGranted = 0;
 
@@ -86,10 +107,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         actionType:  'feedback_approved',
         referenceId: id,
       });
+      if (!result.granted && result.reason !== 'already_granted') {
+        // The credit did not move: put the review back to pending (CAS on what
+        // THIS request wrote) so an admin can retry - never "approved" with
+        // nothing credited. grantEarnCredit is idempotent per feedback id.
+        const { data: reverted, error: revertErr } = await supabase.from('feedback_submissions')
+          .update({ status: 'pending', reviewed_at: null, reviewed_by: null })
+          .eq('id', id).eq('status', 'approved').eq('reviewed_at', now).eq('credits_granted', false)
+          .select('id');
+        if (revertErr || !Array.isArray(reverted) || reverted.length !== 1) {
+          // Say what is TRUE: the item still reads approved-but-uncredited. It
+          // is retryable (the approve predicate above accepts that state).
+          console.error('[admin/feedback] approval revert failed after a failed grant - approved without credit (retry approve to complete):', id, revertErr?.message ?? 'no row matched');
+          return res.status(500).json({ error: 'Credit grant failed and the item still shows approved without credit; approve it again to complete', code: 'CREDIT_GRANT_FAILED_APPROVED_UNCREDITED', retryable: true });
+        }
+        return res.status(500).json({ error: 'Credit grant failed; the feedback is back in the review queue', code: 'CREDIT_GRANT_FAILED', retryable: true });
+      }
+      // already_granted: credited by an EARLIER approval - say so instead of
+      // reporting "approved, 0 credits" for a credited submission.
+      const alreadyCredited = result.reason === 'already_granted';
       creditsGranted = result.credits;
+      const { error: flagErr } = await supabase.from('feedback_submissions').update({ credits_granted: true }).eq('id', id);
+      // A lost flag write leaves approved-but-uncredited, which the widened
+      // approve predicate heals on the next review (the grant is idempotent).
+      if (flagErr) console.error('[admin/feedback] credits_granted flag write failed (credit IS granted):', id, flagErr.message);
+      if (alreadyCredited) return res.status(200).json({ success: true, action, creditsGranted: 0, alreadyCredited: true });
     } else {
       // Notify submitter that feedback wasn't accepted so they can try again
-      await supabase.from('notifications').insert({
+      // best-effort: the rejection is recorded; a failed notice is logged.
+      const { error: notifyErr } = await supabase.from('notifications').insert({
         user_id:  (fb as any).user_id,
         type:     'feedback_rejected',
         title:    'Feedback not accepted this time',
@@ -97,6 +143,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         metadata: { feedback_id: id },
         is_read:  false,
       });
+      if (notifyErr) console.error('[admin/feedback] rejection notification failed:', id, notifyErr.message);
     }
 
     return res.status(200).json({ success: true, action, creditsGranted });

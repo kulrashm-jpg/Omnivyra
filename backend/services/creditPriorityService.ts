@@ -41,11 +41,15 @@ export interface AvailableBalance {
  * Returns null if no wallet row exists.
  */
 export async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot | null> {
-  const { data } = await supabase
+  // MONEY: a failed read is not "no credit account" - every caller maps null to
+  // no_credit_account / insufficient, mislabelling an outage as a missing
+  // wallet. Throw: the caller fails as unavailable instead.
+  const { data, error } = await supabase
     .from('organization_credits')
     .select('free_balance, paid_balance, incentive_balance, reserved_free, reserved_paid, reserved_incentive')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[creditPriority] wallet read failed for ${orgId}: ${error.message}`);
 
   if (!data) return null;
 

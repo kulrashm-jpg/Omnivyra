@@ -9,6 +9,18 @@ import {
   GRACE_DAYS,
   type BillingSubscriptionRow,
 } from '../../services/subscriptionStateResolver';
+// The allocation service reads the plan assignment when planKey is null. A clean
+// empty read = "no assignment" (explicit; a failed read now throws, 2026-11-12).
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: {
+    from: () => {
+      const b: any = {};
+      b.select = () => b; b.eq = () => b;
+      b.maybeSingle = async () => ({ data: null, error: null });
+      return b;
+    },
+  },
+}));
 import { allocateMonthlyCreditsForOrg } from '../../services/subscriptionAllocationService';
 
 const NOW = Date.parse('2026-06-24T00:00:00Z');
@@ -80,6 +92,10 @@ describe('allocation gate — canceled/expired blocked, active allowed (Step 6)'
     expect((await p('TRIALING', { dryRun: true })).status).toBe('dry_run');
   });
   it('no_plan short-circuits before the subscription gate', async () => {
+    // planKey: null makes the service READ the plan assignment. This used to pass
+    // only because the unconfigured client errored and the unread error looked
+    // like "no plan"; since 2026-11-12 a failed read throws, so the "no
+    // assignment" answer is given explicitly here (a clean empty read).
     const r = await allocateMonthlyCreditsForOrg({ orgId: 'org1', planKey: null, subscriptionState: 'CANCELED', now: new Date(NOW) });
     expect(r.status).toBe('no_plan');
   });

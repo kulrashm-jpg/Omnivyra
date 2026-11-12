@@ -256,13 +256,13 @@ export async function openBillingOperation(args: {
     logger.warn('billing_op_upsert_failed', {
       idempotency_key: args.idempotencyKey, message: error.message,
     });
-    const { data: existing } = await supabase
+    const { data: existing, error: existingErr } = await supabase
       .from('billing_operations')
       .select('id')
       .eq('idempotency_key', args.idempotencyKey)
       .maybeSingle();
     if (existing?.id) return existing.id;
-    throw new Error(`[billingOrchestrator] could not open operation: ${error.message}`);
+    throw new Error(`[billingOrchestrator] could not open operation: ${error.message}${existingErr ? ` (re-read also failed: ${existingErr.message})` : ''}`);
   }
 
   return (data?.id as string) ?? id;

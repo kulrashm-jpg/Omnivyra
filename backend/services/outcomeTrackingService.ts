@@ -228,12 +228,18 @@ export async function getCompanyOutcomeStats(companyId: string): Promise<{
   total_leads: number;
   total_credits_used: number;
   best_campaign_id: string | null;
+  /** Campaigns with a REAL outcome (outcome_score > 0 and a positive cost per outcome). */
+  scored_outcomes: number;
+  /** Average credits per outcome over the SCORED campaigns only (0 when none). */
+  avg_scored_credits_per_outcome: number;
 }> {
-  const { data } = await ownedDbTable('campaign_outcomes')
+  // A failed read is not "no outcomes". Throw (the route / cron reports it).
+  const { data, error } = await ownedDbTable('campaign_outcomes')
     .select('campaign_id, leads_generated, credits_used, credits_per_outcome, outcome_score')
     .eq('company_id', companyId)
     .order('snapshot_at', { ascending: false })
     .limit(50);
+  if (error) throw new Error(`[outcomeTracking] outcome stats read failed for ${companyId}: ${error.message}`);
 
   const rows = (data ?? []) as Array<{
     campaign_id: string;
@@ -244,8 +250,13 @@ export async function getCompanyOutcomeStats(companyId: string): Promise<{
   }>;
 
   if (!rows.length) {
-    return { avg_credits_per_outcome: 0, total_outcomes: 0, total_leads: 0, total_credits_used: 0, best_campaign_id: null };
+    return { avg_credits_per_outcome: 0, total_outcomes: 0, total_leads: 0, total_credits_used: 0, best_campaign_id: null, scored_outcomes: 0, avg_scored_credits_per_outcome: 0 };
   }
+  // PRICING (e9, 2026-11-12): an EMPTY campaign has outcome_score 0 and
+  // credits_per_outcome = credits_used - a small number that reads as a superb
+  // efficiency. Only campaigns with a real outcome may count toward a tier.
+  const scored = rows.filter((r) => Number(r.outcome_score) > 0 && Number(r.credits_per_outcome) > 0);
+  const avgScored = scored.length ? scored.reduce((s, r) => s + Number(r.credits_per_outcome), 0) / scored.length : 0;
 
   const totalLeads   = rows.reduce((s, r) => s + r.leads_generated, 0);
   const totalCredits = rows.reduce((s, r) => s + r.credits_used, 0);
@@ -258,5 +269,7 @@ export async function getCompanyOutcomeStats(companyId: string): Promise<{
     total_leads:             totalLeads,
     total_credits_used:      totalCredits,
     best_campaign_id:        bestCampaign.credits_per_outcome > 0 ? bestCampaign.campaign_id : null,
+    scored_outcomes:         scored.length,
+    avg_scored_credits_per_outcome: parseFloat(avgScored.toFixed(2)),
   };
 }

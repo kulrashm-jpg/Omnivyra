@@ -172,10 +172,12 @@ export async function exportApprovalChain(args: {
   const approvalIds = (data ?? []).map((r: Record<string, unknown>) => String(r.id));
   let signaturesById: Record<string, Array<Record<string, unknown>>> = {};
   if (approvalIds.length > 0) {
-    const { data: sigs } = await supabase
+    // An export missing its signatures would read as "unsigned approvals". Throw.
+    const { data: sigs, error: sigsErr } = await supabase
       .from('credit_action_approval_signatures')
       .select('approval_id, approver_id, decision, comment, signed_at')
       .in('approval_id', approvalIds);
+    if (sigsErr) throw new Error(`[ledgerExport] approval signatures read failed: ${sigsErr.message}`);
     for (const s of (sigs ?? []) as Array<Record<string, unknown>>) {
       const id = String(s.approval_id);
       (signaturesById[id] ??= []).push(s);

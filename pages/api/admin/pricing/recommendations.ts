@@ -55,7 +55,9 @@ async function resolveLatestWeek(): Promise<string | null> {
     .select('week_start')
     .order('week_start', { ascending: false })
     .limit(1);
-  if (error || !data || data.length === 0) return null;
+  // A failed read is not "no analysis has run yet" - throw -> 500.
+  if (error) throw new Error(`pricing_intelligence week read failed: ${error.message}`);
+  if (!data || data.length === 0) return null;
   return (data[0] as any).week_start as string;
 }
 
@@ -101,10 +103,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const intel = (intelRows ?? []) as IntelligenceRow[];
 
     // Load ALL pending queue rows once; join in JS (small n).
-    const { data: queueRows } = await supabase
+    // A failed read is not "no pending proposals" - recommendations would show
+    // as unqueued and invite duplicate or conflicting proposals.
+    const { data: queueRows, error: queueErr } = await supabase
       .from('pricing_adjustment_queue')
       .select('id, action_key, model_name, current_multiplier, proposed_multiplier, margin_percent, reason, status, source_week, created_at')
       .eq('status', 'pending');
+    if (queueErr) {
+      logger.error('admin_pricing_recs_queue_failed', { message: queueErr.message });
+      return res.status(500).json({ error: 'Failed to load pricing queue' });
+    }
 
     const queueByKey = new Map<string, QueueRow>();
     for (const q of ((queueRows ?? []) as QueueRow[])) {

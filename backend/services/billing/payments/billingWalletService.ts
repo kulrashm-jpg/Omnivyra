@@ -61,13 +61,17 @@ export async function getBillingWalletSnapshot(orgId: string): Promise<BillingWa
     Math.max(0, paid) +
     Math.max(0, incentive);
 
-  const { data: lastTx } = await supabase
+  // best-effort: only the last-activity timestamp depends on this read; the
+  // balances above are already read. Failing the whole snapshot for it would
+  // take every billing view down. Logged on failure (the timestamp is null).
+  const { data: lastTx, error: lastTxErr } = await supabase
     .from('credit_transactions')
     .select('created_at')
     .eq('organization_id', orgId)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (lastTxErr) logger.error('billing_wallet_last_activity_read_failed', { orgId, message: lastTxErr.message });
 
   return {
     organizationId:    orgId,

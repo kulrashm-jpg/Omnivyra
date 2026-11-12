@@ -66,7 +66,8 @@ async function notifyOrgAdmin(
   grantId: string,
 ): Promise<void> {
   // Find the COMPANY_ADMIN for this org to notify
-  const { data: adminRole } = await sb
+  // best-effort (notification only; the grant is already done): logged.
+  const { data: adminRole, error: adminErr } = await sb
     .from('user_company_roles')
     .select('user_id')
     .eq('company_id', orgId)
@@ -74,11 +75,15 @@ async function notifyOrgAdmin(
     .eq('status', 'active')
     .limit(1)
     .maybeSingle();
+  if (adminErr) {
+    console.error('[super-admin/credits/grant] admin lookup failed - no notification:', orgId, adminErr.message);
+    return;
+  }
 
   const role = adminRole as any;
   if (!role?.user_id) return;
 
-  await (sb as any).from('notifications').insert({
+  const { error: noteErr } = await (sb as any).from('notifications').insert({
     user_id:  role.user_id,
     type:     'credit_granted',
     title:    'Credits added to your account',
@@ -86,6 +91,7 @@ async function notifyOrgAdmin(
     metadata: { grant_id: grantId, credits_added: credits, reason },
     is_read:  false,
   });
+  if (noteErr) console.error('[super-admin/credits/grant] notification write failed:', orgId, noteErr.message);
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -119,11 +125,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // Verify the org exists before logging a grant against it
-  const { data: org } = await sb
+  // A failed read is not "no such organization" (a 404 sends the operator
+  // hunting for a typo in a valid id). 503, nothing granted.
+  const { data: org, error: orgErr } = await sb
     .from('companies')
     .select('id')
     .eq('id', organization_id)
     .maybeSingle();
+  if (orgErr) {
+    return res.status(503).json({ error: 'organization lookup unavailable', retryable: true });
+  }
 
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
@@ -134,6 +145,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // If this endpoint is retried (network error, duplicate submission), the same
   // grantId flows into makeIdempotencyKey → createCredit is a no-op →
   // exactly-once credit delivery regardless of retries.
+  let grantKeyActor: string | null = grantedBy ?? null;
+  let resolvedGrantId: string | null = null;
   const { data: grant, error: logErr } = await sb
     .from('manual_credit_grants')
     .insert({
@@ -149,9 +162,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (logErr || !grant?.id) {
     if (logErr?.code === '23505' && requestIdempotencyKey) {
+      // MONEY (2026-11-12, class 2): an existing grant row for this key does NOT
+      // prove the credit was applied - the first attempt can insert the row and
+      // then fail in createCredit (500); withIdempotency allows the retry, which
+      // landed here and answered SUCCESS with nothing credited. Resolve the
+      // existing grant and fall through to createCredit under the ORIGINAL
+      // grant's ledger key: a no-op if credited, completes it if not.
       const { data: existingGrant, error: existingGrantError } = await sb
         .from('manual_credit_grants')
-        .select('id')
+        .select('id, granted_by, organization_id, credits_amount')
         .eq('idempotency_key', requestIdempotencyKey)
         .maybeSingle();
       if (existingGrantError) {
@@ -159,18 +178,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Failed to resolve existing grant' });
       }
       if (existingGrant?.id) {
-        return res.status(200).json({
-          success: true,
-          grant_id: existingGrant.id,
-          credits_added: credits,
-        });
+        if (existingGrant.organization_id !== organization_id || Number(existingGrant.credits_amount) !== Number(credits)) {
+          return res.status(409).json({ error: 'This Idempotency-Key is already used by a DIFFERENT grant (another org or amount) - nothing was granted. Send a new key for this grant.', code: 'IDEMPOTENCY_KEY_REUSED' });
+        }
+        resolvedGrantId = existingGrant.id as string;
+        grantKeyActor = (existingGrant.granted_by as string | null) ?? grantKeyActor;
       }
     }
-    logger.error('super_admin_credit_grant_log_failed', { message: logErr?.message ?? 'unknown' });
-    return res.status(500).json({ error: 'Failed to record grant: ' + (logErr?.message ?? 'unknown') });
+    if (!resolvedGrantId) {
+      logger.error('super_admin_credit_grant_log_failed', { message: logErr?.message ?? 'unknown' });
+      return res.status(500).json({ error: 'Failed to record grant' });
+    }
   }
 
-  const grantId = grant.id as string;
+  const grantId = (resolvedGrantId ?? grant!.id) as string;
 
   // ── STEP 4: Apply credit via creditExecutionService ────────────────────────
   // Category is passed through directly — incentive credits are processed
@@ -184,8 +205,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       referenceId:    grantId,
       note:           `[admin] ${reason.trim()}`,
       performedBy:    grantedBy ?? organization_id,
+      // The ORIGINAL grant's granted_by: a repeat must form the same ledger key.
       idempotencyKey: makeIdempotencyKey(
-        grantedBy ?? organization_id,
+        grantKeyActor ?? organization_id,
         'admin_grant',
         grantId,
       ),

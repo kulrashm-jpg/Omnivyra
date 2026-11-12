@@ -100,11 +100,17 @@ export async function getOrgCreditSummary(organizationId: string): Promise<OrgCr
 
   if (!credit) return null;
 
-  const { data: txRows } = await ownedDbTable('credit_transactions')
+  // A failed read is not "no recent transactions": surface the summary as
+  // unavailable (null), exactly like a failed wallet read above.
+  const { data: txRows, error: txErr } = await ownedDbTable('credit_transactions')
     .select('id, transaction_type, credits_delta, balance_after, usd_equivalent, reference_type, note, created_at')
     .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
     .limit(20);
+  if (txErr) {
+    logger.warn('credit_summary_transactions_read_failed', { organizationId, message: txErr.message });
+    return null;
+  }
 
   const c = credit as unknown as {
     free_balance: number;

@@ -9,6 +9,11 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (...args: any[]) => mockOwnedDbTable(...args),
 }));
 
+const mockLoggerError = jest.fn();
+jest.mock('../../services/logger', () => ({
+  logger: { error: (...a: any[]) => mockLoggerError(...a), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+}));
+
 jest.mock('../../services/purchaseService', () => ({
   completePurchase: (...args: any[]) => mockCompletePurchase(...args),
   failPurchase: (...args: any[]) => mockFailPurchase(...args),
@@ -231,6 +236,94 @@ describe('razorpayStagingService adversarial safety', () => {
     expect(result).toMatchObject({ status: 'failed', reason: 'organization_mismatch' });
     expect(mockRecordPaymentProviderEvent).not.toHaveBeenCalled();
     expect(mockCompletePurchase).not.toHaveBeenCalled();
+  });
+
+  // MONEY unread-error sites (2026-11-12)
+  function failingPurchaseRead(table: string) {
+    const chain = tableChain(table);
+    if (table === 'credit_purchases') chain.maybeSingle = jest.fn(async () => ({ data: null, error: { message: 'connection reset' } }));
+    return chain;
+  }
+
+  it('webhook: a failed purchase read THROWS before the event is recorded - never "no purchase" (the retry must not be a duplicate)', async () => {
+    mockOwnedDbTable.mockImplementation((table: string) => failingPurchaseRead(table));
+    const { handleRazorpayStagingWebhook } = await import('../../services/payments/razorpayStagingService');
+    const rawBody = capturedWebhook();
+    await expect(handleRazorpayStagingWebhook({ rawBody, signature: signWebhook(rawBody) })).rejects.toThrow(/purchase lookup failed/);
+    expect(mockRecordPaymentProviderEvent).not.toHaveBeenCalled();
+    expect(mockCompletePurchase).not.toHaveBeenCalled();
+  });
+
+  it('verify: a failed purchase read THROWS - never "purchase_not_found_for_order" to a payer', async () => {
+    mockOwnedDbTable.mockImplementation((table: string) => failingPurchaseRead(table));
+    const { verifyAndFulfillRazorpayStagingPayment } = await import('../../services/payments/razorpayStagingService');
+    await expect(verifyAndFulfillRazorpayStagingPayment({
+      orderId: 'order_test_1', paymentId: 'pay_test_1', signature: signPayment(),
+    })).rejects.toThrow(/purchase lookup failed/);
+    expect(mockCompletePurchase).not.toHaveBeenCalled();
+  });
+
+  it('webhook: a failed post-grant link write is best-effort - still processed, and logged', async () => {
+    mockOwnedDbTable.mockImplementation((table: string) => {
+      const chain = tableChain(table);
+      if (table === 'credit_purchases') {
+        let updating = false;
+        chain.update = jest.fn(() => { updating = true; return chain; });
+        chain.eq = jest.fn(() => (updating ? Promise.resolve({ data: null, error: { message: 'down' } }) : chain));
+      }
+      return chain;
+    });
+    const { handleRazorpayStagingWebhook } = await import('../../services/payments/razorpayStagingService');
+    const rawBody = capturedWebhook();
+    const result = await handleRazorpayStagingWebhook({ rawBody, signature: signWebhook(rawBody) });
+    expect(result).toMatchObject({ status: 'processed', purchaseId: 'purchase-1' });
+    expect(mockLoggerError).toHaveBeenCalledWith('razorpay_staging_purchase_link_failed', expect.anything());
+  });
+
+  // MUTANT SURVIVOR (2026-11-12): the same link-failure event is logged on the
+  // webhook path (above) AND the verify path; this pins the verify site alone.
+  it('verify: a failed post-grant link write is best-effort - still processed, and logged', async () => {
+    mockOwnedDbTable.mockImplementation((table: string) => {
+      const chain = tableChain(table);
+      if (table === 'credit_purchases') {
+        let updating = false;
+        chain.update = jest.fn(() => { updating = true; return chain; });
+        chain.eq = jest.fn(() => (updating ? Promise.resolve({ data: null, error: { message: 'down' } }) : chain));
+      }
+      return chain;
+    });
+    const { verifyAndFulfillRazorpayStagingPayment } = await import('../../services/payments/razorpayStagingService');
+    const result = await verifyAndFulfillRazorpayStagingPayment({
+      orderId: 'order_test_1', paymentId: 'pay_test_1', signature: signPayment(), expectedOrganizationId: 'org-1',
+    });
+    expect(result).toMatchObject({ status: 'processed' });
+    expect(mockLoggerError).toHaveBeenCalledWith('razorpay_staging_purchase_link_failed', expect.anything());
+  });
+
+  function attachRows(rows: unknown) {
+    mockOwnedDbTable.mockImplementation((table: string) => {
+      const chain = tableChain(table);
+      if (table === 'credit_purchases') {
+        let updating = false;
+        chain.update = jest.fn(() => { updating = true; return chain; });
+        chain.select = jest.fn(() => (updating ? Promise.resolve({ data: rows, error: null }) : chain));
+      }
+      return chain;
+    });
+  }
+
+  it('staging order: the order id must attach to exactly one pending purchase, else the order is NOT handed out', async () => {
+    attachRows([]);
+    const { createRazorpayStagingCreditOrder } = await import('../../services/payments/razorpayStagingService');
+    await expect(createRazorpayStagingCreditOrder({ organizationId: 'org-1', packageId: 'pkg-1', requestedBy: 'admin-1' }))
+      .rejects.toThrow(/credit_purchase_order_attach_failed:rows=0/);
+  });
+
+  it('staging order control: one attached row returns the order', async () => {
+    attachRows([{ id: 'inserted' }]);
+    const { createRazorpayStagingCreditOrder } = await import('../../services/payments/razorpayStagingService');
+    const r = await createRazorpayStagingCreditOrder({ organizationId: 'org-1', packageId: 'pkg-1', requestedBy: 'admin-1' });
+    expect(r).toMatchObject({ purchaseId: 'inserted', keyId: 'rzp_test_key' });
   });
 
   it('rejects live keys in the staging order path', async () => {

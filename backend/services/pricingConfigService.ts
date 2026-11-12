@@ -49,12 +49,15 @@ export interface PlanPricing {
 
 export async function getPlanPricing(): Promise<PlanPricing[]> {
   try {
-    const { data } = await supabase
+    // A failed read is not "no plan pricing" (the Super Admin pricing page would
+    // show every plan unpriced). Throw - the route answers 5xx.
+    const { data, error } = await supabase
       .from('billing_plan_pricing')
       .select('plan_key, founder_usd, regular_usd, active');
+    if (error) throw new Error(`[pricingConfig] plan pricing read failed: ${error.message}`);
     return (data ?? []) as PlanPricing[];
-  } catch {
-    return [];
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
   }
 }
 

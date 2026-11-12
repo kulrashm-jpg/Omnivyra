@@ -211,7 +211,10 @@ export async function wasRecentlyRun(
   windowSeconds: number,
 ): Promise<boolean> {
   const since = new Date(Date.now() - windowSeconds * 1000).toISOString();
-  const { data } = await supabase
+  // MONEY: a failed read is not "not recently run" - answering false charged the
+  // action again inside its dedup window. Throw: deductCreditsAwaited's catch
+  // turns it into a failed deduction (nothing charged).
+  const { data, error } = await supabase
     .from('credit_transactions')
     .select('id')
     .eq('organization_id', orgId)
@@ -220,6 +223,7 @@ export async function wasRecentlyRun(
     .gt('created_at', since)
     .limit(1)
     .maybeSingle();
+  if (error) throw new Error(`[creditDeduction] smart-mode dedup read failed for ${action}: ${error.message}`);
   return !!data;
 }
 

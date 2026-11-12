@@ -48,7 +48,9 @@ export async function traceBillingOperation(args: {
   } else if (args.idempotencyKey) {
     opsQuery = opsQuery.eq('idempotency_key', args.idempotencyKey);
   }
-  const { data: ops } = await opsQuery.limit(50);
+  const { data: ops, error: opsErr } = await opsQuery.limit(50);
+  // A forensic trace missing a piece would be presented as complete (2026-11-12).
+  if (opsErr) throw new Error(`[billingForensics] ops read failed: ${opsErr.message}`);
   const opsRows = (ops ?? []) as Array<Record<string, unknown>>;
   for (const op of opsRows) {
     if (op.idempotency_key)  idemKeys.add(String(op.idempotency_key));
@@ -59,10 +61,12 @@ export async function traceBillingOperation(args: {
   let ledgerRows: Array<Record<string, unknown>> = [];
   if (idemKeys.size > 0) {
     const phaseKeys = Array.from(idemKeys).flatMap(k => [k, `${k}:hold`, `${k}:confirm`, `${k}:release`]);
-    const { data: ledger } = await supabase
+    const { data: ledger, error: ledgerErr } = await supabase
       .from('credit_transactions')
       .select('*')
       .in('idempotency_key', phaseKeys);
+    // A forensic trace missing a piece would be presented as complete (2026-11-12).
+    if (ledgerErr) throw new Error(`[billingForensics] ledger read failed: ${ledgerErr.message}`);
     ledgerRows = (ledger ?? []) as Array<Record<string, unknown>>;
   }
 
@@ -70,17 +74,21 @@ export async function traceBillingOperation(args: {
   let approvalRows: Array<Record<string, unknown>> = [];
   let signatures: Array<Record<string, unknown>> = [];
   if (idemKeys.size > 0) {
-    const { data: app } = await supabase
+    const { data: app, error: appErr } = await supabase
       .from('credit_action_approvals')
       .select('*')
       .in('executed_idempotency_key', Array.from(idemKeys));
+    // A forensic trace missing a piece would be presented as complete (2026-11-12).
+    if (appErr) throw new Error(`[billingForensics] app read failed: ${appErr.message}`);
     approvalRows = (app ?? []) as Array<Record<string, unknown>>;
     if (approvalRows.length > 0) {
       const approvalIds = approvalRows.map(r => String(r.id));
-      const { data: sigs } = await supabase
+      const { data: sigs, error: sigsErr } = await supabase
         .from('credit_action_approval_signatures')
         .select('*')
         .in('approval_id', approvalIds);
+      // A forensic trace missing a piece would be presented as complete (2026-11-12).
+      if (sigsErr) throw new Error(`[billingForensics] sigs read failed: ${sigsErr.message}`);
       signatures = (sigs ?? []) as Array<Record<string, unknown>>;
     }
   }
@@ -96,14 +104,20 @@ export async function traceBillingOperation(args: {
         .from('admin_financial_audit_events')
         .select('*')
         .in('correlation_id', corrArr)
-        .then(r => (r.data ?? []) as Array<Record<string, unknown>>));
+        .then(r => {
+          if (r.error) throw new Error(`[billingForensics] financial audit read failed: ${r.error.message}`);
+          return (r.data ?? []) as Array<Record<string, unknown>>;
+        }));
     }
     if (idemKeyArr.length > 0) {
       queries.push(supabase
         .from('admin_financial_audit_events')
         .select('*')
         .in('ledger_idempotency_key', idemKeyArr)
-        .then(r => (r.data ?? []) as Array<Record<string, unknown>>));
+        .then(r => {
+          if (r.error) throw new Error(`[billingForensics] financial audit read failed: ${r.error.message}`);
+          return (r.data ?? []) as Array<Record<string, unknown>>;
+        }));
     }
     const results = await Promise.all(queries);
     const seen = new Set<string>();
@@ -132,13 +146,15 @@ export async function traceBillingOperation(args: {
     if (earliest) {
       const window24h = new Date(Date.parse(earliest) - 86400_000).toISOString();
       const window24hAfter = new Date(Date.parse(earliest) + 86400_000).toISOString();
-      const { data: pays } = await supabase
+      const { data: pays, error: paysErr } = await supabase
         .from('payment_transactions')
         .select('*')
         .eq('organization_id', orgId)
         .gte('occurred_at', window24h)
         .lte('occurred_at', window24hAfter)
         .order('occurred_at', { ascending: true });
+      // A forensic trace missing a piece would be presented as complete (2026-11-12).
+      if (paysErr) throw new Error(`[billingForensics] pays read failed: ${paysErr.message}`);
       payments = (pays ?? []) as Array<Record<string, unknown>>;
     }
   }
@@ -171,27 +187,33 @@ export async function investigateJobReplay(args: {
   if (args.executionHash) regQ = regQ.eq('execution_hash', args.executionHash);
   else if (args.registryId) regQ = regQ.eq('id', args.registryId);
   else return { registry: null, billingOp: null, ledger: [] };
-  const { data: reg } = await regQ.maybeSingle();
+  const { data: reg, error: regErr } = await regQ.maybeSingle();
+  // A forensic trace missing a piece would be presented as complete (2026-11-12).
+  if (regErr) throw new Error(`[billingForensics] reg read failed: ${regErr.message}`);
   const registry = (reg as Record<string, unknown> | null) ?? null;
   if (!registry) return { registry: null, billingOp: null, ledger: [] };
 
   let billingOp: Record<string, unknown> | null = null;
   if (registry.billing_operation_id) {
-    const { data: bo } = await supabase
+    const { data: bo, error: boErr } = await supabase
       .from('billing_operations')
       .select('*')
       .eq('id', String(registry.billing_operation_id))
       .maybeSingle();
+    // A forensic trace missing a piece would be presented as complete (2026-11-12).
+    if (boErr) throw new Error(`[billingForensics] bo read failed: ${boErr.message}`);
     billingOp = (bo as Record<string, unknown> | null) ?? null;
   }
 
   let ledger: Array<Record<string, unknown>> = [];
   if (registry.idempotency_key) {
     const idem = String(registry.idempotency_key);
-    const { data: l } = await supabase
+    const { data: l, error: lErr } = await supabase
       .from('credit_transactions')
       .select('*')
       .in('idempotency_key', [idem, `${idem}:hold`, `${idem}:confirm`, `${idem}:release`]);
+    // A forensic trace missing a piece would be presented as complete (2026-11-12).
+    if (lErr) throw new Error(`[billingForensics] l read failed: ${lErr.message}`);
     ledger = (l ?? []) as Array<Record<string, unknown>>;
   }
   return { registry, billingOp, ledger };

@@ -679,7 +679,9 @@ const ANOMALY_TO_ALERT_TYPE: Record<AnomalyType, 'high_cost' | 'negative_margin'
 
 export async function recordCostAnomaly(opts: RecordAnomalyOpts): Promise<void> {
   try {
-    await ownedDbTable('cost_anomalies').insert({
+    // best-effort: an anomaly record must never break the work it observes, but
+    // a lost anomaly must not be silent either (the insert error was unread).
+    const { error: anomalyErr } = await ownedDbTable('cost_anomalies').insert({
       organization_id: opts.organizationId ?? null,
       anomaly_type: opts.type,
       severity: opts.severity ?? 'warn',
@@ -690,6 +692,7 @@ export async function recordCostAnomaly(opts: RecordAnomalyOpts): Promise<void> 
       model_name: opts.modelName ?? null,
       metadata: opts.metadata ?? {},
     });
+    if (anomalyErr) console.error('[pricingService] cost anomaly record failed:', opts.type, opts.actionKey ?? null, anomalyErr.message);
 
     if ((opts.severity ?? 'warn') === 'critical') {
       const alertType = ANOMALY_TO_ALERT_TYPE[opts.type];

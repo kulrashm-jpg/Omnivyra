@@ -20,6 +20,8 @@ export type AdminGrantErrorCode =
   | 'INVALID_CREDITS'
   | 'INVALID_EXPIRY'
   | 'GRANT_LIMIT_EXCEEDED'
+  | 'GRANT_LIMIT_UNVERIFIABLE'
+  | 'IDEMPOTENCY_KEY_REQUIRED'
   | 'LEDGER_FAILED';
 
 export type AdminGrantResult =

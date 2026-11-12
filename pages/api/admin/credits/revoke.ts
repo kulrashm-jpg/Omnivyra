@@ -115,6 +115,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reason:      reason.trim(),
       performedBy: user.id,
       originalGrantIdempotencyKey,
+      // withIdempotency guarantees the header on this route.
+      requestIdempotencyKey: String(req.headers['idempotency-key'] ?? '').trim() || undefined,
     });
   } catch (err: any) {
     logger.error('admin_credit_revoke_failed', { actor: user.id, message: err?.message });

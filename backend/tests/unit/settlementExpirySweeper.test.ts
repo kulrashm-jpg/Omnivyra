@@ -41,7 +41,7 @@ interface StoreHandle {
   recordedEvents: any[];
   transitions: any[];
 }
-function makeStore(seed: Sess[], opts: { statelessApply?: boolean } = {}): StoreHandle {
+function makeStore(seed: Sess[], opts: { statelessApply?: boolean; beforeApply?: (sessions: Sess[]) => void } = {}): StoreHandle {
   const sessions = seed.map((s) => ({ ...s }));
   const recordedEvents: any[] = [];
   const eventKeys = new Set<string>();
@@ -60,9 +60,15 @@ function makeStore(seed: Sess[], opts: { statelessApply?: boolean } = {}): Store
     },
     applySettlementTransition: async (input) => {
       transitions.push(input);
-      if (opts.statelessApply) return; // simulate migration-unapplied no-op
+      if (opts.beforeApply) { const f = opts.beforeApply; opts.beforeApply = undefined; f(sessions); }
+      if (opts.statelessApply) return { applied: true }; // simulate migration-unapplied no-op
       const s = sessions.find((x) => x.idempotencyKey === input.idempotencyKey);
+      // The real store is a CAS on fromStatus (class 2, 2026-11-12): model it.
+      if (s && input.fromStatus !== undefined && s.settlementStatus !== input.fromStatus) {
+        return { applied: false, reason: 'state_changed' };
+      }
       if (s) s.settlementStatus = input.settlementStatus;
+      return { applied: true };
     },
   };
   return { deps, sessions, recordedEvents, transitions };
@@ -238,5 +244,19 @@ describe('expiry sweeper — hidden-pricing preservation', () => {
     for (const f of ['amount', 'price', 'plan_price', 'pricing', 'subtotal', 'total', 'invoice']) {
       expect(serialized).not.toContain(`"${f}"`);
     }
+  });
+});
+
+// CLASS 2 (2026-11-12): a `succeeded` webhook landing between the sweep's read
+// and its write must never be regressed to `expired`.
+describe('expiry sweeper - race with a succeeded webhook', () => {
+  test('the session SUCCEEDED in between -> stays succeeded, not counted as expired', async () => {
+    const store = makeStore([sess({ settlementStatus: 'pending', createdAt: agoMin(400) })], {
+      beforeApply: (sessions) => { sessions[0].settlementStatus = 'succeeded'; },
+    });
+    const r = await sweepStaleSettlements({ nowMs: NOW, policy: { pendingMaxAgeMs: 60 * 60_000 } }, store.deps);
+    expect(store.sessions[0].settlementStatus).toBe('succeeded');
+    expect(r.expired).toBe(0);
+    expect(store.transitions[0].fromStatus).toBe('pending');
   });
 });

@@ -89,11 +89,15 @@ async function getActiveReservationsSummary(orgId: string): Promise<{
 }> {
   // Pull open HOLDs (HOLD rows with no sibling CONFIRM or RELEASE).
   // The v_reservation_health view computes this — use it where available.
-  const { data } = await supabase
+  // MONEY (admin forensics): a failed read is not "0 open holds, 0 reserved" -
+  // an operator reading the wallet would conclude nothing is held. Throw so the
+  // route answers 5xx instead of a confident zero.
+  const { data, error } = await supabase
     .from('v_reservation_health')
     .select('open_holds, holds_older_1h, holds_older_6h, holds_older_24h, total_reserved')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`reservation health read failed: ${error.message}`);
 
   if (!data) {
     return { openHolds: 0, totalReserved: 0, oldestHoldAgeSec: null };

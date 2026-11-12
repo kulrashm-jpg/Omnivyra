@@ -105,7 +105,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
 
         const { grantCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
-        const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId });
+        const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId, requestIdempotencyKey: String(req.headers['idempotency-key'] ?? '') });
         if (result.ok === false) return res.status(500).json({ error: result.error });
         const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
@@ -158,7 +158,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
 
         const { adjustCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
-        const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId });
+        const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId, requestIdempotencyKey: String(req.headers['idempotency-key'] ?? '') });
         if (result.ok === false) return res.status(500).json({ error: result.error });
         const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({

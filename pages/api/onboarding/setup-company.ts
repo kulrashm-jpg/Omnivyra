@@ -23,7 +23,7 @@ import {
   isFreeEmailDomain,
 } from '../../../backend/services/companyMatchService';
 import { grantInitialFreeCredit } from '../../../backend/services/initialFreeCreditService';
-import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
+import { completeSignupReferral } from '../../../backend/services/referralCompletionService';
 import {
   crawlWebsiteSources,
   mergeDiscoveredSocialProfiles,
@@ -864,35 +864,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     );
 
     // ── 9. Process referral — grant +200 to referrer if valid ─────────────────
+    // Best-effort (never fails company setup): see completeSignupReferral for
+    // the class-1/2 fixes (multi-invite lookup, CAS completion, winner-only grant).
     if (refCode?.trim()) {
-      const code = refCode.trim().toLowerCase();
-      const { data: referral } = await supabase
-        .from('referrals')
-        .select('id, referrer_user_id, referrer_org_id, status')
-        .eq('referral_code', code)
-        .eq('status', 'pending')
-        .maybeSingle();
-
-      if (referral && (referral as any).referrer_user_id !== user.id) {
-        // Mark referral completed
-        await supabase.from('referrals').update({
-          status:          'completed',
-          referee_user_id: user.id,
-          referee_org_id:  companyId,
-          completed_at:    now,
-        }).eq('id', (referral as any).id);
-
-        // Grant +200 credits to the referrer's org
-        await grantEarnCredit({
-          orgId:       (referral as any).referrer_org_id,
-          userId:      (referral as any).referrer_user_id,
-          actionType:  'referral_signup',
-          referenceId: (referral as any).id,
-        });
-
-        // Clean referral code from any stored state (best-effort)
-        // (Frontend clears localStorage after this call succeeds)
+      const referralOutcome = await completeSignupReferral({
+        db: supabase,
+        refCode,
+        userId: user.id,
+        userEmail: user.email,
+        companyId,
+        now,
+      });
+      if (referralOutcome.status === 'failed' || (referralOutcome.status === 'completed' && !referralOutcome.granted)) {
+        console.error('[onboarding/setup-company] referral not fully processed - referrer may be uncredited:', JSON.stringify(referralOutcome));
       }
+      // (Frontend clears localStorage after this call succeeds)
     }
 
     // ── Telemetry only: detect company-identity drift at creation (never blocks).

@@ -62,11 +62,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const correlationId = typeof req.query.correlationId === 'string' ? req.query.correlationId : null;
   if (correlationId) {
-    const { data: ops } = await supabase
+    // Not "no matching billing_operations" on a failed read (same as the org ledger). 503.
+    const { data: ops, error: opsErr } = await supabase
       .from('billing_operations')
       .select('idempotency_key')
       .eq('correlation_id', correlationId)
       .limit(100);
+    if (opsErr) return res.status(503).json({ error: 'billing_operations_unavailable', retryable: true });
     const keys = ((ops ?? []) as Array<{ idempotency_key: string }>)
       .flatMap(r => [r.idempotency_key, `${r.idempotency_key}:hold`, `${r.idempotency_key}:confirm`, `${r.idempotency_key}:release`]);
     if (keys.length === 0) {

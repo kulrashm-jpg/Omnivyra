@@ -71,11 +71,18 @@ export async function getBillingCenter(orgId: string): Promise<BillingCenter> {
       .order('period_end', { ascending: false })
       .limit(50),
   ]);
+  // Failed reads are not "no plan / no purchases / no invoices" on a customer's
+  // Billing Center. Throw (the route answers 5xx).
+  const centerErr = assignment.error ?? purchases.error ?? invoices.error;
+  if (centerErr) throw new Error(`[billingCenter] read failed: ${centerErr.message}`);
 
   let planKey: string | null = null;
   const planId = (assignment.data as { plan_id?: string } | null)?.plan_id;
   if (planId) {
-    const { data: plan } = await supabase.from('pricing_plans').select('plan_key').eq('id', planId).maybeSingle();
+    // A failed read is not "no plan" (the Billing Center would tell a subscriber
+    // they have none). Throw.
+    const { data: plan, error: planErr } = await supabase.from('pricing_plans').select('plan_key').eq('id', planId).maybeSingle();
+    if (planErr) throw new Error(`[billingCenter] plan read failed: ${planErr.message}`);
     planKey = (plan as { plan_key?: string } | null)?.plan_key ?? null;
   }
 

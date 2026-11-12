@@ -53,8 +53,10 @@ export async function runOrphanUsageReconciliation(opts?: {
     .limit(limit);
 
   if (error) {
+    // A DETECTOR never reports "0 orphans" on a scan it could not read
+    // (2026-11-12): throw so the run fails visibly.
     logger.error('orphan_usage_query_failed', { message: error.message });
-    return { scanned: 0, orphanCount: 0, estimatedUntrackedUsd: 0, byOrgTop10: [], byOperationTop10: [] };
+    throw new Error(`[orphanUsageReconciliation] usage_events scan failed: ${error.message}`);
   }
   const events = (rows ?? []) as Array<{ id: string; organization_id: string; operation: string; cost_usd: number | null; created_at: string }>;
 
@@ -62,10 +64,13 @@ export async function runOrphanUsageReconciliation(opts?: {
   // around the event (±5 min) for the same org. This is an O(N) scan; for high-volume
   // orgs the next iteration should switch to a window-bucketed join SQL query.
   const orphans: typeof events = [];
+  // A failed per-event match is UNVERIFIABLE - neither cleared nor counted as an
+  // orphan (a read error must not inflate the untracked-cost estimate).
+  let unverifiable = 0;
   for (const e of events) {
     const lo = new Date(Date.parse(e.created_at) - 5 * 60 * 1000).toISOString();
     const hi = new Date(Date.parse(e.created_at) + 5 * 60 * 1000).toISOString();
-    const { data: match } = await supabase
+    const { data: match, error: matchErr } = await supabase
       .from('credit_transactions')
       .select('id')
       .eq('organization_id', e.organization_id)
@@ -73,8 +78,11 @@ export async function runOrphanUsageReconciliation(opts?: {
       .gte('created_at', lo)
       .lte('created_at', hi)
       .limit(1);
+    if (matchErr) { unverifiable += 1; continue; }
     if (!match || match.length === 0) orphans.push(e);
   }
+
+  if (unverifiable > 0) logger.warn('orphan_usage_unverifiable', { unverifiable });
 
   // Aggregations
   const byOrg = new Map<string, { orphanCount: number; estimatedUsd: number }>();

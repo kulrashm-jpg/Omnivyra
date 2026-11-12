@@ -40,7 +40,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .select('id, credits, price, sku, canonical_usd_price, is_active')
     .eq('id', packageId)
     .maybeSingle();
-  if (pkgErr) return res.status(400).json({ error: `package_lookup_failed:${pkgErr.message}` });
+  // A failed lookup is a server fault, not a bad request: 503, and the database
+  // message is logged, never returned to the client.
+  if (pkgErr) {
+    logger.error('checkout_package_lookup_failed', { organizationId, packageId, message: pkgErr.message });
+    return res.status(503).json({ error: 'package_lookup_unavailable', retryable: true });
+  }
   if (!pkg || (pkg as any).is_active !== true) return res.status(400).json({ error: 'package_not_available' });
 
   const credits = Number((pkg as any).credits);
@@ -96,7 +101,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 
   if (!outcome.order || !outcome.provider) {
-    await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    // best-effort: no provider order exists, so nothing can be paid against this
+    // row; if the flip fails it stays 'pending' with no provider_order_id and
+    // the expiry sweep closes it. The failure is logged, not swallowed.
+    const { error: failErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    if (failErr) logger.error('checkout_purchase_fail_mark_failed', { organizationId, purchaseId, message: failErr.message });
     logger.warn('payment_order_creation_failed', {
       organizationId, purchaseId, providerMode,
       attempts: outcome.attempts.map((a) => ({ provider: a.provider, ok: a.ok })),
@@ -104,9 +113,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(502).json({ ok: false, error: 'order_creation_failed', attempts: outcome.attempts });
   }
 
-  await supabase.from('credit_purchases')
+  // MONEY: the provider order id is how a payment is matched back to this
+  // purchase (verify, webhook, provider-authoritative closure). If it is not
+  // recorded, a customer could pay an order nothing can fulfil - so refuse to
+  // hand the order to the browser (no key_id, no client token) and close the
+  // row instead. Exactly one row must move; 0 rows is also a failure.
+  const { data: recorded, error: recErr } = await supabase.from('credit_purchases')
     .update({ provider: outcome.provider, provider_order_id: outcome.order.providerOrderId })
-    .eq('id', purchaseId);
+    .eq('id', purchaseId)
+    .select('id');
+  if (recErr || !Array.isArray(recorded) || recorded.length !== 1) {
+    logger.error('checkout_provider_order_record_failed', {
+      organizationId, purchaseId, provider: outcome.provider,
+      providerOrderId: outcome.order.providerOrderId,
+      message: recErr?.message ?? `rows=${Array.isArray(recorded) ? recorded.length : 'none'}`,
+    });
+    // best-effort: the order was never handed out, so it cannot be paid; the
+    // pending row is also closed by the expiry sweep if this flip fails.
+    const { error: closeErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    if (closeErr) logger.error('checkout_purchase_fail_mark_failed', { organizationId, purchaseId, message: closeErr.message });
+    return res.status(503).json({ ok: false, error: 'order_record_failed', retryable: true });
+  }
 
   const keyId = outcome.provider === 'razorpay' ? getProviderCredentials('razorpay').keyId ?? null : null;
 

@@ -49,10 +49,25 @@ export async function grantInitialFreeCredit(input: {
   // ── Read amount + expiry from config; fall back to defaults ──────────────
   // Read first so the self-healing branch below has everything it needs to
   // reconcile a partial earlier run.
-  const { data: config } = await ownedDbTable('free_credit_config')
+  // MONEY: a failed read is not "no config". Treating it as null granted the
+  // DEFAULT amount even when the config disables the grant or sets another
+  // amount. Fail closed as grant_failed: setup-company / onboarding/complete log
+  // it, and the login-time reconciler (sync-supabase-user ->
+  // reconcileInitialFreeCreditForUser) retries the grant on the next login.
+  // Safe because this refusal writes NOTHING that could suppress that retry
+  // (the retry is unconditional; idempotency lives inside the grant).
+  // ACCEPTED COST (weighed 2026-11-12, e1/05): recovery is "next login", not
+  // "soon", and the reconciler is fire-and-forget - a persistently unreadable
+  // config means no credits with only an error log as the trace. Possibly-late
+  // credits are recoverable; a wrong grant against a disabled config is not.
+  const { data: config, error: configErr } = await ownedDbTable('free_credit_config')
     .select('credits, expiry_days, is_active')
     .eq('category', INITIAL_FREE_CREDIT_CATEGORY)
     .maybeSingle();
+  if (configErr) {
+    logger.error('initial_free_credit_config_read_failed', { orgId: input.orgId, message: configErr.message });
+    return { granted: false, reason: 'grant_failed', message: 'Could not read the free-credit configuration.' };
+  }
 
   if (config && (config as { is_active?: boolean }).is_active === false) {
     return {
@@ -83,7 +98,11 @@ export async function grantInitialFreeCredit(input: {
   // self-heal in the bookkeeping branch below.
   const idempotencyKey = makeIdempotencyKey(input.orgId, INITIAL_FREE_CREDIT_CATEGORY, input.orgId);
 
-  const [{ data: existingClaim }, { data: existingLedgerRow }, { data: companyRow }] =
+  const [
+    { data: existingClaim, error: claimReadErr },
+    { data: existingLedgerRow, error: ledgerReadErr },
+    { data: companyRow, error: companyReadErr },
+  ] =
     await Promise.all([
       ownedDbTable('free_credit_claims')
         .select('id, credits_granted')
@@ -100,17 +119,31 @@ export async function grantInitialFreeCredit(input: {
         .maybeSingle(),
     ]);
 
+  // A failed probe is "unknown", not "absent": never decide grant-vs-repair on
+  // an unread state (the ledger key keeps a re-grant idempotent, but the claim /
+  // stamp repairs and the "already claimed" answer would be guesses). The
+  // login-time reconciler retries.
+  const probeErr = claimReadErr ?? ledgerReadErr ?? companyReadErr;
+  if (probeErr) {
+    logger.error('initial_free_credit_probe_failed', { orgId: input.orgId, message: probeErr.message });
+    return { granted: false, reason: 'grant_failed', message: 'Could not read the free-credit state.' };
+  }
+
   // ── Bookkeeping branch — ledger row exists, but claim/stamp/category drift ─
   // Self-heal without touching the wallet (the credit was already granted).
   if (existingLedgerRow) {
     const ledgerRow = existingLedgerRow as { id: string; free_delta?: number | null; category?: string | null };
     const ledgerCredits = Math.abs(ledgerRow.free_delta ?? credits);
 
-    // Repair miscategorized ledger row (legacy default 'paid' bug).
+    // Miscategorized ledger row (legacy default 'paid' bug): REPORTED, never
+    // rewritten. credit_transactions is immutable in prod
+    // (credit_transactions_immutable_update, 83/C17) - the old UPDATE failed on
+    // every login and could never repair anything. The label is bookkeeping:
+    // balances live on organization_credits, not on this column.
+    // best-effort repairs below: the credit was already granted; each failure is
+    // logged so the drift stays visible (and the next login retries it).
     if (ledgerRow.category !== 'free') {
-      await ownedDbTable('credit_transactions')
-        .update({ category: 'free' })
-        .eq('id', ledgerRow.id);
+      logger.warn('initial_free_credit_ledger_category_mismatch', { orgId: input.orgId, ledgerId: ledgerRow.id, category: ledgerRow.category ?? null });
     }
 
     // Repair missing claim row.
@@ -132,10 +165,11 @@ export async function grantInitialFreeCredit(input: {
 
     // Repair missing company stamp (only if NULL — never overwrite later stamps).
     if (companyRow && !(companyRow as { free_credit_granted_at?: string | null }).free_credit_granted_at) {
-      await ownedDbTable('companies')
+      const { error: stampErr } = await ownedDbTable('companies')
         .update({ free_credit_granted_at: new Date().toISOString() })
         .eq('id', input.orgId)
         .is('free_credit_granted_at', null);
+      if (stampErr) logger.warn('initial_free_credit_stamp_repair_failed', { orgId: input.orgId, message: stampErr.message });
     }
 
     return { granted: false, reason: 'already_claimed' };
@@ -147,7 +181,9 @@ export async function grantInitialFreeCredit(input: {
   }
 
   // ── Ensure organization_credits row exists for the org ───────────────────
-  await ownedDbTable('organization_credits').upsert(
+  // best-effort: if the wallet row cannot be ensured, createCredit below fails
+  // and is reported as grant_failed; the upsert error itself is logged.
+  const { error: walletEnsureErr } = await ownedDbTable('organization_credits').upsert(
     {
       organization_id:    input.orgId,
       free_balance:       0,
@@ -159,6 +195,7 @@ export async function grantInitialFreeCredit(input: {
     },
     { onConflict: 'organization_id', ignoreDuplicates: true },
   );
+  if (walletEnsureErr) logger.warn('initial_free_credit_wallet_ensure_failed', { orgId: input.orgId, message: walletEnsureErr.message });
 
   // ── Grant via the credit ledger (idempotent on idempotency_key) ──────────
   try {
@@ -205,10 +242,13 @@ export async function grantInitialFreeCredit(input: {
   }
 
   // ── Stamp the org so admin/UI checks know it's been credited ─────────────
-  await ownedDbTable('companies')
+  // best-effort: the credit is granted; a missing stamp is repaired by the
+  // bookkeeping branch on the next login. Logged.
+  const { error: grantStampErr } = await ownedDbTable('companies')
     .update({ free_credit_granted_at: new Date().toISOString() })
     .eq('id', input.orgId)
     .is('free_credit_granted_at', null);
+  if (grantStampErr) logger.warn('initial_free_credit_stamp_failed', { orgId: input.orgId, message: grantStampErr.message });
 
   return { granted: true, credits, expiresAt };
 }

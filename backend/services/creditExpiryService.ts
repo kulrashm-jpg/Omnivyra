@@ -47,10 +47,15 @@ interface WalletSnapshot {
 }
 
 async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot | null> {
-  const { data } = await ownedDbTable('organization_credits')
+  // MONEY: a failed read is not "no wallet". Before an expiry it decides how
+  // much to expire; after it, it is the paid-balance invariant check - a
+  // swallowed error there silently skipped EXPIRY_CATEGORY_VIOLATION. Throw: the
+  // per-org catch in runExpiryCheck counts it as an error.
+  const { data, error } = await ownedDbTable('organization_credits')
     .select('free_balance, paid_balance, incentive_balance')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[creditExpiry] wallet read failed for ${orgId}: ${error.message}`);
   if (!data) return null;
   const d = data as any;
   return {
@@ -96,10 +101,16 @@ interface IncentiveExpiryConfig {
 }
 
 async function getIncentiveExpiryConfig(): Promise<IncentiveExpiryConfig> {
-  const { data } = await ownedDbTable('free_credit_config')
+  // best-effort, customer-safe direction: a failed read leaves incentive expiry
+  // OFF for this run (nothing is expired on an unread config). Logged.
+  const { data, error } = await ownedDbTable('free_credit_config')
     .select('is_active, expiry_days')
     .eq('category', 'incentive_expiry')
     .maybeSingle();
+  if (error) {
+    console.error('[creditExpiry] incentive_expiry config read failed - incentive expiry skipped this run:', error.message);
+    return { enabled: false, expiryDays: null };
+  }
 
   return {
     enabled:    (data as any)?.is_active    ?? false,
@@ -126,19 +137,51 @@ async function expireOrgFreeCredits(
   amount:    number,
   expiredAt: string,
 ): Promise<number> {
-  // ── Runtime guard 1: idempotency key (one expiry per org per day) ────────
-  const dayKey = expiredAt.slice(0, 10); // YYYY-MM-DD
+  // ── Runtime guard 1: idempotency key - ONE free expiry per ORG ───────────
+  // CLASS 2 (2026-11-12): the key was per org per profile-DAY. Guard 1b below
+  // enforces "one free expiry per org" with a plain READ, so two overlapping
+  // cron runs handling different profiles of one org (different day keys) both
+  // passed it and expired twice. The key is now per ORG, so the ledger's unique
+  // idempotency_key makes the second write a no-op (apply_credit_reservation
+  // returns the existing row on a duplicate key). Rows written under the OLD
+  // per-day key are still honoured by guard 1b (business identity, any key).
+  // Under a genuine race the WINNER is arbitrary: two profiles of one org may
+  // compute different amounts, and whichever writes first stands (the loser is
+  // a silent no-op). Do not read the surviving row as authoritative for a
+  // particular profile - accepted until expiry is rebuilt on lot accounting.
+  const dayKey = expiredAt.slice(0, 10); // YYYY-MM-DD (note text only)
   const idempotencyKey = createHash('sha256')
-    .update(`expire:free:${orgId}:${dayKey}`)
+    .update(`expire:free:org:${orgId}`)
     .digest('hex')
     .slice(0, 32);
 
-  const { data: existing } = await ownedDbTable('credit_transactions')
+  // A failed read is not "not yet expired this window". Throw (per-org error).
+  const { data: existing, error: existingErr } = await ownedDbTable('credit_transactions')
     .select('id')
     .eq('idempotency_key', idempotencyKey)
     .maybeSingle();
+  if (existingErr) throw new Error(`[creditExpiry] idempotency read failed for ${orgId}: ${existingErr.message}`);
 
-  if (existing) return 0; // already processed this expiry window
+  if (existing) return 0; // this org's free expiry already exists (per-org key)
+
+  // ── Runtime guard 1b: at most ONE free expiry per ORG (2026-11-12, e1/05) ──
+  // free_credit_profiles is UNIQUE per USER (several profiles per org are
+  // allowed) and each carries initial_credits + its own expiry date, while the
+  // onboarding grant is ONE per org. Keyed per profile date, an org with N
+  // profiles had the initial amount expired up to N times - capped only by the
+  // free balance, so it drained free credits from other sources. Until expiry
+  // is rebuilt on lot accounting (grant / consumed / expired per lot), refuse
+  // any further free expiry for an org that already has one. This respects
+  // every row written under the existing key (no key-format change).
+  const { data: priorFreeExpiry, error: priorErr } = await ownedDbTable('credit_transactions')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('execution_phase', 'expire')
+    .eq('reference_type', 'expiry')
+    .limit(1)
+    .maybeSingle();
+  if (priorErr) throw new Error(`[creditExpiry] prior-expiry read failed for ${orgId}: ${priorErr.message}`);
+  if (priorFreeExpiry) return 0; // this org's single free grant has already been expired
 
   // ── Runtime guard 2: snapshot paid_balance BEFORE expiry ─────────────────
   const before = await getWalletSnapshot(orgId);
@@ -186,7 +229,9 @@ async function expireOrgFreeCredits(
 
   const expired = toExpire;
 
-  await ownedDbTable('credit_expiry_log').insert({
+  // best-effort: the expiry itself is the ledger row written by the RPC above;
+  // this is the history row. A failure is logged with the amounts.
+  const { error: freeLogErr } = await ownedDbTable('credit_expiry_log').insert({
     organization_id: orgId,
     user_id:         userId,
     amount_expired:  expired,
@@ -194,6 +239,7 @@ async function expireOrgFreeCredits(
     balance_after:   before.free_balance - expired,
     reason:          `free_credit_expiry:${dayKey}`,
   });
+  if (freeLogErr) console.error(`[creditExpiry] expiry log write failed for ${orgId} (expired ${expired}):`, freeLogErr.message);
 
   return expired;
 }
@@ -205,32 +251,53 @@ async function expireOrgFreeCredits(
  * Only called when incentive_expiry config is active.
  * Paid balance is never touched — guarded at DB level by phase='expire_incentive'.
  */
+/** See expireOrgIncentiveCredits: flip to false only together with FIFO lot accounting. */
+const INCENTIVE_EXPIRY_REFUSED_UNTIL_FIFO = true;
+
 async function expireOrgIncentiveCredits(
   orgId:      string,
   expiryDays: number,
 ): Promise<number> {
+  // REFUSED BY DESIGN (2026-11-12, e1/05) until FIFO lot accounting lands.
+  // The amount below is the sum of ALL incentive grants older than the window,
+  // with nothing subtracted for credits already consumed or expired; capped by
+  // the current balance, a later day's run expires credits YOUNGER than the
+  // window (grant 100 long ago, spend 60, expire 40; receive 30 today; tomorrow
+  // the cap expires the new 30). The only thing keeping it off was the
+  // free_credit_config 'incentive_expiry' row (is_active=false), which any
+  // direct DB write can flip - so the refusal lives HERE. Remove it in the same
+  // change that lands FIFO accounting.
+  if (INCENTIVE_EXPIRY_REFUSED_UNTIL_FIFO) throw new Error(
+    'INCENTIVE_EXPIRY_REFUSED: incentive expiry would expire credits younger than its window '
+    + '(grants are not netted against consumption / prior expiry - FIFO lot accounting required). '
+    + `Not expiring incentive credits for org ${orgId} (window ${expiryDays}d).`,
+  );
+
   const dayKey = new Date().toISOString().slice(0, 10);
   const idempotencyKey = createHash('sha256')
     .update(`expire:incentive:${orgId}:${dayKey}`)
     .digest('hex')
     .slice(0, 32);
 
-  const { data: existing } = await ownedDbTable('credit_transactions')
+  // A failed read is not "not yet expired this window". Throw (per-org error).
+  const { data: existing, error: existingErr } = await ownedDbTable('credit_transactions')
     .select('id')
     .eq('idempotency_key', idempotencyKey)
     .maybeSingle();
+  if (existingErr) throw new Error(`[creditExpiry] idempotency read failed for ${orgId}: ${existingErr.message}`);
 
   if (existing) return 0;
 
   // Compute how many incentive credits were granted before the expiry window
   const cutoff = new Date(Date.now() - expiryDays * 86400_000).toISOString();
 
-  const { data: grantRows } = await ownedDbTable('credit_transactions')
+  const { data: grantRows, error: grantErr } = await ownedDbTable('credit_transactions')
     .select('incentive_delta')
     .eq('organization_id', orgId)
     .eq('execution_phase', 'grant')
     .lt('created_at', cutoff)
     .gt('incentive_delta', 0);
+  if (grantErr) throw new Error(`[creditExpiry] incentive grant read failed for ${orgId}: ${grantErr.message}`);
 
   const totalGrantedBefore = (grantRows ?? []).reduce(
     (sum, r) => sum + ((r as any).incentive_delta ?? 0), 0,
@@ -270,7 +337,8 @@ async function expireOrgIncentiveCredits(
     throw new Error(msg);
   }
 
-  await ownedDbTable('credit_expiry_log').insert({
+  // best-effort: see the free-expiry history row above.
+  const { error: incLogErr } = await ownedDbTable('credit_expiry_log').insert({
     organization_id: orgId,
     user_id:         null,
     amount_expired:  toExpire,
@@ -278,6 +346,7 @@ async function expireOrgIncentiveCredits(
     balance_after:   before.incentive_balance - toExpire,
     reason:          `incentive_credit_expiry:${dayKey}`,
   });
+  if (incLogErr) console.error(`[creditExpiry] incentive expiry log write failed for ${orgId} (expired ${toExpire}):`, incLogErr.message);
 
   return toExpire;
 }

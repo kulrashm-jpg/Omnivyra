@@ -1,0 +1,18 @@
+-- ROLLBACK for 20270217000002_feedback_submissions_open_unique.
+-- Drops the index; the route's reads remain as the (racy) early answer and its
+-- 23505 -> 409 mapping becomes unreachable (harmless).
+--
+-- REMOVES ONLY WHAT THE APPLY CREATED (05's rollback rule, 2026-11-12: a rollback
+-- may only remove what was proved absent before the apply). Evidence: the prod
+-- catalog (supabase/_schema/baseline.sql) has NO index of this name on
+-- public.feedback_submissions - only feedback_status_idx. The apply's
+-- CREATE ... IF NOT EXISTS tolerates a pre-existing same-named index, and its
+-- postcondition refuses a NON-unique one; a pre-existing identical UNIQUE index
+-- does not exist in prod, so this DROP cannot remove a prior object there.
+-- PROVENANCE (05): baseline.sql is a September snapshot, so "absent from the
+-- dump" alone is not proof; what makes the absence certain is that this index
+-- NAME originates in 20270217000002 itself (unapplied), so nothing else could
+-- have created it. A postcondition can never prove absence-before. In
+-- any other environment, check for the index BEFORE applying 000002 if this
+-- rollback may be needed.
+DROP INDEX IF EXISTS public.feedback_submissions_one_open_per_user;

@@ -128,6 +128,18 @@ export async function resolveTopupEntitlement(organizationId: string, deps: Reso
       .eq('organization_id', organizationId)
       .order('current_period_end', { ascending: false })
       .limit(1);
+    // best-effort BY POLICY (fail-open, documented above): a read error keeps
+    // top-up credits usable. It used to reach that answer SILENTLY via an
+    // unread r.error (as if there were no subscription row); the policy is now
+    // explicit and the failure logged. OWNER DECISION 2026-11-12 (via e9):
+    // fail-open STAYS, deliberately, for UNCERTAINTY (read failed) as well as
+    // absence (no row) - top-up credits remain usable when the subscription
+    // cannot be read, including a possibly-terminated one during an outage.
+    // Keep the log line: it is how an outage-driven fail-open is seen.
+    if (r?.error) {
+      console.error('[subscriptionStateResolver] topup entitlement read failed - fail-open by policy:', organizationId, r.error.message);
+      return { usable: true, state: 'NO_SUBSCRIPTION' };
+    }
     const row = (r?.data ?? [])[0] ?? null;
     if (!row) return { usable: true, state: 'NO_SUBSCRIPTION' };
     const state = resolveSubscriptionStateFrom({ subscription: row, hasPlanAssignment: false, nowMs, graceDays: deps.graceDays });
@@ -154,8 +166,12 @@ export async function resolveSubscriptionState(organizationId: string, deps: Res
   const loadPlanAssignment = async (): Promise<boolean> => {
     try {
       const r = await deps.db.from('organization_plan_assignments').select('organization_id').eq('organization_id', organizationId).maybeSingle();
+      if (r?.error) throw new Error(r.error.message); // same policy as a thrown load error (below)
       return Boolean(r?.data);
-    } catch { return false; }
+    } catch (err) {
+      console.error('[subscriptionStateResolver] plan assignment read failed - treated as none (legacy policy):', organizationId, err instanceof Error ? err.message : String(err));
+      return false;
+    }
   };
 
   try {
@@ -165,11 +181,15 @@ export async function resolveSubscriptionState(organizationId: string, deps: Res
       .eq('organization_id', organizationId)
       .order('current_period_end', { ascending: false })
       .limit(1);
+    // An unread subRes.error used to resolve as "no subscription row"; route it
+    // to the documented transient-failure policy instead (catch below).
+    if (subRes?.error) throw new Error(subRes.error.message);
     const subscription = (subRes?.data ?? [])[0] ?? null;
     const hasPlanAssignment = await loadPlanAssignment();
     return resolveSubscriptionStateFrom({ subscription, hasPlanAssignment, nowMs, graceDays: deps.graceDays });
-  } catch {
+  } catch (err) {
     // Transient load failure: preserve legacy behavior rather than block allocation.
+    console.error('[subscriptionStateResolver] subscription state read failed - legacy policy applied:', organizationId, err instanceof Error ? err.message : String(err));
     const hasPlanAssignment = await loadPlanAssignment();
     return hasPlanAssignment ? 'ACTIVE' : 'EXPIRED';
   }

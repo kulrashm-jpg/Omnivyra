@@ -68,11 +68,12 @@ export async function reconcile(scope: ReconScope, dryRun = true): Promise<Recon
 
   // For a single purchase, surface the already-healthy case explicitly.
   if (scope.kind === 'single' && scope.purchaseId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('credit_purchases')
       .select('id, organization_id, status, fulfillment_status')
       .eq('id', scope.purchaseId)
       .maybeSingle();
+    if (error) throw new Error(`[commercialReconciliation] purchase read failed for ${scope.purchaseId}: ${error.message}`);
     if (data && (data as any).status === 'completed' && (data as any).fulfillment_status === 'completed') {
       return { scope: scope.kind, dryRun, found: 0, repaired: 0, skipped: 0, alreadyHealthy: 1,
         details: [{ purchaseId: scope.purchaseId, organizationId: (data as any).organization_id, action: 'already_healthy' }] };

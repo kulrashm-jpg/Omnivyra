@@ -119,23 +119,25 @@ export async function verifyBillingConsistency(opts: VerifyOptions = {}): Promis
     .in('status', ['initiated', 'held', 'executed'])
     .lt('started_at', new Date(Date.now() - slaMin * 60_000).toISOString());
   if (opts.organizationId) stuckOpsQ = stuckOpsQ.eq('organization_id', opts.organizationId);
-  const { count: stuckOps } = await stuckOpsQ;
+  // A failed count is not "0 stuck": the signal FAILS with read_failed (a
+  // rollout verifier must never pass on a check it could not perform).
+  const { count: stuckOps, error: stuckOpsErr } = await stuckOpsQ;
   signals.push({
     name:    'no_stuck_billing_operations',
-    passed:  Number(stuckOps ?? 0) === 0,
-    detail:  { stuck: Number(stuckOps ?? 0), slaMin },
+    passed:  !stuckOpsErr && Number(stuckOps ?? 0) === 0,
+    detail:  stuckOpsErr ? { read_failed: stuckOpsErr.message, slaMin } : { stuck: Number(stuckOps ?? 0), slaMin },
     blocker: false,
   });
 
-  const { count: stuckPaymentEvents } = await supabase
+  const { count: stuckPaymentEvents, error: stuckPayErr } = await supabase
     .from('payment_provider_event_state')
     .select('provider_event_pk', { count: 'exact', head: true })
     .in('processing_status', ['recorded', 'requeued'])
     .lt('updated_at', new Date(Date.now() - 30 * 60_000).toISOString());
   signals.push({
     name:    'no_stuck_payment_events',
-    passed:  Number(stuckPaymentEvents ?? 0) === 0,
-    detail:  { stuck: Number(stuckPaymentEvents ?? 0) },
+    passed:  !stuckPayErr && Number(stuckPaymentEvents ?? 0) === 0,
+    detail:  stuckPayErr ? { read_failed: stuckPayErr.message } : { stuck: Number(stuckPaymentEvents ?? 0) },
     blocker: false,
   });
 

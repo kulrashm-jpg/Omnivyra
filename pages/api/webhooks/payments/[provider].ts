@@ -124,11 +124,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let allocated = false;
     const success = extractSuccess(provider, safeParse(raw));
     if (success) {
-      const { data: purchase } = await supabase
+      // MONEY: a failed read is NOT "unmatched". Answering 200 told the provider
+      // the delivery was handled, so it never retried and a paid order was not
+      // fulfilled. 500 makes the provider redeliver; the redelivery reaches
+      // the same idempotent fulfillment.
+      const { data: purchase, error: purchaseErr } = await supabase
         .from('credit_purchases')
         .select('id, status, fulfillment_status')
         .eq('provider_order_id', success.orderId)
         .maybeSingle();
+      if (purchaseErr) {
+        logger.error('payment_webhook_purchase_lookup_failed', {
+          provider, eventId: result.eventId, providerOrderId: success.orderId, message: purchaseErr.message,
+        });
+        return res.status(500).json({ ok: false, error: 'purchase_lookup_unavailable', retryable: true });
+      }
       if (purchase) {
         const alreadyFulfilled = (purchase as any).status === 'completed'
           && (purchase as any).fulfillment_status === 'completed';
@@ -155,6 +165,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             { amountSubunits: success.amountSubunits, currency: success.currency },
           );
           allocated = fulfillment.ok;
+          if (!fulfillment.ok && fulfillment.code === 'UNAVAILABLE') {
+            // Transient read failure inside fulfilment: never answer 200 (that
+            // tells the provider the delivery was handled). 500 -> redelivery.
+            logger.error('payment_webhook_fulfillment_unavailable', {
+              provider, eventId: result.eventId, purchaseId: (purchase as any).id, detail: fulfillment.detail ?? null,
+            });
+            return res.status(500).json({ ok: false, error: 'fulfillment_unavailable', retryable: true });
+          }
           if (!fulfillment.ok) {
             logger.error('payment_webhook_fulfillment_blocked', {
               provider, eventId: result.eventId, purchaseId: (purchase as any).id,

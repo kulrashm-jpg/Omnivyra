@@ -325,7 +325,7 @@ describe('settlement — NO downstream wallet / credit / subscription activation
     // no wallet balance, no entitlement, no invoice.
     const t = store.transitions[0];
     expect(Object.keys(t).sort()).toEqual([
-      'idempotencyKey', 'providerEventReference', 'providerRawStatus', 'settledAt', 'settlementStatus',
+      'fromStatus', 'idempotencyKey', 'providerEventReference', 'providerRawStatus', 'settledAt', 'settlementStatus',
     ]);
     const serialized = JSON.stringify(store.transitions).toLowerCase();
     for (const f of ['credit', 'wallet', 'entitlement', 'subscription', 'invoice', 'balance']) {

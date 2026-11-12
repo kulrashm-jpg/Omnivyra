@@ -38,13 +38,23 @@ export async function heartbeatBillingOperation(operationId: string): Promise<vo
       .select('metadata')
       .eq('id', operationId)
       .maybeSingle();
-    if (readErr || !data) return;
+    // best-effort: a heartbeat must never fail the paid work it reports on. But a
+    // SILENT failure makes a live operation look stuck and invites auto-expiry
+    // to "recover" it - so every failure is logged. DEPENDENCY: this B is only
+    // safe with 4577c29ee (checkFinancialDrift refuses on an unread check); do
+    // not ship or cherry-pick it onto a base without that commit.
+    if (readErr) {
+      logger.warn('heartbeat_billing_op_failed', { operationId, step: 'read', message: readErr.message });
+      return;
+    }
+    if (!data) return;
     const existing = (data as { metadata?: Record<string, unknown> | null }).metadata ?? {};
     const merged = { ...existing, last_heartbeat_at: new Date(now).toISOString() };
-    await supabase
+    const { error: writeErr } = await supabase
       .from('billing_operations')
       .update({ metadata: merged })
       .eq('id', operationId);
+    if (writeErr) logger.warn('heartbeat_billing_op_failed', { operationId, step: 'write', message: writeErr.message });
   } catch (err) {
     logger.warn('heartbeat_billing_op_failed', { operationId, message: err instanceof Error ? err.message : String(err) });
   }
@@ -58,10 +68,12 @@ export async function heartbeatJobRegistry(executionHash: string): Promise<void>
 
   try {
     // last_seen_at is a real column on job_execution_registry — direct update.
-    await supabase
+    // best-effort (see heartbeatBillingOperation): logged, never silent.
+    const { error } = await supabase
       .from('job_execution_registry')
       .update({ last_seen_at: new Date(now).toISOString() })
       .eq('execution_hash', executionHash);
+    if (error) logger.warn('heartbeat_job_registry_failed', { executionHash, message: error.message });
   } catch (err) {
     logger.warn('heartbeat_job_registry_failed', { executionHash, message: err instanceof Error ? err.message : String(err) });
   }

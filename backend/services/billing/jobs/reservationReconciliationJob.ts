@@ -25,6 +25,8 @@ export interface ReservationReconciliationResult {
   expiredHoldsAwaitingReap: number;
   bookKeepingMismatches:    number;
   stuckOrchestratorCalls:   number;
+  /** Rows whose per-row check could not be read: neither cleared nor flagged. */
+  unverifiable:             number;
   details: {
     expiredHoldIds:        string[];
     mismatchedOpIds:       string[];
@@ -39,56 +41,67 @@ export async function runReservationReconciliation(opts?: {
   const slaMin   = opts?.stuckSlaMinutes ?? 30;
   const scanLim  = opts?.scanLimit       ?? 500;
 
+  // A DETECTOR must never report "all clear" on a scan it could not read
+  // (2026-11-12): a failed top-level read throws (the run fails visibly); a
+  // failed per-row check is counted as UNVERIFIABLE - neither cleared nor
+  // flagged as an anomaly (a false critical teaches people to ignore them).
+  let unverifiable = 0;
+
   // 1. Expired HOLDs not yet released.
-  const { data: expiredHolds } = await supabase
+  const { data: expiredHolds, error: expiredErr } = await supabase
     .from('credit_transactions')
     .select('id, organization_id, idempotency_key, expires_at')
     .eq('execution_phase', 'hold')
     .lt('expires_at', new Date().toISOString())
     .limit(scanLim);
+  if (expiredErr) throw new Error(`[reservationReconciliation] expired-hold scan failed: ${expiredErr.message}`);
   const expiredIds: string[] = [];
   for (const h of (expiredHolds ?? []) as Array<{ id: string; organization_id: string; idempotency_key: string }>) {
     // Check for sibling CONFIRM/RELEASE
-    const { data: sibling } = await supabase
+    const { data: sibling, error: siblingErr } = await supabase
       .from('credit_transactions')
       .select('id, execution_phase')
       .eq('parent_transaction_id', h.id)
       .in('execution_phase', ['confirm', 'release'])
       .limit(1);
+    if (siblingErr) { unverifiable += 1; continue; }
     if (!sibling || sibling.length === 0) {
       expiredIds.push(h.id);
     }
   }
 
   // 2. billing_operations claiming confirmed but no matching CONFIRM ledger row.
-  const { data: confirmedOps } = await supabase
+  const { data: confirmedOps, error: confirmedErr } = await supabase
     .from('billing_operations')
     .select('id, organization_id, idempotency_key, confirm_txn_id')
     .eq('status', 'confirmed')
     .gte('completed_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString())
     .limit(scanLim);
+  if (confirmedErr) throw new Error(`[reservationReconciliation] confirmed-ops scan failed: ${confirmedErr.message}`);
   const mismatchedOpIds: string[] = [];
   for (const op of (confirmedOps ?? []) as Array<{ id: string; idempotency_key: string; confirm_txn_id: string | null }>) {
     if (!op.confirm_txn_id) {
       // Check ledger for a CONFIRM with the orchestrator's confirm key
       const confirmKey = `${op.idempotency_key}:confirm`;
-      const { data: txn } = await supabase
+      const { data: txn, error: txnErr } = await supabase
         .from('credit_transactions')
         .select('id')
         .eq('idempotency_key', confirmKey)
         .maybeSingle();
+      if (txnErr) { unverifiable += 1; continue; }
       if (!txn) mismatchedOpIds.push(op.id);
     }
   }
 
   // 3. Orchestrator calls stuck in 'initiated' / 'held' beyond SLA.
   const stuckCutoff = new Date(Date.now() - slaMin * 60 * 1000).toISOString();
-  const { data: stuckOps } = await supabase
+  const { data: stuckOps, error: stuckErr } = await supabase
     .from('billing_operations')
     .select('id, organization_id, module, action, started_at, status')
     .in('status', ['initiated', 'held', 'executed'])
     .lt('started_at', stuckCutoff)
     .limit(scanLim);
+  if (stuckErr) throw new Error(`[reservationReconciliation] stuck-ops scan failed: ${stuckErr.message}`);
   const stuckOpIds = ((stuckOps ?? []) as Array<{ id: string }>).map(r => r.id);
 
   // 4. Emit anomalies + counters
@@ -119,6 +132,15 @@ export async function runReservationReconciliation(opts?: {
     });
   }
 
+  if (unverifiable > 0) {
+    emitAnomaly({
+      kind: 'reservation_orphan_reaped',
+      severity: 'warn',
+      message: `reservation reconciliation could not verify ${unverifiable} row(s) (read errors) - neither cleared nor flagged`,
+      metadata: { unverifiable },
+    });
+  }
+
   const scanned = (expiredHolds?.length ?? 0) + (confirmedOps?.length ?? 0) + (stuckOps?.length ?? 0);
   logger.info('reservation_reconciliation_completed', {
     scanned, expired: expiredIds.length, mismatched: mismatchedOpIds.length, stuck: stuckOpIds.length,
@@ -129,6 +151,7 @@ export async function runReservationReconciliation(opts?: {
     expiredHoldsAwaitingReap: expiredIds.length,
     bookKeepingMismatches:    mismatchedOpIds.length,
     stuckOrchestratorCalls:   stuckOpIds.length,
+    unverifiable,
     details: {
       expiredHoldIds:  expiredIds,
       mismatchedOpIds,

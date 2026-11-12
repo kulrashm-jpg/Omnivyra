@@ -58,11 +58,18 @@ export async function expireSubscriptionCreditsForOrg(orgId: string, deps: Expir
   const { state } = await resolveTopupEntitlement(orgId, { db: deps.db, now: () => nowMs });
   if (state !== 'EXPIRED' && state !== 'CANCELED') return { expired: 0, state, reason: 'not_terminated' };
 
+  // Read errors below are customer-safe SKIPS (nothing expired), but explicit
+  // and logged - they used to read as "no balance / no allocation" silently.
+  const readFailed = (step: string, message: string): SubscriptionExpiryResult => {
+    console.error('[subscriptionCreditExpiry] read failed - nothing expired:', orgId, step, message);
+    return { expired: 0, state, reason: `read_failed:${step}` };
+  };
   const walletRes = await deps.db
     .from('organization_credits')
     .select('free_balance, paid_balance, incentive_balance')
     .eq('organization_id', orgId)
     .maybeSingle();
+  if (walletRes?.error) return readFailed('wallet', walletRes.error.message);
   const free = walletRes?.data?.free_balance ?? 0;
   if (free <= 0) return { expired: 0, state, reason: 'no_free_balance' };
 
@@ -72,21 +79,56 @@ export async function expireSubscriptionCreditsForOrg(orgId: string, deps: Expir
   // — precise per-grant separation would need ledger-FIFO tracking (documented limitation).
   const allocRes = await deps.db
     .from('credit_transactions')
-    .select('credits_delta, free_delta')
+    .select('id, created_at, credits_delta, free_delta')
     .eq('organization_id', orgId)
     .eq('reference_type', 'subscription_allocation')
     .order('created_at', { ascending: false })
     .limit(1);
+  if (allocRes?.error) return readFailed('allocation', allocRes.error.message);
   const lastAlloc = (allocRes?.data ?? [])[0];
   const subscriptionAllocated = Math.max(0, Number(lastAlloc?.free_delta ?? lastAlloc?.credits_delta ?? 0));
   const toExpire = Math.min(free, subscriptionAllocated);
   if (toExpire <= 0) return { expired: 0, state, reason: subscriptionAllocated <= 0 ? 'no_subscription_credits' : 'no_free_balance' };
 
   const dayKey = new Date(nowMs).toISOString().slice(0, 10);
-  const idempotencyKey = createHash('sha256').update(`expire:subscription:${orgId}:${dayKey}`).digest('hex').slice(0, 32);
+  // MONEY (2026-11-12): idempotency is per ALLOCATION, not per day. Keyed per
+  // day, a still-terminated subscription re-expired min(free, last allocation)
+  // EVERY day - day 2 onward drained OTHER free credits (e.g. signup credits)
+  // in the size of an allocation that was already expired. Each subscription
+  // allocation now expires at most once.
+  const allocId = (lastAlloc as { id?: string } | undefined)?.id;
+  if (!allocId) return readFailed('allocation_id', 'subscription allocation row has no id');
+  const idempotencyKey = createHash('sha256').update(`expire:subscription:${orgId}:alloc:${allocId}`).digest('hex').slice(0, 32);
 
   const existing = await deps.db.from('credit_transactions').select('id').eq('idempotency_key', idempotencyKey).maybeSingle();
+  if (existing?.error) return readFailed('idempotency', existing.error.message);
   if (existing?.data) return { expired: 0, state, reason: 'already_expired' };
+
+  // KEY-FORMAT CHANGE GUARD (2026-11-12): the key above is new. Expiries written
+  // under the OLD per-day key (`expire:subscription:<org>:<day>`) exist in prod
+  // (83/C16: 3 subscription_expiry rows on 2026-06-24) and the new key can never
+  // match them - without this check an allocation already expired under the old
+  // format would expire a SECOND time. Decide by BUSINESS IDENTITY, not key: any
+  // subscription_expiry for this org at or after this allocation means this
+  // allocation has been expired (whatever key format wrote it). A renewal
+  // allocation created after that expiry is correctly still expirable.
+  // RELIES ON: this service is the SOLE writer of reference_type
+  // 'subscription_expiry' (pinned by name in subscriptionCreditExpiry.test.ts),
+  // and it only ever expires the allocation that was newest at the time. A
+  // second writer - e.g. a backfill with a backdated created_at - would make
+  // this rule stop an org's expiry forever. `>=`: on an exact tie, suppress
+  // (lost revenue) rather than re-expire (drains the customer's pooled free).
+  const allocAt = (lastAlloc as { created_at?: string } | undefined)?.created_at;
+  if (!allocAt) return readFailed('allocation_created_at', 'subscription allocation row has no created_at');
+  const prior = await deps.db
+    .from('credit_transactions')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('reference_type', 'subscription_expiry')
+    .gte('created_at', allocAt)
+    .limit(1);
+  if (prior?.error) return readFailed('prior_expiry', prior.error.message);
+  if ((prior?.data ?? []).length > 0) return { expired: 0, state, reason: 'already_expired' };
 
   const { error } = await deps.rpc({
     p_org_id: orgId,
@@ -114,6 +156,8 @@ export interface ExpirySweepSummary { processed: number; expired: number; total_
 export async function runSubscriptionCreditExpirySweep(deps: ExpiryDeps = defaultExpiryDeps()): Promise<ExpirySweepSummary> {
   // Candidate orgs: those with a billing_subscriptions row (the resolver decides terminal state).
   const subs = await deps.db.from('billing_subscriptions').select('organization_id');
+  // A failed read is not "no subscriptions" (the sweep would silently do nothing). Throw.
+  if (subs?.error) throw new Error(`[subscriptionCreditExpiry] candidate read failed: ${subs.error.message}`);
   const orgIds: string[] = Array.from(new Set((subs?.data ?? []).map((r: any) => r.organization_id)));
   let expired = 0, total = 0;
   for (const orgId of orgIds) {

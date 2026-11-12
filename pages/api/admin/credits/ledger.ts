@@ -73,11 +73,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // correlationId routes through billing_operations to find matching ledger rows
   const correlationId = typeof req.query.correlationId === 'string' ? req.query.correlationId : null;
   if (correlationId) {
-    const { data: ops } = await supabase
+    // A failed read is not "no matching billing_operations" (a confident empty
+    // ledger for a correlation that did charge). 503.
+    const { data: ops, error: opsErr } = await supabase
       .from('billing_operations')
       .select('idempotency_key')
       .eq('correlation_id', correlationId)
       .limit(50);
+    if (opsErr) {
+      return res.status(503).json({ error: 'billing_operations_unavailable', retryable: true });
+    }
     const idemKeys = ((ops ?? []) as Array<{ idempotency_key: string }>)
       .flatMap(r => [r.idempotency_key, `${r.idempotency_key}:hold`, `${r.idempotency_key}:confirm`, `${r.idempotency_key}:release`]);
     if (idemKeys.length === 0) {

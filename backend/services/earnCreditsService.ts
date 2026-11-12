@@ -35,20 +35,30 @@ export async function grantEarnCredit(params: {
   userId:       string;
   actionType:   EarnActionType;
   referenceId?: string;
-}): Promise<{ granted: boolean; credits: number }> {
+}): Promise<{ granted: boolean; credits: number; reason?: 'already_granted' | 'read_failed' | 'grant_failed' }> {
+  // `reason` (2026-11-12) lets a caller tell "already granted" (fine) from a
+  // failure (retry needed); `granted: false` alone could not.
   const { orgId, userId, actionType, referenceId } = params;
   const action = EARN_ACTIONS[actionType];
   const refId  = referenceId ?? actionType;
 
   // Idempotency: never grant twice for same org + action + reference
-  const { data: existing } = await ownedDbTable('earn_credit_actions')
+  // MONEY: a failed read is not "not yet granted" (the ledger key would stop a
+  // double credit, but the action record and the "you earned" notification
+  // would be duplicated). Refuse - this writes NOTHING, so the next completion
+  // of the action retries cleanly.
+  const { data: existing, error: existingErr } = await ownedDbTable('earn_credit_actions')
     .select('id')
     .eq('organization_id', orgId)
     .eq('action_type', actionType)
     .eq('reference_id', refId)
     .maybeSingle();
+  if (existingErr) {
+    console.error('[earnCreditsService] idempotency read failed - not granted this time:', actionType, existingErr.message);
+    return { granted: false, credits: 0, reason: 'read_failed' };
+  }
 
-  if (existing) return { granted: false, credits: 0 };
+  if (existing) return { granted: false, credits: 0, reason: 'already_granted' };
 
   try {
     await createCredit({
@@ -62,13 +72,25 @@ export async function grantEarnCredit(params: {
       idempotencyKey: makeIdempotencyKey(orgId, actionType, refId),
     });
 
-    await ownedDbTable('earn_credit_actions').insert({
+    // best-effort: the credit is granted (ledger, idempotent key). If this
+    // record is not written the next call re-enters, the ledger key prevents a
+    // second credit, and the record is written then. Logged.
+    const { error: recordErr } = await ownedDbTable('earn_credit_actions').insert({
       organization_id: orgId,
       user_id:         userId,
       action_type:     actionType,
       credits_granted: action.credits,
       reference_id:    refId,
     });
+    // A UNIQUE violation is the AUTHORITATIVE answer (05, 2026-11-12): a
+    // concurrent grant of the same (org, action, reference) won the record
+    // (earn_credit_actions UNIQUE (organization_id, action_type, reference_id))
+    // and the ledger key absorbed this credit. Answer exactly like the
+    // sequential case - no second "you earned" notice, no credits reported.
+    if (recordErr && (recordErr as { code?: string }).code === '23505') {
+      return { granted: false, credits: 0, reason: 'already_granted' };
+    }
+    if (recordErr) console.error('[earnCreditsService] earn action record write failed (credit granted):', actionType, recordErr.message);
 
     // Notify all active org members
     await notifyEarnCreditsGranted(orgId, actionType, action.credits);
@@ -76,7 +98,7 @@ export async function grantEarnCredit(params: {
     return { granted: true, credits: action.credits };
   } catch (err: any) {
     console.error('[earnCreditsService] grant failed:', actionType, err.message);
-    return { granted: false, credits: 0 };
+    return { granted: false, credits: 0, reason: 'grant_failed' };
   }
 }
 
@@ -90,19 +112,24 @@ export async function notifyEarnProgress(params: {
   const { orgId, actionType, message } = params;
   const action = EARN_ACTIONS[actionType];
 
-  // Don't nudge if already earned
-  const { data: existing } = await ownedDbTable('earn_credit_actions')
+  // Don't nudge if already earned. best-effort: on a failed read send NO nudge
+  // (never nudge for credits that may already be earned); logged.
+  const { data: existing, error: existingErr } = await ownedDbTable('earn_credit_actions')
     .select('id')
     .eq('organization_id', orgId)
     .eq('action_type', actionType)
     .maybeSingle();
+  if (existingErr) {
+    console.error('[earnCreditsService] nudge check read failed - no nudge sent:', actionType, existingErr.message);
+    return;
+  }
 
   if (existing) return;
 
   const userIds = await getOrgAdminUserIds(orgId);
   if (!userIds.length) return;
 
-  await ownedDbTable('notifications').insert(
+  const { error: nudgeErr } = await ownedDbTable('notifications').insert(
     userIds.map(uid => ({
       user_id:  uid,
       type:     'earn_credits_nudge',
@@ -112,6 +139,7 @@ export async function notifyEarnProgress(params: {
       is_read:  false,
     })),
   );
+  if (nudgeErr) console.error('[earnCreditsService] nudge notification write failed:', actionType, nudgeErr.message);
 }
 
 // ── Get earn progress for an org ─────────────────────────────────────────────
@@ -127,9 +155,12 @@ export async function getEarnProgress(orgId: string): Promise<{
   total_earned:    number;
   total_available: number;
 }> {
-  const { data: granted } = await ownedDbTable('earn_credit_actions')
+  // A failed read is not "nothing earned" (the page would offer credits the org
+  // already has). Throw - the progress route answers 5xx.
+  const { data: granted, error: grantedErr } = await ownedDbTable('earn_credit_actions')
     .select('action_type, granted_at')
     .eq('organization_id', orgId);
+  if (grantedErr) throw new Error(`[earnCreditsService] earn progress read failed: ${grantedErr.message}`);
 
   const grantedMap = new Map(
     (granted ?? []).map(r => [r.action_type as string, r.granted_at as string]),
@@ -158,14 +189,24 @@ export async function checkAndGrantSetupCredits(
   orgId:  string,
   userId: string,
 ): Promise<{ setup_credits: number; website_credits: number }> {
-  const { data: setupRow } = await ownedDbTable('company_setup_progress')
+  // A failed read is not "steps not done" (the grant would be silently skipped
+  // and the caller told 0 credits). Throw: the step itself is already saved, so
+  // the next setup-progress call re-evaluates the grant.
+  // Callers that swallow this with a logging .catch (the OAuth callbacks,
+  // external-apis) are safe ONLY because the throw writes nothing AND a later
+  // trigger (another completed step / setup-progress call) re-attempts from a
+  // clean state. Do not copy that .catch to a caller with no second trigger.
+  // Accepted cost: if the user never completes another step, the grant waits.
+  const { data: setupRow, error: setupErr } = await ownedDbTable('company_setup_progress')
     .select('profile_complete, external_api_connected, social_accounts_connected, website_blog_connected, lead_capture_connected')
     .eq('company_id', orgId)
     .maybeSingle();
+  if (setupErr) throw new Error(`[earnCreditsService] setup progress read failed: ${setupErr.message}`);
 
-  const { count: socialCount } = await ownedDbTable('social_accounts')
+  const { count: socialCount, error: socialErr } = await ownedDbTable('social_accounts')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', orgId);
+  if (socialErr) throw new Error(`[earnCreditsService] social account count failed: ${socialErr.message}`);
 
   const row = (setupRow as any) ?? {};
   const steps = {
@@ -198,11 +239,13 @@ export async function checkAndGrantSetupCredits(
 
 /** Only COMPANY_ADMIN manages credits — notifications go to them only. */
 async function getOrgAdminUserIds(orgId: string): Promise<string[]> {
-  const { data } = await ownedDbTable('user_company_roles')
+  // best-effort (notifications only): a failed read notifies nobody; logged.
+  const { data, error } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', orgId)
     .eq('status', 'active')
     .eq('role', 'COMPANY_ADMIN');
+  if (error) console.error('[earnCreditsService] org admin read failed - no notification:', orgId, error.message);
   return (data ?? []).map(r => r.user_id as string);
 }
 
@@ -215,7 +258,7 @@ async function notifyEarnCreditsGranted(
   const userIds = await getOrgAdminUserIds(orgId);
   if (!userIds.length) return;
 
-  await ownedDbTable('notifications').insert(
+  const { error: grantedNoteErr } = await ownedDbTable('notifications').insert(
     userIds.map(uid => ({
       user_id:  uid,
       type:     'earn_credits_granted',
@@ -225,4 +268,5 @@ async function notifyEarnCreditsGranted(
       is_read:  false,
     })),
   );
+  if (grantedNoteErr) console.error('[earnCreditsService] granted notification write failed:', actionType, grantedNoteErr.message);
 }

@@ -75,12 +75,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     performedBy:                 guard.principal.userId,
     reason,
     originalGrantIdempotencyKey: originalGrantKey,
+    requestIdempotencyKey:       String(req.headers['idempotency-key'] ?? '').trim() || undefined,
   });
 
   if (result.success !== true) {
     const status =
       result.reason === 'INVALID_AMOUNT'        ? 400 :
+      result.reason === 'IDEMPOTENCY_KEY_REQUIRED' ? 400 :
+      result.reason === 'PRIOR_REVOKE_READ_FAILED' ? 503 :
       result.reason === 'NO_WALLET'             ? 404 :
+      result.reason === 'WALLET_READ_FAILED'    ? 503 :
       result.reason === 'INSUFFICIENT_BALANCE'  ? 409 :
       500;
     return res.status(status).json({ ok: false, code: result.reason, detail: result.detail });
@@ -92,6 +96,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requested:      result.requested,
     idempotencyKey: result.idempotencyKey,
     transactionId:  result.transactionId,
+    ...(result.alreadyRevoked ? { alreadyRevoked: true } : {}),
   });
 }
 

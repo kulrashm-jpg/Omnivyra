@@ -43,6 +43,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!reason) return res.status(400).json({ error: 'reason is required' });
   if (!VALID_CATEGORIES.includes(category as any)) return res.status(400).json({ error: 'Invalid category' });
 
+  // MONEY (2026-11-12, class 2): the grant row's id WAS the only idempotency
+  // anchor, but every request inserted a NEW row - so a retry / double submit /
+  // step-up re-send created a new grant and a SECOND credit (the old comment
+  // below claimed otherwise). One Idempotency-Key per logical grant is now
+  // REQUIRED and stored on the row (manual_credit_grants_idempotency_key_unique,
+  // 20260420_lockdown_idempotency.sql): a repeat resolves the SAME grant.
+  // That index is PARTIAL (WHERE idempotency_key IS NOT NULL) and GLOBAL (key
+  // alone, across every org and admin): historical NULL-key rows are outside
+  // it, and the client must send a random UUID, never a human-shaped key.
+  const requestIdempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+  if (!requestIdempotencyKey) {
+    return res.status(400).json({ error: 'Idempotency-Key header is required', code: 'IDEMPOTENCY_KEY_REQUIRED' });
+  }
+
   // Phase: Platform Authority Isolation. billing.grant_free_credits is a
   // SUPER_ADMIN-only platform-tier capability; replaces the previous
   // BILLING_MANAGE gate which is per-tenant (any COMPANY_ADMIN of the
@@ -61,10 +75,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const sb = supabase;
   const grantedBy = guard.principal.userId;
 
-  // ── 1. Log grant record FIRST — the grantId becomes the idempotency anchor ─
-  // If this endpoint is retried, the same grantId produces the same idempotency
-  // key → createCredit is a no-op → exactly-once credit guaranteed.
-  const { data: grant, error: logErr } = await sb.from('manual_credit_grants').insert({
+  // ── 1. Log grant record FIRST, keyed by the request's Idempotency-Key ──────
+  // A repeat of the same key hits the unique index (23505) and resolves the
+  // EXISTING grant; step 2 then re-applies the credit under the ledger key of
+  // the ORIGINAL grant (its id + granted_by), which is a no-op if it was already
+  // credited and completes it if an earlier attempt failed after the insert.
+  let grant: { id: string; granted_by: string | null } | null = null;
+  const { data: inserted, error: logErr } = await sb.from('manual_credit_grants').insert({
     organization_id: organizationId,
     user_id:         userId ?? null,
     granted_by:      grantedBy,
@@ -73,14 +90,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reason,
     reference_id:    referenceId ?? null,
     note:            note ?? null,
-  }).select('id').single();
+    idempotency_key: requestIdempotencyKey,
+  }).select('id, granted_by').single();
 
-  if (logErr || !grant?.id) {
+  if (logErr?.code === '23505') {
+    const { data: existing, error: existingErr } = await sb.from('manual_credit_grants')
+      .select('id, granted_by, organization_id, credits_amount')
+      .eq('idempotency_key', requestIdempotencyKey)
+      .maybeSingle();
+    if (existingErr || !existing?.id) {
+      console.error('[free-credits/grant] existing grant lookup failed:', existingErr?.message ?? 'not found');
+      return res.status(503).json({ error: 'Could not resolve the earlier grant for this Idempotency-Key', retryable: true });
+    }
+    if (existing.organization_id !== organizationId || Number(existing.credits_amount) !== Number(creditsAmount)) {
+      return res.status(409).json({ error: 'This Idempotency-Key is already used by a DIFFERENT grant (another org or amount) - nothing was granted. Send a new key for this grant.', code: 'IDEMPOTENCY_KEY_REUSED' });
+    }
+    grant = { id: existing.id, granted_by: existing.granted_by ?? null };
+  } else if (logErr || !inserted?.id) {
     console.error('[free-credits/grant] log failed:', logErr?.message);
-    return res.status(500).json({ error: 'Failed to record grant: ' + (logErr?.message ?? 'unknown') });
+    return res.status(500).json({ error: 'Failed to record grant' });
+  } else {
+    grant = { id: inserted.id, granted_by: (inserted as { granted_by?: string | null }).granted_by ?? grantedBy };
   }
 
   // ── 2. Apply credit via creditExecutionService (idempotent on grantId) ─────
+  // The ledger key uses the ORIGINAL grant's granted_by (a repeat by another
+  // admin must not form a different key for the same grant).
+  const keyActor = grant.granted_by ?? grantedBy;
   try {
     await createCredit({
       orgId:          organizationId,
@@ -91,32 +127,49 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       note:           `[${category}] ${reason}`,
       performedBy:    grantedBy ?? organizationId,
       idempotencyKey: makeIdempotencyKey(
-        grantedBy ?? organizationId,
+        keyActor ?? organizationId,
         `admin_grant:${category}`,
         grant.id,
       ),
     });
   } catch (txErr: any) {
     console.error('[free-credits/grant] credit grant failed:', txErr.message);
-    return res.status(500).json({ error: 'Credit transaction failed: ' + txErr.message });
+    // Retry with the SAME Idempotency-Key: it resolves this grant and completes the credit.
+    return res.status(500).json({ error: 'Credit transaction failed; retry with the same Idempotency-Key', grantId: grant.id, retryable: true });
   }
 
   // ── 3. If a specific user is tagged, ensure they are COMPANY_ADMIN ─────────
+  // The credits are granted at this point. A MEMBERSHIP is created only on a
+  // clean "no existing role" read: an unread error used to look like "no role"
+  // and inserted a COMPANY_ADMIN row for a user who may already hold another
+  // role (a privilege change made on an unread answer). On any failure the role
+  // is NOT ensured and the response says so.
+  let roleEnsured = true;
+  let roleWarning: string | undefined;
   if (userId) {
-    const { data: existingRole } = await sb
+    const { data: existingRole, error: roleReadErr } = await sb
       .from('user_company_roles')
       .select('id, role')
       .eq('user_id', userId)
       .eq('company_id', organizationId)
       .maybeSingle();
 
-    if (!existingRole) {
-      await sb.from('user_company_roles').insert({
+    if (roleReadErr) {
+      roleEnsured = false;
+      roleWarning = 'credits granted; company-admin membership NOT ensured (membership read failed) - retry the role step';
+      console.error('[free-credits/grant] role read failed - membership not changed:', organizationId, roleReadErr.message);
+    } else if (!existingRole) {
+      const { error: roleInsertErr } = await sb.from('user_company_roles').insert({
         user_id:    userId,
         company_id: organizationId,
         role:       'COMPANY_ADMIN',
         status:     'active',
       });
+      if (roleInsertErr) {
+        roleEnsured = false;
+        roleWarning = 'credits granted; company-admin membership NOT created - retry the role step';
+        console.error('[free-credits/grant] role insert failed:', organizationId, roleInsertErr.message);
+      }
     }
     // Closure-015J (R-6): an existing SUPER_ADMIN membership is left untouched — it
     // already exceeds COMPANY_ADMIN, and platform super-admin authority changes only
@@ -126,7 +179,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // likewise left as is.
   }
 
-  return res.status(200).json({ success: true, grantId: grant.id });
+  return res.status(200).json({
+    success: true,
+    grantId: grant.id,
+    ...(userId ? { roleEnsured } : {}),
+    ...(roleWarning ? { warning: roleWarning } : {}),
+  });
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.

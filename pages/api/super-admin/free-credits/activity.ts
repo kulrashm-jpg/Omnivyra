@@ -39,11 +39,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // 1. Free credit claims (automated: initial, invite_friend, first_campaign, etc.)
   if (source === 'all' || source === 'claim') {
-    const { data: claims } = await sb
+    // A failed read is not "no activity". 503.
+    const { data: claims, error: claimsErr } = await sb
       .from('free_credit_claims')
       .select('id, user_id, organization_id, category, credits_granted, claimed_at')
       .order('claimed_at', { ascending: false })
       .range(offset, offset + limitNum - 1);
+    if (claimsErr) return res.status(503).json({ error: 'activity_unavailable', retryable: true });
 
     for (const c of claims ?? []) {
       results.push({
@@ -76,13 +78,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // 3. Approved access requests (with credit grants)
   if (source === 'all' || source === 'access_request') {
-    const { data: approved } = await sb
+    const { data: approved, error: approvedErr } = await sb
       .from('access_requests')
       .select('id, user_id, organization_id, email, domain, company_name, credits_granted_amount, admin_note, reviewed_at')
       .eq('status', 'approved')
       .not('credits_granted_amount', 'is', null)
       .gt('credits_granted_amount', 0)
       .order('reviewed_at', { ascending: false });
+    if (approvedErr) return res.status(503).json({ error: 'activity_unavailable', retryable: true });
 
     for (const ar of approved ?? []) {
       results.push({

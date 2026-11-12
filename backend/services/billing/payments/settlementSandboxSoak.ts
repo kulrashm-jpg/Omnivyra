@@ -95,12 +95,19 @@ function reconcileDeps(
       events.add(k);
       return { duplicate: false };
     },
+    // Faithful to the port's CAS contract (CLASS 2): a fromStatus that no longer
+    // matches is state_changed, never an overwrite; a missing session too.
     applySettlementTransition: async (i) => {
       for (const [k, s] of sessions) {
         if (s.idempotencyKey === i.idempotencyKey) {
+          if (i.fromStatus !== undefined && (s.settlementStatus ?? null) !== i.fromStatus) {
+            return { applied: false as const, reason: 'state_changed' as const };
+          }
           sessions.set(k, { ...s, settlementStatus: i.settlementStatus });
+          return { applied: true as const };
         }
       }
+      return { applied: false as const, reason: 'state_changed' as const };
     },
   };
 }
@@ -125,7 +132,12 @@ function sweepDeps(
     },
     applySettlementTransition: async (i) => {
       const s = sessions.find((x) => x.idempotencyKey === i.idempotencyKey);
-      if (s) s.settlementStatus = i.settlementStatus;
+      if (!s) return { applied: false as const, reason: 'state_changed' as const };
+      if (i.fromStatus !== undefined && (s.settlementStatus ?? null) !== i.fromStatus) {
+        return { applied: false as const, reason: 'state_changed' as const };
+      }
+      s.settlementStatus = i.settlementStatus;
+      return { applied: true as const };
     },
   };
 }
