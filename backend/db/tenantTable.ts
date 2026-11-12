@@ -371,19 +371,46 @@ export async function tenantChildTableOf(table: TenantChildTableName, ctx: Tenan
  * (enforceCompanyAccessUniform / requireCapabilityUniform / requireTenantAccess) before any read or write of the row,
  * and only then build tenantContextFor(principal, owner). The tenant-seam gate allows this in pages/api and enforces
  * the order (rule R10). A NULL tenant, a missing or an unreadable row returns null: answer the uniform 404.
- * Direct tenant tables only (a child is authorized through its parent's owner).
+ * A CHILD table (55, e9 ruling) is followed up its registered parent chain to the root's company: the row's link
+ * column is read by id, then each hop by its parent key, up to MAX_HOPS. A missing / unreadable / NULL / non-uuid
+ * value at ANY hop, a non-unique parent key whose rows disagree (or exceed MAX_PARENT_ROWS), or a chain that does not
+ * reach a direct table -> null (the uniform 404). Never a guess.
  */
-export async function ownerCompanyOfRow(table: TenantTableName, id: string, reason: string): Promise<string | null> {
+export async function ownerCompanyOfRow(table: TenantTableName | TenantChildTableName, id: string, reason: string): Promise<string | null> {
   if (typeof reason !== 'string' || reason.trim().length < 3) {
     throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'ownerCompanyOfRow must state its reason');
   }
   if (typeof id !== 'string' || id.length === 0) return null;
-  const column = columnOf(table);
-  const { data, error } = await (ownedDbTable(table) as any).select(column).eq('id', id).maybeSingle();
-  if (error || !data) return null;
-  const tenant = (data as Record<string, unknown>)[column];
-  if (typeof tenant !== 'string' || !UUIDISH.test(tenant)) return null;
-  return tenant.toLowerCase();
+  let current: string = table;
+  let key = 'id';
+  let value = id;
+  for (let hop = 0; hop <= MAX_HOPS; hop++) {
+    const spec = childSpec(current);
+    if (!spec) {
+      if (!(current in TENANT_TABLES)) {
+        if (hop === 0) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${current} is not a registered tenant table`);
+        return null;
+      }
+      const column = columnOf(current as TenantTableName);
+      const { data, error } = await (ownedDbTable(current as TenantTableName) as any).select(column).eq(key, value).limit(MAX_PARENT_ROWS + 1);
+      if (error) return null;
+      const rows = (data ?? []) as Row[];
+      if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) return null;
+      const owners = new Set(rows.map((r) => (typeof r[column] === 'string' && UUIDISH.test(String(r[column])) ? String(r[column]).toLowerCase() : '')));
+      if (owners.size !== 1 || owners.has('')) return null;
+      return [...owners][0];
+    }
+    const { data, error } = await (ownedDbTable(current as TenantTableName) as any).select(spec.via).eq(key, value).limit(MAX_PARENT_ROWS + 1);
+    if (error) return null;
+    const rows = (data ?? []) as Row[];
+    if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) return null;
+    const links = new Set(rows.map((r) => (r[spec.via] === null || r[spec.via] === undefined ? '' : String(r[spec.via]))));
+    if (links.size !== 1 || links.has('')) return null;
+    value = [...links][0];
+    key = spec.parentKey ?? 'id';
+    current = spec.parent;
+  }
+  return null;
 }
 
 /**
