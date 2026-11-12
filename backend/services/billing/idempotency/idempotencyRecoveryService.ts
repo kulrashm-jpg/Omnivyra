@@ -379,6 +379,12 @@ export type SafeRetryResult =
  * is the operator's subsequent action (e.g. re-clicking Grant), which now
  * carries the fresh key.
  */
+// LOAD-BEARING GATES (05, 2026-11-12): the fresh key `retry:<key>:<uuid>`
+// bypasses the ledger's unique idempotency_key BY DESIGN (that is what makes a
+// sanctioned retry possible), so the ledger gives NO replay protection on this
+// path. The only protection is the gate sequence below - settlement refusal,
+// hold/drift refusal, the CAS supersede, then the settlement re-check. Keep
+// every one; do not assume a constraint is underneath the new key.
 export async function safeRetryOperation(args: SafeRetryArgs): Promise<SafeRetryResult> {
   if (!args.reason?.trim()) {
     return { ok: false, code: 'REASON_REQUIRED', message: 'reason required' };
@@ -468,7 +474,7 @@ export async function safeRetryOperation(args: SafeRetryArgs): Promise<SafeRetry
   }
 
   // CLASS 2: re-check settlement AFTER the supersede, BEFORE any fresh key is
-  // issued. The original can write its CONFIRM ledger row before it updates the
+  // RETURNED (it is computed above but withheld until every gate passes). The original can write its CONFIRM ledger row before it updates the
   // operation's status, so the CAS above can still win while money has moved;
   // a fresh key then would charge / grant a second time.
   const settledAfter = await settlementRefusal();
