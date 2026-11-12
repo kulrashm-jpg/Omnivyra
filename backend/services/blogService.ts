@@ -8,7 +8,7 @@ import { sanitizeContentBlocks } from '../../lib/security/htmlSanitizer';
 import { getIntegration, getActiveIntegration, type Integration } from './integrationService';
 import { trackEvent } from './telemetry/telemetryDispatcher';
 import { extractBlogContext } from '../../lib/blog/blockExtractor';
-import { createPublishingJob, executePublishingJob } from './publishingJobService';
+import { createPublishingJob, executePublishingJob, type PublishingJob } from './publishingJobService';
 import { isCmsProvider } from './cms/registry';
 import { captureBlogPublishSnapshotSafely } from './publishSnapshotCaptureService';
 
@@ -90,6 +90,42 @@ export interface PublishResult {
   external_id?: string;
   external_url?: string;
   hosted?:      boolean;
+  /** Another run is publishing this post right now: nothing was done, the blog row is untouched. */
+  in_progress?: boolean;
+  /** The post has an unresolved publishing issue (it may be live): not re-run, blog row untouched. */
+  needs_review?: boolean;
+}
+
+/**
+ * What Publish does with the job that holds the key, when it is NOT one to run (CLASS-2). The job
+ * is never reset: a processing job is another run's, a published one is live (its ids are reported
+ * so the blog row is repaired), a dead-lettered one goes through the confirmed retry only.
+ * Returns null when the job is waiting and this request should run it.
+ */
+export function publishOutcomeForExistingJob(job: PublishingJob): PublishResult | null {
+  switch (job.status) {
+    case 'queued':
+    case 'retrying':
+    case 'scheduled':
+      return null;
+    case 'published':
+      return {
+        success: true,
+        message: `Already published to ${job.provider}.`,
+        external_id: job.external_id ?? undefined,
+        external_url: job.external_url ?? undefined,
+      };
+    case 'processing':
+      return { success: false, in_progress: true, message: `This post is being published to ${job.provider} right now. Refresh in a minute to see the result.` };
+    case 'dead_letter':
+      return {
+        success: false,
+        needs_review: true,
+        message: 'This post has an unresolved publishing issue and may already be live. Open it from Publishing issues on the blog card.',
+      };
+    default:
+      return { success: false, needs_review: true, message: `This post's publishing job is ${job.status}; it was not re-run.` };
+  }
 }
 
 // ─── Slug generation ──────────────────────────────────────────────────────────
@@ -711,7 +747,10 @@ export async function publishBlogPost(
           },
           createdBy: blog.created_by,
         });
-        if (job.scheduled_for) {
+        const existingOutcome = publishOutcomeForExistingJob(job);
+        if (existingOutcome) {
+          result = existingOutcome;
+        } else if (job.scheduled_for) {
           result = {
             success: true,
             message: 'Publishing job scheduled. The worker will publish it at the scheduled time.',
@@ -719,13 +758,16 @@ export async function publishBlogPost(
             external_url: undefined,
           };
         } else {
-          const execution = await executePublishingJob(job.id, 'blog-publish-api');
-          result = {
-            success: execution.success,
-            message: execution.message,
-            external_id: execution.external_id,
-            external_url: execution.external_url,
-          };
+          // No fixed worker id: each request is its own claim identity (executePublishingJob mints one).
+          const execution = await executePublishingJob(job.id);
+          result = execution.notClaimed
+            ? { success: false, in_progress: true, message: 'This post is being published by another request right now. Refresh in a minute to see the result.' }
+            : {
+              success: execution.success,
+              message: execution.message,
+              external_id: execution.external_id,
+              external_url: execution.external_url,
+            };
         }
       }
     }
@@ -737,14 +779,27 @@ export async function publishBlogPost(
     };
   }
 
-  await ownedDbTable('blogs').update({
-    status:         result.success ? (blog.scheduled_publish_at ? 'scheduled' : 'published') : 'failed',
-    published_at:   result.success && !blog.scheduled_publish_at ? new Date().toISOString() : null,
-    external_id:    result.external_id ?? null,
-    external_url:   result.external_url ?? null,
-    integration_id: usedIntegrationId,
-    updated_at:     new Date().toISOString(),
-  }).eq('id', id).eq('company_id', companyId);
+  // A request that ran nothing (another run is publishing, or the job awaits review) leaves the blog
+  // row alone. A FAILURE never erases external_id / external_url / published_at: blanking a live
+  // post's id sent the next Publish down the create path - a DUPLICATE post (CLASS-2).
+  if (!result.in_progress && !result.needs_review) {
+    const blogPatch: Record<string, unknown> = result.success
+      ? {
+        status:         blog.scheduled_publish_at ? 'scheduled' : 'published',
+        published_at:   !blog.scheduled_publish_at ? new Date().toISOString() : null,
+        integration_id: usedIntegrationId,
+        ...(result.external_id ? { external_id: result.external_id } : {}),
+        ...(result.external_url ? { external_url: result.external_url } : {}),
+      }
+      : { status: 'failed' };
+    blogPatch.updated_at = new Date().toISOString();
+    const { error: blogWriteError } = await ownedDbTable('blogs').update(blogPatch).eq('id', id).eq('company_id', companyId);
+    if (blogWriteError) {
+      console.error('[blogService] publish result not recorded on the blog row', {
+        blog_id: id, success: result.success, external_id: result.external_id ?? null, error: blogWriteError.message,
+      });
+    }
+  }
 
   // Adoption telemetry (append-only, fail-soft): content actually published
   // (not merely scheduled). Deduped per blog id.

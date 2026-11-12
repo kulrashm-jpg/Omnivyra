@@ -136,12 +136,12 @@ describe('requeueDeadLetteredPublishingJob', () => {
 describe('the PAIR invariant: dead_letter_at is set exactly when status is dead_letter (05)', () => {
   const run = async (adapterResult: any) => {
     resetFakeDb({
-      publishing_jobs: [j('r', { status: 'processing', dead_letter_at: null, attempt_count: 0, max_attempts: 3 })],
+      publishing_jobs: [j('r', { status: 'processing', locked_by: 'w', locked_at: '2026-11-12T09:59:00.000Z', dead_letter_at: null, attempt_count: 0, max_attempts: 3 })],
       publishing_attempts: [], blogs: [{ id: 'b1', company_id: CO, title: 't' }],
       company_integrations: [{ id: 'int1', company_id: CO, website_connection_id: 'c1' }], integration_logs: [],
     });
     mockAdapter.impl = async () => adapterResult;
-    await executeClaimedPublishingJob({ ...j('r', { status: 'processing', attempt_count: 0, max_attempts: 3 }), connection_id: 'c1', request_payload: {} } as any, 'w');
+    await executeClaimedPublishingJob({ ...j('r', { status: 'processing', locked_by: 'w', locked_at: '2026-11-12T09:59:00.000Z', attempt_count: 0, max_attempts: 3 }), connection_id: 'c1', request_payload: {} } as any, 'w');
     return jobRow('r');
   };
   it.each([

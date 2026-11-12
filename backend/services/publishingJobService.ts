@@ -6,6 +6,7 @@ import type { Blog } from './blogService';
 import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsService';
 import { runWorkerSnapshotShadowHook } from './workerSnapshotShadowHook';
 import { recordAuditEvent } from './auditEventService';
+import { randomUUID } from 'crypto';
 
 export type PublishingJobStatus = 'queued' | 'processing' | 'published' | 'failed' | 'retrying' | 'cancelled' | 'dead_letter' | 'scheduled';
 export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown' | 'uncertain' | 'unsupported';
@@ -99,28 +100,87 @@ export interface WorkerRunResult {
   deadLettered: number;
 }
 
+/**
+ * An existing job with the same key may be RE-ARMED (its payload and timing replaced, and run
+ * again) only from these states - nothing of it is in flight and nothing of it is live. `failed`
+ * is terminal-unsupported (no call was made); `cancelled` never ran.
+ */
+const REARMABLE_STATUSES: readonly PublishingJobStatus[] = ['queued', 'retrying', 'scheduled', 'failed', 'cancelled'];
+
+/**
+ * Create the job for (company, idempotency key), or return the one that already holds the key.
+ *
+ * CLASS-2 (e9 sweep, 2026-11-12): this was an upsert with ON CONFLICT DO UPDATE, which reset ANY
+ * existing job to queued - a second Publish click (or a second tab) during a live run reset the
+ * `processing` job and ran it again (a DUPLICATE post), and re-armed a `published` job or an
+ * outcome-unknown `dead_letter` one past the confirm gate. Now: insert ON CONFLICT DO NOTHING (the
+ * unique key publishing_jobs_idempotency_unique is the constraint); an existing job is re-armed
+ * only from REARMABLE_STATUSES, by a compare-and-set on the status read with the row count
+ * checked. A job that is processing / published / dead_letter is returned UNTOUCHED and the
+ * caller decides from its status.
+ */
 export async function createPublishingJob(input: CreatePublishingJobInput): Promise<PublishingJob> {
-  const runAfter = input.scheduledFor ?? new Date().toISOString();
-  const { data, error } = await ownedDbTable('publishing_jobs')
+  const now = new Date().toISOString();
+  const fields = {
+    website_id: input.websiteId ?? null,
+    connection_id: input.connectionId ?? null,
+    blog_id: input.blogId ?? null,
+    provider: input.provider,
+    job_type: input.jobType ?? (input.scheduledFor ? 'schedule_post' : 'publish_post'),
+    status: (input.scheduledFor ? 'scheduled' : 'queued') as PublishingJobStatus,
+    scheduled_for: input.scheduledFor ?? null,
+    run_after: input.scheduledFor ?? now,
+    request_payload: input.requestPayload ?? {},
+    updated_at: now,
+  };
+  const { data: inserted, error } = await ownedDbTable('publishing_jobs')
     .upsert({
+      ...fields,
       company_id: input.companyId,
-      website_id: input.websiteId ?? null,
-      connection_id: input.connectionId ?? null,
-      blog_id: input.blogId ?? null,
-      provider: input.provider,
-      job_type: input.jobType ?? (input.scheduledFor ? 'schedule_post' : 'publish_post'),
-      status: input.scheduledFor ? 'scheduled' : 'queued',
       idempotency_key: input.idempotencyKey,
-      scheduled_for: input.scheduledFor ?? null,
-      run_after: runAfter,
-      request_payload: input.requestPayload ?? {},
       created_by: input.createdBy ?? null,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'company_id,idempotency_key' })
-    .select('*')
-    .single();
+    }, { onConflict: 'company_id,idempotency_key', ignoreDuplicates: true })
+    .select('*');
   if (error) throw new Error(error.message);
+  if (Array.isArray(inserted) && inserted.length > 0) return inserted[0] as PublishingJob;
+
+  const existing = await readJobByKey(input.companyId, input.idempotencyKey);
+  if (!REARMABLE_STATUSES.includes(existing.status)) return existing;
+  const { data: rearmed, error: rearmError } = await ownedDbTable('publishing_jobs')
+    .update({
+      ...fields,
+      next_retry_at: null, dead_letter_at: null, failure_category: null, last_error: null,
+      locked_by: null, locked_at: null, lock_expires_at: null,
+      max_attempts: Math.max(Number(existing.max_attempts) || 0, (Number(existing.attempt_count) || 0) + 1),
+    })
+    .eq('id', existing.id)
+    .eq('status', existing.status)
+    .select('*');
+  if (rearmError) throw new Error(`Publishing job not re-armed: ${rearmError.message}`);
+  if (Array.isArray(rearmed) && rearmed.length === 1) return rearmed[0] as PublishingJob;
+  // Another request moved it between the read and the write: return what it is now, untouched.
+  return readJobByKey(input.companyId, input.idempotencyKey);
+}
+
+async function readJobByKey(companyId: string, idempotencyKey: string): Promise<PublishingJob> {
+  const { data, error } = await ownedDbTable('publishing_jobs')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('idempotency_key', idempotencyKey)
+    .maybeSingle();
+  if (error) throw new Error(`Publishing job unreadable: ${error.message}`);
+  if (!data) throw new Error('Publishing job neither created nor found by its idempotency key');
   return data as PublishingJob;
+}
+
+/**
+ * The claim a run holds: still `processing` AND the exact lock it took (locked_by + locked_at).
+ * Every write that acts on the claim filters on it, so a run whose lock expired - and whose job was
+ * recovered and claimed again - cannot write over the newer run (CLASS-2). A worker process reuses
+ * one locked_by for every claim, so locked_at is what tells two claims apart.
+ */
+function whereClaimHeld<Q>(query: Q, job: PublishingJob): Q {
+  return (query as any).eq('status', 'processing').eq('locked_by', job.locked_by ?? null).eq('locked_at', job.locked_at ?? null);
 }
 
 export async function claimDuePublishingJobs(input: {
@@ -160,7 +220,15 @@ export async function claimDuePublishingJobs(input: {
   return claimed;
 }
 
-export async function executePublishingJob(jobId: string, workerId = 'inline-worker'): Promise<{ success: boolean; message: string; external_id?: string; external_url?: string }> {
+export type PublishingExecution = { success: boolean; message: string; external_id?: string; external_url?: string; notClaimed?: true };
+
+/**
+ * Run ONE job now (Publish now). Claims only a job that is waiting (queued / retrying / scheduled):
+ * a job already `processing` belongs to another run - claiming it too called the CMS twice
+ * (CLASS-2). Not claimable -> { notClaimed: true }, nothing written. The default worker id is
+ * unique per call, so two inline runs never share a claim identity.
+ */
+export async function executePublishingJob(jobId: string, workerId = `inline-worker:${randomUUID()}`): Promise<PublishingExecution> {
   const claimed = await ownedDbTable('publishing_jobs')
     .update({
       status: 'processing',
@@ -170,14 +238,15 @@ export async function executePublishingJob(jobId: string, workerId = 'inline-wor
       updated_at: new Date().toISOString(),
     })
     .eq('id', jobId)
-    .in('status', ['queued', 'retrying', 'scheduled', 'processing'])
+    .in('status', ['queued', 'retrying', 'scheduled'])
     .select('*')
     .maybeSingle();
-  if (claimed.error || !claimed.data) throw new Error(claimed.error?.message || 'Publishing job not found or not claimable');
+  if (claimed.error) throw new Error(`Publishing job not claimed: ${claimed.error.message}`);
+  if (!claimed.data) return { success: false, notClaimed: true, message: 'This post is already being published by another run.' };
   return executeClaimedPublishingJob(claimed.data as PublishingJob, workerId);
 }
 
-export async function executeClaimedPublishingJob(job: PublishingJob, workerId: string): Promise<{ success: boolean; message: string; external_id?: string; external_url?: string }> {
+export async function executeClaimedPublishingJob(job: PublishingJob, workerId: string): Promise<PublishingExecution> {
   if (!isCmsProvider(job.provider)) {
     await markJobFailure(job, `Unsupported CMS provider: ${job.provider}`, 'validation');
     return { success: false, message: `Unsupported CMS provider: ${job.provider}` };
@@ -188,6 +257,21 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
   // Set IMMEDIATELY before each adapter call: the only fact that separates "we never asked" (safe to
   // retry) from "we asked and do not know" (may be live).
   let providerCallStarted = false;
+
+  // The persisted attempt_count is what bounds retries (max_attempts): a silent failure here let
+  // a job retry without end. It is also the CLAIM CHECK, written FIRST and fenced on the claim: a
+  // run that lost its claim (lock expired, job recovered and claimed again) stops here, before an
+  // attempt row or a provider call - two runs never share an attempt number (CLASS-2).
+  const { data: counted, error: countError } = await whereClaimHeld(ownedDbTable('publishing_jobs')
+    .update({ attempt_count: attemptNumber, updated_at: new Date().toISOString() })
+    .eq('id', job.id), job)
+    .select('id');
+  if (countError) throw new Error(`Publishing attempt not recorded: ${countError.message}`);
+  if (!Array.isArray(counted) || counted.length === 0) {
+    console.warn('[publishingJob] claim lost before the provider call; this run stops (nothing sent)', { job_id: job.id, worker_id: workerId });
+    return { success: false, notClaimed: true, message: 'This publishing job is now held by another run.' };
+  }
+
   const { data: attempt, error: attemptError } = await ownedDbTable('publishing_attempts')
     .insert({
       job_id: job.id,
@@ -199,13 +283,6 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
     .select('*')
     .single();
   if (attemptError) throw new Error(attemptError.message);
-
-  // The persisted attempt_count is what bounds retries (max_attempts): a silent failure here let
-  // a job retry without end. Thrown BEFORE the provider call, so nothing is published.
-  const { error: countError } = await ownedDbTable('publishing_jobs')
-    .update({ attempt_count: attemptNumber, updated_at: new Date().toISOString() })
-    .eq('id', job.id);
-  if (countError) throw new Error(`Publishing attempt not recorded: ${countError.message}`);
 
   try {
     const blog = await loadPublishingBlog(job);
@@ -444,7 +521,7 @@ export async function requeueDeadLetteredPublishingJob(input: {
     };
   }
   const now = new Date().toISOString();
-  const { data: moved, error: moveError } = await ownedDbTable('publishing_jobs')
+  const requeue = ownedDbTable('publishing_jobs')
     .update({
       status: 'queued', run_after: now, next_retry_at: null, dead_letter_at: null, failure_category: null,
       last_error: null, locked_by: null, locked_at: null, lock_expires_at: null,
@@ -457,6 +534,12 @@ export async function requeueDeadLetteredPublishingJob(input: {
     .eq('id', input.jobId)
     .eq('company_id', input.companyId)
     .eq('status', 'dead_letter')
+    // Pinned to the dead letter that was READ (and confirmed): one that cycled to a newer,
+    // outcome-unknown dead letter in between is not re-queued on the old confirmation (CLASS-2).
+    .eq('dead_letter_at', j.dead_letter_at);
+  const { data: moved, error: moveError } = await (j.failure_category == null
+    ? requeue.is('failure_category', null)
+    : requeue.eq('failure_category', j.failure_category))
     .select('id');
   if (moveError) throw new Error(`Publishing job not re-queued: ${moveError.message}`);
   if (!Array.isArray(moved) || moved.length === 0) {
@@ -522,7 +605,7 @@ export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): P
   const now = new Date().toISOString();
   // best-effort: an unreadable stale list only delays recovery to the next tick; nothing is re-queued without it
   const { data, error: staleError } = await ownedDbTable('publishing_jobs')
-    .select('id, attempt_count')
+    .select('id, attempt_count, locked_by')
     .eq('status', 'processing')
     .lt('lock_expires_at', now)
     .limit(50);
@@ -560,14 +643,22 @@ export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): P
         last_error: `Recovered stale processing job by ${workerId}` });
     }
     // best-effort: a failed recovery write leaves the job processing; the next tick retries the same decision
-    const { error: recoverError } = await ownedDbTable('publishing_jobs')
+    // Pinned to the STALE claim that was read (its lock still expired, the same holder): a job
+    // finished and claimed again in between holds a fresh lock, and this decision - made from the
+    // old run's attempt - must not land on the new run (CLASS-2). Only a moved row counts.
+    const holder = (job as { locked_by?: string | null }).locked_by ?? null;
+    const recover = ownedDbTable('publishing_jobs')
       .update(patch)
       .eq('id', job.id)
-      .eq('status', 'processing');
+      .eq('status', 'processing')
+      .lt('lock_expires_at', now);
+    const { data: moved, error: recoverError } = await (holder === null ? recover.is('locked_by', null) : recover.eq('locked_by', holder))
+      .select('id');
     if (recoverError) {
       console.warn('[publishingJob] stale job recovery not written; retried next tick', { job_id: job.id, error: recoverError.message });
       continue;
     }
+    if (!Array.isArray(moved) || moved.length === 0) continue; // re-claimed or finished since the read
     recovered += 1;
   }
   return recovered;
@@ -601,7 +692,7 @@ async function markJobPublished(job: PublishingJob, result: { providerResponse?:
   const response = (result.providerResponse ?? {}) as Record<string, unknown>;
   // The post is LIVE. If this write fails the job stays `processing`; stale recovery then reads the
   // 'succeeded' attempt and marks it published - it is never republished. Logged at ERROR.
-  const { error: publishedError } = await ownedDbTable('publishing_jobs')
+  const { data: marked, error: publishedError } = await whereClaimHeld(ownedDbTable('publishing_jobs')
     .update({
       status: 'published',
       external_id: result.externalId ?? null,
@@ -617,10 +708,17 @@ async function markJobPublished(job: PublishingJob, result: { providerResponse?:
       completed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .eq('id', job.id);
+    .eq('id', job.id), job)
+    .select('id');
   if (publishedError) {
     console.error('[publishingJob] PUBLISHED but the job was not marked published; stale recovery will repair it from the succeeded attempt (no republish)', {
       job_id: job.id, external_id: result.externalId ?? null, external_url: result.externalUrl ?? null, error: publishedError.message,
+    });
+  } else if (!Array.isArray(marked) || marked.length === 0) {
+    // This run's lock expired and another run holds the job now. The post IS live: the evidence
+    // is logged, and the succeeded attempt row records it; the newer run's state is not overwritten.
+    console.error('[publishingJob] PUBLISHED after this run lost its claim; the job is held by another run - verify for a duplicate', {
+      job_id: job.id, external_id: result.externalId ?? null, external_url: result.externalUrl ?? null,
     });
   }
 
@@ -649,7 +747,7 @@ async function markJobFailure(
   const nextRetryAt = exhausted ? null : new Date(Date.now() + backoffMs(attemptNumber)).toISOString();
   // Not silent: an unwritten failure leaves the job `processing`; stale recovery then reads the
   // failed attempt and re-queues it (the retry bound is the persisted attempt_count).
-  const { error: failureWriteError } = await ownedDbTable('publishing_jobs')
+  const { data: failed, error: failureWriteError } = await whereClaimHeld(ownedDbTable('publishing_jobs')
     .update({
       status,
       provider_response: providerResponse ?? {},
@@ -665,9 +763,14 @@ async function markJobFailure(
       metrics: { duration_ms: duration ?? null, attempts: attemptNumber, failure_category: category },
       updated_at: new Date().toISOString(),
     })
-    .eq('id', job.id);
+    .eq('id', job.id), job)
+    .select('id');
   if (failureWriteError) {
     console.error('[publishingJob] job failure not recorded; stale recovery will re-decide it', { job_id: job.id, status, error: failureWriteError.message });
+  } else if (!Array.isArray(failed) || failed.length === 0) {
+    // A late outcome from a run that lost its claim: writing `retrying` here re-armed a job another
+    // run was publishing (CLASS-2). Not written; the failed attempt row keeps the evidence.
+    console.warn('[publishingJob] failure after this run lost its claim; not written over the newer run', { job_id: job.id, status, category });
   }
 
   await logPublishingEvent(job, exhausted ? 'publish_dead_lettered' : 'publish_retrying', 'error', message, {

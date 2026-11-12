@@ -19,7 +19,8 @@ import { fakeDb, resetFakeDb, type Row } from '../helpers/fakeWhatsappDb';
 
 const job = (over: Row = {}): any => ({
   id: 'j1', company_id: 'co-a', website_id: 'w1', connection_id: 'c1', provider: 'wordpress', blog_id: 'b1',
-  job_type: 'publish_post', status: 'processing', attempt_count: 0, max_attempts: 3, request_payload: {}, ...over,
+  // A REAL claim: the run's lock identity (the claim fence filters on it).
+  job_type: 'publish_post', status: 'processing', locked_by: 'w', locked_at: '2026-11-12T09:59:00.000Z', attempt_count: 0, max_attempts: 3, request_payload: {}, ...over,
 });
 const seed = (over: Row = {}) => resetFakeDb({
   publishing_jobs: [job(over)],
