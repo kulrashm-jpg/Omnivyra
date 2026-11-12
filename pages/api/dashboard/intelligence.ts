@@ -7,12 +7,11 @@ import { composePerformanceIntelligenceReport } from '../../../backend/services/
 import { getEngagementSignalsDashboardData } from '../../../backend/services/engagementSignalIntelligenceService';
 import { generateEngagementSignalInsights } from '../../../backend/services/behaviorInsightService';
 
+// DEAD-ENTRY FIX (e9 2026-11-12): canonical names only - getUserRole rewrites ADMIN/CONTENT_MANAGER/CONTENT_PLANNER/CONTENT_ENGAGER/VIEWER, so those entries never matched.
 const ALLOWED_ROLES = [
   Role.COMPANY_ADMIN,
-  Role.ADMIN,
   Role.SUPER_ADMIN,
   Role.CONTENT_CREATOR,
-  Role.CONTENT_PLANNER,
 ];
 
 type IntelligenceDashboardResponse =

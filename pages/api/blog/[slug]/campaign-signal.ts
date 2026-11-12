@@ -186,4 +186,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]), { route: '/api/blog/:slug/campaign-signal' });
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.COMPANY_ADMIN]), { route: '/api/blog/:slug/campaign-signal' });

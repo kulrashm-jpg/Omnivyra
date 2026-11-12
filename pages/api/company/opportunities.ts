@@ -12,12 +12,11 @@ import { getDecisionReportView } from '../../../backend/services/decisionReportS
 import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 
+// DEAD-ENTRY FIX (e9 2026-11-12): canonical names only - getUserRole rewrites ADMIN/CONTENT_MANAGER/CONTENT_PLANNER/CONTENT_ENGAGER/VIEWER, so those entries never matched.
 const ALLOWED_ROLES = [
   Role.COMPANY_ADMIN,
-  Role.ADMIN,
   Role.SUPER_ADMIN,
   Role.CONTENT_CREATOR,
-  Role.CONTENT_PLANNER,
 ];
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

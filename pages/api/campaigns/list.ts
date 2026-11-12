@@ -79,16 +79,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'NOT_ALLOWED' });
     }
 
+    // DEAD-ENTRY FIX (e9 2026-11-12): canonical names only - getUserRole rewrites ADMIN/CONTENT_MANAGER/CONTENT_PLANNER/CONTENT_ENGAGER/VIEWER, so those entries never matched.
     const access = await requireCompanyRole(req, res, companyId, [
       Role.SUPER_ADMIN,
-      Role.ADMIN,
       Role.COMPANY_ADMIN,
-      Role.CONTENT_MANAGER,
-      Role.CONTENT_PLANNER,
       Role.CONTENT_CREATOR,
-      Role.CONTENT_ENGAGER,
-      Role.VIEWER,
-      Role.VIEW_ONLY, // normalized form of VIEWER / CONTENT_ENGAGER
+      Role.VIEW_ONLY,
     ]);
     if (!access) return;
     // Get all campaigns with simplified fields

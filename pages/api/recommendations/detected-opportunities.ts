@@ -444,9 +444,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
+// DEAD-ENTRY FIX (e9 2026-11-12): canonical names only - getUserRole rewrites ADMIN/CONTENT_MANAGER/CONTENT_PLANNER/CONTENT_ENGAGER/VIEWER, so those entries never matched.
 export default withRBAC(handler, [
   Role.COMPANY_ADMIN,
   Role.CONTENT_CREATOR,
-  Role.CONTENT_MANAGER,
   Role.SUPER_ADMIN,
 ]);

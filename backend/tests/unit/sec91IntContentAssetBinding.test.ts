@@ -77,12 +77,32 @@ describe('SEC91-W2G-N1 — content approve/reject bind the asset to the authoriz
   // list [SUPER_ADMIN, ADMIN, CONTENT_MANAGER], so on this tree only platform
   // super admins reach these handlers. N1 is therefore latent today and would
   // open the moment that list is corrected; the binding makes it safe either way.
-  it('precondition (pre-existing role list): company roles are refused by withRBAC; platform super admin reaches the handler', async () => {
-    for (const who of ['A', 'LEGACY_ADMIN', 'LEGACY_MANAGER', 'CREATOR', 'VIEWER'] as W2GPrincipal[]) {
+  //
+  // DEAD-ENTRY FIX (e9, 2026-11-12): the list is now canonical [SUPER_ADMIN,
+  // COMPANY_ADMIN]. Company admins (incl. a legacy 'ADMIN' row, which
+  // normalises to COMPANY_ADMIN) now reach the handler, so N1's binding is LIVE
+  // for them - pinned below. CONTENT_MANAGER joins with the roles step; until
+  // then it normalises to CONTENT_CREATOR and stays refused.
+  it('role list: company admins (incl. legacy ADMIN) reach the handler; manager/creator/viewer are refused', async () => {
+    for (const who of ['LEGACY_MANAGER', 'CREATOR', 'VIEWER'] as W2GPrincipal[]) {
       expect((await post(approve, who, { companyId: CO_A, assetId: ASSET_A })).status).toBe(403);
     }
     expect(mockApprove).not.toHaveBeenCalled();
-    expect((await post(approve, 'SUPER', { companyId: CO_A, assetId: ASSET_A })).status).toBe(200);
+    for (const who of ['A', 'LEGACY_ADMIN', 'SUPER'] as W2GPrincipal[]) {
+      expect((await post(approve, who, { companyId: CO_A, assetId: ASSET_A })).status).toBe(200);
+    }
+    expect(mockApprove).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['approve', () => approve, () => mockApprove, {}],
+    ['reject', () => reject, () => mockReject, { reason: 'Needs revisions' }],
+  ])('CRITICAL (%s, now live for company admins): admin of A naming A with B’s asset → 403, B untouched', async (_n, h, sink, extra) => {
+    for (const who of ['A', 'LEGACY_ADMIN'] as W2GPrincipal[]) {
+      expect((await post(h(), who, { companyId: CO_A, assetId: ASSET_B, ...extra })).status).toBe(403);
+      expect((await post(h(), who, { companyId: CO_B, assetId: ASSET_B, ...extra })).status).toBe(403); // not a member of B
+    }
+    expect(sink()).not.toHaveBeenCalled();
   });
 
   it.each([

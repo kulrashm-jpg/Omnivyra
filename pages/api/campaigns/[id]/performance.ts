@@ -58,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     req,
     res,
     companyId: campaignCompanyId,
-    allowedRoles: [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN],
+    allowedRoles: [Role.SUPER_ADMIN, Role.COMPANY_ADMIN],
   });
   if (!access) return;
 
