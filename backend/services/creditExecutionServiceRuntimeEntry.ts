@@ -525,6 +525,10 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
     // fulfillment failure on a purchase whose credits WERE granted. It must also
     // NAME the idempotency key: a unique violation on any other constraint is a real
     // failure, not "already granted".
+    // The DETAILS half is LOAD-BEARING (05): idempotency_key carries three unique
+    // objects, and a violation reported against idx_credit_txn_idempotency names an
+    // index WITHOUT 'idempotency_key' in its message - only PostgREST's details
+    // ('Key (idempotency_key)=(...) already exists.') does. Never trim this to msg.
     const code = (error as any).code;
     const named = /idempotency_key/.test(`${msg} ${(error as any).details ?? ''}`);
     if (code === '23505' && named) {
