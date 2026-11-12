@@ -169,21 +169,39 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
      * depth so the write cannot address a foreign row even if that check were
      * ever bypassed or reordered.
      */
+    /*
+     * unread-error pkg 2: both results were unchecked (PostgREST returns an error, never throws), so a
+     * failed read or write looked like "nothing to advance". The plan is already built and saved, and a
+     * non-force retry answers from the cache WITHOUT reaching this block, so a 503 would ask for a retry
+     * that cannot help. The plan is returned, and the response says truthfully that the stage did not
+     * move (stage_advance), logged at ERROR. The version stage is synced only after a successful write.
+     */
+    let stageAdvance: 'advanced' | 'unchanged' | 'unreadable' | 'write_failed' = 'unchanged';
     if (campaignId) {
-      const { data: camp } = await supabase
+      const { data: camp, error: stageReadError } = await supabase
         .from('campaigns')
         .select('current_stage')
         .eq('id', campaignId)
         .eq('company_id', operativeCompanyId)
         .single();
+      if (stageReadError) {
+        stageAdvance = 'unreadable';
+        console.error('[platform-plan] plan saved; campaign stage unreadable, not advanced', { campaignId, message: stageReadError.message });
+      }
       const stage = (camp as { current_stage?: string })?.current_stage;
-      if (stage && stage !== 'schedule') {
-        await supabase
+      if (!stageReadError && stage && stage !== 'schedule') {
+        const { error: stageWriteError } = await supabase
           .from('campaigns')
           .update({ current_stage: 'schedule', updated_at: new Date().toISOString() })
           .eq('id', campaignId)
           .eq('company_id', operativeCompanyId);
-        void syncCampaignVersionStage(campaignId, 'schedule', operativeCompanyId).catch(() => {});
+        if (stageWriteError) {
+          stageAdvance = 'write_failed';
+          console.error('[platform-plan] plan saved; campaign stage write failed, not advanced', { campaignId, message: stageWriteError.message });
+        } else {
+          stageAdvance = 'advanced';
+          void syncCampaignVersionStage(campaignId, 'schedule', operativeCompanyId).catch(() => {});
+        }
       }
     }
 
@@ -198,7 +216,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       contentAssets: await listAssetsWithLatestContent({ campaignId }),
     });
 
-    return res.status(200).json({ plan, healthReport });
+    return res.status(200).json({ plan, healthReport, stage_advance: stageAdvance });
   } catch (error: any) {
     if (error instanceof PrePlanningRequiredError || error?.code === 'PRE_PLANNING_REQUIRED') {
       return res.status(412).json({ code: 'PRE_PLANNING_REQUIRED', message: error?.message });
