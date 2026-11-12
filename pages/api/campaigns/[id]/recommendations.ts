@@ -1,26 +1,13 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../../backend/db/campaignStore';
-import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 import {
   generateCampaignRecommendations,
   fetchRecommendationWeeks,
 } from '../../../../backend/services/campaignRecommendationExtensionService';
 import { formatForUserOutput } from '../../../../backend/utils/refineUserFacingResponse';
-
-async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data: ver } = await supabase
-    .from('campaign_versions')
-    .select('company_id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-  if (ver?.company_id) return ver.company_id as string;
-  const camp = await getCampaignById<{ company_id?: string }>(campaignId, 'company_id');
-  return camp?.company_id ? (camp.company_id as string) : null;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -29,22 +16,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const campaignId = id;
 
-  const companyId =
-    (await getCompanyId(campaignId)) ??
-    (typeof req.body?.companyId === 'string' ? req.body.companyId : null) ??
-    (typeof req.query.companyId === 'string' ? req.query.companyId : null);
-  if (!companyId) {
-    return res.status(400).json({ error: 'Campaign must be linked to a company' });
-  }
-
-  const access = await enforceCompanyAccess({
-    req,
-    res,
-    companyId,
-    campaignId,
-    requireCampaignId: false,
-  });
+  // TENANT (e9, BLOCKING): the company came from campaign_versions / campaigns (reads unchecked) and,
+  // failing those, from the request BODY or QUERY, and the caller was authorized against it without
+  // binding the campaign (requireCampaignId:false). POST then wrote recommendation weeks for the
+  // campaign, so a member of A could target B's company-less campaign with their own company. The
+  // campaign is now bound by requireCampaignAccess (company resolved server-side, membership proven,
+  // lookup failure refused); a body/query companyId is only a claim that must MATCH.
+  const access = await requireCampaignAccess(req, res, campaignId);
   if (!access) return;
+  const claimedCompanyId =
+    typeof req.body?.companyId === 'string' ? req.body.companyId.trim()
+      : typeof req.query.companyId === 'string' ? req.query.companyId.trim() : '';
+  if (claimedCompanyId && claimedCompanyId !== access.companyId) {
+    return res.status(403).json({ code: 'CAMPAIGN_NOT_IN_COMPANY', error: 'Campaign does not belong to the given company' });
+  }
+  const companyId = access.companyId;
 
   if (req.method === 'GET') {
     try {
