@@ -37,6 +37,14 @@ type Options = {
    * handler's full audited check (capability, step-up, device) afterwards.
    */
   authorize?: (req: NextApiRequest) => Promise<boolean>;
+  /**
+   * Answers of THIS route that depend on state outside the request (a switch, an account's
+   * connection, a transient read), so a resubmit of the same key must re-run the handler, not
+   * replay them. Left `failed`, exactly like UNCACHED_DENIAL_STATUSES (which apply to every
+   * route). E.g. the WhatsApp broadcast create's 409 "sending is stopped": cached, lifting the
+   * stop never let the same form through (05, CLASS-2 A16).
+   */
+  stateDependentStatuses?: readonly number[];
 };
 
 /**
@@ -240,6 +248,7 @@ export function withIdempotency(
   const methods = new Set((options.methods ?? ['POST', 'PUT', 'PATCH', 'DELETE']).map((m) => m.toUpperCase()));
   const scope = options.scope ?? 'default';
   const staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
+  const stateDependent: ReadonlySet<number> = new Set(options.stateDependentStatuses ?? []);
 
   return async (req: NextApiRequest, res: NextApiResponse) => {
     const method = (req.method ?? 'GET').toUpperCase();
@@ -431,7 +440,7 @@ export function withIdempotency(
 
       (res as any).json = async (body: unknown) => {
         capturedBody = body;
-        const denial = UNCACHED_DENIAL_STATUSES.has(statusCode);
+        const denial = UNCACHED_DENIAL_STATUSES.has(statusCode) || stateDependent.has(statusCode);
         await markRecord(scope, callerId, idempotencyKey, {
           status: statusCode >= 500 || denial ? 'failed' : 'completed',
           response_status: statusCode,

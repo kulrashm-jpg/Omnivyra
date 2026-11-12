@@ -10,7 +10,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * enqueue:true used to create TWO broadcasts and message every contact twice. withIdempotency
  * reserves the key (api_idempotency_keys, unique) before the handler runs, so the second request
  * replays the first's answer or is refused while it runs. The page mints one key per form
- * submission (useIdempotencyKey). GET is unaffected.
+ * submission (useIdempotencyKey), DERIVED FROM THE FORM on purpose: a cached answer to a form
+ * (a 400 for a missing field) replays only for that exact form, and a corrected form is a new key.
+ * Refusals that depend on state instead are never cached (stateDependentStatuses). GET is unaffected.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -155,4 +157,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(withIdempotency(handler, { methods: ['POST'], scope: 'whatsapp-broadcast-create' }), { route: '/api/whatsapp/broadcasts' });
+// 404 / 409 / 503 are the sender-account refusals (senderAccountRefusalResponse): not found, sending
+// stopped / shared number / disconnected, lookup unreadable. They depend on state, not on the
+// form, so a resubmit after the condition is fixed must RUN, not replay the refusal (05).
+export default __createApiRoute(withIdempotency(handler, {
+  methods: ['POST'],
+  scope: 'whatsapp-broadcast-create',
+  stateDependentStatuses: [404, 409, 503],
+}), { route: '/api/whatsapp/broadcasts' });

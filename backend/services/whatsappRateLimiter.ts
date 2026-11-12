@@ -83,6 +83,11 @@ async function redisDecrBy(key: string, count: number): Promise<void> {
   }
 }
 
+/**
+ * The TTL is housekeeping, not the reset: the key carries the UTC DATE (wa:usage:<id>:YYYY-MM-DD),
+ * so a new day is a new key whatever happens to the TTL. A failed or skipped expire leaks one key
+ * per sender per day; it never throttles the next day (05).
+ */
 async function redisIncrBy(key: string, count: number, ttlSeconds: number): Promise<number | null> {
   const redis = await getRedis();
   if (!redis || !redisUsable(redis)) return null;
