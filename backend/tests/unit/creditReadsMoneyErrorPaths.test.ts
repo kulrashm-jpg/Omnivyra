@@ -60,7 +60,7 @@ it('getWalletSnapshot control: a genuinely absent wallet is still null', async (
 
 it('revokeCredit: wallet read error -> WALLET_READ_FAILED, nothing revoked (not NO_WALLET)', async () => {
   mockScript.organization_credits = DOWN;
-  const r = await revokeCredit({ orgId: 'o1', category: 'free', amount: 10, reason: 'test', performedBy: 'admin' } as never);
+  const r = await revokeCredit({ orgId: 'o1', category: 'free', amount: 10, reason: 'test', performedBy: 'admin', requestIdempotencyKey: 'req-1' } as never);
   expect(r).toMatchObject({ success: false, reason: 'WALLET_READ_FAILED' });
   expect(mockRpc).toEqual([]);
 });
