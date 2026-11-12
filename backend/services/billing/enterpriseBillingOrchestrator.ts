@@ -228,45 +228,72 @@ export async function openBillingOperation(args: {
   amountEstimated: number | null;
   metadata:        Record<string, unknown>;
 }): Promise<string> {
-  // billing_operations.idempotency_key UNIQUE — second insert returns the
-  // existing row via the ON CONFLICT path below.
+  // INSERT-OR-READ, never upsert (BLOCKING money fix, e1 2026-11-12; 6f finding, reproduced on the real schema).
+  // The former `.upsert(..., { onConflict: 'idempotency_key', ignoreDuplicates: false })` compiled to ON CONFLICT
+  // DO UPDATE, so RE-OPENING a key rewrote the existing row: a new id, organization_id moved to the caller's
+  // organization, a confirmed / released status reset to 'initiated', and metadata (where aiExecutionResultStore
+  // keeps ai_result) wiped. Every queue / cron retry re-opens its key; AI keys carry no company, so the same user +
+  // action + reference in a SECOND company moved the first company's row (and its stored AI result) to it.
+  // Now: a plain INSERT; on a duplicate key the EXISTING row is returned untouched - but only when it belongs to
+  // this organization. A key held by another organization is refused (BillingOperationKeyConflictError).
   const id = randomUUID();
   const { data, error } = await supabase
     .from('billing_operations')
-    .upsert(
-      {
-        id,
-        correlation_id:   args.correlationId,
-        module:           args.module,
-        action:           args.action,
-        organization_id:  args.organizationId,
-        actor_user_id:    args.actorUserId,
-        idempotency_key:  args.idempotencyKey,
-        amount_estimated: args.amountEstimated,
-        status:           'initiated',
-        metadata:         args.metadata,
-      },
-      { onConflict: 'idempotency_key', ignoreDuplicates: false },
-    )
+    .insert({
+      id,
+      correlation_id:   args.correlationId,
+      module:           args.module,
+      action:           args.action,
+      organization_id:  args.organizationId,
+      actor_user_id:    args.actorUserId,
+      idempotency_key:  args.idempotencyKey,
+      amount_estimated: args.amountEstimated,
+      status:           'initiated',
+      metadata:         args.metadata,
+    })
     .select('id')
     .single();
 
-  if (error) {
-    // Fall back to a SELECT — race with another worker.
-    logger.warn('billing_op_upsert_failed', {
-      idempotency_key: args.idempotencyKey, message: error.message,
-    });
-    const { data: existing } = await supabase
-      .from('billing_operations')
-      .select('id')
-      .eq('idempotency_key', args.idempotencyKey)
-      .maybeSingle();
-    if (existing?.id) return existing.id;
-    throw new Error(`[billingOrchestrator] could not open operation: ${error.message}`);
-  }
+  if (!error && data?.id) return data.id as string;
 
-  return (data?.id as string) ?? id;
+  // Duplicate key (a retry, or a concurrent worker) or a transient insert error: read the row by key AND
+  // organization. Found -> reuse it as-is (re-entrant). Not found -> the key is another organization's (refuse),
+  // or nothing exists (surface the insert error).
+  const duplicate = (error as { code?: string } | null)?.code === '23505';
+  if (error && !duplicate) {
+    logger.warn('billing_op_insert_failed', { idempotency_key: args.idempotencyKey, message: error.message });
+  }
+  const { data: existing, error: readErr } = await supabase
+    .from('billing_operations')
+    .select('id')
+    .eq('idempotency_key', args.idempotencyKey)
+    .eq('organization_id', args.organizationId)
+    .maybeSingle();
+  if (!readErr && existing?.id) return existing.id as string;
+  if (duplicate && !readErr) {
+    logger.error('billing_op_key_held_by_another_organization', {
+      idempotency_key: args.idempotencyKey, organization_id: args.organizationId,
+    });
+    incrCounter('billing_operations_key_conflict');
+    throw new BillingOperationKeyConflictError(args.idempotencyKey);
+  }
+  throw new Error(`[billingOrchestrator] could not open operation: ${(readErr ?? error)?.message ?? 'no row returned'}`);
 }
+
+/** A billing idempotency key already belongs to ANOTHER organization's operation - never reused or rewritten. */
+export class BillingOperationKeyConflictError extends Error {
+  readonly code = 'BILLING_OPERATION_KEY_CONFLICT';
+  constructor(readonly idempotencyKey: string) {
+    super(`[billingOrchestrator] idempotency key belongs to another organization: ${idempotencyKey}`);
+    this.name = 'BillingOperationKeyConflictError';
+  }
+}
+
+/**
+ * Statuses that are FINAL: a settled outcome is never rewritten by a later close (a retry's re-reconcile, or an
+ * exception on the retry path). 'error' and 'insufficient' stay recoverable - a later attempt may settle them.
+ */
+const FINAL_BILLING_OPERATION_STATUSES = ['confirmed', 'released', 'duplicate'] as const;
 
 export async function closeBillingOperation(
   operationId: string,
@@ -279,18 +306,19 @@ export async function closeBillingOperation(
     failureReason?:  string;
   },
 ): Promise<void> {
+  // Only the fields the caller supplies are written (a retry's re-confirm used to NULL amount_charged on a settled
+  // row), and a FINAL row (confirmed / released / duplicate) is never transitioned again (e1 2026-11-12).
+  const update: Record<string, unknown> = { status: patch.status, completed_at: new Date().toISOString() };
+  if (patch.amountCharged !== undefined)    update.amount_charged = patch.amountCharged;
+  if (patch.reservationTxnId !== undefined) update.reservation_txn_id = patch.reservationTxnId;
+  if (patch.confirmTxnId !== undefined)     update.confirm_txn_id = patch.confirmTxnId;
+  if (patch.releaseTxnId !== undefined)     update.release_txn_id = patch.releaseTxnId;
+  if (patch.failureReason !== undefined)    update.failure_reason = patch.failureReason;
   const { error } = await supabase
     .from('billing_operations')
-    .update({
-      status:             patch.status,
-      amount_charged:     patch.amountCharged ?? null,
-      reservation_txn_id: patch.reservationTxnId ?? null,
-      confirm_txn_id:     patch.confirmTxnId ?? null,
-      release_txn_id:     patch.releaseTxnId ?? null,
-      failure_reason:     patch.failureReason ?? null,
-      completed_at:       new Date().toISOString(),
-    })
-    .eq('id', operationId);
+    .update(update)
+    .eq('id', operationId)
+    .not('status', 'in', `(${FINAL_BILLING_OPERATION_STATUSES.join(',')})`);
   if (error) {
     logger.error('billing_op_close_failed', { operationId, message: error.message });
   }

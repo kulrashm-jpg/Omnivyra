@@ -26,6 +26,7 @@ const counters: Record<string, number> = {
   billing_operations_released:     0,
   billing_operations_insufficient: 0,
   billing_operations_errored:      0,
+  billing_operations_key_conflict: 0,
   deduction_failures_total:        0,
   duplicate_prevention_hits_total: 0,
   reservation_expiry_total:        0,
