@@ -65,8 +65,10 @@ export interface ReapResult {
   dryRun?: boolean;
   /** The preflight reconciler's result (in a dry run: its WOULD-confirm/-release decisions). */
   preflight?: import('./monetizationReservationReconciliationService').ReservationReconciliationResult | null;
-  /** Dry run only: holds the preflight would settle or quarantine, so the reaper would not reach them. */
+  /** Holds the preflight decided (settled or quarantined) in this run, so the reaper did not touch them. */
   skippedByPreflight?: number;
+  /** Set when the preflight did not complete: the reaper released NOTHING (it cannot classify). */
+  refused?: 'preflight_unavailable';
 }
 
 const DEFAULT_MIN_AGE_SECONDS = 60 * 60;       // 1 hour
@@ -111,6 +113,27 @@ export async function reapOrphanHolds(input?: {
     return null;
   });
 
+  // FAIL CLOSED (05, 2026-11-12): the quarantine protection lives in THIS run's
+  // preflight result (the hold-row stamp can never be written - immutable
+  // ledger). If the preflight did not complete, nothing can be classified, so
+  // the reaper releases NOTHING (a quarantined hold's work may have completed).
+  if (!preflight) {
+    if (!dryRun) await recordMonetizationOperationalEvent({
+      eventName: 'monetization.orphan_hold_reaper_preflight_unavailable',
+      severity: 'ERROR',
+      organizationId: input?.orgId ?? null,
+      alertKey: 'orphan_hold_reaper_preflight_unavailable',
+      metadata: {},
+    });
+    return {
+      ...(dryRun ? { dryRun: true } : {}),
+      preflight: null,
+      refused: 'preflight_unavailable',
+      scanned: 0, released: 0, skippedHasSibling: 0, skippedTooYoung: 0,
+      skippedQuarantined: 0, failed: 0, releasedHoldIds: [], skippedByPreflight: 0,
+    };
+  }
+
   let query = ownedDbTable('credit_transactions')
     .select('id, organization_id, free_delta, paid_delta, incentive_delta, idempotency_key, reference_type, reference_id, performed_by, created_at, metadata')
     .eq('execution_phase', 'hold')
@@ -141,7 +164,7 @@ export async function reapOrphanHolds(input?: {
   // in prod, so the reaper would have RELEASED a hold the preflight had just
   // quarantined (2026-11-12). Confirmed / released holds have siblings anyway.
   const preflightDecided = new Set(
-    preflight ? preflight.actions.filter((a) => a.decision !== 'skip').map((a) => a.holdId) : [],
+    preflight.actions.filter((a) => a.decision !== 'skip').map((a) => a.holdId),
   );
 
   const result: ReapResult = {
@@ -161,6 +184,10 @@ export async function reapOrphanHolds(input?: {
       result.skippedByPreflight = (result.skippedByPreflight ?? 0) + 1;
       continue;
     }
+    // LEGACY ONLY: honours a quarantine stamp written before the ledger
+    // immutability trigger existed. No current code can write it (the trigger
+    // refuses every UPDATE), so for any hold quarantined today this NEVER
+    // matches - current quarantines are honoured via preflightDecided above.
     if (row.metadata?.reconciliation_status === 'quarantined') {
       result.skippedQuarantined += 1;
       if (!dryRun) await recordMonetizationOperationalEvent({

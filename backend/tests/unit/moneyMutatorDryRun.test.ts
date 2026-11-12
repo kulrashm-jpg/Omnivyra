@@ -188,3 +188,21 @@ describe('orphan hold reaper', () => {
     }
   });
 });
+
+describe('orphan hold reaper - preflight unavailable (05, 2026-11-12)', () => {
+  it('ONLY the preflight throws (the reaper scan is clean) -> the reaper releases NOTHING, alert raised', async () => {
+    const realHolds = HOLDS.splice(0, HOLDS.length, H('h9', 'orphan', 'x'));
+    const recon = jest.requireActual('../../services/monetizationReservationReconciliationService');
+    const spy = jest.spyOn(recon, 'reconcileDurableMonetizationReservations').mockRejectedValueOnce(new Error('preflight boom'));
+    try {
+      const r = await reapOrphanHolds();
+      expect(r.refused).toBe('preflight_unavailable');
+      expect(r.released).toBe(0);
+      expect(mockRpc).toEqual([]);
+      expect(mockOps).toContain('monetization.orphan_hold_reaper_preflight_unavailable');
+    } finally {
+      spy.mockRestore();
+      HOLDS.splice(0, HOLDS.length, ...realHolds);
+    }
+  });
+});
