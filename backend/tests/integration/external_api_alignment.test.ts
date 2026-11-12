@@ -28,6 +28,8 @@ jest.mock('../../services/externalApiHealthService', () => ({
 
 const { supabase } = jest.requireMock('../../db/supabaseClient');
 
+// A uuid company that owns the trend sources: the source scope refuses non-uuid ids (e1 2026-11-12).
+const TREND_COMPANY = '33333333-3333-4333-8333-333333333333';
 const sourcesStore = new Map<string, any>();
 
 const buildQuery = (table: string) => {
@@ -39,6 +41,11 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // .is(column, null): the platform-row read (company_id IS NULL) - recorded like eq.
+    is: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
     // WRITE entry points — the profile write-back at
     // companyProfileServiceRest1Rest2Pulse:381 (`.upsert(payload, { onConflict })`),
     // plus best-effort audit/anomaly inserts which log and swallow their own errors.
@@ -71,10 +78,9 @@ const buildQuery = (table: string) => {
 
 const resolveQuery = (table: string, state: any) => {
   if (table === 'external_api_sources') {
-    if (state.filters.is_active === true) {
-      return { data: Array.from(sourcesStore.values()), error: null };
-    }
-    return { data: Array.from(sourcesStore.values()), error: null };
+    const rows = Array.from(sourcesStore.values());
+    if (!Object.prototype.hasOwnProperty.call(state.filters, 'company_id')) return { data: rows, error: null };
+    return { data: rows.filter((row) => (row.company_id ?? null) === state.filters.company_id), error: null };
   }
   if (table === 'external_api_user_access') {
     return { data: [], error: null };
@@ -154,6 +160,7 @@ describe('External API alignment', () => {
       is_active: true,
       auth_type: 'query',
       api_key_env_name: 'MISSING_KEY',
+      company_id: TREND_COMPANY,
       headers: {},
       query_params: {},
       created_at: new Date().toISOString(),
@@ -165,16 +172,17 @@ describe('External API alignment', () => {
       purpose: 'trends',
       is_active: true,
       auth_type: 'none',
+      company_id: TREND_COMPANY,
       headers: {},
       query_params: {},
       created_at: new Date().toISOString(),
     });
 
-    const summary = await externalApiService.fetchExternalTrends('US', 'marketing', undefined, { recordHealth: true });
+    const summary = await externalApiService.fetchExternalTrends(TREND_COMPANY, 'marketing', undefined, { recordHealth: true });
     expect(summary.missing_env_placeholders).toContain('missing_env:MISSING_KEY');
 
-    await setCachedResponse(buildCacheKey({ apiId: 'api-2', geo: 'marketing', category: undefined, userId: 'system:US' }), { items: [] }, 1000);
-    const cachedSummary = await externalApiService.fetchExternalTrends('US', 'marketing', undefined, { recordHealth: true });
+    await setCachedResponse(buildCacheKey({ apiId: 'api-2', geo: 'marketing', category: undefined, userId: `system:${TREND_COMPANY}` }), { items: [] }, 1000);
+    const cachedSummary = await externalApiService.fetchExternalTrends(TREND_COMPANY, 'marketing', undefined, { recordHealth: true });
     expect(getCacheStats().hits).toBeGreaterThan(0);
     // The seeded payload ({ items: [] }) differs from what the fetch mock returns, so this proves
     // the second call was served from the seeded cache entry rather than a fresh upstream fetch.

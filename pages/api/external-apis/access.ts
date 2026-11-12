@@ -8,6 +8,8 @@ import {
   getEnabledApiIdsFromCompanyConfig,
   getUserApiAccess,
 } from '../../../backend/services/externalApiService';
+import { isSourceOwnOrPlatform } from '../../../backend/services/externalApi/sourceScope';
+import { redactSourceSecretsForViewer } from '../../../backend/security/credentialSafety';
 import {
   invalidateCompanyConfigCache,
   getCompanyConfigRows,
@@ -66,13 +68,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
   let canManageExternalApis = false;
+  // Platform authority (legacy super-admin session, platform super admin, super admin): may see every source's
+  // secret-bearing fields. Everyone else sees them only for their own company's sources.
+  let viewerIsPlatformAdmin = false;
   if (legacySession) {
     canManageExternalApis = true;
+    viewerIsPlatformAdmin = true;
   } else {
     const platformAdmin = await isPlatformSuperAdmin(user.id);
     if (platformAdmin) {
       canManageExternalApis = true;
+      viewerIsPlatformAdmin = true;
     } else if (await isSuperAdmin(user.id)) {
+      viewerIsPlatformAdmin = true;
       console.debug('SUPER_ADMIN_FALLBACK', {
         path: req.url,
         userId: user.id,
@@ -155,7 +163,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         {}
       );
 
-      const apis = sources.map((source) => {
+      // e1 2026-11-12 (HIGH): headers / query_params / oauth_* only for sources this viewer OWNS.
+      const viewableSources = redactSourceSecretsForViewer(sources as Array<Record<string, any>>, {
+        companyId,
+        isPlatformAdmin: viewerIsPlatformAdmin,
+      });
+      const apis = viewableSources.map((source: Record<string, any>) => {
         const rows = usageByApi[source.id] || [];
         const nonFeatureRows = rows.filter((row) => !isFeatureUsageRow(row.user_id));
         const requestCount = nonFeatureRows.reduce(
@@ -470,6 +483,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!api_source_id) {
       return res.status(400).json({ error: 'api_source_id is required' });
+    }
+    // A company may enable only its OWN sources or PLATFORM sources - never another company's (e1, 2026-11-12).
+    let usable = false;
+    try {
+      usable = await isSourceOwnOrPlatform(companyId, String(api_source_id));
+    } catch {
+      usable = false;
+    }
+    if (!usable) {
+      return res.status(404).json({ error: 'API source not found' });
     }
 
     if (typeof is_enabled === 'boolean') {

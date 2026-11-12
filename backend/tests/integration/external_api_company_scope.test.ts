@@ -35,6 +35,9 @@ const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.
   '../../services/rbacService'
 );
 
+// Company ids are uuids: the source scope refuses anything else (e1 2026-11-12).
+const COMPANY_A = '11111111-1111-4111-8111-111111111111';
+const COMPANY_B = '22222222-2222-4222-8222-222222222222';
 const sourcesStore = new Map<string, any>();
 
 const buildQuery = (table: string) => {
@@ -54,6 +57,11 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // .is(column, null): the platform-row read (company_id IS NULL) - recorded like eq.
+    is: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
     // Chainable filter reached by pricingService.fetchModelPricingRow:136, which
     // builds `.eq()x4.lte().order().limit().maybeSingle()`. Records into
     // state.filters like `eq` so resolveQuery can observe it. `gte`/`in`/`limit`/
@@ -86,8 +94,11 @@ const buildQuery = (table: string) => {
 const resolveQuery = (table: string, state: any) => {
   if (table === 'external_api_sources') {
     const rows = Array.from(sourcesStore.values());
+    // Apply the company filter whenever it is present - including an explicit NULL (platform rows): treating a
+    // NULL filter as "no filter" would hand every company's rows to the platform read.
+    const hasCompany = Object.prototype.hasOwnProperty.call(state.filters, 'company_id');
     const companyId = state.filters.company_id;
-    const filtered = companyId ? rows.filter((row) => row.company_id === companyId) : rows;
+    const filtered = hasCompany ? rows.filter((row) => (row.company_id ?? null) === companyId) : rows;
     return { data: filtered, error: null };
   }
   if (table === 'external_api_user_access' || table === 'external_api_usage') {
@@ -130,13 +141,13 @@ describe('External API company scope', () => {
 
   it('returns APIs for selected company only', async () => {
     resolveUserContext.mockResolvedValue({
-      defaultCompanyId: 'company-a',
+      defaultCompanyId: COMPANY_A,
       userId: 'user-1',
     });
     sourcesStore.set('a1', {
       id: 'a1',
       name: 'YouTube Trends',
-      company_id: 'company-a',
+      company_id: COMPANY_A,
       is_active: true,
       base_url: 'https://example.com',
       purpose: 'trends',
@@ -146,7 +157,7 @@ describe('External API company scope', () => {
     sourcesStore.set('b1', {
       id: 'b1',
       name: 'NewsAPI',
-      company_id: 'company-b',
+      company_id: COMPANY_B,
       is_active: true,
       base_url: 'https://example.com',
       purpose: 'trends',
@@ -154,12 +165,12 @@ describe('External API company scope', () => {
       created_at: new Date().toISOString(),
     });
 
-    const req = { method: 'GET', query: { companyId: 'company-a' }, headers: {} } as NextApiRequest;
+    const req = { method: 'GET', query: { companyId: COMPANY_A }, headers: {} } as NextApiRequest;
     const res = createMockRes();
     await externalApisHandler(req, res);
     expect(res.statusCode).toBe(200);
     expect(res.body?.apis).toHaveLength(1);
-    expect(res.body?.apis[0].company_id).toBe('company-a');
+    expect(res.body?.apis[0].company_id).toBe(COMPANY_A);
   });
 
   it('returns 400 when companyId missing', async () => {
@@ -178,7 +189,7 @@ describe('External API company scope', () => {
     sourcesStore.set('a1', {
       id: 'a1',
       name: 'YouTube Trends',
-      company_id: 'company-a',
+      company_id: COMPANY_A,
       is_active: true,
       base_url: 'https://example.com',
       purpose: 'trends',
@@ -188,7 +199,7 @@ describe('External API company scope', () => {
     sourcesStore.set('b1', {
       id: 'b1',
       name: 'NewsAPI',
-      company_id: 'company-b',
+      company_id: COMPANY_B,
       is_active: true,
       base_url: 'https://example.com',
       purpose: 'trends',
@@ -196,12 +207,12 @@ describe('External API company scope', () => {
       created_at: new Date().toISOString(),
     });
 
-    const summary = await externalApiService.fetchExternalApis('company-a', 'US', 'tech', {
+    const summary = await externalApiService.fetchExternalApis(COMPANY_A, 'US', 'tech', {
       recordHealth: false,
     });
     expect(summary.results.length).toBeGreaterThan(0);
     summary.results.forEach((result) => {
-      expect(result.source.company_id).toBe('company-a');
+      expect(result.source.company_id).toBe(COMPANY_A);
     });
   });
 
@@ -265,7 +276,7 @@ describe('External API company scope', () => {
 
         const { generateRecommendations } = require('../../services/recommendationEngineService');
         generateRecommendations({
-          companyId: 'company-a',
+          companyId: COMPANY_A,
           campaignId: 'campaign-1',
         })
           .then((value: any) => {

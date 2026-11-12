@@ -24,6 +24,7 @@ import {
   validateFilterLimits,
 } from '../../../backend/services/companyApiConfigService';
 import { invalidateCompanyConfigCache } from '../../../backend/services/companyApiConfigCache';
+import { isSourceOwnOrPlatform } from '../../../backend/services/externalApi/sourceScope';
 
 const PURPOSE_OPTIONS = [
   'trend_campaign_detection',
@@ -103,6 +104,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!apiSourceId) {
       return res.status(400).json({ error: 'api_source_id required' });
+    }
+    // A company may configure only its OWN sources or PLATFORM sources - never another company's (e1, 2026-11-12).
+    let usable = false;
+    try {
+      usable = await isSourceOwnOrPlatform(String(companyId), apiSourceId);
+    } catch {
+      usable = false;
+    }
+    if (!usable) {
+      return res.status(404).json({ error: 'API source not found' });
     }
     const body = req.body || {};
     const polling_frequency =

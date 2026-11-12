@@ -1,4 +1,5 @@
 import { supabase } from '../../db/supabaseClient';
+import { readOwnOrPlatformSources } from './sourceScope';
 import type {
   ExternalApiSource,
   ExternalApiUserAccess,
@@ -19,30 +20,14 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  const createQuery = () =>
-    supabase
-      .from('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .order('created_at', { ascending: true });
-
-  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  const sources: ExternalApiSource[] = scopedResult.error ? [] : (scopedResult.data || []);
-  if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
-    console.warn('getEnabledApis scoped query failed', { companyId, message: scopedResult.error.message });
-    const fallback = await createQuery();
-    if (fallback.error) {
-      console.warn('getEnabledApis fallback query failed', { companyId, message: fallback.error.message });
-      return [];
-    }
-    sources.push(...(fallback.data || []));
-  } else if (scopedResult.error) {
-    const fallback = await createQuery();
-    if (fallback.error) {
-      console.warn('getEnabledApis fallback query failed', { companyId, message: fallback.error.message });
-      return [];
-    }
-    sources.push(...(fallback.data || []));
+  // Own + platform sources only (sourceScope): no interpolated .or(), and NO unfiltered fallback - a failed read
+  // or a non-uuid company id yields no sources (fail closed), never every company's sources.
+  let sources: ExternalApiSource[];
+  try {
+    sources = await readOwnOrPlatformSources(companyId, (q) => q.eq('is_active', true));
+  } catch (err) {
+    console.warn('getEnabledApis scoped read failed', { companyId, message: (err as Error)?.message });
+    return [];
   }
 
   const companyScoped = sources.some((row) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
@@ -63,31 +48,16 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  const baseQuery = () =>
-    supabase
-      .from('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .order('created_at', { ascending: true });
-
-  const scoped = await baseQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  if (!scoped.error) {
-    const companySpecific = (scoped.data || []).filter((row) => row.company_id === companyId);
-    const globalPresets = (scoped.data || []).filter((row) => row.is_preset && !row.company_id);
-    return [...companySpecific, ...globalPresets];
-  }
-  const message = scoped.error.message || '';
-  if (!message.toLowerCase().includes('company_id')) {
-    console.warn('getAvailableApis scoped query failed', { companyId, message });
-  }
-  const fallback = await baseQuery();
-  if (fallback.error) {
-    console.warn('getAvailableApis fallback query failed', { companyId, message: fallback.error.message });
+  // Own + platform sources only (sourceScope): no interpolated .or(), and NO unfiltered fallback.
+  let scopedRows: ExternalApiSource[];
+  try {
+    scopedRows = await readOwnOrPlatformSources(companyId, (q) => q.eq('is_active', true));
+  } catch (err) {
+    console.warn('getAvailableApis scoped read failed', { companyId, message: (err as Error)?.message });
     return [];
   }
-  const rows = fallback.data || [];
-  const companySpecific = rows.filter((row) => row.company_id === companyId);
-  const globalPresets = rows.filter((row) => row.is_preset && !row.company_id);
+  const companySpecific = scopedRows.filter((row) => row.company_id === companyId);
+  const globalPresets = scopedRows.filter((row) => row.is_preset && !row.company_id);
   return [...companySpecific, ...globalPresets];
 }
 

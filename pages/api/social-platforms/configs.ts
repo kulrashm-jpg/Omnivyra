@@ -13,6 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSocialPostingConfigs } from '../../../backend/services/externalApiService';
+import { redactSourceSecretsForViewer } from '../../../backend/security/credentialSafety';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
@@ -98,7 +99,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const apis = platformScopeRequested
       ? await getSocialPostingConfigs(null, { platformScope: true })
       : await getSocialPostingConfigs(companyId, { skipCache: req.query?.skipCache === '1' });
-    return res.status(200).json({ apis });
+    // e1 2026-11-12 (HIGH): secret-bearing fields only for the caller's OWN sources (or a platform admin).
+    const viewable = redactSourceSecretsForViewer(apis as unknown as Array<Record<string, unknown>>, {
+      companyId: companyId ?? null,
+      isPlatformAdmin: (access as { role?: string }).role === 'SUPER_ADMIN',
+    });
+    return res.status(200).json({ apis: viewable });
   } catch (err: any) {
     console.error('[social-platforms/configs]', err?.message);
     return res.status(500).json({ error: err?.message ?? 'Failed to load configs' });

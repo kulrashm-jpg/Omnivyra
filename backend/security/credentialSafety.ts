@@ -106,6 +106,33 @@ export function redactApiSourceRow<T extends Record<string, unknown>>(input: T |
 }
 
 /**
+ * Fields of an external_api_sources row that can carry a credential: free-form headers / query params (e.g. an
+ * Authorization header or an api_key query value) and the encrypted OAuth client id / secret.
+ */
+export const SOURCE_SECRET_FIELDS = ['headers', 'query_params', 'oauth_client_id_encrypted', 'oauth_client_secret_encrypted'] as const;
+
+/**
+ * e1 2026-11-12 (e9 ruling, HIGH): a viewer receives a source row's secret-bearing fields ONLY for a row it OWNS -
+ * its own company's source, or any row when it is a platform admin. For every other row (a PLATFORM source seen by a
+ * tenant, or any foreign row) the fields are REMOVED ENTIRELY, never partially masked. Rows with no company_id key
+ * are treated as not owned (fail closed). Applied at every egress that returns source rows to a client.
+ */
+export function redactSourceSecretsForViewer<T extends Record<string, unknown>>(
+  rows: T[],
+  viewer: { companyId: string | null | undefined; isPlatformAdmin: boolean },
+): T[] {
+  const own = viewer.companyId ? String(viewer.companyId).toLowerCase() : null;
+  return rows.map((row) => {
+    if (viewer.isPlatformAdmin) return row;
+    const rowCompany = row.company_id == null ? null : String(row.company_id).toLowerCase();
+    if (own !== null && rowCompany !== null && rowCompany === own) return row;
+    const copy: Record<string, unknown> = { ...row };
+    for (const field of SOURCE_SECRET_FIELDS) delete copy[field];
+    return copy as T;
+  });
+}
+
+/**
  * Classify what a stored `credentials_encrypted.api_key_value` currently holds, for migration
  * decisions. Shape-only; the value is never returned.
  */

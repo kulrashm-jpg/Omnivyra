@@ -14,6 +14,7 @@ import {
   DEFAULT_RATE_LIMIT_PER_MIN,
 } from './requestValidation';
 import { ownedDbTable } from '../../db/writeOwner';
+import { readOwnOrPlatformSources } from './sourceScope';
 
 // ── Re-export validatePlatformConfig so callers can import from here ──────────
 export { validatePlatformConfig } from './requestValidation';
@@ -156,21 +157,9 @@ export async function getPlatformConfigs(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  const createQuery = () =>
-    ownedDbTable('external_api_sources')
-      .select('*')
-      .order('created_at', { ascending: true });
-
-  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  let sources: any[] = scopedResult.error ? [] : (scopedResult.data || []);
-  if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to load platform configs: ${scopedResult.error.message}`);
-  }
-  if (scopedResult.error) {
-    const fallbackResult = await createQuery();
-    if (fallbackResult.error) throw new Error(`Failed to load platform configs: ${fallbackResult.error.message}`);
-    sources = fallbackResult.data || [];
-  }
+  // Own + platform sources only (sourceScope): two exact reads - no interpolated .or(), no unfiltered fallback; a
+  // non-uuid company id is refused and a failed read throws.
+  const sources: any[] = await readOwnOrPlatformSources(companyId);
 
   const companyScoped = sources.some((row: any) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
   const companySpecific = companyScoped
@@ -186,10 +175,8 @@ export async function getPlatformConfigs(
   let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
 
   if (enabledIds.length > 0 && selectedPresets.length === 0) {
-    const { data: enabledSources } = await ownedDbTable('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .in('id', enabledIds);
+    // The ids come from company config rows - they never widen the scope beyond own + platform.
+    const enabledSources = await readOwnOrPlatformSources(companyId, (q) => q.eq('is_active', true).in('id', enabledIds));
     const fetched = (enabledSources || []).filter(
       (row: any) => !companySpecific.some((c: any) => c.id === row.id)
     );
@@ -198,11 +185,7 @@ export async function getPlatformConfigs(
 
   let data = [...companySpecific, ...selectedPresets];
   if (companyId && data.length === 0 && enabledIds.length > 0) {
-    const { data: fallbackSources } = await ownedDbTable('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .in('id', enabledIds);
-    data = fallbackSources || [];
+    data = await readOwnOrPlatformSources(companyId, (q) => q.eq('is_active', true).in('id', enabledIds));
   }
 
   const apiIds = data.map((row: any) => row.id);
@@ -284,6 +267,28 @@ export async function getPlatformStrategies(companyId?: string | null): Promise<
   });
 }
 
+/**
+ * The company's OWN source for a platform: an exact category match first, then a name that CONTAINS the platform
+ * with its LIKE characters escaped (matched literally). Two ordered reads - never an interpolated .or() filter -
+ * and NEVER an unscoped fallback: a failed read is an error, not "read every company's sources".
+ */
+async function findOwnSourceByPlatform(companyId: string, platform: string): Promise<{ data: any[] | null; error: any }> {
+  const byCategory = await ownedDbTable('external_api_sources')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('category', platform)
+    .order('created_at', { ascending: true })
+    .limit(1);
+  if (byCategory.error || (byCategory.data?.length ?? 0) > 0) return byCategory;
+  const literal = platform.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
+  return ownedDbTable('external_api_sources')
+    .select('*')
+    .eq('company_id', companyId)
+    .ilike('name', `%${literal}%`)
+    .order('created_at', { ascending: true })
+    .limit(1);
+}
+
 export async function getPlatformConfigByPlatform(
   companyId: string | null | undefined,
   platform: string
@@ -292,28 +297,14 @@ export async function getPlatformConfigByPlatform(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return null;
   }
-  const createQuery = () =>
-    ownedDbTable('external_api_sources')
-      .select('*')
-      .or(`category.eq.${platform},name.ilike.%${platform}%`)
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-  const scopedResult = await createQuery().eq('company_id', companyId);
-  let record = scopedResult.data?.[0];
+  // Previously an error mentioning company_id fell back to the SAME query with NO company filter - i.e. any
+  // company's source for this platform. Now a failed read is just a failure.
+  const scopedResult = await findOwnSourceByPlatform(companyId, platform);
   if (scopedResult.error) {
-    const message = scopedResult.error.message || '';
-    if (!message.toLowerCase().includes('company_id')) {
-      console.warn('Failed to load platform config', { platform });
-      return null;
-    }
-    const fallbackResult = await createQuery();
-    if (fallbackResult.error) {
-      console.warn('Failed to load platform config', { platform });
-      return null;
-    }
-    record = fallbackResult.data?.[0];
+    console.warn('Failed to load platform config', { platform });
+    return null;
   }
+  const record = scopedResult.data?.[0];
   if (!record) return null;
   if (!isApiSourceExecutable(record as ExternalApiSource)) {
     console.warn('EXTERNAL_API_SKIPPED_BY_FILTER', {
@@ -341,12 +332,7 @@ export async function getApiConfigByPlatform(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return null;
   }
-  const { data, error } = await ownedDbTable('external_api_sources')
-    .select('*')
-    .eq('company_id', companyId)
-    .or(`category.eq.${platform},name.ilike.%${platform}%`)
-    .order('created_at', { ascending: true })
-    .limit(1);
+  const { data, error } = await findOwnSourceByPlatform(companyId, platform);
 
   if (error) {
     console.warn('Failed to load external API config', { platform });
