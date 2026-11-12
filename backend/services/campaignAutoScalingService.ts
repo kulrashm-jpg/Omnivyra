@@ -21,24 +21,35 @@ export type ScalingResult = {
   campaign_id: string;
   scaled: boolean;
   actions: string[];
+  /** Actions that were attempted and FAILED (unread-error pkg 2): never reported in `actions`. */
+  failed_actions: string[];
   reason: string;
 };
 
+/*
+ * unread-error pkg 2: PostgREST returns an error, never throws. Each read below used to turn a failure
+ * into "no frequency" / "no company" (silently skipping the actions); each write used to report its
+ * action as done whatever happened. Reads now throw (nothing has been changed yet); the frequency write
+ * throws (it is the first change); a later write that fails is recorded in failed_actions.
+ */
+
 /** Load current posting frequency for a campaign from its strategy or campaigns table. */
 async function getCurrentFrequency(campaignId: string): Promise<Record<string, number>> {
-  const { data } = await ownedDbTable('campaigns')
+  const { data, error } = await ownedDbTable('campaigns')
     .select('posting_frequency')
     .eq('id', campaignId)
     .maybeSingle();
+  if (error) throw new Error(`auto-scale: posting_frequency unreadable: ${error.message}`);
   return ((data as any)?.posting_frequency as Record<string, number>) ?? {};
 }
 
 /** Get company_id for a campaign. */
 async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data } = await ownedDbTable('campaigns')
+  const { data, error } = await ownedDbTable('campaigns')
     .select('company_id')
     .eq('id', campaignId)
     .maybeSingle();
+  if (error) throw new Error(`auto-scale: company_id unreadable: ${error.message}`);
   return (data as any)?.company_id ?? null;
 }
 
@@ -47,7 +58,7 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
  * Returns immediately if thresholds are not met.
  */
 export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
-  const result: ScalingResult = { campaign_id: campaignId, scaled: false, actions: [], reason: '' };
+  const result: ScalingResult = { campaign_id: campaignId, scaled: false, actions: [], failed_actions: [], reason: '' };
 
   const [perf, cfg, companyId] = await Promise.all([
     aggregateCampaignPerformance(campaignId),
@@ -76,9 +87,10 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
   }
 
   if (Object.keys(boostedFreq).length > 0) {
-    await ownedDbTable('campaigns')
+    const { error: freqError } = await ownedDbTable('campaigns')
       .update({ posting_frequency: boostedFreq, updated_at: new Date().toISOString() })
       .eq('id', campaignId);
+    if (freqError) throw new Error(`auto-scale: posting_frequency write failed: ${freqError.message}`);
     result.actions.push(`Increased posting frequency +20%: ${JSON.stringify(boostedFreq)}`);
   }
 
@@ -88,7 +100,7 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
   const minBudget    = Math.max(500, monthlyBasis);
   const maxBudget    = Math.max(2000, monthlyBasis * 3);
 
-  await ownedDbTable('campaign_decision_log').insert({
+  const { error: decisionLogError } = await ownedDbTable('campaign_decision_log').insert({
     campaign_id:       campaignId,
     action:            'CONTINUE',
     ad_recommendation: 'SCALE',
@@ -100,7 +112,11 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
     ],
     created_at: new Date().toISOString(),
   });
-  result.actions.push(`Ad budget recommendation: $${minBudget}–$${maxBudget}/month`);
+  if (decisionLogError) {
+    result.failed_actions.push(`Ad budget recommendation not recorded: ${decisionLogError.message}`);
+  } else {
+    result.actions.push(`Ad budget recommendation: $${minBudget}–$${maxBudget}/month`);
+  }
 
   // ── Action 3: Flag winning content patterns ───────────────────────────────
   if (companyId) {
@@ -126,7 +142,7 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
       decision_type: 'scale',
       reason:        result.reason,
       metrics_used:  { engagement_rate: engagementRate, accuracy_score: accuracyScore },
-      outcome:       result.actions.join('; '),
+      outcome:       [...result.actions, ...result.failed_actions.map((f) => `FAILED: ${f}`)].join('; '),
     });
   }
 

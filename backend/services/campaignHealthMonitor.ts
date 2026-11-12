@@ -46,7 +46,10 @@ async function getRecentEngagementWindows(): Promise<Map<string, WindowRow[]>> {
     .gte('collected_at', since)
     .order('collected_at', { ascending: true });
 
-  if (error || !data) return new Map();
+  // unread-error pkg 2: a failed read is not "no engagement data" (which silently skipped every
+  // campaign). The run fails loudly instead.
+  if (error) throw new Error(`engagement windows unreadable: ${error.message}`);
+  if (!data) return new Map();
 
   // Bucket rows into 6-hour windows per campaign
   const windowsByCampaign = new Map<string, WindowRow[]>();
@@ -72,12 +75,15 @@ async function getRecentEngagementWindows(): Promise<Map<string, WindowRow[]>> {
 
 /** Load previous health report status for a campaign. */
 async function getPreviousHealthStatus(campaignId: string): Promise<{ status: CampaignHealthStatus; critical_run_count: number } | null> {
-  const { data } = await ownedDbTable('campaign_health_reports')
+  const { data, error } = await ownedDbTable('campaign_health_reports')
     .select('report')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  // A failed read is not "previously HEALTHY": it would reset the AT_RISK -> CRITICAL -> pause chain
+  // and write a report on that false basis (unread-error pkg 2).
+  if (error) throw new Error(`previous health report unreadable: ${error.message}`);
 
   if (!data?.report) return null;
   const r = data.report as Record<string, unknown>;
@@ -89,23 +95,30 @@ async function getPreviousHealthStatus(campaignId: string): Promise<{ status: Ca
 
 /** Pause a campaign and record the action. */
 async function pauseCampaign(campaignId: string): Promise<void> {
-  await ownedDbTable('campaigns')
+  const { error } = await ownedDbTable('campaigns')
     .update({ status: 'paused', updated_at: new Date().toISOString() })
     .eq('id', campaignId);
+  // unread-error pkg 2: a failed pause was reported as PAUSED, the user was told so, and a recovery
+  // campaign was generated, while the campaign kept publishing. Nothing after the pause runs now.
+  if (error) throw new Error(`auto-pause failed: ${error.message}`);
 }
 
-/** Trigger an in-app notification for a paused campaign. */
-async function triggerNotification(campaignId: string, reason: string): Promise<void> {
+/**
+ * Trigger an in-app notification for a paused campaign. Non-blocking (the pause already happened):
+ * returns why it failed, or null, so the run reports it instead of swallowing it (unread-error pkg 2).
+ */
+async function triggerNotification(campaignId: string, reason: string): Promise<string | null> {
   try {
     // Resolve company_id for the notification
-    const { data: campaign } = await ownedDbTable('campaigns')
+    const { data: campaign, error: readError } = await ownedDbTable('campaigns')
       .select('company_id, name')
       .eq('id', campaignId)
       .maybeSingle();
+    if (readError) return `pause notification not sent: campaign unreadable: ${readError.message}`;
 
-    if (!campaign?.company_id) return;
+    if (!campaign?.company_id) return 'pause notification not sent: campaign has no company';
 
-    await ownedDbTable('notifications').insert({
+    const { error: insertError } = await ownedDbTable('notifications').insert({
       company_id: campaign.company_id,
       type: 'campaign_auto_paused',
       title: 'Campaign auto-paused',
@@ -114,54 +127,61 @@ async function triggerNotification(campaignId: string, reason: string): Promise<
       created_at: new Date().toISOString(),
       read: false,
     });
-  } catch (_) { /* non-blocking */ }
+    if (insertError) return `pause notification not sent: ${insertError.message}`;
+    return null;
+  } catch (err) {
+    return `pause notification not sent: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 /**
  * Live optimization adjustments for an AT_RISK campaign.
  * Changes platform priority and reduces posting frequency to conserve reach.
+ *
+ * Returns whether the adjustment was applied; THROWS when a read or the write fails (unread-error
+ * pkg 2: it used to be fire-and-forget, every failure swallowed, and the run reported the campaign as
+ * optimized before it had run). The decision is logged only after the write succeeded.
  */
 async function triggerOptimizationAdjustments(
   campaignId: string,
   reason: string,
   companyId: string,
-): Promise<void> {
-  try {
-    // Load current posting frequency
-    const { data: campaign } = await ownedDbTable('campaigns')
-      .select('posting_frequency, platforms')
-      .eq('id', campaignId)
-      .maybeSingle();
+): Promise<boolean> {
+  // Load current posting frequency
+  const { data: campaign, error: readError } = await ownedDbTable('campaigns')
+    .select('posting_frequency, platforms')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (readError) throw new Error(`optimization: campaign unreadable: ${readError.message}`);
 
-    if (!campaign) return;
+  if (!campaign) return false;
 
-    const currentFreq = ((campaign as any).posting_frequency ?? {}) as Record<string, number>;
-    const platforms   = ((campaign as any).platforms ?? []) as string[];
+  const currentFreq = ((campaign as any).posting_frequency ?? {}) as Record<string, number>;
+  const platforms   = ((campaign as any).platforms ?? []) as string[];
 
-    // Reduce all frequencies by 20% (reduce noise, focus on quality)
-    const adjustedFreq: Record<string, number> = {};
-    for (const [p, freq] of Object.entries(currentFreq)) {
-      adjustedFreq[p] = Math.max(1, Math.round(freq * 0.8));
-    }
-
-    await ownedDbTable('campaigns')
-      .update({
-        posting_frequency: adjustedFreq,
-        updated_at:        new Date().toISOString(),
-      })
-      .eq('id', campaignId);
-
-    await logDecision({
-      company_id:    companyId,
-      campaign_id:   campaignId,
-      decision_type: 'optimize',
-      reason:        `AT_RISK: ${reason} — reduced posting frequency to focus on content quality`,
-      metrics_used:  { previous_frequency: currentFreq, adjusted_frequency: adjustedFreq, platforms },
-      outcome:       `Posting frequency reduced 20% across ${platforms.length} platform(s)`,
-    });
-  } catch (err) {
-    console.warn('[campaignHealthMonitor] triggerOptimizationAdjustments failed', err);
+  // Reduce all frequencies by 20% (reduce noise, focus on quality)
+  const adjustedFreq: Record<string, number> = {};
+  for (const [p, freq] of Object.entries(currentFreq)) {
+    adjustedFreq[p] = Math.max(1, Math.round(freq * 0.8));
   }
+
+  const { error: writeError } = await ownedDbTable('campaigns')
+    .update({
+      posting_frequency: adjustedFreq,
+      updated_at:        new Date().toISOString(),
+    })
+    .eq('id', campaignId);
+  if (writeError) throw new Error(`optimization: posting_frequency write failed: ${writeError.message}`);
+
+  await logDecision({
+    company_id:    companyId,
+    campaign_id:   campaignId,
+    decision_type: 'optimize',
+    reason:        `AT_RISK: ${reason} — reduced posting frequency to focus on content quality`,
+    metrics_used:  { previous_frequency: currentFreq, adjusted_frequency: adjustedFreq, platforms },
+    outcome:       `Posting frequency reduced 20% across ${platforms.length} platform(s)`,
+  });
+  return true;
 }
 
 /**
@@ -181,9 +201,11 @@ export async function runCampaignHealthMonitor(): Promise<CampaignHealthMonitorR
   };
 
   try {
-    const { data: activeCampaigns } = await ownedDbTable('campaigns')
+    const { data: activeCampaigns, error: activeError } = await ownedDbTable('campaigns')
       .select('id, company_id')
       .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan']);
+    // unread-error pkg 2: a failed read was "no active campaigns", a silent no-op run.
+    if (activeError) throw new Error(`active campaigns unreadable: ${activeError.message}`);
 
     if (!activeCampaigns?.length) return result;
 
@@ -229,34 +251,50 @@ export async function runCampaignHealthMonitor(): Promise<CampaignHealthMonitorR
         const newCriticalRunCount = newStatus === 'CRITICAL' ? criticalRunCount + 1 : 0;
 
         // ── AT_RISK: trigger live optimization adjustments ───────────────────
+        // unread-error pkg 2: each outcome below is reported only once it has happened; a failure is
+        // reported in result.errors, never swallowed. A failed pause or report write fails this
+        // campaign's evaluation (its report is not written, so the next run retries from the same state).
         if (newStatus === 'AT_RISK') {
           result.at_risk.push(campaignId);
-          // Non-blocking optimization: adjust platform priority + frequency
-          triggerOptimizationAdjustments(campaignId, statusReason, companyIdForLog).catch(() => {});
-          result.optimized.push(campaignId);
+          // Adjust platform priority + frequency. A failure does not block the evaluation.
+          try {
+            if (await triggerOptimizationAdjustments(campaignId, statusReason, companyIdForLog)) result.optimized.push(campaignId);
+          } catch (err: unknown) {
+            result.errors.push(`${campaignId}: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         // ── Auto-pause ───────────────────────────────────────────────────────
         if (newStatus === 'CRITICAL' && newCriticalRunCount >= cfg.critical_runs_for_pause) {
-          await pauseCampaign(campaignId);
-          await triggerNotification(campaignId, statusReason);
+          await pauseCampaign(campaignId); // throws on failure: nothing below runs
           newStatus = 'PAUSED';
           result.paused.push(campaignId);
-          // Generate recovery campaign (non-blocking)
-          generateRecoveryCampaign(campaignId, statusReason).catch(() => {});
-          result.recovered.push(campaignId);
+          const notificationFailure = await triggerNotification(campaignId, statusReason);
+          if (notificationFailure) result.errors.push(`${campaignId}: ${notificationFailure}`);
+          // Generate recovery campaign. A failure does not undo the pause.
+          try {
+            await generateRecoveryCampaign(campaignId, statusReason);
+            result.recovered.push(campaignId);
+          } catch (err: unknown) {
+            result.errors.push(`${campaignId}: recovery campaign not generated: ${err instanceof Error ? err.message : String(err)}`);
+          }
         } else if (newStatus === 'CRITICAL') {
           result.critical.push(campaignId);
         }
 
         // ── HEALTHY: attempt auto-scaling ────────────────────────────────────
         if (newStatus === 'HEALTHY') {
-          const scaleResult = await tryAutoScale(campaignId).catch(() => null);
-          if (scaleResult?.scaled) result.scaled.push(campaignId);
+          try {
+            const scaleResult = await tryAutoScale(campaignId);
+            if (scaleResult.scaled) result.scaled.push(campaignId);
+            for (const failed of scaleResult.failed_actions) result.errors.push(`${campaignId}: auto-scale: ${failed}`);
+          } catch (err: unknown) {
+            result.errors.push(`${campaignId}: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         // ── Persist report ───────────────────────────────────────────────────
-        await ownedDbTable('campaign_health_reports').insert({
+        const { error: reportError } = await ownedDbTable('campaign_health_reports').insert({
           campaign_id: campaignId,
           health_status: newStatus,
           status: newStatus.toLowerCase(),
@@ -273,6 +311,8 @@ export async function runCampaignHealthMonitor(): Promise<CampaignHealthMonitorR
           evaluated_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
         });
+        // The next run reads this report to continue the AT_RISK -> CRITICAL -> pause chain.
+        if (reportError) throw new Error(`health report not written: ${reportError.message}`);
       } catch (err: unknown) {
         result.errors.push(`${campaignId}: ${err instanceof Error ? err.message : String(err)}`);
       }
