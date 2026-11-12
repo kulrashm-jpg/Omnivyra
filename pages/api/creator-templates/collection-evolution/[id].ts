@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import { analyzeCollectionEvolution, acceptEvolutionRecommendation } from '../../../../backend/services/creator/designEvolutionService';
-import { getCollectionCompanyId } from '../../../../backend/services/creator/collectionService';
+import { getCollectionCompanyId, ForeignTemplateReferenceError } from '../../../../backend/services/creator/collectionService';
 import type { EvolutionRecommendation } from '../../../../lib/creator-templates/designEvolution';
 
 /**
@@ -31,7 +31,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const body = (req.body || {}) as Record<string, unknown>;
     const rec = body.recommendation as EvolutionRecommendation | undefined;
     if (!rec || typeof rec.type !== 'string') return res.status(400).json({ error: 'recommendation required' });
-    const updated = await acceptEvolutionRecommendation(id, rec);
+    let updated: Awaited<ReturnType<typeof acceptEvolutionRecommendation>>;
+    try {
+      updated = await acceptEvolutionRecommendation(id, rec);
+    } catch (err) {
+      // rec.action.replacementTemplateId from another company (SECURITY 2026-11-11).
+      if (err instanceof ForeignTemplateReferenceError) return res.status(400).json({ error: 'A referenced template is not available to this company.', code: 'FOREIGN_TEMPLATE' });
+      throw err;
+    }
     if (!updated) return res.status(200).json({ collection: null, applied: false, note: 'Guidance only — this recommendation needs a new template (the engine never creates templates automatically).' });
     return res.status(200).json({ collection: updated, applied: true });
   }
