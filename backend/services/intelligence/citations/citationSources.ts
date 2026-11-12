@@ -105,7 +105,8 @@ export function toCitationSources(input: CitationObservationInput, ctx: Citation
       accepted.set(r.key, { d, r, role: d.role, title });
     } else {
       // The same source twice in one answer counts once, under its strongest role.
-      if (ROLE_RANK[d.role] > ROLE_RANK[prev.role]) prev.role = d.role;
+      // An unknown role ranks lowest (05: rank comparisons must not depend on a total map).
+      if ((ROLE_RANK[d.role] ?? -1) > (ROLE_RANK[prev.role] ?? -1)) prev.role = d.role;
       if (!prev.title && title) prev.title = title;
     }
   }

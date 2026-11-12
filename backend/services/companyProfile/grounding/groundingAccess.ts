@@ -61,7 +61,10 @@ export function assertCanRead(ctx: AccessContext, companyId: string): GroundingR
 /** Assert write access (confirmations, corrections). */
 export function assertCanWrite(ctx: AccessContext, companyId: string): GroundingRole {
   const role = roleFor(ctx, companyId);
-  if (RANK[role] < RANK.editor) throw new AuthorizationError('editor', role);
+  // FAIL CLOSED (05, 2026-11-12): `undefined < n` is FALSE, so a role missing from
+  // RANK (e.g. a tenant Role string at runtime) would ESCAPE this comparison and be
+  // granted write. An unknown key now sorts below every rank.
+  if ((RANK[role] ?? -1) < RANK.editor) throw new AuthorizationError('editor', role);
   return role;
 }
 
