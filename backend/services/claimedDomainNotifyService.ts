@@ -19,6 +19,12 @@
  * row would reset the marker and re-enable the notice (no app path hard-deletes users today).
  * Because callers notify only on a VERIFIED email-domain match, one prospect maps to one company, so
  * per-prospect dedupe is per (company, prospect) by construction.
+ * TWO dedupe mechanisms, on DIFFERENT keys - neither is redundant:
+ *   - this module's markers above (per prospect; admin_user_id = the admin notice went out);
+ *   - send-transactional-email's own idempotency reservation (6f, fix/email-idempotency, migration
+ *     20270217000031), keyed on the idempotency keys passed below: `company-referral:<prospect email>` and
+ *     `inbound-signup-notice:<company>:<prospect email>:<admin user id>` (one key PER ADMIN since all active
+ *     admins are notified). Until that lands the key is inert, and these markers are the only dedupe.
  * (e1 2026-11-12, 05 review: the admin notice used to be gated only by `if (adminEmail)`, and its
  * `inbound-signup-notice:<company>:<prospect>` idempotency key is never applied by the email
  * function - it only reaches a log context - so every attempt re-notified the admin.)
