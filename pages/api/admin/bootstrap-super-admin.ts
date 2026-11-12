@@ -219,11 +219,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // 3. Single-use check: refuse if any SUPER_ADMIN already exists.
-    const { count: existingCount2 } = await ownedDbTable('user_company_roles')
+    // PRIVILEGE (2026-11-12): a failed count is NOT "no SUPER_ADMIN" - reading
+    // it as 0 let bootstrap promote while a super-admin exists. Fail closed.
+    const { count: existingCount2, error: existingErr2 } = await ownedDbTable('user_company_roles')
       .select('id', { count: 'exact', head: true })
       .eq('role', SUPER_ADMIN_ROLE)
       .eq('status', 'active');
-    if ((existingCount2 ?? 0) > 0) {
+    if (existingErr2 || typeof existingCount2 !== 'number') {
+      await deny('env_credential_super_admin_count_unreadable', ip, ua);
+      return res.status(503).json({ error: 'Could not verify that no SUPER_ADMIN exists', code: 'BOOTSTRAP_STATE_UNREADABLE' });
+    }
+    if (existingCount2 > 0) {
       await deny('env_credential_already_consumed', ip, ua);
       return res.status(409).json({
         error: 'A SUPER_ADMIN already exists. Use mode=promote with a passkey-enrolled SUPER_ADMIN instead.',
@@ -232,10 +238,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // 4. Verify target user exists and is not soft-deleted. Never create users.
-    const { data: targetRow } = await ownedDbTable('users')
+    const { data: targetRow, error: targetErr } = await ownedDbTable('users')
       .select('id, supabase_uid, email, is_deleted')
       .eq('id', targetUserId)
       .maybeSingle();
+    if (targetErr) {
+      await deny('env_credential_target_user_unreadable', ip, ua, null, targetUserId);
+      return res.status(503).json({ error: 'Could not read the target user', code: 'TARGET_USER_UNREADABLE' });
+    }
     if (!targetRow) {
       await deny('env_credential_target_user_not_found', ip, ua, null, targetUserId);
       return res.status(404).json({
@@ -336,11 +346,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Verify NO existing SUPER_ADMIN — bootstrap mode is single-use by design.
   // user_company_roles uses status='active' + deactivated_at as its lifecycle
   // markers (no revoked_at column on this table).
-  const { count: existingCount } = await ownedDbTable('user_company_roles')
+  // PRIVILEGE (2026-11-12): a failed count is NOT "no SUPER_ADMIN". Fail closed.
+  const { count: existingCount, error: existingErr } = await ownedDbTable('user_company_roles')
     .select('id', { count: 'exact', head: true })
     .eq('role', SUPER_ADMIN_ROLE)
     .eq('status', 'active');
-  if ((existingCount ?? 0) > 0) {
+  if (existingErr || typeof existingCount !== 'number') {
+    await deny('bootstrap_super_admin_count_unreadable', ip, ua);
+    return res.status(503).json({ error: 'Could not verify that no SUPER_ADMIN exists', code: 'BOOTSTRAP_STATE_UNREADABLE' });
+  }
+  if (existingCount > 0) {
     await deny('bootstrap_already_consumed', ip, ua);
     return res.status(409).json({
       error: 'A SUPER_ADMIN already exists. Use mode=promote.',

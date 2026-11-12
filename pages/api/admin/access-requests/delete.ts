@@ -32,16 +32,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!requestId) return res.status(400).json({ error: 'requestId is required' });
 
-  const { error } = await supabase
+  // CLASS 2 (2026-11-12): a blind update could overwrite an APPROVED request
+  // (the user already holds a company through it). Only pending / rejected
+  // requests can be deleted - the same rule the free-credits requests route
+  // uses. 0 rows -> 409 (approved, already deleted, or missing).
+  const { data: deleted, error } = await supabase
     .from('access_requests')
     .update({
       status: 'deleted',
       reviewed_by: user.id,
       reviewed_at: new Date().toISOString(),
     })
-    .eq('id', requestId);
+    .eq('id', requestId)
+    .in('status', ['pending', 'rejected'])
+    .select('id');
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: 'Failed to delete the request' });
+  if (!Array.isArray(deleted) || deleted.length !== 1) {
+    return res.status(409).json({ error: 'Only a pending or rejected request can be deleted', code: 'REQUEST_NOT_DELETABLE' });
+  }
 
   return res.status(200).json({ success: true });
 }

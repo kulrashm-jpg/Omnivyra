@@ -10,6 +10,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import {
   buildCredentialEnvelope,
   updateProviderAccount,
+  ProviderAccountConflictError,
   deactivateProviderAccount,
 } from '../../../backend/services/providerAccountService';
 // Remediation: shared env-var-name validation; encryption lives in the envelope builder.
@@ -114,6 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //     existing envelope, so only fields the caller actually supplied change.
     //  2. PLAINTEXT. `api_key_value` was stored verbatim; it is now encrypted by the same
     //     shared builder used on create.
+    let expectCredentials: { expectCredentialsEncrypted: string | null } | undefined;
     if (credentials && typeof credentials === 'object') {
       // Server-side env-var-name validation — the client is not the security boundary.
       if (credentials.api_key_env_name && !isEnvVarName(credentials.api_key_env_name)) {
@@ -124,18 +126,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       // Read the CURRENT envelope so unsupplied fields survive the update.
-      const { data: current } = await supabase
+      // A failed read is NOT "no stored credentials": merging onto nothing
+      // would overwrite the stored envelope with only the supplied fields and
+      // drop every other secret. Refuse. (2026-11-12)
+      const { data: current, error: currentErr } = await supabase
         .from('api_provider_accounts')
         .select('credentials_encrypted')
         .eq('id', id)
         .maybeSingle();
+      if (currentErr) {
+        return res.status(503).json({ error: 'Could not read the stored credentials; nothing was changed', retryable: true });
+      }
 
       try {
+        const existingEnvelope = (current as { credentials_encrypted?: string | null } | null)?.credentials_encrypted ?? null;
         const merged = buildCredentialEnvelope({
-          existing: (current as { credentials_encrypted?: string } | null)?.credentials_encrypted ?? null,
+          existing: existingEnvelope,
           supplied: credentials,
         });
-        if (merged && merged !== '{}') patch.credentials_encrypted = merged;
+        if (merged && merged !== '{}') {
+          patch.credentials_encrypted = merged;
+          // CLASS 2: the merge is only valid against THIS read of the envelope.
+          expectCredentials = { expectCredentialsEncrypted: existingEnvelope };
+        }
       } catch {
         // Fail CLOSED — never downgrade to storing plaintext.
         return res.status(500).json({ error: 'Failed to encrypt credentials' });
@@ -150,10 +163,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const updated = await updateProviderAccount(
         id,
         patch as Parameters<typeof updateProviderAccount>[1],
+        expectCredentials,
       );
       const { credentials_encrypted: _creds, ...safe } = updated;
       return res.status(200).json({ account: safe });
     } catch (err: any) {
+      if (err instanceof ProviderAccountConflictError) {
+        return res.status(409).json({ error: 'The stored credentials changed while saving (another edit or a token refresh); reload and retry', code: 'CREDENTIALS_CHANGED' });
+      }
       return res.status(500).json({ error: err?.message || 'Failed to update account' });
     }
   }

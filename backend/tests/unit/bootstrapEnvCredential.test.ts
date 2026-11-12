@@ -106,7 +106,11 @@ function withDb({
   targetUser,
   insertResult,
   existingRoleRow,
+  countError,
+  targetError,
 }: {
+  countError?: boolean;
+  targetError?: boolean;
   superAdminCount?: number;
   targetUser?: { id: string; supabase_uid: string | null; email: string | null; is_deleted: boolean } | null;
   insertResult?: { data: any; error: { message: string } | null };
@@ -123,8 +127,8 @@ function withDb({
             // Return a thenable that resolves to { count }.
             const thenable: any = {
               eq: jest.fn(() => thenable),
-              then(resolve: (v: { count: number }) => void) {
-                resolve({ count: superAdminCount ?? 0 });
+              then(resolve: (v: any) => void) {
+                resolve(countError ? { count: null, error: { message: 'down' } } : { count: superAdminCount ?? 0, error: null });
                 return thenable;
               },
             };
@@ -160,7 +164,7 @@ function withDb({
       return {
         select: jest.fn(() => ({
           eq: jest.fn(() => ({
-            maybeSingle: jest.fn().mockResolvedValue({ data: targetUser ?? null }),
+            maybeSingle: jest.fn().mockResolvedValue(targetError ? { data: null, error: { message: 'down' } } : { data: targetUser ?? null, error: null }),
           })),
         })),
       };
@@ -285,5 +289,41 @@ describe('bootstrap-super-admin mode=env-credential', () => {
     expect(captured.body.bootstrappedUserId).toBe(VALID_TARGET);
     expect(captured.body.nextSteps?.setEnv?.name).toBe('SUPER_ADMIN_PRIMARY_USER_ID');
     expect(captured.body.nextSteps?.setEnv?.value).toBe(VALID_TARGET);
+  });
+});
+
+// PRIVILEGE (2026-11-12): the single-use check read no error, so a failed count
+// read as 0 and bootstrap PROMOTED while a SUPER_ADMIN existed. Each read fails
+// on its own here (the fixture separates the count read from the users read).
+describe('bootstrap-super-admin: unreadable state fails closed', () => {
+  const live = { id: VALID_TARGET, supabase_uid: 'uid', email: 'a@b.c', is_deleted: false };
+  it('env-credential: SUPER_ADMIN count read error -> 503, nothing assigned', async () => {
+    withDb({ countError: true, targetUser: live });
+    const { res, captured } = makeRes();
+    await handler(makeReq({ mode: 'env-credential', username: ENV_USER, password: ENV_PASS, bootstrapToken: TOKEN, targetUserId: VALID_TARGET }), res);
+    expect(captured.status).toBe(503);
+    expect(captured.body.code).toBe('BOOTSTRAP_STATE_UNREADABLE');
+    expect(dbMock.mock.calls.map((c) => c[0])).not.toContain('users');
+  });
+  it('env-credential: target user read error -> 503 (never "not found"), nothing assigned', async () => {
+    withDb({ superAdminCount: 0, targetError: true });
+    const { res, captured } = makeRes();
+    await handler(makeReq({ mode: 'env-credential', username: ENV_USER, password: ENV_PASS, bootstrapToken: TOKEN, targetUserId: VALID_TARGET }), res);
+    expect(captured.status).toBe(503);
+    expect(captured.body.code).toBe('TARGET_USER_UNREADABLE');
+  });
+  it('bootstrap mode: SUPER_ADMIN count read error -> 503 before any principal work', async () => {
+    withDb({ countError: true });
+    const { res, captured } = makeRes();
+    await handler(makeReq({ mode: 'bootstrap', bootstrapToken: TOKEN }), res);
+    expect(captured.status).toBe(503);
+    expect(captured.body.code).toBe('BOOTSTRAP_STATE_UNREADABLE');
+  });
+  it('control: count 0 + live target -> proceeds past both checks', async () => {
+    withDb({ superAdminCount: 0, targetUser: live });
+    const { res, captured } = makeRes();
+    await handler(makeReq({ mode: 'env-credential', username: ENV_USER, password: ENV_PASS, bootstrapToken: TOKEN, targetUserId: VALID_TARGET }), res);
+    expect([503]).not.toContain(captured.status);
+    expect(dbMock.mock.calls.map((c) => c[0])).toContain('users');
   });
 });

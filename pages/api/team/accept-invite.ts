@@ -58,11 +58,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const tokenHash = createHash('sha256').update(token.trim()).digest('hex');
 
   // ── 3. Look up the invitation (single query — fail fast if invalid) ───────
-  const { data: invitation } = await supabase
+  const { data: invitation, error: invitationErr } = await supabase
     .from('invitations')
     .select('id, email, company_id, role, accepted_at, revoked_at, expires_at')
     .eq('token_hash', tokenHash)
     .maybeSingle();
+  // A failed read is not "invitation not found / revoked". (2026-11-12)
+  if (invitationErr) {
+    console.error('[/api/team/accept-invite] invitation read error:', invitationErr.message);
+    return res.status(503).json({ error: 'Could not read the invitation; please try again.' });
+  }
 
   if (!invitation) {
     return res.status(404).json({ error: 'Invitation not found. It may have been revoked or the link is incorrect.' });
@@ -99,11 +104,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── 4. Look up or verify caller's users row ───────────────────────────────
   // active_company_id is the canonical "primary org" pointer; users.company_id
   // is deprecated and no longer read.
-  const { data: userRow } = await supabase
+  const { data: userRow, error: userRowErr } = await supabase
     .from('users')
     .select('id, active_company_id, status')
     .or(`supabase_uid.eq.${callerUid},email.eq.${callerEmail.toLowerCase()}`)
     .maybeSingle();
+  // A failed read is not "account not found". (2026-11-12)
+  if (userRowErr) {
+    console.error('[/api/team/accept-invite] user read error:', userRowErr.message);
+    return res.status(503).json({ error: 'Could not read your account; please try again.' });
+  }
 
   if (!userRow) {
     return res.status(401).json({ error: 'User account not found. Please complete sign-in first.' });
@@ -119,12 +129,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // row to 'active' on acceptance rather than rejecting the invitation
   // as a duplicate. Pre-existing 'active' rows still short-circuit as
   // already-a-member (legacy behavior preserved).
-  const { data: existingRole } = await supabase
+  const { data: existingRole, error: existingRoleErr } = await supabase
     .from('user_company_roles')
     .select('id, status, role')
     .eq('user_id', userId)
     .eq('company_id', companyId)
     .maybeSingle();
+  // A failed read is not "no membership" (that path INSERTS a second row).
+  // Refuse BEFORE the invitation is claimed, so it stays usable.
+  if (existingRoleErr) {
+    console.error('[/api/team/accept-invite] membership read error:', existingRoleErr.message);
+    return res.status(503).json({ error: 'Could not read your membership; please try again.' });
+  }
 
   const existingStatus = (existingRole as any)?.status ?? null;
   const existingRoleValue = (existingRole as any)?.role ?? null;
@@ -158,8 +174,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // - Otherwise INSERT (legacy single-endpoint acceptance flow).
   const now = new Date().toISOString();
 
+  // CLASS 2 (2026-11-12): the membership write is a CAS on the row AS READ
+  // (status + role) with a row count. By id alone, a row an admin deactivated
+  // or re-roled in between was silently reactivated / overwritten, and a row
+  // deleted in between matched nothing yet answered 200 with the invitation
+  // spent. On any failure or lost CAS the invitation claim is RELEASED so the
+  // invite stays usable (mirrors onboardingInvitationAcceptance).
+  const releaseClaim = async (why: string) => {
+    const { error: relErr } = await supabase
+      .from('invitations')
+      .update({ accepted_at: null, accepted_by: null })
+      .eq('id', invitation.id)
+      .eq('accepted_by', userId)
+      .eq('accepted_at', acceptedAt);
+    if (relErr) console.error('[/api/team/accept-invite] STRANDED invitation claim (release failed):', invitation.id, why, relErr.message);
+  };
+
   if (existingRole) {
-    const { error: roleErr } = await supabase
+    let upgrade = supabase
       .from('user_company_roles')
       .update({
         role: invitation.role,
@@ -169,9 +201,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         updated_at: now,
       })
       .eq('id', (existingRole as any).id);
+    upgrade = existingStatus === null ? upgrade.is('status', null) : upgrade.eq('status', existingStatus);
+    upgrade = existingRoleValue === null ? upgrade.is('role', null) : upgrade.eq('role', existingRoleValue);
+    const { data: upgraded, error: roleErr } = await upgrade.select('id');
     if (roleErr) {
       console.error('[/api/team/accept-invite] role upgrade error:', roleErr.message);
+      await releaseClaim('upgrade_error');
       return res.status(500).json({ error: 'Failed to activate membership' });
+    }
+    if (!Array.isArray(upgraded) || upgraded.length !== 1) {
+      await releaseClaim('stale_membership');
+      return res.status(409).json({ error: 'Your membership changed while accepting; please try again.', code: 'STALE_MEMBERSHIP' });
     }
   } else {
     const { error: insErr } = await supabase.from('user_company_roles').insert({
@@ -185,6 +225,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (insErr) {
       console.error('[/api/team/accept-invite] role insert error:', insErr.message);
+      await releaseClaim('insert_error');
       return res.status(500).json({ error: 'Failed to activate membership' });
     }
   }

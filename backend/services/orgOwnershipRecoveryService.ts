@@ -27,11 +27,12 @@ import { ownedDbTable } from '../db/writeOwner';
 import { logger } from './logger';
 import { logSecurityEvent } from '../security/audit/SecurityAuditService';
 import { cascadeDisableCompany } from './lifecycleGovernance';
+import { NON_ADMIN_TENANT_ROLES } from './rbacPrimitives';
 
 const ADMIN_ROLES = new Set(['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN']);
 const DEFAULT_DEMOTED_ROLE = 'CONTENT_CREATOR';
 /** Closure-015J (R-7): non-admin tenant roles a transfer may demote the from-user to. */
-const DEMOTABLE_ROLES = new Set(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY']);
+const DEMOTABLE_ROLES = new Set<string>(NON_ADMIN_TENANT_ROLES);
 const isSuperAdminRole = (role: string | null | undefined): boolean =>
   String(role ?? '').trim().toUpperCase() === 'SUPER_ADMIN';
 
@@ -70,28 +71,35 @@ interface OrgRow { id: string; status: string | null }
 interface RoleRow { user_id: string; company_id: string; role: string | null; status: string | null }
 interface UserRow { id: string; is_deleted: boolean | null }
 
+// PRIVILEGE (2026-11-12): these reads THROW on error. A failed read used to be
+// "no org / no user / no membership" - a refusal with a false reason (and an
+// ambiguous membership, e.g. duplicate rows, read as "none"). Callers' routes
+// answer a thrown error as a 500, which is the truthful answer.
 async function fetchOrg(orgId: string): Promise<OrgRow | null> {
-  const { data } = await ownedDbTable('companies')
+  const { data, error } = await ownedDbTable('companies')
     .select('id, status')
     .eq('id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[orgOwnershipRecovery] org read failed for ${orgId}: ${error.message}`);
   return (data as OrgRow | null) ?? null;
 }
 
 async function fetchUser(userId: string): Promise<UserRow | null> {
-  const { data } = await ownedDbTable('users')
+  const { data, error } = await ownedDbTable('users')
     .select('id, is_deleted')
     .eq('id', userId)
     .maybeSingle();
+  if (error) throw new Error(`[orgOwnershipRecovery] user read failed for ${userId}: ${error.message}`);
   return (data as UserRow | null) ?? null;
 }
 
 async function fetchRole(orgId: string, userId: string): Promise<RoleRow | null> {
-  const { data } = await ownedDbTable('user_company_roles')
+  const { data, error } = await ownedDbTable('user_company_roles')
     .select('user_id, company_id, role, status')
     .eq('user_id', userId)
     .eq('company_id', orgId)
     .maybeSingle();
+  if (error) throw new Error(`[orgOwnershipRecovery] membership read failed for ${userId}@${orgId}: ${error.message}`);
   return (data as RoleRow | null) ?? null;
 }
 
@@ -161,11 +169,27 @@ export async function promoteMemberToAdmin(input: {
     return { ok: true, previousRole, newRole: previousRole, idempotent: true };
   }
 
-  const { error } = await ownedDbTable('user_company_roles')
+  // CLASS 2 (2026-11-12): CAS on the row as READ (role + status 'active') with
+  // a row count. Unconditioned, a concurrent SUPER_ADMIN grant was overwritten
+  // to COMPANY_ADMIN, and a row deactivated in between still got the admin role.
+  let cas = ownedDbTable('user_company_roles')
     .update({ role: 'COMPANY_ADMIN', updated_at: new Date().toISOString() })
     .eq('user_id', input.userId)
-    .eq('company_id', input.orgId);
+    .eq('company_id', input.orgId)
+    .eq('status', 'active');
+  cas = previousRole === null ? cas.is('role', null) : cas.eq('role', previousRole);
+  // RELIES ON idx_user_company_roles_user_company_active (UNIQUE (user_id,
+  // company_id) WHERE status = 'active'): with the status='active' filter at
+  // most ONE row can match, so `length !== 1` can only mean ZERO matched and
+  // nothing was written - STALE_MEMBERSHIP is then truthful. The index is
+  // PARTIAL: drop the status filter (or promote across statuses) and a 2-row
+  // match would write the admin role twice and THEN report failure. (05)
+  const { data: promoted, error } = await cas.select('user_id');
 
+  if (!error && (!Array.isArray(promoted) || promoted.length !== 1)) {
+    logger.warn('org_recovery_promote_stale', { orgId: input.orgId, userId: input.userId, previousRole, rows: Array.isArray(promoted) ? promoted.length : null });
+    return { ok: false, reason: 'STALE_MEMBERSHIP' };
+  }
   if (error) {
     logger.error('org_recovery_promote_failed', {
       orgId: input.orgId,

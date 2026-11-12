@@ -17,6 +17,28 @@ export const Role = {
 export type Role = (typeof Role)[keyof typeof Role];
 
 /**
+ * The NON-ADMIN tenant roles a member may be placed in by a non-governed path
+ * (self-joined confirmation, ownership-recovery demotion). ONE list (05,
+ * 2026-11-12): two hand-kept copies drift and fail differently.
+ * OWNER RULING (e9, 2026-11-12): CONTENT_MANAGER, CONTENT_PLANNER,
+ * CONTENT_ENGAGER and VIEWER are REAL tenant roles and belong here. FINANCE_*
+ * stays OUT. The invitations_role_check widening is a separate migration.
+ * The former KNOWN GAP is CLOSED on this branch: roles Approach A R1 (the four
+ * keep their identity, authorised by ROLE_BASE_TIERS below) and R2 (explicit
+ * ROLE_CAPABILITIES entries, since CapabilityService reads the RAW role).
+ */
+export const NON_ADMIN_TENANT_ROLES = [
+  Role.CONTENT_CREATOR,
+  Role.CONTENT_REVIEWER,
+  Role.CONTENT_PUBLISHER,
+  Role.VIEW_ONLY,
+  Role.CONTENT_MANAGER,
+  Role.CONTENT_PLANNER,
+  Role.CONTENT_ENGAGER,
+  Role.VIEWER,
+] as const;
+
+/**
  * ROLES APPROACH A (owner ruling via e9, 2026-11-12). CONTENT_MANAGER,
  * CONTENT_PLANNER, CONTENT_ENGAGER and VIEWER are REAL roles: they keep their
  * identity (they are no longer rewritten) and authorise through deliberate
