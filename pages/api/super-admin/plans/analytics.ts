@@ -18,6 +18,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -51,18 +52,15 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
     return true;
   }
 
-  // Check Firebase user role
+  // PRIVILEGE (e9 ruling, 2026-11-12): the canonical super-admin source is an
+  // ACTIVE user_company_roles SUPER_ADMIN row (isPlatformSuperAdmin), exactly as
+  // the sibling read routes plans/list and plans/get-organization-plan. This
+  // used to read users.role - a LEGACY column (no CHECK, never a grant
+  // source), which made it a second source of super-admin truth.
   try {
     const { user, error } = await getSupabaseUserFromRequest(req);
-    if (error || !user) return false;
-
-    const { data: profile } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    return String(profile?.role ?? '').toUpperCase() === 'SUPER_ADMIN';
+    if (error || !user?.id) return false;
+    return await isPlatformSuperAdmin(user.id);
   } catch {
     return false;
   }

@@ -7,6 +7,11 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *  1. Downgrading users.role from SUPER_ADMIN to COMPANY_ADMIN
  *  2. Downgrading any SUPER_ADMIN role in user_company_roles to COMPANY_ADMIN
  *
+ * users.role is a LEGACY column (e9 ruling, 2026-11-12): no CHECK, and NOTHING
+ * reads it for authorization - the canonical source is (2), an active
+ * user_company_roles SUPER_ADMIN row. Step (1) is kept as legacy hygiene only;
+ * it is never what revokes access. Do not add a reader of users.role.
+ *
  * Authorization: capability `identity.admin.revoke` + step-up policy
  * (phishing-resistant + trusted device, 10-minute window). Bridge
  * principals cannot satisfy step-up and are rejected.
