@@ -50,7 +50,7 @@ jest.mock('../../services/autonomousDecisionLogger', () => ({ logDecision: async
 jest.mock('../../services/rbacService', () => ({ Role: { COMPANY_ADMIN: 'COMPANY_ADMIN', SUPER_ADMIN: 'SUPER_ADMIN' }, isPlatformSuperAdmin: async () => false, getUserRole: async () => ({ role: 'COMPANY_ADMIN' }) }));
 jest.mock('../../services/supabaseAuthService', () => ({ getSupabaseUserFromRequest: async () => ({ user: { id: 'user-a' }, error: null }) }));
 jest.mock('../../services/intentExecutionService', () => ({ __esModule: true }), { virtual: false });
-jest.mock('../../services/intelligenceUnitService', () => ({ listIntelligenceUnits: async () => [], listCompanyIntelligenceUnits: async () => [] }));
+jest.mock('../../services/intelligenceUnitService', () => ({ listIntelligenceUnits: async () => [{ id: 'iu-1', name: 'U1', category: 'c', report_tiers: [] }], listCompanyIntelligenceUnits: async () => [] }));
 jest.mock('../../services/platformIntelligenceService', () => ({ getPlatformRules: async (p: string) => ({ platform: { canonical_key: p } }) }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
@@ -91,12 +91,13 @@ describe('admin/autonomous POST', () => {
 });
 
 describe('settings/intelligence-access PUT', () => {
-  it("company mode: overrides are written for A only (stamped by the seam), never another company's", async () => {
-    const r = await call(intelligence, 'PUT', {}, { companyId: B, units: [{ id: 'iu-1', enabled: false }] });
-    expect(r.statusCode).toBe(200);
-    const w = writes('company_intelligence_config');
-    expect(w).toHaveLength(1);
-    expect(w[0].payload).toEqual([expect.objectContaining({ company_id: A, iu_id: 'iu-1' })]);
+  it("company mode: an A-only admin's overrides are stamped with A; requesting B is refused (uniform 404), never written to B", async () => {
+    const ok = await call(intelligence, 'PUT', {}, { units: [{ id: 'iu-1', enabled: false }] });
+    expect(ok.statusCode).toBe(200);
+    expect(writes('company_intelligence_config')[0].payload).toEqual([expect.objectContaining({ company_id: A, iu_id: 'iu-1' })]);
+    const toB = await call(intelligence, 'PUT', {}, { companyId: B, units: [{ id: 'iu-1', enabled: false }] });
+    expect(toB.statusCode).toBe(404);
+    expect(writes('company_intelligence_config')).toHaveLength(1);
   });
 });
 
@@ -106,5 +107,41 @@ describe('accounts/[platform] DELETE', () => {
     expect(r.statusCode).toBe(200);
     expect(writes('social_accounts')[0].filters).toMatchObject({ id: 'sa-a', company_id: A, user_id: 'user-a' });
     expect(mockDb.social_accounts.find((x) => x.id === 'sa-b')!.is_active).toBe(true);
+  });
+});
+
+describe('e9 follow-up fixes (intelligence-access)', () => {
+  const C = '33333333-3333-4333-8333-333333333333';
+  const units = (body: Row) => (body?.intelligence ?? []) as Row[];
+
+  it('GLOBAL mode (super admin): the overrides it WRITES are READ back (was a missing read)', async () => {
+    mockDb.user_company_roles = [{ user_id: 'user-a', company_id: A, role: 'SUPER_ADMIN', status: 'active' }];
+    const put = await call(intelligence, 'PUT', {}, { mode: 'global', units: [{ id: 'iu-1', enabled: false }] });
+    expect(put.statusCode).toBe(200);
+    expect(mockDb.company_intelligence_config.find((r) => r.company_id === '__GLOBAL_DEFAULT__')).toMatchObject({ iu_id: 'iu-1', enabled: false });
+    const get = await call(intelligence, 'GET', { mode: 'global' });
+    expect(units(get.body).find((u) => u.id === 'iu-1')).toMatchObject({ enabled: false });
+  });
+
+  it('an admin of A AND B edits B when B is requested (was always their first company)', async () => {
+    mockDb.user_company_roles = [
+      { user_id: 'user-a', company_id: A, role: 'COMPANY_ADMIN', status: 'active' },
+      { user_id: 'user-a', company_id: B, role: 'COMPANY_ADMIN', status: 'active' },
+    ];
+    const r = await call(intelligence, 'PUT', {}, { companyId: B, units: [{ id: 'iu-1', enabled: false }] });
+    expect(r.statusCode).toBe(200);
+    expect(writes('company_intelligence_config')[0].payload).toEqual([expect.objectContaining({ company_id: B, iu_id: 'iu-1' })]);
+  });
+
+  it('a requested company where the caller is NOT an active admin is the uniform 404; nothing written', async () => {
+    mockDb.user_company_roles = [
+      { user_id: 'user-a', company_id: A, role: 'COMPANY_ADMIN', status: 'active' },
+      { user_id: 'user-a', company_id: C, role: 'COMPANY_ADMIN', status: 'inactive' },
+    ];
+    const r = await call(intelligence, 'PUT', {}, { companyId: C, units: [{ id: 'iu-1', enabled: false }] });
+    const unknown = await call(intelligence, 'PUT', {}, { companyId: '44444444-4444-4444-8444-444444444444', units: [{ id: 'iu-1', enabled: false }] });
+    expect(r.statusCode).toBe(404);
+    expect(JSON.stringify(r.body)).toBe(JSON.stringify(unknown.body));
+    expect(writes('company_intelligence_config')).toHaveLength(0);
   });
 });

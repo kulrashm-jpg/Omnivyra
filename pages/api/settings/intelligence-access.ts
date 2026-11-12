@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
+import { UNIFORM_NOT_FOUND } from '@/backend/services/userContextService';
 import {
   type CompanyExecutionFlags,
 } from '@/backend/services/intentExecutionService';
@@ -206,11 +207,15 @@ async function upsertFlags(companyId: string, flags: CompanyExecutionFlags, upda
   );
 }
 
-async function getCompanyUnitOverrides(companyId: string): Promise<Map<string, { enabled: boolean }>> {
-  const { data } = await supabase
-    .from('company_intelligence_config')
-    .select('iu_id, enabled')
-    .eq('company_id', companyId);
+async function getCompanyUnitOverrides(userId: string, companyId: string): Promise<Map<string, { enabled: boolean }>> {
+  let data: unknown[] | null;
+  if (companyId === GLOBAL_DEFAULT_PROFILE_ID) {
+    // The PLATFORM default profile (super-admin, global mode): keyed by a sentinel, not a tenant.
+    // cross-tenant: intelligence-access-global-defaults
+    ({ data } = await supabase.from('company_intelligence_config').select('iu_id, enabled').eq('company_id', companyId));
+  } else {
+    ({ data } = await tenantTable('company_intelligence_config', tenantContextFor({ userId }, companyId)).select('iu_id, enabled'));
+  }
 
   const rows = (data ?? []) as Array<{ iu_id: string; enabled: boolean }>;
   return new Map(rows.map((r) => [r.iu_id, { enabled: r.enabled }]));
@@ -285,7 +290,7 @@ async function listCompaniesForPicker(): Promise<Array<{ id: string; name: strin
   }));
 }
 
-async function resolveAccess(userId: string, requestedCompanyId?: string, mode: 'global' | 'company' = 'company'): Promise<{ companyId: string; canWrite: boolean; isSuperAdmin: boolean } | null> {
+async function resolveAccess(userId: string, requestedCompanyId?: string, mode: 'global' | 'company' = 'company'): Promise<{ companyId: string; canWrite: boolean; isSuperAdmin: boolean } | 'not_found' | null> {
   const { data: roles, error } = await supabase
     .from('user_company_roles')
     .select('company_id, role, status')
@@ -307,8 +312,17 @@ async function resolveAccess(userId: string, requestedCompanyId?: string, mode: 
     return { companyId: selected, canWrite: true, isSuperAdmin: true };
   }
 
-  const companyAdminRole = roles.find((r: any) => String(r.role).toUpperCase() === 'COMPANY_ADMIN');
-  if (!companyAdminRole) return null;
+  const adminRoles = roles.filter((r: any) => String(r.role).toUpperCase() === 'COMPANY_ADMIN');
+  if (adminRoles.length === 0) return null;
+  // e9 (2026-11-12): a multi-company admin reaches the company they ASKED for - only where they
+  // hold an ACTIVE COMPANY_ADMIN role (roles above are status='active'). Any other requested
+  // company is the uniform 404 (indistinguishable from one that does not exist).
+  if (requestedCompanyId) {
+    const match = adminRoles.find((r: any) => String(r.company_id).toLowerCase() === String(requestedCompanyId).toLowerCase());
+    if (!match) return 'not_found';
+    return { companyId: match.company_id, canWrite: true, isSuperAdmin: false };
+  }
+  const companyAdminRole = adminRoles[0];
 
   return {
     companyId: companyAdminRole.company_id,
@@ -354,6 +368,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const requestedCompanyId = body.companyId || queryCompanyId;
 
     const access = await resolveAccess(user.id, requestedCompanyId, mode);
+    if (access === 'not_found') {
+      return res.status(404).json(UNIFORM_NOT_FOUND);
+    }
     if (!access) {
       return res.status(403).json({ error: 'Only company admins or super admins can access this setting' });
     }
@@ -395,7 +412,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       getFlagsRow(GLOBAL_DEFAULT_PROFILE_ID),
       getFlagsRow(access.companyId),
       listIntelligenceUnits(),
-      mode === 'global' ? Promise.resolve(new Map<string, { enabled: boolean }>()) : getCompanyUnitOverrides(access.companyId),
+      getCompanyUnitOverrides(user.id, access.companyId),
       access.isSuperAdmin && mode === 'company' ? listCompaniesForPicker() : Promise.resolve(undefined),
     ]);
 
@@ -422,7 +439,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         name: unit.name,
         category: unit.category,
         report_tiers: unit.report_tiers,
-        enabled: mode === 'global' ? true : (override?.enabled ?? true),
+        enabled: override?.enabled ?? true,
       };
     });
 
