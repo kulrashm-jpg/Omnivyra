@@ -85,6 +85,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
     const userId = auth.user.id;
+    // TENANT: the campaign is owned by the recommendation's company (authorized below); a
+    // company-less recommendation cannot create one (String(null) used to read as company "null").
+    if (!recommendation.company_id) {
+      return res.status(400).json({ code: 'COMPANY_REQUIRED', error: 'This recommendation has no company, so no campaign can be created from it.' });
+    }
     const companyId = String(recommendation.company_id);
     const privileged =
       (await isPlatformSuperAdmin(userId)) ||
@@ -181,6 +186,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         name: `Trend: ${recommendation.trend_topic}`,
         description: `Auto-generated from recommendation ${recommendation.id}`,
         user_id: userId,
+        // TENANT: owned by the recommendation's (authorized) company, never left NULL.
+        company_id: companyId,
         status: 'draft',
         current_stage: 'planning',
         ...(source_blog_type ? { source_blog_type: resolvedBlogType } : {}),

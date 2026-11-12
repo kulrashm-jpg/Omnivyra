@@ -346,3 +346,12 @@ describe('R3-P1 — Content Workspace copy rides the SAME pipeline (additive pas
     expect(content.content_planning_status).toBe('draft');
   });
 });
+
+describe('TENANT: a new campaign row is owned by the authorized company (NULL company_id trace, e9 2026-11-12)', () => {
+  it('the inserted campaigns row carries company_id = the requireTenantAccess organization, never NULL', async () => {
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody()), res);
+    expect(campaignInserts).toHaveLength(1);
+    expect((campaignInserts[0] as Row).company_id).toBe('co-1');
+  });
+});
