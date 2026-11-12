@@ -9,6 +9,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateCampaignFromOpportunity } from '../../../backend/services/opportunityCampaignGenerator';
+import { DuplicateGuardReadError } from '../../../backend/services/campaignDuplicateGuardService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -46,6 +47,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       blueprint: result.blueprint,
     });
   } catch (err: any) {
+    // unread-error pkg 2: the duplicate check could not read, so nothing was created. Retryable.
+    if (err instanceof DuplicateGuardReadError) {
+      console.error('[create-from-opportunity] duplicate check unreadable; nothing created', { table: err.table, message: err.message });
+      return res.status(503).json({ code: err.code, error: 'Could not check for similar campaigns. Nothing was created. Please try again.' });
+    }
     const msg = err?.message ?? '';
     if (msg === 'Campaign opportunity not found') {
       return res.status(404).json({ error: 'Campaign opportunity not found' });
