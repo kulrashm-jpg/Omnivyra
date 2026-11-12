@@ -30,6 +30,12 @@ const COLUMN_OVERRIDES = {
  */
 const TENANT_VIEWS = {
   company_blog_performance_summary: 'company_id',
+  // 55 S2 U classification (2026-11-13, e9-assigned): views exposing a tenant column.
+  v_reservation_health: 'organization_id', // credit_transactions holds grouped by organization_id (NOT security_invoker; super-admin dashboard reads all orgs)
+  v_billing_operations_health: 'organization_id', // billing_operations grouped by organization_id
+  v_company_financial_timeline: 'organization_id', // UNION of credit/financial-audit/approval/payment rows, each carrying organization_id
+  community_ai_network_intelligence: 'organization_id', // security_invoker view over community_ai_discovered_users; organization_id matches community_ai_actions' COLUMN_OVERRIDES
+  market_pulse_view: 'company_id', // security_invoker view grouped by company_id
 };
 /** Indirect tenancy declared by hand where the schema has the column but no FOREIGN KEY constraint. */
 const VIA_OVERRIDES = {
@@ -53,6 +59,51 @@ const VIA_OVERRIDES = {
   content_asset_platform_override: ['attachment_id', 'content_asset_attachment'],
   creator_render_attempt: ['variant_id', 'creator_render_variant'], // not the NULLABLE billing_operation_id
   creator_render_output: ['attempt_id', 'creator_render_attempt'], // until 20270217000027 denormalises the tenant
+  // 55 S2 U classification (2026-11-13, e9-assigned): per-campaign tables, campaign_id with no FK declared.
+  // NULLABLE campaign_id: campaign-less rows are unreachable through the seam (fail closed).
+  ai_enhancement_logs: ['campaign_id', 'campaigns'], // NOT NULL; its day_id FK -> daily_content_plans is itself VIA
+  ai_improvements: ['campaign_id', 'campaigns'], // NULLABLE
+  ai_threads: ['campaign_id', 'campaigns'], // NULLABLE; read by campaign_id
+  business_intelligence_reports: ['campaign_id', 'campaigns'], // campaign_id TEXT holding the campaign uuid
+  campaign_distribution_decisions: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_execution_state: ['campaign_id', 'campaigns'], // NOT NULL; every access by campaign_id
+  campaign_forecasts: ['campaign_id', 'campaigns'], // campaign_id TEXT holding the campaign uuid
+  campaign_goals: ['campaign_id', 'campaigns'], // NULLABLE
+  campaign_performance_metrics: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_preemption_log: ['initiator_campaign_id', 'campaigns'], // both campaign ids NOT NULL; preemption is between campaigns of one company
+  campaign_readiness: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_recommendation_weeks: ['campaign_id', 'campaigns'], // NOT NULL; read by campaign_id (+ session_id)
+  campaign_resource_projection: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_strategic_memory: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_strategies: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_user_roles: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_virality_assessments: ['campaign_id', 'campaigns'], // NOT NULL
+  campaign_week_plan: ['campaign_id', 'campaigns'], // NOT NULL; campaignPlanStore reads by campaign_id
+  content_items: ['campaign_id', 'campaigns'], // legacy; campaign_id VARCHAR, NULLABLE
+  content_pillars: ['campaign_id', 'campaigns'], // NOT NULL
+  content_plans: ['campaign_id', 'campaigns'], // NULLABLE; every access by campaign_id
+  platform_content_slots: ['campaign_id', 'campaigns'], // NOT NULL; its FKs (bolt_content_jobs/daily_content_plans/scheduled_posts) are all VIA
+  platform_strategies: ['campaign_id', 'campaigns'], // NOT NULL
+  roi_reports: ['campaign_id', 'campaigns'], // campaign_id TEXT holding the campaign uuid
+  strategic_memory_snapshots: ['campaign_id', 'campaigns'], // NOT NULL
+  voice_notes: ['campaign_id', 'campaigns'], // campaign_id VARCHAR(255), NULLABLE; routes resolve campaign access first
+  // 55 S2 U classification (2026-11-13, e9-assigned): multi-hop (parent is itself VIA) and non-id-key parents.
+  queue_jobs: ['scheduled_post_id', 'scheduled_posts'], // FK NOT NULL; parent is VIA, so the FK scan cannot pick it
+  queue_job_logs: ['job_id', 'queue_jobs'], // job_id NOT NULL, no FK; two hops
+  content_analytics: ['scheduled_post_id', 'scheduled_posts'], // FK NOT NULL; post metrics
+  scheduled_post_media: ['scheduled_post_id', 'scheduled_posts'], // FK; post-media links
+  post_comments: ['scheduled_post_id', 'scheduled_posts'], // FK NOT NULL; comments ingested for a published post
+  comment_replies: ['comment_id', 'post_comments'], // FK; two hops
+  comment_flags: ['comment_id', 'post_comments'], // FK; two hops
+  comment_likes: ['comment_id', 'post_comments'], // FK; two hops
+  cms_taxonomy_cache: ['connection_id', 'website_connections'], // FK; parent is VIA
+  content_performance_metrics: ['content_asset_id', 'content_assets', 'asset_id'], // FK -> content_assets(asset_id)
+  platform_compliance_reports: ['content_asset_id', 'content_assets', 'asset_id'], // FK -> content_assets(asset_id)
+  platform_content_variants: ['content_asset_id', 'content_assets', 'asset_id'], // FK -> content_assets(asset_id)
+  promotion_metadata: ['content_asset_id', 'content_assets', 'asset_id'], // FK -> content_assets(asset_id)
+  // Settlement webhook ledger: checkout_idempotency_key (NULLABLE, no FK) -> billing_checkout_sessions.idempotency_key
+  // (NOT NULL UNIQUE; parent DIRECT on organization_id). Unmatched events stay invisible (fail closed); never actioned.
+  billing_settlement_events: ['checkout_idempotency_key', 'billing_checkout_sessions', 'idempotency_key'],
 };
 /**
  * GLOBAL tables: no tenant at all (platform-wide content or system state). Reads/writes stay on ownedDbTable
@@ -83,11 +134,113 @@ const GLOBAL_TABLES = {
   creator_render_validation_manifests: 'ops validation manifests of the creator_render_jobs mirror; never read for tenant data',
   creator_dead_letter_jobs: 'creator publish dead-letter queue (operator view, worker-written)',
   creator_upload_rate_state: 'upload abuse-guard rate buckets (system-written; polymorphic user/company/plan scope)',
+  // 55 S2 U classification (2026-11-13, e9-assigned): platform catalogs, config, pricing and ops state.
+  access_request_rate_limit: 'pre-auth access-request abuse guard keyed by ip_hash (no tenant rows)',
+  action_pricing_config: 'platform credit pricing per action_key',
+  ai_execution_profile_versions: 'versions of platform AI execution profiles (FK profile_id)',
+  ai_execution_profiles: 'platform AI execution profile catalog (key UNIQUE); tenant overrides live in ai_capability_profile_bindings',
+  ai_operation_capability_map: 'platform AI operation -> capability map keyed by operation',
+  ai_routing_policies: 'platform AI provider routing policies (key UNIQUE)',
+  analytics_provider_config: 'platform analytics OAuth app config per provider (GA4 etc.)',
+  analytics_serp_provider_health: 'SERP provider health telemetry keyed by provider (platform ops)',
+  angle_industry_matrix: 'platform-wide angle x industry performance aggregate, unique (industry, angle_type); no tenant rows',
+  api_idempotency_keys: 'request-replay infrastructure keyed by (scope, caller_id, idempotency_key); system-written by withIdempotency',
+  billing_fx_rates: 'platform FX rate table keyed by currency (Super Admin pricing config)',
+  billing_plan_pricing: 'platform plan price list keyed by plan_key (Super Admin pricing config)',
+  billing_price_overrides: 'platform price overrides per sku/currency',
+  blocked_domain_patterns: 'platform blocked email-domain patterns',
+  blocked_domains: 'platform blocked email-domain list',
+  campaign_opportunities: 'platform-wide opportunities from GLOBAL strategic_themes/signal_clusters (unique theme_id, opportunity_type); a company campaign is generated FROM one',
+  campaign_readiness_leads: 'platform-owned marketing leads from the public readiness check (visitor-typed company/website/email; PII, not tenant rows)',
+  community_ai_platform_policy: 'platform Community AI policy switch (single config)',
+  competitor_enrichment_cache: 'public competitor profile enrichment cache keyed by name+domain (no tenant rows)',
+  config_change_logs: 'platform admin config change audit',
+  content_validation_config: 'platform content-validation thresholds (admin config)',
+  cost_reconciliation_runs: 'platform vendor-cost reconciliation runs',
+  creator_render_ops_audit: 'render operator action audit (actor, action, target org/provider/job); operator-only, never read for tenant data',
+  creator_render_provider: 'render provider registry keyed by provider_key (health, priority; platform ops)',
+  credit_cost_config: 'platform credit cost per action_type (pricing config)',
+  credit_packages: 'platform credit package catalog (sku, price)',
+  credit_untracked_actions: 'platform allow-list of actions exempt from credit tracking',
+  curated_industry_sources: 'platform curated industry source catalog',
+  currency_exchange_rates: 'platform FX engine rates (source/target currency, provider snapshots)',
+  decision_engine_config: 'platform decision-engine thresholds (admin config)',
+  disposable_domains: 'platform disposable-email domain list',
+  domain_eligibility_cache: 'email-domain MX/eligibility cache keyed by domain',
+  domain_whitelist: 'platform email-domain allow-list for free-credit eligibility (Super Admin managed)',
+  engagement_sources: 'engagement source type catalog (platform, source_type)',
+  experiment_config: 'platform A/B experiment config',
+  free_credit_config: 'platform free-credit grant config per category',
+  global_campaign_patterns: 'platform-wide aggregated campaign patterns (anonymised, by platform/content_type)',
+  governance_lockdown: 'single global governance kill-switch row (GovernanceLockdownService: one row)',
+  hidden_billing_catalog: 'platform hidden billing catalog (reference_key, amount)',
+  hidden_billing_catalog_audit: 'Super Admin hidden-billing catalog change audit (immutable)',
+  image_metadata: 'stock-image provider metadata cache keyed by provider_id',
+  image_search_cache: 'stock-image search result cache keyed by query_key',
+  intelligence_categories: 'platform intelligence category catalog',
+  intelligence_cleanup_progress: 'cleanup-job cursor keyed by job_name (worker infrastructure)',
+  intelligence_global_config: 'platform intelligence job config per job_type',
+  intelligence_job_runs: 'daily intelligence scheduler run log (ops)',
+  intelligence_throttle_config: 'platform intelligence throttle singleton (id = 1 CHECK)',
+  intelligence_units: 'platform intelligence-unit catalog (id IU-NN)',
+  llm_model_pricing: 'platform LLM vendor price list',
+  llm_models: 'platform LLM model catalog',
+  llm_providers: 'platform LLM provider catalog',
+  marketpulse_signal_impacts: 'impacts of a GLOBAL marketpulse_signals row (FK signal_id)',
+  marketpulse_signal_relationships: 'relationships between GLOBAL marketpulse_signals rows (FK both ends)',
+  marketpulse_signals: 'platform-wide market signals unique on duplicate_key; per-tenant relevance lives in marketpulse_company_signal_relevance (DIRECT)',
+  marketpulse_trends: 'platform-wide market pulse trends; per-company impact lives in marketpulse_business_impacts (DIRECT)',
+  payment_provider_config: 'platform payment-provider catalog/switches, unique per provider (Super Admin config)',
+  plan_limits: 'limits per pricing plan (plan_id, resource_key): plan catalog',
+  platform_content_rules: 'content rules per platform_master entry (catalog)',
+  platform_master: 'platform (social network) master catalog',
+  platform_oauth_configs: 'platform OAuth app credentials per social platform (keyed by platform)',
+  platform_post_metadata_requirements: 'required post metadata per platform_master row (catalog)',
+  platform_registry: 'social-platform capability catalog keyed by platform_key',
+  platform_rules: 'platform content rules per social platform (catalog)',
+  platform_rules_config: 'platform rules admin config',
+  prediction_config: 'platform prediction weights (admin-tunable config)',
+  pricing_adjustment_queue: 'platform pricing-multiplier review queue (Super Admin)',
+  pricing_intelligence: 'platform pricing margin analytics per action/model/week',
+  pricing_plans: 'platform subscription plan catalog (plan_key, price)',
+  provider_invoice_imports: 'platform provider invoices (our AI/API vendor bills)',
+  provisioned_resources: 'platform infrastructure cost inventory (Supabase/Vercel/etc.)',
+  public_email_providers: 'public email-domain list (gmail etc.)',
+  rbac_config: 'platform RBAC role/permission config (versioned)',
+  recommendation_policies: 'platform recommendation weighting policies',
+  scheduler_locks: 'scheduler lease rows keyed by job_name (worker infrastructure)',
+  settlement_metrics_rollup: 'billing settlement ops metric rollups',
+  settlement_operational_metrics: 'billing settlement ops metrics',
+  settlement_runtime_locks: 'settlement worker locks keyed by lock_key',
+  signal_intelligence: 'platform-wide intelligence per GLOBAL signal_clusters row; companies jsonb lists mentioned entities, not owners',
+  super_admin_audit_logs: 'platform operator (Super Admin) audit trail',
+  system_anomalies: 'platform anomaly telemetry (Super Admin system health)',
+  token_refresh_locks: 'OAuth token refresh lock rows keyed by lock_key (worker infrastructure)',
+  tone_config: 'platform tone rules keyed by tone_name (admin config)',
+  user_friendly_error_mappings: 'platform error-message mapping catalog',
+  user_override: 'Super Admin free-credit eligibility override per auth user (platform signup gate)',
+  worker_dead_letter_queue: 'worker dead-letter queue (ops); tenant only inside job_payload JSON',
+  worker_health: 'worker heartbeat telemetry (ops)',
 };
 /** Tables that carry a tenant-named column but are NOT tenant-owned rows (global config or cross-tenant ledgers). */
 const NOT_TENANT = new Set([
   'users', // identity: a user spans companies; users.company_id is legacy (C21: 105 NULL); access is the membership layer's
   'user_company_roles', // membership: keyed by user across companies BY DESIGN (auth resolves which companies a user may act in)
+  // 55 S2 U classification (2026-11-13, e9-assigned): tenant root, identity layer, cross-tenant by design.
+  'companies', // tenant ROOT: the row IS the tenant; scope by id = ctx.companyId, never by a tenant column
+  'engagement_authors', // external platform identities deduped ACROSS tenants; tenant linkage is on the referencing engagement rows
+  'referrals', // cross-tenant referral ledger (referrer and referee orgs) by design
+  'signup_intents', // pre-account signup intent keyed by email: no company exists yet
+  'auth_sessions', // identity layer: per user, spans companies
+  'auth_audit_logs', // identity layer: user auth event audit
+  'trusted_devices', // identity layer: user device trust
+  'webauthn_credentials', // identity layer: user passkeys
+  'webauthn_challenges', // identity layer: passkey ceremony challenges
+  'totp_factors', // identity layer: user MFA factors
+  'recovery_codes', // identity layer: user MFA recovery codes
+  'stepup_sessions', // identity layer: user step-up auth sessions
+  'user_preferences', // per-USER UI preference, UNIQUE(user_id); a user spans companies
+  'adapter_configs', // per-USER content-adapter preferences, UNIQUE(user_id, platform); not tenant content
 ]);
 const TAG_RULES = [
   ['money', /(credit|billing|invoice|payment|wallet|purchase|refund|subscription|pricing|monetiz|settlement|usage_event|cost|quota|ledger|charge)/],
@@ -95,7 +248,13 @@ const TAG_RULES = [
   ['content', /(content|blog|post|plan|campaign|creator|asset|media|message|thread|comment|draft|template|report|snapshot|engagement|opportunit|knowledge|profile|brand|theme|calendar|render|image|video|document|note|reply|story)/],
 ];
 /** Per-table tag corrections (money > pii > content > other). */
-const TAG_OVERRIDES = { integration_credentials: 'money' };
+const TAG_OVERRIDES = {
+  integration_credentials: 'money',
+  // 55 S2 U classification (2026-11-13): billing views the name rules tag 'other'; their reads are pre-launch (money).
+  v_reservation_health: 'money',
+  v_billing_operations_health: 'money',
+  v_company_financial_timeline: 'money',
+};
 /**
  * TENANT_OR_PLATFORM (e9 ruling on C28, 2026-11-12): catalog tables whose NULL-tenant rows are PLATFORM rows
  * every tenant may READ. Reads go through tenantOrPlatformTable (tenant rows + platform rows); writes are
