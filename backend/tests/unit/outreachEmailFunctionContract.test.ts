@@ -22,12 +22,14 @@ import path from 'path';
 
 const invocations: Array<{ fn: string; body: Record<string, unknown> }> = [];
 let functionResponse: { data?: unknown; error?: { message?: string } } = {};
+let invokeThrows: Error | null = null;
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     functions: {
       invoke: async (fn: string, opts: { body: Record<string, unknown> }) => {
         invocations.push({ fn, body: opts.body });
+        if (invokeThrows) throw invokeThrows;
         return functionResponse;
       },
     },
@@ -351,6 +353,16 @@ describe('send-transactional-email non-2xx -> provider `uncertain` unless DEFINI
     const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
     expect(res.accepted).toBe(false);
     expect(res.uncertain).toBeUndefined();
+  });
+
+  it('a THROW out of invoke (the request may be on its way) -> uncertain, never a re-queueable provider error', async () => {
+    invokeThrows = new Error('socket closed mid-request');
+    try {
+      const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
+      expect(res).toMatchObject({ accepted: false, uncertain: true, rejectionReason: 'provider_uncertain' });
+    } finally {
+      invokeThrows = null;
+    }
   });
 
   it('the body is read from a CLONE: the Response stays readable afterwards', async () => {

@@ -116,6 +116,11 @@ export interface EmailProviderPort {
  *     503 store unavailable - nothing was sent);
  *   - any other 4xx: refused before sending -> DEFINITE.
  * supabase-js carries the HTTP Response as `error.context` (cloned before reading, so the body stays intact).
+ *
+ * DESIGN NOTE (05, root cause): every "must be uncertain" case here exists because a re-dispatch mints a NEW key
+ * (company, task, attempt + 1), which the function's dedupe cannot connect to the earlier attempt. A key STABLE
+ * across retries of the same task would let the dedupe catch a re-queued attempt and take most of this weight off
+ * the classifier. Before adding another case here, consider that change one level up (logged as a design item).
  */
 export async function classifyFunctionError(error: unknown): Promise<'uncertain' | 'definite'> {
   const ctx = (error as { context?: { status?: unknown; clone?: () => { json: () => Promise<unknown> }; json?: () => Promise<unknown> } } | null)?.context;
@@ -140,17 +145,27 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
     // that is disabled by default.
     const { supabase } = (await import('../../db/supabaseClient')) as { supabase: { functions: { invoke: (fn: string, opts: unknown) => Promise<{ data?: unknown; error?: { message?: string } }> } } };
 
-    const res = await supabase.functions.invoke('send-transactional-email', {
-      body: {
-        type: 'lead_outreach',
-        recipientEmail: request.to,
-        subject: request.subject,
-        body: request.body,
-        unsubscribeUrl: request.unsubscribeUrl,
-        idempotencyKey: request.idempotencyKey,
-        companyId: request.companyId,
-      },
-    });
+    const payload = {
+      type: 'lead_outreach',
+      recipientEmail: request.to,
+      subject: request.subject,
+      body: request.body,
+      unsubscribeUrl: request.unsubscribeUrl,
+      idempotencyKey: request.idempotencyKey,
+      companyId: request.companyId,
+    };
+    // From here the request may be on its way. A THROW out of invoke (whatever the client library does today)
+    // is therefore UNCERTAIN, never a provider error that dispatch re-queues (05 review: correctness must not
+    // rest on a library's internals). Everything above this line is pre-send, and a throw there stays definite.
+    let res: Awaited<ReturnType<typeof supabase.functions.invoke>>;
+    try {
+      res = await supabase.functions.invoke('send-transactional-email', { body: payload });
+    } catch (e) {
+      return {
+        accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain',
+        raw: { reason: 'provider_uncertain', thrown: String(e instanceof Error ? e.message : e).slice(0, 200) },
+      };
+    }
 
     if (res.error) {
       // An UNCERTAIN answer is not a rejection: the provider may have the message (the function never resends it,
