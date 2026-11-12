@@ -112,6 +112,12 @@ export async function expireSubscriptionCreditsForOrg(orgId: string, deps: Expir
   // subscription_expiry for this org at or after this allocation means this
   // allocation has been expired (whatever key format wrote it). A renewal
   // allocation created after that expiry is correctly still expirable.
+  // RELIES ON: this service is the SOLE writer of reference_type
+  // 'subscription_expiry' (pinned by name in subscriptionCreditExpiry.test.ts),
+  // and it only ever expires the allocation that was newest at the time. A
+  // second writer - e.g. a backfill with a backdated created_at - would make
+  // this rule stop an org's expiry forever. `>=`: on an exact tie, suppress
+  // (lost revenue) rather than re-expire (drains the customer's pooled free).
   const allocAt = (lastAlloc as { created_at?: string } | undefined)?.created_at;
   if (!allocAt) return readFailed('allocation_created_at', 'subscription allocation row has no created_at');
   const prior = await deps.db
