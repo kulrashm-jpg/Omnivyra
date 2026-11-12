@@ -11,7 +11,7 @@
  * The fake applies every filter and records each update's filters.
  */
 export {};
-process.env.VERIFICATION_SECRET = 'test-verification-secret-0123456789abcdef';
+process.env.VERIFICATION_SECRET = 'x'.repeat(32); // obviously fake; the service requires >= 32 chars (public repo: no realistic secrets)
 type Row = Record<string, any>;
 const mockDb: Record<string, Row[]> = {};
 const mockUpdates: Array<{ table: string; filters: Row; patch: Row }> = [];
