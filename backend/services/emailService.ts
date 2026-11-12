@@ -104,6 +104,8 @@
  */
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
+import { randomUUID } from 'crypto';
+import { enqueueEmailJob } from './emailJobsService';
 
 type InvitePayload = {
   type: 'team_invite';
@@ -163,6 +165,11 @@ type EmailPayload =
   | ActivationOutreachPayload
   | CreditAlertPayload;
 
+/**
+ * A DIRECT send. `context.idempotencyKey` is for the log line ONLY: send-transactional-email does not
+ * read it, so a direct send is NOT deduplicated (CLASS-2 D11). A send that must be once-only goes
+ * through the email_jobs queue (enqueueEmailJob), whose unique idempotency_key is the constraint.
+ */
 async function invokeEdgeFunction(payload: EmailPayload, context: { idempotencyKey?: string }): Promise<void> {
   const { error } = await supabase.functions.invoke('send-transactional-email', {
     body: payload,
@@ -254,16 +261,24 @@ export async function sendInboundSignupNoticeToAdmin(
   },
   idempotencyKey?: string,
 ): Promise<void> {
-  await invokeEdgeFunction(
-    {
-      type: 'inbound_signup_notice',
+  // CLASS-2 D11: QUEUED, so the key is a real constraint (email_jobs_idempotency_key_unique): a repeat
+  // with the same key returns the existing job and sends nothing. Sent direct, the key reached an
+  // edge function that never reads it, and every repeat verify notified the admin again.
+  const correlationId = randomUUID();
+  await enqueueEmailJob({
+    templateKey: 'inbound_signup_notice',
+    recipientEmail: adminEmail,
+    payload: {
       recipientEmail: adminEmail,
       prospectEmail: opts.prospectEmail,
       companyName: opts.companyName,
       supportEmail: opts.supportEmail,
+      correlationId,
     },
-    { idempotencyKey },
-  );
+    invitationId: null,
+    correlationId,
+    idempotencyKey,
+  });
 }
 
 /**

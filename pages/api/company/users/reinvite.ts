@@ -198,9 +198,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const rawToken = await createInvitationToken(userId, normalizedEmail, companyId, actorId, canonicalRole);
     const inviteUrl = `${getCanonicalAppUrl()}/accept-invite?token=${rawToken}`;
 
-    // Send the invite via SES through the email_jobs queue. Idempotency
-    // key bound to (user, company) so back-to-back reinvite requests
-    // collapse to a single email instead of spamming the recipient.
+    // A DIRECT send (not the email_jobs queue), and NOT deduplicated by the key below: it is a log
+    // label only (CLASS-2 D11 - the edge function never reads it). It deliberately is not queued:
+    // every reinvite mints a NEW token and revokes the previous one, so collapsing the email alone
+    // would deliver a revoked link. Back-to-back reinvites are serialised by the membership
+    // compare-and-set above; the no-membership interleave is tracked separately (D14).
     await sendInvite(
       normalizedEmail,
       inviteUrl,

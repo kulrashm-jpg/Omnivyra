@@ -273,6 +273,10 @@ async function transactionalEmail(kind: string): Promise<number> {
       break;
     default: throw new Error(kind);
   }
+  // CLASS-2 D11 moved inbound_signup_notice onto the email_jobs queue (a real idempotency key). The
+  // queue and its worker (pages/api/cron/email-jobs.ts) read no contact governance either, so a job
+  // queued for the suppressed recipient is this path's send - the characterised fact is unchanged.
+  if (kind === 'inbound_signup_notice') return (db.email_jobs ?? []).filter((j) => j.recipient_email === EMAIL).length;
   return sends.edge.filter((b) => b.recipientEmail === EMAIL).length;
 }
 

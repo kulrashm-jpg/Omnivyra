@@ -26,7 +26,11 @@ import { logger } from './logger';
 
 export type InviteTemplateKey =
   | 'team_invite_magic_link'
-  | 'team_invite_credentials';
+  | 'team_invite_credentials'
+  // CLASS-2 D11 (e9): the admin's inbound-signup notice is queued so its idempotency key is REAL
+  // (email_jobs_idempotency_key_unique); sent direct, the key was passed to an edge function that
+  // never reads it, and every repeat verify sent the notice again.
+  | 'inbound_signup_notice';
 
 export interface MagicLinkPayload {
   recipientEmail: string;
@@ -50,7 +54,15 @@ export interface CredentialsPayload {
   correlationId: string;
 }
 
-export type InvitePayload = MagicLinkPayload | CredentialsPayload;
+export interface InboundSignupNoticeJobPayload {
+  recipientEmail: string;
+  prospectEmail: string;
+  companyName: string | null;
+  supportEmail: string;
+  correlationId: string;
+}
+
+export type InvitePayload = MagicLinkPayload | CredentialsPayload | InboundSignupNoticeJobPayload;
 
 interface EncryptedField {
   alg: 'aes-256-gcm';
@@ -63,6 +75,7 @@ const SENSITIVE_FIELD_MARK = '__encrypted__';
 const SENSITIVE_FIELDS_BY_TEMPLATE: Readonly<Record<InviteTemplateKey, readonly string[]>> = {
   team_invite_magic_link: [],
   team_invite_credentials: ['temporaryPassword'],
+  inbound_signup_notice: [],
 };
 
 function getEncryptionKey(): Buffer {
@@ -113,9 +126,11 @@ export function decryptSensitiveField(envelope: unknown): string {
   return pt.toString('utf8');
 }
 
-function hashPayloadForDedupe(templateKey: string, recipientEmail: string, invitationId: string | null): string {
+function hashPayloadForDedupe(templateKey: string, recipientEmail: string, invitationId: string | null, discriminator = ''): string {
+  // `discriminator` separates jobs that share a recipient and have no invitation: two notices to one
+  // admin about DIFFERENT prospects must not collapse on the pending-payload unique index.
   return createHash('sha256')
-    .update([templateKey, recipientEmail.toLowerCase(), invitationId ?? ''].join(':'))
+    .update([templateKey, recipientEmail.toLowerCase(), invitationId ?? '', discriminator].filter((p, i) => i < 3 || p !== '').join(':'))
     .digest('hex');
 }
 
@@ -188,6 +203,7 @@ export async function enqueueEmailJob(opts: EnqueueOptions): Promise<EnqueueResu
   const jobTypeByTemplate: Record<InviteTemplateKey, string> = {
     team_invite_magic_link: 'team_invite_magic_link',
     team_invite_credentials: 'team_invite_credentials',
+    inbound_signup_notice: 'inbound_signup_notice', // allowed by email_jobs_job_type_check (20260639)
   };
 
   const idempotencyKey = opts.idempotencyKey?.trim() || null;
@@ -206,7 +222,12 @@ export async function enqueueEmailJob(opts: EnqueueOptions): Promise<EnqueueResu
     }
   }
 
-  const payloadHash = hashPayloadForDedupe(opts.templateKey, recipientEmail, opts.invitationId);
+  const payloadHash = hashPayloadForDedupe(
+    opts.templateKey,
+    recipientEmail,
+    opts.invitationId,
+    opts.templateKey === 'inbound_signup_notice' ? String((opts.payload as InboundSignupNoticeJobPayload).prospectEmail ?? '').toLowerCase() : '',
+  );
 
   const insertPayload: Record<string, unknown> = {
     job_type: jobTypeByTemplate[opts.templateKey],
@@ -330,6 +351,7 @@ export function buildSendEnvelopeFromClaim(claimed: {
   const typeByTemplate: Record<string, string> = {
     team_invite_magic_link: 'team_invite',
     team_invite_credentials: 'team_invite_credentials',
+    inbound_signup_notice: 'inbound_signup_notice',
   };
   const edgeType = typeByTemplate[claimed.template_key];
   if (!edgeType) {
@@ -359,6 +381,19 @@ export function buildSendEnvelopeFromClaim(claimed: {
         role: String(work.role ?? ''),
         loginUrl: String(work.loginUrl ?? ''),
         temporaryPassword: String(work.temporaryPassword ?? ''),
+      },
+    };
+  }
+
+  if (claimed.template_key === 'inbound_signup_notice') {
+    return {
+      ok: true,
+      body: {
+        type: edgeType,
+        recipientEmail: claimed.recipient_email,
+        prospectEmail: String(work.prospectEmail ?? ''),
+        companyName: (work.companyName as string | null) ?? null,
+        supportEmail: String(work.supportEmail ?? ''),
       },
     };
   }

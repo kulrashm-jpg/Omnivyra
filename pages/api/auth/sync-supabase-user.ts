@@ -665,8 +665,9 @@ async function notifyAdminAndProspectOfClaimedDomain(input: {
     }
   }
 
-  // 2) Admin notification — best-effort; idempotent via Supabase email
-  //    enqueue idempotency key so repeat verifies don't double-send.
+  // 2) Admin notification — best-effort; once per (company, prospect): it is QUEUED with this
+  //    idempotency key, and email_jobs_idempotency_key_unique makes a repeat verify a no-op
+  //    (CLASS-2 D11 - until then the key was passed to an edge function that never read it).
   if (adminEmail) {
     try {
       await sendInboundSignupNoticeToAdmin(
