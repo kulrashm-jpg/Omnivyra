@@ -45,3 +45,15 @@ it('a NULL status is matched with IS NULL', async () => {
   mockRow.settlement_status = null;
   await expect(applySettlementTransition({ ...T, settlementStatus: 'pending', fromStatus: null })).resolves.toEqual({ applied: true });
 });
+
+it('a missing column is NOT silent: reason schema_missing, logged once (05)', async () => {
+  const { logger } = jest.requireMock('../../services/logger');
+  const sb = jest.requireMock('../../db/supabaseClient').supabase;
+  const orig = sb.from;
+  sb.from = () => { const b: any = { update: () => b, eq: () => b, is: () => b, select: async () => ({ data: null, error: { message: 'column "settlement_status" does not exist' } }) }; return b; };
+  try {
+    await expect(applySettlementTransition({ ...T, settlementStatus: 'expired', fromStatus: 'pending' })).resolves.toEqual({ applied: false, reason: 'schema_missing' });
+    await applySettlementTransition({ ...T, settlementStatus: 'expired', fromStatus: 'pending' });
+    expect((logger.warn as jest.Mock).mock.calls.filter((c) => c[0] === 'settlement_transition_column_missing')).toHaveLength(1);
+  } finally { sb.from = orig; }
+});

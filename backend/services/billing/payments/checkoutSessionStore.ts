@@ -203,7 +203,10 @@ export interface ApplySettlementTransitionInput {
   fromStatus?: string | null;
 }
 
-export type SettlementTransitionOutcome = { applied: true } | { applied: false; reason: 'state_changed' | 'write_failed' };
+export type SettlementTransitionOutcome = { applied: true } | { applied: false; reason: 'state_changed' | 'write_failed' | 'schema_missing' };
+
+/** Logged ONCE per process: a missing table/column makes settlement inert. */
+let settlementSchemaMissingLogged = false;
 
 /**
  * Apply a normalized settlement-state transition onto the persisted checkout
@@ -235,9 +238,16 @@ export async function applySettlementTransition(
     }
     const { data, error } = await q.select('idempotency_key');
     if (error) {
-      if (!String(error.message ?? '').toLowerCase().includes('does not exist')) {
-        logger.warn('settlement_transition_apply_failed', { message: error.message });
+      if (String(error.message ?? '').toLowerCase().includes('does not exist')) {
+        // Tolerated schema desync - but never SILENT (05): the subsystem is
+        // inert, which must be distinguishable from "nothing to transition".
+        if (!settlementSchemaMissingLogged) {
+          settlementSchemaMissingLogged = true;
+          logger.warn('settlement_transition_column_missing', { message: error.message });
+        }
+        return { applied: false, reason: 'schema_missing' };
       }
+      logger.warn('settlement_transition_apply_failed', { message: error.message });
       return { applied: false, reason: 'write_failed' };
     }
     if (input.fromStatus !== undefined && (!Array.isArray(data) || data.length === 0)) {
