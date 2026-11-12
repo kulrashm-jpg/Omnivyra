@@ -93,6 +93,9 @@ export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResp
   //   2. the request is addressed to a LOOPBACK host (Host and, when present,
   //      X-Forwarded-Host) - the bypass exists only for local DOM-scraper
   //      testing, so any deployed domain is refused without a list to maintain.
+  // Guard 1 is THE boundary; guard 2 is defence in depth only: Host is a
+  // client-controlled header (anyone can send `Host: localhost`). Never drop
+  // isNonProduction() on the grounds that loopback is already required.
   const bypassEnabled =
     isNonProduction()
     && (process.env.DEV_EXTENSION_AUTH_BYPASS === '1'
