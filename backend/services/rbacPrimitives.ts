@@ -16,6 +16,22 @@ export const Role = {
 
 export type Role = (typeof Role)[keyof typeof Role];
 
+/**
+ * The NON-ADMIN tenant roles a member may be placed in by a non-governed path
+ * (self-joined confirmation, ownership-recovery demotion). ONE list (05,
+ * 2026-11-12): two hand-kept copies drift and fail differently. It is exactly
+ * the DB-enforced invitation roles (invitations_role_check) minus
+ * COMPANY_ADMIN. The Role map above also carries CONTENT_MANAGER,
+ * CONTENT_PLANNER, CONTENT_ENGAGER and VIEWER, which no invitation can grant;
+ * they are deliberately NOT here (adding one is a product decision).
+ */
+export const NON_ADMIN_TENANT_ROLES = [
+  Role.CONTENT_CREATOR,
+  Role.CONTENT_REVIEWER,
+  Role.CONTENT_PUBLISHER,
+  Role.VIEW_ONLY,
+] as const;
+
 export const normalizePermissionRole = (role: string) => {
   if (role === Role.ADMIN) return Role.COMPANY_ADMIN;
   if (role === Role.CONTENT_MANAGER) return Role.CONTENT_CREATOR;

@@ -27,11 +27,12 @@ import { ownedDbTable } from '../db/writeOwner';
 import { logger } from './logger';
 import { logSecurityEvent } from '../security/audit/SecurityAuditService';
 import { cascadeDisableCompany } from './lifecycleGovernance';
+import { NON_ADMIN_TENANT_ROLES } from './rbacPrimitives';
 
 const ADMIN_ROLES = new Set(['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN']);
 const DEFAULT_DEMOTED_ROLE = 'CONTENT_CREATOR';
 /** Closure-015J (R-7): non-admin tenant roles a transfer may demote the from-user to. */
-const DEMOTABLE_ROLES = new Set(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY']);
+const DEMOTABLE_ROLES = new Set<string>(NON_ADMIN_TENANT_ROLES);
 const isSuperAdminRole = (role: string | null | undefined): boolean =>
   String(role ?? '').trim().toUpperCase() === 'SUPER_ADMIN';
 
@@ -177,6 +178,12 @@ export async function promoteMemberToAdmin(input: {
     .eq('company_id', input.orgId)
     .eq('status', 'active');
   cas = previousRole === null ? cas.is('role', null) : cas.eq('role', previousRole);
+  // RELIES ON idx_user_company_roles_user_company_active (UNIQUE (user_id,
+  // company_id) WHERE status = 'active'): with the status='active' filter at
+  // most ONE row can match, so `length !== 1` can only mean ZERO matched and
+  // nothing was written - STALE_MEMBERSHIP is then truthful. The index is
+  // PARTIAL: drop the status filter (or promote across statuses) and a 2-row
+  // match would write the admin role twice and THEN report failure. (05)
   const { data: promoted, error } = await cas.select('user_id');
 
   if (!error && (!Array.isArray(promoted) || promoted.length !== 1)) {

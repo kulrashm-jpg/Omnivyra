@@ -86,3 +86,15 @@ it('notification failure -> still 200 (role is set), and logged', async () => {
   expect(res.statusCode).toBe(200);
   expect(errSpy.mock.calls.some((c) => String(c[0]).includes('confirmation notification failed'))).toBe(true);
 });
+
+// 05 (2026-11-12): ONE list of non-admin tenant roles, shared with the
+// ownership-recovery demotion set - never a second hand-kept copy.
+it('the confirmable roles ARE the shared NON_ADMIN_TENANT_ROLES (same object, not a copy)', () => {
+  const { SELF_JOINED_CONFIRMABLE_ROLES } = jest.requireActual('../../../pages/api/team/self-joined');
+  const { NON_ADMIN_TENANT_ROLES } = jest.requireActual('../../services/rbacPrimitives');
+  expect(SELF_JOINED_CONFIRMABLE_ROLES).toBe(NON_ADMIN_TENANT_ROLES);
+});
+it.each(['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER', 'FINANCE_ADMIN'])('Role-map value %s that no invitation can grant is refused (product decision to add)', async (role) => {
+  const res = await patch(role);
+  expect(res.statusCode).toBe(400);
+});

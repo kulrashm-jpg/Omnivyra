@@ -19,6 +19,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
+import { NON_ADMIN_TENANT_ROLES } from '../../../backend/services/rbacPrimitives';
 
 /**
  * PRIVILEGE (2026-11-12): roles a self-joined member may be CONFIRMED into.
@@ -27,7 +28,7 @@ import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
  * promotion path (step-up, single-admin rule, audit). Admin roles go through
  * that path only; any other value is refused.
  */
-export const SELF_JOINED_CONFIRMABLE_ROLES = ['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY'] as const;
+export const SELF_JOINED_CONFIRMABLE_ROLES: readonly string[] = NON_ADMIN_TENANT_ROLES;
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { companyId, userId } = req.query as { companyId?: string; userId?: string };
@@ -78,7 +79,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'PATCH') {
     if (!userId) return res.status(400).json({ error: 'userId is required' });
     const { role = 'CONTENT_CREATOR' } = (req.body ?? {}) as { role?: string };
-    if (!(SELF_JOINED_CONFIRMABLE_ROLES as readonly string[]).includes(role)) {
+    if (!SELF_JOINED_CONFIRMABLE_ROLES.includes(role)) {
       return res.status(400).json({
         error: `role must be one of ${SELF_JOINED_CONFIRMABLE_ROLES.join(', ')}; admin roles are granted through the governed promotion flow`,
         code: 'ROLE_NOT_CONFIRMABLE',
