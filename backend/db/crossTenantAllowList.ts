@@ -20,6 +20,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: 'an inbound Meta webhook names a phone_number_id, not a tenant; the lookup resolves WHICH tenant owns it (the shared-number guard refuses ambiguity)',
     owner: 'virality-6f',
   },
+  {
+    id: 'content-architect-search',
+    tables: ['company_profiles', 'campaigns', 'campaign_versions', 'recommendation_snapshots'],
+    file: 'pages/api/content-architect/search.ts',
+    reason: 'platform search for a Content Architect session (isContentArchitectSession, route-auth platform level): finds any company, campaign or recommendation by id, name or URL so the architect can open it; spans tenants by design and returns ids and names only',
+    owner: 'virality-55',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));

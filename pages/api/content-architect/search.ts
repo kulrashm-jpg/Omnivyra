@@ -44,6 +44,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
+// S2 tenant seam: this route is a PLATFORM search (isContentArchitectSession above, the route-auth gate's
+// platform level). It spans tenants BY DESIGN, so its tenant-table reads stay on the service client and each
+// carries the reviewed `cross-tenant: content-architect-search` marker (backend/db/crossTenantAllowList.ts).
 async function searchCompanies(
   supabaseClient: any,
   q: string,
@@ -63,6 +66,7 @@ async function searchCompanies(
   };
 
   if (exactId) {
+    // cross-tenant: content-architect-search
     const { data: exactProfile } = await supabaseClient
       .from('company_profiles')
       .select('company_id, name')
@@ -80,6 +84,7 @@ async function searchCompanies(
   }
 
   // 1. company_profiles: by company_id, name, or website_url (URL)
+  // cross-tenant: content-architect-search
   const { data: byId } = await supabaseClient
     .from('company_profiles')
     .select('company_id, name')
@@ -87,6 +92,7 @@ async function searchCompanies(
     .limit(limit);
   (byId || []).forEach((row: { company_id: string; name?: string }) => add(row.company_id, row.name ?? null));
 
+  // cross-tenant: content-architect-search
   const { data: byName } = await supabaseClient
     .from('company_profiles')
     .select('company_id, name')
@@ -94,6 +100,7 @@ async function searchCompanies(
     .limit(limit);
   (byName || []).forEach((row: { company_id: string; name?: string }) => add(row.company_id, row.name ?? null));
 
+  // cross-tenant: content-architect-search
   const { data: byUrl } = await supabaseClient
     .from('company_profiles')
     .select('company_id, name')
@@ -139,6 +146,7 @@ async function searchCampaigns(
 ): Promise<{ id: string; name: string; company_id: string }[]> {
   let campaigns: { id: string; name?: string }[] = [];
   if (exactId) {
+    // cross-tenant: content-architect-search
     const { data: exact } = await supabaseClient
       .from('campaigns')
       .select('id, name')
@@ -148,11 +156,13 @@ async function searchCampaigns(
     if (exact) campaigns = [exact];
   }
   if (campaigns.length === 0) {
+    // cross-tenant: content-architect-search
     const { data: byIdCampaigns } = await supabaseClient
       .from('campaigns')
       .select('id, name')
       .ilike('id', `%${q}%`)
       .limit(limit);
+    // cross-tenant: content-architect-search
     const { data: byNameCampaigns } = await supabaseClient
     .from('campaigns')
     .select('id, name')
@@ -166,6 +176,7 @@ async function searchCampaigns(
     return [];
   }
 
+  // cross-tenant: content-architect-search
   const { data: versions } = await supabaseClient
     .from('campaign_versions')
     .select('campaign_id, company_id')
@@ -198,6 +209,7 @@ async function searchRecommendations(
 ): Promise<{ id: string; campaign_id: string | null; company_id: string; trend_topic: string }[]> {
   let byIdList: { id: string; company_id?: string; campaign_id?: string; trend_topic?: string }[] = [];
   if (exactId) {
+    // cross-tenant: content-architect-search
     const { data: exact } = await supabaseClient
       .from('recommendation_snapshots')
       .select('id, company_id, campaign_id, trend_topic')
@@ -207,6 +219,7 @@ async function searchRecommendations(
     if (exact) byIdList = [exact];
   }
   if (byIdList.length === 0) {
+    // cross-tenant: content-architect-search
     const { data: byIdData } = await supabaseClient
       .from('recommendation_snapshots')
       .select('id, company_id, campaign_id, trend_topic')
@@ -215,6 +228,7 @@ async function searchRecommendations(
     byIdList = byIdData ?? [];
   }
 
+  // cross-tenant: content-architect-search
   const { data: byTopicData } = await supabaseClient
     .from('recommendation_snapshots')
     .select('id, company_id, campaign_id, trend_topic')
