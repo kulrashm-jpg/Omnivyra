@@ -517,3 +517,49 @@ describe('CLASS-2: a Retry is a FRESH send, and nothing of the old message lands
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('already been resolved by another path'), expect.objectContaining({ worker_wa_message_id: 'wamid.stale' }));
   });
 });
+
+describe('CLASS-2 A11/A10: a run is `running` before batch 0 can act, and consumes quota for exactly what it queues', () => {
+  const broadcastRow = (): Row => fakeDb.tables.whatsapp_broadcasts[0];
+  const R3 = '0a000000-0000-4000-8000-000000000009';
+
+  it('A11: batch 0 (no delay) already sees the broadcast `running` - so its completion is not missed', async () => {
+    seed();
+    let statusWhenBatchRan: unknown = null;
+    mockEnqueue = async (data, opts) => { statusWhenBatchRan = broadcastRow().status; return runNow(data, opts); };
+    await enqueueBroadcast('b1', 'free');
+    expect(statusWhenBatchRan).toBe('running');
+  });
+
+  it("A11: a kill-switch pause written by batch 0 is NOT overwritten back to `running` by the enqueue", async () => {
+    seed();
+    mockEnqueue = async (data, opts) => {
+      const out = await runNow(data, opts);
+      Object.assign(broadcastRow(), { status: 'paused' }); // pauseForStop, inside batch 0
+      return out;
+    };
+    await enqueueBroadcast('b1', 'free');
+    expect(broadcastRow().status).toBe('paused');
+  });
+
+  it('A11: nothing of the run was queued (batch 0 withdrawn): the broadcast goes back to its prior status', async () => {
+    seed();
+    mockEnqueue = async () => { throw new Error('Connection is closed.'); };
+    await expect(enqueueBroadcast('b1', 'free')).rejects.toThrow('Connection is closed.');
+    expect(broadcastRow().status).toBe('draft');
+    expect(sends).toHaveLength(0);
+  });
+
+  it('A10: a recipient added while the run is consuming quota is NOT queued by it - quota and queue agree', async () => {
+    seed();
+    mockCheckAndConsume.mockImplementationOnce(async () => {
+      fakeDb.tables.whatsapp_broadcast_recipients.push(recipient(R3, PHONE2)); // POST ?action=recipients, no lease
+      return { allowed: true, tier: 'TIER_1' };
+    });
+    await enqueueBroadcast('b1', 'free');
+    const consumed = (mockCheckAndConsume.mock.calls[0] as unknown as [{ count: number }])[0].count;
+    const queued = mockQueue.flatMap((j) => j.ids);
+    expect(consumed).toBe(1);
+    expect(queued).toEqual([R1]);
+    expect(rec(R3).status).toBe('pending'); // left for the next run
+  });
+});

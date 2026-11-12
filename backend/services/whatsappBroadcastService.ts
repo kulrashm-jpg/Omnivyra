@@ -812,19 +812,35 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
   // recipient consumes no quota. processBatch decides again at send time.
   await screenPendingRecipients(broadcast.company_id, broadcastId);
 
-  // Count pending recipients
-  const { count, error: countError } = await ownedDbTable('whatsapp_broadcast_recipients')
-    .select('*', { count: 'exact', head: true })
-    .eq('broadcast_id', broadcastId)
-    .eq('status', 'pending');
-  // A failed count is not "no pending recipients" (unread-error census): nothing is queued and
-  // no quota is consumed, and the caller is told the read failed.
-  if (countError) throw new Error(`Broadcast recipients unreadable: ${countError.message}`);
+  // The pending ids are read FIRST, and the quota is consumed for exactly them (CLASS-2 A10): a
+  // separate count, read before the ids, let recipients added in between (POST ?action=recipients
+  // is not under this lease) be queued with no quota consumed for them. A recipient added after
+  // this read stays pending for the next run.
+  // Every id is read BEFORE the first job is queued, and paged by key: batch 0 has no delay, so
+  // once queued a worker moves rows out of `pending`, and an offset over that shrinking set would
+  // skip recipients. A failed read is not "no pending recipients" (unread-error census): nothing
+  // is queued and no quota is consumed, and the caller is told the read failed.
+  const pendingIds: string[] = [];
+  for (;;) {
+    let page = ownedDbTable('whatsapp_broadcast_recipients')
+      .select('id')
+      .eq('broadcast_id', broadcastId)
+      .eq('status', 'pending');
+    if (pendingIds.length > 0) page = page.gt('id', pendingIds[pendingIds.length - 1]);
 
-  const totalCount = count ?? 0;
+    const { data: recipients, error: readError } = await page
+      .order('id', { ascending: true })
+      .limit(RECIPIENT_ID_PAGE);
+    if (readError) throw new Error(`Broadcast recipients unreadable: ${readError.message}`);
+    // Until an empty page: the server's row cap may be lower than the page asked for.
+    if (!recipients?.length) break;
+    pendingIds.push(...recipients.map((r) => r.id as string));
+  }
+
+  const totalCount = pendingIds.length;
   if (totalCount === 0) throw new Error('No pending recipients for broadcast');
 
-  // Check rate limit for total recipient count
+  // Check rate limit for exactly the recipients this run will queue
   const rateCheck = await checkAndConsume({
     social_account_id: broadcast.social_account_id,
     // NOT the phone number id: the limiter's Redis key (wa:usage:<this>:<day>) is per SENDER
@@ -854,33 +870,32 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
   // Improvement 4: tier-aware chunking
   const { batch_size, delay_ms } = getBroadcastChunkStrategy(rateCheck.tier);
 
-  // Fetch recipient IDs in pages and add to queue
-  // Every id is read BEFORE the first job is queued, and paged by key. Batch 0 has no
-  // delay, so a worker moves rows out of `pending` while this runs: an offset over that
-  // shrinking set skips recipients, and they are never queued.
-  const pendingIds: string[] = [];
-  for (;;) {
-    let page = ownedDbTable('whatsapp_broadcast_recipients')
-      .select('id')
-      .eq('broadcast_id', broadcastId)
-      .eq('status', 'pending');
-    if (pendingIds.length > 0) page = page.gt('id', pendingIds[pendingIds.length - 1]);
-
-    const { data: recipients, error: readError } = await page
-      .order('id', { ascending: true })
-      .limit(RECIPIENT_ID_PAGE);
-    if (readError) throw new Error(`Broadcast recipients unreadable: ${readError.message}`);
-    // Until an empty page: the server's row cap may be lower than the page asked for.
-    if (!recipients?.length) break;
-    pendingIds.push(...recipients.map((r) => r.id as string));
-  }
-
   const runId = crypto.randomUUID();
   let batchIndex = 0;
   let enqueuedRecipients = 0;
-  const markRunning = () => ownedDbTable('whatsapp_broadcasts')
+
+  // CLASS-2 A11: `running` is written BEFORE the first job is queued. It used to be written after
+  // every batch was queued, blind - but batch 0 has no delay, so it could already have run: its
+  // kill-switch pause (pauseForStop) was overwritten back to `running`, and a completion it
+  // triggered was missed (the counts refresh completes only a `running` broadcast), leaving it
+  // `running` for ever. Before the first enqueue no job of this run exists and the live-batch
+  // check above refused while an earlier run's could still write, so nothing can be overwritten.
+  const priorStatus = String(broadcast.status ?? 'draft');
+  const { data: started, error: startError } = await ownedDbTable('whatsapp_broadcasts')
     .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', broadcastId);
+    .eq('id', broadcastId)
+    .select('id');
+  if (startError) throw new Error(`Broadcast not started: ${startError.message}`);
+  if (!Array.isArray(started) || started.length === 0) throw new Error(`Broadcast not found: ${broadcastId}`);
+  // Nothing of this run was queued after all: the broadcast goes back to what it was - only if it
+  // is still the `running` this run wrote.
+  const unstart = async () => {
+    const { error: unstartError } = await ownedDbTable('whatsapp_broadcasts')
+      .update({ status: priorStatus, updated_at: new Date().toISOString() })
+      .eq('id', broadcastId)
+      .eq('status', 'running');
+    if (unstartError) console.error('[wa-broadcast] nothing was queued but the broadcast still reads running', { broadcast_id: broadcastId, error: unstartError.message });
+  };
 
   for (let i = 0; i < pendingIds.length; i += batch_size) {
     const recipientIds = pendingIds.slice(i, i + batch_size);
@@ -906,13 +921,13 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
       try {
         settled = await settleUnconfirmedEnqueue(broadcastId, recipientIds);
       } catch (uncertain) {
+        // Batch 0 may be queued (unknown): the broadcast stays `running`, which is then true or
+        // completes/pauses on its own.
         if (batchIndex === 0) throw uncertain;
-        await markRunning();
         throw new BroadcastPartiallyEnqueuedError({ run_id: runId, batches: batchIndex, recipients: enqueuedRecipients }, uncertain);
       }
       if (settled === 'withdrawn') {
-        if (batchIndex === 0) throw enqueueError; // nothing of this run is queued: a plain failure
-        await markRunning();
+        if (batchIndex === 0) { await unstart(); throw enqueueError; } // nothing of this run is queued: a plain failure
         throw new BroadcastPartiallyEnqueuedError({ run_id: runId, batches: batchIndex, recipients: enqueuedRecipients }, enqueueError);
       }
       // 'queued': the job exists and is running; count it.
@@ -922,7 +937,6 @@ async function enqueueRun(broadcastId: string, broadcast: any, plan: string): Pr
     enqueuedRecipients += recipientIds.length;
   }
 
-  if (batchIndex > 0) await markRunning();
   return { run_id: runId, batches: batchIndex, recipients: enqueuedRecipients };
 }
 

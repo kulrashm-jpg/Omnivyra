@@ -52,8 +52,11 @@ function table(name: string) {
       return { data: [row], error: null };
     }
     if (st.op === 'update') {
-      rows().filter(match).forEach((r) => Object.assign(r, st.patch));
-      return { data: null, error: null };
+      // The updated rows, as PostgREST returns them to `.update().select()`: a caller that checks
+      // its row count (a compare-and-set) must see what really moved.
+      const moved = rows().filter(match);
+      moved.forEach((r) => Object.assign(r, st.patch));
+      return { data: moved.map((r) => ({ ...r })), error: null };
     }
     // W1's paged recipient read: keyset paging on id (gt + order + limit).
     const found = rows().filter(match).sort((a, b) => String(a.id).localeCompare(String(b.id))).slice(0, st.limit);
