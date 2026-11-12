@@ -9,7 +9,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 import { generateCampaignSuggestions } from '../../../../backend/services/plannerOpportunityAdvisor';
 import { getLatestDraftPlan, saveDraftBlueprint } from '../../../../backend/db/campaignPlanStore';
 import type { CampaignBlueprint } from '../../../../backend/types/CampaignBlueprint';
@@ -35,8 +35,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const { data: opp, error: oppError } = await supabase
-      .from('opportunity_radar')
+    // S2 tenant seam: the tenant is req.body.companyId, the company enforceCompanyAccess above authorized for this
+    // principal (and bound campaignId to); opportunity_radar is scoped by organization_id = that company, so another
+    // company's opportunity reads as not found and is never updated.
+    let opportunities: ReturnType<typeof tenantTable>;
+    try {
+      opportunities = tenantTable('opportunity_radar', tenantContextFor(access, String(req.body?.companyId)));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Opportunity not found' });
+      throw err;
+    }
+
+    const { data: opp, error: oppError } = await opportunities
       .select('id, organization_id, opportunity_type, title, description, signal_count, confidence_score, topic_keywords, related_campaign_id')
       .eq('id', opportunityId)
       .maybeSingle();
@@ -59,8 +69,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const topic = suggestion?.topic || opp.topic_keywords?.[0] || opp.title;
     const weekNumber = suggestion?.week_hint ?? 4;
 
-    const { error: updateError } = await supabase
-      .from('opportunity_radar')
+    const { error: updateError } = await opportunities
       .update({
         status: 'applied_to_campaign',
         applied_campaign_id: campaignId,

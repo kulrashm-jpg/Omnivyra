@@ -54,7 +54,7 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 jest.mock('../../security/TenantGuard', () => ({
-  requireCampaignTenantAccess: jest.fn(async () => ({ userId: 'u-1', organizationId: 'co-1', bypass: false })),
+  requireCampaignTenantAccess: jest.fn(async () => ({ userId: 'u-1', organizationId: 'c0a00000-0000-4000-8000-0000000000c1', bypass: false })),
 }));
 
 import {

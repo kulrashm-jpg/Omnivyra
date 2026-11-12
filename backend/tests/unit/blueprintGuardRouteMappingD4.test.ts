@@ -34,7 +34,7 @@ jest.mock('../../db/supabaseClient', () => ({
       const q: Record<string, unknown> = {};
       for (const m of ['select', 'eq', 'limit', 'order', 'in', 'insert', 'update', 'upsert', 'delete']) q[m] = () => q;
       const data = (): unknown =>
-        table === 'campaigns' ? campaignRow : table === 'campaign_versions' ? { company_id: 'co-1', campaign_snapshot: {} } : null;
+        table === 'campaigns' ? campaignRow : table === 'campaign_versions' ? { company_id: 'c0a00000-0000-4000-8000-0000000000c1', campaign_snapshot: {} } : null;
       q.maybeSingle = async () => ({ data: data(), error: null });
       q.single = async () => ({ data: data(), error: null });
       q.then = (ok: (r: { data: unknown; error: null }) => unknown) => Promise.resolve({ data: [], error: null }).then(ok);
@@ -47,7 +47,7 @@ jest.mock('../../services/GovernanceLockdownService', () => ({ isGovernanceLocke
 jest.mock('../../services/userContextService', () => ({ enforceCompanyAccess: async () => ({ userId: 'user-1' }) }));
 jest.mock('../../services/campaignAccessService', () => ({
   requireCampaignAccess: async (_req: unknown, _res: unknown, campaignId: string) => ({
-    userId: 'user-1', companyId: 'co-1', campaignId, campaignAuth: { role: 'COMPANY_ADMIN' },
+    userId: 'user-1', companyId: 'c0a00000-0000-4000-8000-0000000000c1', campaignId, campaignAuth: { role: 'COMPANY_ADMIN' },
   }),
 }));
 jest.mock('../../services/GovernanceEventService', () => ({ recordGovernanceEvent: jest.fn(async () => undefined) }));
@@ -91,11 +91,11 @@ const DURATION_UNSET: Row = { id: 'camp-1', blueprint_status: 'ACTIVE', duration
 
 const ROUTES: Array<[string, Row, () => ReturnType<typeof invoke>]> = [
   ['regenerate-blueprint', DURATION_SET, () =>
-    invoke(regenerateHandler, { method: 'POST', body: { campaignId: 'camp-1', companyId: 'co-1' } })],
+    invoke(regenerateHandler, { method: 'POST', body: { campaignId: 'camp-1', companyId: 'c0a00000-0000-4000-8000-0000000000c1' } })],
   ['negotiate-duration', DURATION_SET, () =>
-    invoke(negotiateHandler, { method: 'POST', body: { campaignId: 'camp-1', companyId: 'co-1', message: '6 weeks' } })],
+    invoke(negotiateHandler, { method: 'POST', body: { campaignId: 'camp-1', companyId: 'c0a00000-0000-4000-8000-0000000000c1', message: '6 weeks' } })],
   ['run-preplanning', DURATION_UNSET, () =>
-    invoke(preplanningHandler, { method: 'POST', body: { campaignId: 'camp-1', companyId: 'co-1', requested_weeks: 6 } })],
+    invoke(preplanningHandler, { method: 'POST', body: { campaignId: 'camp-1', companyId: 'c0a00000-0000-4000-8000-0000000000c1', requested_weeks: 6 } })],
   ['schedule-structured-plan', DURATION_SET, () =>
     invoke(scheduleStructuredPlanHandler, {
       method: 'POST',

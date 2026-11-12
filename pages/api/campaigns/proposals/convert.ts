@@ -12,6 +12,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { tenantTable, tenantContextFor, type TenantContext } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -43,6 +44,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const organizationId = proposal.organization_id as string;
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
+
+  // S2 tenant seam: the tenant is the proposal's company, which enforceCompanyAccess just authorized for
+  // access.userId; never a request value. Made before any write; a company that cannot form a context answers
+  // the route's existing not-found and nothing is written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, organizationId);
+  } catch {
+    return res.status(404).json({ error: 'Proposal not found' });
+  }
 
   const pd = (proposal.proposal_data as Record<string, unknown>) || {};
   const weeksRaw = (pd.weekly_structure as Array<{ week?: number; phase?: string; focus?: string }>) || [];
@@ -112,8 +123,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ],
   });
 
-  await supabase
-    .from('campaigns')
+  await tenantTable('campaigns', tenant)
     .update({
       current_stage: 'campaign_week_plan',
       duration_weeks: blueprint.duration_weeks,
@@ -144,8 +154,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[proposals/convert] campaign_versions insert', versionError);
   }
 
-  const { error: updateError } = await supabase
-    .from('campaign_proposals')
+  const { error: updateError } = await tenantTable('campaign_proposals', tenant)
     .update({ status: 'accepted', updated_at: new Date().toISOString() })
     .eq('id', proposalId);
 

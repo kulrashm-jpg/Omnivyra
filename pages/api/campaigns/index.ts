@@ -5,6 +5,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { insertActivity, updateActivity, deleteActivity } from '../../../backend/services/executionPlannerService';
@@ -380,8 +381,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (req.method === 'POST') {
       const campaignData = req.body;
+      // S2 tenant seam: the tenant is companyId, the company the role check above authorized for requester
+      // (getUserRole / getCompanyRoleIncludingInvited + CREATE_CAMPAIGN, or the platform/content-architect principal).
+      // Made before any read or write of this branch, so a refusal writes nothing; the insert below is stamped by it.
       // 3AH-115 (WS-C) — authorized above; bind identity before the first write.
       const ownerCompanyId = UUID_RE.test(companyId) ? companyId.toLowerCase() : companyId;
+      // (built from ownerCompanyId, the exact value the insert payload carries, so the seam's stamp/mismatch check agrees)
+      const campaignsTable = tenantTable('campaigns', tenantContextFor({ userId: requester.id }, ownerCompanyId));
       const requestedIdRaw = campaignData?.id;
       const idSupplied = requestedIdRaw !== undefined && requestedIdRaw !== null;
       if (idSupplied && (typeof requestedIdRaw !== 'string' || !UUID_RE.test(requestedIdRaw.trim()))) {
@@ -470,9 +476,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       };
 
 
-      // Insert campaign into database
-      const { data: campaign, error } = await (supabase as any)
-        .from('campaigns')
+      // Insert campaign into database (company_id = ownerCompanyId, the same company as the tenant context).
+      const { data: campaign, error } = await campaignsTable
         .insert([campaignDataWithUser])
         .select()
         .single();
@@ -818,6 +823,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
       const offset = (page - 1) * limit;
 
+      // S2 tenant seam: the tenant is companyId, the company the role check above authorized (VIEW_CAMPAIGNS).
+      const campaignsTable = tenantTable('campaigns', tenantContextFor({ userId: requester.id }, companyId));
+
       let campaigns, error;
       let ids: string[] = [];
       try {
@@ -830,8 +838,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (ids.length === 0) {
           return res.status(200).json({ success: true, campaigns: [], total: 0, page, limit });
         }
-        const result = await supabase
-          .from('campaigns')
+        const result = await campaignsTable
           .select('*')
           .in('id', ids)
           .order('created_at', { ascending: false })
@@ -898,6 +905,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
   } catch (error) {
+    // A seam refusal (companyId cannot form a tenant context) answers the route's existing company denial.
+    if (error instanceof TenantSeamError) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     console.error('Error in campaigns API:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;

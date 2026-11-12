@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -28,8 +29,9 @@ async function getWeeklyPerformance(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId as string);
     if (!access) return;
 
-    let query = supabase
-      .from('campaign_performance')
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized for this campaign.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    let query = tenantTable('campaign_performance', tenant)
       .select('*')
       .eq('campaign_id', access.campaignId);
 
@@ -47,6 +49,9 @@ async function getWeeklyPerformance(req: NextApiRequest, res: NextApiResponse) {
     res.status(200).json(data);
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     console.error('Error in getWeeklyPerformance:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -93,8 +98,9 @@ async function createWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
       updated_at: new Date().toISOString()
     };
 
-    const { data, error } = await supabase
-      .from('campaign_performance')
+    // S2 tenant seam: the seam stamps company_id = the company requireCampaignAccess authorized.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const { data, error } = await tenantTable('campaign_performance', tenant)
       .insert(performanceData)
       .select()
       .single();
@@ -111,6 +117,9 @@ async function createWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     console.error('Error in createWeeklyPerformance:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -167,8 +176,9 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
     if (platform_breakdown !== undefined) updateData.platform_breakdown = platform_breakdown;
     if (content_type_breakdown !== undefined) updateData.content_type_breakdown = content_type_breakdown;
 
-    const { data, error } = await supabase
-      .from('campaign_performance')
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized for the record's campaign.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const { data, error } = await tenantTable('campaign_performance', tenant)
       .update(updateData)
       .eq('id', id)
       .eq('campaign_id', access.campaignId)
@@ -187,6 +197,9 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     console.error('Error in updateWeeklyPerformance:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

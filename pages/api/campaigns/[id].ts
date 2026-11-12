@@ -5,6 +5,7 @@ import { evaluateCampaignReadiness } from '../../../backend/services/campaignRea
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 /** CAMPAIGN_DELETE holders (backend/security/capabilityRegistry.ts). */
 const CAMPAIGN_DELETE_ROLES: Role[] = [Role.COMPANY_ADMIN, Role.SUPER_ADMIN];
@@ -106,6 +107,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
   if (!tenantContext) return;
 
+  // S2 tenant seam: the tenant is campaignCompanyId, the owner resolveCampaignOwnership derived from the resource and
+  // enforceCompanyAccess just authorized for this principal. A campaigns row that records NO company
+  // (campaignRowUnowned, 3AH-116) cannot be reached through the seam (it filters on company_id = tenant); those
+  // reads/writes keep their explicit `.is('company_id', null)` predicate on the proven-unowned row.
+  let campaignsTable: ReturnType<typeof tenantTable>;
+  try {
+    campaignsTable = tenantTable('campaigns', tenantContextFor(tenantContext, campaignCompanyId));
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    throw err;
+  }
+
   // SEC-91 W2-A (STEP 3AH-91, W2A-1) — same-company role gate for the writes.
   // Membership alone used to be enough, so a VIEW_ONLY member could rename,
   // pause/cancel/activate or permanently delete any campaign of the company.
@@ -134,11 +147,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'GET') {
     try {
-      const { data: campaign, error } = await supabase
-        .from('campaigns')
-        .select('id, name, description, status, current_stage, start_date, end_date, company_id')
-        .eq('id', id)
-        .maybeSingle();
+      const columns = 'id, name, description, status, current_stage, start_date, end_date, company_id';
+      const { data: campaign, error } = campaignRowUnowned
+        ? await supabase.from('campaigns').select(columns).eq('id', id).is('company_id', null).maybeSingle()
+        : await campaignsTable.select(columns).eq('id', id).maybeSingle();
       if (error || !campaign) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
@@ -176,10 +188,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
 
-      let campaignDelete = supabase.from('campaigns').delete().eq('id', id);
-      campaignDelete = campaignRowUnowned
-        ? campaignDelete.is('company_id', null)
-        : campaignDelete.eq('company_id', campaignCompanyId);
+      const campaignDelete = campaignRowUnowned
+        ? supabase.from('campaigns').delete().eq('id', id).is('company_id', null)
+        : campaignsTable.delete().eq('id', id);
       const { data: deletedCampaigns, error } = await campaignDelete.select('id');
       if (error) {
         console.error('Error deleting campaign:', error.code);

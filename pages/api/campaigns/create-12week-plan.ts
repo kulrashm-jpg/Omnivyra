@@ -8,6 +8,7 @@ import { requireCompanyContext } from '../../../backend/services/companyContextG
 import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -87,16 +88,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       authorizedCompanyId = ctx.companyId;
     }
 
-    if (!campaign) {
+    if (!authorizedCompanyId) {
+      // S2 tenant seam: an EXISTING company-less legacy campaign has no tenant to write it under; the seam hides
+      // NULL-company campaigns (e9: NULLS_HIDING_OK), so it answers the same uniform 404 as a foreign one and
+      // nothing is written.
+      if (campaign) return res.status(404).json({ error: 'Campaign not found' });
       // TENANT: a new campaign is owned by an AUTHORIZED company, never created company-less. The
       // tenant guard's doctrine is "no active_company_id inference", so the caller must name the
       // company (the shipped caller does); without it nothing is written.
-      if (!authorizedCompanyId) {
-        return res.status(400).json({
-          code: 'COMPANY_REQUIRED',
-          error: 'companyId is required to create a campaign. Nothing was created.',
-        });
-      }
+      return res.status(400).json({
+        code: 'COMPANY_REQUIRED',
+        error: 'companyId is required to create a campaign. Nothing was created.',
+      });
+    }
+    // S2 tenant seam: the tenant is the company requireCompanyContext authorized above (the campaign's own
+    // company, or for a new campaign the body company once authorized), for the authenticated user; never a
+    // raw request value.
+    const tenant = tenantContextFor({ userId: user.id }, authorizedCompanyId);
+
+    if (!campaign) {
       console.log('Campaign does not exist, creating new one');
       // Create the campaign with the provided campaignId
       const summary = (aiContent || JSON.stringify(structuredPlan?.weeks || []).slice(0, 200)) + '...';
@@ -149,8 +159,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     } else {
       // Update existing campaign
       console.log('Campaign exists, updating it');
-      const { data: updatedCampaign, error: updateError } = await supabase
-        .from('campaigns')
+      const { data: updatedCampaign, error: updateError } = await tenantTable('campaigns', tenant)
         .update({
           start_date: startDate,
           ai_generated_summary: aiContent,
@@ -210,8 +219,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       blueprint = fromLegacyRefinements(syntheticRefinements, campaignId);
     }
 
-    await supabase
-      .from('campaigns')
+    await tenantTable('campaigns', tenant)
       .update({
         weekly_themes: weeklyThemes,
         current_stage: 'campaign_week_plan',
@@ -284,8 +292,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
-      const { error: performanceError } = await supabase
-        .from('campaign_performance')
+      // S2 tenant seam: the seam stamps company_id (the authorized company) on every row.
+      const { error: performanceError } = await tenantTable('campaign_performance', tenant)
         .insert(performanceRows);
 
       if (performanceError) {
@@ -307,6 +315,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     console.error('Error in create-12week-plan API:', error);
     res.status(500).json({ 
       error: 'Internal server error', 

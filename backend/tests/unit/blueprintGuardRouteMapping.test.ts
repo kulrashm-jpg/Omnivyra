@@ -25,7 +25,7 @@ jest.mock('../../db/supabaseClient', () => ({
       const q: Record<string, unknown> = {};
       for (const m of ['select', 'eq', 'limit', 'order', 'in']) q[m] = () => q;
       q.maybeSingle = async () => ({
-        data: table === 'campaigns' ? campaignRow : table === 'campaign_versions' ? { company_id: 'co-1' } : null,
+        data: table === 'campaigns' ? campaignRow : table === 'campaign_versions' ? { company_id: 'c0a00000-0000-4000-8000-0000000000c1' } : null,
         error: null,
       });
       return q;
@@ -59,13 +59,13 @@ const guard = assertBlueprintMutable as jest.Mock;
 const callUpdateDuration = () =>
   invoke(updateDurationHandler, {
     method: 'POST',
-    body: { campaignId: 'camp-1', companyId: 'co-1', requested_weeks: 6 },
+    body: { campaignId: 'camp-1', companyId: 'c0a00000-0000-4000-8000-0000000000c1', requested_weeks: 6 },
   });
 const callCommitPlan = () =>
   invoke(commitPlanHandler, {
     method: 'POST',
     query: { id: 'camp-1' },
-    body: { companyId: 'co-1', plan: { weeks: [] } },
+    body: { companyId: 'c0a00000-0000-4000-8000-0000000000c1', plan: { weeks: [] } },
   });
 
 const ROUTES: Array<[string, () => ReturnType<typeof invoke>]> = [

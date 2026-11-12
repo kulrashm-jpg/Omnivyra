@@ -21,8 +21,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../../backend/security/TenantGuard';
+import { tenantTable, tenantContextFor, type TenantContext } from '../../../../backend/db/tenantTable';
 import { campaignLifecycleSelect } from '../../../../lib/campaign/executionStatusCompat';
 import { resolveCampaignStage, isFinalizedStage, CampaignStatusFields } from '../../../../lib/campaign/campaignStage';
 import { DRAFT_FINALIZED_CODE } from '../../../../lib/campaign/plannerDraftLifecycle';
@@ -44,9 +44,8 @@ const MAX_STATE_BYTES = 256 * 1024; // generous ceiling; planner state is small
  *
  * Returns null when the campaign is still a usable draft.
  */
-async function finalizedStageOrNull(campaignId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('campaigns')
+async function finalizedStageOrNull(tenant: TenantContext, campaignId: string): Promise<string | null> {
+  const { data, error } = await tenantTable('campaigns', tenant)
     .select(campaignLifecycleSelect())
     .eq('id', campaignId)
     .maybeSingle();
@@ -61,9 +60,8 @@ async function finalizedStageOrNull(campaignId: string): Promise<string | null> 
   return isFinalizedStage(stage) ? stage : null;
 }
 
-async function loadLatestVersion(campaignId: string) {
-  const { data } = await supabase
-    .from('campaign_versions')
+async function loadLatestVersion(tenant: TenantContext, campaignId: string) {
+  const { data } = await tenantTable('campaign_versions', tenant)
     .select('id, campaign_snapshot')
     .eq('campaign_id', campaignId)
     .order('version', { ascending: false })
@@ -81,11 +79,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await requireCampaignTenantAccess(req, res, campaignId);
   if (!access) return;
 
+  // S2 tenant seam: every campaigns / campaign_versions access below is scoped to the company
+  // requireCampaignTenantAccess authorized (access.organizationId) for this campaign, never a request value.
+  // A company that cannot form a context answers the access check's own 404, before anything is read or written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+  } catch {
+    return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+  }
+
   // BLOCK-1: one lifecycle check covering BOTH verbs. A finalized campaign
   // may neither hand its state to a new planner session (GET) nor accept
   // draft writes from a stale tab (PUT).
   if (req.method === 'GET' || req.method === 'PUT') {
-    const finalizedStage = await finalizedStageOrNull(campaignId);
+    const finalizedStage = await finalizedStageOrNull(tenant, campaignId);
     if (finalizedStage) {
       return res.status(409).json({
         code: DRAFT_FINALIZED_CODE,
@@ -96,7 +104,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'GET') {
-    const version = await loadLatestVersion(campaignId);
+    const version = await loadLatestVersion(tenant, campaignId);
     const snapshot = version?.campaign_snapshot ?? {};
     return res.status(200).json({
       planner_state: (snapshot as Record<string, unknown>).planner_state ?? null,
@@ -117,7 +125,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(413).json({ error: 'planner_state too large' });
     }
 
-    const version = await loadLatestVersion(campaignId);
+    const version = await loadLatestVersion(tenant, campaignId);
     if (!version) {
       return res.status(404).json({ error: 'Campaign version not found' });
     }
@@ -135,8 +143,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const nextRevision = currentRevision + 1;
-    const { error: updateErr } = await supabase
-      .from('campaign_versions')
+    const { error: updateErr } = await tenantTable('campaign_versions', tenant)
       .update({
         campaign_snapshot: {
           ...snapshot,
@@ -157,8 +164,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const spine = (plannerState as { idea_spine?: { title?: unknown; description?: unknown } }).idea_spine;
       const title = typeof spine?.title === 'string' && spine.title.trim() ? spine.title.trim().slice(0, 200) : null;
       const description = typeof spine?.description === 'string' ? spine.description.trim().slice(0, 500) : null;
-      await supabase
-        .from('campaigns')
+      await tenantTable('campaigns', tenant)
         .update({
           ...(title ? { name: title } : {}),
           ...(description ? { description } : {}),

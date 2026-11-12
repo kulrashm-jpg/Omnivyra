@@ -11,6 +11,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { getStoredStrategicThemeTitle } from '../../../../lib/recommendationStrategicCard';
+import { tenantTable, tenantContextFor, type TenantContext } from '../../../../backend/db/tenantTable';
 
 async function getCompanyIdForCampaign(campaignId: string): Promise<string | null> {
   const { data, error } = await supabase
@@ -46,6 +47,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requireCampaignId: true,
   });
   if (!access) return;
+
+  // S2 tenant seam: the tenant is the company enforceCompanyAccess just authorized for access.userId (and bound
+  // this campaign to, requireCampaignId: true). A company that cannot form a context answers the route's existing
+  // 404, before anything is written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, companyId);
+  } catch {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
 
   const body = req.body || {};
   const source_recommendation_id =
@@ -92,8 +103,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     updatedSnapshot.mode = 'fast';
   }
 
-  const { error: updateError } = await supabase
-    .from('campaign_versions')
+  const { error: updateError } = await tenantTable('campaign_versions', tenant)
     .update({ campaign_snapshot: updatedSnapshot })
     .eq('id', (latestVersion as { id: string }).id);
 
@@ -105,8 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Update campaign name to theme topic when we have a strategic theme (so dashboard shows topic, not "Campaign from themes")
   const themeName = getStoredStrategicThemeTitle(source_strategic_theme as Record<string, unknown> | null | undefined);
   if (themeName) {
-      const { error: nameError } = await supabase
-        .from('campaigns')
+      const { error: nameError } = await tenantTable('campaigns', tenant)
         .update({ name: themeName })
         .eq('id', campaignId);
       if (nameError) {

@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -31,20 +32,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Opportunity not found' });
     }
 
+    const authorizedCompanyId = companyId ?? opp.organization_id;
     const access = await enforceCompanyAccess({
       req,
       res,
-      companyId: companyId ?? opp.organization_id,
+      companyId: authorizedCompanyId,
     });
     if (!access) return;
 
-    const { error } = await supabase
-      .from('opportunity_radar')
+    // S2 tenant seam: the tenant is the company enforceCompanyAccess above authorized (the body companyId, else the
+    // opportunity's own organization_id). An opportunity of another company matches no row: nothing is written and
+    // the caller gets the same 404 as an unknown id.
+    let opportunities: ReturnType<typeof tenantTable>;
+    try {
+      opportunities = tenantTable('opportunity_radar', tenantContextFor(access, String(authorizedCompanyId)));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Opportunity not found' });
+      throw err;
+    }
+
+    const { data: updated, error } = await opportunities
       .update({ status: 'ignored' })
-      .eq('id', opportunityId);
+      .eq('id', opportunityId)
+      .select('id');
 
     if (error) {
       return res.status(500).json({ error: error.message });
+    }
+    if (!Array.isArray(updated) || updated.length === 0) {
+      return res.status(404).json({ error: 'Opportunity not found' });
     }
 
     return res.status(200).json({ success: true, opportunityId });

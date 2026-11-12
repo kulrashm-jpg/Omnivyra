@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUserCompanyRole, hasPermission } from '../../../backend/services/rbacService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -19,7 +20,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'companyId and campaignId required' });
   }
 
-  const { role } = await getUserCompanyRole(req, companyId);
+  const { role, userId } = await getUserCompanyRole(req, companyId);
   if (!(await hasPermission(role, 'approve'))) {
     return res.status(403).json({ error: 'NOT_ALLOWED' });
   }
@@ -41,8 +42,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { data: campaign, error } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is companyId, which getUserCompanyRole + hasPermission('approve') above authorized
+    // for this principal (and the version check bound the campaign to it); the seam applies the company predicate.
+    const tenant = tenantContextFor({ userId }, companyId);
+    const { data: campaign, error } = await tenantTable('campaigns', tenant)
       .update({ status: 'approved', updated_at: new Date().toISOString() })
       .eq('id', campaignId)
       .select()
@@ -54,6 +57,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ success: true, campaign });
   } catch (error) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error approving campaign:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

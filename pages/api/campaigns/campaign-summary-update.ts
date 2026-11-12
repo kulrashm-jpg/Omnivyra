@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -25,9 +25,10 @@ async function getCampaignSummary(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId as string);
     if (!access) return;
 
-    // Get campaign with summary data
-    const { data: campaign, error } = await supabase
-      .from('campaigns')
+    // Get campaign with summary data.
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized (access.companyId).
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const { data: campaign, error } = await tenantTable('campaigns', tenant)
       .select('*')
       .eq('id', access.campaignId)
       .single();
@@ -40,6 +41,7 @@ async function getCampaignSummary(req: NextApiRequest, res: NextApiResponse) {
     res.status(200).json(campaign);
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error in getCampaignSummary:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -67,6 +69,11 @@ async function updateCampaignSummary(req: NextApiRequest, res: NextApiResponse) 
     const access = await requireCampaignAccess(req, res, campaignId as string);
     if (!access) return;
 
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized (access.companyId); the handle is
+    // made before the write, so a refusal writes nothing.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const campaigns = tenantTable('campaigns', tenant);
+
     // Update campaign summary fields
     const updateData: any = {
       updated_at: new Date().toISOString()
@@ -81,8 +88,7 @@ async function updateCampaignSummary(req: NextApiRequest, res: NextApiResponse) 
     if (weekly_themes !== undefined) updateData.weekly_themes = weekly_themes;
     if (performance_targets !== undefined) updateData.performance_targets = performance_targets;
 
-    const { data, error } = await supabase
-      .from('campaigns')
+    const { data, error } = await campaigns
       .update(updateData)
       .eq('id', access.campaignId)
       .select()
@@ -100,6 +106,7 @@ async function updateCampaignSummary(req: NextApiRequest, res: NextApiResponse) 
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error in updateCampaignSummary:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -78,13 +78,13 @@ afterEach(() => jest.restoreAllMocks());
 describe('proposals/convert', () => {
   it('the new campaign row is owned by the proposal company (the one enforceCompanyAccess authorized)', async () => {
     reads.campaign_proposals = {
-      id: 'prop-1', status: 'pending', organization_id: 'co-prop', opportunity_id: 'opp-1',
+      id: 'prop-1', status: 'pending', organization_id: 'c0a00000-0000-4000-8000-00000000c0f0', opportunity_id: 'opp-1',
       proposal_title: 'P', proposal_data: { weekly_structure: [{ phase: 'A' }], recommended_platforms: ['linkedin'] },
     };
     const res = mockRes();
     await convertHandler({ method: 'POST', url: '/api/campaigns/proposals/convert', headers: {}, query: {}, body: { proposalId: 'prop-1' } } as any, res);
     expect(campaignInserts()).toHaveLength(1);
-    expect(insertedCompany()).toBe('co-prop');
+    expect(insertedCompany()).toBe('c0a00000-0000-4000-8000-00000000c0f0');
   });
 });
 

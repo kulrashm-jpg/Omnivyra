@@ -8,7 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
@@ -59,8 +59,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const { data: campaign, error: campError } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is companyId, the company enforceCompanyAccess above authorized for this principal
+    // and bound campaignId to. Both handles are made here, before any read or write.
+    let campaigns: ReturnType<typeof tenantTable>;
+    let recommendationSnapshots: ReturnType<typeof tenantTable>;
+    try {
+      const tenant = tenantContextFor(access, String(companyId));
+      campaigns = tenantTable('campaigns', tenant);
+      recommendationSnapshots = tenantTable('recommendation_snapshots', tenant);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+      throw err;
+    }
+
+    const { data: campaign, error: campError } = await campaigns
       .select('id, blueprint_status, duration_weeks, execution_status')
       .eq('id', campaignId)
       .maybeSingle();
@@ -225,8 +237,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         // 1. Card next: if campaign originated from Trend recommendation (DB row), use its topic
         if (sourceRecId && topicSet.size === 0) {
-          const { data: rec } = await supabase
-            .from('recommendation_snapshots')
+          // S2 tenant seam: only the authorized company's recommendation is read (another company's reads as absent).
+          const { data: rec } = await recommendationSnapshots
             .select('trend_topic, category')
             .eq('id', sourceRecId)
             .maybeSingle();
@@ -350,8 +362,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       source: 'regenerate-blueprint',
     });
 
-    const { error: updateError } = await supabase
-      .from('campaigns')
+    const { error: updateError } = await campaigns
       .update({
         blueprint_status: 'ACTIVE',
         updated_at: new Date().toISOString(),
@@ -372,6 +383,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       message: 'Blueprint regenerated successfully.',
     });
   } catch (err: any) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('[regenerate-blueprint]', err);
     return res.status(500).json({
       error: err?.message || 'Internal server error',

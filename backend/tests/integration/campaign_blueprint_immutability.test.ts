@@ -45,13 +45,24 @@ jest.mock('../../services/CampaignNegotiationService', () => ({
   runDurationNegotiation: jest.fn(),
 }));
 
-const COMPANY_ID = 'company-123';
+const COMPANY_ID = 'c0a00000-0000-4000-8000-000000000123';
 const CAMPAIGN_ID = 'campaign-456';
 
 type ChainResult = { data: any; error: any };
 
+/**
+ * An update builder: the tenant seam adds `.eq('company_id', tenant)` before the route's own `.eq('id', ...)`, so
+ * every `.eq` returns the builder and the builder itself resolves (as PostgREST's does).
+ */
+function updateChainResult() {
+  const u: any = {};
+  u.eq = jest.fn(() => u);
+  u.then = (onOk: any, onErr: any) => Promise.resolve({ data: null, error: null }).then(onOk, onErr);
+  return u;
+}
+
 function chain(result: ChainResult) {
-  const updateChain = { eq: jest.fn().mockResolvedValue({ data: null, error: null }) };
+  const updateChain = updateChainResult();
   const q: any = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
@@ -180,9 +191,7 @@ describe('Blueprint Execution Integrity Guard', () => {
             },
             error: null,
           });
-          q.update = jest.fn().mockReturnValue({
-            eq: jest.fn().mockResolvedValue({ data: null, error: null }),
-          });
+          q.update = jest.fn().mockReturnValue(updateChainResult());
         }
         if (table === 'scheduled_posts') {
           q.maybeSingle = jest.fn().mockResolvedValue({ data: null, error: null });
@@ -222,9 +231,7 @@ describe('Blueprint Execution Integrity Guard', () => {
             },
             error: null,
           });
-          q.update = jest.fn().mockReturnValue({
-            eq: jest.fn().mockResolvedValue({ data: null, error: null }),
-          });
+          q.update = jest.fn().mockReturnValue(updateChainResult());
         }
         if (table === 'scheduled_posts') {
           q.maybeSingle = jest.fn().mockResolvedValue({ data: null, error: null });

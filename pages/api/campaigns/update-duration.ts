@@ -10,7 +10,7 @@ import { campaignLifecycleSelect, isCampaignFinalized } from '../../../lib/campa
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../backend/services/campaignBlueprintService';
@@ -55,8 +55,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const { data: campaign, error: campError } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is companyId, the company enforceCompanyAccess above authorized for this principal
+    // and bound campaignId to. The handle is made here, before any read or write.
+    let campaigns: ReturnType<typeof tenantTable>;
+    try {
+      campaigns = tenantTable('campaigns', tenantContextFor(access, String(companyId)));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+      throw err;
+    }
+
+    const { data: campaign, error: campError } = await campaigns
       // R5: execution_status removed — absent in production, and naming it
       // 42703-failed the whole read. duration_locked is untouched: it exists,
       // and its semantics below are deliberately unchanged.
@@ -191,8 +200,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         updatePayload.end_date = null; // Recalculated when blueprint regenerates
       }
     }
-    const { error: updateError } = await supabase
-      .from('campaigns')
+    const { error: updateError } = await campaigns
       .update(updatePayload)
       .eq('id', campaignId);
 
@@ -209,6 +217,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       message: 'Duration updated. Blueprint invalidated. Regeneration required before execution.',
     });
   } catch (err: any) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('[update-duration]', err);
     return res.status(500).json({
       error: err?.message || 'Internal server error',

@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../../backend/services/recommendationEngineService';
 import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
@@ -78,6 +79,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: false,
     });
     if (!access) return;
+    // S2 tenant seam: the tenant is companyId, the company enforceCompanyAccess above authorized for this principal.
+    // Made before any work or write (incl. billing), so a company that cannot form a tenant context is refused with
+    // the same denial enforceCompanyAccess gives an unknown company, and nothing is generated, charged or written.
+    let recommendationSnapshots: ReturnType<typeof tenantTable>;
+    try {
+      recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, String(companyId)));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Access denied to company' });
+      throw err;
+    }
     console.log('RECOMMENDATION_REQUEST', { companyId, campaignId: resolvedCampaignId });
 
     if (resolvedCampaignId) {
@@ -328,8 +339,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         source_signals_count: sourceSignalsCount,
         signals_source: signalsSource,
       }));
-      let { error: snapshotError } = await supabase
-        .from('recommendation_snapshots')
+      // S2 tenant seam: every insert below is stamped with the tenant company; the payloads' company_id is the same
+      // companyId (a different value would be refused as TENANT_MISMATCH, never rewritten).
+      let { error: snapshotError } = await recommendationSnapshots
         .insert(records);
       // Backward compatibility: retry inserts for older schemas.
       if (snapshotError) {
@@ -343,7 +355,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           refreshed_at: row.refreshed_at,
           created_at: row.created_at,
         }));
-        const retry = await supabase.from('recommendation_snapshots').insert(baseRecords);
+        const retry = await recommendationSnapshots.insert(baseRecords);
         snapshotError = retry.error;
       }
       // Oldest schema fallback: no campaign_id column.
@@ -357,8 +369,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           refreshed_at: row.refreshed_at,
           created_at: row.created_at,
         }));
-        const retryWithoutCampaignId = await supabase
-          .from('recommendation_snapshots')
+        const retryWithoutCampaignId = await recommendationSnapshots
           .insert(minimalRecords);
         snapshotError = retryWithoutCampaignId.error;
       }
@@ -369,8 +380,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           trend_topic: row.trend_topic,
           created_at: row.created_at,
         }));
-        const retryEssential = await supabase
-          .from('recommendation_snapshots')
+        const retryEssential = await recommendationSnapshots
           .insert(essentialRecords);
         snapshotError = retryEssential.error;
       }

@@ -29,6 +29,7 @@ import { campaignLifecycleSelect } from '../../../../lib/campaign/executionStatu
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../../backend/security/TenantGuard';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
 import {
   applyExecutionEvents,
   deriveExecutionEvents,
@@ -44,13 +45,15 @@ import { resolveCampaignStage, CampaignStatusFields } from '../../../../lib/camp
  *  planner revision, never touches planning fields (the reducer guarantees
  *  it). Returns what happened for observability. */
 async function persistSyncedExecutionState(
+  tenant: TenantContext,
   campaignId: string,
   events: ExecutionEvent[],
 ): Promise<{ persisted: number; skipped: string }> {
   if (events.length === 0) return { persisted: 0, skipped: 'no_events' };
 
-  const { data: version } = await supabase
-    .from('campaign_versions')
+  // S2 tenant seam: both the version read and the write are scoped to the tenant the handler resolved.
+  const versions = tenantTable('campaign_versions', tenant);
+  const { data: version } = await versions
     .select('id, campaign_snapshot')
     .eq('campaign_id', campaignId)
     .order('version', { ascending: false })
@@ -72,8 +75,7 @@ async function persistSyncedExecutionState(
   }
 
   const revision = Number((snapshot as Record<string, unknown>).planner_state_revision ?? 0);
-  const { data: updated, error } = await supabase
-    .from('campaign_versions')
+  const { data: updated, error } = await versions
     .update({
       campaign_snapshot: {
         ...snapshot,
@@ -108,11 +110,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!access) return;
 
   try {
+    // S2 tenant seam: the tenant is the company requireCampaignTenantAccess resolved for this campaign and authorized
+    // for this principal (access.organizationId), never a request value.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
     const [{ data: campaign }, { data: planRows }, { data: posts }] = await Promise.all([
       // R5: execution_status dropped — absent in production, and naming it
       // 42703-failed this read. resolveCampaignStage already treats it as
       // optional, and campaigns.status covers the 'completed' branch it fed.
-      supabase.from('campaigns').select(campaignLifecycleSelect()).eq('id', campaignId).maybeSingle(),
+      tenantTable('campaigns', tenant).select(campaignLifecycleSelect()).eq('id', campaignId).maybeSingle(),
       supabase
         .from('daily_content_plans')
         .select('execution_id, scheduled_post_id, content_status')
@@ -136,7 +141,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // P7 — durable projection: fold + persist server-side (write-on-change
     // only; failures are non-fatal — clients still fold the events locally
     // and the state stays reconstructible from the canonical records).
-    const persistence = await persistSyncedExecutionState(campaignId, events).catch((err) => {
+    const persistence = await persistSyncedExecutionState(tenant, campaignId, events).catch((err) => {
       console.warn('[assignment-execution-events] persist crashed (non-fatal):', (err as Error)?.message ?? err);
       return { persisted: 0, skipped: 'write_failed' };
     });
@@ -151,6 +156,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     console.error('[assignment-execution-events] derivation failed:', (err as Error)?.message ?? err);
     return res.status(500).json({ error: 'Failed to derive execution events' });
   }

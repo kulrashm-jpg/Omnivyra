@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -32,8 +33,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
   if (!access) return;
 
-  const { error: updateError } = await supabase
-    .from('recommendation_snapshots')
+  // S2 tenant seam: the tenant is the snapshot's own company (read above), which enforceCompanyAccess just
+  // authorized for this principal. A company that cannot form a context answers the same 404 as a missing row.
+  let recommendationSnapshots: ReturnType<typeof tenantTable>;
+  try {
+    recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, String(snapshot.company_id)));
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Recommendation not found' });
+    throw err;
+  }
+
+  const { error: updateError } = await recommendationSnapshots
     .update({ status: 'ARCHIVED' })
     .eq('id', id);
 

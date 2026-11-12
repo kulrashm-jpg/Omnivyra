@@ -90,7 +90,10 @@ beforeEach(() => {
 
 describe('W2-1 expand-to-week-plans — batched prefetch + writes', () => {
   test('mixed new/existing weeks: 3 table calls, exact inserted/updated counts', async () => {
-    (requireCampaignAccess as jest.Mock).mockResolvedValue({ companyId: 'c1' });
+    // The REAL shape (CampaignAccessResult): the tenant seam builds its context from userId + companyId and proves
+    // campaignId is in that company (tenantChildTable reads the campaigns row) before any write.
+    (requireCampaignAccess as jest.Mock).mockResolvedValue({ userId: 'u1', companyId: 'c0a00000-0000-4000-8000-00000000000a', campaignId: 'camp-1' });
+    mockTableResponses['campaigns'] = { data: { id: 'camp-1', company_id: 'c0a00000-0000-4000-8000-00000000000a' }, error: null };
     (getUnifiedCampaignBlueprint as jest.Mock).mockResolvedValue({ weeks: [1, 2, 3] });
     (blueprintWeeksToLegacyRefinements as jest.Mock).mockReturnValue([
       { campaign_id: 'camp-1', week_number: 1, theme: 't1', focus_area: 'f1' },
@@ -135,13 +138,17 @@ describe('W2-2 save-comprehensive-plan — single bulk upsert', () => {
   };
 
   test('3 weeks → ONE weekly_content_refinements call; redundant second loop folded', async () => {
-    (requireCampaignTenantAccess as jest.Mock).mockResolvedValue({ companyId: 'c1' });
+    // The REAL shape (TenantAccessGranted): the tenant seam builds its context from userId + organizationId and
+    // proves the campaign is in that company (tenantChildTable reads the campaigns row) before any write.
+    (requireCampaignTenantAccess as jest.Mock).mockResolvedValue({ userId: 'u1', organizationId: 'c0a00000-0000-4000-8000-00000000000a' });
+    mockTableResponses['campaigns'] = { data: { id: 'camp-1', company_id: 'c0a00000-0000-4000-8000-00000000000a' }, error: null };
     const res = createMockRes();
     await saveComprehensiveHandler(createApiRequestMock({ method: 'POST', body }), res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toMatchObject({ success: true, message: 'Campaign plan saved successfully' });
     expect(fromCount('weekly_content_refinements')).toBe(1); // was 3 upserts + 1 content update
-    expect(fromCount('campaigns')).toBe(1);
+    // the campaign update + the tenant seam's parent read of campaigns (tenantChildTable, S2) = 2
+    expect(fromCount('campaigns')).toBe(2);
   });
 
   test('guard-before-data: denied tenant performs zero writes', async () => {

@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -18,9 +18,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
 
+    // S2 tenant seam: the tenant is the company requireCampaignTenantAccess authorized (access.organizationId)
+    // for this campaignId, never the body. weekly_content_refinements is a child of campaigns: its handle (which
+    // proves the campaign is in that tenant) is made BEFORE any write below, so a refusal writes nothing.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+    const refinementsTable = await tenantChildTable('weekly_content_refinements', tenant, String(campaignId));
+
     // Update campaign with summary information
-    const { error: campaignError } = await supabase
-      .from('campaigns')
+    const { error: campaignError } = await tenantTable('campaigns', tenant)
       .update({
         objective: campaignSummary.objective,
         target_audience: campaignSummary.targetAudience,
@@ -58,8 +63,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         console.warn('DEPRECATED: weekly_content_refinements write path triggered (save-comprehensive-plan update)');
       }
     }
-    const { error: weekError } = await supabase
-      .from('weekly_content_refinements')
+    const { error: weekError } = await refinementsTable
       .upsert(
         weeklyRefinementUpdates.map((weekData: Record<string, unknown>) => ({
           ...weekData,
@@ -82,6 +86,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     console.error('Error saving comprehensive plan:', error);
     return res.status(500).json({ 
       error: 'Failed to save comprehensive plan',

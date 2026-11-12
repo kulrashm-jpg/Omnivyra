@@ -5,6 +5,7 @@ import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campai
 import { blueprintWeeksToLegacyRefinements } from '../../../../backend/services/campaignBlueprintAdapter';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 /**
  * POST /api/campaigns/[id]/expand-to-week-plans
@@ -35,6 +36,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         hint: 'Create or commit a 12-week plan first, then expand to detailed week plans.',
       });
     }
+
+    // S2 tenant seam: weekly_content_refinements is a child of campaigns. The handle is built from the company
+    // requireCampaignAccess authorized and the campaign id it checked, and is made (proving the campaign is in that
+    // tenant) BEFORE any write below, so a refusal writes nothing.
+    const refinementsTable = await tenantChildTable(
+      'weekly_content_refinements',
+      tenantContextFor({ userId: access.userId }, access.companyId),
+      access.campaignId,
+    );
 
     // Get campaign_week_plan id for FK link (when stored in campaign_week_plan table)
     const { data: twelveWeekRow } = await supabase
@@ -87,16 +97,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let updated = 0;
 
     if (newRows.length > 0) {
-      const { error } = await supabase
-        .from('weekly_content_refinements')
+      const { error } = await refinementsTable
         .insert(newRows.map((r) => ({ ...buildPayload(r), created_at: nowIso })));
       if (!error) inserted = newRows.length;
     }
     if (updateRows.length > 0) {
       // Upsert on (campaign_id, week_number) acts as a batched UPDATE for
       // rows the prefetch proved exist; created_at deliberately omitted.
-      const { error } = await supabase
-        .from('weekly_content_refinements')
+      const { error } = await refinementsTable
         .upsert(updateRows.map(buildPayload), { onConflict: 'campaign_id,week_number' });
       if (!error) updated = updateRows.length;
     }
@@ -113,6 +121,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       totalWeeks: refinements.length,
     });
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     console.error('expand-to-week-plans error:', error);
     return res.status(500).json({
       error: 'Failed to expand to week plans',

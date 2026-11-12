@@ -17,6 +17,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
 import { getUserRole, isPlatformSuperAdmin, Role } from '@/backend/services/rbacService';
+import { tenantTable, tenantContextFor, type TenantContext } from '@/backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -69,12 +70,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE', code: 'FORBIDDEN_ROLE' });
   }
 
+  // S2 tenant seam: the tenant is the pending campaign's company, which requireCompanyAccess and the role check
+  // above authorized for auth.user; every pending_campaigns write below goes through it. A company that cannot
+  // form a context answers the route's existing not-found, before anything is written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor({ userId: auth.user.id }, companyId);
+  } catch {
+    return res.status(404).json({ error: 'Pending campaign not found' });
+  }
+
   const reviewedAt = new Date().toISOString();
   const reviewedBy = auth.user.email ?? auth.user.id;
 
   // ── Reject ────────────────────────────────────────────────────────────────
   if (action === 'reject') {
-    const { error: rejectErr } = await supabase.from('pending_campaigns').update({
+    const { error: rejectErr } = await tenantTable('pending_campaigns', tenant).update({
       status:      'rejected',
       reviewed_at: reviewedAt,
       reviewed_by: reviewedBy,
@@ -98,7 +109,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── Approve → mark pending first, then create campaign ───────────────────
   // Marking as approved BEFORE creating the campaign prevents a double-approve
   // race and ensures no orphaned campaigns if campaign insert fails.
-  const { error: markErr } = await supabase.from('pending_campaigns').update({
+  const { error: markErr } = await tenantTable('pending_campaigns', tenant).update({
     status:      'approved',
     reviewed_at: reviewedAt,
     reviewed_by: reviewedBy,
@@ -129,7 +140,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (createError) {
     console.error('[pending/approve] campaign create failed:', createError.message);
     // Roll back status so admin can retry
-    await supabase.from('pending_campaigns').update({
+    await tenantTable('pending_campaigns', tenant).update({
       status: 'pending',
     }).eq('id', pendingId);
     return res.status(500).json({ error: 'Internal server error' });

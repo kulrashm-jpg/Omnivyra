@@ -12,7 +12,7 @@
 import {
   seed,
   upsertAppendsBlindly, invoke, writeCalls, completedWrites, sinkCalls, leaksB, rows,
-  CAMPAIGN_A, CAMPAIGN_B, UNKNOWN_ID, CANARY_B, CO_B,
+  CAMPAIGN_A, CAMPAIGN_B, UNKNOWN_ID, CANARY_B, CO_A, CO_B,
 } from '../helpers/routeAuthHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
@@ -39,9 +39,10 @@ function world() {
       { id: 'wr-a', campaign_id: CAMPAIGN_A, week_number: 1, theme: 'Theme A' },
       { id: 'wr-b', campaign_id: CAMPAIGN_B, week_number: 1, theme: CANARY_B },
     ],
+    // campaign_performance carries its tenant column (tenantTables.ts): the S2 seam reads/updates it under company_id.
     campaign_performance: [
-      { id: 'perf-a', campaign_id: CAMPAIGN_A, week_number: 1, reach: 3, date: '2026-01-01', conversions: 1 },
-      { id: 'perf-b', campaign_id: CAMPAIGN_B, week_number: 1, reach: 9, date: '2026-01-01', conversions: 20, weekly_theme: CANARY_B, total_reach: 7 },
+      { id: 'perf-a', company_id: CO_A, campaign_id: CAMPAIGN_A, week_number: 1, reach: 3, date: '2026-01-01', conversions: 1 },
+      { id: 'perf-b', company_id: CO_B, campaign_id: CAMPAIGN_B, week_number: 1, reach: 9, date: '2026-01-01', conversions: 20, weekly_theme: CANARY_B, total_reach: 7 },
     ],
     campaign_strategies: [
       { campaign_id: CAMPAIGN_A, objective: 'Objective A' },

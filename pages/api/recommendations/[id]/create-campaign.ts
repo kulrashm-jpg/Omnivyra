@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 import {
   getUserRole,
   hasPermission,
@@ -99,6 +100,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!(await hasPermission(role, 'CREATE_CAMPAIGN'))) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
+    }
+
+    // S2 tenant seam: the tenant is the recommendation's own company, which the role check above just authorized for
+    // this principal (getUserRole + CREATE_CAMPAIGN, or a platform super admin). Made before any write, so a refusal
+    // writes nothing and answers the same 404 as a missing recommendation.
+    let recommendationSnapshots: ReturnType<typeof tenantTable>;
+    try {
+      recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor({ userId }, companyId));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Recommendation not found' });
+      throw err;
     }
 
     const { data: decisionRow } = await supabase
@@ -279,8 +291,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       collectedPlanningContext: finalCollectedPlanningContext,
     });
 
-    const { error: linkError } = await supabase
-      .from('recommendation_snapshots')
+    const { error: linkError } = await recommendationSnapshots
       .update({ campaign_id: campaign.id })
       .eq('id', recommendation.id);
 

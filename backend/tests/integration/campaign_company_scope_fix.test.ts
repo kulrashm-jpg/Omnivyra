@@ -54,7 +54,10 @@ const buildQuery = (table: string, state: any) => {
   const query: any = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn((field: string, value: any) => {
-      if (table === 'campaigns' && field === 'company_id') {
+      // The campaigns LIST route must never filter campaigns by company_id (it maps through campaign_versions).
+      // The campaigns INDEX route reads through the tenant seam (S2), which always does; its test opts in and
+      // the filter is then honoured faithfully below.
+      if (table === 'campaigns' && field === 'company_id' && !state.seamCampaignFilter) {
         throw new Error('campaigns.company_id referenced');
       }
       state.filters[field] = value;
@@ -109,6 +112,9 @@ const resolveQuery = (table: string, state: any) => {
     }
     if (state.filters.id) {
       rows = rows.filter((row: any) => row.id === state.filters.id);
+    }
+    if (state.seamCampaignFilter && state.filters.company_id !== undefined) {
+      rows = rows.filter((row: any) => row.company_id === state.filters.company_id);
     }
     const data = state.single ? rows[0] || null : rows;
     return { data, error: null };
@@ -260,16 +266,28 @@ describe('Campaign company scope fix', () => {
     });
   });
 
-  it('dashboard only shows company campaigns', async () => {
+  // S2 (tenant seam, deliberate): the INDEX route now reads campaigns through tenantTable, which filters on
+  // campaigns.company_id (NOT NULL since 20270217000025; C36: 0 NULL, 0 version mismatches in prod). Company ids are
+  // uuids (the seam refuses others) and every campaigns row carries its company. c4 is mapped to company A by a version
+  // row but its campaigns row belongs to B: the seam must hide it (fail closed on a disagreement).
+  it('dashboard only shows company campaigns (through the tenant seam)', async () => {
+    const CO_A = 'c0a00000-0000-4000-8000-00000000000a';
+    const CO_B = 'c0b00000-0000-4000-8000-00000000000b';
+    const userContextService = require('../../../backend/services/userContextService');
+    (userContextService.resolveUserContext as jest.Mock).mockResolvedValue({
+      userId: 'user-1', companyIds: [CO_A, CO_B], defaultCompanyId: CO_A, role: 'admin',
+    });
     const mappingRows = [
-      { company_id: 'company-a', campaign_id: 'c1' },
-      { company_id: 'company-a', campaign_id: 'c2' },
-      { company_id: 'company-b', campaign_id: 'c3' },
+      { company_id: CO_A, campaign_id: 'c1' },
+      { company_id: CO_A, campaign_id: 'c2' },
+      { company_id: CO_B, campaign_id: 'c3' },
+      { company_id: CO_A, campaign_id: 'c4' },
     ];
     const campaignRows = [
-      { id: 'c1', name: 'Campaign One', weekly_themes: [] },
-      { id: 'c2', name: 'Campaign Two', weekly_themes: [] },
-      { id: 'c3', name: 'Campaign Three', weekly_themes: [] },
+      { id: 'c1', company_id: CO_A, name: 'Campaign One', weekly_themes: [] },
+      { id: 'c2', company_id: CO_A, name: 'Campaign Two', weekly_themes: [] },
+      { id: 'c3', company_id: CO_B, name: 'Campaign Three', weekly_themes: [] },
+      { id: 'c4', company_id: CO_B, name: 'Campaign Four', weekly_themes: [] },
     ];
     const indexSupabase = {
       from: jest.fn((table: string) =>
@@ -277,14 +295,15 @@ describe('Campaign company scope fix', () => {
           filters: {},
           rows: mappingRows,
           campaignRows,
-          roleRows: [{ company_id: 'company-a', role: 'COMPANY_ADMIN', status: 'active' }],
+          roleRows: [{ company_id: CO_A, role: 'COMPANY_ADMIN', status: 'active' }],
+          seamCampaignFilter: true,
         })
       ),
     };
     (backendSupabase.from as jest.Mock).mockImplementation(indexSupabase.from);
 
     const handler = (await import('../../../pages/api/campaigns/index')).default;
-    const req = createApiRequestMock({ method: 'GET', companyId: 'company-a' });
+    const req = createApiRequestMock({ method: 'GET', companyId: CO_A });
     const res = createMockRes();
     await handler(req, res);
 

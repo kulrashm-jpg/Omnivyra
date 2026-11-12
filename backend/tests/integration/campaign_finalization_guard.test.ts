@@ -11,7 +11,7 @@ jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn().mockResolvedValue({ userId: 'user-1' }),
   // requireCampaignAccess (schedule-structured-plan, since #156) authenticates
   // through resolveUserContext: user-1, an active member of the owning company.
-  resolveUserContext: jest.fn().mockResolvedValue({ userId: 'user-1', companyIds: ['company-final-123'] }),
+  resolveUserContext: jest.fn().mockResolvedValue({ userId: 'user-1', companyIds: ['c0a00000-0000-4000-8000-0000000f1123'] }),
 }));
 // schedule-structured-plan is wrapped in the REAL withIdempotency (Group A),
 // which resolves the caller before the handler runs. The caller is user-1 —
@@ -84,13 +84,24 @@ import scheduleStructuredPlanHandler from '../../../pages/api/campaigns/[id]/sch
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from '../../services/GovernanceEventService';
 import { supabase } from '../../db/supabaseClient';
 
-const COMPANY_ID = 'company-final-123';
+const COMPANY_ID = 'c0a00000-0000-4000-8000-0000000f1123';
 const CAMPAIGN_ID = 'campaign-final-456';
 
 type ChainResult = { data: any; error: any };
 
+/**
+ * An update builder: the tenant seam adds `.eq('company_id', tenant)` before the route's own `.eq('id', ...)`, so
+ * every `.eq` returns the builder and the builder itself resolves (as PostgREST's does).
+ */
+function updateChainResult() {
+  const u: any = {};
+  u.eq = jest.fn(() => u);
+  u.then = (onOk: any, onErr: any) => Promise.resolve({ data: null, error: null }).then(onOk, onErr);
+  return u;
+}
+
 function chain(result: ChainResult) {
-  const updateChain = { eq: jest.fn().mockResolvedValue({ data: null, error: null }) };
+  const updateChain = updateChainResult();
   const insertChain = { select: jest.fn().mockReturnValue({ single: jest.fn().mockResolvedValue(result) }) };
   const q: any = {
     select: jest.fn().mockReturnThis(),

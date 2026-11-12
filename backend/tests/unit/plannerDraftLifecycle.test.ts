@@ -57,8 +57,8 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 jest.mock('../../security/TenantGuard', () => ({
-  requireTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'co-1', bypass: false })),
-  requireCampaignTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'co-1', bypass: false })),
+  requireTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'c0a00000-0000-4000-8000-0000000000c1', bypass: false })),
+  requireCampaignTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'c0a00000-0000-4000-8000-0000000000c1', bypass: false })),
 }));
 
 const mockFetchWithAuth = jest.fn();
@@ -203,17 +203,17 @@ describe('a second campaign is reachable once the first is finalized', () => {
   it('the resume lookup is constrained to status=draft, so a finalized campaign cannot be resumed', async () => {
     campaignsRow = null; // status='draft' matches nothing once A was finalized
     const res = mockRes();
-    await plannerDraftHandler({ method: 'POST', body: { companyId: 'co-1' } } as any, res);
+    await plannerDraftHandler({ method: 'POST', body: { companyId: 'c0a00000-0000-4000-8000-0000000000c1' } } as any, res);
 
     // The filter itself is the guarantee — assert it, do not assume it.
     expect(filters).toContainEqual({ table: 'campaigns', col: 'status', val: 'draft' });
-    expect(filters).toContainEqual({ table: 'campaigns', col: 'company_id', val: 'co-1' });
+    expect(filters).toContainEqual({ table: 'campaigns', col: 'company_id', val: 'c0a00000-0000-4000-8000-0000000000c1' });
   });
 
   it('creates campaign B with a NEW id and an EMPTY planner_state', async () => {
     campaignsRow = null;
     const res = mockRes();
-    await plannerDraftHandler({ method: 'POST', body: { companyId: 'co-1' } } as any, res);
+    await plannerDraftHandler({ method: 'POST', body: { companyId: 'c0a00000-0000-4000-8000-0000000000c1' } } as any, res);
 
     expect(res.statusCode).toBe(201);
     expect(res.body.resumed).toBe(false);

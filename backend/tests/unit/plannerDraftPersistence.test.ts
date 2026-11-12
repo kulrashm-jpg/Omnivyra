@@ -50,8 +50,8 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 jest.mock('../../security/TenantGuard', () => ({
-  requireTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'co-1', bypass: false })),
-  requireCampaignTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'co-1', bypass: false })),
+  requireTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'c0a00000-0000-4000-8000-0000000000c1', bypass: false })),
+  requireCampaignTenantAccess: jest.fn(async () => ({ userId: 'user-1', organizationId: 'c0a00000-0000-4000-8000-0000000000c1', bypass: false })),
 }));
 
 import plannerDraftHandler from '../../../pages/api/campaigns/planner-draft';
@@ -76,7 +76,7 @@ beforeEach(() => {
 describe('POST /api/campaigns/planner-draft — create-or-resume (I-1)', () => {
   it('creates a Draft Campaign + v1 snapshot when none is open', async () => {
     const res = mockRes();
-    await plannerDraftHandler({ method: 'POST', body: { companyId: 'co-1' } } as any, res);
+    await plannerDraftHandler({ method: 'POST', body: { companyId: 'c0a00000-0000-4000-8000-0000000000c1' } } as any, res);
     expect(res.statusCode).toBe(201);
     expect(res.body.campaign_id).toBeTruthy();
     expect(res.body.resumed).toBe(false);
@@ -86,13 +86,13 @@ describe('POST /api/campaigns/planner-draft — create-or-resume (I-1)', () => {
       status: 'draft',
       current_stage: 'planning',
       user_id: 'user-1',
-      company_id: 'co-1',
+      company_id: 'c0a00000-0000-4000-8000-0000000000c1',
       name: 'Untitled Strategic Mix',
     });
     expect(String(campaign.thread_id)).toMatch(/^planner_draft_/);
 
     const version = inserted.find((i) => i.table === 'campaign_versions')!.payload;
-    expect(version).toMatchObject({ company_id: 'co-1', status: 'draft', version: 1 });
+    expect(version).toMatchObject({ company_id: 'c0a00000-0000-4000-8000-0000000000c1', status: 'draft', version: 1 });
     expect((version.campaign_snapshot as Row).planner_state_revision).toBe(0);
     expect((version.campaign_snapshot as Row).planner_draft).toBe(true);
   });
@@ -100,7 +100,7 @@ describe('POST /api/campaigns/planner-draft — create-or-resume (I-1)', () => {
   it('RESUMES the newest open draft instead of forking a second one (multi-tab / multi-device)', async () => {
     campaignsRows = [{ id: 'draft-1', updated_at: '2026-07-11T00:00:00Z' }];
     const res = mockRes();
-    await plannerDraftHandler({ method: 'POST', body: { companyId: 'co-1' } } as any, res);
+    await plannerDraftHandler({ method: 'POST', body: { companyId: 'c0a00000-0000-4000-8000-0000000000c1' } } as any, res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toMatchObject({ campaign_id: 'draft-1', resumed: true });
     expect(inserted).toHaveLength(0); // nothing created
