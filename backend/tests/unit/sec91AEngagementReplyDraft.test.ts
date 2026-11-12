@@ -27,7 +27,7 @@ jest.mock('../../services/communityAiActionExecutor', () => ({ executeAction: (.
 jest.mock('../../services/engagementCapabilityMap', () => ({ resolveEngagementCapability: () => ({ status: 'api_verified', mode: 'api' }) }));
 jest.mock('../../services/engagementThreadService', () => ({
   // Actionability is org-scoped in production; here: A's thread awaits a reply.
-  isThreadActionable: async (org: string, thread: string) => org === 'co-a-0000-0000-0000-00000000000a' && thread === 'thr-a',
+  isThreadActionable: async (org: string, thread: string) => org === 'c0a00000-0000-4000-8000-00000000000a' && thread === 'thr-a',
   getThreadActionability: async () => new Map(),
 }));
 jest.mock('../../services/responsePerformanceService', () => ({ recordReplyPerformance: async () => undefined }));

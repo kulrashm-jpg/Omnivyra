@@ -21,8 +21,8 @@ jest.mock('@supabase/ssr', () => ({
 }));
 
 const byCompany: Record<string, string[]> = {
-  'co-a-0000-0000-0000-00000000000a': ['linkedin'],
-  'co-b-0000-0000-0000-00000000000b': [`x-${'CANARY-COMPANY-B-CONFIDENTIAL'}`],
+  'c0a00000-0000-4000-8000-00000000000a': ['linkedin'],
+  'c0b00000-0000-4000-8000-00000000000b': [`x-${'CANARY-COMPANY-B-CONFIDENTIAL'}`],
 };
 const getPlatformsWithTokensForOrg = jest.fn(async (org: string) => byCompany[org] ?? []);
 const getCompanyConfiguredPlatformsForConnectors = jest.fn(async (org: string) => (byCompany[org] ?? []).map((p) => ({ platform: p })));

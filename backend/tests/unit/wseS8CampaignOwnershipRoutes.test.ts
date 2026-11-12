@@ -63,7 +63,7 @@ const reply = require('../../../pages/api/engagement/reply').default;
 const signalStatus = require('../../../pages/api/engagement/signal/status').default;
 /* eslint-enable @typescript-eslint/no-var-requires */
 
-const CO_C = 'co-c-0000-0000-0000-00000000000c';
+const CO_C = 'c0c00000-0000-4000-8000-00000000000c';
 const X = 'camp-x-00-0000-0000-0000000000xx';
 const ASSET = 'asset-x';
 const SIGNAL = 'sig-x';
