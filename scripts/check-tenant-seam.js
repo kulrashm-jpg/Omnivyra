@@ -197,6 +197,20 @@ function scan() {
       const e = allow.get(marker);
       if (!e || e.file !== rel || !e.tables.includes(table)) findings.push({ rule: 'R2', marker, ...base });
     }
+    // R9: the job bootstrap resolveTenantOfRow is for background work only; in a request handler the tenant comes
+    // from the principal. Allowed in pages/api only with an allow-listed `// cross-tenant: <id>` marker (webhooks).
+    if (rel.startsWith('pages/api/')) {
+      for (const m of code.matchAll(/\bresolveTenantOfRow\s*\(/g)) {
+        const line = lineAt(m.index);
+        let marker = null;
+        for (let k = line - 1; k >= Math.max(1, line - 4); k--) {
+          const mm = (rawLines[k - 1] || '').match(/\/\/\s*cross-tenant:\s*([a-z0-9][a-z0-9-]*)/i);
+          if (mm) { marker = mm[1]; break; }
+        }
+        const e = marker && allow.get(marker);
+        if (!e || e.file !== rel) findings.push({ rule: 'R9', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-' });
+      }
+    }
     for (const m of code.matchAll(/tenantContextFor\s*\(([^;]*?)\)/g)) {
       if (/req\.body/.test(m[1])) findings.push({ rule: 'R4', file: rel, line: lineAt(m.index), table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-' });
     }

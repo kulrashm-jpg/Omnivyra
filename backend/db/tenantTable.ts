@@ -215,6 +215,29 @@ export async function tenantChildTable(table: TenantChildTableName, ctx: TenantC
 }
 
 /**
+ * BOOTSTRAP for background work (queue / worker jobs, reconcilers, webhook processors) whose payload carries only a
+ * row id: "which tenant owns this row?". The single by-id read happens HERE, inside the seam (the only place allowed
+ * to read a tenant table without a context). It returns a SYSTEM context for the row's own tenant; every later access
+ * (including re-reading the same row) goes through tenantTable(..., ctx). A NULL tenant, a missing row or an unreadable
+ * row returns null (the caller refuses the job; never "no tenant, so no filter").
+ *
+ * Request handlers must NOT use this: their tenant comes from the authenticated principal (tenantContextFor). The
+ * tenant-seam gate flags resolveTenantOfRow under pages/api (rule R9) unless the call site is allow-listed (webhooks).
+ */
+export async function resolveTenantOfRow(table: TenantTableName, id: string, reason: string): Promise<TenantContext | null> {
+  if (typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'resolveTenantOfRow must state its reason');
+  }
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const column = columnOf(table);
+  const { data, error } = await (ownedDbTable(table) as any).select(column).eq('id', id).maybeSingle();
+  if (error || !data) return null;
+  const tenant = (data as Record<string, unknown>)[column];
+  if (typeof tenant !== 'string' || !UUIDISH.test(tenant)) return null;
+  return systemTenantContext(tenant, `${reason.trim()} (resolved from ${table}.${column} of row ${id})`);
+}
+
+/**
  * A tenant RPC: the tenant argument is supplied by the seam from the context, never by the caller.
  * `tenantArg` names the function's tenant parameter (e.g. 'p_company_id', 'p_org_id').
  */

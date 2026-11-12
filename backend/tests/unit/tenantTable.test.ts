@@ -24,7 +24,7 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: (fn: string, args: Record<string, unknown>) => { rpcCalls.push({ fn, args }); return Promise.resolve({ data: null, error: null }); },
 }));
 
-import { tenantTable, tenantChildTable, tenantOrPlatformTable, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
+import { tenantTable, tenantChildTable, tenantOrPlatformTable, resolveTenantOfRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
 import { TENANT_TABLES, TENANT_CHILD_TABLES } from '../../db/tenantTables';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -111,6 +111,25 @@ describe('tenantOrPlatformTable (e9 on C28)', () => {
     expect(calls.filter((c) => c.op === 'eq').map((c) => c.args)).toEqual([['company_id', A]]);
     expect(() => tenantOrPlatformTable('external_api_sources' as never, ctxA).update({ company_id: null })).toThrow(/TENANT_MISMATCH/);
     expect(() => tenantOrPlatformTable('campaigns' as never, ctxA)).toThrow(/not TENANT_OR_PLATFORM/);
+  });
+});
+
+describe('resolveTenantOfRow (job bootstrap)', () => {
+  it('reads the row by id inside the seam and returns a system context for ITS tenant', async () => {
+    parentRow = { company_id: A };
+    const ctx = await resolveTenantOfRow('campaigns', 'row-1', 'lead job');
+    expect(ctx?.companyId).toBe(A);
+    expect(ctx?.origin).toBe('system');
+    expect(calls.map((c) => [c.op, c.args])).toEqual([['select', ['company_id']], ['eq', ['id', 'row-1']], ['maybeSingle', []]]);
+  });
+  it('NULL tenant, missing row or unreadable row -> null (the job refuses); a reason is mandatory', async () => {
+    parentRow = { company_id: null };
+    expect(await resolveTenantOfRow('campaigns', 'row-1', 'lead job')).toBeNull();
+    parentRow = null;
+    expect(await resolveTenantOfRow('campaigns', 'row-1', 'lead job')).toBeNull();
+    parentRow = { company_id: A }; parentError = { code: '57014' };
+    expect(await resolveTenantOfRow('campaigns', 'row-1', 'lead job')).toBeNull();
+    await expect(resolveTenantOfRow('campaigns', 'row-1', '')).rejects.toThrow(/reason/);
   });
 });
 
