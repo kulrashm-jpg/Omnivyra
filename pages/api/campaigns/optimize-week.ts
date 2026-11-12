@@ -9,7 +9,7 @@ import {
 } from '../../../backend/services/campaignBlueprintService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
-import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../backend/db/campaignVersionStore';
+import { getLatestCampaignVersion, saveCampaignHealthReport, CampaignVersionReadError } from '../../../backend/db/campaignVersionStore';
 import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getLatestLearningInsights, getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
@@ -104,7 +104,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       resolvedWeeklyPlan: resolved.weekly_plan,
     });
 
-    const updatedVersion = await getLatestCampaignVersion(companyId, campaignId);
+    // The optimization is SAVED by now. A failed re-read must not produce a health report from EMPTY
+    // plans (unread-error pkg 2: it used to read as 'no version' and save a bogus report): answer the
+    // saved optimization truthfully, with the health report marked unavailable.
+    let updatedVersion: any;
+    try {
+      updatedVersion = await getLatestCampaignVersion(companyId, campaignId);
+    } catch (readError) {
+      if (!(readError instanceof CampaignVersionReadError)) throw readError;
+      console.error('[optimize-week] optimization saved; version re-read failed, health report skipped', { campaignId, message: readError.message });
+      return res.status(200).json({
+        updated_week: optimization.updated_week,
+        change_summary: optimization.change_summary,
+        confidence: optimization.confidence,
+        health_report: null,
+        health_report_status: 'unavailable',
+      });
+    }
     const weeklyPlans = updatedVersion?.campaign_snapshot?.weekly_plan ?? [];
     const dailyPlans = updatedVersion?.campaign_snapshot?.daily_plan ?? [];
     const contentAssets = await listAssetsWithLatestContent({ campaignId });
@@ -160,6 +176,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       health_report: healthReport,
     });
   } catch (error: any) {
+    if (error instanceof CampaignVersionReadError) {
+      return res.status(503).json({ code: error.code, error: 'Campaign data is temporarily unavailable. Nothing was changed. Please try again.' });
+    }
     if (error instanceof PrePlanningRequiredError || error?.code === 'PRE_PLANNING_REQUIRED') {
       return res.status(412).json({ code: 'PRE_PLANNING_REQUIRED', message: error?.message });
     }

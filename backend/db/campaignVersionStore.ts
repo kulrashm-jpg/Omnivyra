@@ -144,6 +144,22 @@ export async function saveTrendSnapshot(input: {
   }
 }
 
+/**
+ * A campaign_versions read FAILED (unread-error pkg 2). PostgREST returns the error (never throws);
+ * these readers used to turn ANY error into "no version" / "no campaigns" (null / []), which callers
+ * then acted on: governance ledger verification answered valid:true with zero campaigns checked, a
+ * governance snapshot was persisted empty, a health report was saved from empty plans, and the
+ * approved-version resolver fell back to the latest UNAPPROVED version. "No row" still answers null.
+ */
+export class CampaignVersionReadError extends Error {
+  readonly code = 'CAMPAIGN_VERSION_READ_FAILED';
+  constructor(readonly source: string, cause: { message?: string } | unknown) {
+    const detail = (cause as { message?: unknown } | null | undefined)?.message;
+    super(`campaign_versions read failed (${source})${typeof detail === 'string' && detail ? `: ${detail}` : ''}`);
+    this.name = 'CampaignVersionReadError';
+  }
+}
+
 export async function getLatestCampaignVersion(
   companyId: string,
   campaignId?: string
@@ -157,7 +173,9 @@ export async function getLatestCampaignVersion(
   }
   const { data, error } = await query.order('created_at', { ascending: false }).limit(1).single();
   if (error) {
-    return null;
+    // `.single()` reports "no row" as PGRST116: that is "no version". Anything else is a failed read.
+    if ((error as { code?: string }).code === 'PGRST116') return null;
+    throw new CampaignVersionReadError('getLatestCampaignVersion', error);
   }
   return data;
 }
@@ -171,7 +189,7 @@ export async function getCompanyCampaignIds(companyId: string): Promise<string[]
     .from('campaign_versions')
     .select('campaign_id')
     .eq('company_id', companyId);
-  if (error) return [];
+  if (error) throw new CampaignVersionReadError('getCompanyCampaignIds', error);
   return Array.from(new Set((data || []).map((r: any) => r.campaign_id).filter(Boolean)));
 }
 
@@ -197,7 +215,8 @@ export async function getLatestCampaignVersionByCampaignId(
     .limit(1)
     .maybeSingle();
 
-  if (error || !data?.company_id) return null;
+  if (error) throw new CampaignVersionReadError('getLatestCampaignVersionByCampaignId', error);
+  if (!data?.company_id) return null;
 
   const {
     build_mode,
@@ -285,12 +304,21 @@ export async function syncCampaignVersionStage(
       query = query.eq('company_id', companyId);
     }
     const { data: rows, error: fetchError } = await query;
-    if (fetchError || !rows?.length) return;
+    // Best-effort and fire-and-forget at every caller, so it never throws, but a failure is no longer
+    // silent (unread-error pkg 2): the version status would otherwise disagree with the campaign stage.
+    if (fetchError) {
+      console.error('[syncCampaignVersionStage] version unreadable; stage not synced', { campaignId, newStage, message: fetchError.message });
+      return;
+    }
+    if (!rows?.length) return;
     const ids = rows.map((r: { id: string }) => r.id);
-    await supabase
+    const { error: updateError } = await supabase
       .from('campaign_versions')
       .update({ status: newStage })
       .in('id', ids);
+    if (updateError) {
+      console.error('[syncCampaignVersionStage] stage not synced', { campaignId, newStage, message: updateError.message });
+    }
   } catch (e) {
     console.warn('syncCampaignVersionStage failed:', e);
   }

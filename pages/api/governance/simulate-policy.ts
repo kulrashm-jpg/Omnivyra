@@ -7,6 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { CampaignVersionReadError } from '../../../backend/db/campaignVersionStore';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -109,11 +110,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       max_weeks_allowed: evaluation.max_weeks_allowed,
       min_weeks_required: evaluation.min_weeks_required,
     });
-  } catch (err: any) {
+  } catch (err) {
     console.error('[governance/simulate-policy]', err);
-    return res.status(500).json({
-      error: err?.message ?? 'Internal server error',
-    });
+    // Never the raw error text to the client (it can carry PostgREST / SQL detail). A failed
+    // campaign_versions read is retryable (unread-error pkg 2: those readers now throw).
+    if (err instanceof CampaignVersionReadError) {
+      return res.status(503).json({ code: err.code, error: 'Campaign data is temporarily unavailable. Please try again.' });
+    }
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 

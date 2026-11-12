@@ -1,20 +1,32 @@
 /**
  * Stage 31 — Governance Ledger Verification.
  * Validates tamper-evident hash chain. Never throws.
+ *
+ * unread-error pkg 2 (e9, value-for-unreadable rule): a ledger that could not be READ is neither valid
+ * nor corrupted. It used to be both, depending on where it failed: a failed events read answered
+ * valid:true (nothing checked, reported intact), and a failed campaign-list read or any throw answered
+ * valid:false (reported as CORRUPTION). Each result now carries status 'verified' | 'corrupted' |
+ * 'unverifiable'; valid is true only for 'verified'.
  */
 
 import { supabase } from '../db/supabaseClient';
 import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { computeGovernanceEventHash } from '../governance/GovernanceLedger';
 
+export type LedgerStatus = 'verified' | 'corrupted' | 'unverifiable';
+
 export interface CampaignLedgerResult {
   valid: boolean;
+  status: LedgerStatus;
   corruptedEventIds?: string[];
 }
 
 export interface CompanyLedgerResult {
   valid: boolean;
+  status: LedgerStatus;
   corruptedCampaigns: string[];
+  /** Campaigns whose ledger could not be read (not checked, not corrupted). */
+  unverifiableCampaigns: string[];
 }
 
 /**
@@ -29,8 +41,11 @@ export async function verifyCampaignLedger(campaignId: string): Promise<Campaign
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: true });
 
-    if (error || !events || events.length === 0) {
-      return { valid: true };
+    if (error) {
+      return { valid: false, status: 'unverifiable' };
+    }
+    if (!events || events.length === 0) {
+      return { valid: true, status: 'verified' };
     }
 
     const corruptedEventIds: string[] = [];
@@ -59,12 +74,14 @@ export async function verifyCampaignLedger(campaignId: string): Promise<Campaign
       prevHash = computedHash;
     }
 
+    const corrupted = corruptedEventIds.length > 0;
     return {
-      valid: corruptedEventIds.length === 0,
-      corruptedEventIds: corruptedEventIds.length > 0 ? corruptedEventIds : undefined,
+      valid: !corrupted,
+      status: corrupted ? 'corrupted' : 'verified',
+      corruptedEventIds: corrupted ? corruptedEventIds : undefined,
     };
   } catch {
-    return { valid: false, corruptedEventIds: [] };
+    return { valid: false, status: 'unverifiable' };
   }
 }
 
@@ -76,19 +93,21 @@ export async function verifyCompanyLedger(companyId: string): Promise<CompanyLed
   try {
     const campaignIds = await getCompanyCampaignIds(companyId);
     const corruptedCampaigns: string[] = [];
+    const unverifiableCampaigns: string[] = [];
 
     for (const cid of campaignIds) {
       const result = await verifyCampaignLedger(cid);
-      if (!result.valid) {
-        corruptedCampaigns.push(cid);
-      }
+      if (result.status === 'corrupted') corruptedCampaigns.push(cid);
+      else if (result.status === 'unverifiable') unverifiableCampaigns.push(cid);
     }
 
-    return {
-      valid: corruptedCampaigns.length === 0,
-      corruptedCampaigns,
-    };
+    // Corruption found anywhere is reported as corruption; otherwise any unread campaign makes the
+    // whole company unverifiable (never "valid" with campaigns left unchecked).
+    const status: LedgerStatus = corruptedCampaigns.length > 0 ? 'corrupted'
+      : unverifiableCampaigns.length > 0 ? 'unverifiable' : 'verified';
+    return { valid: status === 'verified', status, corruptedCampaigns, unverifiableCampaigns };
   } catch {
-    return { valid: false, corruptedCampaigns: [] };
+    // The campaign list itself could not be read (getCompanyCampaignIds now throws on a failed read).
+    return { valid: false, status: 'unverifiable', corruptedCampaigns: [], unverifiableCampaigns: [] };
   }
 }

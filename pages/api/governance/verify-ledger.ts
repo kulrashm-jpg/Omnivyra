@@ -23,7 +23,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const result = await verifyCompanyLedger(companyId);
   return res.status(200).json({
     valid: result.valid,
+    status: result.status,
     corruptedCampaigns: result.corruptedCampaigns,
+    unverifiableCampaigns: result.unverifiableCampaigns,
   });
 }
 
