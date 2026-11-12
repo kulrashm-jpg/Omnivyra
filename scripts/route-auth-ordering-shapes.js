@@ -67,6 +67,16 @@ function seamHandleNames(sf, imports) {
         if (imp && SEAM_TABLE_FACTORIES.has(imp.imported) && SEAM_MODULE.test(imp.spec.replace(/\.(?:ts|js)$/, ''))) out.add(n.name.text);
       }
     }
+    // 55: `let h; try { h = tenantTable(...) } catch (e) { ...404 }` - a later ASSIGNMENT from a factory call binds the name too.
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left)) {
+      let e = unwrap(n.right);
+      while (e && ts.isAwaitExpression(e)) e = unwrap(e.expression);
+      if (e && ts.isCallExpression(e)) {
+        const c = unwrap(e.expression);
+        const imp = ts.isIdentifier(c) ? imports.get(c.text) : null;
+        if (imp && SEAM_TABLE_FACTORIES.has(imp.imported) && SEAM_MODULE.test(imp.spec.replace(/\.(?:ts|js)$/, ''))) out.add(n.left.text);
+      }
+    }
     ts.forEachChild(n, visit);
   };
   visit(sf);
