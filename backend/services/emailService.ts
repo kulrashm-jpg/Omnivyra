@@ -164,8 +164,10 @@ type EmailPayload =
   | CreditAlertPayload;
 
 async function invokeEdgeFunction(payload: EmailPayload, context: { idempotencyKey?: string }): Promise<void> {
+  // The key travels IN THE BODY: the function honours it (reserve-first idempotency). It used to be logged here
+  // only, so every caller that passed a key believed its email was deduplicated and it was not.
   const { error } = await supabase.functions.invoke('send-transactional-email', {
-    body: payload,
+    body: context.idempotencyKey ? { ...payload, idempotencyKey: context.idempotencyKey } : payload,
   });
 
   if (error) {

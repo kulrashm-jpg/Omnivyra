@@ -36,6 +36,9 @@ import { SESClient, SendEmailCommand } from "npm:@aws-sdk/client-ses@3.658.1";
 // templates keep the v1 path unchanged.
 import { SESv2Client, SendEmailCommand as SendEmailV2Command } from "npm:@aws-sdk/client-sesv2@3.658.1";
 import { authorizeServiceCaller } from "./auth.ts";
+import { parseSecretKeys } from "./auth.ts";
+import { PreSendError, sendOnce } from "./idempotency.ts";
+import { rpcStore } from "./store.ts";
 import { escapeHtml, escapeHtmlBlock, safeHref } from "./escape.ts";
 import {
   listUnsubscribeHeaders,
@@ -333,11 +336,11 @@ async function sendViaSES(envelope: Envelope): Promise<string | null> {
   const secretAccessKey = Deno.env.get("AWS_SECRET_ACCESS_KEY");
 
   if (!region) {
-    throw new Error("AWS_SES_REGION is missing or empty");
+    throw new PreSendError("AWS_SES_REGION is missing or empty");
   }
 
   if (!from || !accessKeyId || !secretAccessKey) {
-    throw new Error(
+    throw new PreSendError(
       "SES_NOT_CONFIGURED: EMAIL_FROM, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY all required",
     );
   }
@@ -349,7 +352,7 @@ async function sendViaSES(envelope: Envelope): Promise<string | null> {
   // secret being set correctly. Remove the assertion once verified.
   console.log("FINAL REGION USED:", region);
   if (region !== "eu-north-1") {
-    throw new Error(`REGION MISMATCH: Expected eu-north-1 but got ${region}`);
+    throw new PreSendError(`REGION MISMATCH: Expected eu-north-1 but got ${region}`);
   }
   // ───── END TEMPORARY DIAGNOSTIC ────────────────────────────────────────
 
@@ -395,13 +398,13 @@ async function sendOutreachViaSESv2(envelope: Envelope): Promise<string | null> 
   const secretAccessKey  = Deno.env.get("AWS_SECRET_ACCESS_KEY");
   const configurationSet = Deno.env.get("SES_CONFIGURATION_SET")?.trim();
 
-  if (!region) throw new Error("AWS_SES_REGION is missing or empty");
+  if (!region) throw new PreSendError("AWS_SES_REGION is missing or empty");
   if (!from || !accessKeyId || !secretAccessKey) {
-    throw new Error("SES_NOT_CONFIGURED: EMAIL_FROM, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY all required");
+    throw new PreSendError("SES_NOT_CONFIGURED: EMAIL_FROM, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY all required");
   }
-  if (!configurationSet) throw new Error("SES_CONFIGURATION_SET_MISSING");
+  if (!configurationSet) throw new PreSendError("SES_CONFIGURATION_SET_MISSING");
   if (!envelope.headers || envelope.headers.length === 0 || envelope.text === undefined) {
-    throw new Error("LEAD_OUTREACH_ENVELOPE_INCOMPLETE");
+    throw new PreSendError("LEAD_OUTREACH_ENVELOPE_INCOMPLETE");
   }
 
   const client = new SESv2Client({ region, credentials: { accessKeyId, secretAccessKey } });
@@ -438,6 +441,26 @@ function invalidLeadOutreach(t: Record<string, unknown>): string | null {
   if (!url) return "INVALID_UNSUBSCRIBE_URL";
   t.unsubscribeUrl = url;
   return null;
+}
+
+/** No store: only reachable for a keyless send, which never calls it. */
+const NO_STORE = {
+  reserve: () => Promise.reject(new Error("IDEMPOTENCY_STORE_NOT_USED")),
+  confirm: () => Promise.reject(new Error("IDEMPOTENCY_STORE_NOT_USED")),
+  release: () => Promise.reject(new Error("IDEMPOTENCY_STORE_NOT_USED")),
+  markUncertain: () => Promise.reject(new Error("IDEMPOTENCY_STORE_NOT_USED")),
+};
+/**
+ * The database store, from the platform-injected SUPABASE_URL and secret key. A misconfiguration surfaces as a
+ * reserve failure -> 503 and NOTHING sent (never a send without a reservation).
+ */
+function lazyStore() {
+  try {
+    return rpcStore({ url: Deno.env.get("SUPABASE_URL") ?? "", key: parseSecretKeys(Deno.env.get("SUPABASE_SECRET_KEYS"))[0] ?? "" });
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    return { reserve: () => Promise.reject(e), confirm: () => Promise.reject(e), release: () => Promise.reject(e), markUncertain: () => Promise.reject(e) };
+  }
 }
 
 Deno.serve(async (req) => {
@@ -523,13 +546,23 @@ Deno.serve(async (req) => {
 
   try {
     const envelope = render(body);
-    const messageId = requestedType === "lead_outreach"
-      ? await sendOutreachViaSESv2(envelope)
-      : await sendViaSES(envelope);
-    // PI-041-A-O: `messageId` is ADDITIVE. `ok` keeps its meaning and position, so
-    // every existing caller — all of which inspect only `ok` — is unaffected.
-    return new Response(JSON.stringify({ ok: true, messageId }), {
-      status: 200,
+    // IDEMPOTENCY (correct-sending, e9 rulings 2026-11-13): a body `idempotencyKey` is honoured - reserve
+    // first, send only on our own reservation; a duplicate is answered without sending; an uncertain send is
+    // never resent. See ./idempotency.ts. Without a key, the send is unchanged.
+    const rawKey = (body as { idempotencyKey?: unknown }).idempotencyKey;
+    const idempotencyKey = typeof rawKey === "string" && rawKey.trim() !== "" ? rawKey.trim() : null;
+    const result = await sendOnce({
+      key: idempotencyKey,
+      emailType: requestedType,
+      recipient: envelope.to,
+      // Built only when a key needs it: a keyless send never depends on the database.
+      store: idempotencyKey ? lazyStore() : NO_STORE,
+      send: () => (requestedType === "lead_outreach" ? sendOutreachViaSESv2(envelope) : sendViaSES(envelope)),
+      log: (event, detail) => console.error(event, JSON.stringify(detail)),
+    });
+    // PI-041-A-O: `messageId` is ADDITIVE and `ok` keeps its meaning; a duplicate adds `duplicate: true`.
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
