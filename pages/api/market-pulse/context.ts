@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isContentArchitectSession, resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getMarketPulseContext } from '../../../backend/services/marketPulseV2Service';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -25,7 +26,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       : 'executive';
     const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
     const offset = typeof req.query.offset === 'string' ? Number(req.query.offset) : undefined;
-    const context = await getMarketPulseContext(companyId, safeViewType, { limit, offset });
+    const context = await getMarketPulseContext(tenantContextFor(access, companyId), safeViewType, { limit, offset });
     return res.status(200).json(context);
   } catch (error) {
     return res.status(500).json({ error: (error as Error).message || 'Failed to load Market Pulse context' });

@@ -33,6 +33,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { config } from '@/config';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
+import { systemTenantContext } from '../../../backend/db/tenantTable';
 import { jobQueue } from '../../../backend/queue/jobQueue';
 import { runJob } from '../../../backend/services/jobRunner';
 import {
@@ -182,7 +183,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             credit_acknowledged: true,
           };
 
-          const { context, resolvedInput } = await resolveMarketPulseRunInput(companyId, input);
+          // A job acting for ONE company: the id comes from the market_pulse_automation_settings row read above.
+          const tenant = systemTenantContext(companyId, 'cron market-pulse-automation: one company from its automation settings row');
+          const { context, resolvedInput } = await resolveMarketPulseRunInput(tenant, input);
 
           const regionsNormalized =
             resolvedInput.custom_regions && resolvedInput.custom_regions.length > 0
@@ -224,14 +227,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             throw new Error(insertError?.message || 'Failed to create legacy Market Pulse job');
           }
 
-          const run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
+          const run = await createMarketPulseRun(tenant, resolvedInput, legacyJob.id);
 
           if (!config.ENABLE_AUTO_WORKERS) {
             // Same fallback the on-demand endpoint uses when workers are
             // disabled (single-process / dev). Runs the processor inline so
             // findings are persisted by the time this cron tick returns.
             await processMarketPulseJobV1(legacyJob.id);
-            await syncLegacyJobIntoRun(run.id, companyId);
+            await syncLegacyJobIntoRun(run.id, tenant);
             return { mode: 'inline', runId: run.id, legacyJobId: legacyJob.id };
           }
 

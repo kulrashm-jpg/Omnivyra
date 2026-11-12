@@ -5,6 +5,7 @@ import {
   getMarketPulseExecutiveExperience,
   saveMarketPulseWatchlistItem,
 } from '../../../backend/services/marketPulseExecutiveExperienceService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -15,9 +16,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await resolveCompanyAccess(req, res, companyId);
   if (!access) return;
+  const tenant = tenantContextFor(access, companyId);
 
   if (req.method === 'GET') {
-    const experience = await getMarketPulseExecutiveExperience(companyId, 'executive');
+    const experience = await getMarketPulseExecutiveExperience(tenant, 'executive');
     return res.status(200).json({ watchlists: experience.watchlists });
   }
 
@@ -31,8 +33,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!watchlistType || !watchlistValue) {
       return res.status(400).json({ error: 'watchlistType and watchlistValue are required' });
     }
-    const item = await saveMarketPulseWatchlistItem({
-      companyId,
+    const item = await saveMarketPulseWatchlistItem(tenant, {
       watchlistType,
       watchlistValue,
       priorityLevel: typeof body.priorityLevel === 'string' ? body.priorityLevel : typeof body.priority_level === 'string' ? body.priority_level : 'normal',

@@ -6,6 +6,7 @@ import { resolveCompanyAccess } from '../../../../../backend/services/contentArc
 import { getMarketPulseRun, syncLegacyJobIntoRun } from '../../../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../../../backend/services/marketPulseJobProcessor';
 import { isUuid } from '../../../../../lib/shared/uuid';
+import { tenantContextFor, type TenantContext } from '../../../../../backend/db/tenantTable';
 
 function shouldRecoverStaleMarketPulseInline(): boolean {
   if (!config.ENABLE_AUTO_WORKERS) return true;
@@ -19,10 +20,10 @@ function shouldRecoverStaleMarketPulseInline(): boolean {
   );
 }
 
-async function recoverLocalPendingJob(runId: string, companyId: string): Promise<void> {
+async function recoverLocalPendingJob(runId: string, tenant: TenantContext): Promise<void> {
   if (!shouldRecoverStaleMarketPulseInline()) return;
 
-  const current = await getMarketPulseRun(runId, companyId);
+  const current = await getMarketPulseRun(runId, tenant);
   const legacyJobId = String(current.run?.context_snapshot?.legacy_job_id ?? '').trim();
   if (!legacyJobId) return;
 
@@ -77,8 +78,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    await recoverLocalPendingJob(runId, companyId);
-    const synced = await syncLegacyJobIntoRun(runId, companyId);
+    const tenant = tenantContextFor(access, companyId);
+    await recoverLocalPendingJob(runId, tenant);
+    const synced = await syncLegacyJobIntoRun(runId, tenant);
     return res.status(200).json(synced);
   } catch (error) {
     return res.status(500).json({ error: (error as Error).message || 'Failed to load Market Pulse run' });
