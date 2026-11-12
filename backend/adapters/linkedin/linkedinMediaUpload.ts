@@ -42,9 +42,10 @@
  * RETRY SAFETY
  * ─────────────────────────────────────────────────────────────────────────────
  * - Per-attachment URN cache keyed by source URL is read/written via
- *   `scheduled_posts.creator_attachment_metadata.provider_asset_urns.linkedin`
- *   (existing JSONB column; no schema change). On retry/replay, a cached URN
- *   is reused — no duplicate upload to LinkedIn.
+ *   `scheduled_posts.provider_asset_urns.linkedin` (its own column; it moved
+ *   out of creator_attachment_metadata, which is an ARRAY - see the cache
+ *   section below). On retry/replay, a cached URN is reused — no duplicate
+ *   upload to LinkedIn.
  * - The cache is best-effort. If the cached URN is stale (asset expired on
  *   LinkedIn side, which is rare within the publish window), the Posts API
  *   call will 422 and the operator can clear the cache and retry.
@@ -147,8 +148,8 @@ export function inferLinkedInMediaKind(mimeOrUrl: string | undefined | null): Li
 
 /**
  * Get or upload a single LinkedIn asset for the given source URL. Reuses a
- * cached asset URN from `scheduled_posts.creator_attachment_metadata`
- * .provider_asset_urns.linkedin when present. Otherwise: download source →
+ * cached asset URN from `scheduled_posts.provider_asset_urns.linkedin` when
+ * present. Otherwise: download source →
  * registerUpload → PUT binary → (video only) finalize + poll until READY →
  * write URN back to the cache.
  */
@@ -503,22 +504,26 @@ async function pollVideoUntilReady(input: {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// URN cache (creator_attachment_metadata JSONB sub-key)
+// URN cache (scheduled_posts.provider_asset_urns: { linkedin: { [sourceUrl]: assetUrn } })
 // ───────────────────────────────────────────────────────────────────────
+//
+// CLASS-2 / owner ruling (via e9, 2026-11-12): this cache used to live INSIDE
+// creator_attachment_metadata as an object sub-key - but that column is canonically a JSONB ARRAY
+// of creator attachments (attribution reads it as one), and writing the cache spread the array into
+// an object, destroying the attachments. It now has its own column. The write is a compare-and-set
+// on the updated_at that was read (re-read and retried), so two uploads of different media for one
+// post never erase each other's URN. Best-effort by design: a miss only re-uploads the asset.
 
 async function readUrnCache(scheduledPostId: string, sourceUrl: string): Promise<string | null> {
   try {
     const { data, error } = await supabase
       .from('scheduled_posts')
-      .select('creator_attachment_metadata')
+      .select('provider_asset_urns')
       .eq('id', scheduledPostId)
       .maybeSingle();
-    if (error || !data) return null;
-    const metadata = (data as { creator_attachment_metadata?: unknown }).creator_attachment_metadata;
-    if (!metadata || typeof metadata !== 'object') return null;
-    const providerCache = (metadata as Record<string, any>).provider_asset_urns;
-    if (!providerCache || typeof providerCache !== 'object') return null;
-    const linkedinCache = providerCache.linkedin;
+    if (error || !data) return null; // a miss: the asset is uploaded again
+    const cache = (data as { provider_asset_urns?: unknown }).provider_asset_urns;
+    const linkedinCache = cache && typeof cache === 'object' && !Array.isArray(cache) ? (cache as Record<string, any>).linkedin : null;
     if (!linkedinCache || typeof linkedinCache !== 'object') return null;
     const urn = linkedinCache[sourceUrl];
     return typeof urn === 'string' && urn.length > 0 ? urn : null;
@@ -527,54 +532,49 @@ async function readUrnCache(scheduledPostId: string, sourceUrl: string): Promise
   }
 }
 
+const URN_CACHE_WRITE_ATTEMPTS = 3;
+
 async function writeUrnCache(
   scheduledPostId: string,
   sourceUrl: string,
   assetUrn: string,
 ): Promise<{ ok: true } | { ok: false; error: LinkedInUploadFailure }> {
+  const fail = (message: string): { ok: false; error: LinkedInUploadFailure } => ({
+    ok: false,
+    error: { code: 'LINKEDIN_MEDIA_CACHE_WRITE_FAILED', message, retryable: true },
+  });
   try {
-    const { data: row } = await supabase
-      .from('scheduled_posts')
-      .select('creator_attachment_metadata')
-      .eq('id', scheduledPostId)
-      .maybeSingle();
-    const existing = (row as { creator_attachment_metadata?: unknown } | null)?.creator_attachment_metadata;
-    const metadata: Record<string, any> = (existing && typeof existing === 'object') ? { ...(existing as object) } : {};
-    const providerCache: Record<string, any> = metadata.provider_asset_urns && typeof metadata.provider_asset_urns === 'object'
-      ? { ...metadata.provider_asset_urns }
-      : {};
-    const linkedinCache: Record<string, any> = providerCache.linkedin && typeof providerCache.linkedin === 'object'
-      ? { ...providerCache.linkedin }
-      : {};
-    linkedinCache[sourceUrl] = assetUrn;
-    providerCache.linkedin = linkedinCache;
-    metadata.provider_asset_urns = providerCache;
-    const { error } = await supabase
-      .from('scheduled_posts')
-      .update({ creator_attachment_metadata: metadata, updated_at: new Date().toISOString() })
-      .eq('id', scheduledPostId);
-    if (error) {
-      return {
-        ok: false,
-        error: {
-          code: 'LINKEDIN_MEDIA_CACHE_WRITE_FAILED',
-          message: `URN cache update failed: ${error.message}`,
-          retryable: true,
-        },
-      };
+    for (let attempt = 1; attempt <= URN_CACHE_WRITE_ATTEMPTS; attempt += 1) {
+      const { data: row, error: readError } = await supabase
+        .from('scheduled_posts')
+        .select('provider_asset_urns, updated_at')
+        .eq('id', scheduledPostId)
+        .maybeSingle();
+      if (readError) return fail(`URN cache read failed: ${readError.message}`);
+      if (!row) return fail('URN cache: scheduled post not found');
+      const existing = (row as { provider_asset_urns?: unknown }).provider_asset_urns;
+      const cache: Record<string, any> = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...(existing as object) } : {};
+      const linkedinCache: Record<string, any> = cache.linkedin && typeof cache.linkedin === 'object' ? { ...cache.linkedin } : {};
+      linkedinCache[sourceUrl] = assetUrn;
+      cache.linkedin = linkedinCache;
+      const readAt = (row as { updated_at?: string | null }).updated_at ?? null;
+      const write = supabase
+        .from('scheduled_posts')
+        .update({ provider_asset_urns: cache, updated_at: new Date().toISOString() })
+        .eq('id', scheduledPostId);
+      const { data: moved, error } = await (readAt === null ? write.is('updated_at', null) : write.eq('updated_at', readAt)).select('id');
+      if (error) return fail(`URN cache update failed: ${error.message}`);
+      if (Array.isArray(moved) && moved.length === 1) return { ok: true };
+      // The row changed since the read (another URN, a status write): re-read and re-apply.
     }
-    return { ok: true };
+    return fail('URN cache update kept losing to concurrent writes');
   } catch (err) {
-    return {
-      ok: false,
-      error: {
-        code: 'LINKEDIN_MEDIA_CACHE_WRITE_FAILED',
-        message: `URN cache write threw: ${(err as Error).message}`,
-        retryable: true,
-      },
-    };
+    return fail(`URN cache write threw: ${(err as Error).message}`);
   }
 }
+
+/** Test seam (the URN cache is internal to the uploader). */
+export const __urnCacheForTests = { readUrnCache, writeUrnCache };
 
 // ───────────────────────────────────────────────────────────────────────
 // Tiny utilities
