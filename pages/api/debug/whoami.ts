@@ -16,8 +16,15 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { isProduction } from '../../../backend/services/config/productionFlags';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // SEC-005 (docs/security/AUTH-ENFORCEMENT-ARCHITECTURE.md: "Self-scoped, not cross-tenant; disable in
+  // production"). A dev-side diagnostic with no caller in the app: in production it does not exist - the same
+  // 404 as any unknown route, before any identity work. The AUTH-CTX-002 contract still holds where it runs.
+  if (isProduction()) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
