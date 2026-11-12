@@ -294,14 +294,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const generatedCampaignId = payload.generatedCampaignId;
     if (generatedCampaignId && typeof generatedCampaignId === 'string' && generatedCampaignId.trim()) {
+      // The id is interpolated into a PostgREST `or` filter below, so it must be a uuid HERE (05 finding).
+      // The campaign-version preflight also rejects a non-uuid today, but that is another module's
+      // choice; this guard must not depend on it.
+      const campaignIdForGuard = normalizeOptionalUuid(generatedCampaignId);
+      if (!campaignIdForGuard) {
+        return res.status(400).json({ error: 'generatedCampaignId must be a UUID', code: 'INVALID_CAMPAIGN_ID' });
+      }
       // A query FAILURE is not "no existing run". Reading `data` while
       // discarding `error` turns a transport/PostgREST fault into a silent
       // green light to start a second execution — the exact class this guard
       // exists to prevent.
+      // Scoped to the AUTHORIZED company (enforceCompanyAccess above): another company's run for the
+      // same campaign id must neither block this start nor be returned as this caller's run.
       const { data: existingRun, error: existingRunError } = await supabase
         .from('bolt_execution_runs')
         .select('id')
-        .or(`campaign_id.eq.${generatedCampaignId},target_campaign_id.eq.${generatedCampaignId}`)
+        .eq('company_id', companyId)
+        .or(`campaign_id.eq.${campaignIdForGuard},target_campaign_id.eq.${campaignIdForGuard}`)
         .in('status', ['running', 'started'])
         .limit(1)
         .maybeSingle();
