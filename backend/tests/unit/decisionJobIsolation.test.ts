@@ -239,7 +239,7 @@ jest.mock('@/backend/services/context/canonicalProfileAdapter', () => ({ getCano
 
 describe('3. dailyIntelligence: a failed campaign still queues its company; company steps are isolated', () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { runDailyIntelligence } = require('../../jobs/dailyIntelligenceScheduler');
+  const { runDailyIntelligence, computeDailyRunStatus } = require('../../jobs/dailyIntelligenceScheduler');
   const summary = (failed: Array<{ engine: string; error: string }> = []) => {
     const r: Record<string, unknown> = { total: 0, failed };
     for (const k of ['traffic', 'funnel', 'seo', 'contentAuthority', 'lead', 'brandTrust', 'backlinkAuthority', 'competitorNormalization', 'competitorIntelligence', 'competitiveSignals', 'distribution', 'authority', 'geo', 'trust', 'intent', 'velocity', 'portfolio', 'geoStrategy', 'advancedRevenueAttribution']) r[k] = 0;
@@ -344,6 +344,29 @@ describe('3. dailyIntelligence: a failed campaign still queues its company; comp
     expect(attempts('behavior_alerts')).toBe(1);
     expect(attempts('behavior_action_outcomes')).toBe(3);
     expect(dlq).toEqual(['job:daily-intelligence:company:behavior_action_outcomes']);
+  });
+
+  it('STATUS engines: engine failures reach the result (and, via computeDailyRunStatus, the status)', async () => {
+    runDataDriven.mockImplementation(async () => {
+      calls.push('data_driven_engines');
+      return summary([{ engine: 'seo', error: 'down' }, { engine: 'traffic', error: 'down' }]);
+    });
+    const r = await runDailyIntelligence();
+    expect(r).toMatchObject({ company_step_failures: 0, engine_failures: 2, companies_all_steps_failed: 0 });
+  });
+
+  // The status rule itself, with each signal ISOLATED (the run harness always fails its campaign job,
+  // so only a direct call can show that an engine failure ALONE prevents 'completed').
+  it.each([
+    ['nothing failed', { companiesRan: 1, companiesAllStepsFailed: 0, companyStepFailures: 0, engineFailures: 0, failedCampaigns: 0 }, 'completed'],
+    ['no company ran (no vacuous failed)', { companiesRan: 0, companiesAllStepsFailed: 0, companyStepFailures: 0, engineFailures: 0, failedCampaigns: 0 }, 'completed'],
+    ['ONLY engines failed (05)', { companiesRan: 1, companiesAllStepsFailed: 0, companyStepFailures: 0, engineFailures: 19, failedCampaigns: 0 }, 'completed_with_errors'],
+    ['only a step failed', { companiesRan: 1, companiesAllStepsFailed: 0, companyStepFailures: 1, engineFailures: 0, failedCampaigns: 0 }, 'completed_with_errors'],
+    ['only a campaign failed', { companiesRan: 1, companiesAllStepsFailed: 0, companyStepFailures: 0, engineFailures: 0, failedCampaigns: 1 }, 'completed_with_errors'],
+    ['every company failed all five', { companiesRan: 2, companiesAllStepsFailed: 2, companyStepFailures: 10, engineFailures: 0, failedCampaigns: 0 }, 'failed'],
+    ['one of two companies failed all five', { companiesRan: 2, companiesAllStepsFailed: 1, companyStepFailures: 5, engineFailures: 0, failedCampaigns: 0 }, 'completed_with_errors'],
+  ])('computeDailyRunStatus: %s', (_name, input, expected) => {
+    expect(computeDailyRunStatus(input)).toBe(expected);
   });
 
   it('ENGINE: a failed engine is recorded by name, and the engines are not re-run', async () => {

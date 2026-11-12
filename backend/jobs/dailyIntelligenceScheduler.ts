@@ -177,8 +177,23 @@ export type DailyIntelligenceResult = {
   company_step_failures: number;
   /** Companies where EVERY one of the five steps failed. */
   companies_all_steps_failed: number;
+  /** Data-driven engines that failed inside a step that otherwise completed (each recorded by name). */
+  engine_failures: number;
   errors: string[];
 };
+
+/** The daily run's status (see the comment at its use in runDailyIntelligence). Exported for its test. */
+export function computeDailyRunStatus(c: {
+  companiesRan: number;
+  companiesAllStepsFailed: number;
+  companyStepFailures: number;
+  engineFailures: number;
+  failedCampaigns: number;
+}): 'completed' | 'completed_with_errors' | 'failed' {
+  if (c.companiesRan > 0 && c.companiesAllStepsFailed === c.companiesRan) return 'failed';
+  if (c.companyStepFailures > 0 || c.engineFailures > 0 || c.failedCampaigns > 0) return 'completed_with_errors';
+  return 'completed';
+}
 
 export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
   const startTime = Date.now();
@@ -210,6 +225,7 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
   let companiesRan = 0;
   let companyStepFailures = 0;
   let companiesAllStepsFailed = 0;
+  let engineFailures = 0;
   let eventsEmittedCount = 0;
   let duplicateEventsBlocked = 0;
   let alertsSentCount = 0;
@@ -244,6 +260,7 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
       companies_ran: 0,
       company_step_failures: 0,
       companies_all_steps_failed: 0,
+      engine_failures: 0,
       errors: ['Skipped: job already locked (run in progress, lock < 30min)'],
     };
   }
@@ -651,6 +668,7 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
           // A failed ENGINE is recorded here, not thrown: throwing would make this step's retry re-run
           // all 19 engines (the 18 that succeeded included) for one engine's failure.
           for (const f of intelligenceRun.failed) {
+            engineFailures += 1;
             errors.push(`Opportunity company ${companyId}: engine ${f.engine}: ${f.error}`);
             console.error('[dailyIntelligence] engine failed', { companyId, engine: f.engine, message: f.error });
           }
@@ -698,14 +716,13 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
     //   failed                 every company job that RAN failed all five steps. companies_ran > 0:
     //                          over zero companies "every one failed" is vacuously true, and a quiet
     //                          run must not read as a failure.
-    //   completed_with_errors  any company step or campaign job failed
+    //   completed_with_errors  any company step, engine (inside a step that otherwise completed; 05) or
+    //                          campaign job failed. An engine failure never makes the run 'failed', which
+    //                          is reserved for all-five-steps-failed, but it must prevent 'completed'.
     //   completed              otherwise (including a run with no eligible company)
     // Nothing reads intelligence_job_runs today, so this record alone is NOT detection: the 'failed'
     // branch also logs at ERROR, because logs are watched and this table is not.
-    const runStatus: 'completed' | 'completed_with_errors' | 'failed' =
-      companiesRan > 0 && companiesAllStepsFailed === companiesRan ? 'failed'
-        : (companyStepFailures > 0 || failedCampaigns > 0) ? 'completed_with_errors'
-          : 'completed';
+    const runStatus = computeDailyRunStatus({ companiesRan, companiesAllStepsFailed, companyStepFailures, engineFailures, failedCampaigns });
     if (runStatus === 'failed') {
       console.error('[dailyIntelligence] run FAILED: every company job that ran failed all five steps', { companiesRan, companyStepFailures });
     }
@@ -775,6 +792,7 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
       companies_ran: companiesRan,
       company_step_failures: companyStepFailures,
       companies_all_steps_failed: companiesAllStepsFailed,
+      engine_failures: engineFailures,
       errors,
     };
   } catch (err) {
