@@ -306,3 +306,29 @@ describe('WP3/L5 — the send path (source contract)', () => {
     expect(indexSrc).toMatch(/validateUnsubscribeUrl\(t\.unsubscribeUrl, getAppUrl\(\)\)/);
   });
 });
+
+// e9 2026-11-13: an UNCERTAIN answer from send-transactional-email (409 IDEMPOTENCY_UNCERTAIN, or 502 uncertain)
+// reaches the outreach provider as `uncertain` - never a plain rejection that dispatch could re-queue.
+describe('send-transactional-email UNCERTAIN answer -> provider `uncertain`', () => {
+  const nonOk = (status: number, body: unknown) =>
+    ({ error: { message: 'Edge Function returned a non-2xx status code', context: new Response(JSON.stringify(body), { status }) } }) as never;
+
+  it.each([
+    ['409 IDEMPOTENCY_UNCERTAIN', 409, { ok: false, error: 'IDEMPOTENCY_UNCERTAIN', duplicate: true, retryable: false }],
+    ['502 uncertain send', 502, { ok: false, error: 'socket hang up', uncertain: true, retryable: false }],
+  ])('%s -> uncertain, not accepted', async (_n, status, body) => {
+    functionResponse = nonOk(status, body);
+    const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
+    expect(res).toMatchObject({ accepted: false, uncertain: true, rejectionReason: 'provider_uncertain' });
+  });
+
+  it.each([
+    ['409 IN_FLIGHT (retryable)', 409, { ok: false, error: 'IDEMPOTENCY_IN_FLIGHT', duplicate: true, retryable: true }],
+    ['500 definite failure', 500, { ok: false, error: 'ses 400', retryable: true }],
+  ])('CONTROL: %s stays a plain rejection (never marked uncertain)', async (_n, status, body) => {
+    functionResponse = nonOk(status, body);
+    const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
+    expect(res.accepted).toBe(false);
+    expect(res.uncertain).toBeUndefined();
+  });
+});

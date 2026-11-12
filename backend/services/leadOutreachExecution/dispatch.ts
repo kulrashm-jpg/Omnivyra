@@ -285,6 +285,20 @@ export async function dispatchInternalOutreachTask(
   recordStageOutcome('transport', dispatched.outcome === 'accepted' ? 'ok' : dispatched.outcome === 'disabled' ? 'skipped' : 'failed');
   if (dispatched.outcome !== 'accepted' && dispatched.outcome !== 'disabled') recordFailure(dispatched.outcome === 'provider_error' ? 'provider' : 'transport', dispatched.error);
 
+  if (dispatched.outcome === 'timeout') {
+    // AMBIGUOUS (a timeout, or the provider answered "uncertain"): the provider may have the message. The task
+    // must NOT return to `queued` - a later dispatch is a NEW attempt with a NEW idempotency key, i.e. a fresh
+    // send that no provider dedupe can stop. It goes to `failed` (leaving it needs an explicit `retried`, a person's
+    // decision), and the quota unit stays COUNTED (the message may have gone out).
+    await transitionOutreachTaskState(companyId, task.id, 'dispatching', 'failed');
+    recordExternalOutcome(transport.external, dispatched.outcome);
+    recordDispatchOutcome('failed');
+    return result(taskId, 'timeout', dispatched.error ?? 'transport reported timeout', startedMs, {
+      status: 'failed', attemptNumber, governance: evaluation, limiterLayer: reservation.layer,
+      provider: dispatched.provider, providerMessageId: dispatched.providerMessageId, transportOutcome: dispatched.outcome,
+    });
+  }
+
   if (dispatched.outcome !== 'accepted') {
     // Quota is released and the task returns to `queued`. NO retry is
     // scheduled — that is a later milestone; failure stops after persistence.
