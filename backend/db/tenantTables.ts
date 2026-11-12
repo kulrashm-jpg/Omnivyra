@@ -618,7 +618,7 @@ export const TENANT_CHILD_TABLES = {
   campaign_team_assignment: { via: 'team_id', parent: 'teams', tag: 'content' },
   collaboration_plans: { via: 'opportunity_id', parent: 'opportunity_items', tag: 'content' },
   community_threads: { via: 'post_id', parent: 'community_posts', tag: 'content' },
-  company_blog_series_posts: { via: 'blog_id', parent: 'blogs', tag: 'content' },
+  company_blog_series_posts: { via: 'series_id', parent: 'company_blog_series', tag: 'content' },
   content_assets: { via: 'campaign_id', parent: 'campaigns', tag: 'content' },
   creator_render_attempt: { via: 'billing_operation_id', parent: 'billing_operations', tag: 'content' },
   creator_render_job_state: { via: 'render_job_id', parent: 'creator_render_job', tag: 'content' },

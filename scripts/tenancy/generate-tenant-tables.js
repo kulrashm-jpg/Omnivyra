@@ -29,6 +29,7 @@ const VIA_OVERRIDES = {
   daily_content_plans: ['campaign_id', 'campaigns'],
   media_files: ['campaign_id', 'campaigns'],
   content_assets: ['campaign_id', 'campaigns'],
+  company_blog_series_posts: ['series_id', 'company_blog_series'], // e1 S2: every route op is keyed by SERIES (series/[id], series/index); the series is company-scoped. Blog ownership of referenced posts stays SEC-1's check.
 };
 /**
  * GLOBAL tables: no tenant at all (platform-wide content or system state). Reads/writes stay on ownedDbTable
