@@ -22,7 +22,7 @@
  * repository layer.
  */
 
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import { BoltError, BOLT_ERROR_CODES, type BoltErrorCode } from '../../lib/shared/bolt/boltErrorCodes';
 
 interface SupabaseError { message: string; code?: string | null; details?: string | null; hint?: string | null; }
@@ -45,31 +45,34 @@ function wrapSupabaseError(
   });
 }
 
+// S2 tenant seam: the three persistence wrappers take the caller's TenantContext; company_id is stamped by the
+// seam on insert (a row naming another tenant is refused) and the version update is pinned to the tenant.
+
 // ── Campaign insert ────────────────────────────────────────────────
-export async function insertCampaignOrThrow(row: Record<string, unknown>): Promise<void> {
-  const { error } = await ownedDbTable('campaigns').insert(row);
+export async function insertCampaignOrThrow(tenant: TenantContext, row: Record<string, unknown>): Promise<void> {
+  const { error } = await tenantTable('campaigns', tenant).insert(row);
   const wrapped = wrapSupabaseError(
     error,
     BOLT_ERROR_CODES.CAMPAIGN_INSERT_FAILED,
-    { campaign_id: row.id, company_id: row.company_id },
+    { campaign_id: row.id, company_id: tenant.companyId },
   );
   if (wrapped) throw wrapped;
 }
 
 // ── Campaign version insert ────────────────────────────────────────
-export async function insertCampaignVersionOrThrow(row: Record<string, unknown>): Promise<void> {
-  const { error } = await ownedDbTable('campaign_versions').insert(row);
+export async function insertCampaignVersionOrThrow(tenant: TenantContext, row: Record<string, unknown>): Promise<void> {
+  const { error } = await tenantTable('campaign_versions', tenant).insert(row);
   const wrapped = wrapSupabaseError(
     error,
     BOLT_ERROR_CODES.CAMPAIGN_VERSION_INSERT_FAILED,
-    { campaign_id: row.campaign_id, company_id: row.company_id },
+    { campaign_id: row.campaign_id, company_id: tenant.companyId },
   );
   if (wrapped) throw wrapped;
 }
 
 // ── Campaign version update ────────────────────────────────────────
-export async function updateCampaignVersionOrThrow(versionId: string, updates: Record<string, unknown>): Promise<void> {
-  const { error } = await ownedDbTable('campaign_versions').update(updates).eq('id', versionId);
+export async function updateCampaignVersionOrThrow(tenant: TenantContext, versionId: string, updates: Record<string, unknown>): Promise<void> {
+  const { error } = await tenantTable('campaign_versions', tenant).update(updates).eq('id', versionId);
   const wrapped = wrapSupabaseError(
     error,
     BOLT_ERROR_CODES.CAMPAIGN_VERSION_UPDATE_FAILED,

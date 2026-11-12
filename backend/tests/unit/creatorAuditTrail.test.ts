@@ -60,7 +60,10 @@ describe('creatorAuditTrailService', () => {
       { id: '2', action: 'upload_completed', daily_plan_id: 'plan-x' },
     ];
     const a = await import('../../services/creatorAuditTrailService');
-    const history = await a.getAuditHistoryForPlan('plan-x');
+    // S2 tenant seam: the reader takes the caller's TenantContext (uuid company) first.
+    const { tenantContextFor } = await import('../../db/tenantTable');
+    const tenant = tenantContextFor({ userId: 'user-1' }, '11111111-1111-4111-8111-111111111111');
+    const history = await a.getAuditHistoryForPlan(tenant, 'plan-x');
     expect(history.length).toBe(2);
   });
 
