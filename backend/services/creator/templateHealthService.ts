@@ -15,15 +15,21 @@ import { listTemplateAudit, listUserTemplateVersions, getUserTemplate, listUserT
 
 /** Operational health for one template (system or user). */
 export async function getTemplateHealth(id: string): Promise<TemplateHealth> {
-  const audit = await listTemplateAudit(id);
-  const events: TemplateHealthEvent[] = audit.map((a) => ({ action: a.action, templateId: a.templateId, templateVersion: a.templateVersion, at: a.at }));
-
   // A registered USER template also resolves through getTemplateById - only a real system
   // template takes the system branch (it used to label user templates 'system').
   const sys = getTemplateById(id);
   if (sys && sys.ownership === 'system') {
-    return computeTemplateHealth(id, events, { ownership: 'system', latestVersion: sys.version, activeVersion: sys.version, status: 'published' });
+    // e9 RULING (2026-11-12): a SYSTEM template is used by every tenant, and its audit rows carry
+    // no company (creator_user_template_audit: template_id / action / version / actor / detail /
+    // created_at), so they cannot be scoped to the caller's company. Restrictive default: a
+    // tenant never sees platform-wide aggregates - system health is catalog metadata only, with
+    // NO audit-derived events. (If the audit rows gain a company column, scope them by it here.)
+    return computeTemplateHealth(id, [], { ownership: 'system', latestVersion: sys.version, activeVersion: sys.version, status: 'published' });
   }
+
+  // A USER template's audit trail is its owning tenant's own (the route authorizes the owner).
+  const audit = await listTemplateAudit(id);
+  const events: TemplateHealthEvent[] = audit.map((a) => ({ action: a.action, templateId: a.templateId, templateVersion: a.templateVersion, at: a.at }));
   const user = await getUserTemplate(id);
   const versions = await listUserTemplateVersions(id);
   const latestVersion = versions[0]?.version ?? user?.version ?? null;
