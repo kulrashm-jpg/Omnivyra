@@ -4,7 +4,7 @@
  */
 
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
-import { enforceDecisionGenerationThrottle } from './decisionGenerationControlService';
+import { DecisionGenerationThrottledError, enforceDecisionGenerationThrottle } from './decisionGenerationControlService';
 import {
   archiveDecisionScope,
   listDecisionObjects,
@@ -162,6 +162,10 @@ export type GenerateFeedbackInsightsResult = {
   decisions_created: number;
   decisions_archived: number;
   companies_processed: number;
+  /** Companies skipped this run because decision generation was throttled (not a failure). */
+  companies_throttled: number;
+  /** Companies whose generation failed; logged, and the loop continued with the next company. */
+  companies_failed: number;
 };
 
 export async function generateFeedbackInsights(): Promise<GenerateFeedbackInsightsResult> {
@@ -184,50 +188,71 @@ export async function generateFeedbackInsights(): Promise<GenerateFeedbackInsigh
 
   let decisionsCreated = 0;
   let decisionsArchived = 0;
+  let companiesThrottled = 0;
+  const failures: Array<{ companyId: string; message: string }> = [];
 
+  // One company's failure must not abort the loop for every company after it (e9, 2026-11-12):
+  // per-company catch + continue, as insightLearning does. A throttle is a skip, not a failure.
   for (const [companyId, companySignals] of byCompany.entries()) {
-    await enforceDecisionGenerationThrottle(companyId, 'feedbackIntelligenceEngine');
-    const drafts = buildCompanyDecisionDrafts(companySignals);
+    try {
+      await enforceDecisionGenerationThrottle(companyId, 'feedbackIntelligenceEngine');
+      const drafts = buildCompanyDecisionDrafts(companySignals);
 
-    if (drafts.length === 0) {
-      await archiveDecisionScope({
-        company_id: companyId,
-        report_tier: 'growth',
-        source_service: 'feedbackIntelligenceEngine',
-        entity_type: 'global',
-        entity_id: null,
-        changed_by: 'system',
-      });
-      decisionsArchived += 1;
-      continue;
+      if (drafts.length === 0) {
+        await archiveDecisionScope({
+          company_id: companyId,
+          report_tier: 'growth',
+          source_service: 'feedbackIntelligenceEngine',
+          entity_type: 'global',
+          entity_id: null,
+          changed_by: 'system',
+        });
+        decisionsArchived += 1;
+        continue;
+      }
+
+      const persisted = await replaceDecisionObjectsForSource(
+        drafts.map((draft) => ({
+          company_id: companyId,
+          report_tier: 'growth',
+          source_service: 'feedbackIntelligenceEngine',
+          entity_type: 'global',
+          entity_id: null,
+          issue_type: draft.issue_type,
+          title: draft.title,
+          description: draft.description,
+          evidence: draft.evidence,
+          impact_traffic: draft.impact_traffic,
+          impact_conversion: draft.impact_conversion,
+          impact_revenue: draft.impact_revenue,
+          priority_score: draft.priority_score,
+          effort_score: draft.effort_score,
+          confidence_score: draft.confidence_score,
+          recommendation: draft.recommendation,
+          action_type: draft.action_type,
+          action_payload: draft.action_payload,
+          status: 'open',
+          last_changed_by: 'system',
+        }))
+      );
+
+      decisionsCreated += persisted.length;
+    } catch (err) {
+      if (err instanceof DecisionGenerationThrottledError) {
+        companiesThrottled += 1;
+        continue;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push({ companyId, message });
+      console.error('[feedbackIntelligence] company failed; continuing with the next company', { companyId, message });
     }
+  }
 
-    const persisted = await replaceDecisionObjectsForSource(
-      drafts.map((draft) => ({
-        company_id: companyId,
-        report_tier: 'growth',
-        source_service: 'feedbackIntelligenceEngine',
-        entity_type: 'global',
-        entity_id: null,
-        issue_type: draft.issue_type,
-        title: draft.title,
-        description: draft.description,
-        evidence: draft.evidence,
-        impact_traffic: draft.impact_traffic,
-        impact_conversion: draft.impact_conversion,
-        impact_revenue: draft.impact_revenue,
-        priority_score: draft.priority_score,
-        effort_score: draft.effort_score,
-        confidence_score: draft.confidence_score,
-        recommendation: draft.recommendation,
-        action_type: draft.action_type,
-        action_payload: draft.action_payload,
-        status: 'open',
-        last_changed_by: 'system',
-      }))
-    );
-
-    decisionsCreated += persisted.length;
+  // Every company that was attempted failed: that is an outage, not one bad tenant. Fail the run so
+  // runWithConfig records it as failed.
+  const attempted = byCompany.size - companiesThrottled;
+  if (attempted > 0 && failures.length === attempted) {
+    throw new Error(`feedbackIntelligence: all ${attempted} attempted companies failed; first: ${failures[0].message}`);
   }
 
   return {
@@ -235,6 +260,8 @@ export async function generateFeedbackInsights(): Promise<GenerateFeedbackInsigh
     decisions_created: decisionsCreated,
     decisions_archived: decisionsArchived,
     companies_processed: byCompany.size,
+    companies_throttled: companiesThrottled,
+    companies_failed: failures.length,
   };
 }
 

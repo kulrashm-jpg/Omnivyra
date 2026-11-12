@@ -30,6 +30,7 @@ import { runInBackgroundJobContext } from '../services/intelligenceExecutionCont
 import { listDecisionObjects } from '../services/decisionObjectService';
 import { enforceDecisionGenerationThrottle } from '../services/decisionGenerationControlService';
 import { runDataDrivenIntelligenceForCompany } from '../services/dataDrivenIntelligenceScheduler';
+import { executeWithRetry } from '../services/workerRetryService';
 import { recomputePrioritiesForCompany } from '../services/prioritizationService';
 import { evaluateBehaviorAlerts } from '../services/behaviorAlertService';
 import { evaluateBehaviorActionOutcomes } from '../services/behaviorActionTrackingService';
@@ -495,6 +496,11 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
         failedCampaigns++;
         const msg = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
         errors.push(`Campaign ${campaignId}: ${msg}`);
+        // The company job does not depend on a campaign job SUCCEEDING (e9, 2026-11-12). It was only
+        // queued from the end of a successful campaign body, so a company whose campaigns all failed
+        // (e.g. the decision_events 23502 on every strategic-insight write) never got opportunities,
+        // the 19 engines or behaviour alerts at all. A failed campaign still queues its company.
+        companiesSeen.add(companyId);
       } else if (outcome.status === 'dead_letter_skip') {
         errors.push(`Campaign ${campaignId}: dead_letter_skip (${outcome.reason})`);
       } else if (outcome.status === 'pressure_rejected') {
@@ -518,94 +524,128 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
           },
         },
         async () => {
-        const trendSnapshots = await getTrendSnapshots(companyId);
-        const trendSignals = trendSnapshots.map((s: { snapshot?: unknown }) => ({ snapshot: s?.snapshot ?? {} }));
+        // Each step is ISOLATED (e9, 2026-11-12): one step throwing used to skip every step after it,
+        // so a failing detectOpportunities also stopped the 19 engines, the priority recompute and the
+        // behaviour alerts for the company. Each step now carries its OWN bounded retry + dead-letter
+        // (executeWithRetry, the same policy runJob applies to the whole body), so a failing step is
+        // retried alone and never re-runs the steps that succeeded. A step that still fails is logged,
+        // recorded in this run's errors[], and the next step runs. The company body itself no longer
+        // throws for a step failure: throwing would make runJob's retry re-run ALL five steps.
+        const step = async (name: string, fn: () => Promise<void>): Promise<void> => {
+          try {
+            await executeWithRetry(`job:daily-intelligence:company:${name}`, { company_id: companyId, step: name }, fn);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            errors.push(`Opportunity company ${companyId}: step ${name}: ${message}`);
+            console.error('[dailyIntelligence] company step failed; continuing with the next step', { companyId, step: name, message });
+          }
+        };
 
-        const strategicInsightDecisions = await listDecisionObjects({
-          viewName: 'growth_view',
-          companyId,
-          sourceService: 'strategicInsightService',
-          status: ['open'],
-          limit: 50,
-        });
-        const strategicInsightReport = toStrategicInsightCompatibility(strategicInsightDecisions);
+        await step('opportunities', async () => {
+          const trendSnapshots = await getTrendSnapshots(companyId);
+          const trendSignals = trendSnapshots.map((s: { snapshot?: unknown }) => ({ snapshot: s?.snapshot ?? {} }));
 
-        let inboxSignals: Record<string, unknown>[] = [];
-        try {
-          const threads = await getThreads({ organization_id: companyId, limit: 50, exclude_ignored: true });
-          inboxSignals = threads.map((t) => ({
-            thread_id: t.thread_id,
-            latest_message: t.latest_message,
-            dominant_intent: t.dominant_intent,
-            customer_question: t.customer_question,
-          }));
-        } catch {
-          inboxSignals = [];
-        }
-
-        const oppDecisions = await runInBackgroundJobContext('daily_intelligence:opportunities', async () =>
-          detectOpportunities({
-            company_id: companyId,
-            trend_signals: trendSignals,
-            engagement_health_report: { engagement_rate: 0 },
-            strategic_insight_report: strategicInsightReport,
-            inbox_signals: inboxSignals,
-          })
-        );
-
-        const topOpp = oppDecisions[0];
-        const oppRes = await emitIntelligenceEvent(companyId, 'opportunity_detected', {
-          opportunity_count: oppDecisions.length,
-          top_score: topOpp?.priority_score ?? null,
-          top_title: topOpp?.title ?? null,
-        });
-        if (oppRes && 'id' in oppRes) eventsEmittedCount++;
-        else if (oppRes && 'duplicate' in oppRes) duplicateEventsBlocked++;
-
-        if (topOpp && typeof topOpp.priority_score === 'number' && topOpp.priority_score > 85) {
-          const alertRes = await sendIntelligenceAlert({
-            company_id: companyId,
-            event_type: 'opportunity_high',
-            opportunity_score: topOpp.priority_score,
-            title: 'High-value opportunity detected',
-            message: `${topOpp.title ?? 'Opportunity'} (score ${topOpp.priority_score})`,
-            event_data: { top_title: topOpp.title },
-            channels: ['in_app'],
+          const strategicInsightDecisions = await listDecisionObjects({
+            viewName: 'growth_view',
+            companyId,
+            sourceService: 'strategicInsightService',
+            status: ['open'],
+            limit: 50,
           });
-          if (alertRes.sent?.length) alertsSentCount++;
-          else if (alertRes.deduplicated) alertsDeduplicated++;
-        }
+          const strategicInsightReport = toStrategicInsightCompatibility(strategicInsightDecisions);
 
-        opportunitiesGenerated++;
+          let inboxSignals: Record<string, unknown>[] = [];
+          try {
+            const threads = await getThreads({ organization_id: companyId, limit: 50, exclude_ignored: true });
+            inboxSignals = threads.map((t) => ({
+              thread_id: t.thread_id,
+              latest_message: t.latest_message,
+              dominant_intent: t.dominant_intent,
+              customer_question: t.customer_question,
+            }));
+          } catch {
+            inboxSignals = [];
+          }
 
-        const intelligenceRun = await runDataDrivenIntelligenceForCompany(companyId);
-        trafficDecisionsGenerated += intelligenceRun.traffic;
-        funnelDecisionsGenerated += intelligenceRun.funnel;
-        seoDecisionsGenerated += intelligenceRun.seo;
-        contentAuthorityDecisionsGenerated += intelligenceRun.contentAuthority;
-        leadDecisionsGenerated += intelligenceRun.lead;
-        brandTrustDecisionsGenerated += intelligenceRun.brandTrust;
-        backlinkAuthorityDecisionsGenerated += intelligenceRun.backlinkAuthority;
-        competitorNormalizationDecisionsGenerated += intelligenceRun.competitorNormalization;
-        competitorIntelligenceDecisionsGenerated += intelligenceRun.competitorIntelligence;
-        competitiveSignalDecisionsGenerated += intelligenceRun.competitiveSignals;
-        distributionDecisionsGenerated += intelligenceRun.distribution;
-        authorityDecisionsGenerated += intelligenceRun.authority;
-        geoDecisionsGenerated += intelligenceRun.geo;
-        trustDecisionsGenerated += intelligenceRun.trust;
-        intentDecisionsGenerated += intelligenceRun.intent;
-        velocityDecisionsGenerated += intelligenceRun.velocity;
-        portfolioDecisionsGenerated += intelligenceRun.portfolio;
-        geoStrategyDecisionsGenerated += intelligenceRun.geoStrategy;
-        advancedRevenueAttributionDecisionsGenerated += intelligenceRun.advancedRevenueAttribution;
+          const oppDecisions = await runInBackgroundJobContext('daily_intelligence:opportunities', async () =>
+            detectOpportunities({
+              company_id: companyId,
+              trend_signals: trendSignals,
+              engagement_health_report: { engagement_rate: 0 },
+              strategic_insight_report: strategicInsightReport,
+              inbox_signals: inboxSignals,
+            })
+          );
 
-        await recomputePrioritiesForCompany({ companyId, limit: 500 });
+          const topOpp = oppDecisions[0];
+          const oppRes = await emitIntelligenceEvent(companyId, 'opportunity_detected', {
+            opportunity_count: oppDecisions.length,
+            top_score: topOpp?.priority_score ?? null,
+            top_title: topOpp?.title ?? null,
+          });
+          if (oppRes && 'id' in oppRes) eventsEmittedCount++;
+          else if (oppRes && 'duplicate' in oppRes) duplicateEventsBlocked++;
 
-        const behaviorAlertResult = await evaluateBehaviorAlerts(companyId);
-        alertsSentCount += behaviorAlertResult.sent;
-        alertsDeduplicated += behaviorAlertResult.deduplicated;
+          if (topOpp && typeof topOpp.priority_score === 'number' && topOpp.priority_score > 85) {
+            const alertRes = await sendIntelligenceAlert({
+              company_id: companyId,
+              event_type: 'opportunity_high',
+              opportunity_score: topOpp.priority_score,
+              title: 'High-value opportunity detected',
+              message: `${topOpp.title ?? 'Opportunity'} (score ${topOpp.priority_score})`,
+              event_data: { top_title: topOpp.title },
+              channels: ['in_app'],
+            });
+            if (alertRes.sent?.length) alertsSentCount++;
+            else if (alertRes.deduplicated) alertsDeduplicated++;
+          }
 
-        await evaluateBehaviorActionOutcomes(companyId);
+          opportunitiesGenerated++;
+        });
+
+        await step('data_driven_engines', async () => {
+          const intelligenceRun = await runDataDrivenIntelligenceForCompany(companyId);
+          trafficDecisionsGenerated += intelligenceRun.traffic;
+          funnelDecisionsGenerated += intelligenceRun.funnel;
+          seoDecisionsGenerated += intelligenceRun.seo;
+          contentAuthorityDecisionsGenerated += intelligenceRun.contentAuthority;
+          leadDecisionsGenerated += intelligenceRun.lead;
+          brandTrustDecisionsGenerated += intelligenceRun.brandTrust;
+          backlinkAuthorityDecisionsGenerated += intelligenceRun.backlinkAuthority;
+          competitorNormalizationDecisionsGenerated += intelligenceRun.competitorNormalization;
+          competitorIntelligenceDecisionsGenerated += intelligenceRun.competitorIntelligence;
+          competitiveSignalDecisionsGenerated += intelligenceRun.competitiveSignals;
+          distributionDecisionsGenerated += intelligenceRun.distribution;
+          authorityDecisionsGenerated += intelligenceRun.authority;
+          geoDecisionsGenerated += intelligenceRun.geo;
+          trustDecisionsGenerated += intelligenceRun.trust;
+          intentDecisionsGenerated += intelligenceRun.intent;
+          velocityDecisionsGenerated += intelligenceRun.velocity;
+          portfolioDecisionsGenerated += intelligenceRun.portfolio;
+          geoStrategyDecisionsGenerated += intelligenceRun.geoStrategy;
+          advancedRevenueAttributionDecisionsGenerated += intelligenceRun.advancedRevenueAttribution;
+          // A failed ENGINE is recorded here, not thrown: throwing would make this step's retry re-run
+          // all 19 engines (the 18 that succeeded included) for one engine's failure.
+          for (const f of intelligenceRun.failed) {
+            errors.push(`Opportunity company ${companyId}: engine ${f.engine}: ${f.error}`);
+            console.error('[dailyIntelligence] engine failed', { companyId, engine: f.engine, message: f.error });
+          }
+        });
+
+        await step('priority_recompute', async () => {
+          await recomputePrioritiesForCompany({ companyId, limit: 500 });
+        });
+
+        await step('behavior_alerts', async () => {
+          const behaviorAlertResult = await evaluateBehaviorAlerts(companyId);
+          alertsSentCount += behaviorAlertResult.sent;
+          alertsDeduplicated += behaviorAlertResult.deduplicated;
+        });
+
+        await step('behavior_action_outcomes', async () => {
+          await evaluateBehaviorActionOutcomes(companyId);
+        });
+
         },
       );
       if (companyOutcome.status === 'tenant_invalid') {

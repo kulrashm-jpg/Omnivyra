@@ -3,6 +3,19 @@ import { ownedDbTable } from '../db/writeOwner';
 
 const HOUR_MS = 60 * 60 * 1000;
 
+/**
+ * Thrown when a company's decision generation is THROTTLED (min_refresh_interval or
+ * max_generations_per_hour). It is not a failure: a per-company loop treats it as "skip this
+ * company this run". Its message is unchanged from the plain Error it replaces. Any other error from
+ * enforceDecisionGenerationThrottle (an unreadable or unwritable controls row) is a real failure.
+ */
+export class DecisionGenerationThrottledError extends Error {
+  constructor(message: string, public readonly companyId: string, public readonly source: string) {
+    super(message);
+    this.name = 'DecisionGenerationThrottledError';
+  }
+}
+
 type GenerationControlRow = {
   company_id: string;
   min_refresh_interval_minutes: number;
@@ -36,7 +49,7 @@ export async function enforceDecisionGenerationThrottle(companyId: string, sourc
   if (lastGenerationAt) {
     const minRefreshMs = row.min_refresh_interval_minutes * 60 * 1000;
     if ((now.getTime() - lastGenerationAt.getTime()) < minRefreshMs) {
-      throw new Error(`${source} blocked by min_refresh_interval for company ${companyId}.`);
+      throw new DecisionGenerationThrottledError(`${source} blocked by min_refresh_interval for company ${companyId}.`, companyId, source);
     }
   }
 
@@ -47,7 +60,7 @@ export async function enforceDecisionGenerationThrottle(companyId: string, sourc
 
   const generationCount = sameHourWindow ? row.generation_count_in_window : 0;
   if (generationCount >= row.max_generations_per_hour) {
-    throw new Error(`${source} blocked by max_generations_per_hour for company ${companyId}.`);
+    throw new DecisionGenerationThrottledError(`${source} blocked by max_generations_per_hour for company ${companyId}.`, companyId, source);
   }
 
   const { error: upsertError } = await ownedDbTable('decision_generation_controls')

@@ -44,6 +44,8 @@ export type DataDrivenIntelligenceRunSummary = {
   geoStrategy: number;
   advancedRevenueAttribution: number;
   total: number;
+  /** Engines that threw this run (each counted 0). Empty when all 19 succeeded. */
+  failed: Array<{ engine: string; error: string }>;
 };
 
 export async function runDataDrivenIntelligenceForCompany(companyId: string): Promise<DataDrivenIntelligenceRunSummary> {
@@ -51,27 +53,12 @@ export async function runDataDrivenIntelligenceForCompany(companyId: string): Pr
   // provider credentials every provider is skipped and the contexts are empty (engines fall back).
   const evidenceContexts = await activateProviderEvidence(companyId, new Date().toISOString());
 
-  const [
-    traffic,
-    funnel,
-    seo,
-    contentAuthority,
-    lead,
-    brandTrust,
-    backlinkAuthority,
-    competitorNormalization,
-    competitorIntelligence,
-    competitiveSignals,
-    distribution,
-    authority,
-    geo,
-    trust,
-    intent,
-    velocity,
-    portfolio,
-    geoStrategy,
-    advancedRevenueAttribution,
-  ] = await Promise.all([
+  // One engine failing must not discard the others (e9, 2026-11-12). Promise.all rejected on the
+  // first failure: every other engine's count was lost (they kept running, unawaited) and the
+  // caller skipped everything after this step. allSettled awaits all 19; a failed engine counts 0
+  // and is named in `failed` for the caller to record.
+  const ENGINES = ['traffic', 'funnel', 'seo', 'contentAuthority', 'lead', 'brandTrust', 'backlinkAuthority', 'competitorNormalization', 'competitorIntelligence', 'competitiveSignals', 'distribution', 'authority', 'geo', 'trust', 'intent', 'velocity', 'portfolio', 'geoStrategy', 'advancedRevenueAttribution'] as const;
+  const settled = await Promise.allSettled([
     runInBackgroundJobContext('data_driven_intelligence:traffic', async () =>
       generateTrafficIntelligenceDecisions(companyId)
     ),
@@ -131,6 +118,33 @@ export async function runDataDrivenIntelligenceForCompany(companyId: string): Pr
       generateAdvancedRevenueAttributionDecisions(companyId)
     ),
   ]);
+  const failed: Array<{ engine: (typeof ENGINES)[number]; error: string }> = [];
+  settled.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      failed.push({ engine: ENGINES[i], error: r.reason instanceof Error ? r.reason.message : String(r.reason) });
+    }
+  });
+  const [
+    traffic,
+    funnel,
+    seo,
+    contentAuthority,
+    lead,
+    brandTrust,
+    backlinkAuthority,
+    competitorNormalization,
+    competitorIntelligence,
+    competitiveSignals,
+    distribution,
+    authority,
+    geo,
+    trust,
+    intent,
+    velocity,
+    portfolio,
+    geoStrategy,
+    advancedRevenueAttribution,
+  ] = settled.map((r) => (r.status === 'fulfilled' ? r.value : []));
 
   return {
     traffic: traffic.length,
@@ -172,5 +186,6 @@ export async function runDataDrivenIntelligenceForCompany(companyId: string): Pr
       portfolio.length +
       geoStrategy.length +
       advancedRevenueAttribution.length,
+    failed,
   };
 }
