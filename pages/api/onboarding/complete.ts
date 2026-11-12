@@ -206,41 +206,66 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // ── 3. Get or create company ────────────────────────────────────────────
-    const emailDomain    = authEmail.includes('@') ? authEmail.split('@')[1].toLowerCase() : '';
+    // Owner ruling (2026-11-12), three explicit decisions:
+    //  1. MATCHING: exact (case-insensitive) equality on the FULL verified email domain, decided in
+    //     code - never a pattern match on a name. (The old name-label ILIKE bound x@acme.io to
+    //     acme.com's company 'acme'; its .limit(1) also refused members of a 2nd same-name company.)
+    //  2. BINDING: an existing company is reachable ONLY via companies.admin_email_domain AND an
+    //     active/invited membership the user already holds. A domain match without one gets NO access
+    //     (join requests to the company's admins follow separately). No domain match -> a NEW company,
+    //     even if another company has the same name (names are not unique; admin_email_domain is).
+    //  3. PROMOTION: COMPANY_ADMIN only for a company THIS request created - never because a company
+    //     "has no initial credit claim" (that billing-as-identity gate is removed; a company with no
+    //     admin is a Super Admin recovery case, not a signup outcome).
+    const emailDomain    = authEmail.includes('@') ? authEmail.split('@')[1].trim().toLowerCase() : '';
     const finalCompanyName = emailDomain ? emailDomain.split('.')[0] : 'Company';
 
     let companyId: string | null = null;
-    let createdHere = false;
+    let createdThisRequest = false;
 
-    const { data: existingCompanies } = await supabase
-      .from('companies')
-      .select('id')
-      .ilike('name', finalCompanyName)
-      .limit(1);
+    let domainCompanyId: string | null = null;
+    if (emailDomain) {
+      // Candidates are fetched case-insensitively (pattern characters escaped); the DECISION is exact
+      // equality below, so no pattern character can widen the match.
+      const domainPattern = emailDomain.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
+      const { data: domainCandidates, error: domainErr } = await supabase
+        .from('companies')
+        .select('id, admin_email_domain')
+        .ilike('admin_email_domain', domainPattern)
+        .limit(10);
+      if (domainErr) {
+        console.error('[onboarding/complete] company domain lookup failed:', domainErr.message);
+        return res.status(500).json({ error: 'Could not resolve your company. Please try again.' });
+      }
+      const exact = (domainCandidates ?? []).filter(
+        (c: { admin_email_domain?: unknown }) =>
+          typeof c.admin_email_domain === 'string' && c.admin_email_domain.trim().toLowerCase() === emailDomain,
+      );
+      if (exact.length > 1) {
+        // Two companies claim the same domain modulo case: ambiguous - never guess which to bind.
+        console.error('[onboarding/complete] ambiguous admin_email_domain', { count: exact.length });
+        return res.status(409).json({ code: 'COMPANY_DOMAIN_AMBIGUOUS', error: 'Your company could not be resolved. Please contact support.' });
+      }
+      domainCompanyId = exact[0]?.id ?? null;
+    }
 
-    if (existingCompanies && existingCompanies.length > 0) {
-      // SECURITY (e1, 2026-11-12): a NAME match is not authorization. Previously any verified signup
-      // whose domain label matched an existing company's name (x@acme.io -> 'acme') was bound to it,
-      // and - if that company had no initial credit claim - inserted as its COMPANY_ADMIN (step 6).
-      // Now a pre-existing company is reachable ONLY by a user who already holds an active or invited
-      // membership in it; anyone else must be invited. Decided BEFORE any write that binds the user
-      // to the company (free_credit_profiles, roles, credits, active_company_id).
-      const matchedCompanyId: string = existingCompanies[0].id;
-      const { data: priorMembership } = await supabase
+    if (domainCompanyId) {
+      const { data: priorMembership, error: membershipErr } = await supabase
         .from('user_company_roles')
         .select('id')
         .eq('user_id', userId)
-        .eq('company_id', matchedCompanyId)
+        .eq('company_id', domainCompanyId)
         .in('status', ['active', 'invited'])
         .limit(1)
         .maybeSingle();
-      if (!priorMembership) {
+      if (membershipErr || !priorMembership) {
+        // Decided BEFORE any write that binds the user to the company.
         return res.status(403).json({
           code:  'INVITE_REQUIRED',
-          error: 'This company is already registered. Ask your company admin to invite you.',
+          error: 'Your company already uses Omnivyra. Ask your company admin to invite you.',
         });
       }
-      companyId = matchedCompanyId;
+      companyId = domainCompanyId;
     } else {
       const website = emailDomain ? `https://${emailDomain}` : 'https://example.com';
       const { data: newCompany, error: createError } = await supabase
@@ -260,7 +285,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'Could not create company' });
       }
       companyId = newCompany.id;
-      createdHere = true;
+      createdThisRequest = true;
 
       await supabase.from('company_profiles').upsert({
         company_id:  companyId,
@@ -298,38 +323,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    // ── 5. Check if credits already claimed for this company (org-level dedup) ─
-    // Block 2nd-and-beyond self-registrations to a previously credited company.
-    // (DB enforces one-per-org via the UNIQUE index on free_credit_claims for
-    // category='initial_free_credit' — this app-layer check just gives a
-    // friendlier 403 than letting the constraint fire.)
-    const { data: orgClaim } = await supabase
-      .from('free_credit_claims')
-      .select('id, user_id')
-      .eq('organization_id', companyId)
-      .eq('category', INITIAL_FREE_CREDIT_CATEGORY)
-      .maybeSingle();
-
-    if (orgClaim && (orgClaim as { user_id: string }).user_id !== userId) {
-      return res.status(403).json({
-        code:  'INVITE_REQUIRED',
-        error: 'This company is already registered. Ask your company admin to invite you.',
-      });
-    }
+    // ── 5. (removed) The org-level credit-claim check is NO LONGER an identity gate (decision 3).
+    //         Credit dedup stays in grantInitialFreeCredit + the DB one-per-org unique index.
 
     // ── 6. Company role — COMPANY_ADMIN only for the company THIS request created ──
-    // Stated by construction (createdHere), never inferred from the absence of a membership row:
-    // a read over two rows for the same (user, company) - allowed by the partial unique index -
-    // errors with data null, which previously read as "no membership" and promoted an invited
-    // user of a pre-existing company (05 review). A failed insert is refused, not ignored.
-    if (createdHere) {
+    if (createdThisRequest) {
+      // join_source is set explicitly: NULL bypassed the self-joined domain guard trigger
+      // (trg_user_company_roles_self_joined_domain_guard fires only for 'self_joined').
       const { error: roleErr } = await supabase.from('user_company_roles').insert({
-        user_id:    userId,
-        company_id: companyId,
-        role:       'COMPANY_ADMIN',
-        status:     'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        user_id:     userId,
+        company_id:  companyId,
+        role:        'COMPANY_ADMIN',
+        status:      'active',
+        join_source: 'self_joined',
+        created_at:  new Date().toISOString(),
+        updated_at:  new Date().toISOString(),
       });
       if (roleErr) {
         console.error('[onboarding/complete] founder role insert failed:', roleErr.message);
