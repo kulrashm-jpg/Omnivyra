@@ -9,8 +9,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
-import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { resolveCampaignIdsForCompany } from '../../../backend/services/growthIntelligence';
+import { tenantChildTableOf, tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
+
+/** tenantChildTableOf verifies at most 200 parents per call; larger sets are counted chunk by chunk. */
+const PARENT_CHUNK = 200;
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
 
 type SystemHealth = 'healthy' | 'partial' | 'empty';
 
@@ -26,48 +35,52 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const companyContext = await requireCompanyContext({ req, res, companyId });
-    if (!companyContext) return;
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
+    // S2 tenant seam (e1): every count below is read under the context of THIS access check.
+    const tenant = tenantContextFor(access, companyId);
 
-    const campaignIds = await resolveCampaignIdsForCompany(supabase, companyId);
+    // The tenant's OWN campaigns (the former member-created fallback counted other companies' campaigns).
+    const campaignIds = await resolveCampaignIdsForCompany(tenant);
     const campaignCount = campaignIds.length;
 
     let scheduledPostCount = 0;
     let analyticsRecords = 0;
 
-    if (campaignIds.length > 0) {
-      const { count: scheduledCount } = await supabase
-        .from('scheduled_posts')
-        .select('id', { count: 'exact', head: true })
-        .in('campaign_id', campaignIds);
-      scheduledPostCount = scheduledCount ?? 0;
-
-      if (scheduledPostCount > 0) {
-        const { data: postIds } = await supabase
-          .from('scheduled_posts')
-          .select('id')
-          .in('campaign_id', campaignIds);
-        const ids = (postIds ?? []).map((r: { id: string }) => r.id).filter(Boolean);
-        if (ids.length > 0) {
-          const { count: analyticsCount } = await supabase
-            .from('content_analytics')
-            .select('id', { count: 'exact', head: true })
-            .in('scheduled_post_id', ids);
-          analyticsRecords = analyticsCount ?? 0;
-        }
-      }
+    // scheduled_posts is a child of campaigns: tenantChildTableOf verifies every campaign is this tenant's in one
+    // read per chunk (a foreign id refuses the whole call) before the posts are read.
+    const postIds: string[] = [];
+    for (const part of chunks(campaignIds, PARENT_CHUNK)) {
+      const posts = await tenantChildTableOf('scheduled_posts', tenant, part);
+      const { count, error: countErr } = await posts.select('id', { count: 'exact', head: true });
+      if (countErr) throw new Error('scheduled posts unreadable');
+      scheduledPostCount += count ?? 0;
+      // Ids feed the analytics count only. NOTE (pre-existing, unchanged): an unpaginated select returns at most
+      // PostgREST's max-rows (1000 by default), so analyticsRecords can undercount for very large accounts.
+      const { data, error } = await posts.select('id');
+      if (error) throw new Error('scheduled posts unreadable');
+      for (const r of (data ?? []) as Array<{ id?: string | null }>) if (r.id) postIds.push(r.id);
     }
 
-    const { count: communityCount } = await supabase
-      .from('community_ai_actions')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', companyId);
+    // content_analytics has no tenant column (registry: UNCLASSIFIED); it is read ONLY for post ids that were
+    // just read through the seam above, so every counted row belongs to this tenant's posts.
+    for (const part of chunks(postIds, PARENT_CHUNK)) {
+      const { count, error } = await supabase
+        .from('content_analytics')
+        .select('id', { count: 'exact', head: true })
+        .in('scheduled_post_id', part);
+      if (error) throw new Error('content analytics unreadable');
+      analyticsRecords += count ?? 0;
+    }
+
+    const { count: communityCount, error: communityErr } = await tenantTable('community_ai_actions', tenant)
+      .select('id', { count: 'exact', head: true });
+    if (communityErr) throw new Error('community actions unreadable');
     const communityActions = communityCount ?? 0;
 
-    const { count: opportunityCount } = await supabase
-      .from('theme_company_relevance')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId);
+    const { count: opportunityCount, error: opportunityErr } = await tenantTable('theme_company_relevance', tenant)
+      .select('id', { count: 'exact', head: true });
+    if (opportunityErr) throw new Error('opportunity signals unreadable');
     const opportunitySignals = opportunityCount ?? 0;
 
     const hasCampaigns = campaignCount > 0;
@@ -87,7 +100,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       success: true,
       data: {
         companyId,
-        authorizedCompanyId: companyContext.companyId,
+        authorizedCompanyId: tenant.companyId,
         counts: {
           campaigns: campaignCount,
           scheduledPosts: scheduledPostCount,

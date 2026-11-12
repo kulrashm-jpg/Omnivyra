@@ -8,7 +8,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
-import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import {
   getPublishingSuccessMetrics,
   resolveCampaignIdsForCompany,
@@ -28,10 +29,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = (req.query.campaignId as string)?.trim?.() || undefined;
 
   try {
-    const companyContext = await requireCompanyContext({ req, res, companyId, campaignId });
-    if (!companyContext) return;
+    const access = await enforceCompanyAccess({ req, res, companyId, campaignId: campaignId ?? null });
+    if (!access) return;
+    // S2 tenant seam: the campaign list is the tenant's own, under the context of THIS access check.
+    const tenant = tenantContextFor(access, companyId);
 
-    const campaignIds = campaignId ? [campaignId] : await resolveCampaignIdsForCompany(supabase, companyId);
+    const campaignIds = campaignId ? [campaignId] : await resolveCampaignIdsForCompany(tenant);
     const data = await getPublishingSuccessMetrics(supabase, campaignIds);
     return res.status(200).json({ success: true, data });
   } catch (err: unknown) {

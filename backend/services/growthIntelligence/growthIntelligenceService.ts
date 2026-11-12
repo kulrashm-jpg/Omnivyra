@@ -6,6 +6,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { systemTenantContext, tenantTable, type TenantContext } from '../../db/tenantTable';
 import type { GrowthSummary } from './types';
 import { getCachedGrowth, setCachedGrowth } from './cache/growthCache';
 import { getContentVelocityMetrics } from './metrics/contentVelocity';
@@ -35,51 +36,17 @@ function normalize(value: number, max: number): number {
 }
 
 /**
- * Resolve campaign IDs for a company.
- * Uses campaign_versions first; falls back to user_company_roles + campaigns.
+ * The tenant's OWN campaigns, read through the S2 seam (e1, 2026-11-12).
+ * SECURITY: this used to fall back (when a company had no campaign_versions) to
+ * `campaigns.in('user_id', <active members>)` - every campaign ANY member had created, whichever company owned
+ * it. A user in companies A and B therefore put B's campaigns (and their posts, analytics and engagement) into
+ * A's growth intelligence. Ownership is campaigns.company_id, nothing else. Legacy campaigns with a NULL company
+ * are hidden (campaigns is NULLS_HIDING_OK). A read error throws - an empty list would read as "no campaigns".
  */
-export async function resolveCampaignIdsForCompany(
-  supabase: SupabaseClient,
-  companyId: string
-): Promise<string[]> {
-  const ids = new Set<string>();
-
-  try {
-    const { data: versions } = await supabase
-      .from('campaign_versions')
-      .select('campaign_id')
-      .eq('company_id', companyId);
-
-    for (const row of versions ?? []) {
-      const cid = (row as { campaign_id?: string }).campaign_id;
-      if (cid) ids.add(cid);
-    }
-
-    if (ids.size > 0) return Array.from(ids);
-
-    const { data: roles } = await supabase
-      .from('user_company_roles')
-      .select('user_id')
-      .eq('company_id', companyId)
-      .eq('status', 'active');
-
-    const userIds = (roles ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
-    if (userIds.length === 0) return [];
-
-    const { data: campaigns } = await supabase
-      .from('campaigns')
-      .select('id')
-      .in('user_id', userIds);
-
-    for (const row of campaigns ?? []) {
-      const id = (row as { id: string }).id;
-      if (id) ids.add(id);
-    }
-
-    return Array.from(ids);
-  } catch {
-    return [];
-  }
+export async function resolveCampaignIdsForCompany(tenant: TenantContext): Promise<string[]> {
+  const { data, error } = await tenantTable('campaigns', tenant).select('id');
+  if (error) throw new Error(`growth intelligence: campaigns unreadable (${(error as { code?: string }).code ?? 'error'})`);
+  return [...new Set(((data ?? []) as Array<{ id?: string | null }>).map((r) => r.id).filter((id): id is string => !!id))];
 }
 
 export async function getGrowthIntelligenceSummary(
@@ -94,7 +61,10 @@ export async function getGrowthIntelligenceSummary(
     // fail-safe: continue to compute
   }
 
-  const campaignIds = campaignId ? [campaignId] : await resolveCampaignIdsForCompany(supabase, companyId);
+  // Callers are routes that already authorized companyId, and platform/background plugins acting for it.
+  const campaignIds = campaignId
+    ? [campaignId]
+    : await resolveCampaignIdsForCompany(systemTenantContext(companyId, 'growth intelligence summary for an authorized company'));
 
   const [contentVelocity, publishing, engagement, community, opportunities] = await Promise.all([
     getContentVelocityMetrics(supabase, campaignIds),
