@@ -217,8 +217,32 @@ function scan() {
       const e = allow.get(marker);
       if (!e || e.file !== rel || !e.tables.includes(table)) findings.push({ rule: 'R2', marker, ...base });
     }
-    // R9: the job bootstrap resolveTenantOfRow is for background work only; in a request handler the tenant comes
-    // from the principal. Allowed in pages/api only with an allow-listed `// cross-tenant: <id>` marker (webhooks).
+    // Derive-then-authorize (05 shape rules): the derived value must be BOUND (a wrapped binding counts), and an access
+    // call - recognised by SHAPE, named require*/enforce*/assert* and receiving that variable - must come in the SAME
+    // block before the first seam or DB use. Returns null when the shape holds, else the reason.
+    const deriveThenAuthorize = (m) => {
+      const head = code.slice(Math.max(0, m.index - 200), m.index);
+      const bound = head.match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?$/);
+      if (!bound) return 'result not bound to a variable';
+      const v = bound[1];
+      let depth = 0, end = code.length;
+      for (let k = m.index; k < code.length; k++) {
+        const ch = code[k];
+        if (ch === '{') depth++;
+        else if (ch === '}') { if (depth === 0) { end = k; break; } depth--; }
+      }
+      const rest = code.slice(m.index, end);
+      const esc = v.replace(/[$]/g, '\\$');
+      const access = rest.search(new RegExp('\\b(?:require|enforce|assert)[A-Z]\\w*\\s*\\([^;]*\\b' + esc + '\\b'));
+      const use = rest.slice(1).search(/\b(?:tenantContextFor|tenantTable|tenantChildTable|tenantChildTableOf|tenantOrPlatformTable|ownedDbTable|supabase\s*\.\s*from)\s*\(/);
+      if (access < 0) return `no access check takes ${v} in the same block (an access call must be named require*/enforce*/assert* and receive ${v})`;
+      if (use >= 0 && use + 1 < access) return `a seam/DB call runs between deriving ${v} and its access check (nothing may be read or written before the derived company is authorized; stricter than route-auth R6, which allows reads, because here the context itself is unproven)`;
+      return null;
+    };
+    // R9: resolveTenantOfRow is the job bootstrap. In pages/api it is allowed ONLY (a) with an allow-listed
+    // `// cross-tenant: <id>` marker (webhooks), or (b) in the derive-then-authorize shape (e9 ruling, option 1, from 55):
+    // resolve -> IMMEDIATELY authorize the caller for that company with a registered primitive -> everything after on
+    // the seam with that context. The uniform 404 for a null result is a response, not a data access, so it may precede.
     if (rel.startsWith('pages/api/')) {
       for (const m of code.matchAll(/\bresolveTenantOfRow\s*\(/g)) {
         const line = lineAt(m.index);
@@ -228,37 +252,16 @@ function scan() {
           if (mm) { marker = mm[1]; break; }
         }
         const e = marker && allow.get(marker);
-        if (!e || e.file !== rel) findings.push({ rule: 'R9', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-' });
+        if (e && e.file === rel) continue;
+        const why = deriveThenAuthorize(m);
+        if (why) findings.push({ rule: 'R9', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
       }
     }
-    // R10 (derive-then-authorize, e1/83 2026-11-13): ownerCompanyOfRow returns only the owning company. Its result
-    // must be bound to a variable, and an access call (shape match, 05: (require|enforce|assert)Xxx( ) that takes that
-    // variable must come BEFORE the first tenantContextFor / tenantTable / ownedDbTable use after it.
+    // R10 (derive-then-authorize, e1/83 2026-11-13): ownerCompanyOfRow returns only the owning company; same shape rule.
     if (rel.startsWith('pages/api/')) {
       for (const m of code.matchAll(/\bownerCompanyOfRow\s*\(/g)) {
-        const line = lineAt(m.index);
-        // 05 FP-2: the binding may wrap (`const owner =\n  await ownerCompanyOfRow(...)`), so look back up to 200 chars.
-        const head = code.slice(Math.max(0, m.index - 200), m.index);
-        const bound = head.match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?$/);
-        const r10 = (why) => findings.push({ rule: 'R10', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
-        if (!bound) { r10('result not bound to a variable'); continue; }
-        const v = bound[1];
-        // 05 FN-1: only the ENCLOSING BLOCK counts (brace depth from the call until it closes), never the rest of the
-        // file - an access check in another handler must not excuse this one.
-        let depth = 0, end = code.length;
-        for (let k = m.index; k < code.length; k++) {
-          const ch = code[k];
-          if (ch === '{') depth++;
-          else if (ch === '}') { if (depth === 0) { end = k; break; } depth--; }
-        }
-        const rest = code.slice(m.index, end);
-        const esc = v.replace(/[$]/g, '\\$');
-        // 05 FP-3: the access call is recognised by SHAPE - it must be named require*/enforce*/assert* and take v.
-        const access = rest.search(new RegExp('\\b(?:require|enforce|assert)[A-Z]\\w*\\s*\\([^;]*\\b' + esc + '\\b'));
-        const use = rest.slice(1).search(/\b(?:tenantContextFor|tenantTable|tenantChildTable|tenantChildTableOf|ownedDbTable|supabase\s*\.\s*from)\s*\(/);
-        if (access < 0) r10(`no access check takes ${v} in the same block (an access call must be named require*/enforce*/assert* and receive ${v})`);
-        // 05 FP-1: the STRICT rule, stated as such - no seam or DB access of ANY table between deriving and authorizing.
-        else if (use >= 0 && use + 1 < access) r10(`a seam/DB call runs between deriving ${v} and its access check (nothing may be read or written before the owner is authorized)`);
+        const why = deriveThenAuthorize(m);
+        if (why) findings.push({ rule: 'R10', file: rel, line: lineAt(m.index), table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
       }
     }
     for (const m of code.matchAll(/tenantContextFor\s*\(([^;]*?)\)/g)) {

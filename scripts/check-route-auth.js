@@ -62,6 +62,11 @@
  *                  authentication;
  *     R6-ORDER     a protected side effect after authentication but before
  *                  tenant authorization, in a route that binds a request id;
+ *                  a READ (incl. a tenant-seam handle's parent check) is not an
+ *                  R6 effect. NOTE: the tenant-seam gate's R10 is stricter on
+ *                  purpose - after ownerCompanyOfRow NOTHING may be read before
+ *                  the owner is authorized (it governs derive-then-authorize);
+ *
  *     R7-PRINCIPAL an authorization primitive/helper evaluated against a
  *                  caller-controlled principal (request user id / role / admin flag).
  *     Recognised as safe before authentication, and nothing else: a

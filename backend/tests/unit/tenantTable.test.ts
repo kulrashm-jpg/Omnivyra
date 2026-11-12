@@ -234,6 +234,32 @@ describe('tenantChildTableOf (many parents, one read; e1 S2)', () => {
   });
 });
 
+describe('upsert conflict key must include the scoping column (05; the #378 upsertVariant class)', () => {
+  const col = TENANT_TABLES.campaigns.column;
+  it('tenantTable: no onConflict (= primary key) or a key without the tenant column is refused before the builder', () => {
+    expect(() => tenantTable('campaigns', ctxA).upsert({ id: 'x', name: 'n' })).toThrow(/onConflict that includes/);
+    expect(() => tenantTable('campaigns', ctxA).upsert({ id: 'x' }, { onConflict: 'id' })).toThrow(/onConflict that includes/);
+    expect(calls).toHaveLength(0);
+    tenantTable('campaigns', ctxA).upsert({ id: 'x' }, { onConflict: `id, ${col}` });
+    tenantTable('campaigns', ctxA).upsert({ id: 'x' }, { ignoreDuplicates: true });
+    expect(calls.filter((c) => c.op === 'upsert')).toHaveLength(2);
+  });
+  it('tenantChildTable: the conflict key must include the parent link', async () => {
+    const t = await tenantChildTable('daily_content_plans', ctxA, 'p-1');
+    const via = TENANT_CHILD_TABLES.daily_content_plans.via;
+    expect(() => t.upsert({ day: 'mon' }, { onConflict: 'id' })).toThrow(/onConflict that includes/);
+    t.upsert({ day: 'mon' }, { onConflict: `${via},day` });
+    expect(calls.filter((c) => c.table === 'daily_content_plans' && c.op === 'upsert')).toHaveLength(1);
+  });
+  it('tenantChildTableOf: an onConflict without via cannot resolve onto another parent\'s row', async () => {
+    limitRows.campaigns = [{ id: 'c-1' }];
+    const t = await tenantChildTableOf('scheduled_posts', ctxA, ['c-1']);
+    expect(() => t.upsert({ campaign_id: 'c-1', platform: 'x' }, { onConflict: 'platform' })).toThrow(/onConflict that includes campaign_id/);
+    t.upsert({ campaign_id: 'c-1', platform: 'x' }, { onConflict: 'campaign_id,platform' });
+    expect(calls.filter((c) => c.table === 'scheduled_posts' && c.op === 'upsert')).toHaveLength(1);
+  });
+});
+
 describe('ownerCompanyOfRow (derive-then-authorize, R10)', () => {
   const col = TENANT_TABLES.campaigns.column;
   it('returns ONLY the owning company id (lowercase), read by id, never row data', async () => {
