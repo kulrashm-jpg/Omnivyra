@@ -430,7 +430,12 @@ describe('B — the proposed SQL (static structure only; real-Postgres proof is 
     ]);
     expect(definedIn('CREATE TRIGGER trg_guard_super_admin_membership_company')).toEqual(['20261210000001_company_lifecycle_super_admin_guard.sql']);
     expect(definedIn('SUPER_ADMIN_GRANT_NOT_GOVERNED')).toEqual(['20261210000002_assign_super_admin_rpc_and_direct_grant_guard.sql']);
-    expect(definedIn('CREATE OR REPLACE FUNCTION public.hard_delete_company(')).toEqual(['20261210000001_company_lifecycle_super_admin_guard.sql']);
+    // 20270217000029 re-authors hard_delete_company (named COMPANY_HAS_CONTENT refusal, e9 2026-11-13)
+    // from the applied 0001 body, the same way 0002 re-creates the guard function above.
+    expect(definedIn('CREATE OR REPLACE FUNCTION public.hard_delete_company(')).toEqual([
+      '20261210000001_company_lifecycle_super_admin_guard.sql',
+      '20270217000029_hard_delete_company_named_dependents.sql',
+    ]);
     expect(definedIn('CREATE OR REPLACE FUNCTION public.assign_super_admin(')).toEqual(['20261210000002_assign_super_admin_rpc_and_direct_grant_guard.sql']);
     expect(definedIn('CREATE OR REPLACE FUNCTION public.save_rbac_config(')).toEqual(['20261210000003_rbac_config.sql']);
     expect(definedIn('CREATE TABLE IF NOT EXISTS public.rbac_config (')).toEqual(['20261210000003_rbac_config.sql']);
@@ -530,6 +535,21 @@ describe('B — the proposed SQL (static structure only; real-Postgres proof is 
     expect(body.indexOf('DELETE FROM companies')).toBeGreaterThan(body.indexOf('DELETE FROM company_profiles'));
     expect(body.indexOf('DELETE FROM company_profiles')).toBeGreaterThan(body.indexOf('DELETE FROM user_company_roles'));
     expect(sql).toContain('REVOKE ALL ON FUNCTION public.hard_delete_company(uuid, uuid, text) FROM PUBLIC, anon, authenticated;');
+  });
+
+  it('029 keeps every 0001 property of hard_delete_company and refuses content by name BEFORE any delete', () => {
+    const sql = fs.readFileSync(path.resolve(__dirname, '../../../supabase/migrations/20270217000029_hard_delete_company_named_dependents.sql'), 'utf8');
+    const body = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.hard_delete_company('));
+    const firstDelete = body.indexOf('DELETE FROM user_company_roles');
+    expect(body.indexOf('FOR UPDATE')).toBeGreaterThan(0);
+    expect(body.indexOf('FOR UPDATE')).toBeLessThan(firstDelete);
+    expect(body.slice(0, firstDelete)).toContain("RAISE EXCEPTION 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP'");
+    expect(body.slice(0, firstDelete)).toContain("RAISE EXCEPTION 'COMPANY_HAS_CONTENT'");
+    expect(body.indexOf('DELETE FROM companies')).toBeGreaterThan(body.indexOf('DELETE FROM company_profiles'));
+    expect(body.indexOf('DELETE FROM company_profiles')).toBeGreaterThan(firstDelete);
+    expect(body.slice(0, body.indexOf('AS $$'))).toMatch(/SECURITY DEFINER\s+SET search_path = public/);
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.hard_delete_company(uuid, uuid, text) FROM PUBLIC, anon, authenticated;');
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.hard_delete_company(uuid, uuid, text) TO service_role;');
   });
 
   it('save_rbac_config serializes on a transaction advisory lock and refuses a stale expected version', () => {

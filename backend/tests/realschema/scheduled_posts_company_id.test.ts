@@ -83,7 +83,7 @@ async function seed(c: Client) {
     [w.user, w.A, w.B, w.user2]);
   const acct = (id: string, co: string | null) => c.query(
     `INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, account_name, access_token, company_id, is_active)
-     VALUES ($1, $2, 'linkedin', $1, 'sp', 'not-a-token', $3, true)`, [id, w.user, co]);
+     VALUES ($1::uuid, $2, 'linkedin', $1::text, 'sp', 'not-a-token', $3, true)`, [id, w.user, co]);
   await acct(w.saA, w.A); await acct(w.saB, w.B); await acct(w.saNone, null);
   return w;
 }
@@ -268,7 +268,7 @@ describe('05 review: enforced rollback order and the orphan repair path', () => 
     await c.query(`INSERT INTO public.companies (id, name) VALUES ($1, 'sp-gone')`, [gone]);
     const orphan = randomUUID();
     await c.query(`INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, account_name, access_token, company_id, is_active)
-                   VALUES ($1, $2, 'linkedin', $1, 'sp', 'not-a-token', $3, true)`, [orphan, w.user, gone]);
+                   VALUES ($1::uuid, $2, 'linkedin', $1::text, 'sp', 'not-a-token', $3, true)`, [orphan, w.user, gone]);
     await c.query(`DELETE FROM public.companies WHERE id = $1`, [gone]); // no FK from social_accounts: the id dangles
     expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = NULL WHERE id = $1`, [orphan])).toMatchObject({ ok: true });
     expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = NULL WHERE id = $1`, [w.saA])).toMatchObject({ ok: false, code: '23514' });
