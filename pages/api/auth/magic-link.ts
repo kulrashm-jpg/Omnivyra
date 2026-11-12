@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../../lib/auth/emailAddressPolicy';
 
 /**
  * POST /api/auth/magic-link
@@ -44,6 +45,8 @@ async function handler(
   const { email } = body as { email?: string };
 
   if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
+  // Conservative address policy where an address first enters (defence in depth).
+  if (!isAcceptableEmailAddress(email)) return res.status(400).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE });
 
   const normalizedEmail = email.trim().toLowerCase();
 
