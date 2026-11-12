@@ -48,6 +48,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: "IDENTITY-SCOPED, no tenant involved: the caller's OWN phone number, selected by .eq('user_id', user.id) where user comes from getSupabaseUserFromRequest (401 without a session). It reads one column (phone_number) of the caller's own row - never another user's - pinned by backend/tests/unit/s2OwnPhoneIdentityScoped.test.ts 'returns only the caller's own phone, never another user's'. Reads nothing else cross-tenant; writes nothing.",
     owner: 'virality-e1',
   },
+  {
+    id: 'company-name-availability',
+    tables: ['company_profiles'],
+    file: 'pages/api/onboarding/validate-company-name.ts',
+    reason: "PUBLIC signup check 'is this EXACT company name taken' - uniqueness is a property across ALL tenants, so the lookup cannot be tenant-scoped. It answers ONLY a boolean (never an id or another name): the input is escaped before .ilike (escapeLikePattern: % _ and \\ are literal, so a prefix like 'A%' matches only a company literally named 'A%'), and the endpoint is rate-limited per IP (NAME_CHECK_LIMIT 30/min). Pinned by backend/tests/unit/s2CompanyNameAvailability.test.ts 'a wildcard prefix never matches another company' and 'rate-limited per IP'. Reads nothing else cross-tenant; writes nothing.",
+    owner: 'virality-e1',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));

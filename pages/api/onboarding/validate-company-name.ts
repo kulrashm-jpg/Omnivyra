@@ -22,6 +22,19 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
+
+/**
+ * SECURITY (e1 S2, 2026-11-12): this public endpoint answers "is this EXACT name taken". It passed the
+ * raw input to `.ilike()`, where `%` `_` and `\` are pattern characters - so 'A%' answered "is ANY
+ * company named A...", letting anyone enumerate existing company names by prefix. The input is now
+ * escaped (exact, case-insensitive match) and the endpoint is rate-limited per IP.
+ */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+const NAME_CHECK_LIMIT = { keyPrefix: 'rl:validate-company-name', limit: 30, windowSecs: 60 };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -39,6 +52,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const trimmed = companyName.trim();
+  const exact = escapeLikePattern(trimmed);
 
   // Check length constraints
   if (trimmed.length < 2) {
@@ -55,12 +69,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
+  const rl = await checkRateLimit(authRequestIp(req), NAME_CHECK_LIMIT);
+  if (!rl.allowed) {
+    return res.status(429).json({ available: false, reason: 'Too many requests. Try again later.' });
+  }
+
   try {
     // Check in companies table
     const { data: companiesResult, error: companiesError } = await supabase
       .from('companies')
       .select('id, name')
-      .ilike('name', trimmed) // Case-insensitive search
+      .ilike('name', exact) // exact, case-insensitive (wildcards escaped)
       .limit(1);
 
     if (companiesError) {
@@ -79,10 +98,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Check in company_profiles table as well (fallback storage)
-    const { data: profilesResult, error: profilesError } = await supabase
-      .from('company_profiles')
+    // cross-tenant: company-name-availability
+    const { data: profilesResult, error: profilesError } = await supabase.from('company_profiles')
       .select('company_id, name')
-      .ilike('name', trimmed) // Case-insensitive search
+      .ilike('name', exact) // exact, case-insensitive (wildcards escaped)
       .limit(1);
 
     if (profilesError) {
