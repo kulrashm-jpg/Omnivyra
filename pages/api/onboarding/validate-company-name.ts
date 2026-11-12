@@ -22,6 +22,27 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { authRequestIp } from '../../../backend/auth/requestClientIp';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
+
+/**
+ * SECURITY (e1, 2026-11-12): this public endpoint answers "is this EXACT name taken". It passed the
+ * raw input to `.ilike()`, where `%` `_` `\` (SQL LIKE) and `*` (PostgREST rewrites it to `%`) are
+ * pattern characters - so 'A%' or 'A*' answered "is ANY company named A...", letting anyone enumerate
+ * existing company names by prefix.
+ * The CONTROL is `isExactNameMatch`: availability is decided by case-insensitive EQUALITY in code, so
+ * whatever rows a pattern returns, the answer is about the exact name only. The pattern is also narrowed
+ * (`likeCandidatePattern`: % _ \ escaped, `*` -> single-char `_`) so it fetches only same-length
+ * candidates. The per-IP limit is a speed bump, not a control (the IP rests on a forwarding header).
+ */
+export function likeCandidatePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
+}
+export function isExactNameMatch(rowName: unknown, wanted: string): boolean {
+  return typeof rowName === 'string' && rowName.trim().toLowerCase() === wanted.toLowerCase();
+}
+// No UI calls this endpoint today, so refusing during a limiter outage costs nothing: fail CLOSED.
+const NAME_CHECK_LIMIT = { keyPrefix: 'rl:validate-company-name', limit: 30, windowSecs: 60, onRedisFailure: 'closed' as const };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -39,6 +60,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const trimmed = companyName.trim();
+  const candidates = likeCandidatePattern(trimmed);
 
   // Check length constraints
   if (trimmed.length < 2) {
@@ -55,13 +77,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
+  const rl = await checkRateLimit(authRequestIp(req), NAME_CHECK_LIMIT);
+  if (!rl.allowed) {
+    return res.status(429).json({ available: false, reason: 'Too many requests. Try again later.' });
+  }
+
   try {
     // Check in companies table
     const { data: companiesResult, error: companiesError } = await supabase
       .from('companies')
       .select('id, name')
-      .ilike('name', trimmed) // Case-insensitive search
-      .limit(1);
+      .ilike('name', candidates) // candidates only - the decision is isExactNameMatch below
+      .limit(50);
 
     if (companiesError) {
       console.error('[validate-company-name] companies query error:', companiesError);
@@ -71,7 +98,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    if (companiesResult && companiesResult.length > 0) {
+    if ((companiesResult ?? []).some((r: { name?: unknown }) => isExactNameMatch(r.name, trimmed))) {
       return res.status(200).json({ 
         available: false,
         reason: `Company name "${trimmed}" is already taken. Please choose a different name.` 
@@ -79,11 +106,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Check in company_profiles table as well (fallback storage)
-    const { data: profilesResult, error: profilesError } = await supabase
-      .from('company_profiles')
+    const { data: profilesResult, error: profilesError } = await supabase.from('company_profiles')
       .select('company_id, name')
-      .ilike('name', trimmed) // Case-insensitive search
-      .limit(1);
+      .ilike('name', candidates) // candidates only - the decision is isExactNameMatch below
+      .limit(50);
 
     if (profilesError) {
       console.error('[validate-company-name] company_profiles query error:', profilesError);
@@ -93,7 +119,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    if (profilesResult && profilesResult.length > 0) {
+    if ((profilesResult ?? []).some((r: { name?: unknown }) => isExactNameMatch(r.name, trimmed))) {
       return res.status(200).json({ 
         available: false,
         reason: `Company name "${trimmed}" is already taken. Please choose a different name.` 
