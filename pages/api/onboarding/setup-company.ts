@@ -14,7 +14,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { randomUUID } from 'crypto';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { acceptInvitationViaOnboarding } from '../../../backend/services/onboardingInvitationAcceptance';
 import {
@@ -39,6 +38,7 @@ import {
 } from '../../../backend/services/validatedWebsiteService';
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
+import { resolveBootstrapIntent, logCompanyBootstrapRefused } from '../../../backend/services/signupBootstrapGate';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
 import { bootstrapCompanyProfile } from '../../../backend/services/companyBootstrapService';
@@ -213,13 +213,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   const userProfileIndustry = String(typedUserProfileRow?.industry || '').trim();
   const profileIndustry = industry.trim() || userProfileIndustry;
   const emailDerivedWebsite = deriveWebsiteFromEmail(user.email);
-  // CONSUME the website validated once at signup (system-of-record). No probe,
-  // no existence/canonical/forwarding check happens here. Falls back to the pure
-  // email-derived value, then any user-entered value, for paths without an intent.
+  // Used ONLY for the pre-creation lookups below (existing-company matching). A NEW company is written with the
+  // bound intent's validated website (P1 gate) - never this value. The user-typed body `website` is ignored
+  // (e1 2026-11-13, owner ruling: no user-typed website); the email-derived fallback is the user's own verified
+  // domain and is safe for lookup.
   const { canonicalWebsite } = await resolveValidatedWebsite(user.email, {
     emailDerived: emailDerivedWebsite,
-    userEntered:  website,
+    userEntered:  '',
   });
+  void website; // accepted in the body for client compatibility; never trusted
 
   if (!companyName.trim()) return res.status(400).json({ error: 'companyName is required' });
 
@@ -415,7 +417,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       });
     }
 
-    const companyId = randomUUID();
     const now = new Date().toISOString();
 
     // ── 3. Create companies row ───────────────────────────────────────────────
@@ -519,14 +520,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     // real work-email signups (canonicalWebsite is always set there). Every other
     // column, the explicit companyId, and the 23505 race handling below are
     // unchanged; the injected insert preserves the Postgres error code.
+    // ── P1 bootstrap gate (e1 2026-11-13; e9 ruling) ──────────────────────────
+    // A NEW company requires a BOUND signup intent minted by the server after every signup gate passed (signup.ts /
+    // revalidate-signup). The company's id IS the intent's id, so this INSERT is the atomic once-only consume (a
+    // failed bootstrap writes nothing; a retry re-enters the same id via the 23505 race path below, which admits
+    // only a user who already holds that company). The written website is the intent's VALIDATED website - never
+    // an email-derived or user-typed fallback (owner ruling). No intent -> RESUME prompt, never an error.
+    // See backend/services/signupBootstrapGate.ts (and its companies.id invariant).
+    const bootstrap = await resolveBootstrapIntent(user.email);
+    if (!bootstrap.ok) {
+      logCompanyBootstrapRefused('setup-company', bootstrap.reason, user.id);
+      void emitCompanyEvent('CompanyCreated', 'denied', bootstrap.reason);
+      if (bootstrap.reason === 'INTENT_LOOKUP_FAILED') {
+        return res.status(503).json({ error: 'We could not confirm your signup right now. Please try again in a moment.', code: 'INTENT_LOOKUP_FAILED' });
+      }
+      return res.status(409).json({
+        error: 'Please confirm your company details to continue.',
+        code:  'SIGNUP_REVALIDATION_REQUIRED',
+      });
+    }
+    const companyId = bootstrap.intent.intentId;
+    const intentWebsite = bootstrap.intent.websiteUrl;
+    const intentWebsiteDomain = (() => {
+      const d = extractDomain(intentWebsite);
+      return d && !isFreeEmailDomain(d) ? d : null;
+    })();
+
     let companyErr: (Error & { code?: string }) | null = null;
     try {
       await createCompanyIdentity(
         {
           id:                companyId,
           name:              companyName.trim(),
-          website:           canonicalWebsite || null,
-          websiteDomain:     websiteDomain,
+          website:           intentWebsite,
+          websiteDomain:     intentWebsiteDomain,
           adminEmailDomain:  adminEmailDomain,
           industry:          profileIndustry || null,
           size:              companySize.trim() || null,
@@ -658,19 +685,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     // fields; this fills the cheap, deterministic ones immediately.
     let discoveredSocialProfile: any = {};
     let discoveredMetadata: import('../../../backend/services/companyProfile/websiteMetadataExtractor').DiscoveredWebsiteMetadata | null = null;
-    if (canonicalWebsite) {
+    if (intentWebsite) {
       try {
         // CKRE-001 §1/§2/§7 — pass crawl context so this onboarding crawl is
         // instrumented and its root fetch is reused (not re-fetched) by the
         // profile-refinement crawl fired in step 5b below.
-        const crawlResult = await crawlWebsiteSources(canonicalWebsite, new Set(), {
+        const crawlResult = await crawlWebsiteSources(intentWebsite, new Set(), {
           companyId,
           userId: user.id,
           email: user.email ?? null,
           workflow: 'onboarding',
         });
         discoveredSocialProfile = mergeDiscoveredSocialProfiles(
-          { company_id: companyId, website_url: canonicalWebsite } as any,
+          { company_id: companyId, website_url: intentWebsite } as any,
           crawlResult.social_links,
         );
         discoveredMetadata = crawlResult.metadata;
@@ -703,7 +730,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     await supabase.from('company_profiles').upsert({
       company_id:  companyId,
       name:        companyName.trim(),
-      website_url: canonicalWebsite || null,
+      website_url: intentWebsite || null,
       industry:    profileIndustry || null,
       // §3/§7 — system-discovered brand assets + country (deterministic, from
       // the crawl HTML). AI refinement (step 5b) fills the rest and owns
@@ -785,7 +812,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       await bootstrapCompanyProfile(companyId, {
         supabase,
         discovered: discoveredMetadata,
-        verifiedWebsite: canonicalWebsite || null,
+        verifiedWebsite: intentWebsite || null,
         now,
       });
     } catch (error) {
@@ -815,14 +842,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     // automatically. Best-effort and fully non-fatal: it never blocks the
     // onboarding response and never fails setup. Only when a website exists,
     // since extraction needs a source to produce a non-zero score.
-    if (canonicalWebsite) {
+    if (intentWebsite) {
       // CKRE-001 §1 — the eager AI refinement is the "enrichment" step; emit
       // EnrichmentTriggered so the crawl→enrichment journey is fully observable.
       // Reuses the crawl event infra; correlation ties to the signup journey.
       void emitCrawlEvent({
         event: 'EnrichmentTriggered', outcome: 'allowed',
         correlationId: signupCorrelationId,
-        companyId, userId: user.id, workflow: 'onboarding', target: canonicalWebsite,
+        companyId, userId: user.id, workflow: 'onboarding', target: intentWebsite,
         reason: 'eager_profile_refinement',
       });
       void import('../../../backend/services/companyProfileService')
@@ -899,7 +926,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     monitorCompanyIdentityDrift({
       id:                 companyId,
       name:               companyName.trim(),
-      website:            canonicalWebsite || null,
+      website:            intentWebsite || null,
       website_domain:     websiteDomain,
       admin_email_domain: adminEmailDomain,
     });

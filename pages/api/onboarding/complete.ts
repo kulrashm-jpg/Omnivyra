@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { resolveBootstrapIntent, logCompanyBootstrapRefused } from '../../../backend/services/signupBootstrapGate';
 
 /**
  * POST /api/onboarding/complete
@@ -242,10 +243,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       companyId = matchedCompanyId;
     } else {
-      const website = emailDomain ? `https://${emailDomain}` : 'https://example.com';
+      // P1 bootstrap gate (e1 2026-11-13; e9 ruling) - the SAME chokepoint as setup-company: a NEW company requires
+      // a BOUND signup intent minted by the server after every signup gate passed; companies.id = the intent id (the
+      // insert is the once-only consume); the website is the intent's VALIDATED website. The former fabricated
+      // `https://<email domain>` / 'https://example.com' website and the gate-less creation are gone - this route
+      // has no UI caller and was a direct path to a company + initial credits for a bypass-created identity.
+      const bootstrap = await resolveBootstrapIntent(authEmail);
+      if (!bootstrap.ok) {
+        logCompanyBootstrapRefused('onboarding/complete', bootstrap.reason, userId);
+        if (bootstrap.reason === 'INTENT_LOOKUP_FAILED') {
+          return res.status(503).json({ error: 'We could not confirm your signup right now. Please try again in a moment.', code: 'INTENT_LOOKUP_FAILED' });
+        }
+        return res.status(409).json({ error: 'Please confirm your company details to continue.', code: 'SIGNUP_REVALIDATION_REQUIRED' });
+      }
+      const website = bootstrap.intent.websiteUrl;
       const { data: newCompany, error: createError } = await supabase
         .from('companies')
         .insert({
+          id:                 bootstrap.intent.intentId,
           name:               finalCompanyName,
           website,
           admin_email_domain: emailDomain || null,
@@ -255,12 +270,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .select('id')
         .single();
 
-      if (createError) {
+      if (createError && (createError as { code?: string }).code === '23505') {
+        // The intent was already consumed (companies.id = intent id). Re-enter ONLY for a user who already holds
+        // that company; anyone else is refused (never a second company from one intent).
+        const { data: heldRole } = await supabase
+          .from('user_company_roles')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('company_id', bootstrap.intent.intentId)
+          .in('status', ['active', 'invited'])
+          .limit(1)
+          .maybeSingle();
+        if (!heldRole) {
+          return res.status(409).json({ code: 'INVITE_REQUIRED', error: 'This company is already registered. Ask your company admin to invite you.' });
+        }
+        companyId = bootstrap.intent.intentId;
+      } else if (createError) {
         console.error('[onboarding/complete] company creation failed:', createError.message);
         return res.status(500).json({ error: 'Could not create company' });
+      } else {
+        companyId = newCompany.id;
+        createdHere = true;
       }
-      companyId = newCompany.id;
-      createdHere = true;
 
       await supabase.from('company_profiles').upsert({
         company_id:  companyId,

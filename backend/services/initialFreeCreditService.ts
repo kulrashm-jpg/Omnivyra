@@ -26,6 +26,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 import { logger } from './logger';
+import { isIntentBornOrganization } from './signupBootstrapGate';
 
 export const INITIAL_FREE_CREDIT_CATEGORY = 'initial_free_credit';
 // Canonical signup grant per approved credit policy: 300 FREE credits, 30-day validity.
@@ -38,7 +39,7 @@ export type InitialFreeCreditResult =
   | { granted: true; credits: number; expiresAt: string }
   | {
       granted: false;
-      reason: 'already_claimed' | 'config_disabled' | 'grant_failed' | 'no_existing_grant';
+      reason: 'already_claimed' | 'config_disabled' | 'grant_failed' | 'no_existing_grant' | 'not_signup_company';
       message?: string;
     };
 
@@ -158,6 +159,18 @@ export async function grantInitialFreeCredit(input: {
   // No ledger grant exists: a repair-only caller must NEVER create one (it skipped onboarding's eligibility).
   if (input.repairOnly) {
     return { granted: false, reason: 'no_existing_grant' };
+  }
+
+  // P1 credit chokepoint (e1 2026-11-13; e9 ruling): a NEW initial grant requires the organization to be born from a
+  // server-minted signup intent (companies.id = signup_intents.id - see signupBootstrapGate). Inside the service so
+  // no caller can skip it. Admin- / invite-created companies get no initial grant (owner rule). A read error is
+  // 'grant_failed' (retryable at the caller), never a grant.
+  const intentBorn = await isIntentBornOrganization(input.orgId);
+  if (intentBorn !== 'yes') {
+    logger.warn('initial_free_credit_refused_not_intent_born', { orgId: input.orgId, userId: input.userId, lookup: intentBorn });
+    return intentBorn === 'unknown'
+      ? { granted: false, reason: 'grant_failed', message: 'Could not verify the signup for this company. Please try again.' }
+      : { granted: false, reason: 'not_signup_company' };
   }
 
   // ── Ensure organization_credits row exists for the org ───────────────────
