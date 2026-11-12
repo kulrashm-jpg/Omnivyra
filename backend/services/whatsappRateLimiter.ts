@@ -70,14 +70,16 @@ function redisUsable(redis: unknown): boolean {
   return typeof status !== 'string' || status === 'ready';
 }
 
-async function redisGetCount(key: string): Promise<number | null> {
+/** Gives a refused reservation back. A failed give-back over-counts (refuses sooner), never over-sends. */
+async function redisDecrBy(key: string, count: number): Promise<void> {
   const redis = await getRedis();
-  if (!redis || !redisUsable(redis)) return null;
+  if (!redis || !redisUsable(redis)) return;
   try {
-    const val = await redis.get(key);
-    return val === null ? 0 : parseInt(val, 10);
-  } catch {
-    return null; // Redis unavailable → fall through to DB
+    await redis.decrby(key, count);
+  } catch (err) {
+    console.warn('[whatsappRateLimiter] refused reservation not given back; the day over-counts (refuses sooner)', {
+      key, count, error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -194,17 +196,20 @@ export async function checkAndConsume(params: {
   const redisKey = `wa:usage:${phone_number_id}:${new Date().toISOString().slice(0, 10)}`; // YYYY-MM-DD
   const ttl      = 24 * 60 * 60; // 24h
 
-  // ── Layer 1: Redis ────────────────────────────────────────────────────────
-  const currentRedis = await redisGetCount(redisKey);
-
-  if (currentRedis !== null) {
-    // Redis is available
-    if (currentRedis + count > effective) {
-      return { allowed: false, remaining: Math.max(0, effective - currentRedis), tier, source: 'redis' };
+  // ── Layer 1: Redis - ONE atomic INCRBY, then the comparison (CLASS-2 B5) ──
+  // This was GET, compare, then INCRBY: two enqueues on one number (different broadcasts, so
+  // not under one lease) both read room and both consumed it - over the tier/plan limit. And a
+  // failed INCRBY (null) answered allowed:true with nothing counted. Now the increment IS the
+  // reservation: over the limit -> given back and refused; a failed INCRBY (it may or may not
+  // have counted) falls to the DB layer, which is atomic and fails closed - never allowed
+  // without a counted consume.
+  const newTotal = await redisIncrBy(redisKey, count, ttl);
+  if (newTotal !== null) {
+    if (newTotal > effective) {
+      await redisDecrBy(redisKey, count);
+      return { allowed: false, remaining: Math.max(0, effective - (newTotal - count)), tier, source: 'redis' };
     }
-    const newTotal = await redisIncrBy(redisKey, count, ttl);
-    const remaining = newTotal !== null ? Math.max(0, effective - newTotal) : 0;
-    return { allowed: true, remaining, tier, source: 'redis' };
+    return { allowed: true, remaining: Math.max(0, effective - newTotal), tier, source: 'redis' };
   }
 
   // ── Layer 2: DB fallback (Refinement 6) - atomic, fails CLOSED ────────────
