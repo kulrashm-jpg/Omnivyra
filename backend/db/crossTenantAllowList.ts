@@ -31,7 +31,7 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     id: 'invite-set-password-own-email',
     tables: ['invitations'],
     file: 'pages/api/auth/set-password.ts',
-    reason: "BEARER: the authenticated user's OWN email, used ONLY when VERIFIED - the route requires user.emailVerified (resolveAuthenticatedUser's email_confirmed_at) before the email selects any invitation; pinned by backend/tests/unit/s2SetPasswordVerifiedEmail.test.ts 'an UNVERIFIED email never activates an invitation'. The user is not a member yet - activation is what makes them one - so the invitation row names the tenant. Every later write goes through systemTenantContext(row.company_id, reason); activation itself is the activate_invitation_membership RPC. Reads nothing else cross-tenant; all other access is tenant-scoped.",
+    reason: "BEARER: TWO independent facts, neither sufficient alone - (1) the authenticated user's OWN email, used ONLY when VERIFIED (the route requires user.emailVerified, resolveAuthenticatedUser's email_confirmed_at, around the WHOLE invitation block; pinned by backend/tests/unit/s2SetPasswordVerifiedEmail.test.ts 'an UNVERIFIED email never activates an invitation'), AND (2) an invitation whose magic-link token was ALREADY CONSUMED (the lookup requires token_consumed_at IS NOT NULL) - the email only selects among invitations someone already exercised the secret token for. The user is not a member yet - activation is what makes them one - so the invitation row names the tenant. Every later write goes through systemTenantContext(row.company_id, reason); activation itself is the activate_invitation_membership RPC. Reads nothing else cross-tenant; all other access is tenant-scoped.",
     owner: 'virality-e1',
   },
   {
