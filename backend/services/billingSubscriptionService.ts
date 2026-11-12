@@ -149,8 +149,46 @@ export interface BillingSubDeps {
   now?: () => number;
 }
 
-/** Upsert a subscription row (conflict on provider+provider_subscription_id). Idempotent. */
-export async function upsertBillingSubscription(input: SubscriptionUpsertInput, deps: BillingSubDeps): Promise<{ ok: boolean; error?: string }> {
+// The unordered upsertBillingSubscription was REMOVED with the event-ordering fix: every subscription ledger write
+// goes through applyOrderedSubscriptionWrite, so no caller can re-introduce a write that ignores provider-event order.
+
+// ── Event ordering (BLOCKING money fix, e9 2026-11-13) ──────────────────────────────────────────
+// Stripe does not deliver events in order and may redeliver. The ledger used to upsert every event, so a
+// stale 'active' arriving after a newer 'canceled' re-activated a cancelled subscription (unpaid service).
+// Now each row remembers the provider event it last applied (metadata.stripe_last_event = { id, created }; no
+// migration: billing_subscriptions.metadata is jsonb NOT NULL) and an event is applied ONLY if it is newer:
+//   created (Stripe's epoch seconds) greater -> newer; smaller -> STALE (logged + counted, never applied);
+//   equal created with a different id -> deterministic tie-break on the id (lexicographically greater wins);
+//   same id -> duplicate, a no-op.
+// The write is a compare-and-set on the event id it read, so two concurrent deliveries cannot both win; a lost
+// race re-reads and re-decides (bounded).
+export interface ProviderEventRef { id: string; created: number }
+export type EventOrder = 'newer' | 'stale' | 'duplicate';
+
+export function compareProviderEvents(incoming: ProviderEventRef, stored: ProviderEventRef | null | undefined): EventOrder {
+  if (!stored || typeof stored.id !== 'string' || typeof stored.created !== 'number') return 'newer';
+  if (incoming.id === stored.id) return 'duplicate';
+  if (incoming.created > stored.created) return 'newer';
+  if (incoming.created < stored.created) return 'stale';
+  return incoming.id > stored.id ? 'newer' : 'stale';
+}
+
+let staleSubscriptionEventsSkipped = 0;
+/** Count of stale provider events refused since process start (observability). */
+export function getStaleSubscriptionEventsSkipped(): number { return staleSubscriptionEventsSkipped; }
+
+const MAX_ORDERED_WRITE_ATTEMPTS = 3;
+
+/**
+ * Event-ordered ledger write: applies input only if `event` is newer than the event the row last applied.
+ * Returns ok:true for applied, duplicate and stale (the last two with `skipped`); ok:false only on a read/write
+ * failure or persistent contention.
+ */
+export async function applyOrderedSubscriptionWrite(
+  input: SubscriptionUpsertInput,
+  event: ProviderEventRef,
+  deps: BillingSubDeps,
+): Promise<{ ok: boolean; skipped?: 'stale_event' | 'duplicate_event'; error?: string }> {
   const nowIso = new Date(deps.now ? deps.now() : Date.now()).toISOString();
   const row = {
     organization_id: input.organizationId,
@@ -165,27 +203,72 @@ export async function upsertBillingSubscription(input: SubscriptionUpsertInput, 
     auto_renew: input.autoRenew,
     updated_at: nowIso,
   };
-  const { error } = await deps.db
-    .from('billing_subscriptions')
-    .upsert(row, { onConflict: 'provider,provider_subscription_id' });
-  return error ? { ok: false, error: error.message } : { ok: true };
+  const evt: ProviderEventRef = { id: event.id, created: event.created };
+  for (let attempt = 0; attempt < MAX_ORDERED_WRITE_ATTEMPTS; attempt++) {
+    const { data: existing, error: readError } = await deps.db
+      .from('billing_subscriptions')
+      .select('id, metadata')
+      .eq('provider', input.provider)
+      .eq('provider_subscription_id', input.providerSubscriptionId)
+      .maybeSingle();
+    if (readError) return { ok: false, error: readError.message };
+
+    if (!existing) {
+      const { error } = await deps.db.from('billing_subscriptions').insert({ ...row, metadata: { stripe_last_event: evt } });
+      if (!error) return { ok: true };
+      if ((error as { code?: string }).code === '23505') continue; // a concurrent delivery created it: re-decide
+      return { ok: false, error: error.message };
+    }
+
+    const current = existing as { id: string; metadata?: Record<string, unknown> | null };
+    const metadata = (current.metadata && typeof current.metadata === 'object') ? current.metadata : {};
+    const stored = (metadata as { stripe_last_event?: ProviderEventRef }).stripe_last_event ?? null;
+    const order = compareProviderEvents(evt, stored);
+    if (order === 'duplicate') return { ok: true, skipped: 'duplicate_event' };
+    if (order === 'stale') {
+      staleSubscriptionEventsSkipped += 1;
+      console.warn('[billingSubscription] stale provider event refused (not applied)', {
+        provider_subscription_id: input.providerSubscriptionId, event_id: evt.id, event_created: evt.created,
+        applied_event_id: stored?.id, applied_event_created: stored?.created, refused_status: input.status,
+      });
+      return { ok: true, skipped: 'stale_event' };
+    }
+
+    let update = deps.db
+      .from('billing_subscriptions')
+      .update({ ...row, metadata: { ...metadata, stripe_last_event: evt } })
+      .eq('id', current.id);
+    update = stored?.id
+      ? update.eq('metadata->stripe_last_event->>id', stored.id)
+      : update.is('metadata->stripe_last_event', null);
+    const { data: written, error: writeError } = await update.select('id');
+    if (writeError) return { ok: false, error: writeError.message };
+    if (Array.isArray(written) && written.length === 1) return { ok: true };
+    // 0 rows: another delivery applied an event between our read and write. Re-read and re-decide.
+  }
+  return { ok: false, error: 'subscription_event_contention' };
 }
 
-/** Apply a Stripe customer.subscription.* event to the ledger. Best-effort; returns outcome. */
+/** Apply a Stripe customer.subscription.* event to the ledger, in provider-event order. Best-effort; returns outcome. */
 export async function applyStripeSubscriptionEvent(
   eventType: string,
   obj: StripeSubscriptionObject,
   organizationId: string | null,
   deps: BillingSubDeps,
+  event?: ProviderEventRef,
 ): Promise<{ applied: boolean; reason?: string; status?: LedgerSubStatus; planId?: string | null; planSource?: PlanResolutionSource }> {
   if (!organizationId) return { applied: false, reason: 'no_org' };
+  // Fail closed: without the provider event's identity and time the order cannot be decided, so nothing is written.
+  if (!event || typeof event.id !== 'string' || !event.id || typeof event.created !== 'number' || !Number.isFinite(event.created)) {
+    return { applied: false, reason: 'missing_event_ref' };
+  }
   const resolution = await resolvePlanId(obj, deps);                 // deterministic, fail-closed
   const input = buildUpsertFromStripeSubscription(eventType, obj, organizationId, resolution.planId);
   if (!input) return { applied: false, reason: 'incomplete_event' };
-  const res = await upsertBillingSubscription(input, deps);
-  return res.ok
-    ? { applied: true, status: input.status, planId: input.planId, planSource: resolution.source }
-    : { applied: false, reason: res.error };
+  const res = await applyOrderedSubscriptionWrite(input, event, deps);
+  if (!res.ok) return { applied: false, reason: res.error };
+  if (res.skipped) return { applied: false, reason: res.skipped };
+  return { applied: true, status: input.status, planId: input.planId, planSource: resolution.source };
 }
 
 /**

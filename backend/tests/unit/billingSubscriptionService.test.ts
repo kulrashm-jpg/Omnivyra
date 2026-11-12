@@ -5,7 +5,6 @@
 import {
   mapStripeStatus,
   buildUpsertFromStripeSubscription,
-  upsertBillingSubscription,
   applyStripeSubscriptionEvent,
   markExpiredSubscriptions,
   type StripeSubscriptionObject,
@@ -66,6 +65,10 @@ function dbStub(opts: { selectRows?: any[] }, captured: { upserts: any[]; update
     from() {
       const api: any = {
         upsert: (row: any, o: any) => { captured.upserts.push({ row, onConflict: o?.onConflict }); return Promise.resolve({ error: null }); },
+        // Ordered ledger write (event-order fix): read by provider key (no row here), then INSERT.
+        insert: (row: any) => { captured.upserts.push({ row, insert: true }); return Promise.resolve({ error: null }); },
+        eq: () => api,
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
         select: () => api,
         in: () => api,
         lt: () => api,
@@ -77,19 +80,6 @@ function dbStub(opts: { selectRows?: any[] }, captured: { upserts: any[]; update
   };
 }
 
-describe('upsertBillingSubscription', () => {
-  it('upserts with the conflict key', async () => {
-    const captured = { upserts: [] as any[], updates: [] as any[] };
-    const res = await upsertBillingSubscription(
-      { organizationId: 'org1', provider: 'stripe', providerSubscriptionId: 'sub_1', planId: null, status: 'active', currentPeriodStart: '2026-06-01T00:00:00Z', currentPeriodEnd: '2026-07-01T00:00:00Z', trialEndsAt: null, cancelAtPeriodEnd: false, autoRenew: true },
-      { db: dbStub({}, captured) as any, now: () => NOW },
-    );
-    expect(res.ok).toBe(true);
-    expect(captured.upserts[0].onConflict).toBe('provider,provider_subscription_id');
-    expect(captured.upserts[0].row.status).toBe('active');
-  });
-});
-
 describe('applyStripeSubscriptionEvent', () => {
   it('no org → not applied', async () => {
     const captured = { upserts: [] as any[], updates: [] as any[] };
@@ -97,12 +87,13 @@ describe('applyStripeSubscriptionEvent', () => {
     expect(r.applied).toBe(false);
     expect(r.reason).toBe('no_org');
   });
-  it('valid event → upserts ledger row', async () => {
+  it('valid event → inserts the ledger row stamped with the provider event (ordering in billingSubscriptionEventOrder.test.ts)', async () => {
     const captured = { upserts: [] as any[], updates: [] as any[] };
     const obj = { id: 'sub_9', status: 'active', current_period_start: sec('2026-06-01T00:00:00Z'), current_period_end: sec('2026-07-01T00:00:00Z') };
-    const r = await applyStripeSubscriptionEvent('customer.subscription.updated', obj, 'org1', { db: dbStub({}, captured) as any });
+    const r = await applyStripeSubscriptionEvent('customer.subscription.updated', obj, 'org1', { db: dbStub({}, captured) as any, now: () => NOW }, { id: 'evt_9', created: sec('2026-06-10T00:00:00Z') });
     expect(r.applied).toBe(true);
     expect(captured.upserts).toHaveLength(1);
+    expect(captured.upserts[0]).toMatchObject({ insert: true, row: { status: 'active', provider_subscription_id: 'sub_9', metadata: { stripe_last_event: { id: 'evt_9', created: sec('2026-06-10T00:00:00Z') } } } });
   });
 });
 

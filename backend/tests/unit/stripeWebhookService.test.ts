@@ -276,6 +276,22 @@ describe('processStripeWebhookEvent', () => {
     expect(state.recordedEvents[0].organizationId).toBe('org-A');
   });
 
+  test('subscription event → the ledger receives the provider event id + created (event-order fix)', async () => {
+    const { deps } = makeDeps({});
+    const calls: unknown[][] = [];
+    deps.applySubscriptionEvent = async (...a) => { calls.push(a); return { applied: true }; };
+    const evt = makeEvent({
+      type: 'customer.subscription.updated', id: 'evt_sub_order', created: 1781000000,
+      data: { object: { id: 'sub_42', metadata: { organization_id: 'org-A' } } },
+    });
+    const r = await processStripeWebhookEvent(evt, deps);
+    expect(r.status).toBe('processed');
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('customer.subscription.updated');
+    expect(calls[0][2]).toBe('org-A');
+    expect(calls[0][3]).toEqual({ id: 'evt_sub_order', created: 1781000000 });
+  });
+
   test('failed payment with matching purchase → failPurchase invoked', async () => {
     const { deps, state } = makeDeps({
       purchaseLookup: (id) => id === 'pi_fail' ? { id: 'cp-fail', organization_id: 'org-A', status: 'pending', fulfillment_status: 'pending' } : null,

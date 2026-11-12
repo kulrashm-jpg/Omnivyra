@@ -138,8 +138,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (code === '23505') return { inserted: false, duplicate: true };
       throw new Error(`payment_transactions insert failed: ${error.message}`);
     },
-    applySubscriptionEvent: async (eventType, obj, organizationId) =>
-      applyStripeSubscriptionEvent(eventType, obj as any, organizationId, { db: { from: ownedDbTable } }),
+    applySubscriptionEvent: async (eventType, obj, organizationId, event) =>
+      applyStripeSubscriptionEvent(eventType, obj as any, organizationId, { db: { from: ownedDbTable } }, event),
     markEvent: async (eventId, status, errorMsg) => {
       await ownedDbTable('payment_provider_events')
         .update({
