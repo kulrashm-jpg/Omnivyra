@@ -69,6 +69,61 @@ function stripComments(src) {
   }
   return out.join('');
 }
+/**
+ * Provenance of a tenant predicate's VALUE (05: a safe-set, fail closed; never a request-pattern denylist).
+ *  'safe'       literal, or derived from a resolved principal / tenant context (SAFE_SOURCES), directly or via
+ *               ONE local binding (const/let x = …, const { x } = …) found before the call in the same file;
+ *  'request'    derived from req.body / req.query / req.params (directly or via one binding);
+ *  'unresolved' anything else (function parameters, other bindings, deeper flows) → R7, reviewed.
+ */
+const SAFE_SOURCES = /\b(enforceCompanyAccess(?:Uniform)?|resolveUserContext|requireCompanyAccess|requireTenantAccess|getUserCompanyRole|enforceRole|resolvePrincipal|tenantContextFor|systemTenantContext|getCompanyContext|resolveCompanyContext)\s*\(|\b(ctx|tenantCtx|tenantContext|access|principal|userContext|companyAccess)\.(companyId|company_id|organizationId|organization_id)\b|\bTENANT_CTX\b/;
+const REQUEST = /\breq\.(body|query|params)\b|\brequest\.(body|query|params)\b/;
+function classifyExpr(expr) {
+  if (/^(['"`])[^'"`]*\1$/.test(expr) || /^\d+$/.test(expr)) return 'safe';
+  if (REQUEST.test(expr)) return 'request';
+  if (SAFE_SOURCES.test(expr)) return 'safe';
+  return null;
+}
+/**
+ * e9 ruling: a request-derived (or otherwise unresolved) value that has PASSED an access check binding it to the
+ * principal earlier in the same file counts as SCOPED ('checked'); the check's offset is recorded. The check must
+ * name the same value (the identifier, or the same req.* expression) among its arguments. withRBAC-wrapped
+ * handlers bind req.query/req.body company ids by construction (scripts/check-withrbac-binding.js guards that).
+ */
+const ACCESS_CALL = /\b(enforceCompanyAccess(?:Uniform)?|requireTenantAccess|assertTenantAccess|requireCompanyAccess|enforceRole|getUserCompanyRole|enforceOrgAccess|requireOrgAccess)\s*\(([^;]{0,400})/g;
+function accessCheckFor(token, before) {
+  if (!token) return -1;
+  const esc = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(^|[^\\w$.])${esc}(?![\\w$])`);
+  let at = -1;
+  for (const m of before.matchAll(ACCESS_CALL)) if (re.test(m[2])) at = m.index;
+  return at;
+}
+function provenanceOf(valueExpr, code, callIdx) {
+  const before = code.slice(Math.max(0, callIdx - 20000), callIdx);
+  const offset = Math.max(0, callIdx - 20000);
+  const checked = (token) => { const at = accessCheckFor(token, before); return at >= 0 ? { kind: 'checked', at: offset + at } : null; };
+  const rbac = /\bwithRBAC\s*\(/.test(code);
+  const direct = classifyExpr(valueExpr);
+  if (direct === 'safe') return { kind: 'safe' };
+  const root = (valueExpr.match(/^([A-Za-z_$][\w$]*)/) || [])[1];
+  if (direct === 'request') return checked(valueExpr) || checked(root) || (rbac ? { kind: 'checked-rbac' } : { kind: 'request' });
+  if (!root) return { kind: 'unresolved' };
+  const esc = root.replace(/\$/g, '\\$');
+  const decls = [
+    new RegExp(`(?:const|let|var)\\s+${esc}\\s*(?::[^=]{1,80})?=\\s*([^;\\n]{1,240})`, 'g'),
+    new RegExp(`(?:const|let|var)\\s*\\{[^}]*\\b${esc}\\b[^}]*\\}\\s*=\\s*([^;\\n]{1,240})`, 'g'),
+  ];
+  let last = null, lastIdx = -1;
+  for (const re of decls) for (const m of before.matchAll(re)) if (m.index > lastIdx) { lastIdx = m.index; last = m[1]; }
+  const hop = last == null ? null : classifyExpr(last.trim());
+  if (hop === 'safe') return { kind: 'safe' };
+  const chk = checked(root);
+  if (chk) return chk;
+  if (hop === 'request') return rbac ? { kind: 'checked-rbac' } : { kind: 'request' };
+  return { kind: 'unresolved' };
+}
+
 function walk(dir, out) {
   if (!fs.existsSync(dir)) return;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -125,12 +180,19 @@ function scan() {
       const pm = chain.match(predRe);
       const predicated = !!pm;
       const valueExpr = pm ? (pm[1] || pm[2] || '') : '';
-      const requestSourced = predicated && /\breq\.(body|query|params)\b|\bquery\.|\bbody\.|\bparams\./.test(valueExpr);
+      // 05: classify the VALUE by SOURCE with a safe-set, fail closed (one-hop trace through a local binding).
+      const prov = predicated ? provenanceOf(valueExpr.trim(), code, m.index) : null;
+      const provenance = prov ? prov.kind : null;
+      const provenanceAt = prov && prov.at != null ? `${rel}:${lineAt(prov.at)}` : null;
+      const requestSourced = provenance === 'request';
       // 05: an EMBEDDED select on a tenant chain escapes the predicate for outbound (belongs-to) embeds.
       const embed = /\.select\(\s*(['"`])((?:(?!\1).)*\()/.test(chain.replace(/->>?/g, ''));
       const base = { file: rel, line, table, kind, tag: spec.tag, area: areaOf(rel), mode: reg.direct.has(table) ? 'direct' : 'child', predicated, requestSourced, embed };
+      base.provenance = provenance;
+      if (provenanceAt) base.provenanceAt = provenanceAt;
       if (embed) findings.push({ rule: 'E', ...base });
       if (requestSourced) findings.push({ rule: 'R6', ...base });
+      else if (provenance === 'unresolved') findings.push({ rule: 'R7', ...base });
       if (!marker) { findings.push({ rule: 'R1', ...base }); continue; }
       const e = allow.get(marker);
       if (!e || e.file !== rel || !e.tables.includes(table)) findings.push({ rule: 'R2', marker, ...base });
@@ -146,11 +208,16 @@ function scan() {
 const stats = { windowCapHits: 0, markersCoveringSeveralCalls: 0 };
 // Pre-launch (owner 2026-11-12): all writes, money/pii/content reads, request-sourced predicates, embeds, and
 // unclassified tables (unknown until classified).
-const prelaunch = (f) => f.kind === 'write' || f.kind === 'context' || f.tag !== 'other' || f.rule === 'R6' || f.rule === 'E';
+const prelaunch = (f) => f.kind === 'write' || f.kind === 'context' || f.tag !== 'other' || f.rule === 'R6' || f.rule === 'E' || (f.rule === 'R7' && (f.kind === 'write' || f.tag !== 'other'));
 const { findings, unclassified, files } = scan();
 const by = (keyFn) => { const m = new Map(); for (const f of findings) { const k = keyFn(f); m.set(k, (m.get(k) || 0) + 1); } return [...m].sort((a, b) => b[1] - a[1]); };
 console.log(`[tenant-seam] scanned ${files} files: ${findings.length} findings (${findings.filter(prelaunch).length} pre-launch), ${[...unclassified.values()].reduce((a, b) => a + b, 0)} unclassified sites over ${unclassified.size} tables`);
 console.log(`  without ANY tenant predicate in the call chain: ${findings.filter((f) => f.rule === 'R1' && !f.predicated).length} (pre-launch ${findings.filter((f) => f.rule === 'R1' && !f.predicated && prelaunch(f)).length}; writes ${findings.filter((f) => f.rule === 'R1' && !f.predicated && f.kind === 'write').length})`);
+{
+  const p = findings.filter((f) => f.rule === 'R1' && f.predicated);
+  const c = (v) => p.filter((f) => f.provenance === v).length;
+  console.log(`  predicated sites by value provenance: safe ${c('safe')}, access-checked ${c('checked')}, withRBAC ${c('checked-rbac')}, request-unchecked ${c('request')} (R6), unresolved ${c('unresolved')} (R7, review; pre-launch ${findings.filter((f) => f.rule === 'R7' && prelaunch(f)).length})`);
+}
 console.log(`  request-sourced tenant predicates (R6): ${findings.filter((f) => f.rule === 'R6').length}; embedded selects on tenant chains (E): ${findings.filter((f) => f.rule === 'E').length}; unclassified-table sites (U): ${findings.filter((f) => f.rule === 'U').length}`);
 console.log(`  window self-check: ${stats.windowCapHits} chains hit the 600-char window with no terminator (rescanned to 2000), ${stats.markersCoveringSeveralCalls} markers sit within 3 lines of more than one tenant call`);
 console.log('  by area:', by((f) => f.area).map(([k, v]) => `${k}=${v}`).join(' '));
