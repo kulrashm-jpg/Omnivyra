@@ -30,6 +30,11 @@ const VIA_OVERRIDES = {
   media_files: ['campaign_id', 'campaigns'],
   content_assets: ['campaign_id', 'campaigns'],
   company_blog_series_posts: ['series_id', 'company_blog_series'], // e1 S2: every route op is keyed by SERIES (series/[id], series/index); the series is company-scoped. Blog ownership of referenced posts stays SEC-1's check.
+  // 55 S2 (2026-11-13): campaign_id NOT NULL, no FK declared; every access is by campaign id.
+  weekly_content_refinements: ['campaign_id', 'campaigns'], // schedulingService, campaignBlueprintService: always read by campaign_id
+  creator_execution_dead_letter_queue: ['campaign_id', 'campaigns'], // creatorExecutionObservabilityService: write-only, per campaign
+  creator_execution_metrics: ['campaign_id', 'campaigns'], // write-only, per campaign
+  creator_execution_summaries: ['campaign_id', 'campaigns'], // upsert-only, per campaign
 };
 /**
  * GLOBAL tables: no tenant at all (platform-wide content or system state). Reads/writes stay on ownedDbTable
@@ -45,6 +50,14 @@ const GLOBAL_TABLES = {
   blog_read_sessions: 'reads of the public platform blog',
   blog_performance_summary: 'public platform blog metrics',
   system_health_metrics: 'platform health telemetry',
+  // 55 S2 (2026-11-13): no tenant column, no tenant-owned rows.
+  creator_alert_state: 'creator ops alert dedup state, keyed by alert_key (platform alerting, no tenant rows)',
+  creator_cron_lease: 'creator cron lease rows keyed by job_name (worker infrastructure, no tenant data)',
+  creator_render_metrics: 'renderer telemetry keyed by metric_name / audit_id (platform ops)',
+  signal_clusters: 'platform-wide market signal clusters (topic + embedding; no tenant)',
+  strategic_themes: 'platform-wide intelligence themes; per-company relevance lives in theme_company_relevance (DIRECT)',
+  // No CREATE TABLE in supabase/ (schema only in contentArchitectSecurityService.ts:264): missing migration flagged.
+  content_architect_sessions: 'platform Content Architect access sessions keyed by token hash / user_id (no tenant rows)',
 };
 /** Tables that carry a tenant-named column but are NOT tenant-owned rows (global config or cross-tenant ledgers). */
 const NOT_TENANT = new Set([
