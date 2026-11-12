@@ -440,6 +440,11 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       claimPoint: 'scheduler',
       executionMode: action.execution_mode ?? null,
       correlationId,
+      // CLASS-2 A19: the guardrails are re-checked INSIDE the claim, atomically (canExecuteAction
+      // above ran outside any lock: a concurrent claimant could take the last unit in between). A
+      // guardrail refusal here leaves the row 'approved' with a refusal record; the next tick's
+      // canExecuteAction then marks it skipped, as before.
+      guardrailSource: 'scheduler',
     });
     if (!claim.claimed) {
       continue;

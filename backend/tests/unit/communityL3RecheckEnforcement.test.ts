@@ -19,7 +19,9 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => mockDb.from(t),
   ownedDbRpc: jest.fn(async (name: string, args: Record<string, any>) => {
     if (name === 'record_community_execution_refusal') return { data: true, error: null };
-    if (name !== 'claim_community_ai_action_for_execution') return { data: null, error: null };
+    // community_ai_claim_within_limits (A19) claims the same way here: this suite seeds no
+    // execution_guardrails row, so the guardrail half allows and the claim decides.
+    if (name !== 'claim_community_ai_action_for_execution' && name !== 'community_ai_claim_within_limits') return { data: null, error: null };
     const r = mockDb.tables.community_ai_actions.find((x: any) => x.id === args.p_action_id);
     if (!r || r.status !== 'approved') return { data: [{ claimed: false, code: 'CLAIM_CONFLICT', current_status: r?.status ?? null }], error: null };
     r.status = 'executing';

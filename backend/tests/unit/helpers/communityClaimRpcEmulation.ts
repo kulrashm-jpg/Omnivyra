@@ -13,6 +13,14 @@
  *     does). The check-and-set is synchronous, so N concurrent
  *     claimants still produce exactly one winner.
  *   record_community_execution_refusal(...) → appended to `refusals`.
+ *   community_ai_claim_within_limits(..., p_source) (20270217000021, CLASS-2 A19)
+ *     → a row that is missing / another tenant's / not 'approved' goes straight to
+ *     the claim (its codes); otherwise the execution_guardrails row of the
+ *     organization (none = no limits) is evaluated EXACTLY as the SQL does
+ *     (executed in the window + executing of any age; UTC day; per-post only for
+ *     'reply'; per-evaluation only for p_source 'evaluation'); a refusal records
+ *     once and returns (false, GUARDRAIL_*, status); else the claim, unchanged.
+ *     Count and claim run with no await between them (the SQL's advisory lock).
  *
  * It never opens anything the database would not: no evidence, no claim.
  */
@@ -39,7 +47,39 @@ export function communityRpcEmulation(
       const d = decide(args.p_org, args.p_tenant);
       return { data: [{ ...d, policy_version: 'test' }], error: null };
     }
+    if (name === 'community_ai_claim_within_limits') return claimWithinLimits(args);
     if (name !== 'claim_community_ai_action_for_execution') return { data: null, error: { message: `unexpected rpc ${name}` } };
+    return claim(args);
+  };
+  const claimWithinLimits = (args: Record<string, any>) => {
+    if (args.p_source !== 'evaluation' && args.p_source !== 'scheduler') {
+      return { data: null, error: { message: 'community_ai_claim_within_limits: invalid arguments' } };
+    }
+    const db = getDb();
+    const row = (db.tables.community_ai_actions || []).find((r: any) => r.id === args.p_action_id);
+    if (!row || row.organization_id !== args.p_org || row.tenant_id !== args.p_tenant || row.status !== 'approved') return claim(args);
+    const platform = String(row.platform ?? '').trim().toLowerCase();
+    const g = (db.tables.execution_guardrails || []).find((x: any) => x.company_id === args.p_org);
+    if (g) {
+      const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+      const tenMin = Date.now() - 10 * 60 * 1000;
+      const counted = (extra: (r: any) => boolean, since: number | null) => (db.tables.community_ai_actions || []).filter((r: any) =>
+        r.organization_id === args.p_org && r.platform === platform && extra(r)
+        && ((r.status === 'executed' && r.executed_at != null && (since == null || Date.parse(r.executed_at) >= since)) || r.status === 'executing')).length;
+      let code: string | null = null;
+      if (g.auto_execution_enabled === false) code = 'GUARDRAIL_AUTO_DISABLED';
+      if (!code && g.daily_platform_limit != null && counted(() => true, dayStart.getTime()) >= g.daily_platform_limit) code = 'GUARDRAIL_DAILY_PLATFORM_LIMIT';
+      if (!code && String(row.action_type ?? '').trim().toLowerCase() === 'reply' && g.per_post_reply_limit != null
+        && counted((r) => r.target_id === row.target_id && r.action_type === 'reply', null) >= g.per_post_reply_limit) code = 'GUARDRAIL_PER_POST_LIMIT';
+      if (!code && args.p_source === 'evaluation' && g.per_evaluation_limit != null && counted(() => true, tenMin) >= g.per_evaluation_limit) code = 'GUARDRAIL_PER_EVALUATION_LIMIT';
+      if (code) {
+        refusals.push({ action_id: row.id, claim_point: args.p_claim_point, code });
+        return { data: [{ claimed: false, code, current_status: row.status }], error: null };
+      }
+    }
+    return claim(args);
+  };
+  const claim = (args: Record<string, any>) => {
     claims.push(args);
     const db = getDb();
     const row = (db.tables.community_ai_actions || []).find((r: any) => r.id === args.p_action_id);

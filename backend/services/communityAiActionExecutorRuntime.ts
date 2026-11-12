@@ -15,7 +15,7 @@ import { recordCommunityExecutionRefusal } from './communityExecutionRefusal';
 import { evaluateCommunityApprovalEvidence, COMMUNITY_APPROVAL_EVIDENCE_COLUMNS } from './communityApprovalBinding';
 import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
-import { checkUsageBeforeExecution } from './usageEnforcementService';
+import { checkUsageBeforeExecution, releaseUsageReservation, type UsageReservation } from './usageEnforcementService';
 import { ownedDbTable, ownedDbRpc } from '../db/writeOwner';
 import { recheckCommunityRecipient, isRecipientRecheckRefusal } from './communityRecipientRecheck';
 
@@ -420,6 +420,9 @@ export const executeAction = async (
         claimPoint: options?.source === 'scheduler' ? 'scheduler' : options?.source === 'auto' ? 'auto'
           : options?.source === 'orchestration' ? 'orchestration' : 'manual',
         correlationId,
+        // CLASS-2 A19: an auto-rule run re-checks its guardrails INSIDE the claim, atomically
+        // (canExecuteAction ran earlier, outside any lock).
+        guardrailSource: options?.source === 'auto' ? 'evaluation' : undefined,
       });
       selfClaimed = c.claimed;
       claimLost = !c.claimed;
@@ -442,7 +445,11 @@ export const executeAction = async (
     return false;
   };
 
-  const runResult = await runExecution(action, approved, options, claim);
+  // A20: the plan-usage reservation taken by runExecution (if any) is settled here, once, whatever
+  // path the run took. A throw leaves it unreleased (it may have acted): it counts until its TTL.
+  const usage: UsageReservationHolder = { reservation: null };
+  const runResult = await runExecution(action, approved, options, claim, usage);
+  await settleUsageReservation(usage, runResult);
   runResult.correlation_id = correlationId;
   if (claimLost) {
     // Not claimed: another worker holds (or finished) the row (CLAIM_CONFLICT,
@@ -569,7 +576,9 @@ const runExecution = async (
   approved: boolean,
   options?: { notify?: boolean; webhook?: boolean; source?: 'manual' | 'auto' | 'scheduler' | 'bulk' | 'orchestration'; auto?: boolean },
   /** Atomic single-execution claim, run after every gate (see executeAction). */
-  claim?: (mode?: string) => Promise<boolean>
+  claim?: (mode?: string) => Promise<boolean>,
+  /** A20: receives the plan-usage reservation; executeAction settles it. */
+  usage?: UsageReservationHolder,
 ): Promise<ExecutionResult> => {
   // ── Prompt 3 policy and approval gate (OD-1, OD-3, LD-4, LD-7) ─────────────
   // Every refusal here is pre-claim and pre-dispatch: nothing acted, and the row
@@ -729,7 +738,13 @@ const runExecution = async (
     projected_increment: 1,
     // CLASS-2 A20: a real reply / DM is never sent on an unverifiable plan usage.
     failClosed: true,
+    // CLASS-2 A20: reserved atomically - concurrent sends can no longer each read the same meter.
+    reserve: { action_id: action.id },
   });
+  if (enforcement.allowed && enforcement.reservation) {
+    if (usage) usage.reservation = enforcement.reservation;
+    else await releaseUsageReservation(enforcement.reservation); // no holder: nothing could settle it
+  }
   if (!enforcement.allowed) {
     return {
       ok: false,
@@ -896,6 +911,25 @@ const runExecution = async (
   return result;
 };
 
+/** A20: the plan-usage reservation of one run. */
+type UsageReservationHolder = { reservation: UsageReservation | null };
+
+/**
+ * A20: settle a run's plan-usage reservation. Released when the meter now counts the send (executed
+ * / sent_unverified: recordUsage ran) or when nothing could have acted (may_have_acted false). Kept
+ * otherwise - a browser dispatch, a deferred RPA run, an uncertain outcome: it may have acted and the
+ * executor does not meter it, so the reservation counts until its TTL (erring toward refusing).
+ */
+async function settleUsageReservation(holder: UsageReservationHolder, result: ExecutionResult): Promise<void> {
+  const reservation = holder.reservation;
+  if (!reservation) return;
+  const metered = result.status === 'executed' || result.status === 'sent_unverified';
+  if (metered || result.may_have_acted === false) {
+    holder.reservation = null;
+    await releaseUsageReservation(reservation);
+  }
+}
+
 /** Executor entry points that claim through the single claim. */
 export type CommunityActionClaimPoint = 'manual' | 'scheduler' | 'auto' | 'orchestration' | 'rpa_retry';
 
@@ -907,7 +941,9 @@ export interface CommunityActionClaimResult {
    * (PLATFORM_KILL_SWITCH, POLICY_*), APPROVAL_REQUIRED,
    * APPROVAL_EVIDENCE_REQUIRED, APPROVAL_EXPIRED, CLAIM_CONFLICT (lost race
    * or not claimable; see currentStatus), ACTION_NOT_FOUND,
-   * TENANT_SCOPE_VIOLATION; or, from this wrapper, CLAIM_SCOPE_MISSING,
+   * TENANT_SCOPE_VIOLATION; with `guardrailSource`, a guardrail refusal
+   * (GUARDRAIL_AUTO_DISABLED, GUARDRAIL_DAILY_PLATFORM_LIMIT,
+   * GUARDRAIL_PER_POST_LIMIT, GUARDRAIL_PER_EVALUATION_LIMIT); or, from this wrapper, CLAIM_SCOPE_MISSING,
    * CLAIM_STATUS_UNSUPPORTED, IDEMPOTENCY_KEY_CONFLICT, CLAIM_STAMP_FAILED,
    * CLAIM_RPC_ERROR.
    */
@@ -948,6 +984,13 @@ export async function claimCommunityActionForExecution(input: {
   fromStatuses?: string[];
   /** Columns the manual execute route stamps with the claim. */
   stamp?: { execution_mode?: string; final_text?: string | null; idempotency_key?: string | null };
+  /**
+   * CLASS-2 A19: claim THROUGH the execution guardrails - community_ai_claim_within_limits
+   * (migration 20270217000021) re-checks the daily / per-post / per-evaluation limits and claims in
+   * one transaction under a per (organization, platform) lock, so two claimants can no longer both
+   * see room. 'scheduler' and 'evaluation' (auto-rules) are the sources the guardrails apply to.
+   */
+  guardrailSource?: 'scheduler' | 'evaluation';
 }): Promise<CommunityActionClaimResult> {
   const from = input.fromStatuses && input.fromStatuses.length > 0 ? input.fromStatuses : ['approved'];
   if (!input.actionId || !input.tenantId || !input.organizationId) {
@@ -956,14 +999,17 @@ export async function claimCommunityActionForExecution(input: {
   if (from.length !== 1 || from[0] !== 'approved') {
     return { claimed: false, code: 'CLAIM_STATUS_UNSUPPORTED', currentStatus: null };
   }
-  const { data, error } = await ownedDbRpc('claim_community_ai_action_for_execution', {
+  const claimArgs = {
     p_action_id: input.actionId,
     p_org: input.organizationId,
     p_tenant: input.tenantId,
     p_claim_point: input.claimPoint,
     p_execution_mode: input.executionMode ?? input.stamp?.execution_mode ?? null,
     p_correlation_id: input.correlationId ?? null,
-  });
+  };
+  const { data, error } = input.guardrailSource
+    ? await ownedDbRpc('community_ai_claim_within_limits', { ...claimArgs, p_source: input.guardrailSource })
+    : await ownedDbRpc('claim_community_ai_action_for_execution', claimArgs);
   if (error) {
     return { claimed: false, code: 'CLAIM_RPC_ERROR', currentStatus: null, error: (error as { message?: string }).message || 'claim failed' };
   }

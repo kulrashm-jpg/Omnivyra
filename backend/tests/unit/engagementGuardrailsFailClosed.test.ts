@@ -11,9 +11,11 @@
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (t: string) => require('../helpers/fakeWhatsappDb').fakeTable(t),
-    rpc: async () => ({ data: null, error: null }),
+    rpc: (name: string, args: unknown) => mockRpc(name, args),
   },
 }));
+// A20 reserve: usage_execution_reserve / usage_execution_release answers, per test.
+let mockRpc: (name: string, args: unknown) => Promise<{ data: unknown; error: { message: string } | null }> = async () => ({ data: null, error: null });
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => require('../helpers/fakeWhatsappDb').fakeTable(t),
 }));
@@ -25,6 +27,7 @@ import { failNext, fakeDb, resetFakeDb, type Row } from '../helpers/fakeWhatsapp
 import { canExecuteAction } from '../../services/executionGuardrailService';
 import { checkUsageBeforeExecution } from '../../services/usageEnforcementService';
 import { undoAutomationUsageIncrement } from '../../services/automation/automationService';
+import { releaseUsageReservation } from '../../services/usageEnforcementService';
 
 const ACTION = { id: 'a-new', company_id: 'co-a', organization_id: 'co-a', platform: 'linkedin', action_type: 'reply', target_id: 'post-1' };
 const act = (id: string, over: Row = {}): Row => ({ id, organization_id: 'co-a', platform: 'linkedin', action_type: 'reply', target_id: 'post-1', status: 'executed', executed_at: new Date().toISOString(), ...over });
@@ -90,6 +93,69 @@ describe('A20 plan usage', () => {
     seed();
     expect(await checkUsageBeforeExecution({ organization_id: 'co-a', resource_key: 'automation_executions', projected_increment: 1, failClosed: true }))
       .toEqual({ allowed: true });
+  });
+});
+
+describe('A20 plan usage RESERVED atomically (usage_execution_reserve, 20270217000021)', () => {
+  const seed = (meter = 0) => resetFakeDb({
+    organization_plan_assignments: [{ organization_id: 'co-a', plan_id: 'p1' }],
+    pricing_plans: [{ id: 'p1', enforcement_enabled: true, allow_overage: false, grace_percent: 50 }],
+    usage_meter_monthly: [{ organization_id: 'co-a', year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() + 1, automation_executions: meter }],
+  });
+  const reserve = () => checkUsageBeforeExecution({ organization_id: 'co-a', resource_key: 'automation_executions', projected_increment: 1, failClosed: true, reserve: { action_id: 'a-1' } });
+  const calls: Array<[string, any]> = [];
+  beforeEach(() => { calls.length = 0; });
+
+  it('asks the DATABASE (not the meter read) with the plan allowed_until (limit + grace) and this month', async () => {
+    seed(5);
+    mockRpc = async (name, args) => { calls.push([name, args]); return { data: [{ granted: true, reservation_id: 'r-1', used: 6 }], error: null }; };
+    expect(await reserve()).toEqual({ allowed: true, reservation: { id: 'r-1', organization_id: 'co-a' } });
+    expect(calls).toEqual([['usage_execution_reserve', expect.objectContaining({
+      p_org: 'co-a', p_action_id: 'a-1', p_allowed_until: 150, p_year: new Date().getUTCFullYear(), p_month: new Date().getUTCMonth() + 1, p_ttl_seconds: 86400,
+    })]]);
+  });
+
+  it('the database REFUSES (another send took the last unit) -> refused, even though the meter read showed room', async () => {
+    seed(5); // the meter read alone would allow
+    mockRpc = async () => ({ data: [{ granted: false, reservation_id: null, used: 150 }], error: null });
+    expect(await reserve()).toMatchObject({ allowed: false, limit: 100, current_usage: 150, allowed_until: 150 });
+  });
+
+  it('the reserve call FAILS -> refused (fail closed)', async () => {
+    seed(5);
+    mockRpc = async () => ({ data: null, error: { message: 'statement timeout' } });
+    expect(await reserve()).toMatchObject({ allowed: false, reason: 'usage_unverifiable' });
+  });
+
+  it('the reserve call answers NOTHING (null error, null data) -> refused, not "granted"', async () => {
+    seed(5);
+    mockRpc = async () => ({ data: null, error: null });
+    expect(await reserve()).toMatchObject({ allowed: false, reason: 'usage_unverifiable' });
+  });
+
+  it('reserve is refused for any other resource (it reserves ONE automation execution)', async () => {
+    await expect(checkUsageBeforeExecution({ organization_id: 'co-a', resource_key: 'llm_tokens', reserve: { action_id: 'a-1' } }))
+      .rejects.toThrow('reserve is only for automation_executions');
+  });
+
+  it('NEGATIVE CONTROL: overage allowed -> no reservation needed, none taken', async () => {
+    resetFakeDb({
+      organization_plan_assignments: [{ organization_id: 'co-a', plan_id: 'p1' }],
+      pricing_plans: [{ id: 'p1', enforcement_enabled: true, allow_overage: true, grace_percent: 0 }],
+      usage_meter_monthly: [],
+    });
+    mockRpc = async (name, args) => { calls.push([name, args]); return { data: null, error: null }; };
+    expect(await reserve()).toEqual({ allowed: true });
+    expect(calls).toEqual([]);
+  });
+
+  it('release: a failure is LOGGED by name and answers false (the reservation then counts until its TTL)', async () => {
+    mockRpc = async () => ({ data: null, error: { message: 'timeout' } });
+    expect(await releaseUsageReservation({ id: 'r-1', organization_id: 'co-a' })).toBe(false);
+    expect(console.error).toHaveBeenCalledWith('USAGE_RESERVATION_RELEASE_FAILED', expect.objectContaining({ reservation_id: 'r-1' }));
+    mockRpc = async (name, args) => { calls.push([name, args]); return { data: true, error: null }; };
+    expect(await releaseUsageReservation({ id: 'r-1', organization_id: 'co-a' })).toBe(true);
+    expect(calls).toEqual([['usage_execution_release', { p_reservation_id: 'r-1', p_org: 'co-a' }]]);
   });
 });
 

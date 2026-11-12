@@ -6,8 +6,19 @@
 import { supabase } from '../db/supabaseClient';
 import { resolveOrganizationPlanLimits } from './planResolutionService';
 
+/** A20: one reserved execution (usage_execution_reserve, migration 20270217000021). */
+export type UsageReservation = { id: string; organization_id: string };
+
 export type EnforcementResult =
-  | { allowed: true }
+  | {
+      allowed: true;
+      /**
+       * Set only when the caller asked to `reserve` and the plan is limited: the execution is counted
+       * against the plan from NOW. The caller must release it (releaseUsageReservation) once the
+       * meter counts the send, or when the send did not happen; otherwise it counts until its TTL.
+       */
+      reservation?: UsageReservation;
+    }
   | {
       allowed: false;
       resource_key: string;
@@ -18,6 +29,13 @@ export type EnforcementResult =
       /** Set when the usage could not be read and the caller asked to fail closed (numbers are 0). */
       reason?: 'usage_unverifiable';
     };
+
+/**
+ * A20: how long an unreleased reservation keeps counting. A send that may have acted but is not
+ * metered by the executor (a browser dispatch, a deferred RPA run, an uncertain outcome) is never
+ * released, so it counts for this long - erring toward refusing, never toward a second grant.
+ */
+const RESERVATION_TTL_SECONDS = 24 * 60 * 60;
 
 function currentYearMonth(): { year: number; month: number } {
   const now = new Date();
@@ -64,7 +82,18 @@ export async function checkUsageBeforeExecution(params: {
    * the external API keep the historical allow-on-error behaviour until their owner decides.
    */
   failClosed?: boolean;
+  /**
+   * CLASS-2 A20 (e9 sweep): RESERVE the execution atomically instead of only reading the meter.
+   * Reading allowed N concurrent sends to each see the same meter and all send (the meter is
+   * incremented only after a send). With `reserve`, usage_execution_reserve counts the meter + live
+   * reservations under a per (organization, month) lock and writes a reservation within the limit.
+   * Only for resource 'automation_executions', projected_increment 1.
+   */
+  reserve?: { action_id: string; ttl_seconds?: number };
 }): Promise<EnforcementResult> {
+  if (params.reserve && (params.resource_key !== 'automation_executions' || (params.projected_increment ?? 1) !== 1)) {
+    throw new Error('checkUsageBeforeExecution: reserve is only for automation_executions with projected_increment 1');
+  }
   // ALLOW-ON-ERROR, MEASURED (owner ruling via e9, 2026-11-12): callers that did not opt into
   // failClosed (the LLM gateway, the external API) are still allowed when usage cannot be read - but
   // never silently. Every such allow logs at ERROR with ONE stable marker, so how often the accepted
@@ -121,10 +150,39 @@ export async function checkUsageBeforeExecution(params: {
     const projected = params.projected_increment ?? 0;
     const allowedUntil = limit * (1 + gracePercent / 100);
 
-    if (currentUsage + projected <= allowedUntil) {
+    if (allowOverage) {
       return { allowed: true };
     }
-    if (allowOverage) {
+
+    if (params.reserve) {
+      const { data, error } = await supabase.rpc('usage_execution_reserve', {
+        p_org:           params.organization_id,
+        p_year:          year,
+        p_month:         month,
+        p_action_id:     params.reserve.action_id,
+        p_allowed_until: allowedUntil,
+        p_ttl_seconds:   params.reserve.ttl_seconds ?? RESERVATION_TTL_SECONDS,
+      });
+      if (error) return params.failClosed ? unverifiable(`reserve: ${error.message}`) : allowedUnverified(`reserve: ${error.message}`);
+      const row = (Array.isArray(data) ? data[0] : data) as { granted?: unknown; reservation_id?: unknown; used?: unknown } | null;
+      // A null error is not an answer (postgrest-js can answer a blank response with error: null).
+      if (!row || typeof row.granted !== 'boolean' || (row.granted && typeof row.reservation_id !== 'string')) {
+        return params.failClosed ? unverifiable('reserve: no answer') : allowedUnverified('reserve: no answer');
+      }
+      if (row.granted) {
+        return { allowed: true, reservation: { id: row.reservation_id as string, organization_id: params.organization_id } };
+      }
+      return {
+        allowed: false,
+        resource_key: params.resource_key,
+        limit,
+        current_usage: Number(row.used ?? currentUsage),
+        allowed_until: allowedUntil,
+        grace_percent: gracePercent,
+      };
+    }
+
+    if (currentUsage + projected <= allowedUntil) {
       return { allowed: true };
     }
 
@@ -139,5 +197,27 @@ export async function checkUsageBeforeExecution(params: {
   } catch (error: any) {
     if (params.failClosed) return unverifiable(error?.message ?? String(error));
     return allowedUnverified(error?.message ?? String(error));
+  }
+}
+
+/**
+ * A20: release a reservation - the meter now counts the send, or the send did not happen. A failed
+ * release is logged (USAGE_RESERVATION_RELEASE_FAILED) and the reservation counts until its TTL:
+ * erring toward refusing, never toward a second grant. Never throws.
+ */
+export async function releaseUsageReservation(reservation: UsageReservation): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc('usage_execution_release', {
+      p_reservation_id: reservation.id,
+      p_org:            reservation.organization_id,
+    });
+    if (error) {
+      console.error('USAGE_RESERVATION_RELEASE_FAILED', { reservation_id: reservation.id, organization_id: reservation.organization_id, error: error.message });
+      return false;
+    }
+    return data === true;
+  } catch (error: any) {
+    console.error('USAGE_RESERVATION_RELEASE_FAILED', { reservation_id: reservation.id, organization_id: reservation.organization_id, error: error?.message ?? String(error) });
+    return false;
   }
 }
