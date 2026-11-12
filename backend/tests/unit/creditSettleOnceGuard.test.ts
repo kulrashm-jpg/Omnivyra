@@ -115,3 +115,37 @@ it('control: hold / grant / expire phases are not checked (no parent settlement 
   const r = await callCreditReservation({ orgId: 'o1', phase: 'grant', split: SPLIT, idempotencyKey: 'g1', referenceType: 'x', note: 'n', performedBy: 'u' });
   expect(r.error).toBeNull();
 });
+
+// COVERAGE BOUND (05, 2026-11-12): a settlement with a NULL parent under a
+// DIFFERENT key family is invisible to both checks. This pins the bound
+// HONESTLY (it is NOT refused) so nobody reads the guard as complete coverage;
+// the guarded function's mandatory parent closes it.
+it('KNOWN BOUND: a NULL-parent settlement under a different key family is NOT detected (closed only by the guarded function)', async () => {
+  mockLedger.push({ id: 'x1', idempotency_key: 'retry:k:lineage1:release', execution_phase: 'release', parent_transaction_id: null });
+  const r = await settle('confirm', 'k:confirm');
+  expect(r.error).toBeNull();
+});
+
+// The chokepoint is only a chokepoint while nothing else calls the RPCs.
+it('fs: apply_credit_reservation / apply_credit_partial_confirm are called ONLY via the repository (expiry services excepted - no HOLD)', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const ROOT = path.resolve(__dirname, '../../..');
+  const out: string[] = [];
+  const walk = (d: string) => {
+    let es: import('fs').Dirent[] = [];
+    try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      if (['node_modules', '.next', 'tests', '__tests__'].includes(e.name)) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx|js)$/.test(e.name) && /rpc\(\s*['"]apply_credit_(reservation|partial_confirm)['"]/.test(fs.readFileSync(p, 'utf8'))) out.push(path.relative(ROOT, p).split(path.sep).join('/'));
+    }
+  };
+  for (const d of ['backend', 'pages', 'lib', 'shared', 'app']) walk(path.join(ROOT, d));
+  expect(out.sort()).toEqual([
+    'backend/repositories/creditExecutionRepository.ts',
+    'backend/services/creditExpiryService.ts',
+    'backend/services/subscriptionCreditExpiryService.ts',
+  ]);
+});

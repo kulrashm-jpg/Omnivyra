@@ -65,10 +65,19 @@ export interface CreditPartialConfirmCommand {
  *   - by parent:   credit_transactions.parent_transaction_id = <hold id>
  *   - by key family: <base>:confirm / <base>:release (holds settled before
  *     parent ids were always written)
- * A settlement under the SAME key passes through (the RPC returns it). A read
- * error refuses. NOT atomic (two different-key settles in the same instant can
- * both pass) - the post-check below detects that and raises CRITICAL; the DB
- * guard (apply_credit_reservation_guarded) closes it.
+ * A settlement under the SAME key passes through (apply_credit_reservation's
+ * live body returns the existing row for a repeated key). A read error refuses.
+ * NOT atomic (two different-key settles in the same instant can both pass) -
+ * the post-check below detects that and logs CRITICAL; the DB guard
+ * (apply_credit_reservation_guarded) closes it.
+ * COVERAGE BOUND (05): the guard relates settlements by SAME PARENT or SAME KEY
+ * FAMILY. A settlement with a NULL parent_transaction_id under a DIFFERENT key
+ * family (e.g. a safeRetry `retry:<key>:<lineage>` base) is invisible to both
+ * and is NOT refused - prod does not require p_parent_id (a 20260625 guard
+ * that was never installed). Closing that needs the mandatory parent of the
+ * guarded function; until then this is not complete coverage.
+ * apply_credit_partial_confirm: its prod body matches NO repo version (83/C20);
+ * nothing here assumes how it behaves internally - the refusal is app-side.
  */
 const SETTLE_PHASES = ['confirm', 'release'] as const;
 
