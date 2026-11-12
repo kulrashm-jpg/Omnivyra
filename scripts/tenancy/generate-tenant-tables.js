@@ -58,6 +58,13 @@ const GLOBAL_TABLES = {
   strategic_themes: 'platform-wide intelligence themes; per-company relevance lives in theme_company_relevance (DIRECT)',
   // No CREATE TABLE in supabase/ (schema only in contentArchitectSecurityService.ts:264): missing migration flagged.
   content_architect_sessions: 'platform Content Architect access sessions keyed by token hash / user_id (no tenant rows)',
+  // e9 rulings (2026-11-13): ops mirrors / ops state, never read for tenant data. The three render-mirror tables
+  // are pinned by backend/tests/unit/s2RenderMirrorTablesNotTenantFacing.test.ts (no pages/api reference).
+  creator_render_jobs: 'durable ops mirror of BullMQ render jobs; tenant only inside payload JSON; never read for tenant data (tenant reads use creator_render_job)',
+  creator_render_job_events: 'ops event log of the creator_render_jobs mirror; never read for tenant data',
+  creator_render_validation_manifests: 'ops validation manifests of the creator_render_jobs mirror; never read for tenant data',
+  creator_dead_letter_jobs: 'creator publish dead-letter queue (operator view, worker-written)',
+  creator_upload_rate_state: 'upload abuse-guard rate buckets (system-written; polymorphic user/company/plan scope)',
 };
 /** Tables that carry a tenant-named column but are NOT tenant-owned rows (global config or cross-tenant ledgers). */
 const NOT_TENANT = new Set([
