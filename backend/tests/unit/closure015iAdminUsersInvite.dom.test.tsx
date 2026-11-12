@@ -90,15 +90,18 @@ describe('/admin/users invite → governed /api/admin/invite-user', () => {
     render(<AdminUsersPage />);
     const select = screen.getByDisplayValue('CONTENT_CREATOR') as HTMLSelectElement;
     const options = Array.from(select.options).map((o) => o.value);
-    expect(options).toEqual(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY', 'COMPANY_ADMIN']);
-    for (const legacy of ['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'ADMIN']) expect(options).not.toContain(legacy);
+    // R4 (e9 2026-11-12): + the four content roles (invitations_role_check, 20270217000010).
+    expect(options).toEqual(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY', 'CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER', 'COMPANY_ADMIN']);
+    // the four content roles are now REAL and invitable; only the ADMIN alias and SUPER_ADMIN stay out.
+    for (const refused of ['ADMIN', 'SUPER_ADMIN']) expect(options).not.toContain(refused);
   });
 
   it('a company-admin viewer is not offered COMPANY_ADMIN', async () => {
     mockContext.userRole = 'ADMIN';
     render(<AdminUsersPage />);
     const options = Array.from((screen.getByDisplayValue('CONTENT_CREATOR') as HTMLSelectElement).options).map((o) => o.value);
-    expect(options).toEqual(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY']);
+    expect(options).toEqual(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY', 'CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER']);
+    expect(options).not.toContain('COMPANY_ADMIN');
   });
 
   it('the selected governed role is sent', async () => {

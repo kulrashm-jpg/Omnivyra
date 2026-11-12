@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import { performSuperAdminWrite, freshIdempotencyHeaders } from '@/lib/security/superAdminWrite';
+import { NON_ADMIN_TENANT_ROLES } from '../../shared/rbac/tenantRoles';
 
 type UserRow = {
   user_id: string;
@@ -9,17 +10,16 @@ type UserRow = {
   role: string | null;
 };
 
-const ROLE_OPTIONS = [
-  'CONTENT_MANAGER',
-  'CONTENT_PLANNER',
-  'CONTENT_CREATOR',
-  'CONTENT_ENGAGER',
-];
+// Roles Approach A, R4 (e9 2026-11-12): every non-admin tenant role, from the ONE
+// shared list (shared/rbac/tenantRoles) - previously VIEWER / REVIEWER / PUBLISHER
+// / VIEW_ONLY were missing here.
+const ROLE_OPTIONS: string[] = [...NON_ADMIN_TENANT_ROLES];
 
 // Closure-015I (F-3): invitations use the governed invitation vocabulary
 // (POST /api/admin/invite-user VALID_ROLES = invitations_role_check). COMPANY_ADMIN
 // is offered to super-admin viewers only, as ADMIN was before.
-const INVITE_ROLE_OPTIONS = ['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY'];
+// R4: the non-admin invitable roles, incl. the four content roles (20270217000010).
+const INVITE_ROLE_OPTIONS: string[] = [...NON_ADMIN_TENANT_ROLES];
 
 export default function AdminUsersPage() {
   const {
@@ -39,7 +39,7 @@ export default function AdminUsersPage() {
   const canManageUsers = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
   const roleOptions = useMemo(() => {
     if (userRole === 'SUPER_ADMIN') {
-      return [...ROLE_OPTIONS, 'ADMIN'];
+      return [...ROLE_OPTIONS, 'COMPANY_ADMIN']; // R3: the ADMIN alias is refused by the server; offer the canonical name
     }
     return ROLE_OPTIONS;
   }, [userRole]);

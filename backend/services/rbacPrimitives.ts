@@ -1,4 +1,8 @@
 import { supabase } from '../db/supabaseClient';
+import {
+  NON_ADMIN_TENANT_ROLES as SHARED_NON_ADMIN_TENANT_ROLES,
+  INVITABLE_TENANT_ROLES as SHARED_INVITABLE_TENANT_ROLES,
+} from '../../shared/rbac/tenantRoles';
 
 export const Role = {
   SUPER_ADMIN: 'SUPER_ADMIN',
@@ -27,16 +31,7 @@ export type Role = (typeof Role)[keyof typeof Role];
  * keep their identity, authorised by ROLE_BASE_TIERS below) and R2 (explicit
  * ROLE_CAPABILITIES entries, since CapabilityService reads the RAW role).
  */
-export const NON_ADMIN_TENANT_ROLES = [
-  Role.CONTENT_CREATOR,
-  Role.CONTENT_REVIEWER,
-  Role.CONTENT_PUBLISHER,
-  Role.VIEW_ONLY,
-  Role.CONTENT_MANAGER,
-  Role.CONTENT_PLANNER,
-  Role.CONTENT_ENGAGER,
-  Role.VIEWER,
-] as const;
+export const NON_ADMIN_TENANT_ROLES: ReadonlyArray<Role> = SHARED_NON_ADMIN_TENANT_ROLES; // the SAME object as shared/rbac/tenantRoles
 
 /**
  * The roles an INVITATION may carry = invitations_role_check (widened by
@@ -45,7 +40,7 @@ export const NON_ADMIN_TENANT_ROLES = [
  * path keeps its own copy and none SILENTLY downgrades a role. SUPER_ADMIN is
  * never invitable (identity.admin.assign only); ADMIN is a legacy alias only.
  */
-export const INVITABLE_TENANT_ROLES = [Role.COMPANY_ADMIN, ...NON_ADMIN_TENANT_ROLES] as const;
+export const INVITABLE_TENANT_ROLES: ReadonlyArray<Role> = SHARED_INVITABLE_TENANT_ROLES; // shared/rbac/tenantRoles
 
 /**
  * ROLES APPROACH A (owner ruling via e9, 2026-11-12). CONTENT_MANAGER,
@@ -60,20 +55,8 @@ export const INVITABLE_TENANT_ROLES = [Role.COMPANY_ADMIN, ...NON_ADMIN_TENANT_R
  * No tier is an admin role: none of the four reaches team / users / roles /
  * external APIs / billing / org, because no admin role is a tier.
  */
-export const ROLE_BASE_TIERS: Readonly<Record<string, ReadonlyArray<Role>>> = {
-  [Role.VIEWER]: [Role.VIEW_ONLY],
-  [Role.CONTENT_ENGAGER]: [Role.VIEW_ONLY],
-  [Role.CONTENT_PLANNER]: [Role.CONTENT_CREATOR],
-  [Role.CONTENT_MANAGER]: [Role.CONTENT_CREATOR, Role.CONTENT_PUBLISHER, Role.CONTENT_REVIEWER],
-};
-
-/** The role itself plus its base tiers (the set an allow-list is matched against). */
-export const roleAndTiers = (role: string | null | undefined): string[] =>
-  role ? [role, ...(ROLE_BASE_TIERS[role] ?? [])] : [];
-
-/** True when `allowed` names the role or one of its base tiers ('*' allows any role). */
-export const roleSatisfies = (role: string | null | undefined, allowed: ReadonlyArray<string>): boolean =>
-  !!role && (allowed.includes('*') || roleAndTiers(role).some((r) => allowed.includes(r)));
+// The model lives in shared/rbac/tenantRoles (pure; the client imports it too).
+export { ROLE_BASE_TIERS, roleAndTiers, roleSatisfies } from '../../shared/rbac/tenantRoles';
 
 /** Only the legacy ADMIN alias is rewritten; the four content roles keep their identity. */
 export const normalizePermissionRole = (role: string) => {

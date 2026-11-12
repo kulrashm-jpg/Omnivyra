@@ -1,6 +1,7 @@
 /**
  * Role-based visibility helpers for UI sections only.
- * No backend enforcement; default unknown role → ADMIN behavior.
+ * No backend enforcement. R4 (e9 2026-11-12): an unknown / empty role gets the
+ * LEAST-privileged view ('NONE' - every section hidden), never ADMIN.
  */
 
 export type UserRole =
@@ -8,7 +9,8 @@ export type UserRole =
   | 'CREATOR'
   | 'CONTENT_MANAGER'
   | 'CMO'
-  | 'SYSTEM';
+  | 'SYSTEM'
+  | 'NONE';
 
 /** CMO strip (Execution Risk, Capacity Fit, Momentum): ADMIN, CMO, CONTENT_MANAGER, SYSTEM = true; CREATOR = false. */
 export function canViewCMOLayer(role: UserRole | string | null | undefined): boolean {
@@ -29,8 +31,8 @@ export function canViewSystemFields(role: UserRole | string | null | undefined):
 }
 
 function normalizeRole(role: UserRole | string | null | undefined): UserRole {
-  if (role == null || typeof role !== 'string' || !role.trim()) return 'ADMIN';
+  if (role == null || typeof role !== 'string' || !role.trim()) return 'NONE';
   const r = role.trim().toUpperCase() as UserRole;
   const valid: UserRole[] = ['ADMIN', 'CREATOR', 'CONTENT_MANAGER', 'CMO', 'SYSTEM'];
-  return valid.includes(r) ? r : 'ADMIN';
+  return valid.includes(r) ? r : 'NONE';
 }

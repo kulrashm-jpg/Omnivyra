@@ -26,6 +26,7 @@ import { singleFlight } from '../lib/auth/singleFlightRefresh';
 import { apiFetch } from '../lib/apiFetch';
 import { verifySessionInBackground } from '../lib/auth/optimisticSession';
 import { markAuthActivation } from '../lib/observability/clientPerf';
+import { roleSatisfies } from '../shared/rbac/tenantRoles';
 
 /**
  * Retry-guard configuration for the /api/company-profile?mode=list probe.
@@ -91,10 +92,9 @@ const normalizeCompanyRole = (role?: string | null) => {
   // Real platform super admins authenticate via the super-admin cookie path
   // (loadContentArchitectContext), not via normal Supabase auth. Downgrade silently.
   if (upper === 'SUPER_ADMIN') return 'COMPANY_ADMIN';
-  if (upper === 'CONTENT_MANAGER') return 'CONTENT_CREATOR';
-  if (upper === 'CONTENT_PLANNER') return 'CONTENT_CREATOR';
-  if (upper === 'CONTENT_ENGAGER') return 'VIEW_ONLY';
-  if (upper === 'VIEWER') return 'VIEW_ONLY';
+  // Roles Approach A (e9 2026-11-12): CONTENT_MANAGER / PLANNER / ENGAGER / VIEWER
+  // keep their identity; hasPermissionForRole authorises them through the SAME
+  // base tiers the server uses (shared/rbac/tenantRoles).
   return upper;
 };
 
@@ -104,14 +104,15 @@ const permissionMatrix: Record<PermissionAction, string[]> = {
   APPROVE_CONTENT: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'CONTENT_REVIEWER'],
   SCHEDULE_CONTENT: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'CONTENT_PUBLISHER'],
   CREATE_CONTENT: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'CONTENT_CREATOR'],
-  ENGAGE: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'VIEW_ONLY'],
+  // CONTENT_ENGAGER = VIEW_ONLY + engagement (e9 2026-11-12); VIEWER reaches ENGAGE via VIEW_ONLY, as before.
+  ENGAGE: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'VIEW_ONLY', 'CONTENT_ENGAGER'],
   MANAGE_EXTERNAL_APIS: ['SUPER_ADMIN', 'COMPANY_ADMIN'],
   VIEW_OMNIVYRA: ['SUPER_ADMIN'],
 };
 
 const hasPermissionForRole = (role: string, action: PermissionAction) => {
   if (!role) return false;
-  return permissionMatrix[action].includes(role);
+  return roleSatisfies(role, permissionMatrix[action]); // role OR its base tier (shared model)
 };
 
 type CompanyContextValue = {

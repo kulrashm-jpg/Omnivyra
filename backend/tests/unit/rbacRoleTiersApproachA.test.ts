@@ -119,3 +119,23 @@ it('R3: the user_company_roles CHECK in 20270217000011 == every canonical Role v
   expect(mig).toEqual((Object.values(Role) as string[]).filter((r) => r !== 'ADMIN').sort());
 });
 
+// R4 - ONE model for client and server: rbacPrimitives re-exports the SAME objects.
+it('R4: server re-exports ARE the shared objects (client and API cannot drift)', () => {
+  const shared = jest.requireActual('../../../shared/rbac/tenantRoles');
+  const prims = jest.requireActual('../../services/rbacPrimitives');
+  expect(prims.NON_ADMIN_TENANT_ROLES).toBe(shared.NON_ADMIN_TENANT_ROLES);
+  expect(prims.INVITABLE_TENANT_ROLES).toBe(shared.INVITABLE_TENANT_ROLES);
+  expect(prims.ROLE_BASE_TIERS).toBe(shared.ROLE_BASE_TIERS);
+  expect(prims.roleSatisfies).toBe(shared.roleSatisfies);
+});
+
+it('R4: roleVisibility gives an unknown / empty role the LEAST-privileged view (never ADMIN)', () => {
+  const v = jest.requireActual('../../../utils/roleVisibility');
+  for (const r of [null, undefined, '', 'VIEWER', 'CONTENT_ENGAGER', 'not-a-role']) {
+    expect(v.canViewCMOLayer(r)).toBe(false);
+    expect(v.canViewCreatorBrief(r)).toBe(false);
+    expect(v.canViewSystemFields(r)).toBe(false);
+  }
+  expect(v.canViewCMOLayer('ADMIN')).toBe(true); // control: a known role still sees its sections
+});
+
