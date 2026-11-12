@@ -96,14 +96,26 @@ export async function resolveEnforcementMode(
   return { mode: 'off', reason: 'default_off' };
 }
 
+/** Refusal reasons that are NOT a credit shortfall, with their own client code. */
+const NON_CREDIT_REFUSALS: Record<string, { code: string; message: string }> = {
+  // phase2RouteWiring: too many failed (released) attempts for one request in
+  // one replay window. Telling the user "insufficient credits" would be false.
+  attempt_limit: {
+    code: 'RETRY_LIMIT_REACHED',
+    message: 'Too many failed attempts for this request. Please wait a few minutes and try again.',
+  },
+};
+
 export class PaymentRequiredError extends Error {
-  readonly code = 'INSUFFICIENT_CREDITS';
+  readonly code: string;
   readonly httpStatus = 402;
   constructor(
     public readonly surface: BillingSurface,
     public readonly detail?: string,
   ) {
-    super(detail || 'Insufficient credits for this action.');
+    const nonCredit = detail ? NON_CREDIT_REFUSALS[detail] : undefined;
+    super(nonCredit?.message ?? (detail || 'Insufficient credits for this action.'));
+    this.code = nonCredit?.code ?? 'INSUFFICIENT_CREDITS';
     this.name = 'PaymentRequiredError';
   }
 }
@@ -167,7 +179,9 @@ export async function runWithPhase2Enforcement<T>(args: {
   // mode === 'enforce'
   const outcome = await args.enforce();
   if (!outcome.ok) {
-    incrCounter('billing_operations_insufficient');
+    // Only a real shortfall counts as "insufficient" (an attempt-limit refusal
+    // is counted by phase2RouteWiring under its own name).
+    if (outcome.reason !== 'attempt_limit') incrCounter('billing_operations_insufficient');
     throw new PaymentRequiredError(args.surface, outcome.reason);
   }
   return outcome.result as T;

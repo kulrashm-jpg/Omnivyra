@@ -41,8 +41,11 @@ import { logger } from '../logger';
  * Now: the key carries a REPLAY WINDOW bucket (10 min) and an ATTEMPT counter.
  *  - already_released -> the next attempt key (a retry after a failure is
  *    charged exactly once);
- *  - already_confirmed / already_settled -> a free replay, but only inside the
- *    window; a new window is a new key, so a later identical request charges.
+ *  - already_confirmed / already_settled -> a free replay, but only until the
+ *    END OF THE CURRENT 10-minute bucket. The bucket is a FIXED clock grid
+ *    (floor(now / 10 min)), NOT a sliding window from first use: a request at
+ *    09:59:59 gets ~1 second of free replay. A later identical request (new
+ *    bucket = new key) is charged.
  * referenceId itself (ledger lineage) is unchanged; only the idempotency key
  * moves. A retry that straddles a window boundary is charged again (accepted).
  */
@@ -146,6 +149,7 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
         attempt += 1;
         if (attempt >= MAX_ATTEMPTS_PER_WINDOW) {
           logger.error('phase2_route_attempt_limit', { surface: args.surface, org: args.organizationId, attempts: attempt });
+          incrCounter('phase2_route_attempt_limit');
           return { ok: false, reason: 'attempt_limit' };
         }
         result = await runAttempt(attempt);

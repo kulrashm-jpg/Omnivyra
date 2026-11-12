@@ -7,6 +7,12 @@
  * an executor error releases the hold and rethrows; a later call on a
  * released key returns already_released; a confirmed key returns
  * already_confirmed. Charges are counted per confirm.
+ *
+ * The fake models TWO of the engine's three per-key states (05): confirmed and
+ * released. The third - an orphaned HOLD (process died between hold and
+ * settle) - is neither; executeWithCredits reuses that hold and executes
+ * (RuntimeCore :183), the status is never already_released, so the attempt
+ * loop does not advance and exactly one charge results. No case needed.
  */
 const ledger = new Map<string, 'confirmed' | 'released'>();
 let charges = 0;
@@ -115,4 +121,19 @@ it('different users of one org are separate keys (each charged)', async () => {
   await wirePhase2Route({ ...ARGS, run: ok() });
   await wirePhase2Route({ ...ARGS, userId: 'user-2', run: ok() });
   expect(charges).toBe(2);
+});
+
+it('attempt_limit is NOT reported as a credit shortfall (own code + own counter)', async () => {
+  const { PaymentRequiredError } = jest.requireActual('../../services/billing/phase2EnforcementGate');
+  const e = new PaymentRequiredError('s', 'attempt_limit');
+  expect(e.code).toBe('RETRY_LIMIT_REACHED');
+  expect(e.message).toMatch(/Too many failed attempts/);
+  expect(new PaymentRequiredError('s', 'insufficient_credits').code).toBe('INSUFFICIENT_CREDITS');
+  const { incrCounter } = jest.requireMock('../../services/billing/billingMetrics');
+  (incrCounter as jest.Mock).mockClear();
+  for (let i = 0; i < MAX_ATTEMPTS_PER_WINDOW; i++) {
+    await expect(wirePhase2Route({ ...ARGS, run: boom() })).rejects.toThrow();
+  }
+  await expect(wirePhase2Route({ ...ARGS, run: ok() })).rejects.toThrow();
+  expect(incrCounter).toHaveBeenCalledWith('phase2_route_attempt_limit');
 });
