@@ -371,19 +371,30 @@ export async function safeRetryOperation(args: SafeRetryArgs): Promise<SafeRetry
     return { ok: false, code: 'REASON_REQUIRED', message: 'reason required' };
   }
 
-  const idemKey = await readIdempotencyKey(args.surface, args.id);
+  // FAIL CLOSED (e1, 2026-11-12, BLOCKING money): every read below is a SAFETY check. A read error is "unknown",
+  // never "absent" - the former code treated an errored settlement read as "no settlement" and minted a fresh key,
+  // so an operation the ledger had already CONFIRMED could be charged a second time.
+  let idemKey: string | null;
+  try {
+    idemKey = await readIdempotencyKey(args.surface, args.id);
+  } catch (err) {
+    return { ok: false, code: 'FAILED', message: `could not read the operation's idempotency key: ${err instanceof Error ? err.message : String(err)}` };
+  }
   if (!idemKey) {
     return { ok: false, code: 'NOT_FOUND', message: `no idempotency_key bound to ${args.surface}:${args.id}` };
   }
 
   // 1+2. COMPLETED settlement / ledger mutation check — any CONFIRM or GRANT
   //      row for this key means money already moved; retry is forbidden.
-  const { data: settled } = await supabase
+  const { data: settled, error: settledErr } = await supabase
     .from('credit_transactions')
     .select('id, execution_phase')
     .in('idempotency_key', [idemKey, `${idemKey}:confirm`])
     .in('execution_phase', ['confirm', 'grant'])
     .limit(1);
+  if (settledErr) {
+    return { ok: false, code: 'FAILED', message: `Refusing retry: settlement state could not be verified (${settledErr.message}).` };
+  }
   if (settled && settled.length > 0) {
     return {
       ok: false,
@@ -544,25 +555,34 @@ export async function checkFinancialDrift(surface: StuckOperation['surface'], id
 
   // For billing_operations + job_execution_registry: check whether the
   // bound idempotency_key has an unreaped HOLD in credit_transactions.
-  const idemKey = await readIdempotencyKey(surface, id);
+  // FAIL CLOSED (e1, 2026-11-12): a read error is reported as drift - never as "no HOLD" - so recover /
+  // safe-retry refuse and reconciliation flags manual review instead of acting on an unverified ledger.
+  let idemKey: string | null;
+  try {
+    idemKey = await readIdempotencyKey(surface, id);
+  } catch {
+    return 'drift_detected';
+  }
   if (!idemKey) return 'ok';
 
   // Check for HOLD with no sibling CONFIRM/RELEASE
-  const { data: holdRows } = await supabase
+  const { data: holdRows, error: holdErr } = await supabase
     .from('credit_transactions')
     .select('id')
     .eq('idempotency_key', `${idemKey}:hold`)
     .eq('execution_phase', 'hold')
     .limit(1);
+  if (holdErr) return 'drift_detected';
   if (!holdRows || holdRows.length === 0) return 'ok';  // no HOLD → no drift risk
 
   const holdId = String((holdRows[0] as { id: string }).id);
-  const { data: siblings } = await supabase
+  const { data: siblings, error: siblingErr } = await supabase
     .from('credit_transactions')
     .select('id, execution_phase')
     .eq('parent_transaction_id', holdId)
     .in('execution_phase', ['confirm', 'release'])
     .limit(1);
+  if (siblingErr) return 'drift_detected';
 
   if (!siblings || siblings.length === 0) {
     // HOLD with no terminal sibling → reaper must run first
@@ -571,13 +591,11 @@ export async function checkFinancialDrift(surface: StuckOperation['surface'], id
   return 'ok';
 }
 
+/** The operation's bound key; null when the row has none. THROWS on a read error (a safety read is never "absent"). */
 async function readIdempotencyKey(surface: StuckOperation['surface'], id: string): Promise<string | null> {
-  if (surface === 'billing_operations') {
-    const { data } = await supabase.from('billing_operations').select('idempotency_key').eq('id', id).maybeSingle();
-    return (data as { idempotency_key?: string } | null)?.idempotency_key ?? null;
-  }
-  if (surface === 'job_execution_registry') {
-    const { data } = await supabase.from('job_execution_registry').select('idempotency_key').eq('id', id).maybeSingle();
+  if (surface === 'billing_operations' || surface === 'job_execution_registry') {
+    const { data, error } = await supabase.from(surface).select('idempotency_key').eq('id', id).maybeSingle();
+    if (error) throw new Error(`idempotency key read failed: ${error.message}`);
     return (data as { idempotency_key?: string } | null)?.idempotency_key ?? null;
   }
   return null;
