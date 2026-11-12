@@ -7,6 +7,12 @@
 const ts = require('typescript');
 
 const WRITE_METHODS = new Set(['insert', 'update', 'upsert', 'delete']);
+// Tenant-seam factories (backend/db/tenantTable.ts, S1): a table ROOT like .from(), so a route's own
+// .select()/.update()/... on the returned handle is its effect; creating the handle writes nothing.
+const SEAM_TABLE_FACTORIES = new Set(['tenantTable', 'tenantOrPlatformTable', 'tenantChildTable', 'tenantChildTableOf']);
+// The child factories READ the parent(s) to verify them before returning the handle.
+const SEAM_PARENT_READERS = new Set(['tenantChildTable', 'tenantChildTableOf']);
+const SEAM_MODULE = /(?:^|\/)backend\/db\/tenantTable$/;
 const STORAGE_METHODS = new Set(['remove', 'upload', 'move', 'copy', 'update', 'createSignedUploadUrl', 'uploadToSignedUrl']);
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'request', 'head']);
 const OUTBOUND_NAME = /^(?:sendMail|sendEmail|send[A-Z]\w*(?:Email|Mail|Sms|SMS|WhatsApp\w*|Message|Notification|Invite|Invitation))$/;
@@ -37,6 +43,7 @@ function chainOf(expr) {
     if (ts.isCallExpression(e)) { const n = calleeName(e); if (n) names.add(n); e = unwrap(e.expression); continue; }
     if (ts.isPropertyAccessExpression(e)) { names.add(e.name.text); e = unwrap(e.expression); continue; }
     if (ts.isElementAccessExpression(e)) { e = unwrap(e.expression); continue; }
+    if (ts.isAwaitExpression(e)) { e = unwrap(e.expression); continue; }
     if (ts.isIdentifier(e)) root = e.text;
     break;
   }
@@ -52,12 +59,13 @@ function sinkOf(call, m) {
     if (QUEUE_IDENT.test(c.text)) return { kind: 'queue', detail: `${c.text}()` };
     if (OUTBOUND_NAME.test(c.text)) return { kind: 'outbound', detail: `${c.text}()` };
     if (c.text === 'axios') return { kind: 'external-call', detail: 'axios()' };
+    if (SEAM_PARENT_READERS.has(c.text) && imp && SEAM_MODULE.test(imp.spec.replace(/\.(?:ts|js)$/, ''))) return { kind: 'db-read', detail: `${c.text}() parent check` };
     return null;
   }
   if (!ts.isPropertyAccessExpression(c)) return null;
   const name = c.name.text;
   const { names, root } = chainOf(c.expression);
-  const tableRoot = names.has('from') || names.has('ownedDbTable') || names.has('dbTable');
+  const tableRoot = names.has('from') || names.has('ownedDbTable') || names.has('dbTable') || [...SEAM_TABLE_FACTORIES].some((f) => names.has(f));
   if (names.has('storage') && STORAGE_METHODS.has(name)) return { kind: 'storage', detail: `storage.${name}()` };
   if (WRITE_METHODS.has(name) && tableRoot && !names.has('storage')) return { kind: 'db-write', detail: `.${name}()` };
   if (name === 'rpc' && root) return { kind: 'db-rpc', detail: `.rpc(${call.arguments[0] && ts.isStringLiteral(call.arguments[0]) ? call.arguments[0].text : '…'})` };
@@ -166,7 +174,7 @@ function invokesParam(fn, i) {
   return direct(fn.body.statements);
 }
 
-module.exports = {
+module.exports = { SEAM_TABLE_FACTORIES, SEAM_MODULE,
   CALLER_PRINCIPAL, isFnLike, unwrap, calleeName, chainOf, sinkOf, operands,
   isMethodExpr, methodTest, underMethods, requestDerived, enclosingFn, optionalBinding, invokesParam,
 };
