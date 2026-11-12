@@ -33,8 +33,7 @@ import { validateAndModerateUserMessage } from '../../../../backend/chatGovernan
 import { getCampaignPlanningInputs, saveCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
 type CampaignAiMode = 'generate_plan' | 'refine_day' | 'platform_customize';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
-import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../backend/services/schedulingService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { buildStartDateConflictWarning } from '../../../../backend/services/startDateConflictWarning';
 import { getUserCompanyRole, getCompanyRoleIncludingInvited } from '../../../../backend/services/rbacService';
 import { requireCampaignAccess, type CampaignAccessResult } from '../../../../backend/services/campaignAccessService';
 import { resolveEffectiveCampaignRole, isCompanyOverrideRole } from '../../../../backend/services/campaignRoleService';
@@ -842,43 +841,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    let startDateConflictWarning: string | null = null;
     const tentativeStart = typeof finalCollectedPlanningContext?.tentative_start === 'string'
       ? finalCollectedPlanningContext.tentative_start.trim()
       : null;
-    if (tentativeStart && /^\d{4}-\d{2}-\d{2}$/.test(tentativeStart) && supabase) {
-      try {
-        const { data: campaignRow } = await supabase
-          .from('campaigns')
-          .select('user_id')
-          .eq('id', resolvedCampaignId)
-          .maybeSingle();
-        const userId = campaignRow?.user_id;
-        if (userId) {
-          const startDate = new Date(tentativeStart);
-          const endDate = new Date(startDate);
-          endDate.setDate(endDate.getDate() + 12 * 7);
-          const conflicts = await detectCampaignConflicts(
-            userId!,
-            startDate,
-            endDate,
-            resolvedCampaignId
-          );
-          if (conflicts.length > 0) {
-            const lines = conflicts.map(
-              (c) => `• "${c.campaign_name}" (${c.start_date.toLocaleDateString()} – ${c.end_date.toLocaleDateString()}, ${c.overlap_days} day overlap)`
-            );
-            startDateConflictWarning = `⚠️ **Date conflict:** This start date overlaps with ${conflicts.length} existing campaign(s):\n\n${lines.join('\n')}\n\nConsider choosing a different start date or finishing the overlapping campaign(s) first.`;
-            const suggestion = await suggestAvailableDateRange(userId!, 12 * 7, startDate);
-            if (suggestion) {
-              startDateConflictWarning += `\n\nSuggested alternative: start **${suggestion.start_date.toLocaleDateString()}** (after current campaigns).`;
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('[plan] Start date conflict check failed (non-blocking):', (err as any)?.message ?? err);
-      }
-    }
+    // Advisory and non-blocking; a check that could not run now SAYS so (unread-error pkg 2).
+    const startDateConflictWarning = await buildStartDateConflictWarning(resolvedCampaignId, tentativeStart);
 
     if (typeof saveAiCampaignPlan === 'function') {
       try {

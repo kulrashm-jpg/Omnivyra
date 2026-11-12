@@ -6,7 +6,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../backend/services/schedulingService';
+import { ConflictCheckReadError, detectCampaignConflicts, suggestAvailableDateRange } from '../../../backend/services/schedulingService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
@@ -67,6 +67,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (error: any) {
+    // unread-error pkg 2: a failed campaigns read used to answer "no conflicts" with a 200.
+    if (error instanceof ConflictCheckReadError) {
+      console.error('[conflicts] campaigns unreadable; no answer given', { operation: error.operation, message: error.message });
+      return res.status(503).json({
+        code: error.code,
+        error: 'Could not check for date conflicts right now. Please try again.',
+      });
+    }
     console.error('Conflict detection error:', error);
     res.status(500).json({
       error: 'Failed to detect conflicts',
