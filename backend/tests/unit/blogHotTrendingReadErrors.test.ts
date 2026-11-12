@@ -124,3 +124,18 @@ it('a row-capped last-hour read is reported as incomplete (some hot posts may be
   expect(res.statusCode).toBe(200);
   expect(res.body.incomplete).toBe(true);
 });
+
+it('more qualifying posts than the candidate cap (20) -> incomplete, even with no row cap (05)', async () => {
+  mockDb.hourRows = Array.from({ length: 25 }, (_, i) => views(`post-${i}`, 3)).flat();
+  mockDb.dayCount = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`post-${i}`, 72]));
+  const res = await call();
+  expect(res.statusCode).toBe(200);
+  expect(res.body.incomplete).toBe(true);
+});
+
+it('CONTROL: exactly 20 qualifying posts -> complete', async () => {
+  mockDb.hourRows = Array.from({ length: 20 }, (_, i) => views(`post-${i}`, 3)).flat();
+  mockDb.dayCount = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`post-${i}`, 72]));
+  const res = await call();
+  expect(res.body.incomplete).toBe(false);
+});

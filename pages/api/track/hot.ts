@@ -10,7 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * {
  *   hot: [{ slug, views_last_hour, avg_hourly, spike_ratio }],
  *   has_trending: boolean,
- *   incomplete: boolean   // the last-hour read hit the row cap: some hot posts may be missing
+ *   incomplete: boolean   // the last-hour read hit the row cap, or posts beyond the candidate cap were not evaluated
  * }
  *
  * A failed read answers 500 HOT_UNAVAILABLE (e9 / 05, 2026-11-12). It used to FABRICATE spikes: a
@@ -65,10 +65,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const hourMap = new Map<string, number>();
     for (const r of hourRows) hourMap.set(r.url_slug, (hourMap.get(r.url_slug) ?? 0) + 1);
 
-    const candidates = [...hourMap]
-      .filter(([, v]) => v >= MIN_VIEWS)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, MAX_CANDIDATES);
+    // KNOWN LIMIT (05): the cap selects by last-hour VOLUME, but hotness is a RATIO against a
+    // baseline not yet read - so it can drop the largest ratios (3 views on a 0.1/h baseline loses its
+    // slot to 50 on a 40/h baseline). A dropped candidate sets `incomplete`. The proper fix is one
+    // grouped baseline read for every candidate.
+    const qualifying = [...hourMap].filter(([, v]) => v >= MIN_VIEWS).sort((a, b) => b[1] - a[1]);
+    if (qualifying.length > MAX_CANDIDATES) incomplete = true;
+    const candidates = qualifying.slice(0, MAX_CANDIDATES);
 
     // Each candidate's 24h baseline: an EXACT count (head request - no rows, so no row cap).
     const baselines = await Promise.all(candidates.map(([slug]) => supabase
@@ -94,7 +97,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ code: 'HOT_UNAVAILABLE', error: 'Trending detection is temporarily unavailable.' });
   }
 
-  if (incomplete) console.warn('[track/hot] last-hour read hit the row cap; some hot posts may be missing', { account_id: accountId });
+  if (incomplete) console.warn('[track/hot] some posts were not evaluated (row cap or candidate cap); hot posts may be missing', { account_id: accountId });
   hot.sort((a, b) => b.spike_ratio - a.spike_ratio);
 
   return res.status(200).json({ hot, has_trending: hot.length > 0, incomplete });
