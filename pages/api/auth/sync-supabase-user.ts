@@ -281,20 +281,6 @@ async function handler(
     return res.status(200).json({ ok: true });
   }
 
-  // ── Email-address policy (e1, 2026-11-12; e9 ruling) ─────────────────────
-  // The provider (GoTrue / OAuth) may accept an address this app refuses - e.g. a quoted local part with commas.
-  // From here on the address is WRITTEN or used to LINK a row, so a refused address creates nothing: no users row,
-  // no supabase_uid stamped on an existing row found by email. A returning user whose row is already bound to this
-  // exact supabase_uid (the branch above) is not re-judged - that update never writes the address, and refusing it
-  // would lock out an existing account. Terminal and session-fatal (EMAIL_NOT_ACCEPTED, 403): the clients sign out
-  // and explain, so there is no login loop.
-  if (!isAcceptableEmailAddress(email)) {
-    logger.warn('auth.email_policy_refused', { endpoint: 'sync-supabase-user', supabaseUid });
-    incrementAuthMetric('auth_email_policy_refused', { endpoint: 'sync-supabase-user' });
-    sendAuthError(res, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED);
-    return;
-  }
-
   // Second try: row exists by email (invited user or Firebase-migrated user) —
   // stamp supabase_uid on it so future lookups use the faster UID path.
   const { data: byEmail } = await supabase
@@ -338,6 +324,21 @@ async function handler(
     }
     await projectSession(existingUserIdByEmail);
     return res.status(200).json({ ok: true });
+  }
+
+  // ── Email-address policy (e1, 2026-11-12; e9 ruling; placement per 05 review) ──
+  // The provider (GoTrue / OAuth) may accept an address this app refuses - e.g. a quoted local part with commas.
+  // Refused ONLY here, immediately before the INSERT: this is the one branch that introduces a NEW users row (a new
+  // address + identity). Both earlier branches are exempt for the same reason - neither writes the address:
+  //   - by supabase_uid (returning user): updates sign-in flags only;
+  //   - by email (pending invitee / Firebase-migrated user): stamps supabase_uid + flags on a row that ALREADY holds
+  //     the address, so refusing there creates no safety and locks out a pre-existing legitimate account.
+  // Terminal and session-fatal (EMAIL_NOT_ACCEPTED, 403): the clients sign out and explain - no login loop.
+  if (!isAcceptableEmailAddress(email)) {
+    logger.warn('auth.email_policy_refused', { endpoint: 'sync-supabase-user', supabaseUid });
+    incrementAuthMetric('auth_email_policy_refused', { endpoint: 'sync-supabase-user' });
+    sendAuthError(res, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED);
+    return;
   }
 
   // Third: brand-new user — INSERT with id returned in the same round-trip.

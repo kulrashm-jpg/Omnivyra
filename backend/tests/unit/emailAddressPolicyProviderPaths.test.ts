@@ -101,13 +101,14 @@ describe('sync-supabase-user', () => {
     expect(usersWrites()).toEqual([]);
   });
 
-  it('a refused address never LINKS an existing row found by email (no supabase_uid stamped)', async () => {
-    mockDb.users = [{ id: 'u-victim', email: QUOTED_COMMA.toLowerCase(), supabase_uid: null, is_deleted: false }];
-    mockIdentity = { supabaseUid: 'sb-attacker', email: QUOTED_COMMA, emailVerified: true };
+  it('control (05 review): a PRE-EXISTING row found by email (pending invitee / Firebase-migrated) is linked, not locked out - and the address is never written', async () => {
+    mockDb.users = [{ id: 'u-invitee', email: QUOTED_COMMA.toLowerCase(), supabase_uid: null, is_deleted: false }];
+    mockIdentity = { supabaseUid: 'sb-invitee', email: QUOTED_COMMA, emailVerified: true };
     const r = await call(sync);
-    expect([r.status, r.body?.code]).toEqual([403, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED]);
-    expect(usersWrites()).toEqual([]);
-    expect(mockDb.users[0].supabase_uid).toBeNull();
+    expect([r.status, r.body]).toEqual([200, { ok: true }]);
+    expect(mockDb.users).toHaveLength(1);
+    expect(mockDb.users[0].supabase_uid).toBe('sb-invitee');
+    expect(usersWrites().every((w) => w.op === 'update' && !('email' in w.payload))).toBe(true);
   });
 
   it('control: a returning user already bound by supabase_uid is NOT locked out (the update never writes the address)', async () => {
@@ -131,7 +132,9 @@ describe('verify-email (first-verify path creates the users row)', () => {
   it('a quoted-comma address creates no users row: 403 EMAIL_NOT_ACCEPTED, not a 500', async () => {
     mockIdentity = { supabaseUid: 'sb-attacker', email: QUOTED_COMMA, emailVerified: true };
     const r = await call(verifyEmail);
-    expect([r.status, r.body?.code, r.thrown]).toEqual([403, 'EMAIL_NOT_ACCEPTED', null]);
+    expect([r.status, r.body?.code, r.thrown]).toEqual([403, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED, null]);
+    // the canonical envelope (sendAuthError / buildAuthErrorResponse), not a hand-rolled body
+    expect(r.body).toMatchObject({ fatal: true });
     expect(usersWrites()).toEqual([]);
   });
 

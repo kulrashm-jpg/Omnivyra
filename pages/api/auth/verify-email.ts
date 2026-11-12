@@ -1,5 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
-import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../../lib/auth/emailAddressPolicy';
+import { isAcceptableEmailAddress } from '../../../lib/auth/emailAddressPolicy';
+import { sendAuthError } from '../../../backend/services/sendAuthError';
+import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 
 /**
  * POST /api/auth/verify-email
@@ -119,7 +121,8 @@ async function handler(
     if (!isAcceptableEmailAddress(email)) {
       logger.warn('auth.email_policy_refused', { endpoint: 'verify-email', supabaseUid: identity.supabaseUid });
       incrementAuthMetric('auth_email_policy_refused', { endpoint: 'verify-email' });
-      return res.status(403).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE, code: 'EMAIL_NOT_ACCEPTED' });
+      // The canonical envelope (status from the registry, typed code, auth_error_emitted log + counter).
+      return sendAuthError(res, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED);
     }
 
     const insertResult = await supabase
