@@ -35,6 +35,7 @@ import type { PaymentProviderId } from '@/backend/services/payments/orchestrator
 import { logger } from '@/backend/services/logger';
 import { supabase } from '@/backend/db/supabaseClient';
 import { fulfillProviderConfirmedPurchase } from '@/backend/services/billing/purchaseClosureService';
+import { markPaymentEventState, readPaymentEventState } from '@/backend/services/payments/paymentEventState';
 
 function safeParse(s: string): any {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
@@ -119,16 +120,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       provider, eventId: result.eventId, eventType: result.eventType, recorded: result.recorded,
     });
 
+    // 20270217000003 (e9): the event's STATE lives in payment_provider_event_state,
+    // written by the guarded forward-only RPC. A redelivery of an event whose money
+    // action FAILED is reprocessed: failed -> requeued first (failed -> processed is
+    // not a legal transition). Bookkeeping writes never fail the webhook.
+    const rowId = result.eventRowId ?? null;
+    if (rowId && (await readPaymentEventState(rowId)) === 'failed') {
+      await markPaymentEventState(rowId, 'requeued');
+    }
+    const settle = async (status: 'processed' | 'failed', reason?: string) => {
+      if (rowId) await markPaymentEventState(rowId, status, reason ?? null);
+    };
+
     // On a verified SUCCESS event → allocate via the idempotent fulfillment
     // (top-up paid pool). Duplicate webhooks / verify races resolve to one grant.
     let allocated = false;
     const success = extractSuccess(provider, safeParse(raw));
+    if (!success) await settle('processed', `ignored:${result.eventType ?? 'unknown'}`);
     if (success) {
-      const { data: purchase } = await supabase
+      const { data: purchase, error: purchaseErr } = await supabase
         .from('credit_purchases')
         .select('id, status, fulfillment_status')
         .eq('provider_order_id', success.orderId)
         .maybeSingle();
+      if (purchaseErr) {
+        // MONEY: a failed read is not "no purchase" - answer non-2xx so the provider redelivers.
+        logger.error('payment_webhook_purchase_lookup_failed', { provider, eventId: result.eventId, message: purchaseErr.message });
+        await settle('failed', 'purchase_lookup_error');
+        return res.status(500).json({ ok: false, error: 'webhook_money_action_failed', retryable: true });
+      }
       if (purchase) {
         const alreadyFulfilled = (purchase as any).status === 'completed'
           && (purchase as any).fulfillment_status === 'completed';
@@ -139,6 +159,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             provider, eventId: result.eventId, purchaseId: (purchase as any).id,
           });
           allocated = true;
+          await settle('processed');
         } else {
           // P1: routed through fulfillProviderConfirmedPurchase rather than
           // completePurchase directly, so a purchase Omnivyra closed itself
@@ -155,11 +176,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             { amountSubunits: success.amountSubunits, currency: success.currency },
           );
           allocated = fulfillment.ok;
-          if (!fulfillment.ok) {
+          if (fulfillment.ok) {
+            await settle('processed');
+          } else if (fulfillment.detail === 'error') {
+            // MONEY (e9): the completion write / credit grant FAILED transiently -
+            // record 'failed' and answer NON-2xx so the provider redelivers.
+            logger.error('payment_webhook_fulfillment_failed', { provider, eventId: result.eventId, purchaseId: (purchase as any).id });
+            await settle('failed', 'fulfillment_error');
+            return res.status(500).json({ ok: false, error: 'webhook_money_action_failed', retryable: true });
+          } else {
+            // A DETERMINISTIC refusal (financial gate, not reopenable, provider not
+            // paid, ...): a retry cannot change it - terminal, with the reason.
             logger.error('payment_webhook_fulfillment_blocked', {
               provider, eventId: result.eventId, purchaseId: (purchase as any).id,
               code: fulfillment.code ?? null, detail: fulfillment.detail ?? null,
             });
+            await settle('processed', `blocked:${fulfillment.detail ?? fulfillment.code ?? 'unknown'}`);
           }
         }
       } else {
@@ -168,6 +200,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         logger.error('payment_webhook_unmatched_order', {
           provider, eventId: result.eventId, providerOrderId: success.orderId,
         });
+        await settle('processed', 'unmatched_order');
       }
     }
 

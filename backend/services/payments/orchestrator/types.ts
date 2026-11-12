@@ -122,6 +122,8 @@ export interface WebhookVerifyResult {
   eventId: string | null;
   eventType: string | null;
   recorded: boolean;
+  /** The payment_provider_events ROW id (state is keyed on it - 20270217000003). */
+  eventRowId?: string | null;
 }
 
 export interface WebhookHandler {

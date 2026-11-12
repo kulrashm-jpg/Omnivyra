@@ -39,8 +39,34 @@ process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
 // ── isolated in-memory database ─────────────────────────────────────────────
 interface Row { [k: string]: unknown }
-const db: { credit_purchases: Row[]; payment_provider_events: Row[] } = {
-  credit_purchases: [], payment_provider_events: [],
+const db: { credit_purchases: Row[]; payment_provider_events: Row[]; payment_provider_event_state: Row[] } = {
+  credit_purchases: [], payment_provider_events: [], payment_provider_event_state: [],
+};
+
+/**
+ * 20270217000003 - a FAITHFUL fake of advance_payment_provider_event_state_guarded:
+ * the same forward-only transition table; an unknown event raises; a refused
+ * transition changes nothing.
+ */
+const STATE_NEXT: Record<string, string[]> = {
+  recorded: ['processed', 'duplicate', 'failed'], failed: ['requeued', 'failed'], requeued: ['processed', 'failed'],
+  processed: [], duplicate: [],
+};
+function fakeRpc(fn: string, args: Record<string, any>) {
+  if (fn !== 'advance_payment_provider_event_state_guarded') return Promise.resolve({ data: null, error: { message: `unknown rpc ${fn}` } });
+  if (!db.payment_provider_events.some((e) => e.id === args.p_event_id)) {
+    return Promise.resolve({ data: null, error: { message: 'PAYMENT_EVENT_NOT_FOUND' } });
+  }
+  let row = db.payment_provider_event_state.find((r) => r.provider_event_pk === args.p_event_id);
+  if (!row) { row = { provider_event_pk: args.p_event_id, processing_status: 'recorded', retry_count: 0 }; db.payment_provider_event_state.push(row); }
+  const cur = String(row.processing_status);
+  if (!STATE_NEXT[cur].includes(args.p_status)) return Promise.resolve({ data: { applied: false, current: cur }, error: null });
+  Object.assign(row, { processing_status: args.p_status, error_message: args.p_error ?? null });
+  return Promise.resolve({ data: { applied: true, previous: cur, current: args.p_status }, error: null });
+}
+const eventState = (providerEventId: string) => {
+  const ev = db.payment_provider_events.find((e) => e.provider_event_id === providerEventId);
+  return ev ? (db.payment_provider_event_state.find((r) => r.provider_event_pk === ev.id)?.processing_status ?? 'recorded') : null;
 };
 type Filter = { op: 'eq' | 'neq' | 'lt'; col: string; val: unknown };
 const fail = { update: false, message: 'simulated db failure' };
@@ -90,7 +116,7 @@ const fakeFrom = (t: string) => ({
   update: (v: Row) => makeBuilder(t as keyof typeof db, 'update', v),
   insert: (v: Row) => makeBuilder(t as keyof typeof db, 'insert', v),
 });
-jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => fakeFrom(t) }));
+jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => fakeFrom(t), ownedDbRpc: (fn: string, a: Record<string, unknown>) => fakeRpc(fn, a) }));
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => fakeFrom(t) } }));
 jest.mock('@/backend/db/supabaseClient', () => ({ supabase: { from: (t: string) => fakeFrom(t) } }), { virtual: true });
 
@@ -230,7 +256,7 @@ const invoicesFor = (id: string) => invoices.filter((i) => i === id);
 const balance = () => grants.reduce((s, g) => s + g.amount, 0);
 
 beforeEach(() => {
-  db.credit_purchases = []; db.payment_provider_events = [];
+  db.credit_purchases = []; db.payment_provider_events = []; db.payment_provider_event_state = [];
   grants.length = 0; invoices.length = 0; seq = 0;
   fail.update = false; creditFails = false; invoiceFails = false;
   providerOutcome.mockReset();
@@ -566,6 +592,33 @@ describe('S20 — database failure handling', () => {
     expect(r.details[0].action).not.toBe('already_completed');
     expect(get(o.purchaseId).status).toBe('pending');
   });
+  it('MONEY (e9): a credit-ledger failure on the WEBHOOK answers 500 (state failed); the REDELIVERY grants exactly once (state processed)', async () => {
+    const o = simCreateOrder(); simProviderPaid(o);
+    creditFails = true;
+    const evt = rzpEvent(o);
+    const bad = await simDeliverWebhook(evt);
+    expect(bad.status).toBe(500);
+    expect(bad.body).toMatchObject({ error: 'webhook_money_action_failed', retryable: true });
+    expect(grantsFor(o.purchaseId)).toHaveLength(0);
+    const evId = String((db.payment_provider_events[0] as Row).provider_event_id);
+    expect(eventState(evId)).toBe('failed');
+    const good = await simRedeliverWebhook(evt);
+    expect(good.status).toBe(200);
+    expect(grantsFor(o.purchaseId)).toHaveLength(1);
+    expect(eventState(evId)).toBe('processed');
+  });
+
+  it('control: a successful webhook leaves the event processed; a redelivery cannot regress it', async () => {
+    const o = simCreateOrder(); simProviderPaid(o);
+    const evt = rzpEvent(o);
+    expect((await simDeliverWebhook(evt)).status).toBe(200);
+    const evId = String((db.payment_provider_events[0] as Row).provider_event_id);
+    expect(eventState(evId)).toBe('processed');
+    expect((await simRedeliverWebhook(evt)).status).toBe(200);
+    expect(eventState(evId)).toBe('processed');
+    expect(grantsFor(o.purchaseId)).toHaveLength(1);
+  });
+
   it('credit-ledger failure leaves it retryable; retry grants exactly once', async () => {
     const o = simCreateOrder(); simProviderPaid(o);
     creditFails = true;

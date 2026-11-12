@@ -25,7 +25,7 @@ export class RazorpayWebhookHandler implements WebhookHandler {
     const rec = await recordPaymentProviderEvent({
       provider: 'razorpay', providerEventId: String(eventId), eventType: String(eventType), payload: evt ?? {},
     });
-    return { verified: true, eventId: String(eventId), eventType: String(eventType), recorded: Boolean(rec.id) || rec.duplicate };
+    return { verified: true, eventId: String(eventId), eventType: String(eventType), recorded: Boolean(rec.id) || rec.duplicate, eventRowId: rec.id ?? null };
   }
 }
 
@@ -43,7 +43,7 @@ export class CashfreeWebhookHandler implements WebhookHandler {
     const rec = await recordPaymentProviderEvent({
       provider: 'cashfree', providerEventId: String(eventId), eventType: String(eventType), payload: evt ?? {},
     });
-    return { verified: true, eventId: String(eventId), eventType: String(eventType), recorded: Boolean(rec.id) || rec.duplicate };
+    return { verified: true, eventId: String(eventId), eventType: String(eventType), recorded: Boolean(rec.id) || rec.duplicate, eventRowId: rec.id ?? null };
   }
 }
 
