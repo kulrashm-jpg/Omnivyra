@@ -15,6 +15,27 @@ import { logger } from '../../logger';
 import { CONSUMPTION_PHASES } from '../ledgerPhases';
 import { loadCurrentCreditRateUsd, needsDerivedUsd, rowUsd } from '../ledgerUsd';
 
+/**
+ * The reader version a snapshot was taken with, stamped in its metadata.
+ * 'consumption-v2' = counts confirm + confirm_partial and prices unrecorded USD
+ * at read time (e9, 2026-11-12). Snapshots WITHOUT this stamp were taken by the
+ * old reader, which missed every token-priced charge (C33: 2 such snapshots in
+ * prod). The stamp marks "taken after the reader fix" exactly, with no deploy
+ * date to guess, because only the fixed code writes it.
+ */
+export const SNAPSHOT_READER_VERSION = 'consumption-v2';
+
+/**
+ * e9 RULING (2026-11-12): a pre-fix snapshot is NEVER a billing basis (no
+ * invoice may be built from it) and is never rewritten (frozen, UPDATE-refused).
+ * Any code that builds an invoice or charge from an EXISTING snapshot row must
+ * check this first.
+ */
+export function isBillableSnapshot(row: { metadata?: unknown } | null | undefined): boolean {
+  const m = (row?.metadata ?? null) as { reader_version?: unknown } | null;
+  return !!m && m.reader_version === SNAPSHOT_READER_VERSION;
+}
+
 export interface UsageSnapshotArgs {
   organizationId: string;
   periodStart:    string;
@@ -32,6 +53,12 @@ export interface UsageSnapshotResult {
   /** true when part of totalUsd was derived at read time (e9 ruling b); per action in byAction. */
   usdEstimated?:   boolean;
   alreadyExists?:  boolean;
+  /**
+   * A snapshot exists for this period but was taken BEFORE the reader fix: it is
+   * not used. The figures returned are the LIVE ledger aggregate, nothing is
+   * written, and snapshotId is absent (the stale row is left untouched).
+   */
+  preFixSnapshotBypassed?: { snapshotId: string };
   error?:          string;
 }
 
@@ -41,7 +68,7 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
   // that feeds it is checked; a failure returns ok:false and writes nothing.
   const { data: existing, error: existingErr } = await supabase
     .from('usage_billing_snapshots')
-    .select('id, total_credits, total_usd_equivalent, llm_input_tokens, llm_output_tokens, by_action')
+    .select('id, total_credits, total_usd_equivalent, llm_input_tokens, llm_output_tokens, by_action, metadata')
     .eq('organization_id', args.organizationId)
     .eq('period_start', args.periodStart)
     .eq('period_end', args.periodEnd)
@@ -51,7 +78,12 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
     return { ok: false, totalCredits: 0, totalUsd: 0, llmInputTokens: 0, llmOutputTokens: 0, byAction: {}, error: existingErr.message };
   }
 
-  if (existing) {
+  // A pre-fix snapshot is bypassed: compute the live aggregate below, never write.
+  let bypassed: { snapshotId: string } | null = null;
+  if (existing && !isBillableSnapshot(existing as { metadata?: unknown })) {
+    bypassed = { snapshotId: String((existing as { id?: unknown }).id) };
+    logger.warn('usage_snapshot_pre_fix_bypassed', { org: args.organizationId, snapshotId: bypassed.snapshotId, periodStart: args.periodStart, periodEnd: args.periodEnd });
+  } else if (existing) {
     const e = existing as Record<string, unknown>;
     return {
       ok:              true,
@@ -132,6 +164,10 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
     logger.warn('usage_snapshot_token_rollup_unavailable', { org: args.organizationId, message: err instanceof Error ? err.message : String(err) });
   }
 
+  if (bypassed) {
+    return { ok: true, totalCredits, totalUsd, llmInputTokens, llmOutputTokens, byAction, usdEstimated, alreadyExists: true, preFixSnapshotBypassed: bypassed };
+  }
+
   // 4. Insert snapshot (ON CONFLICT DO NOTHING — concurrent writers collapse).
   const { data: inserted, error: insErr } = await supabase
     .from('usage_billing_snapshots')
@@ -144,6 +180,7 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
       llm_input_tokens:      llmInputTokens,
       llm_output_tokens:     llmOutputTokens,
       by_action:             byAction,
+      metadata:              { reader_version: SNAPSHOT_READER_VERSION },
     })
     .select('id')
     .maybeSingle();
@@ -153,7 +190,7 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
     if (/duplicate key/i.test(insErr.message) || (insErr as { code?: string }).code === '23505') {
       const { data: again, error: againErr } = await supabase
         .from('usage_billing_snapshots')
-        .select('id')
+        .select('id, metadata')
         .eq('organization_id', args.organizationId)
         .eq('period_start', args.periodStart)
         .eq('period_end', args.periodEnd)
@@ -164,9 +201,15 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
         logger.error('usage_snapshot_refetch_failed', { org: args.organizationId, message: againErr?.message ?? 'no row' });
         return { ok: false, totalCredits: 0, totalUsd: 0, llmInputTokens: 0, llmOutputTokens: 0, byAction: {}, error: againErr?.message ?? 'snapshot_refetch_failed' };
       }
+      const againId = String((again as { id?: string }).id);
+      if (!isBillableSnapshot(again as { metadata?: unknown })) {
+        // The winner was a pre-fix writer: its row is not a billing basis.
+        logger.warn('usage_snapshot_pre_fix_bypassed', { org: args.organizationId, snapshotId: againId, periodStart: args.periodStart, periodEnd: args.periodEnd });
+        return { ok: true, totalCredits, totalUsd, llmInputTokens, llmOutputTokens, byAction, usdEstimated, alreadyExists: true, preFixSnapshotBypassed: { snapshotId: againId } };
+      }
       return {
-        ok: true, snapshotId: (again as { id?: string } | null)?.id, totalCredits, totalUsd,
-        llmInputTokens, llmOutputTokens, byAction, alreadyExists: true,
+        ok: true, snapshotId: againId, totalCredits, totalUsd,
+        llmInputTokens, llmOutputTokens, byAction, usdEstimated, alreadyExists: true,
       };
     }
     logger.error('usage_snapshot_insert_failed', { org: args.organizationId, message: insErr.message });

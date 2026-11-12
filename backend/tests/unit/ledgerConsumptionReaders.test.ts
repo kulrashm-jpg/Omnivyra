@@ -58,6 +58,7 @@ jest.mock('../../services/billing/billingMetrics', () => ({ incrCounter: jest.fn
 jest.mock('../../services/billing/billingAuditEmitter', () => ({ emitAnomaly: jest.fn(), emitFinancialAudit: jest.fn(async () => undefined) }));
 jest.mock('../../services/monetizationOpsService', () => ({ recordMonetizationOperationalEvent: jest.fn(async () => undefined) }));
 jest.mock('../../services/billing/exports/auditManifestService', () => ({ recordExportManifest: jest.fn(async () => ({ id: 'm1' })) }));
+jest.mock('../../services/billing/contracts/enterpriseContractResolver', () => ({ resolveActiveContract: jest.fn(async () => null) }));
 
 import { forecastUsage } from '../../services/billing/contracts/usageForecastingService';
 import { takeUsageSnapshot } from '../../services/billing/payments/usageAggregationService';
@@ -69,6 +70,8 @@ import { getWeeklyConsumption } from '../../services/creditAlertService';
 import { wasRecentlyRun } from '../../services/creditDeductionService';
 import { auditMonetizationInvariants } from '../../services/monetizationReservationReconciliationService';
 import { CONSUMPTION_PHASES } from '../../services/billing/ledgerPhases';
+import { isBillableSnapshot, SNAPSHOT_READER_VERSION } from '../../services/billing/payments/usageAggregationService';
+import { projectInvoice } from '../../services/billing/contracts/invoiceProjectionEngine';
 
 const ORG = '0c0c0c0c-0000-4000-8000-000000000001';
 const OTHER = '0c0c0c0c-0000-4000-8000-000000000002';
@@ -258,6 +261,49 @@ describe("USD at read time (e9 ruling b): a charge with no recorded USD is deriv
     expect(inv.usdEstimated).toBe(false);
     expect(inv.lineItems.every((li) => li.usdEstimated === undefined)).toBe(true);
     expect((await forecastUsage({ organizationId: ORG, ...PERIOD }))!.usdEstimated).toBe(false);
+  });
+});
+
+describe('e9 RULING: a snapshot taken BEFORE the reader fix is never a billing basis (and never rewritten)', () => {
+  // A pre-fix snapshot as prod holds it (C33: 2 rows): no reader_version stamp, partial confirms missing.
+  const preFix = () => {
+    mockTables.usage_billing_snapshots = [{
+      id: 'snap-old', organization_id: ORG, period_start: PERIOD.periodStart, period_end: PERIOD.periodEnd,
+      total_credits: 10, total_usd_equivalent: 0.1, llm_input_tokens: 0, llm_output_tokens: 0,
+      by_action: { content_basic: { credits: 10, usd: 0.1, count: 1 } }, metadata: {},
+    }];
+  };
+
+  it('isBillableSnapshot: only a snapshot stamped by the fixed reader is billable', () => {
+    expect(isBillableSnapshot({ metadata: { reader_version: SNAPSHOT_READER_VERSION } })).toBe(true);
+    expect(isBillableSnapshot({ metadata: {} })).toBe(false);
+    expect(isBillableSnapshot({})).toBe(false);
+    expect(isBillableSnapshot(null)).toBe(false);
+  });
+
+  it('takeUsageSnapshot over a PRE-FIX snapshot: live ledger totals, no snapshotId, nothing written, the old row untouched', async () => {
+    preFix();
+    const before = JSON.stringify(mockTables.usage_billing_snapshots);
+    const s = await takeUsageSnapshot({ organizationId: ORG, ...PERIOD });
+    expect(s).toMatchObject({ ok: true, totalCredits: EXPECTED_CONSUMED, alreadyExists: true, preFixSnapshotBypassed: { snapshotId: 'snap-old' } });
+    expect(s.snapshotId).toBeUndefined();
+    expect(JSON.stringify(mockTables.usage_billing_snapshots)).toBe(before); // no insert, no rewrite
+  });
+
+  it('a snapshot taken by the fixed reader is stamped, and is then reused as the period basis', async () => {
+    const first = await takeUsageSnapshot({ organizationId: ORG, ...PERIOD });
+    expect(mockTables.usage_billing_snapshots[0].metadata).toEqual({ reader_version: SNAPSHOT_READER_VERSION });
+    const again = await takeUsageSnapshot({ organizationId: ORG, ...PERIOD });
+    expect(again).toMatchObject({ alreadyExists: true, snapshotId: first.snapshotId, totalCredits: EXPECTED_CONSUMED });
+    expect(again.preFixSnapshotBypassed).toBeUndefined();
+  });
+
+  it('projectInvoice over a PRE-FIX snapshot: observed usage comes from the ledger, with a warning naming the bypassed row', async () => {
+    preFix();
+    const p = await projectInvoice({ organizationId: ORG, ...PERIOD });
+    const observed = p.lineItems.reduce((n, li) => n + li.observedCredits, 0);
+    expect(observed).toBe(EXPECTED_CONSUMED); // the stale row said 10
+    expect(p.warnings.some((w) => w.startsWith('usage_snapshot_pre_fix_bypassed: snap-old'))).toBe(true);
   });
 });
 

@@ -63,6 +63,14 @@ export async function projectInvoice(args: {
   if (!snap.ok) {
     warnings.push(`usage_snapshot_failed: ${snap.error ?? 'unknown'}`);
   }
+  // e9 (2026-11-12): a snapshot taken before the reader fix is never a billing
+  // basis - the observed figures come from the live ledger instead.
+  if (snap.preFixSnapshotBypassed) {
+    warnings.push(`usage_snapshot_pre_fix_bypassed: ${snap.preFixSnapshotBypassed.snapshotId} (observed usage read live from the ledger)`);
+  }
+  if (snap.usdEstimated) {
+    warnings.push('usd_estimated: part of the observed USD was priced at the current credit rate (no USD recorded on the charge)');
+  }
 
   // 2. Forecast remaining usage in the period.
   const forecast = await forecastUsage({
