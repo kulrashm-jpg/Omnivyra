@@ -8,6 +8,9 @@
  *
  * Hostile fake: every terminal is keyed by table + operation (+ selected columns for reads); anything
  * this suite does not configure THROWS. One fault per case.
+ *
+ * SUGGEST-ONLY (owner ruling via e9, 2026-11-12): the monitor and the scaler never write to a customer's
+ * campaign. 'campaigns:update' is unconfigured in every case, so a write throws AND is recorded.
  */
 type Result = { data: unknown; error: { message: string } | null };
 
@@ -21,9 +24,11 @@ function makeBuilder(table: string) {
   const key = () => (op === 'select' && table === 'campaigns' ? `${table}:select:${cols}` : `${table}:${op}`);
   const settle = (): Result => {
     const k = key();
+    // Every write ATTEMPT is recorded before the configuration check, so an unconfigured write is
+    // both a throw AND visible to wrote() (no vacuous absence assertion).
+    if (op !== 'select') writes.push({ key: k, payload });
     const r = results[k];
     if (!r) throw new Error(`hostile fake: unconfigured ${k}`);
-    if (op !== 'select') writes.push({ key: k, payload });
     return r;
   };
   const b: any = {
@@ -47,7 +52,8 @@ jest.mock('../../services/configService', () => ({
     ad_scale_threshold: 0.05, accuracy_good_threshold: 0.7,
   })),
 }));
-const mockRecovery = jest.fn(async (..._a: unknown[]) => ({ original_campaign_id: 'c1', recovery_pending_id: 'p1', reason: 'r' }));
+/** Suggest-only: the monitor no longer generates a recovery campaign (its notification said "was paused"). */
+const mockRecovery = jest.fn(async (..._a: unknown[]) => { throw new Error('generateRecoveryCampaign must not be called'); });
 jest.mock('../../services/campaignRecoveryService', () => ({ generateRecoveryCampaign: (...a: unknown[]) => mockRecovery(...a) }));
 const mockLogDecision = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('../../services/autonomousDecisionLogger', () => ({ logDecision: (...a: unknown[]) => mockLogDecision(...a) }));
@@ -73,7 +79,8 @@ function baseResults(): Record<string, Result> {
     'performance_feedback:select': engagement(0.001, 0.001),
     'campaign_health_reports:select': ok(null),
     'campaign_health_reports:insert': ok(null),
-    'campaigns:update': ok(null),
+    // SUGGEST-ONLY: 'campaigns:update' is deliberately NOT configured, so ANY write to a customer's
+    // campaign throws in every case of this suite (and fails it via result.errors or a rejection).
     'campaigns:select:company_id, name': ok({ company_id: 'co-1', name: 'C1' }),
     'notifications:insert': ok(null),
     'campaigns:select:posting_frequency, platforms': ok({ posting_frequency: { linkedin: 5 }, platforms: ['linkedin'] }),
@@ -82,8 +89,11 @@ function baseResults(): Record<string, Result> {
     'campaign_decision_log:insert': ok(null),
   };
 }
-/** The previous report that makes this run the second CRITICAL one (-> auto-pause). */
+/** The previous report that makes this run the second CRITICAL one (-> pause RECOMMENDED). */
 const PAUSE_DUE = ok({ report: { health_status: 'AT_RISK', critical_run_count: 1 } });
+/** Already past the threshold: the recommendation was made on an earlier run. Only the >40% drop path
+ *  chains CRITICAL runs (the 'AT_RISK persisted' path needs a previous AT_RISK), so the case uses it. */
+const PAUSE_ALREADY_RECOMMENDED = ok({ report: { health_status: 'CRITICAL', critical_run_count: 2 } });
 
 const wrote = (k: string) => writes.filter((w) => w.key === k);
 const reportStatus = () => (wrote('campaign_health_reports:insert')[0]?.payload as { health_status?: string } | undefined)?.health_status;
@@ -96,51 +106,43 @@ beforeEach(() => {
   mockPerf.mockClear();
 });
 
-describe('auto-pause', () => {
+describe('pause RECOMMENDED (suggest-only; was auto-pause)', () => {
   beforeEach(() => { results['campaign_health_reports:select'] = PAUSE_DUE; });
 
-  it('CONTROL: a due pause pauses, notifies, generates recovery, and reports PAUSED', async () => {
+  it('CONTROL: a due pause is RECOMMENDED (decision + notification), the campaign is NOT written, the report stays CRITICAL', async () => {
     const r = await runCampaignHealthMonitor();
-    expect(r).toMatchObject({ paused: ['c1'], recovered: ['c1'], errors: [] });
-    expect(wrote('campaigns:update')).toHaveLength(1);
-    expect(wrote('notifications:insert')).toHaveLength(1);
-    expect(mockRecovery).toHaveBeenCalledTimes(1);
-    expect(reportStatus()).toBe('PAUSED');
-  });
-
-  it('a FAILED pause is not PAUSED: no notification, no recovery, no report; the error is reported', async () => {
-    results['campaigns:update'] = boom();
-    const r = await runCampaignHealthMonitor();
-    expect(r.paused).toEqual([]);
-    expect(r.recovered).toEqual([]);
-    expect(r.errors.join('\n')).toMatch(/c1: auto-pause failed: boom/);
-    expect(wrote('notifications:insert')).toEqual([]);
+    expect(r).toMatchObject({ pause_recommended: ['c1'], critical: ['c1'], errors: [] });
+    expect(wrote('campaigns:update')).toEqual([]);
+    expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({ decision_type: 'pause', outcome: expect.stringContaining('RECOMMENDED (not applied)') }));
+    const note = wrote('notifications:insert')[0]?.payload as { type?: string; body?: string };
+    expect(note.type).toBe('campaign_pause_recommended');
+    expect(note.body).toMatch(/We recommend pausing it\. Nothing was changed\./);
+    expect(note.body).not.toMatch(/was (automatically )?paused/);
     expect(mockRecovery).not.toHaveBeenCalled();
-    expect(wrote('campaign_health_reports:insert')).toEqual([]);
+    expect(reportStatus()).toBe('CRITICAL');
   });
 
-  it('a failed notification INSERT keeps the pause and reports the failure', async () => {
+  it('the recommendation is made ONCE: a run already past the threshold does not notify again', async () => {
+    results['campaign_health_reports:select'] = PAUSE_ALREADY_RECOMMENDED;
+    results['performance_feedback:select'] = engagement(0.02, 0.001); // a >40% drop: CRITICAL again (count 3)
+    const r = await runCampaignHealthMonitor();
+    expect(r).toMatchObject({ pause_recommended: [], critical: ['c1'], errors: [] });
+    expect(wrote('notifications:insert')).toEqual([]);
+  });
+
+  it('a failed notification INSERT is reported (the recommendation decision is still recorded)', async () => {
     results['notifications:insert'] = boom();
     const r = await runCampaignHealthMonitor();
-    expect(r.paused).toEqual(['c1']);
-    expect(r.errors.join('\n')).toMatch(/pause notification not sent: boom/);
-    expect(reportStatus()).toBe('PAUSED');
+    expect(r.errors.join('\n')).toMatch(/c1: pause recommendation not sent: boom/);
+    expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({ decision_type: 'pause' }));
+    expect(reportStatus()).toBe('CRITICAL');
   });
 
-  it('an unreadable campaign for the notification keeps the pause and reports the failure', async () => {
+  it('an unreadable campaign for the notification is reported, and nothing is inserted', async () => {
     results['campaigns:select:company_id, name'] = boom();
     const r = await runCampaignHealthMonitor();
-    expect(r.paused).toEqual(['c1']);
-    expect(r.errors.join('\n')).toMatch(/pause notification not sent: campaign unreadable: boom/);
+    expect(r.errors.join('\n')).toMatch(/c1: pause recommendation not sent: campaign unreadable: boom/);
     expect(wrote('notifications:insert')).toEqual([]);
-  });
-
-  it('a failed recovery keeps the pause, is not "recovered", and is reported', async () => {
-    mockRecovery.mockRejectedValueOnce(new Error('no pending row'));
-    const r = await runCampaignHealthMonitor();
-    expect(r.paused).toEqual(['c1']);
-    expect(r.recovered).toEqual([]);
-    expect(r.errors.join('\n')).toMatch(/recovery campaign not generated: no pending row/);
   });
 });
 
@@ -175,30 +177,25 @@ describe('run-level reads', () => {
   });
 });
 
-describe('AT_RISK optimization', () => {
-  it('CONTROL: it runs before the run reports it, writes the lower frequency, and logs the decision', async () => {
+describe('AT_RISK: lower frequency RECOMMENDED (suggest-only; was a write)', () => {
+  it('CONTROL: the PROPOSED frequency is recorded as a recommendation, the campaign is NOT written', async () => {
     const r = await runCampaignHealthMonitor();
-    expect(r).toMatchObject({ at_risk: ['c1'], optimized: ['c1'], errors: [] });
-    expect((wrote('campaigns:update')[0]?.payload as { posting_frequency?: unknown }).posting_frequency).toEqual({ linkedin: 4 });
-    expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({ decision_type: 'optimize' }));
-  });
-
-  it('a FAILED frequency write is not "optimized", logs no decision, and is reported; the report is still written', async () => {
-    results['campaigns:update'] = boom();
-    const r = await runCampaignHealthMonitor();
-    expect(r.at_risk).toEqual(['c1']);
-    expect(r.optimized).toEqual([]);
-    expect(r.errors.join('\n')).toMatch(/c1: optimization: posting_frequency write failed: boom/);
-    expect(mockLogDecision).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ at_risk: ['c1'], optimization_recommended: ['c1'], errors: [] });
+    expect(wrote('campaigns:update')).toEqual([]);
+    expect(mockLogDecision).toHaveBeenCalledWith(expect.objectContaining({
+      decision_type: 'optimize',
+      metrics_used: expect.objectContaining({ current_frequency: { linkedin: 5 }, proposed_frequency: { linkedin: 4 } }),
+      outcome: expect.stringContaining('RECOMMENDED (not applied)'),
+    }));
     expect(reportStatus()).toBe('AT_RISK');
   });
 
-  it('an UNREADABLE campaign is not "optimized" and is reported', async () => {
+  it('an UNREADABLE campaign is not "recommended", logs no decision, and is reported', async () => {
     results['campaigns:select:posting_frequency, platforms'] = boom();
     const r = await runCampaignHealthMonitor();
-    expect(r.optimized).toEqual([]);
+    expect(r.optimization_recommended).toEqual([]);
     expect(r.errors.join('\n')).toMatch(/c1: optimization: campaign unreadable: boom/);
-    expect(wrote('campaigns:update')).toEqual([]);
+    expect(mockLogDecision).not.toHaveBeenCalled();
   });
 });
 
@@ -215,7 +212,6 @@ describe('auto-scale (HEALTHY)', () => {
   });
 
   it('SUGGEST-ONLY (e9 ruling): a healthy run NEVER writes posting_frequency (any campaigns update throws here)', async () => {
-    delete results['campaigns:update'];
     const direct = await tryAutoScale('c1');
     expect(direct.scaled).toBe(true);
     expect(direct.actions.join('\n')).not.toMatch(/posting frequency/i);
