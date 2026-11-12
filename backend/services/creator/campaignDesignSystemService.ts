@@ -23,7 +23,7 @@ import {
   upgradeCampaign,
   resolveCampaignTemplate,
 } from '../../../lib/creator-templates/campaignDesignSystem';
-import { getCollection, buildResolver } from './collectionService';
+import { getCollection, buildResolver, getCollectionCompanyId } from './collectionService';
 import type { CreatorTemplate } from '../../../lib/creator-templates';
 import { resolveAutoSelection } from '../../../lib/creator-templates/autoSelection';
 import type { RecommendationContext } from '../../../lib/creator-templates/templateRecommendation';
@@ -84,7 +84,7 @@ export async function attachCollectionToCampaign(input: {
 }): Promise<{ designSystem: CampaignDesignSystem | null; validation: AttachValidation }> {
   const collection = await getCollection(input.collectionId);
   if (!collection) return { designSystem: null, validation: { ok: false, errors: ['Collection not found.'], missingFamilies: [] } };
-  const resolve = await buildResolver(collection.templateIds);
+  const resolve = await buildResolver(collection.templateIds, input.companyId);
   const validation = canAttachCollection(collection, resolve, input.requiredFamilies ?? []);
   if (!validation.ok) return { designSystem: null, validation };
 
@@ -133,7 +133,7 @@ export async function loadCampaignTemplatePool(campaignId: string): Promise<Camp
   // immediately; fall back to the pinned snapshot only if the collection is gone.
   const live = await getCollection(ds.collectionId);
   const templateIds = live?.templateIds ?? ds.pinnedSnapshot.templateIds;
-  const resolve = await buildResolver(templateIds);
+  const resolve = await buildResolver(templateIds, await getCollectionCompanyId(ds.collectionId));
   const byFamily = new Map<TemplateAssetFamily, CreatorTemplate[]>();
   for (const id of templateIds) {
     const t = resolve(id);
@@ -165,7 +165,7 @@ export function selectTemplateFromPool(
 export async function recommendCampaignTemplate(campaignId: string, family: TemplateAssetFamily) {
   const ds = await getCampaignDesignSystem(campaignId);
   if (!ds) return null;
-  const resolve = await buildResolver(ds.pinnedSnapshot.templateIds);
+  const resolve = await buildResolver(ds.pinnedSnapshot.templateIds, await getCollectionCompanyId(ds.collectionId));
   return resolveCampaignTemplate(ds, family, resolve);
 }
 
@@ -173,7 +173,7 @@ export async function recommendCampaignTemplate(campaignId: string, family: Temp
 export async function getCampaignDesignHealth(campaignId: string): Promise<{ designSystem: CampaignDesignSystem; health: CampaignDesignHealth } | null> {
   const ds = await getCampaignDesignSystem(campaignId);
   if (!ds) return null;
-  const resolve = await buildResolver(ds.pinnedSnapshot.templateIds);
+  const resolve = await buildResolver(ds.pinnedSnapshot.templateIds, await getCollectionCompanyId(ds.collectionId));
   return { designSystem: ds, health: campaignDesignHealth(ds, resolve) };
 }
 
@@ -183,7 +183,7 @@ export async function getCampaignCollectionUpgrade(campaignId: string): Promise<
   if (!ds) return null;
   const latest = await getCollection(ds.collectionId);
   if (!latest) return null;
-  const resolve = await buildResolver([...new Set([...ds.pinnedSnapshot.templateIds, ...latest.templateIds])]);
+  const resolve = await buildResolver([...new Set([...ds.pinnedSnapshot.templateIds, ...latest.templateIds])], await getCollectionCompanyId(ds.collectionId));
   return { designSystem: ds, latestVersion: latest.version, diff: compareCollectionVersions(ds.pinnedSnapshot, latest, resolve) };
 }
 

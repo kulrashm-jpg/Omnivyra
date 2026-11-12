@@ -21,7 +21,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET ────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     try {
-      const template = await getBlockTemplate(id);
+      // Scoped to the authorised company: another tenant's id is a 404,
+      // indistinguishable from a missing one (SECURITY, 2026-11-11).
+      const template = await getBlockTemplate(id, companyId);
       if (!template) return res.status(404).json({ error: 'Template not found' });
       return res.status(200).json({ template });
     } catch (err: any) {
@@ -33,13 +35,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'PUT') {
     const { name, description, content_blocks, tags, is_public } = req.body;
     try {
-      const template = await updateBlockTemplate(id, {
+      const template = await updateBlockTemplate(id, companyId, {
         ...(name !== undefined && { name }),
         ...(description !== undefined && { description }),
         ...(content_blocks !== undefined && { content_blocks }),
         ...(tags !== undefined && { tags }),
         ...(is_public !== undefined && { is_public }),
       });
+      if (!template) return res.status(404).json({ error: 'Template not found' });
       return res.status(200).json({ template });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -49,7 +52,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── DELETE ─────────────────────────────────────────────────────────────────
   if (req.method === 'DELETE') {
     try {
-      await deleteBlockTemplate(id);
+      const deleted = await deleteBlockTemplate(id, companyId);
+      if (!deleted) return res.status(404).json({ error: 'Template not found' });
       return res.status(200).json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
