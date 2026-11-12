@@ -72,7 +72,17 @@ describe('themeAngleEngine', () => {
       expect(r1).toBe(r2);
     });
 
-    it('executes in under 1ms', () => {
+    // QUARANTINED 2026-11-12 (e9 ruling) - tracking: FLAKY-THEME-001.
+    // Reason: a wall-clock bound (100 generateThemeFromTopic calls < 100ms via
+    // Date.now()) on a shared CI runner. It failed twice on CI-83 HEAD only, on
+    // a branch that changes nothing in themeAngleEngine's import graph (its
+    // imports are languageRefinementService (type) and
+    // editorialTextRefinementService, neither of which has imports). Pre-existing
+    // flakiness by construction, not a regression. No retry loop added.
+    // Owner: the content/theme engine track (routed by e9). Restore as a
+    // deterministic check (e.g. an operation-count or complexity bound) or
+    // delete; do not re-enable as a wall-clock assertion.
+    it.skip('executes in under 1ms', () => {
       const start = Date.now();
       for (let i = 0; i < 100; i++) {
         generateThemeFromTopic(`Topic ${i}`);
