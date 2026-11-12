@@ -49,6 +49,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // below claimed otherwise). One Idempotency-Key per logical grant is now
   // REQUIRED and stored on the row (manual_credit_grants_idempotency_key_unique,
   // 20260420_lockdown_idempotency.sql): a repeat resolves the SAME grant.
+  // That index is PARTIAL (WHERE idempotency_key IS NOT NULL) and GLOBAL (key
+  // alone, across every org and admin): historical NULL-key rows are outside
+  // it, and the client must send a random UUID, never a human-shaped key.
   const requestIdempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
   if (!requestIdempotencyKey) {
     return res.status(400).json({ error: 'Idempotency-Key header is required', code: 'IDEMPOTENCY_KEY_REQUIRED' });
@@ -100,7 +103,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(503).json({ error: 'Could not resolve the earlier grant for this Idempotency-Key', retryable: true });
     }
     if (existing.organization_id !== organizationId || Number(existing.credits_amount) !== Number(creditsAmount)) {
-      return res.status(409).json({ error: 'This Idempotency-Key was already used for a different grant', code: 'IDEMPOTENCY_KEY_REUSED' });
+      return res.status(409).json({ error: 'This Idempotency-Key is already used by a DIFFERENT grant (another org or amount) - nothing was granted. Send a new key for this grant.', code: 'IDEMPOTENCY_KEY_REUSED' });
     }
     grant = { id: existing.id, granted_by: existing.granted_by ?? null };
   } else if (logErr || !inserted?.id) {

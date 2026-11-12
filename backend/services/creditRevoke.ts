@@ -75,6 +75,11 @@ export type RevokeCreditResult =
     }
   | { success: false; reason: 'INVALID_AMOUNT' | 'NO_WALLET' | 'WALLET_READ_FAILED' | 'INSUFFICIENT_BALANCE' | 'RPC_FAILED' | 'IDEMPOTENCY_KEY_REQUIRED' | 'PRIOR_REVOKE_READ_FAILED'; detail?: string };
 
+/** Escape SQL LIKE metacharacters for PostgreSQL's default '\' escape. */
+function escapeLike(v: string): string {
+  return v.replace(/([\\%_])/g, '\\$1');
+}
+
 export async function revokeCredit(input: RevokeCreditInput): Promise<RevokeCreditResult> {
   if (!Number.isFinite(input.amount) || input.amount <= 0 || !Number.isInteger(input.amount)) {
     return { success: false, reason: 'INVALID_AMOUNT' };
@@ -99,7 +104,14 @@ export async function revokeCredit(input: RevokeCreditInput): Promise<RevokeCred
       .select('id, idempotency_key')
       .eq('organization_id', input.orgId)
       .eq('reference_type', 'credit_revoke')
-      .like('idempotency_key', `${grantKey}:revoke:${input.category}:%`)
+      // grantKey is caller-supplied (an operator Idempotency-Key): escape the
+      // LIKE metacharacters (backslash is PG's default LIKE escape; PostgREST
+      // has no ESCAPE clause) - an '_' in a key must not match ANY character
+      // and hit ANOTHER grant's revoke (a false "already revoked" leaves the
+      // credits in place). category is a closed union (no metacharacters).
+      // RELIES ON: a grant key never contains ':revoke:' (else grant B's key
+      // could begin with `<grantA>:revoke:<cat>:`).
+      .like('idempotency_key', `${escapeLike(grantKey)}:revoke:${input.category}:%`)
       .limit(1);
     if (priorErr) return { success: false, reason: 'PRIOR_REVOKE_READ_FAILED', detail: priorErr.message };
     const hit = (prior ?? [])[0] as { id: string; idempotency_key: string } | undefined;

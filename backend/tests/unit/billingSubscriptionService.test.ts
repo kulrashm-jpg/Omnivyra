@@ -69,6 +69,7 @@ function dbStub(opts: { selectRows?: any[] }, captured: { upserts: any[]; update
         select: () => api,
         in: () => api,
         lt: () => api,
+        limit: () => api,
         update: (row: any) => {
           captured.updates.push({ row });
           // the sweep's update re-states the predicate and returns the updated ids

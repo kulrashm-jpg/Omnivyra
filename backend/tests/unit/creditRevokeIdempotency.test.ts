@@ -27,8 +27,16 @@ function mockQuery(table: string) {
     limit: () => b,
     eq: (c: string, v: unknown) => { filters.push((r) => r[c] === v); return b; },
     like: (c: string, pattern: string) => {
-      const re = new RegExp('^' + pattern.split('%').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
-      filters.push((r) => re.test(String(r[c] ?? '')));
+      // PostgreSQL LIKE semantics: '%' any run, '_' any ONE char, '\x' literal x.
+      let re = '^';
+      for (let i = 0; i < pattern.length; i++) {
+        const ch = pattern[i];
+        const lit = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (ch === '\\' && i + 1 < pattern.length) { re += lit(pattern[++i]); continue; }
+        re += ch === '%' ? '.*' : ch === '_' ? '.' : lit(ch);
+      }
+      const rx = new RegExp(re + '$');
+      filters.push((r) => rx.test(String(r[c] ?? '')));
       return b;
     },
     maybeSingle: async () => (table === 'organization_credits' ? { data: mockWallet ? { ...mockWallet } : null, error: null } : { data: null, error: null }),
@@ -109,4 +117,19 @@ it('two DISTINCT requests (different request keys) are two revokes (no time-buck
   await revokeCredit({ ...BASE, amount: 10, requestIdempotencyKey: 'req-a' });
   await revokeCredit({ ...BASE, amount: 10, requestIdempotencyKey: 'req-b' });
   expect(mockWallet!.free_balance).toBe(80);
+});
+
+// 05 (2026-11-12): grantKey is an operator-supplied Idempotency-Key, so LIKE
+// metacharacters in it must be escaped. Unescaped, '_' matches ANY character
+// and a different grant's revoke would read as "already revoked".
+it('a grant key containing "_" does NOT match a DIFFERENT grant\'s revoke (LIKE escaped)', async () => {
+  mockLedger.push({ id: 'other', organization_id: 'o1', reference_type: 'credit_revoke', idempotency_key: 'grantX2026:revoke:free:60' });
+  const r = await revokeCredit({ ...BASE, amount: 60, originalGrantIdempotencyKey: 'grant_2026' });
+  expect(r).toMatchObject({ success: true, revoked: 60 });
+  expect((r as { alreadyRevoked?: boolean }).alreadyRevoked).toBeUndefined();
+});
+it('control: the same "_" key DOES match its own earlier revoke', async () => {
+  mockLedger.push({ id: 'mine', organization_id: 'o1', reference_type: 'credit_revoke', idempotency_key: 'grant_2026:revoke:free:60' });
+  const r = await revokeCredit({ ...BASE, amount: 60, originalGrantIdempotencyKey: 'grant_2026' });
+  expect(r).toMatchObject({ success: true, revoked: 0, alreadyRevoked: true });
 });

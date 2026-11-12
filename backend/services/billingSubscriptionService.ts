@@ -200,36 +200,51 @@ export async function applyStripeSubscriptionEvent(
  * event-driven (a customer.subscription.updated upsert advances the period); this sweep handles
  * the lapse case. Returns count expired.
  */
+/** Rows per sweep batch: bounds the `.in('id', ...)` URL (PostgREST 414 on a mass lapse). */
+export const EXPIRY_SWEEP_BATCH = 200;
+/** Batches per run; the next run continues (the read is the remaining work). */
+export const EXPIRY_SWEEP_MAX_BATCHES = 50;
+
 export async function markExpiredSubscriptions(deps: BillingSubDeps, graceDays = SUBSCRIPTION_GRACE_DAYS): Promise<{ expired: number; ids: string[] }> {
   const nowMs = deps.now ? deps.now() : Date.now();
   const cutoffIso = new Date(nowMs - graceDays * 86_400_000).toISOString();
-  // current_period_end + grace < now  ⇔  current_period_end < now - grace
-  const { data, error } = await deps.db
-    .from('billing_subscriptions')
-    .select('id, current_period_end, status')
-    .in('status', ['active', 'trialing', 'past_due'])
-    .lt('current_period_end', cutoffIso);
-  // A failed read is not "nothing to expire", and an unread update is not
-  // "expired": throw so the cron reports the failure instead of a false count.
-  if (error) throw new Error(`[billingSubscription] expiry candidates read failed: ${error.message}`);
-  if (!data) return { expired: 0, ids: [] };
-  const ids: string[] = (data as any[]).map((r) => r.id);
-  if (ids.length === 0) return { expired: 0, ids: [] };
   const nowIso = new Date(nowMs).toISOString();
-  // CLASS 2 (2026-11-12): the update RE-STATES the expiry predicate (status +
-  // period) instead of trusting the read. A Stripe renewal that advanced
-  // current_period_end (or a status change) between the read and this write
-  // used to be overwritten to 'expired' - and an expired subscription feeds the
-  // credit-expiry sweep (drains the paying org's allocation) and blocks the
-  // next allocation. Only rows STILL lapsed are expired, and the count is the
-  // rows actually updated.
-  const { data: updated, error: updErr } = await deps.db.from('billing_subscriptions')
-    .update({ status: 'expired', updated_at: nowIso })
-    .in('id', ids)
-    .in('status', ['active', 'trialing', 'past_due'])
-    .lt('current_period_end', cutoffIso)
-    .select('id');
-  if (updErr) throw new Error(`[billingSubscription] expiry update failed for ${ids.length} subscription(s): ${updErr.message}`);
-  const expiredIds: string[] = ((updated ?? []) as Array<{ id: string }>).map((r) => r.id);
+  const expiredIds: string[] = [];
+  // BATCHED (05, 2026-11-12): the read was unbounded and every id went into ONE
+  // `.in('id', ...)` URL - a mass lapse (pricing change, provider outage,
+  // backfill) could fail the whole sweep with a 414. Expired rows leave the
+  // predicate, so each read returns the remaining work; a short batch, or a
+  // batch that updated nothing (lost every CAS), ends the run.
+  for (let batch = 0; batch < EXPIRY_SWEEP_MAX_BATCHES; batch++) {
+    // current_period_end + grace < now  <=>  current_period_end < now - grace
+    const { data, error } = await deps.db
+      .from('billing_subscriptions')
+      .select('id, current_period_end, status')
+      .in('status', ['active', 'trialing', 'past_due'])
+      .lt('current_period_end', cutoffIso)
+      .limit(EXPIRY_SWEEP_BATCH);
+    // A failed read is not "nothing to expire", and an unread update is not
+    // "expired": throw so the cron reports the failure instead of a false count.
+    if (error) throw new Error(`[billingSubscription] expiry candidates read failed: ${error.message}`);
+    const ids: string[] = ((data ?? []) as any[]).map((r) => r.id);
+    if (ids.length === 0) break;
+    // CLASS 2 (2026-11-12): the update RE-STATES the expiry predicate (status +
+    // period) instead of trusting the read. A Stripe renewal that advanced
+    // current_period_end (or a status change) between the read and this write
+    // used to be overwritten to 'expired' - and an expired subscription feeds the
+    // credit-expiry sweep (drains the paying org's allocation) and blocks the
+    // next allocation. Only rows STILL lapsed are expired, and the count is the
+    // rows actually updated.
+    const { data: updated, error: updErr } = await deps.db.from('billing_subscriptions')
+      .update({ status: 'expired', updated_at: nowIso })
+      .in('id', ids)
+      .in('status', ['active', 'trialing', 'past_due'])
+      .lt('current_period_end', cutoffIso)
+      .select('id');
+    if (updErr) throw new Error(`[billingSubscription] expiry update failed for ${ids.length} subscription(s): ${updErr.message}`);
+    const batchIds = ((updated ?? []) as Array<{ id: string }>).map((r) => r.id);
+    expiredIds.push(...batchIds);
+    if (ids.length < EXPIRY_SWEEP_BATCH || batchIds.length === 0) break;
+  }
   return { expired: expiredIds.length, ids: expiredIds };
 }

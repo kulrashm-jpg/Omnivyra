@@ -179,7 +179,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       if (existingGrant?.id) {
         if (existingGrant.organization_id !== organization_id || Number(existingGrant.credits_amount) !== Number(credits)) {
-          return res.status(409).json({ error: 'This Idempotency-Key was already used for a different grant', code: 'IDEMPOTENCY_KEY_REUSED' });
+          return res.status(409).json({ error: 'This Idempotency-Key is already used by a DIFFERENT grant (another org or amount) - nothing was granted. Send a new key for this grant.', code: 'IDEMPOTENCY_KEY_REUSED' });
         }
         resolvedGrantId = existingGrant.id as string;
         grantKeyActor = (existingGrant.granted_by as string | null) ?? grantKeyActor;
