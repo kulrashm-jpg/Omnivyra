@@ -67,7 +67,8 @@ export interface WhatsAppAdapterDeps {
    * Compare-and-set; returns true when this call moved the row. The claim (`requested ->
    * submitting`) is D-2's atomic claim: the default makes it through orch_claim_engine_request
    * (per-person lock + frequency gap + claim, one transaction) and reports why nothing was
-   * claimed through `claim.verdict`.   *
+   * claimed through `claim.verdict`.
+   *
    * `expectUpdatedAt` (CLASS-2 C3): the generic compare-and-set ALSO requires updated_at to equal
    * this value - the RAW string PostgREST returned (microseconds; never round-tripped through a
    * Date). The guard trigger sets updated_at := now() on every update, so it is the claim's
@@ -220,12 +221,21 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
     ({ engine: 'whatsapp', outcome, disposition, reason, externalRef });
 
   /** Settle the request row (best effort; the step settlement is the authority) and report. */
-  const settle = async (ctx: EngineStepContext, from: RequestState, state: RequestState, r: EngineResult): Promise<EngineResult> => {
-    await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, from, {
+  /**
+   * Settle the request. With `expectUpdatedAt` the settle is FENCED (CLASS-2 C3, 55): it lands only
+   * on the claim that value names, and if the claim moved this run settles nothing and waits - the
+   * request belongs to whoever moved it. Without it (only for a run that has passed fence 1, so
+   * held the claim at the fence; every later writer is pinned) the settle is state-only, as before.
+   */
+  const settle = async (ctx: EngineStepContext, from: RequestState, state: RequestState, r: EngineResult, expectUpdatedAt?: string): Promise<EngineResult> => {
+    const moved = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, from, {
       state,
       detail: r.reason,
       ...(r.externalRef === null ? {} : { external_ref: r.externalRef }),
-    });
+    }, undefined, expectUpdatedAt);
+    if (expectUpdatedAt !== undefined && !moved) {
+      return result('submitting', 'wait', 'the claim moved concurrently; this run settled nothing', null);
+    }
     return r;
   };
 
@@ -290,7 +300,10 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
             return result('broadcast_unreadable', 'wait', 'the broadcast could not be read', null);
           }
           if (orphan !== null) {
-            return settle(ctx, 'submitting', 'uncertain', result('submission_interrupted', 'needs_human', 'a submission was interrupted after the broadcast was created; review it before any resend', orphan));
+            // Pinned like the release below (55, F1): the claimant may have passed fence 1 since this
+            // read, and then it queues - an unpinned `uncertain` would sit over a live send.
+            if (row.updated_at === null) return result('submitting', 'wait', 'the stale claim cannot be fenced (no updated_at)', null);
+            return settle(ctx, 'submitting', 'uncertain', result('submission_interrupted', 'needs_human', 'a submission was interrupted after the broadcast was created; review it before any resend', orphan), row.updated_at);
           }
           // FENCE 2 (CLASS-2 C3): released only if it is still the stale claim that was READ. A
           // claimant that woke, created its broadcast and refreshed its claim (fence 1) has a new
@@ -358,6 +371,10 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
 
       const name = broadcastNameFor(ctx.executionTaskId);
       let broadcastId: string | null = null;
+      // Until fence 1 passes, every settle of this run is pinned to its claim token (55, F2): a run
+      // that stalled, was released and re-claimed, then failed in createBroadcast / expand, must not
+      // settle the NEW holder's live claim `failed`.
+      let fenced = false;
       try {
         broadcastId = await deps.createBroadcast({
           company_id: ctx.organizationId,
@@ -382,6 +399,7 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           });
           return result('claim_lost', 'wait', 'another sweep holds this request now; nothing was queued by this run', null);
         }
+        fenced = true;
         // Validates the template and the account's rate limit, then queues the
         // send. Only after it succeeds is the request `submitted`.
         await deps.enqueueBroadcast(broadcastId, WHATSAPP_RATE_PLAN);
@@ -394,14 +412,14 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
         // stays the one record of the attempt. A person reviews it before any resend.
         if (isEnqueueUncertain(e)) {
           const ref = broadcastId ?? (e as WhatsAppEnqueueUncertainError).broadcastId;
-          return settle(ctx, 'submitting', 'uncertain', result('uncertain', 'needs_human', ENQUEUE_UNCERTAIN_DETAIL, ref));
+          return settle(ctx, 'submitting', 'uncertain', result('uncertain', 'needs_human', ENQUEUE_UNCERTAIN_DETAIL, ref), fenced ? undefined : claimToken);
         }
         // A refusal here (unapproved template, rate limit, unreadable account), or a lost
         // acknowledgement whose recipients the engine withdrew, is for a person to resolve:
         // nothing of it can be sent. The request is settled `failed` so no sweep re-submits
         // it on its own.
         const reason = (e as Error).message.slice(0, 200);
-        return settle(ctx, 'submitting', 'failed', result('submit_failed', 'needs_human', reason, broadcastId));
+        return settle(ctx, 'submitting', 'failed', result('submit_failed', 'needs_human', reason, broadcastId), fenced ? undefined : claimToken);
       }
       await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'submitted', external_ref: broadcastId });
       return result('submitted', 'wait', 'queued with the WhatsApp engine', broadcastId);

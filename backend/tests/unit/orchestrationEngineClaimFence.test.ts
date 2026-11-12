@@ -156,6 +156,50 @@ describe('WhatsApp engine request: a stalled sweep never sends a second message'
     expect(row).toMatchObject({ state: 'uncertain' });
   });
 
+  it('(e) B FINDS A\'s broadcast, then A passes FENCE 1 before B settles: B\'s uncertain settle is refused; A sends ONCE (55 F1)', async () => {
+    let resumeExpand!: () => void;
+    let resumeEnqueue!: () => void;
+    let aAtEnqueue!: () => void;
+    const aPaused = new Promise<void>((r) => { hooks.expandPersonRecipients = () => new Promise<void>((go) => { resumeExpand = go; r(); }); });
+    const aReachedEnqueue = new Promise<void>((r) => { aAtEnqueue = r; });
+    hooks.enqueueBroadcast = () => new Promise<void>((go) => { resumeEnqueue = go; aAtEnqueue(); });
+    const a = sweep();                                              // A: claims, creates bc-1, pauses before fence 1
+    await aPaused;
+    later(STALE_SUBMISSION_MS + 60_000);
+    hooks.findBroadcastByName = async () => { resumeExpand(); await aReachedEnqueue; }; // B found bc-1; A passes fence 1
+    const b = await sweep();                                        // B's uncertain settle lands here
+    resumeEnqueue();
+    expect(await a).toMatchObject({ outcome: 'submitted' });
+    expect(b).toMatchObject({ disposition: 'wait' });
+    expect(enqueued).toEqual(['bc-1']);
+    expect(row).toMatchObject({ state: 'submitted', external_ref: 'bc-1' });
+  });
+
+  it('(f) A stalls, B releases and claims; A then FAILS before its fence: A\'s failed settle does not touch B\'s live claim; B sends ONCE (55 F2)', async () => {
+    let resumeA!: () => void;
+    let resumeB!: () => void;
+    let aStalled!: () => void;
+    let bStalled!: () => void;
+    const aIn = new Promise<void>((r) => { aStalled = r; });
+    const bIn = new Promise<void>((r) => { bStalled = r; });
+    const aCreate = (async () => { await new Promise<void>((go) => { resumeA = go; aStalled(); }); throw new Error('Rate limit exceeded (tier 1)'); }) as never;
+    const bCreate = (async (input: { name: string }) => {
+      await new Promise<void>((go) => { resumeB = go; bStalled(); });
+      const id = `bc-${broadcasts.length + 1}`; broadcasts.push({ id, name: input.name }); return id;
+    }) as never;
+    const a = sweep({ createBroadcast: aCreate });                  // A claims, stalls in createBroadcast
+    await aIn;
+    later(STALE_SUBMISSION_MS + 60_000);
+    const b = sweep({ createBroadcast: bCreate });                  // B: stale + none -> release -> claims, stalls
+    await bIn;
+    resumeA();
+    expect(await a).toMatchObject({ disposition: 'wait' });         // its `failed` settle was refused
+    expect(row).toMatchObject({ state: 'submitting' });             // B's claim untouched
+    resumeB();
+    expect(await b).toMatchObject({ outcome: 'submitted' });
+    expect(enqueued).toEqual(['bc-1']);
+  });
+
   it('the claim cannot be read back (no token): nothing is created or queued - fail closed, never treated as "mine"', async () => {
     let reads = 0;
     const r = await sweep({
