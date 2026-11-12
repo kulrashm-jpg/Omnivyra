@@ -21,6 +21,20 @@ export interface StrategyTemplate {
   updated_at: string;
 }
 
+/**
+ * What a NON-owner may see of a public template: its CONTENT only - never who published it (user_id) or which
+ * company (company_id). Being public is evidence to see the template, not to learn its company (05 review). An
+ * explicit column list, so a column a later migration adds is never published by default.
+ */
+export type PublicStrategyTemplate = Omit<StrategyTemplate, 'user_id' | 'company_id'>;
+const PUBLIC_TEMPLATE_COLUMNS =
+  'id, name, description, objective, campaign_intent, target_audience, key_platforms, content_pillars, '
+  + 'content_frequency, distribution_preferences, tags, is_public, created_at, updated_at';
+export function toPublicTemplateView(t: StrategyTemplate): PublicStrategyTemplate {
+  const { user_id: _userId, company_id: _companyId, ...content } = t;
+  return content;
+}
+
 const mapTemplate = (row: any): StrategyTemplate => ({
   id: row.id,
   user_id: row.user_id,
@@ -50,11 +64,12 @@ const mapTemplate = (row: any): StrategyTemplate => ({
 export async function listStrategyTemplates(
   userId: string,
   options: { company_id?: string; is_public?: boolean; tags?: string[] } = {}
-): Promise<StrategyTemplate[]> {
+): Promise<Array<StrategyTemplate | PublicStrategyTemplate>> {
   const read = async (scope: 'own' | 'public') => {
+    // Own rows in full; OTHER users' public rows as content only (never user_id / company_id).
     // cross-tenant: strategy-templates-user-owned-or-public
-    let query = ownedDbTable('strategy_templates').select('*');
-    query = scope === 'own' ? query.eq('user_id', userId) : query.eq('is_public', true);
+    let query = ownedDbTable('strategy_templates').select(scope === 'own' ? '*' : PUBLIC_TEMPLATE_COLUMNS);
+    query = scope === 'own' ? query.eq('user_id', userId) : query.eq('is_public', true).neq('user_id', userId);
     if (options.company_id) query = query.eq('company_id', options.company_id);
     if (options.is_public !== undefined) query = query.eq('is_public', options.is_public);
     const { data, error } = await query.order('updated_at', { ascending: false });
@@ -62,11 +77,11 @@ export async function listStrategyTemplates(
     return (data || []) as Array<Record<string, any>>;
   };
   const [own, pub] = await Promise.all([read('own'), read('public')]);
-  const byId = new Map<string, Record<string, any>>();
-  for (const row of [...own, ...pub]) byId.set(String(row.id), row);
-  return [...byId.values()]
-    .sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
-    .map(mapTemplate);
+  const rows: Array<StrategyTemplate | PublicStrategyTemplate> = [
+    ...own.map(mapTemplate),
+    ...pub.map((row) => toPublicTemplateView(mapTemplate(row))),
+  ];
+  return rows.sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
 }
 
 export async function getStrategyTemplate(

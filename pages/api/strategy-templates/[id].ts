@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import {
   deleteStrategyTemplate,
   getStrategyTemplate,
+  toPublicTemplateView,
   updateStrategyTemplate,
 } from '../../../backend/services/strategyTemplateService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -39,7 +40,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'GET') {
-    return res.status(200).json({ success: true, data: template });
+    // A non-owner sees a public template's content only - never who or which company published it.
+    return res.status(200).json({ success: true, data: isOwner ? template : toPublicTemplateView(template) });
   }
 
   if (!isOwner) {

@@ -13,10 +13,12 @@ const CO_A = '11111111-1111-4111-8111-111111111111';
 const CO_B = '22222222-2222-4222-8222-222222222222';
 function mockTable(table: string) {
   const tests: Array<(r: Row) => boolean> = []; const filters: Array<[string, unknown]> = [];
-  let op = 'select'; let payload: Row = {}; let one = false;
+  let op = 'select'; let payload: Row = {}; let one = false; let pick: string[] | null = null;
   const b: any = {
-    select: () => b, order: () => b,
+    select: (cols?: string) => { if (cols && cols !== '*') pick = cols.split(',').map((c) => c.trim()); return b; },
+    order: () => b,
     eq: (c: string, v: unknown) => { filters.push([c, v]); tests.push((r) => r[c] === v); return b; },
+    neq: (c: string, v: unknown) => { tests.push((r) => r[c] !== v); return b; },
     or: () => { throw new Error('interpolated .or() must not be used'); },
     update: (p: Row) => { op = 'update'; payload = p; return b; },
     delete: () => { op = 'delete'; return b; },
@@ -29,7 +31,8 @@ function mockTable(table: string) {
       if (op === 'delete') { mockWrites.push({ op, filters }); mockDb[table] = rows.filter((r) => !hit.includes(r)); }
       if (op === 'insert') return Promise.resolve({ data: { id: 't-new', ...payload }, error: null }).then(ok, ko);
       if (one && hit.length !== 1) return Promise.resolve({ data: null, error: { code: 'PGRST116' } }).then(ok, ko);
-      return Promise.resolve({ data: one ? hit[0] : hit, error: null }).then(ok, ko);
+      const shape = (r: Row) => (pick ? Object.fromEntries(pick.filter((k) => k in r).map((k) => [k, r[k]])) : r);
+      return Promise.resolve({ data: one ? shape(hit[0]) : hit.map(shape), error: null }).then(ok, ko);
     },
   };
   return b;
@@ -94,12 +97,28 @@ it('a non-owner never reads a PRIVATE template, even by id', async () => {
   const r = await call('GET', 't-own-private');
   expect(r.statusCode).toBe(404);
   expect(JSON.stringify(r.body)).not.toContain('t-own-private');
-  expect((await call('GET', 't-own-public')).statusCode).toBe(200);
+  const pub = await call('GET', 't-own-public');
+  expect(pub.statusCode).toBe(200);
+  // public = the content, never who or which company published it
+  expect(Object.keys(pub.body.data)).not.toEqual(expect.arrayContaining(['user_id']));
+  expect('company_id' in pub.body.data).toBe(false);
+  expect('user_id' in pub.body.data).toBe(false);
+});
+
+it("the owner still gets their own template in full (incl. company and owner)", async () => {
+  const own = await call('GET', 't-own-private');
+  expect(own.body.data).toMatchObject({ id: 't-own-private', user_id: 'u-owner', company_id: null });
 });
 
 it('the list is own + public only - never another user’s private template', async () => {
-  const ids = (await listStrategyTemplates('u-owner')).map((t: { id: string }) => t.id).sort();
-  expect(ids).toEqual(['t-other-public', 't-own-private', 't-own-public']);
+  const list = await listStrategyTemplates('u-owner');
+  expect(list.map((t: { id: string }) => t.id).sort()).toEqual(['t-other-public', 't-own-private', 't-own-public']);
+  // another user's public template: content only - no publisher, no company
+  const other = list.find((t: { id: string }) => t.id === 't-other-public');
+  expect('user_id' in other).toBe(false);
+  expect('company_id' in other).toBe(false);
+  // the caller's OWN public template stays full
+  expect(list.find((t: { id: string }) => t.id === 't-own-public')).toMatchObject({ user_id: 'u-owner' });
 });
 
 async function create(body: Row) {
