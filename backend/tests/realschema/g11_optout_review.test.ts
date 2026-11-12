@@ -74,7 +74,10 @@ beforeAll(() => {
 });
 afterAll(() => { expect(fetchCalls).toBe(0); });
 
-const dbNow = async (): Promise<string> => new Date((await one('SELECT now() AS t')).t as Date).toISOString();
+// The database instant at FULL precision, as PostgREST renders it (microseconds, +00:00). A node-pg Date ->
+// toISOString cut it to milliseconds, which made a hold written in the same transaction look 'not yet started'
+// once the transport stopped cutting effective_from the same way (harness rows fix, 2026-11-13).
+const dbNow = async (): Promise<string> => String((await one(`SELECT to_json(now()) #>> '{}' AS t`)).t);
 
 async function allowed(org: string, channel: string, who: { personId?: string; target?: string }): Promise<boolean> {
   const loaded = await loadGovernanceRecords({ organizationId: org, personId: who.personId ?? null, target: who.target ?? null, channel });
@@ -234,7 +237,9 @@ describe('no decision (rule 5)', () => {
     const b = await operatorOptOut(person, 'r:zone', now);
     const row = await review(b.reviewId);
     expect(row).toMatchObject({ due_timezone: 'Asia/Kolkata', due_timezone_fallback: false });
-    expect((row.opened_at as Date).toISOString()).toBe(now);
+    // Same INSTANT, compared as an instant: `now` is the database's full-precision PostgREST rendering, the row
+    // value a node-pg Date (milliseconds).
+    expect((row.opened_at as Date).toISOString()).toBe(new Date(now).toISOString());
     expect((row.due_at as Date).toISOString()).toBe(svc.optOutReviewDueAt(now, 'Asia/Kolkata').dueAt);
     const { isodow } = await one(`SELECT extract(isodow FROM due_at AT TIME ZONE 'Asia/Kolkata')::int AS isodow FROM public.contact_opt_out_reviews WHERE id = $1`, [b.reviewId]);
     expect(isodow).toBeLessThanOrEqual(5);

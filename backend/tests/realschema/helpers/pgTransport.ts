@@ -5,6 +5,18 @@
  *
  * Calls are serialized because one connection serves them all, so interleaved service
  * runs race BETWEEN calls, at the real unique index, instead of corrupting savepoints.
+ *
+ * ROWS ARRIVE AS POSTGREST SENDS THEM (2026-11-13, 6f; 83 review). PostgREST builds its response
+ * with to_json, so a timestamptz keeps its MICROSECONDS ("...10:00:00.123456+00:00"), numerics are
+ * JSON numbers and json columns are objects. node-pg instead returned Date objects, which
+ * `toISOString()` cut to milliseconds: a value read back and used as a compare-and-set token
+ * (`.eq('updated_at', token)`, the C3 claim fence) could then never match - the fake was HARSHER than
+ * PostgREST. Every row is now rendered with to_jsonb:
+ *   - SELECT: `to_jsonb(x)` over `CROSS JOIN LATERAL (SELECT <select list>) x`, so WHERE / ORDER BY /
+ *     LIMIT / OFFSET stay on the outer query exactly as before (row order is unchanged, guaranteed).
+ *   - INSERT / UPDATE / DELETE ... RETURNING: wrapped in a CTE and rendered the same way.
+ * RPC answers follow PostgREST too: a scalar function returns the bare value, a non-set composite one
+ * object, a SETOF / TABLE function an array of objects, a void function null.
  */
 
 import { selectList } from './computedFields';
@@ -22,11 +34,9 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const SQL_OP: Record<string, string> = { eq: '=', gte: '>=', lte: '<=', gt: '>', lt: '<', neq: '<>' };
-const normalize = (row: Row): Row => {
-  const out: Row = {};
-  for (const [k, v] of Object.entries(row)) out[k] = v instanceof Date ? v.toISOString() : v;
-  return out;
-};
+/** The select list as a row source inside LATERAL: a bare `*` must name the table there. */
+const lateralList = (sel: string, table: string): string =>
+  sel.split(',').map((item) => (item.trim() === '*' ? `"${table}".*` : item)).join(',');
 /** What PostgREST does with a JSON body value: objects and arrays arrive as JSON. */
 const render = (v: unknown): unknown => (v !== null && typeof v === 'object' ? JSON.stringify(v) : v);
 
@@ -40,14 +50,16 @@ export function pgTable(client: () => PgClient, table: string): Row {
   const where = (params: unknown[]): string => {
     if (st.filters.length === 0) return '';
     const parts = st.filters.map((f) => {
-      if (f.op === 'is' && f.val === null) return `"${f.col}" IS NULL`;
-      if (f.op === 'not_is_null') return `"${f.col}" IS NOT NULL`;
+      // Qualified with the table: the SELECT's LATERAL row repeats the column names.
+      const col = `"${table}"."${f.col}"`;
+      if (f.op === 'is' && f.val === null) return `${col} IS NULL`;
+      if (f.op === 'not_is_null') return `${col} IS NOT NULL`;
       if (f.op === 'in') {
         const list = (f.val as unknown[]).map((v) => { params.push(v); return `$${params.length}`; });
-        return list.length ? `"${f.col}" IN (${list.join(', ')})` : 'false';
+        return list.length ? `${col} IN (${list.join(', ')})` : 'false';
       }
       params.push(f.val);
-      return `"${f.col}" ${SQL_OP[f.op]} $${params.length}`;
+      return `${col} ${SQL_OP[f.op]} $${params.length}`;
     });
     return ` WHERE ${parts.join(' AND ')}`;
   };
@@ -66,18 +78,18 @@ export function pgTable(client: () => PgClient, table: string): Row {
         const sets = keys.filter((k) => !target.includes(k)).map((k) => `"${k}" = EXCLUDED."${k}"`).join(', ');
         sql += ` ON CONFLICT (${target.map((k) => `"${k}"`).join(', ')}) DO ${sets && !st.ignoreDuplicates ? `UPDATE SET ${sets}` : 'NOTHING'}`;
       }
-      sql += ` RETURNING ${sel}`;
+      sql = `WITH q AS (${sql} RETURNING ${sel}) SELECT to_jsonb(q) AS __row FROM q`;
     } else if (st.op === 'update') {
       const row = (st.payload ?? {}) as Row;
       const sets = Object.keys(row).map((k) => { params.push(render(row[k])); return `"${k}" = $${params.length}`; }).join(', ');
-      sql = `UPDATE public."${table}" SET ${sets}${where(params)} RETURNING ${sel}`;
+      sql = `WITH q AS (UPDATE public."${table}" SET ${sets}${where(params)} RETURNING ${sel}) SELECT to_jsonb(q) AS __row FROM q`;
     } else if (st.op === 'delete') {
-      sql = `DELETE FROM public."${table}"${where(params)} RETURNING ${sel}`;
+      sql = `WITH q AS (DELETE FROM public."${table}"${where(params)} RETURNING ${sel}) SELECT to_jsonb(q) AS __row FROM q`;
     } else if (st.count) {
       sql = `SELECT count(*)::int AS n FROM public."${table}"${where(params)}`;
     } else {
-      sql = `SELECT ${sel} FROM public."${table}"${where(params)}`;
-      if (st.orders.length) sql += ` ORDER BY ${st.orders.map((o) => `"${o.col}" ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`;
+      sql = `SELECT to_jsonb(x) AS __row FROM public."${table}" CROSS JOIN LATERAL (SELECT ${lateralList(sel, table)}) x${where(params)}`;
+      if (st.orders.length) sql += ` ORDER BY ${st.orders.map((o) => `"${table}"."${o.col}" ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`;
       if (st.limit !== null) sql += ` LIMIT ${st.limit}`;
       if (st.offset !== null) sql += ` OFFSET ${st.offset}`;
     }
@@ -86,7 +98,7 @@ export function pgTable(client: () => PgClient, table: string): Row {
       const res = await c.query(sql, params);
       await c.query('RELEASE SAVEPOINT pg_adapter');
       if (st.count) return { data: null, count: Number(res.rows[0].n), error: null };
-      const out = res.rows.map(normalize);
+      const out = res.rows.map((r) => r.__row as Row);
       if (st.mode === 'single' && out.length !== 1) return { data: null, error: { code: 'PGRST116', message: `expected one row, got ${out.length}` } };
       if (st.mode !== 'many') return { data: out[0] ?? null, error: null };
       return { data: out, error: null };
@@ -119,17 +131,42 @@ export function pgTable(client: () => PgClient, table: string): Row {
   return b;
 }
 
+type RpcShape = 'scalar' | 'composite' | 'set' | 'void';
+const rpcShapeCache = new Map<string, RpcShape>();
+/** PostgREST's answer shape for public.<fn>: from pg_proc (SETOF / TABLE -> set; row type -> composite). */
+async function rpcShape(c: PgClient, fn: string): Promise<RpcShape> {
+  const hit = rpcShapeCache.get(fn);
+  if (hit) return hit;
+  const r = await c.query(
+    `SELECT p.proretset AS set, t.typtype AS kind, t.typname AS name
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_type t ON t.oid = p.prorettype
+      WHERE n.nspname = 'public' AND p.proname = $1 ORDER BY p.oid LIMIT 1`, [fn]);
+  const row = r.rows[0] as { set?: boolean; kind?: string; name?: string } | undefined;
+  const shape: RpcShape = !row ? 'set'
+    : row.set ? 'set'
+      : row.name === 'void' ? 'void'
+        : (row.kind === 'c' || row.name === 'record') ? 'composite' : 'scalar';
+  rpcShapeCache.set(fn, shape);
+  return shape;
+}
+
 export function pgRpc(client: () => PgClient) {
   return (fn: string, args: Row) => serial(async () => {
     const c = client();
     if (!/^[a-z_]+$/.test(fn)) throw new Error(`pg adapter: bad function name ${fn}`);
     const keys = Object.keys(args);
-    const sql = `SELECT * FROM public.${fn}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')})`;
+    const call = `public.${fn}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')})`;
     await c.query('SAVEPOINT pg_rpc');
     try {
+      const shape = await rpcShape(c, fn);
+      const sql = shape === 'scalar' || shape === 'void' ? `SELECT to_jsonb(${call}) AS __v`
+        : `SELECT to_jsonb(r) AS __row FROM ${call} r`;
       const res = await c.query(sql, keys.map((k) => args[k]));
       await c.query('RELEASE SAVEPOINT pg_rpc');
-      return { data: res.rows.map(normalize), error: null };
+      if (shape === 'void') return { data: null, error: null };
+      if (shape === 'scalar') return { data: (res.rows[0] as Row | undefined)?.__v ?? null, error: null };
+      const rows = res.rows.map((x) => x.__row as Row);
+      return { data: shape === 'composite' ? (rows[0] ?? null) : rows, error: null };
     } catch (err) {
       await c.query('ROLLBACK TO SAVEPOINT pg_rpc');
       return { data: null, error: err };

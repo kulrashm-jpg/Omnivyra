@@ -508,7 +508,10 @@ describe('real approve + execute routes, then the claim', () => {
       const logs = await db.query(
         `SELECT event_payload->>'user_id' AS user_id, event_payload->>'timestamp' AS ts
            FROM public.community_ai_action_logs WHERE action_id = $1 AND event_type = 'approved'`, [id]);
-      expect(logs.rows).toEqual([{ user_id: APPROVER, ts: approved.body.approved_at }]);
+      // The same INSTANT in two spellings: the route returns approved_at as PostgREST renders it ("+00:00"),
+      // the log stores the app's ISO string ("Z"). Compared as instants, never as strings.
+      expect(logs.rows.map((r: { user_id: string; ts: string }) => ({ user_id: r.user_id, at: Date.parse(r.ts) })))
+        .toEqual([{ user_id: APPROVER, at: Date.parse(approved.body.approved_at) }]);
       // Approved but not yet dispatched: status 'approved' is not a claimable state.
       expect(await claim(id)).toEqual([]);
 
