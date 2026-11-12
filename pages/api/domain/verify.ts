@@ -25,6 +25,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
@@ -128,8 +129,8 @@ async function handler(
       });
     }
     const verifiedAt = new Date().toISOString();
-    const { error: updErr } = await supabase
-      .from('company_domains')
+    // S2: a SUPER_ADMIN override still writes ONLY the looked-up row's own tenant.
+    const { error: updErr } = await tenantTable('company_domains', tenantContextFor({ userId: internalUserId }, row.company_id))
       .update({
         verification_status: 'admin_override',
         verification_method: 'admin_override',
@@ -213,8 +214,8 @@ async function handler(
   }
 
   const verifiedAt = new Date().toISOString();
-  const { error: updErr } = await supabase
-    .from('company_domains')
+  // S2: pinned to the company the role check above authorized.
+  const { error: updErr } = await tenantTable('company_domains', tenantContextFor({ userId: internalUserId }, row.company_id))
     .update({
       verification_status: 'verified',
       verification_method: outcome.method,

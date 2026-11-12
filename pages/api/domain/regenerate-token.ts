@@ -31,6 +31,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
@@ -136,8 +137,9 @@ async function handler(
   const rawToken = crypto.randomBytes(32).toString('hex');
   const hashed   = hashVerificationToken(rawToken);
 
-  const { error: updErr } = await supabase
-    .from('company_domains')
+  // S2: the write is pinned to the company the role check above authorized.
+  const tenant = tenantContextFor({ userId: internalUserId }, domainRow.company_id);
+  const { error: updErr } = await tenantTable('company_domains', tenant)
     .update({
       verification_token:  hashed,
       verification_status: 'pending',
