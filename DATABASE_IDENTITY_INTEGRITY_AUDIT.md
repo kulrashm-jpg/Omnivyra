@@ -8,6 +8,23 @@ Method: authoritative analysis of the declared schema DDL in `supabase/migration
 observed in prior phases. **No probe writes were performed against production**; where
 live data already proves a behavior, it is cited as evidence.
 
+> **CORRECTION (2026-11-12, programme schema audit - 05 / 83 / e1):** this audit read the
+> declared DDL in `supabase/migrations/*`, which is NOT what runs in production. Checked
+> against the production schema dump (`supabase/_schema/baseline.sql`) and 83's read-only
+> prod pack (C20):
+> - `20260510_company_membership_identity_hardening` was **never applied**: the functions
+>   `omnivyra_self_joined_role_matches_company_domain`, `omnivyra_enforce_self_joined_company_domain`,
+>   `omnivyra_enforce_active_company_membership`, `omnivyra_is_free_email_domain`,
+>   `omnivyra_extract_email_domain` and the triggers `trg_user_company_roles_self_joined_domain_guard`
+>   / `trg_users_active_company_membership_guard` **do not exist in production**, and the
+>   one-time cleanup UPDATEs in that file never ran.
+> - `idx_companies_admin_email_domain_unique` (and `idx_companies_website_domain_unique`) are
+>   **absent** in production.
+> The app-level checks that stand in for them, and the gaps, are recorded in e1's privilege
+> audit (2026-11-12); a re-authored migration replaces the DB layer (never apply 20260510
+> as-is). Read every "Triggers" / "DB functions" / "UNIQUE" row below as REPO INTENT, not
+> production fact.
+
 ## Bottom line
 
 **If application code is bypassed, the database WILL accept inconsistent company
