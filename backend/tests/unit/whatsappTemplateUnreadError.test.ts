@@ -6,7 +6,10 @@
  */
 const mockFetch = { calls: 0 };
 const mockRpc = { fail: false };
-const AT = new Date('2026-01-01T10:00:00Z'); // in the PAST: a mutant stamping "now" must look NEWER
+// The clock the test asserts against is the clock the code sees: Date is FROZEN at NOW (timers stay
+// real), and AT is before it - so a mutant stamping "now" is NEWER than AT at any time of day.
+const NOW = new Date('2026-06-01T00:00:00Z');
+const AT = new Date('2026-01-01T10:00:00Z');
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => require('../helpers/fakeWhatsappDb').fakeTable(t),
@@ -48,6 +51,11 @@ const seed = (templates: Row[]) => resetFakeDb({
 });
 const row = (id: string): Row => fakeDb.tables.whatsapp_templates.find((x) => x.id === id)!;
 const input = { company_id: ORG, social_account_id: 'sa1', template_name: 'hello', template_category: 'MARKETING' as const, components: [] };
+
+beforeAll(() => {
+  jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate', 'clearImmediate', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask', 'hrtime', 'performance'] });
+});
+afterAll(() => jest.useRealTimers());
 
 beforeEach(() => {
   mockFetch.calls = 0;

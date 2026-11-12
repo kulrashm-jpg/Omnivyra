@@ -17,6 +17,12 @@ import { supabase } from '../../db/supabaseClient';
 
 export interface WaWebhookJob {
   payload: any; // raw parsed Meta webhook body
+  /**
+   * Set when a retry was narrowed to the failed template changes: the webhook body as FIRST
+   * received, kept for the forensic record (a dead-lettered job still shows everything that came
+   * in). Never processed.
+   */
+  original_payload?: any;
 }
 
 export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise<void> {
@@ -84,8 +90,16 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
     }
   }
   if (templateFailure) {
+    // ORDER MATTERS - narrow, THEN throw. A crash between the two fails SAFE: stalled-job recovery
+    // re-runs the already-narrowed data (fewer effects, not more). Throwing first would lose the
+    // narrowing. The first-received body is kept in original_payload (never overwritten by a later
+    // narrowing), so a dead-lettered job still shows what else that webhook carried.
     try {
-      await job.updateData({ ...job.data, payload: { ...payload, entry: failedTemplateEntries } });
+      await job.updateData({
+        ...job.data,
+        payload:          { ...payload, entry: failedTemplateEntries },
+        original_payload: job.data.original_payload ?? payload,
+      });
     } catch (err) {
       // The retry then re-runs the WHOLE payload (delivery counters may count twice) - still thrown:
       // a template left sendable after Meta stopped it is the worse outcome.

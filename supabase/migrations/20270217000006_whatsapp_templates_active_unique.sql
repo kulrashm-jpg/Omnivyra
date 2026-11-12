@@ -21,7 +21,9 @@
 -- (Meta stamps whole seconds, so time cannot order them), one LESS restrictive than the status it
 -- holds (APPROVED < PAUSED < REJECTED < DISABLED): wrongly restricting blocks a send, visibly and
 -- recoverably; wrongly permitting sends on a template Meta stopped. Equal and as restrictive is
--- re-applied (a duplicate delivery is idempotent; a real same-second transition is not lost). It applies APPROVED
+-- re-applied (a duplicate delivery is idempotent; a real same-second transition is not lost).
+-- Restrictiveness is a TIE-BREAK, never an override: a LATER re-approval after a DISABLED applies.
+-- It applies APPROVED
 -- (deprecate the other active versions, then activate this one) or PAUSED / DISABLED / REJECTED
 -- (deactivate) in the same transaction. Returns 'applied' | 'stale' | 'not_found'.
 -- SECURITY INVOKER (the service role already writes this table), search_path pinned, EXECUTE by full
