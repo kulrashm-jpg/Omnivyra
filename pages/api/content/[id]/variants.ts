@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '@/lib/platform/routeFactory'
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
-import { listVariants, upsertVariant } from '@/backend/services/content/contentService';
+import { getContent, listVariants, upsertVariant } from '@/backend/services/content/contentService';
 import { resolveCompanyId, firstQueryValue, respondServiceError } from '@/lib/content/contentApiHelpers';
 
 /**
@@ -29,6 +29,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // (PERMISSIONS.CREATE_CAMPAIGN) in the company authorized above; VIEW_ONLY and
   // its aliases stay read-only. Reads are unchanged. See contentWriteAuthz.ts.
   if ((req.method === 'POST') && !(await enforceContentWriteRole({ req, res, companyId: scopedCompanyId }))) return;
+
+  // Tenant isolation (SECURITY, 2026-11-11): prove the content belongs to the
+  // caller's company BEFORE touching its variants. upsertVariant conflicts on
+  // (content_id, platform) - a key with no company column - so without this a
+  // member of company A could POST to company B's content id and OVERWRITE B's
+  // variant, re-stamping it with A's company_id (a takeover). Same check as the
+  // sibling content routes (approval, blocks, lineage, ...).
+  const content = await getContent(id, scopedCompanyId);
+  if (!content) return res.status(404).json({ error: 'Content not found' });
 
   if (req.method === 'GET') {
     try {

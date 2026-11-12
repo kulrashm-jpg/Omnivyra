@@ -28,7 +28,7 @@ import {
   bumpCollectionVersion,
   validateCollection,
 } from '../../../lib/creator-templates/collection';
-import { getUserTemplate } from './userTemplateService';
+import { getUserTemplateForCompany } from './userTemplateService';
 
 const TABLE = 'creator_template_collections';
 const nowIso = () => new Date().toISOString();
@@ -68,23 +68,64 @@ function toRow(c: TemplateCollection, companyId: string): Record<string, unknown
   };
 }
 
-/** Build a SYNC resolver over a collection's references (system + user). */
-export async function buildResolver(templateIds: string[]): Promise<TemplateResolver> {
+/**
+ * Build a SYNC resolver over a collection's references (system + user).
+ *
+ * SECURITY (2026-11-11): user templates resolve ONLY within `companyId` (null
+ * = system templates only). A collection could hold another tenant's template
+ * id (add/cover/reorder/replace did not check ownership), and resolving it by
+ * id alone returned that tenant's FULL template. Foreign ids now resolve to
+ * nothing - which also neutralises any already stored.
+ */
+export async function buildResolver(templateIds: string[], companyId: string | null): Promise<TemplateResolver> {
   const map = new Map<string, CreatorTemplate>();
   for (const id of templateIds) {
-    const sys = getTemplateById(id);
+    const sys = platformTemplate(id);
     if (sys) { map.set(id, sys); continue; }
-    const usr = await getUserTemplate(id);
+    if (!companyId) continue;
+    const usr = await getUserTemplateForCompany(id, companyId);
     if (usr) map.set(id, usr);
   }
-  return (id: string) => map.get(id) ?? getTemplateById(id) ?? null;
+  return (id: string) => map.get(id) ?? platformTemplate(id);
+}
+
+/**
+ * A PLATFORM template (ownership 'system': in-code or curated), never a user/AI
+ * one. getTemplateById ALSO returns user templates registered at runtime in this
+ * process (the render path registers them), so treating any hit as "system"
+ * would resolve - or admit - another tenant's template (SECURITY 2026-11-11).
+ */
+function platformTemplate(id: string): CreatorTemplate | null {
+  const t = getTemplateById(id);
+  return t && t.ownership === 'system' ? t : null;
+}
+
+/** Thrown when a collection edit references a template the collection's company may not use. */
+export class ForeignTemplateReferenceError extends Error {
+  constructor(readonly templateId: string) {
+    super(`template ${templateId} is not available to this company`);
+    this.name = 'ForeignTemplateReferenceError';
+  }
+}
+
+/**
+ * Every template id an edit INTRODUCES (members or cover) must be a system
+ * template or this company's own user template (SECURITY, 2026-11-11).
+ */
+async function assertReferencesUsable(before: TemplateCollection, after: TemplateCollection, companyId: string): Promise<void> {
+  const had = new Set([...before.templateIds, ...(before.preview.coverTemplateId ? [before.preview.coverTemplateId] : [])]);
+  const now = [...after.templateIds, ...(after.preview.coverTemplateId ? [after.preview.coverTemplateId] : [])];
+  for (const id of new Set(now)) {
+    if (had.has(id) || platformTemplate(id)) continue;
+    if (!(await getUserTemplateForCompany(id, companyId))) throw new ForeignTemplateReferenceError(id);
+  }
 }
 
 /** Derive the cover from a member's EXISTING preview (no new render). */
-async function refreshCover(c: TemplateCollection): Promise<TemplateCollection> {
+async function refreshCover(c: TemplateCollection, companyId: string | null): Promise<TemplateCollection> {
   const coverId = c.preview.coverTemplateId ?? c.templateIds[0] ?? null;
   if (!coverId) return { ...c, preview: { coverTemplateId: null, coverUrl: null } };
-  const resolve = await buildResolver([coverId]);
+  const resolve = await buildResolver([coverId], companyId);
   const cover = resolve(coverId);
   return { ...c, preview: { coverTemplateId: coverId, coverUrl: cover?.preview.thumbnailUrl ?? null } };
 }
@@ -113,7 +154,8 @@ export async function getCollection(id: string): Promise<TemplateCollection | nu
 export async function getCollectionDetail(id: string): Promise<{ collection: TemplateCollection; templates: CreatorTemplate[]; validation: CollectionValidation; storyBlueprintCoverage: BlueprintCoverage } | null> {
   const collection = await getCollection(id);
   if (!collection) return null;
-  const resolve = await buildResolver(collection.templateIds);
+  // Members resolve only within the collection's own company (SECURITY 2026-11-11).
+  const resolve = await buildResolver(collection.templateIds, await companyIdFor(id));
   const templates = collection.templateIds.map(resolve).filter((t): t is CreatorTemplate => t !== null);
   return { collection, templates, validation: validateCollection(collection, resolve), storyBlueprintCoverage: blueprintCoverage(templates) };
 }
@@ -147,13 +189,19 @@ export async function createCollectionRecord(input: CreateCollectionInput): Prom
   const now = nowIso();
   try {
     const draft = createCollection({ id: 'pending', ownerUserId: input.ownerUserId, teamId: input.teamId ?? null, name: input.name, description: input.description, category: input.category, brandStyle: input.brandStyle, templateIds: input.templateIds, now });
+    // Initial members are checked like any later edit (SECURITY 2026-11-11):
+    // a foreign template id is refused, never stored.
+    await assertReferencesUsable({ ...draft, templateIds: [], preview: { coverTemplateId: null, coverUrl: null } }, draft, input.companyId);
     const { data, error } = await supabase.from(TABLE).insert(toRow(draft, input.companyId)).select('*').maybeSingle();
     if (error || !data) return null;
     const row = data as Record<string, unknown>;
-    const finalized = await refreshCover({ ...draft, id: String(row.id) });
+    const finalized = await refreshCover({ ...draft, id: String(row.id) }, input.companyId);
     await supabase.from(TABLE).update({ collection_json: finalized, cover_url: finalized.preview.coverUrl ?? null }).eq('id', row.id);
     return hydrate({ ...row, collection_json: finalized, cover_url: finalized.preview.coverUrl ?? null });
-  } catch { return null; }
+  } catch (err) {
+    if (err instanceof ForeignTemplateReferenceError) throw err; // a refusal, not a storage failure
+    return null;
+  }
 }
 
 /** Load → pure mutate → refresh cover → bump version → persist. */
@@ -163,9 +211,13 @@ async function applyAndPersist(id: string, mutate: (c: TemplateCollection, now: 
   const companyId = await companyIdFor(id);
   if (!companyId) return null;
   const now = nowIso();
+  // Ownership of introduced references is checked BEFORE the write; a foreign
+  // id is refused (thrown), never stored.
+  const candidate = mutate(current, now);
+  await assertReferencesUsable(current, candidate, companyId);
   try {
-    const mutated = bumpCollectionVersion(mutate(current, now));
-    const finalized = await refreshCover(mutated);
+    const mutated = bumpCollectionVersion(candidate);
+    const finalized = await refreshCover(mutated, companyId);
     const { data, error } = await supabase.from(TABLE).update(toRow(finalized, companyId)).eq('id', id).select('*').maybeSingle();
     if (error || !data) return null;
     return hydrate(data as Record<string, unknown>);
@@ -189,10 +241,13 @@ export async function duplicateCollectionRecord(input: { id: string; companyId: 
     const { data, error } = await supabase.from(TABLE).insert(toRow(draft, input.companyId)).select('*').maybeSingle();
     if (error || !data) return null;
     const row = data as Record<string, unknown>;
-    const finalized = await refreshCover({ ...draft, id: String(row.id) });
+    const finalized = await refreshCover({ ...draft, id: String(row.id) }, input.companyId);
     await supabase.from(TABLE).update({ collection_json: finalized, cover_url: finalized.preview.coverUrl ?? null }).eq('id', row.id);
     return hydrate({ ...row, collection_json: finalized, cover_url: finalized.preview.coverUrl ?? null });
-  } catch { return null; }
+  } catch (err) {
+    if (err instanceof ForeignTemplateReferenceError) throw err; // a refusal, not a storage failure
+    return null;
+  }
 }
 
 export async function deleteCollection(id: string): Promise<boolean> {

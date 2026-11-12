@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
-import { listCollections, createCollectionRecord, duplicateCollectionRecord, getCollectionCompanyId } from '../../../../backend/services/creator/collectionService';
+import { listCollections, createCollectionRecord, duplicateCollectionRecord, getCollectionCompanyId, ForeignTemplateReferenceError } from '../../../../backend/services/creator/collectionService';
 
 /**
  * GET  /api/creator-templates/collections?company_id=        — list collections
@@ -38,7 +38,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(201).json({ collection: dup });
     }
 
-    const created = await createCollectionRecord({
+    let created: Awaited<ReturnType<typeof createCollectionRecord>>;
+    try {
+    created = await createCollectionRecord({
       companyId,
       ownerUserId: user.userId,
       name: typeof body.name === 'string' ? body.name : undefined,
@@ -48,6 +50,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       templateIds: Array.isArray(body.template_ids) ? body.template_ids.filter((x): x is string => typeof x === 'string') : undefined,
       teamId: typeof body.team_id === 'string' ? body.team_id : null,
     });
+    } catch (err) {
+      // An initial template id from another company (SECURITY 2026-11-11).
+      if (err instanceof ForeignTemplateReferenceError) return res.status(400).json({ error: 'A referenced template is not available to this company.', code: 'FOREIGN_TEMPLATE' });
+      throw err;
+    }
     if (!created) return res.status(503).json({ error: 'Could not create collection (storage unavailable).' });
     return res.status(201).json({ collection: created });
   }
