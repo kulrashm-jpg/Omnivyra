@@ -34,7 +34,7 @@ it('e9 RULING: a SYSTEM template exposes NO cross-tenant audit events (catalog m
   const { ALL_SYSTEM_TEMPLATES } = jest.requireActual('../../../lib/creator-templates');
   const sysId = ALL_SYSTEM_TEMPLATES[0].id as string;
   mockAuditReads.length = 0;
-  const h: any = await getTemplateHealth(sysId);
+  const h: any = await getTemplateHealth(sysId, 'company-a');
   expect(h.ownership).toBe('system');
   expect(mockAuditReads).toEqual([]); // the shared audit trail is not even read
   expect(JSON.stringify(h)).not.toMatch(/2026-11-0[12]/);
