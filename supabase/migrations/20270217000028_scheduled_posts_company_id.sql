@@ -13,7 +13,9 @@
 -- e9 option B): once social_accounts.company_id is set it can never change (NULL -> X adoption, which
 -- the linkedin / x / youtube callbacks use for legacy rows, stays allowed). Verified 2026-11-13: no
 -- app path moves an account today (every reconnect looks up WITHIN the connecting company and inserts
--- a new row otherwise); the trigger turns that accidental safety into an enforced one. A publish-time
+-- a new row otherwise, which UNIQUE (company_id, platform, platform_user_id) has always required); the
+-- trigger closes what that constraint cannot (moving to a company that does not yet hold the identity).
+-- X -> NULL is allowed only for an orphan whose company no longer exists (repair path). A publish-time
 -- check (account company vs scheduled_posts.company_id) ships as application code after this.
 --
 -- THE THREE POPULATIONS (each backfilled from one source; any row that cannot be derived honestly
@@ -44,7 +46,8 @@
 -- with ANY campaign OR ANY scheduled post cannot be hard-deleted. 029 (applied right after this)
 -- re-authors public.hard_delete_company to refuse that up front with the named COMPANY_HAS_CONTENT
 -- (counts per table) before any delete; between this apply and 029 the refusal is a bare 23503 that
--- still deletes nothing. Soft-delete / disable stays the normal way to retire a company.
+-- still deletes nothing. That bare 23503 is not introduced by 028: 025 alone already produces it for
+-- every company with a campaign; 029 repairs that pre-existing operator-facing gap for both. Soft-delete / disable stays the normal way to retire a company.
 --
 -- ORDER. Apply AFTER 20270217000025 (campaigns.company_id NOT NULL) and BEFORE any S2 conversion of
 -- scheduled_posts goes live. The fast-track code (resolver) should be deployed first so no new
@@ -258,6 +261,12 @@ SECURITY INVOKER
 SET search_path = ''
 AS $fn$
 BEGIN
+  -- Repair path (05 review): social_accounts.company_id has no FK to companies, so a hard-deleted
+  -- company can leave a dangling id. Clearing it (X -> NULL) is allowed ONLY when company X no longer
+  -- exists; an account can never move between two live companies, nor be cleared from a live one.
+  IF NEW.company_id IS NULL AND NOT EXISTS (SELECT 1 FROM public.companies c WHERE c.id = OLD.company_id) THEN
+    RETURN NEW;
+  END IF;
   RAISE EXCEPTION 'social_accounts: account % belongs to company % and cannot move to company %; connect it under the other company instead (a new row)',
     OLD.id, OLD.company_id, coalesce(NEW.company_id::text, 'none')
     USING ERRCODE = '23514';

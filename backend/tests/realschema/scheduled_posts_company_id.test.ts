@@ -19,6 +19,7 @@ const url = process.env.W6_DB_URL as string;
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../supabase/migrations');
 const MIGRATION_FILE = '20270217000028_scheduled_posts_company_id.sql';
 const ROLLBACK_FILE = path.join('rollbacks', 'scheduled_posts_company_id_rollback.sql');
+const ROLLBACK_029 = path.join('rollbacks', 'hard_delete_company_named_dependents_rollback.sql');
 
 function unwrapped(file: string): string {
   const lines = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').split('\n');
@@ -34,6 +35,12 @@ function verifyBlock(): string {
   const end = sql.indexOf('$' + 'verify$;', start + marker.length);
   if (start < 0 || end < 0) throw new Error('verify block not found');
   return sql.slice(start, end + ('$' + 'verify$;').length);
+}
+
+/** Rolls back 028 in the enforced order: 029 first (it is applied on this branch), then 028. */
+async function rollback028(c: Client): Promise<void> {
+  await c.query(unwrapped(ROLLBACK_029));
+  await c.query(unwrapped(ROLLBACK_FILE));
 }
 
 async function rolledBack<T>(body: (c: Client) => Promise<T>): Promise<T> {
@@ -148,7 +155,7 @@ describe('the guard trigger', () => {
 describe('the migration itself', () => {
   it('HEAD CONTROL: without 028 the cross-company post is ACCEPTED; with it, REFUSED', () => rolledBack(async (c) => {
     const w = await seed(c);
-    await c.query(unwrapped(ROLLBACK_FILE));
+    await rollback028(c);
     const before = await attemptIn(c, `INSERT INTO public.scheduled_posts (user_id, campaign_id, social_account_id, platform, content_type, content, scheduled_for)
                                        VALUES ($1, $2, $3, 'linkedin', 'post', 'sp', now()) RETURNING id`, [w.user, w.campA, w.saB]);
     expect(before.ok).toBe(true);
@@ -161,7 +168,7 @@ describe('the migration itself', () => {
   }));
   it('backfills each population from its own source: (a) campaign, (b) account with ANY membership, (c) single active company', () => rolledBack(async (c) => {
     const w = await seed(c);
-    await c.query(unwrapped(ROLLBACK_FILE));
+    await rollback028(c);
     const ins = async (campaign: string | null, account: string | null, user = w.user) => (await c.query(
       `INSERT INTO public.scheduled_posts (user_id, campaign_id, social_account_id, platform, content_type, content, scheduled_for)
        VALUES ($1, $2, $3, 'linkedin', 'post', 'sp', now()) RETURNING id`, [user, campaign, account])).rows[0].id as string;
@@ -180,7 +187,7 @@ describe('the migration itself', () => {
     ['(c) creator with no active company', (w: any) => [randomUUID(), null, null], /preflight \(c\)/],
   ])('its preflight REFUSES %s, naming the post, and changes nothing', (_label, row, pattern) => rolledBack(async (c) => {
     const w = await seed(c);
-    await c.query(unwrapped(ROLLBACK_FILE));
+    await rollback028(c);
     const [user, campaign, account] = (row as (w: any) => unknown[])(w);
     if (user !== w.user && user !== w.user2) await c.query(`INSERT INTO public.users (id, email) VALUES ($1, $2)`, [user, `sp-${user}@example.test`]);
     const id = (await c.query(`INSERT INTO public.scheduled_posts (user_id, campaign_id, social_account_id, platform, content_type, content, scheduled_for)
@@ -193,7 +200,7 @@ describe('the migration itself', () => {
     expect(col).toBe(0);
   }));
   it('PROVENANCE: a company_id column 028 did not create is refused by the apply AND by the rollback', () => rolledBack(async (c) => {
-    await c.query(unwrapped(ROLLBACK_FILE));
+    await rollback028(c);
     await c.query('ALTER TABLE public.scheduled_posts ADD COLUMN company_id uuid'); // someone else's column
     const apply = await attemptIn(c, unwrapped(MIGRATION_FILE));
     expect(apply).toMatchObject({ ok: false });
@@ -209,7 +216,7 @@ describe('the migration itself', () => {
     expect(r.message).toMatch(/must be SECURITY INVOKER/);
   }));
   it('the rollback removes the column, triggers and function; re-applying restores them', () => rolledBack(async (c) => {
-    await c.query(unwrapped(ROLLBACK_FILE));
+    await rollback028(c);
     const gone = (await c.query(`SELECT to_regprocedure('public.scheduled_posts_company_id_guard()') AS f`)).rows[0].f;
     expect(gone).toBeNull();
     expect(await attemptIn(c, unwrapped(MIGRATION_FILE))).toMatchObject({ ok: true });
@@ -236,7 +243,7 @@ describe('social_accounts never move between companies (e9 option B)', () => {
   }));
   it('HEAD CONTROL: without 028 an account CAN move company; with it, it cannot', () => rolledBack(async (c) => {
     const w = await seed(c);
-    await c.query(unwrapped(ROLLBACK_FILE));
+    await rollback028(c);
     expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saA, w.B])).toMatchObject({ ok: true });
     await c.query(`UPDATE public.social_accounts SET company_id = $2 WHERE id = $1`, [w.saA, w.A]);
     await c.query(unwrapped(MIGRATION_FILE));
@@ -247,4 +254,23 @@ describe('social_accounts never move between companies (e9 option B)', () => {
     const r = (await db.query(`SELECT prosecdef, proconfig, has_function_privilege('anon', oid, 'EXECUTE') AS anon, has_function_privilege('authenticated', oid, 'EXECUTE') AS auth FROM pg_proc WHERE oid = 'public.social_accounts_company_id_immutable()'::regprocedure`)).rows[0];
     expect(r).toEqual({ prosecdef: false, proconfig: ['search_path=""'], anon: false, auth: false });
   });
+});
+
+describe('05 review: enforced rollback order and the orphan repair path', () => {
+  it("028's rollback REFUSES while 029's hard_delete_company is applied (roll back 029 first)", () => rolledBack(async (c) => {
+    const r = await attemptIn(c, unwrapped(ROLLBACK_FILE));
+    expect(r).toMatchObject({ ok: false });
+    expect(r.message).toMatch(/roll back 20270217000029 first/);
+  }));
+  it('an orphaned account (its company no longer exists) can be cleared X -> NULL; a live one cannot', () => rolledBack(async (c) => {
+    const w = await seed(c);
+    const gone = randomUUID();
+    await c.query(`INSERT INTO public.companies (id, name) VALUES ($1, 'sp-gone')`, [gone]);
+    const orphan = randomUUID();
+    await c.query(`INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, account_name, access_token, company_id, is_active)
+                   VALUES ($1, $2, 'linkedin', $1, 'sp', 'not-a-token', $3, true)`, [orphan, w.user, gone]);
+    await c.query(`DELETE FROM public.companies WHERE id = $1`, [gone]); // no FK from social_accounts: the id dangles
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = NULL WHERE id = $1`, [orphan])).toMatchObject({ ok: true });
+    expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = NULL WHERE id = $1`, [w.saA])).toMatchObject({ ok: false, code: '23514' });
+  }));
 });

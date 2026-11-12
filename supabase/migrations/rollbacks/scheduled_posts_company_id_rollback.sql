@@ -22,6 +22,12 @@ BEGIN
      AND to_regprocedure('public.scheduled_posts_company_id_guard()') IS NULL THEN
     RAISE EXCEPTION 'SP-COMPANY rollback: scheduled_posts.company_id exists without the 028 guard function; it was not created by 028, refusing to drop it';
   END IF;
+  -- 029's hard_delete_company counts scheduled_posts.company_id: dropping the column under it would
+  -- succeed here and break every later hard delete (05 review). Enforce the order.
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE oid = to_regprocedure('public.hard_delete_company(uuid, uuid, text)')
+              AND md5(replace(prosrc, E'\r', '')) = '3f2c47120b18bb9e0d98d95e74fcbb29') THEN
+    RAISE EXCEPTION 'SP-COMPANY rollback: roll back 20270217000029 first (hard_delete_company still reads scheduled_posts.company_id)';
+  END IF;
 END
 $provenance$;
 
