@@ -8,7 +8,13 @@
 -- authority: at most ONE pending-or-approved submission per user. A rejected
 -- submission is outside the predicate, so the user may resubmit; an approved
 -- one stays inside it, so approval is permanent.
--- In code, a 23505 on the insert answers 409 (the concurrent loser).
+-- The predicate MIRRORS the route's two existing reads (feedback.ts: status =
+-- 'approved' -> 409 "already accepted and credited"; status = 'pending' -> 409
+-- "already pending review"), so it enforces the existing rule, not a new one.
+-- In code, a 23505 naming this index answers 409 (the concurrent loser).
+-- Not CONCURRENTLY: CREATE INDEX CONCURRENTLY cannot run inside a transaction
+-- block and migrations apply transactionally; the table is small, so the
+-- write lock lasts milliseconds.
 --
 -- PRECONDITION: RAISES (nothing changed) if any user already holds more than
 -- one pending/approved row (83/C18, prod 2026-11-12: 0 such users).

@@ -226,6 +226,11 @@ describe('earn/feedback concurrent submit', () => {
     const res = await call(feedback, 'POST', FEEDBACK);
     expect(res.statusCode).toBe(409);
   });
+  it('a 23505 from a DIFFERENT unique constraint -> 500 (the 409 is keyed on the index NAME)', async () => {
+    mockScript['feedback_submissions:insert'] = () => ({ data: null, error: { message: 'duplicate key value violates unique constraint "feedback_submissions_pkey"', code: '23505' } as any });
+    const res = await call(feedback, 'POST', FEEDBACK);
+    expect(res.statusCode).toBe(500);
+  });
   it('control: any other insert error is still a 500 (never a false "already submitted")', async () => {
     mockScript['feedback_submissions:insert'] = () => ({ data: null, error: { message: 'connection reset', code: '08006' } as any });
     const res = await call(feedback, 'POST', FEEDBACK);

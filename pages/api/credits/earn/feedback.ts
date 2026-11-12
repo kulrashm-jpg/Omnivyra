@@ -89,8 +89,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (insertErr) {
     // CLASS 2 (20270217000002): the partial UNIQUE index (one pending/approved
     // submission per user) is the authority; the two reads above are only the
-    // early answer. A 23505 here is the concurrent loser -> 409, never a 500.
-    if ((insertErr as { code?: string }).code === '23505') {
+    // early answer. A 23505 NAMING that index is the concurrent loser -> 409.
+    // Keyed on the constraint NAME (05): any other UNIQUE added to this table
+    // later must not inherit the "already pending or accepted" message.
+    if ((insertErr as { code?: string }).code === '23505'
+        && /feedback_submissions_one_open_per_user/.test(`${insertErr.message ?? ''} ${(insertErr as { details?: string }).details ?? ''}`)) {
       return res.status(409).json({ error: 'You already have feedback pending review or accepted.' });
     }
     logger.error('credits_earn_feedback_insert_failed', { userId: user.id, message: insertErr.message });
