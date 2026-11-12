@@ -320,7 +320,9 @@ export type PublishClaimRefusalReason =
   | 'call_in_flight'
   | 'already_published'
   | 'outcome_uncertain'
-  | 'not_claimable';
+  | 'not_claimable'
+  /** The account/post company check could not be completed (read error, or the post has no company). */
+  | 'company_unverified';
 
 /**
  * Deliberately ONE shape rather than a discriminated union: this repo compiles
@@ -519,6 +521,69 @@ export async function refreshScheduledPostMediaFromRefs(input: {
   }
 }
 
+/**
+ * CORRECT-SENDING GUARD (BLOCKING, e9 option B, 2026-11-13). A post is published ONLY through an account
+ * of the post's own company: the account actually used (the caller's social_account_id, which the
+ * platform adapter publishes with) must belong to scheduled_posts.company_id (migration 20270217000028).
+ *
+ * - mismatch (including an account with no company, or no such account): FAILED, visible, NOT suppressed:
+ *   the caller records the failure; nothing reaches the platform.
+ * - cannot verify (account read failed; the post carries no company, i.e. the code runs against a
+ *   schema without 028): FAILED + suppressed, so NO status is written and the post stays as it was for a
+ *   later retry. Never published unverified. CRITICAL log when the post has no company.
+ * Returns null when the check passes.
+ */
+export async function refuseUnlessAccountMatchesPostCompany(
+  scheduledPost: { id?: string; company_id?: string | null },
+  socialAccountId: string,
+  timestamp: string,
+): Promise<PublishNowResult | null> {
+  const postCompany = scheduledPost.company_id ?? null;
+  if (!postCompany) {
+    console.error('[publishNow] CRITICAL: post has no company_id (schema without migration 20270217000028?); not publishing', {
+      scheduled_post_id: scheduledPost.id,
+    });
+    return {
+      status: 'FAILED',
+      message: 'Publish refused: the post\'s company could not be determined; it was left unchanged for retry.',
+      timestamp,
+      suppressed: true,
+      refusal: 'company_unverified',
+    };
+  }
+  const { data, error } = await supabase
+    .from('social_accounts')
+    .select('id, company_id')
+    .eq('id', socialAccountId)
+    .maybeSingle();
+  if (error) {
+    console.error('[publishNow] account company read failed; not publishing', { scheduled_post_id: scheduledPost.id, error: error.message });
+    return {
+      status: 'FAILED',
+      message: 'Publish refused: could not verify the account\'s company; it was left unchanged for retry.',
+      timestamp,
+      suppressed: true,
+      refusal: 'company_unverified',
+    };
+  }
+  const accountCompany = (data as { company_id?: string | null } | null)?.company_id ?? null;
+  if (!data || accountCompany !== postCompany) {
+    logger.warn('publishNow.account_company_mismatch', {
+      surface: 'publishNow',
+      scheduledPostId: scheduledPost.id,
+      socialAccountId,
+      postCompanyId: postCompany,
+      accountCompanyId: accountCompany,
+    });
+    return {
+      status: 'FAILED',
+      message: `Publish refused (ACCOUNT_COMPANY_MISMATCH): the social account is not connected in this post's company. Reconnect the account in this company's Settings → Social Accounts.`,
+      timestamp,
+    };
+  }
+  return null;
+}
+
 export async function publishNow(input: PublishNowInput): Promise<PublishNowResult> {
   const { scheduled_post_id, social_account_id, user_id } = input;
   const timestamp = new Date().toISOString();
@@ -547,6 +612,9 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
   // orchestrator's per-node idempotency safely skips already-published nodes
   // and continues with unpublished ones (the resume-from-failed path).
   if (scheduledPost.is_thread_start === true) {
+    const threadCompanyRefusal = await refuseUnlessAccountMatchesPostCompany(
+      scheduledPost as { id?: string; company_id?: string | null }, social_account_id, timestamp);
+    if (threadCompanyRefusal) return threadCompanyRefusal;
     const threadResult = await publishThread({
       root_scheduled_post_id: scheduled_post_id,
       social_account_id,
@@ -596,6 +664,12 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       refusal: 'not_claimable',
     };
   }
+
+  // Correct-sending guard (after the idempotent short-circuit and the thread-child refusal: an
+  // already-published row is reported, never re-judged; before the claim: a refused post is never claimed or sent).
+  const companyRefusal = await refuseUnlessAccountMatchesPostCompany(
+    scheduledPost as { id?: string; company_id?: string | null }, social_account_id, timestamp);
+  if (companyRefusal) return companyRefusal;
 
   // ── POST-LEVEL PUBLISH CLAIM ───────────────────────────────────────────
   //

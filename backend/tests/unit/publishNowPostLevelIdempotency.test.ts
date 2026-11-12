@@ -227,12 +227,16 @@ import { RELEASABLE_POST_STATUSES } from '../../../lib/campaign/publishAuthoriza
 
 const USER = '00000000-0000-0000-0000-0000000000u1';
 const ACCOUNT = '00000000-0000-0000-0000-0000000000a1';
+/** The post's company and its account's company (migration 20270217000028 gives every post one). */
+const COMPANY = '00000000-0000-0000-0000-0000000000c1';
+const OTHER_COMPANY = '00000000-0000-0000-0000-0000000000c2';
 
 function seedPost(id: string, overrides: Row = {}): Row {
   const row: Row = {
     id,
     user_id: USER,
     social_account_id: ACCOUNT,
+    company_id: COMPANY,
     campaign_id: null,
     platform: 'linkedin',
     content_type: 'post',
@@ -270,6 +274,7 @@ const cronWouldSelect = (now = new Date().toISOString()) =>
 
 beforeEach(() => {
   Object.keys(store).forEach((k) => { store[k] = []; });
+  store.social_accounts = [{ id: ACCOUNT, company_id: COMPANY }];
   platformCalls.length = 0;
   threadCalls.length = 0;
   platformOutcome = 'success';
@@ -516,6 +521,7 @@ describe('publishNow — the MANUAL "publish now" path keeps working', () => {
 
     for (const status of ['scheduled', 'failed']) {
       Object.keys(store).forEach((k) => { store[k] = []; });
+      store.social_accounts = [{ id: ACCOUNT, company_id: COMPANY }];
       platformCalls.length = 0;
       seedPost('sp-x', { status });
       const result = await run('sp-x', 'api');
@@ -754,5 +760,65 @@ describe('Closure-004 — publish-now refuses a thread child', () => {
     expect(r.message).toMatch(/thread/i);
     expect(publishesFor('sp-child')).toBe(0);
     expect(post('sp-child')).toEqual(before);
+  });
+});
+
+/* ── Correct-sending guard (e9 option B): the account used must be in the post's company ── */
+describe('publishNow — the publishing account must belong to the post\'s company', () => {
+  test("CRITICAL: an account in ANOTHER company is refused visibly; nothing is claimed or sent", async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: OTHER_COMPANY }];
+    seedPost('sp-x');
+    const result = await run('sp-x', 'cron');
+    expect(result.status).toBe('FAILED');
+    expect(result.suppressed).toBeUndefined();
+    expect(result.message).toContain('ACCOUNT_COMPANY_MISMATCH');
+    expect(publishesFor('sp-x')).toBe(0);
+    expect(post('sp-x').status).toBe('scheduled');
+  });
+
+  test('a company-LESS account is refused the same way', async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: null }];
+    seedPost('sp-n');
+    const result = await run('sp-n');
+    expect(result.message).toContain('ACCOUNT_COMPANY_MISMATCH');
+    expect(publishesFor('sp-n')).toBe(0);
+  });
+
+  test('a missing account row is refused the same way', async () => {
+    store.social_accounts = [];
+    seedPost('sp-m');
+    const result = await run('sp-m');
+    expect(result.message).toContain('ACCOUNT_COMPANY_MISMATCH');
+    expect(publishesFor('sp-m')).toBe(0);
+  });
+
+  test('a post with NO company (schema without 028) is not sent and is left untouched for retry', async () => {
+    seedPost('sp-u', { company_id: null });
+    const result = await run('sp-u');
+    expect(result).toMatchObject({ status: 'FAILED', suppressed: true, refusal: 'company_unverified' });
+    expect(publishesFor('sp-u')).toBe(0);
+    expect(post('sp-u').status).toBe('scheduled');
+  });
+
+  test('a thread ROOT on a foreign account is refused before the thread orchestrator runs', async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: OTHER_COMPANY }];
+    seedPost('sp-t', { is_thread_start: true });
+    const result = await run('sp-t');
+    expect(result.message).toContain('ACCOUNT_COMPANY_MISMATCH');
+    expect(threadCalls).toEqual([]);
+  });
+
+  test('CONTROL: an already-published row is still reported idempotently (never re-judged)', async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: OTHER_COMPANY }];
+    seedPost('sp-p', { platform_post_id: 'ext-1', status: 'published' });
+    const result = await run('sp-p');
+    expect(result).toMatchObject({ status: 'PUBLISHED', external_post_id: 'ext-1' });
+  });
+
+  test('CONTROL: the same-company account publishes', async () => {
+    seedPost('sp-ok');
+    const result = await run('sp-ok');
+    expect(result.status).toBe('PUBLISHED');
+    expect(publishesFor('sp-ok')).toBe(1);
   });
 });

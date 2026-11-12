@@ -20,6 +20,28 @@ jest.mock('../../db/queries', () => ({
   markScheduledPostPlatformCallStarted: jest.fn(async () => true),
   markScheduledPostOutcomeUncertain: jest.fn(async () => true),
 }));
+// The correct-sending guard reads the publishing account's company (FAITHFUL: eq filters must match).
+// Any other table is unconfigured and answers with an error, as the unmocked client did before.
+jest.mock('../../db/supabaseClient', () => {
+  const ACCOUNTS = [{ id: 'acct-1', company_id: 'co-1' }];
+  return {
+    supabase: {
+      from: (table: string) => {
+        const eqs: Array<[string, unknown]> = [];
+        const b: any = {};
+        b.select = () => b;
+        b.eq = (c: string, v: unknown) => { eqs.push([c, v]); return b; };
+        const rows = () => (table === 'social_accounts' ? ACCOUNTS.filter((r: any) => eqs.every(([c, v]) => r[c] === v)) : null);
+        const err = { message: `unconfigured table ${table}` };
+        b.maybeSingle = async () => (rows() ? { data: rows()![0] ?? null, error: null } : { data: null, error: err });
+        b.single = b.maybeSingle;
+        b.then = (ok: any, ko?: any) => Promise.resolve(rows() ? { data: rows(), error: null } : { data: null, error: err }).then(ok, ko);
+        for (const m of ['in', 'is', 'order', 'limit', 'neq', 'lt', 'lte', 'gt', 'gte']) b[m] = () => b;
+        return b;
+      },
+    },
+  };
+});
 jest.mock('../../adapters/platformAdapter', () => ({
   publishToPlatform: jest.fn(),
 }));
@@ -60,6 +82,7 @@ function fakePost(overrides: Partial<Awaited<ReturnType<typeof getScheduledPost>
     id: 'sp-1',
     user_id: 'user-1',
     social_account_id: 'acct-1',
+    company_id: 'co-1',
     platform: 'instagram',
     content_type: 'post',
     content: 'Hello world',
