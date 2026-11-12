@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIpOrNull } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { systemTenantContext, tenantTable } from '../../../backend/db/tenantTable';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -72,8 +73,8 @@ async function handler(
   let route = '/onboarding/profile';
 
   if (user.email) {
-    const { data: invitation } = await supabase
-      .from('invitations')
+    // cross-tenant: invite-set-password-own-email
+    const { data: invitation } = await supabase.from('invitations')
       .select('id, company_id, expires_at, token_consumed_at')
       .eq('email', user.email.toLowerCase())
       .is('accepted_at', null)
@@ -87,7 +88,9 @@ async function handler(
       const now = new Date().toISOString();
       // Closure-015E: shared predicate (same <= semantics); missing / malformed ⇒ expired.
       if (isInvitationExpired((invitation as any).expires_at)) {
-        await supabase.from('invitations').update({ revoked_at: now }).eq('id', (invitation as any).id);
+        // S2: pinned to the tenant the invitation names.
+        await tenantTable('invitations', systemTenantContext(String((invitation as any).company_id), 'invitee own-email bearer (set-password)'))
+          .update({ revoked_at: now }).eq('id', (invitation as any).id);
         return res.status(400).json({ error: 'Invitation has expired', code: 'EXPIRED_INVITATION' });
       }
 

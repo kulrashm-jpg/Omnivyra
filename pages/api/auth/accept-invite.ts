@@ -15,6 +15,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { systemTenantContext, tenantTable } from '../../../backend/db/tenantTable';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -49,15 +50,17 @@ async function handler(
   // ── 3. Hash token and look up invitation ──────────────────────────────────
   const tokenHash = createHash('sha256').update(token).digest('hex');
 
-  const { data: invitation } = await supabase
-    .from('invitations')
-    .select('id, email, expires_at, accepted_at, revoked_at, token_consumed_at')
+  // cross-tenant: invite-accept-token-bearer
+  const { data: invitation } = await supabase.from('invitations')
+    .select('id, company_id, email, expires_at, accepted_at, revoked_at, token_consumed_at')
     .eq('token_hash', tokenHash)
     .maybeSingle();
 
   if (!invitation) {
     return res.status(404).json({ error: 'Invitation not found or already used', code: 'NOT_FOUND' });
   }
+  // S2: every write below is pinned to the tenant the invitation itself names.
+  const invites = () => tenantTable('invitations', systemTenantContext(String((invitation as any).company_id), 'invitation token bearer (accept-invite)'));
 
   // ── 4. Validate invitation status ─────────────────────────────────────────
   if ((invitation as any).accepted_at) {
@@ -74,13 +77,12 @@ async function handler(
 
   // Closure-015E: RPC semantics (expired AT expires_at); missing / malformed ⇒ expired.
   if (isInvitationExpired((invitation as any).expires_at)) {
-    await supabase.from('invitations').update({ revoked_at: new Date().toISOString() }).eq('id', (invitation as any).id);
+    await invites().update({ revoked_at: new Date().toISOString() }).eq('id', (invitation as any).id);
     return res.status(400).json({ error: 'This invitation has expired', code: 'EXPIRED' });
   }
 
   const consumedAt = new Date().toISOString();
-  const { data: consumedRow, error: consumeError } = await supabase
-    .from('invitations')
+  const { data: consumedRow, error: consumeError } = await invites()
     .update({ token_consumed_at: consumedAt })
     .eq('id', (invitation as any).id)
     .is('token_consumed_at', null)
@@ -109,8 +111,7 @@ async function handler(
   });
 
   if (otpError) {
-    await supabase
-      .from('invitations')
+    await invites()
       .update({ token_consumed_at: null })
       .eq('id', (invitation as any).id);
     logger.warn('accept_invite_otp_send_failed', {

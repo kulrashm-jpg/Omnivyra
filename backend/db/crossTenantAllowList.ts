@@ -20,6 +20,27 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: 'an inbound Meta webhook names a phone_number_id, not a tenant; the lookup resolves WHICH tenant owns it (the shared-number guard refuses ambiguity)',
     owner: 'virality-6f',
   },
+  {
+    id: 'invite-accept-token-bearer',
+    tables: ['invitations'],
+    file: 'pages/api/auth/accept-invite.ts',
+    reason: "BEARER: possession of the secret invitation token (looked up by sha256(token), unauthenticated). The actor cannot be a member yet - accepting is how they join - so no principal resolves a tenant; the invitation row names it. Every later write goes through systemTenantContext(row.company_id, reason).",
+    owner: 'virality-e1',
+  },
+  {
+    id: 'invite-set-password-own-email',
+    tables: ['invitations'],
+    file: 'pages/api/auth/set-password.ts',
+    reason: "BEARER: the authenticated user's OWN verified email (the pending invitation addressed to it). The user is not a member yet - activation is what makes them one - so the invitation row names the tenant. Every later write goes through systemTenantContext(row.company_id, reason); activation itself is the activate_invitation_membership RPC.",
+    owner: 'virality-e1',
+  },
+  {
+    id: 'invite-resend-self-serve',
+    tables: ['invitations'],
+    file: 'pages/api/auth/resend-invitation.ts',
+    reason: "BEARER: an email address (self-serve resend, rate-limited per IP and per email). The requester is not a member - they lost their invitation - so the row names the tenant. The response is a CONSTANT 200 whether or not an invitation exists (no enumeration), pinned by backend/tests/unit/s2InvitationBearerTenant.test.ts 'self-serve resend answers the same 200 body whether or not an invitation exists'. Every later write goes through systemTenantContext(row.company_id, reason).",
+    owner: 'virality-e1',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));

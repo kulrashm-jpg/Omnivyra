@@ -51,6 +51,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { systemTenantContext, tenantTable } from '../../../backend/db/tenantTable';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
@@ -198,8 +199,8 @@ async function handleSelfServeResend(
   // Find the most-recent non-accepted, non-revoked invitation for this
   // email. Expired invites still count — the whole point of resend is
   // to recover from expiry.
-  const { data: invitation } = await supabase
-    .from('invitations')
+  // cross-tenant: invite-resend-self-serve
+  const { data: invitation } = await supabase.from('invitations')
     .select('id, role, company_id, invited_by')
     .eq('email', email)
     .is('accepted_at', null)
@@ -213,8 +214,8 @@ async function handleSelfServeResend(
 
   if (invitation) {
     // Revoke the old row + issue a fresh one with a new token.
-    await supabase
-      .from('invitations')
+    // S2: pinned to the tenant the invitation names.
+    await tenantTable('invitations', systemTenantContext(String((invitation as { company_id: string }).company_id), 'invitee self-serve resend (constant 200)'))
       .update({ revoked_at: new Date().toISOString() })
       .eq('id', (invitation as { id: string }).id)
       .is('accepted_at', null);

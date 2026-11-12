@@ -230,7 +230,7 @@ describe('Workstream 3 — invitation expiry', () => {
   describe('auth/accept-invite (real route)', () => {
     const TOKEN = 'c15e-auth-invite-token-not-real-0001';
     function authWorld(expires_at: unknown) {
-      seed({ invitations: [{ id: 'inv-2', email: 'x@example.test', token_hash: createHash('sha256').update(TOKEN).digest('hex'), expires_at, accepted_at: null, revoked_at: null, token_consumed_at: null }] });
+      seed({ invitations: [{ id: 'inv-2', email: 'x@example.test', company_id: CO_A /* NOT NULL in the schema; the S2 seam pins writes to it */, token_hash: createHash('sha256').update(TOKEN).digest('hex'), expires_at, accepted_at: null, revoked_at: null, token_consumed_at: null }] });
     }
     const post = () => invoke(authAcceptInvite as never, { method: 'POST', body: { token: TOKEN }, headers: {} });
     afterEach(() => jest.useRealTimers());
