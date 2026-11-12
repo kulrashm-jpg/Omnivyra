@@ -180,7 +180,9 @@ BEGIN
     RAISE EXCEPTION 'WTAU postcondition: whatsapp_apply_template_status is missing';
   END IF;
   SELECT p.prosecdef, p.proconfig, p.provolatile INTO v_secdef, v_config, v_vol FROM pg_proc p WHERE p.oid = v_fn;
-  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_fn AND md5(p.prosrc) = ANY (ARRAY['8bfa4c0135900db2277f5cdf6aaab329', '7cfd98c9e03a77cce407d4ef8996606a'])) THEN
+  -- Both hashes DERIVE from the installed body (LF-normalised): the CRLF one is exercised too (05).
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN LATERAL (SELECT replace(p.prosrc, E'\r\n', E'\n') AS lf) n
+                  WHERE p.oid = v_fn AND md5(n.lf) = (ARRAY['8bfa4c0135900db2277f5cdf6aaab329', '7cfd98c9e03a77cce407d4ef8996606a'])[1] AND md5(replace(n.lf, E'\n', E'\r\n')) = (ARRAY['8bfa4c0135900db2277f5cdf6aaab329', '7cfd98c9e03a77cce407d4ef8996606a'])[2]) THEN
     RAISE EXCEPTION 'WTAU postcondition: the installed function body does not match the hashes in this migration - update them with the body';
   END IF;
   IF v_secdef THEN RAISE EXCEPTION 'WTAU postcondition: the function must be SECURITY INVOKER'; END IF;

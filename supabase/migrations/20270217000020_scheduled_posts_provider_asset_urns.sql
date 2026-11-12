@@ -15,7 +15,26 @@
 
 BEGIN;
 
+-- ROLLBACK SOUNDNESS (05 / e1 rule, e9 2026-11-12): a lone column cannot be told from someone else's
+-- by its shape, so this migration RECORDS that it created it - a column comment. An existing column
+-- is accepted only with that mark (a re-apply); the rollback drops the column only while it stands.
+DO $preflight$
+BEGIN
+  IF to_regclass('public.scheduled_posts') IS NULL THEN
+    RAISE EXCEPTION 'SPAU preflight: public.scheduled_posts is missing';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('public.scheduled_posts')
+              AND attname = 'provider_asset_urns' AND NOT attisdropped)
+     AND col_description(to_regclass('public.scheduled_posts'),
+           (SELECT attnum FROM pg_attribute WHERE attrelid = to_regclass('public.scheduled_posts') AND attname = 'provider_asset_urns' AND NOT attisdropped))
+         IS DISTINCT FROM 'owned by migration 20270217000020 (LinkedIn URN cache); its rollback drops it only while this comment stands' THEN
+    RAISE EXCEPTION 'SPAU preflight: scheduled_posts.provider_asset_urns already exists without this migration''s mark - it predates it; refusing (its rollback must never drop it)';
+  END IF;
+END
+$preflight$;
+
 ALTER TABLE public.scheduled_posts ADD COLUMN IF NOT EXISTS provider_asset_urns jsonb;
+COMMENT ON COLUMN public.scheduled_posts.provider_asset_urns IS 'owned by migration 20270217000020 (LinkedIn URN cache); its rollback drops it only while this comment stands';
 
 DO $verify$
 BEGIN
@@ -23,6 +42,7 @@ BEGIN
     SELECT 1 FROM pg_attribute
      WHERE attrelid = 'public.scheduled_posts'::regclass AND attname = 'provider_asset_urns'
        AND atttypid = 'jsonb'::regtype AND NOT attnotnull AND NOT attisdropped
+       AND col_description(attrelid, attnum) = 'owned by migration 20270217000020 (LinkedIn URN cache); its rollback drops it only while this comment stands'
   ) THEN
     RAISE EXCEPTION 'SPAU postcondition: public.scheduled_posts.provider_asset_urns must exist as a nullable jsonb';
   END IF;
