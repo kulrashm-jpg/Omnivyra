@@ -25,7 +25,7 @@
 const ts = require('typescript');
 const crypto = require('crypto');
 const {
-  CALLER_PRINCIPAL, isFnLike, unwrap, calleeName, chainOf, sinkOf, operands,
+  CALLER_PRINCIPAL, isFnLike, unwrap, calleeName, chainOf, sinkOf, operands, SEAM_TABLE_FACTORIES, SEAM_MODULE,
   isMethodExpr, methodTest, underMethods, requestDerived, enclosingFn, optionalBinding, invokesParam,
 } = require('./route-auth-ordering-shapes');
 
@@ -145,6 +145,10 @@ function createOrderingAnalyzer({ PRIMITIVES, AUTHZ_HELPERS, DELEGATION_ROOTS, r
     const imp = m.imports.get(c.text);
     const target = imp && resolveSpec(m.rel, imp.spec);
     if (!target || imp.imported === 'default') return null;
+    // A tenant-seam factory is never summarised: its body only DEFINES the handle's verbs (closures the route may
+    // never call). The route's own verbs on the handle, and the child factories' parent read, are seen at the call
+    // site by sinkOf (55, S2; virality-83 gate fix).
+    if (SEAM_MODULE.test(target) && SEAM_TABLE_FACTORIES.has(imp.imported)) return null;
     const mod = loadModule(target);
     if (!mod) return null;
     const mm = parsed(mod);

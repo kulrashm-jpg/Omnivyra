@@ -26,7 +26,7 @@ export type TenantContext = {
 };
 
 export class TenantSeamError extends Error {
-  constructor(readonly code: 'TENANT_CONTEXT_MISSING' | 'TENANT_MISMATCH' | 'TENANT_TABLE_UNKNOWN' | 'TENANT_PAYLOAD_INVALID', message: string) {
+  constructor(readonly code: 'TENANT_CONTEXT_MISSING' | 'TENANT_MISMATCH' | 'TENANT_TABLE_UNKNOWN' | 'TENANT_PAYLOAD_INVALID' | 'TENANT_PARENT_FANOUT', message: string) {
     super(`${code}: ${message}`);
     this.name = 'TenantSeamError';
   }
@@ -69,10 +69,33 @@ function requireCtx(ctx: TenantContext | null | undefined): TenantContext {
   if (!ctx || typeof ctx.companyId !== 'string' || !UUIDISH.test(ctx.companyId)) {
     throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'tenantTable called without a tenant context');
   }
+  // 05 (S1 review): every non-id comparison is `value.toLowerCase() === ctx.companyId`, so the context id MUST be
+  // lowercase. The constructors guarantee it; a hand-built context that is not lowercase is refused here rather
+  // than turning into a spurious (and inconsistent) cross-tenant refusal later.
+  if (ctx.companyId !== ctx.companyId.toLowerCase()) {
+    throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'tenant context company id must be lowercase (use tenantContextFor / systemTenantContext)');
+  }
   return ctx;
 }
 
 type Row = Record<string, unknown>;
+
+/**
+ * 05 (tenantChildTableOf review; the #378 upsertVariant class): in an upsert the CONFLICT KEY decides which existing
+ * row DO UPDATE takes. A key without the scoping column - including the default primary key - can resolve onto
+ * ANOTHER tenant's (or parent's) row, which the stamped payload then re-stamps into this scope. So every seam upsert
+ * must name an onConflict that includes the scoping column, unless it is ignoreDuplicates (DO NOTHING never touches
+ * the existing row). Anything else is refused before the builder is reached.
+ */
+function scopedConflict(table: string, scopeColumn: string, options?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (options && options.ignoreDuplicates === true) return options;
+  const raw = options && typeof options.onConflict === 'string' ? options.onConflict : '';
+  const cols = raw.split(',').map((x) => x.trim().replace(/^"|"$/g, '')).filter(Boolean);
+  if (!cols.includes(scopeColumn)) {
+    throw new TenantSeamError('TENANT_PAYLOAD_INVALID', `${table}: upsert must name an onConflict that includes ${scopeColumn} (or use ignoreDuplicates); a conflict key without it can take over another tenant's row`);
+  }
+  return options;
+}
 
 /**
  * Embedded selects (`'*, other(*)'`) are REFUSED (05, S1 review): the tenant predicate constrains the base
@@ -127,7 +150,7 @@ export function tenantTable(table: TenantTableName, ctx: TenantContext) {
       return (ownedDbTable(table) as any).insert(stamp(values, column, c.companyId), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), options);
+      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), scopedConflict(table, column, options));
     },
   };
 }
@@ -162,7 +185,7 @@ export function tenantOrPlatformTable(table: TenantTableName, ctx: TenantContext
       return (ownedDbTable(table) as any).insert(stamp(values, column, c.companyId), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), options);
+      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), scopedConflict(table, column, options));
     },
   };
 }
@@ -178,7 +201,11 @@ type ChildSpec = { via: string; parent: string; parentKey?: string };
 const childSpec = (t: string): ChildSpec | undefined => (TENANT_CHILD_TABLES as Record<string, ChildSpec | undefined>)[t];
 /** Deepest parent chain the seam will walk (e.g. platform_override -> attachment -> core_asset is 2). */
 const MAX_HOPS = 4;
-/** A non-unique parent key may match several parent rows; more than this is refused (fail closed, never truncated). */
+/**
+ * A non-unique parent key may match several parent rows; more than this is refused (fail closed, never truncated).
+ * 50 is CHOSEN, not measured (05, S1 review): no prod fan-out count exists yet for content_core_asset.content_core_id.
+ * Exceeding it throws TENANT_PARENT_FANOUT - an AVAILABILITY refusal, never reported as a cross-tenant mismatch.
+ */
 const MAX_PARENT_ROWS = 50;
 
 /**
@@ -195,6 +222,7 @@ async function verifyParent(child: string, c: TenantContext, parentTable: string
   if (hop > MAX_HOPS) throw new TenantSeamError('TENANT_MISMATCH', `${child}: parent chain deeper than ${MAX_HOPS}`);
   const unreadable = (e: unknown) => new TenantSeamError('TENANT_MISMATCH', `${child}: parent ${parentTable} unreadable (${(e as { code?: string }).code ?? 'error'})`);
   const absent = () => new TenantSeamError('TENANT_MISMATCH', `${child}: parent ${parentTable} is not in this tenant`);
+  const fanout = () => new TenantSeamError('TENANT_PARENT_FANOUT', `${child}: parent key matches more than ${MAX_PARENT_ROWS} ${parentTable} rows (availability limit, not a tenant mismatch)`);
   const parentSpec = childSpec(parentTable);
   if (!parentSpec) {
     if (!(parentTable in TENANT_TABLES)) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${child}: parent ${parentTable} is not a registered tenant table`);
@@ -208,14 +236,16 @@ async function verifyParent(child: string, c: TenantContext, parentTable: string
     const { data, error } = await (ownedDbTable(parentTable as TenantTableName) as any).select(column).eq(key, value).limit(MAX_PARENT_ROWS + 1);
     if (error) throw unreadable(error);
     const rows = (data ?? []) as Row[];
-    if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) throw absent();
+    if (rows.length > MAX_PARENT_ROWS) throw fanout();
+    if (rows.length === 0) throw absent();
     if (!rows.every((r) => typeof r[column] === 'string' && String(r[column]).toLowerCase() === c.companyId)) throw absent();
     return;
   }
   const { data, error } = await (ownedDbTable(parentTable as TenantTableName) as any).select(parentSpec.via).eq(key, value).limit(MAX_PARENT_ROWS + 1);
   if (error) throw unreadable(error);
   const rows = (data ?? []) as Row[];
-  if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) throw absent();
+  if (rows.length > MAX_PARENT_ROWS) throw fanout();
+  if (rows.length === 0) throw absent();
   const links = new Set<string>();
   for (const r of rows) {
     const v = r[parentSpec.via];
@@ -258,9 +288,102 @@ export async function tenantChildTable(table: TenantChildTableName, ctx: TenantC
       return (ownedDbTable(table) as any).insert(pin(values), options);
     },
     upsert(values: Row | Row[], options?: Record<string, unknown>) {
-      return (ownedDbTable(table) as any).upsert(pin(values), options);
+      return (ownedDbTable(table) as any).upsert(pin(values), scopedConflict(table, via, options));
     },
   };
+}
+
+/** Most parents one batch call may name (a URL-length and blast-radius bound; CHOSEN, not measured). */
+const MAX_BATCH_PARENTS = 200;
+
+/**
+ * A child table across MANY parents of the same tenant (e1 S2, e.g. scheduled_posts for all of a company's
+ * campaigns): ONE parent read verifies the whole set, then every verb is pinned with `.in(via, parents)`.
+ *  - Any foreign, missing or unreadable parent refuses the WHOLE call (TENANT_MISMATCH; never silently dropped).
+ *  - An empty list returns verbs that match nothing (`.in(via, [])`), never "no filter".
+ *  - insert/upsert REQUIRE `via` on each row and refuse a value outside the verified set (there is no single
+ *    parent to stamp); update may not move a row outside the set.
+ *  - More than MAX_BATCH_PARENTS ids -> TENANT_PARENT_FANOUT (split the call).
+ * A direct parent keyed by id is verified in one read; other parent shapes (multi-hop / non-id key) fall back to
+ * verifyParent per id.
+ */
+export async function tenantChildTableOf(table: TenantChildTableName, ctx: TenantContext, parentIds: readonly string[]) {
+  const c = requireCtx(ctx);
+  const spec = childSpec(table);
+  if (!spec) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is not a registered child tenant table`);
+  if (!Array.isArray(parentIds) || parentIds.some((p) => typeof p !== 'string' || p.length === 0)) {
+    throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ids must be non-empty strings`);
+  }
+  const ids = [...new Set(parentIds)];
+  if (ids.length > MAX_BATCH_PARENTS) {
+    throw new TenantSeamError('TENANT_PARENT_FANOUT', `${table}: ${ids.length} parents in one call (limit ${MAX_BATCH_PARENTS}; split it)`);
+  }
+  const key = spec.parentKey ?? 'id';
+  if (ids.length > 0) {
+    if (key === 'id' && !childSpec(spec.parent) && spec.parent in TENANT_TABLES) {
+      const { data, error } = await tenantTable(spec.parent as TenantTableName, c).select('id').in('id', ids).limit(MAX_BATCH_PARENTS + 1);
+      if (error) throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ${spec.parent} unreadable (${(error as { code?: string }).code ?? 'error'})`);
+      const found = new Set(((data ?? []) as Row[]).map((r) => String(r.id)));
+      const missing = ids.filter((id) => !found.has(id));
+      if (missing.length) throw new TenantSeamError('TENANT_MISMATCH', `${table}: ${missing.length} of ${ids.length} parents are not in this tenant`);
+    } else {
+      for (const id of ids) await verifyParent(table, c, spec.parent, key, id, 1);
+    }
+  }
+  const via = spec.via;
+  const allowed = new Set(ids);
+  const check = (rows: Row | Row[]): Row | Row[] => {
+    const one = (r: Row): Row => {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) throw new TenantSeamError('TENANT_PAYLOAD_INVALID', 'insert/upsert payload must be an object');
+      if (r[via] === undefined || r[via] === null) throw new TenantSeamError('TENANT_PAYLOAD_INVALID', `${table}: each row must name its parent (${via}) in a batch call`);
+      if (!allowed.has(String(r[via]))) throw new TenantSeamError('TENANT_MISMATCH', `${table}: payload ${via} is not one of the verified parents`);
+      return r;
+    };
+    return Array.isArray(rows) ? rows.map(one) : one(rows);
+  };
+  return {
+    select(columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
+      refuseEmbed(table, columns);
+      return (ownedDbTable(table) as any).select(columns ?? '*', options).in(via, ids);
+    },
+    update(values: Row, options?: Record<string, unknown>) {
+      if (values && Object.prototype.hasOwnProperty.call(values, via) && !allowed.has(String(values[via]))) {
+        throw new TenantSeamError('TENANT_MISMATCH', `${table}: update may not move a row outside the verified parents (${via})`);
+      }
+      return (ownedDbTable(table) as any).update(values, options).in(via, ids);
+    },
+    delete(options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).delete(options).in(via, ids);
+    },
+    insert(values: Row | Row[], options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).insert(check(values), options);
+    },
+    upsert(values: Row | Row[], options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).upsert(check(values), scopedConflict(table, via, options));
+    },
+  };
+}
+
+/**
+ * DERIVE-THEN-AUTHORIZE for request handlers keyed by a row id (playbooks/[id], user templates, proposals, ...):
+ * "which company owns this row?" - and NOTHING else. It returns only the owning company id (lowercase), never row
+ * data, so by itself it grants nothing. The route MUST then run its access check on that company
+ * (enforceCompanyAccessUniform / requireCapabilityUniform / requireTenantAccess) before any read or write of the row,
+ * and only then build tenantContextFor(principal, owner). The tenant-seam gate allows this in pages/api and enforces
+ * the order (rule R10). A NULL tenant, a missing or an unreadable row returns null: answer the uniform 404.
+ * Direct tenant tables only (a child is authorized through its parent's owner).
+ */
+export async function ownerCompanyOfRow(table: TenantTableName, id: string, reason: string): Promise<string | null> {
+  if (typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'ownerCompanyOfRow must state its reason');
+  }
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const column = columnOf(table);
+  const { data, error } = await (ownedDbTable(table) as any).select(column).eq('id', id).maybeSingle();
+  if (error || !data) return null;
+  const tenant = (data as Record<string, unknown>)[column];
+  if (typeof tenant !== 'string' || !UUIDISH.test(tenant)) return null;
+  return tenant.toLowerCase();
 }
 
 /**

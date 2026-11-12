@@ -164,6 +164,32 @@ export default async function handler(req, res) {
   });
 });
 
+describe('tenant-seam factories (S1): only the verbs a route CALLS are effects (55 S2 false positive)', () => {
+  const SEAM = "import { tenantTable, tenantChildTable, tenantContextFor } from '../../../backend/db/tenantTable';";
+  const imports = `${AUTH}\n${TENANT}\n${SEAM}`;
+  it('a child handle that is only READ before authorization is not a write (its unused write verbs are not effects)', () => {
+    const src = route(`const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) return res.status(401).end();
+  const ctx = tenantContextFor({ userId: user.id }, req.query.companyId);
+  const plans = await tenantChildTable('daily_content_plans', ctx, req.query.campaignId);
+  const { data } = await plans.select('id');
+  const access = await enforceCompanyAccess({ req, res, companyId: req.query.companyId });
+  if (!access) return;
+  return res.status(200).json(data);`, imports);
+    expect(rules(src)).not.toContain('R6-ORDER');
+  });
+  it('CONTROL: a WRITE through a seam handle before tenant authorization is still R6-ORDER', () => {
+    const src = route(`const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) return res.status(401).end();
+  const ctx = tenantContextFor({ userId: user.id }, req.body.companyId);
+  await tenantTable('notes', ctx).delete().eq('id', req.body.id);
+  const access = await enforceCompanyAccess({ req, res, companyId: req.body.companyId });
+  if (!access) return;
+  return res.status(204).end();`, imports);
+    expect(rules(src)).toContain('R6-ORDER');
+  });
+});
+
 describe('R6-ORDER — side effects after authentication but before tenant authorization', () => {
   const imports = `${AUTH}\n${TENANT}\n${DB}`;
 

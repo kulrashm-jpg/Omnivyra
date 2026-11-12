@@ -12,7 +12,7 @@ function builder(table: string): any {
   const record = (op: string) => (...args: unknown[]) => { calls.push({ table, op, args }); return b; };
   const b: any = new Proxy({}, {
     get(_t, prop: string) {
-      if (['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'or'].includes(prop)) return record(prop);
+      if (['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'or', 'in'].includes(prop)) return record(prop);
       if (prop === 'maybeSingle') return async () => { calls.push({ table, op: 'maybeSingle', args: [] }); return { data: parentRow, error: parentError }; };
       if (prop === 'limit') return async (...args: unknown[]) => { calls.push({ table, op: 'limit', args }); return { data: limitRows[table] ?? [], error: limitError[table] ?? null }; };
       if (prop === 'then') return undefined;
@@ -27,7 +27,7 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: (fn: string, args: Record<string, unknown>) => { rpcCalls.push({ fn, args }); return Promise.resolve({ data: null, error: null }); },
 }));
 
-import { tenantTable, tenantChildTable, tenantOrPlatformTable, resolveTenantOfRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
+import { tenantTable, tenantChildTable, tenantChildTableOf, tenantOrPlatformTable, resolveTenantOfRow, ownerCompanyOfRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
 import { TENANT_TABLES, TENANT_CHILD_TABLES } from '../../db/tenantTables';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -133,15 +133,31 @@ describe('tenantChildTable multi-hop and non-id-key parents (55 S2)', () => {
   });
   it('a NON-unique direct key: every parent row must be this tenant\'s (shared with another tenant, or NULL, is refused)', async () => {
     const col = TENANT_TABLES.content_core_asset.column;
-    limitRows.content_core_asset = [{ [col]: A }, { [col]: A.toUpperCase() }];
+    const HEX = 'abcdef12-3456-4789-8abc-def012345678'; // letters, so the case-insensitive match is really exercised
+    limitRows.content_core_asset = [{ [col]: HEX }, { [col]: HEX.toUpperCase() }];
+    await expect(tenantChildTable('content_asset_attachment', tenantContextFor({ userId: 'u' }, HEX), 'core-1')).resolves.toBeDefined();
+    calls.length = 0;
+    limitRows.content_core_asset = [{ [col]: A }, { [col]: A }];
     await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).resolves.toBeDefined();
     expect(calls.filter((c) => c.table === 'content_core_asset').map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['content_core_id', 'core-1']], ['limit', [51]]]);
     limitRows.content_core_asset = [{ [col]: A }, { [col]: B }];
     await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
     limitRows.content_core_asset = [{ [col]: A }, { [col]: null }];
     await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    // Over-wide is an AVAILABILITY refusal with its own code, never reported as a tenant mismatch (05).
     limitRows.content_core_asset = Array.from({ length: 51 }, () => ({ [col]: A }));
-    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.toThrow(/TENANT_MISMATCH/);
+    const wide = tenantChildTable('content_asset_attachment', ctxA, 'core-1');
+    await expect(wide).rejects.toThrow(/TENANT_PARENT_FANOUT/);
+    await expect(tenantChildTable('content_asset_attachment', ctxA, 'core-1')).rejects.not.toThrow(/TENANT_MISMATCH/);
+    limitRows.content_assets = Array.from({ length: 51 }, () => ({ campaign_id: 'c-1' }));
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/TENANT_PARENT_FANOUT/);
+  });
+  it('a hand-built context whose company id is not lowercase is refused at the seam (05 NOTE 2)', () => {
+    const HEX = 'abcdef12-3456-4789-8abc-def012345678'; // has letters, so upper-casing changes it (A is all digits)
+    const upper = { companyId: HEX.toUpperCase(), origin: 'request', reason: null } as unknown as TenantContext;
+    expect(HEX.toUpperCase()).not.toBe(HEX);
+    expect(() => tenantTable('campaigns', upper)).toThrow(/lowercase/);
+    expect(tenantContextFor({ userId: 'u' }, HEX.toUpperCase()).companyId).toBe(HEX);
   });
   it('three hops end to end: platform_override -> attachment -> core_asset', async () => {
     const col = TENANT_TABLES.content_core_asset.column;
@@ -167,6 +183,102 @@ describe('tenantOrPlatformTable (e9 on C28)', () => {
     expect(calls.filter((c) => c.op === 'eq').map((c) => c.args)).toEqual([['company_id', A]]);
     expect(() => tenantOrPlatformTable('external_api_sources' as never, ctxA).update({ company_id: null })).toThrow(/TENANT_MISMATCH/);
     expect(() => tenantOrPlatformTable('campaigns' as never, ctxA)).toThrow(/not TENANT_OR_PLATFORM/);
+  });
+});
+
+describe('tenantChildTableOf (many parents, one read; e1 S2)', () => {
+  const col = TENANT_TABLES.campaigns.column;
+  it('verifies ALL parents in ONE read under the tenant, then pins every verb with .in(via, parents)', async () => {
+    limitRows.campaigns = [{ id: 'c-1' }, { id: 'c-2' }];
+    const t = await tenantChildTableOf('scheduled_posts', ctxA, ['c-1', 'c-2', 'c-1']);
+    expect(calls.filter((c) => c.table === 'campaigns').map((c) => [c.op, c.args])).toEqual([
+      ['select', ['id', undefined]], ['eq', [col, A]], ['in', ['id', ['c-1', 'c-2']]], ['limit', [201]],
+    ]);
+    t.select('id', { count: 'exact', head: true });
+    t.delete();
+    expect(calls.filter((c) => c.table === 'scheduled_posts' && c.op === 'in').map((c) => c.args)).toEqual([
+      ['campaign_id', ['c-1', 'c-2']], ['campaign_id', ['c-1', 'c-2']],
+    ]);
+  });
+  it('ONE foreign or missing parent refuses the WHOLE call (never silently dropped); unreadable refuses too', async () => {
+    limitRows.campaigns = [{ id: 'c-1' }];
+    await expect(tenantChildTableOf('scheduled_posts', ctxA, ['c-1', 'c-foreign'])).rejects.toThrow(/TENANT_MISMATCH: .*1 of 2/);
+    limitRows.campaigns = [{ id: 'c-1' }]; limitError.campaigns = { code: '57014' };
+    await expect(tenantChildTableOf('scheduled_posts', ctxA, ['c-1'])).rejects.toThrow(/unreadable/);
+  });
+  it('an EMPTY list reads no parent and returns verbs that match nothing (never "no filter")', async () => {
+    const t = await tenantChildTableOf('scheduled_posts', ctxA, []);
+    t.select('id');
+    expect(calls.filter((c) => c.table === 'campaigns')).toHaveLength(0);
+    expect(calls.filter((c) => c.table === 'scheduled_posts').map((c) => [c.op, c.args])).toEqual([['select', ['id', undefined]], ['in', ['campaign_id', []]]]);
+  });
+  it('insert/upsert must name a verified parent; update may not move a row outside the set', async () => {
+    limitRows.campaigns = [{ id: 'c-1' }, { id: 'c-2' }];
+    const t = await tenantChildTableOf('scheduled_posts', ctxA, ['c-1', 'c-2']);
+    expect(() => t.insert({ content: 'x' })).toThrow(/TENANT_PAYLOAD_INVALID/);
+    expect(() => t.upsert([{ campaign_id: 'c-1' }, { campaign_id: 'c-9' }])).toThrow(/TENANT_MISMATCH/);
+    expect(() => t.update({ campaign_id: 'c-9' })).toThrow(/TENANT_MISMATCH/);
+    t.insert([{ campaign_id: 'c-1' }, { campaign_id: 'c-2' }]);
+    expect(calls.filter((c) => c.table === 'scheduled_posts' && c.op === 'insert')).toHaveLength(1);
+  });
+  it('more than 200 parents -> TENANT_PARENT_FANOUT before any read; a blank id is refused', async () => {
+    await expect(tenantChildTableOf('scheduled_posts', ctxA, Array.from({ length: 201 }, (_, i) => `c-${i}`))).rejects.toThrow(/TENANT_PARENT_FANOUT/);
+    await expect(tenantChildTableOf('scheduled_posts', ctxA, ['c-1', ''])).rejects.toThrow(/TENANT_MISMATCH/);
+    expect(calls).toHaveLength(0);
+  });
+  it('a multi-hop parent falls back to the per-id chain check', async () => {
+    limitRows.content_assets = [{ campaign_id: 'c-1' }];
+    parentRow = { id: 'c-1' };
+    await tenantChildTableOf('content_asset_versions', ctxA, ['a-1', 'a-2']);
+    expect(calls.filter((c) => c.table === 'content_assets' && c.op === 'eq').map((c) => c.args)).toEqual([['asset_id', 'a-1'], ['asset_id', 'a-2']]);
+  });
+});
+
+describe('upsert conflict key must include the scoping column (05; the #378 upsertVariant class)', () => {
+  const col = TENANT_TABLES.campaigns.column;
+  it('tenantTable: no onConflict (= primary key) or a key without the tenant column is refused before the builder', () => {
+    expect(() => tenantTable('campaigns', ctxA).upsert({ id: 'x', name: 'n' })).toThrow(/onConflict that includes/);
+    expect(() => tenantTable('campaigns', ctxA).upsert({ id: 'x' }, { onConflict: 'id' })).toThrow(/onConflict that includes/);
+    expect(calls).toHaveLength(0);
+    tenantTable('campaigns', ctxA).upsert({ id: 'x' }, { onConflict: `id, ${col}` });
+    tenantTable('campaigns', ctxA).upsert({ id: 'x' }, { ignoreDuplicates: true });
+    expect(calls.filter((c) => c.op === 'upsert')).toHaveLength(2);
+  });
+  it('tenantChildTable: the conflict key must include the parent link', async () => {
+    const t = await tenantChildTable('daily_content_plans', ctxA, 'p-1');
+    const via = TENANT_CHILD_TABLES.daily_content_plans.via;
+    expect(() => t.upsert({ day: 'mon' }, { onConflict: 'id' })).toThrow(/onConflict that includes/);
+    t.upsert({ day: 'mon' }, { onConflict: `${via},day` });
+    expect(calls.filter((c) => c.table === 'daily_content_plans' && c.op === 'upsert')).toHaveLength(1);
+  });
+  it('tenantChildTableOf: an onConflict without via cannot resolve onto another parent\'s row', async () => {
+    limitRows.campaigns = [{ id: 'c-1' }];
+    const t = await tenantChildTableOf('scheduled_posts', ctxA, ['c-1']);
+    expect(() => t.upsert({ campaign_id: 'c-1', platform: 'x' }, { onConflict: 'platform' })).toThrow(/onConflict that includes campaign_id/);
+    t.upsert({ campaign_id: 'c-1', platform: 'x' }, { onConflict: 'campaign_id,platform' });
+    expect(calls.filter((c) => c.table === 'scheduled_posts' && c.op === 'upsert')).toHaveLength(1);
+  });
+});
+
+describe('ownerCompanyOfRow (derive-then-authorize, R10)', () => {
+  const col = TENANT_TABLES.campaigns.column;
+  it('returns ONLY the owning company id (lowercase), read by id, never row data', async () => {
+    const HEX = 'abcdef12-3456-4789-8abc-def012345678';
+    parentRow = { [col]: HEX.toUpperCase() };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'playbook by id')).resolves.toBe(HEX);
+    expect(calls.map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['id', 'c-1']], ['maybeSingle', []]]);
+  });
+  it('missing, unreadable, NULL-tenant or non-uuid tenant -> null (uniform 404); a reason is required', async () => {
+    parentRow = null;
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    parentRow = { [col]: A }; parentError = { code: '57014' };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    parentError = null; parentRow = { [col]: null };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    parentRow = { [col]: 'not-a-uuid' };
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    await expect(ownerCompanyOfRow('campaigns', '', 'by id')).resolves.toBeNull();
+    await expect(ownerCompanyOfRow('campaigns', 'c-1', '')).rejects.toThrow(/reason/);
   });
 });
 
