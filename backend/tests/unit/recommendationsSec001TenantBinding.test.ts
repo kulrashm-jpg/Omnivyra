@@ -235,6 +235,10 @@ describe('create-campaign-from-group', () => {
     expect(cv!.payload.company_id).toBe(COMPANY_A);
     const audit = writes.find(w => w.table === 'audit_logs');
     expect(audit!.payload.company_id).toBe(COMPANY_A);
+    // TENANT (NULL company_id trace, e9 2026-11-12): the campaign ROW is owned by the authorized company.
+    const created = writes.filter(w => w.table === 'campaigns' && w.op === 'insert');
+    expect(created).toHaveLength(1);
+    expect(created[0].payload.company_id).toBe(COMPANY_A);
     expect(planCalls).toHaveLength(1);
   });
 

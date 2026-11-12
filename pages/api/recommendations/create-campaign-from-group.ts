@@ -115,6 +115,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .insert({
         name: campaignName,
         description: `Grouped from ${snapshotHashes.length} recommendations`,
+        // TENANT: owned by the company requireCompanyAccess authorized above, never left NULL.
+        company_id: String(company_id),
         status: 'draft',
         current_stage: 'planning',
         created_at: new Date().toISOString(),
