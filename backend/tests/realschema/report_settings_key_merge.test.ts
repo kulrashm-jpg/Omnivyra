@@ -8,6 +8,8 @@
  * Nothing is applied by this suite: it tests the installed function. Each call runs in its own
  * transaction after `SET LOCAL ROLE <role>`, as behind PostgREST.
  */
+import fs from 'fs';
+import path from 'path';
 import { Client } from 'pg';
 import { db } from './setup';
 
@@ -210,5 +212,198 @@ describe('concurrency', () => {
       await c1.end(); await c2.end();
     }
     expect((await stored(CO)).rs).toMatchObject({ brand_voice: { tone: 'warm' }, agent_checkpoints: ['c1'], website_fingerprint: 'c2' });
+  });
+});
+
+// ── Sandbox parity (05/e9 rule, 2026-11-12: sandbox-only evidence does not close a unit). Every case
+// of the pg-sandbox proof (sql_proof.js, 44/44) that the suites above did not already cover lives here,
+// against the replayed real schema.
+const MIGRATIONS_DIR = path.resolve(__dirname, '../../../supabase/migrations');
+const MIGRATION_FILE = '20270217000000_report_settings_merge_keys_rpc.sql';
+const ROLLBACK_FILE = path.join('rollbacks', 'report_settings_merge_keys_rpc_rollback.sql');
+
+/** The file's statements without its own BEGIN/COMMIT (the test owns the transaction). */
+function unwrapped(file: string): string {
+  const lines = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').split('\n');
+  const out = lines.filter((l) => l.trim() !== 'BEGIN;' && l.trim() !== 'COMMIT;');
+  if (lines.length - out.length !== 2) throw new Error(`${file}: expected exactly one BEGIN; and one COMMIT; line`);
+  return out.join('\n');
+}
+
+/** The migration's own postcondition block, run alone (to prove it catches a widened grant). */
+function verifyBlock(): string {
+  const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, MIGRATION_FILE), 'utf8');
+  const marker = 'DO $' + 'verify$';
+  const start = sql.indexOf(marker);
+  const end = sql.indexOf('$' + 'verify$;', start + marker.length);
+  if (start < 0 || end < 0) throw new Error('verify block not found');
+  return sql.slice(start, end + ('$' + 'verify$;').length);
+}
+
+/** One rolled-back transaction as the connection's own role (DDL/grants, nothing persists). */
+async function rolledBack<T>(body: (c: Client) => Promise<T>): Promise<T> {
+  const c = new Client({ connectionString: url });
+  await c.connect();
+  try {
+    await c.query('BEGIN');
+    return await body(c);
+  } finally {
+    await c.query('ROLLBACK').catch(() => undefined);
+    await c.end();
+  }
+}
+
+/** Runs sql under a savepoint; returns the SQLSTATE/message on failure, the tx stays usable. */
+async function attemptIn(c: Client, sql: string): Promise<{ ok: boolean; code?: string; message?: string }> {
+  await c.query('SAVEPOINT a');
+  try {
+    await c.query(sql);
+    await c.query('RELEASE SAVEPOINT a');
+    return { ok: true };
+  } catch (e) {
+    await c.query('ROLLBACK TO SAVEPOINT a');
+    const err = e as { code?: string; message?: string };
+    return { ok: false, code: err.code, message: err.message };
+  }
+}
+
+/** Two committing writers, interleaved: `first` holds the row lock while `second` waits on it. */
+async function interleave(first: (c: Client) => Promise<unknown>, second: (c: Client) => Promise<unknown>, role: string | null = 'service_role') {
+  const c1 = new Client({ connectionString: url }); const c2 = new Client({ connectionString: url });
+  await c1.connect(); await c2.connect();
+  try {
+    await c1.query('BEGIN'); await c2.query('BEGIN');
+    if (role) { await c1.query(`SET LOCAL ROLE ${role}`); await c2.query(`SET LOCAL ROLE ${role}`); }
+    await first(c1);
+    const waiting = second(c2);
+    await new Promise((r) => setTimeout(r, 250));
+    await c1.query('COMMIT');
+    await waiting;
+    await c2.query('COMMIT');
+  } finally {
+    await c1.end(); await c2.end();
+  }
+}
+
+const MERGE_SQL = 'SELECT public.merge_report_settings_keys($1, $2::jsonb, NULL, $3::text[], $4::text[])';
+
+describe('sandbox parity: input refusals', () => {
+  it('an empty patch and an array patch are refused (22023); a NULL company is refused (22004)', async () => {
+    expect(await merge('service_role', CO, {})).toMatchObject({ ok: false, code: '22023' });
+    expect(await merge('service_role', CO, [1] as unknown)).toMatchObject({ ok: false, code: '22023' });
+    expect(await as('service_role', `SELECT public.merge_report_settings_keys(NULL, '{"bootstrap":1}'::jsonb)`)).toMatchObject({ ok: false, code: '22004' });
+  });
+
+  it('list errors are refused (22023): a NULL element, a non-allowed key, a key in both lists, a nested key not in the patch, a non-object nested value', async () => {
+    expect(await as('service_role', `SELECT public.merge_report_settings_keys($1, '{"bootstrap":1}'::jsonb, NULL, ARRAY[NULL]::text[])`, [CO])).toMatchObject({ ok: false, code: '22023' });
+    expect(await merge('service_role', CO, { bootstrap: 1 }, null, ['not_a_key'])).toMatchObject({ ok: false, code: '22023' });
+    expect(await merge('service_role', CO, { market_pulse: { a: 1 } }, null, ['market_pulse'], ['market_pulse'])).toMatchObject({ ok: false, code: '22023' });
+    expect(await merge('service_role', CO, { bootstrap: 1 }, null, null, ['market_pulse'])).toMatchObject({ ok: false, code: '22023' });
+    expect(await merge('service_role', CO, { market_pulse: 'x' as unknown }, null, null, ['market_pulse'])).toMatchObject({ ok: false, code: '22023' });
+    expect((await stored(CO)).rs).toEqual({ brand_voice: { tone: 'warm' }, user_report_pref: 42, orchestration_tasks: [1] });
+  });
+
+  it('profile keys are allow-listed (a profile_ui key merges)', async () => {
+    expect(await merge('service_role', CO, { company_facts: { team_size: 9 } }, null, null, ['company_facts'])).toMatchObject({ ok: true, rows: [{ n: 1 }] });
+    expect((await stored(CO)).rs.company_facts).toEqual({ team_size: 9 });
+  });
+});
+
+describe('sandbox parity: stored-column shapes', () => {
+  it('a SQL NULL column becomes the patch', async () => {
+    await db.query('UPDATE public.company_profiles SET report_settings = NULL WHERE company_id = $1', [CO]);
+    await merge('service_role', CO, { bootstrap: 'b' });
+    expect((await stored(CO)).rs).toEqual({ bootstrap: 'b' });
+  });
+
+  it('a JSON null column becomes the patch', async () => {
+    await seedProfile(CO, 'null');
+    await merge('service_role', CO, { bootstrap: 'b' });
+    expect((await stored(CO)).rs).toEqual({ bootstrap: 'b' });
+  });
+
+  it('nested: an absent stored key starts from {}', async () => {
+    await merge('service_role', CO, { market_pulse: { exclusions: ['x'] } }, null, null, ['market_pulse']);
+    expect((await stored(CO)).rs.market_pulse).toEqual({ exclusions: ['x'] });
+  });
+});
+
+describe('sandbox parity: races and their controls', () => {
+  it('if_absent under a concurrent replacer: the replacer WINS (decided on the locked row)', async () => {
+    await interleave(
+      (c) => c.query(MERGE_SQL, [CO, JSON.stringify({ discovered_metadata: 'replacer' }), null, null]),
+      (c) => c.query(MERGE_SQL, [CO, JSON.stringify({ discovered_metadata: 'backfill' }), ['discovered_metadata'], null]),
+    );
+    expect((await stored(CO)).rs.discovered_metadata).toBe('replacer');
+  });
+
+  it('CONTROL: without if_absent the backfill OVERWRITES the replacer (why if_absent exists)', async () => {
+    await interleave(
+      (c) => c.query(MERGE_SQL, [CO, JSON.stringify({ discovered_metadata: 'replacer' }), null, null]),
+      (c) => c.query(MERGE_SQL, [CO, JSON.stringify({ discovered_metadata: 'backfill' }), null, null]),
+    );
+    expect((await stored(CO)).rs.discovered_metadata).toBe('backfill');
+  });
+
+  it('CONTROL: without p_merge_nested the second writer REPLACES market_pulse (the first sub-field is lost)', async () => {
+    await merge('service_role', CO, { market_pulse: { keep: 1 } });
+    await interleave(
+      (c) => c.query(MERGE_SQL, [CO, JSON.stringify({ market_pulse: { competitor_details: ['refine'] } }), null, ['market_pulse']]),
+      (c) => c.query(MERGE_SQL, [CO, JSON.stringify({ market_pulse: { exclusions: ['ui'] } }), null, null]),
+    );
+    expect((await stored(CO)).rs.market_pulse).toEqual({ exclusions: ['ui'] });
+  });
+
+  it('CONTROL: the LEGACY whole-column read-modify-write loses the other writer\'s key (the defect)', async () => {
+    const before = (await stored(CO)).rs as Record<string, unknown>;
+    await interleave(
+      async (c) => {
+        await c.query('SELECT report_settings FROM public.company_profiles WHERE company_id = $1 FOR UPDATE', [CO]);
+        await c.query('UPDATE public.company_profiles SET report_settings = $2::jsonb WHERE company_id = $1', [CO, JSON.stringify({ ...before, agent_checkpoints: ['c1'] })]);
+      },
+      // The second writer read the column BEFORE the first committed (a stale copy), then writes it back whole.
+      (c) => c.query('UPDATE public.company_profiles SET report_settings = $2::jsonb WHERE company_id = $1', [CO, JSON.stringify({ ...before, website_fingerprint: 'c2' })]),
+      null,
+    );
+    const rs = (await stored(CO)).rs;
+    expect(rs.website_fingerprint).toBe('c2');
+    expect(rs).not.toHaveProperty('agent_checkpoints'); // LOST: the defect the RPC removes
+  });
+});
+
+describe('sandbox parity: the migration itself', () => {
+  it('re-applies cleanly on the applied state (idempotent)', async () => {
+    const r = await rolledBack((c) => attemptIn(c, unwrapped(MIGRATION_FILE)));
+    expect(r).toEqual({ ok: true });
+  });
+
+  it('CONTROL: its verify block CATCHES an anon grant', async () => {
+    const r = await rolledBack(async (c) => {
+      await c.query(`GRANT EXECUTE ON FUNCTION ${FN} TO anon`);
+      return attemptIn(c, verifyBlock());
+    });
+    expect(r.ok).toBe(false);
+    expect(String(r.message)).toMatch(/anon has EXECUTE/);
+  });
+
+  it('re-applying RE-CLOSES a widened grant', async () => {
+    const r = await rolledBack(async (c) => {
+      await c.query(`GRANT EXECUTE ON FUNCTION ${FN} TO anon`);
+      const applied = await attemptIn(c, unwrapped(MIGRATION_FILE));
+      const anon = (await c.query(`SELECT has_function_privilege('anon', $1::regprocedure, 'EXECUTE') AS x`, [FN])).rows[0].x;
+      return { applied, anon };
+    });
+    expect(r).toEqual({ applied: { ok: true }, anon: false });
+  });
+
+  it('the rollback drops the function and leaves the data', async () => {
+    const r = await rolledBack(async (c) => {
+      const before = (await c.query('SELECT report_settings FROM public.company_profiles WHERE company_id = $1', [CO])).rows[0];
+      const rb = await attemptIn(c, unwrapped(ROLLBACK_FILE));
+      const fn = (await c.query('SELECT to_regprocedure($1) AS f', [FN])).rows[0].f;
+      const after = (await c.query('SELECT report_settings FROM public.company_profiles WHERE company_id = $1', [CO])).rows[0];
+      return { rb, fn, same: JSON.stringify(before) === JSON.stringify(after) };
+    });
+    expect(r).toEqual({ rb: { ok: true }, fn: null, same: true });
   });
 });
