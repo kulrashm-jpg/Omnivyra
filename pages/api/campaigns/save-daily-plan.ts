@@ -86,7 +86,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Save daily plan via execution engine (updateActivity or insertActivity)
     const platform = dailyExecution?.platform ?? dailyPlan.platform ?? 'linkedin';
     const contentType = dailyExecution?.content_type ?? dailyPlan.contentType ?? 'post';
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('daily_content_plans')
       .select('id')
       .eq('campaign_id', campaignId)
@@ -95,6 +95,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .eq('platform', platform)
       .eq('content_type', contentType)
       .maybeSingle();
+    // A failed lookup is not "no existing row": the insert below would DUPLICATE the slot
+    // (unread-error pkg 2). PGRST116 is maybeSingle's "more than one row": the slot is already
+    // duplicated, and a retry cannot fix that, so it is a 409, not a 503.
+    if (existingError) {
+      const ambiguous = (existingError as { code?: string }).code === 'PGRST116';
+      console.error('[save-daily-plan] existing-slot lookup failed; nothing saved', { campaignId, ambiguous, message: existingError.message });
+      return res.status(ambiguous ? 409 : 503).json(ambiguous
+        ? { code: 'DAILY_PLAN_SLOT_AMBIGUOUS', error: 'More than one plan already exists for this day, platform and content type. Nothing was saved.' }
+        : { code: 'DAILY_PLAN_SLOT_READ_FAILED', error: 'Could not check for an existing plan. Nothing was saved. Please try again.' });
+    }
 
     const updates = {
       date: dailyPlan.date,
@@ -113,16 +123,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     };
 
     const { updateActivity, insertActivity } = await import('../../../backend/services/executionPlannerService');
-    let planData: Record<string, unknown>;
+    let planData: Record<string, unknown> | null;
+    // The read-back after a successful write: unread, a failure answered data:null as if that were
+    // the row (unread-error pkg 2). The plan IS saved, so the answer stays 200 and says so.
+    let readBackError: { message: string } | null = null;
 
     if (existing?.id) {
       await updateActivity(existing.id, updates, 'board');
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('daily_content_plans')
         .select('*')
         .eq('id', existing.id)
         .single();
-      planData = data as Record<string, unknown>;
+      readBackError = error;
+      planData = data as Record<string, unknown> | null;
     } else {
       const row = {
         campaign_id: campaignId,
@@ -136,12 +150,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ...updates,
       };
       const { id } = await insertActivity(row as any, 'board');
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('daily_content_plans')
         .select('*')
         .eq('id', id)
         .single();
-      planData = data as Record<string, unknown>;
+      readBackError = error;
+      planData = data as Record<string, unknown> | null;
+    }
+
+    if (readBackError) {
+      console.error('[save-daily-plan] saved, but the saved row could not be read back', { campaignId, message: readBackError.message });
+      return res.status(200).json({
+        success: true,
+        saved: true,
+        read_back: 'failed',
+        message: 'Daily plan saved, but it could not be reloaded. Refresh to see it.',
+        data: null,
+      });
     }
 
     res.status(200).json({
