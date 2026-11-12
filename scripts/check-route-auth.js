@@ -107,6 +107,8 @@ const PRIMITIVES = {
   validateAuthToken: { from: /^backend\/services\/authResolver$/, level: 'identity' },
   // ── tenant ──
   enforceCompanyAccess: { from: /^backend\/services\/userContextService$/, level: 'tenant', campaignArg: true },
+  // Same decision as enforceCompanyAccess (incl. campaign binding); a DENIAL is the uniform 404.
+  enforceCompanyAccessUniform: { from: /^backend\/services\/userContextService$/, level: 'tenant', campaignArg: true },
   requireTenantAccess: { from: /^backend\/security\/TenantGuard$/, level: 'tenant' },
   requireCampaignTenantAccess: { from: /^backend\/security\/TenantGuard$/, level: 'tenant', campaign: true },
   requireContentTenantAccess: { from: /^backend\/security\/TenantGuard$/, level: 'tenant' },
@@ -120,6 +122,8 @@ const PRIMITIVES = {
   withRBAC: { from: /^backend\/middleware\/withRBAC$/, level: 'tenant' },
   enforceRole: { from: /^backend\/services\/rbacService$/, level: 'tenant' },
   requireCapability: { from: /^backend\/security\/requireCapability$/, level: 'tenant' },
+  // Same decision as requireCapability; a DENIAL is answered as the uniform 404 (no existence oracle).
+  requireCapabilityUniform: { from: /^backend\/security\/requireCapabilityUniform$/, level: 'tenant' },
   resolveCompanyAccess: { from: /^backend\/services\/contentArchitectService$/, level: 'tenant' },
   resolveCompanyId: { from: /^backend\/services\/reportsCompanyAccessService$/, level: 'tenant' },
   getUserCompanyRole: { from: /^backend\/services\/rbacService$/, level: 'tenant' },
