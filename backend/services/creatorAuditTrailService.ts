@@ -82,6 +82,9 @@ async function flush() {
   if (_queue.length === 0) return;
   const batch = _queue.splice(0, _queue.length);
   try {
+    // One batch mixes entries from many tenants (and NULL-company system entries); each row carries its own
+    // company_id. Append-only: this path never reads the table back.
+    // cross-tenant: creator-audit-append-only-sink
     await supabase.from('creator_audit_log').insert(batch);
   } catch (err) {
     logger.warn('creatorAuditTrail.flush_failed', {

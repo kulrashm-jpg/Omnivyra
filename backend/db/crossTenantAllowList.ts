@@ -55,6 +55,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: "PUBLIC signup check 'is this EXACT company name taken' - uniqueness is a property across ALL tenants, so the lookup cannot be tenant-scoped. It answers ONLY a boolean (never an id or another name), and the boolean is decided by case-insensitive EQUALITY in code (isExactNameMatch) - so no pattern character in either layer (SQL LIKE % _ \\ or PostgREST's * -> %) can widen the answer beyond the exact name; the .ilike pattern (likeCandidatePattern) only narrows which candidate rows are fetched. Inherent and accepted: it reveals whether one EXACT name exists. The per-IP limit (NAME_CHECK_LIMIT 30/min, fails closed on limiter outage) is a speed bump, not the control. Pinned by backend/tests/unit/s2CompanyNameAvailability.test.ts 'a wildcard prefix never matches another company' and 'rate-limited per IP'. Reads nothing else cross-tenant; writes nothing.",
     owner: 'virality-e1',
   },
+  {
+    id: 'creator-audit-append-only-sink',
+    tables: ['creator_audit_log'],
+    file: 'backend/services/creatorAuditTrailService.ts',
+    reason: "SYSTEM-WRITER SINK (83 ruling 4, 2026-11-12): recordAuditEntry buffers best-effort audit entries from many call sites and flush() INSERTS them in one batch, so a batch mixes tenants and NULL-company system entries (prod: 65/65 rows NULL company) - there is no single tenant to scope the write to. Each row carries its OWN company_id (entry.companyId or the ambient trace's), never another entry's. WRITE-ONLY: flush() only ever inserts - it never selects, updates or deletes, and returns nothing to any caller; the readers (getAuditHistoryForPlan / getAuditHistoryForScheduledPost) go through tenantTable, so nothing is read back to a tenant by this path. Pinned by backend/tests/unit/s2CreatorAuditSink.test.ts 'flush only inserts, and each row keeps its own company'. Reads nothing cross-tenant; writes only creator_audit_log. Follow-up (NON-BLOCKING-SCHEDULED): an optional tenant per entry so stamped entries go through the seam.",
+    owner: 'virality-e1',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));
