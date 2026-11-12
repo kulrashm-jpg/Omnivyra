@@ -18,8 +18,10 @@ export async function getTemplateHealth(id: string): Promise<TemplateHealth> {
   const audit = await listTemplateAudit(id);
   const events: TemplateHealthEvent[] = audit.map((a) => ({ action: a.action, templateId: a.templateId, templateVersion: a.templateVersion, at: a.at }));
 
+  // A registered USER template also resolves through getTemplateById - only a real system
+  // template takes the system branch (it used to label user templates 'system').
   const sys = getTemplateById(id);
-  if (sys) {
+  if (sys && sys.ownership === 'system') {
     return computeTemplateHealth(id, events, { ownership: 'system', latestVersion: sys.version, activeVersion: sys.version, status: 'published' });
   }
   const user = await getUserTemplate(id);
