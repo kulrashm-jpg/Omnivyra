@@ -142,3 +142,193 @@ describe('FIX: decision writes succeed and every event carries company_id', () =
     }
   });
 });
+
+// ── The migration itself, on the replayed schema (05/e9 rule: sandbox-only evidence does not close a
+// unit; every sandbox case lives here too). Each case runs the migration's OWN SQL, read from its file
+// with the file's BEGIN/COMMIT removed, inside a rolled-back transaction, so nothing leaks into the
+// shared CI database. A savepoint captures an expected refusal without aborting the transaction.
+const MIGRATION_FILE = '20270217000019_decision_event_trigger_company_id.sql';
+const ROLLBACK_FILE = path.join('rollbacks', 'decision_event_trigger_company_id_rollback.sql');
+const OWN_BODY_MD5 = '91053ed21f92b1fab46db0cdc09d7ecb';
+const PROD_CRLF_MD5 = '64faad0ef8a81658661c1dbef94e5ddf';
+const FN_SIG = 'public.omnivyra_log_decision_event()';
+
+/** The file's statements without its own transaction control (the test owns the transaction). */
+function unwrapped(file: string): string {
+  const sql = fs.readFileSync(path.join(MIGRATIONS, file), 'utf8');
+  const lines = sql.split('\n');
+  const out = lines.filter((l) => l.trim() !== 'BEGIN;' && l.trim() !== 'COMMIT;');
+  if (lines.length - out.length !== 2) throw new Error(`${file}: expected exactly one BEGIN; and one COMMIT; line`);
+  return out.join('\n');
+}
+
+type Attempt = { ok: true } | { ok: false; code: string; message: string };
+
+/** Runs sql; on failure rolls back to a savepoint and returns the error (the transaction stays usable). */
+async function attemptSql(c: Client, sql: string): Promise<Attempt> {
+  await c.query('SAVEPOINT attempt');
+  try {
+    await c.query(sql);
+    await c.query('RELEASE SAVEPOINT attempt');
+    return { ok: true };
+  } catch (e) {
+    await c.query('ROLLBACK TO SAVEPOINT attempt');
+    const err = e as { code?: string; message?: string };
+    return { ok: false, code: err.code ?? '?', message: err.message ?? '' };
+  }
+}
+
+const messageOf = (a: Attempt): string => (a as { message?: string }).message ?? '';
+
+const fnState = async (c: Client) => (await c.query(
+  `SELECT md5(prosrc) AS md5, prosrc,
+          has_function_privilege('service_role', oid, 'EXECUTE') AS sr,
+          has_function_privilege('anon', oid, 'EXECUTE') AS anon
+     FROM pg_proc WHERE oid = $1::regprocedure`, [FN])).rows[0] as { md5: string; prosrc: string; sr: boolean; anon: boolean };
+
+/** Expects a rolled-back tx body to have succeeded and returns its value. */
+function value<T>(out: { ok: true; value: T } | { ok: false; code: string; message: string }): T {
+  if (!out.ok) throw new Error(`transaction failed: ${(out as { code: string }).code} ${(out as { message: string }).message}`);
+  return (out as { value: T }).value;
+}
+
+const UNKNOWN_BODY_MARK = 'created_by_someone_else';
+
+describe('the migration: re-run, accepted bodies, refusals', () => {
+  it('RE-RUN on the applied state is a clean no-op (its own body is accepted)', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => ({ r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) })));
+    expect(v.r).toEqual({ ok: true });
+    expect(v.s.md5).toBe(OWN_BODY_MD5);
+  });
+
+  it('accepts the 20260411 body in LF (the baseline) and replaces it', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(body0411());
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(v.r).toEqual({ ok: true });
+    expect(v.s.md5).toBe(OWN_BODY_MD5);
+  });
+
+  it('accepts the 20260411 body in CRLF (PROD, md5 64faad0e...) and replaces it', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(body0411().split('\n').join('\r\n'));
+      const before = await fnState(c);
+      return { before, r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(v.before.md5).toBe(PROD_CRLF_MD5);
+    expect(v.r).toEqual({ ok: true });
+    expect(v.s.md5).toBe(OWN_BODY_MD5);
+  });
+
+  it('REFUSES an unknown body and leaves it in place', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(body0411().replace(`'created'`, `'${UNKNOWN_BODY_MARK}'`));
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(v.r.ok).toBe(false);
+    expect(messageOf(v.r)).toMatch(/unexpected body/);
+    expect(v.s.prosrc).toContain(UNKNOWN_BODY_MARK);
+  });
+
+  it('REFUSES when decision_events.company_id is nullable (the 20260430 DDL half missing)', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query('ALTER TABLE public.decision_events ALTER COLUMN company_id DROP NOT NULL');
+      await c.query(body0411());
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(messageOf(v.r)).toMatch(/decision_events\.company_id must exist and be NOT NULL/);
+    expect(v.s.prosrc).not.toContain('NEW.company_id');
+  });
+
+  it('REFUSES when the trigger is disabled', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query('ALTER TABLE public.decision_objects DISABLE TRIGGER trg_decision_objects_log_events');
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)) };
+    }));
+    expect(messageOf(v.r)).toMatch(/trg_decision_objects_log_events/);
+  });
+});
+
+describe('the rollback, and re-applying after it', () => {
+  it('rollback restores the defect (23502); re-applying fixes it again, company_id on the event', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      const rb = await attemptSql(c, unwrapped(ROLLBACK_FILE));
+      await c.query('SAVEPOINT insert_attempt');
+      let afterRollbackCode = 'none';
+      try {
+        await c.query(INSERT_DECISION, [CO]);
+      } catch (e) {
+        afterRollbackCode = (e as { code?: string }).code ?? '?';
+      }
+      await c.query('ROLLBACK TO SAVEPOINT insert_attempt');
+      const reapply = await attemptSql(c, unwrapped(MIGRATION_FILE));
+      const id = (await c.query(INSERT_DECISION, [CO])).rows[0].id;
+      const ev = (await c.query('SELECT company_id FROM public.decision_events WHERE decision_id = $1', [id])).rows;
+      return { rb, afterRollbackCode, reapply, ev, s: await fnState(c) };
+    }));
+    expect(v.rb).toEqual({ ok: true });
+    expect(v.afterRollbackCode).toBe('23502');
+    expect(v.reapply).toEqual({ ok: true });
+    expect(v.ev).toEqual([{ company_id: CO }]);
+    expect(v.s.md5).toBe(OWN_BODY_MD5);
+  });
+});
+
+describe('search_path: a caller cannot redirect the event insert', () => {
+  it('a decision insert under search_path = evil, public writes its event to public.decision_events', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query('CREATE SCHEMA dec_evt_evil');
+      await c.query('CREATE TABLE dec_evt_evil.decision_events (LIKE public.decision_events)');
+      await c.query('SET LOCAL search_path = dec_evt_evil, public');
+      const id = (await c.query(INSERT_DECISION, [CO])).rows[0].id;
+      const evil = (await c.query('SELECT count(*)::int AS n FROM dec_evt_evil.decision_events')).rows[0].n;
+      const good = (await c.query('SELECT count(*)::int AS n FROM public.decision_events WHERE decision_id = $1', [id])).rows[0].n;
+      return { evil, good };
+    }));
+    expect(v).toEqual({ evil: 0, good: 1 });
+  });
+});
+
+describe('service_role EXECUTE is exactly as found (never lost, never gained)', () => {
+  it('CI shape (no grant, PUBLIC revoked): applies and service_role stays without EXECUTE', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(`REVOKE ALL ON FUNCTION ${FN_SIG} FROM PUBLIC, service_role`);
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(v.r).toEqual({ ok: true });
+    expect(v.s.sr).toBe(false);
+  });
+
+  it('PUBLIC-only shape (20270111000003 not run): service_role KEEPS EXECUTE, anon loses it', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(`REVOKE ALL ON FUNCTION ${FN_SIG} FROM service_role`);
+      await c.query(`GRANT EXECUTE ON FUNCTION ${FN_SIG} TO PUBLIC`);
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(v.r).toEqual({ ok: true });
+    expect(v.s.sr).toBe(true);
+    expect(v.s.anon).toBe(false);
+  });
+
+  it('prod shape (explicit grant): applies and service_role keeps EXECUTE', async () => {
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(`GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role`);
+      return { r: await attemptSql(c, unwrapped(MIGRATION_FILE)), s: await fnState(c) };
+    }));
+    expect(v.r).toEqual({ ok: true });
+    expect(v.s.sr).toBe(true);
+  });
+
+  it('CONTROL: a variant that strips service_role before the verify block is refused', async () => {
+    const base = unwrapped(MIGRATION_FILE);
+    const marker = 'DO $' + 'verify$';
+    const sabotage = base.split(marker).join(`REVOKE ALL ON FUNCTION ${FN_SIG} FROM service_role;\n${marker}`);
+    const v = value(await inRolledBackTx(null, async (c) => {
+      await c.query(`GRANT EXECUTE ON FUNCTION ${FN_SIG} TO service_role`);
+      return { r: await attemptSql(c, sabotage) };
+    }));
+    expect(sabotage).not.toBe(base);
+    expect(messageOf(v.r)).toMatch(/service_role EXECUTE changed/);
+  });
+});
