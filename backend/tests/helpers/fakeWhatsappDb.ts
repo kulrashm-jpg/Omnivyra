@@ -91,7 +91,10 @@ export function fakeTable(table: string): Row {
     if (st.mode === 'single' && out.length !== 1) {
       return { data: null, count: null, error: { code: 'PGRST116', message: `expected one row, got ${out.length}` } };
     }
-    if (st.mode !== 'many') return { data: out[0] ?? null, count: null, error: null };
+    // A COPY, as PostgREST returns: handing back the live row let a later write (or a test's
+    // concurrent change) silently rewrite a value the caller had already read. SHALLOW, like the
+    // `many` path below: a jsonb column (an object or array value) still aliases the stored row.
+    if (st.mode !== 'many') return { data: out[0] ? { ...out[0] } : null, count: null, error: null };
     return { data: out.map((r) => ({ ...r })), count: null, error: null };
   };
 
