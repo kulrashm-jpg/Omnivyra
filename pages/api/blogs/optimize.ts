@@ -28,7 +28,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
+import { UNIFORM_NOT_FOUND } from '../../../backend/services/userContextService';
 import {
   applyOptimizationActions,
   type BlogForRegeneration,
@@ -79,19 +80,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Fetch blog ────────────────────────────────────────────────────────────────
 
-  const { data: blog, error: blogError } = await supabase
-    .from('blogs')
+  // S2: the blog is read UNDER the authorized company, so another tenant's blog is simply not
+  // found - the same uniform 404 as an unknown id (it used to be 404 vs 403, an existence oracle).
+  const tenant = tenantContextFor(access, company_id);
+  const { data: blog, error: blogError } = await tenantTable('blogs', tenant)
     .select('id, title, content_blocks, seo_meta_title, company_id')
     .eq('id', blog_id)
-    .single();
+    .maybeSingle();
 
-  if (blogError || !blog) {
-    return res.status(404).json({ error: 'Blog not found' });
+  if (blogError) {
+    return res.status(500).json({ error: 'Failed to load blog' });
+  }
+  if (!blog) {
+    return res.status(404).json(UNIFORM_NOT_FOUND);
   }
 
-  // Verify the blog belongs to the requesting company.
-  if (blog.company_id !== company_id) {
-    return res.status(403).json({ error: 'Access denied: blog does not belong to this company' });
+  // Defence in depth (the seam already scoped the read): never a distinguishable answer.
+  if (String(blog.company_id).toLowerCase() !== tenant.companyId) {
+    return res.status(404).json(UNIFORM_NOT_FOUND);
   }
 
   // ── Execute actions ───────────────────────────────────────────────────────────
@@ -123,8 +129,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       patch.seo_meta_title = result.title_change;
     }
 
-    const { error: updateError } = await supabase
-      .from('blogs')
+    const { error: updateError } = await tenantTable('blogs', tenant)
       .update(patch)
       .eq('id', blog_id);
 
