@@ -48,7 +48,7 @@ function chainableMock(rowsByTable: Record<string, unknown>): jest.Mock {
       order:  () => chain,
       limit:  () => Promise.resolve(result),
       maybeSingle: () => Promise.resolve(result),
-      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      update: () => { const u: Record<string, unknown> = { eq: () => u, select: () => Promise.resolve({ data: [{ id: 'op-1' }], error: null }) }; return u; },
       then:   (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
     };
     return chain;
@@ -99,7 +99,7 @@ describe('idempotencyRecoveryService', () => {
           }
           return Promise.resolve({ data: null, error: null });
         },
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        update: () => { const u: Record<string, unknown> = { eq: () => u, select: () => Promise.resolve({ data: [{ id: 'op-1' }], error: null }) }; return u; },
       };
       return chain;
     });
@@ -136,7 +136,7 @@ describe('idempotencyRecoveryService', () => {
           // readIdempotencyKey
           return Promise.resolve({ data: { idempotency_key: 'key-x' }, error: null });
         },
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        update: () => { const u: Record<string, unknown> = { eq: () => u, select: () => Promise.resolve({ data: [{ id: 'op-1' }], error: null }) }; return u; },
       };
       return chain;
     });

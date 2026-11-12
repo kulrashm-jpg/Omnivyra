@@ -51,6 +51,10 @@ function mockSupabase(opts: {
   siblingRows?: Array<{ id: string; execution_phase: string }>;
   currentRow?: { status: string; organization_id: string | null } | null;
   updateOk?: boolean;
+  /** Rows the CAS update matches (default 1); 0 = the row moved since the read. */
+  casRows?: number;
+  /** Settlement rows visible to the re-check AFTER the supersede. */
+  settledAfterRows?: Array<{ id: string; execution_phase: string }>;
 }) {
   // credit_transactions.limit is called in a deterministic order across the
   // safeRetry flow:
@@ -61,6 +65,7 @@ function mockSupabase(opts: {
   // AND status/organization_id so readIdempotencyKey() and readCurrent()
   // each pick the field they need regardless of call order.
   let ctLimitCall = 0;
+  let superseded = false;
   (supabase.from as AnyMock).mockImplementation((table: string) => {
     const chain: Record<string, unknown> = {
       select: () => chain,
@@ -70,6 +75,7 @@ function mockSupabase(opts: {
       order:  () => chain,
       limit:  () => {
         if (table === 'credit_transactions') {
+          if (superseded) return Promise.resolve({ data: opts.settledAfterRows ?? [], error: null });
           ctLimitCall++;
           if (ctLimitCall === 1) return Promise.resolve({ data: opts.settledRows ?? [], error: null });
           if (ctLimitCall === 2) return Promise.resolve({ data: opts.holdRows ?? [], error: null });
@@ -90,7 +96,19 @@ function mockSupabase(opts: {
         }
         return Promise.resolve({ data: null, error: null });
       },
-      update: () => ({ eq: () => Promise.resolve({ error: opts.updateOk === false ? { message: 'update failed' } : null }) }),
+      // CAS update: update().eq(id).eq(status).select('id') -> the matched rows.
+      update: () => {
+        const u: Record<string, unknown> = {
+          eq: () => u,
+          select: () => {
+            superseded = true;
+            if (opts.updateOk === false) return Promise.resolve({ data: null, error: { message: 'update failed' } });
+            const n = opts.casRows ?? 1;
+            return Promise.resolve({ data: Array.from({ length: n }, (_, i) => ({ id: `op-${i}` })), error: null });
+          },
+        };
+        return u;
+      },
     };
     return chain;
   });
@@ -239,5 +257,24 @@ describe('runReconciliationAfterRecovery', () => {
     const criticalCall = (emitAnomaly as AnyMock).mock.calls.find(c => c[0].severity === 'critical');
     expect(criticalCall).toBeTruthy();
     expect(criticalCall[0].metadata.requires_manual_review).toBe(true);
+  });
+});
+
+// CLASS 2 (2026-11-12): the supersede is a CAS on the status as read, and the
+// settlement is re-checked AFTER it, before any fresh key is issued.
+describe('safeRetryOperation - races', () => {
+  beforeEach(() => { jest.clearAllMocks(); _resetBillingMetricsForTests(); });
+
+  it('the row MOVED since the read (lost CAS) -> STATE_CHANGED, no fresh key', async () => {
+    mockSupabase({ idempotencyKey: 'key-x', casRows: 0 });
+    const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: 'stuck' });
+    expect(r).toMatchObject({ ok: false, code: 'STATE_CHANGED' });
+  });
+
+  it('the original CONFIRMED between the checks and the supersede -> COMPLETED_SETTLEMENT, no fresh key', async () => {
+    mockSupabase({ idempotencyKey: 'key-x', settledAfterRows: [{ id: 't9', execution_phase: 'confirm' }] });
+    const r = await safeRetryOperation({ surface: 'billing_operations', id: 'op-1', actorUserId: 'a', reason: 'stuck' });
+    expect(r).toMatchObject({ ok: false, code: 'COMPLETED_SETTLEMENT' });
+    expect((r as { newIdempotencyKey?: string }).newIdempotencyKey).toBeUndefined();
   });
 });

@@ -249,7 +249,7 @@ export async function recoverOperation(args: RecoveryArgs): Promise<RecoveryResu
   }
 
   // ── Apply transition ─────────────────────────────────────────────────
-  const updated = await applyStatusUpdate(args.surface, args.id, toStatus, args.reason);
+  const updated = await applyStatusUpdate(args.surface, args.id, toStatus, args.reason, currentRow.status);
   if (!updated.ok) {
     return { ok: false, surface: args.surface, id: args.id, error: 'error' in updated ? updated.error : 'update failed', driftCheck };
   }
@@ -352,7 +352,7 @@ export type SafeRetryResult =
   | {
       ok: false;
       code: 'NOT_FOUND' | 'COMPLETED_SETTLEMENT' | 'ACTIVE_RESERVATION' | 'NOT_RECOVERABLE' | 'REASON_REQUIRED' | 'FAILED'
-        | 'READ_FAILED' | 'SETTLEMENT_UNKNOWN' | 'DRIFT_UNKNOWN';
+        | 'READ_FAILED' | 'SETTLEMENT_UNKNOWN' | 'DRIFT_UNKNOWN' | 'STATE_CHANGED';
       message: string;
     };
 
@@ -398,22 +398,27 @@ export async function safeRetryOperation(args: SafeRetryArgs): Promise<SafeRetry
 
   // 1+2. COMPLETED settlement / ledger mutation check — any CONFIRM or GRANT
   //      row for this key means money already moved; retry is forbidden.
-  const { data: settled, error: settledErr } = await supabase
-    .from('credit_transactions')
-    .select('id, execution_phase')
-    .in('idempotency_key', [idemKey, `${idemKey}:confirm`])
-    .in('execution_phase', ['confirm', 'grant'])
-    .limit(1);
-  if (settledErr) {
-    return { ok: false, code: 'SETTLEMENT_UNKNOWN', message: `Refusing retry: settlement check failed (${settledErr.message}) - a completed settlement may exist.` };
-  }
-  if (settled && settled.length > 0) {
-    return {
-      ok: false,
-      code: 'COMPLETED_SETTLEMENT',
-      message: `Refusing retry: a completed ${String((settled[0] as { execution_phase: string }).execution_phase)} settlement already exists for this operation. Replay protection enforced.`,
-    };
-  }
+  const settlementRefusal = async (): Promise<SafeRetryResult | null> => {
+    const { data: settled, error: settledErr } = await supabase
+      .from('credit_transactions')
+      .select('id, execution_phase')
+      .in('idempotency_key', [idemKey as string, `${idemKey}:confirm`])
+      .in('execution_phase', ['confirm', 'grant'])
+      .limit(1);
+    if (settledErr) {
+      return { ok: false, code: 'SETTLEMENT_UNKNOWN', message: `Refusing retry: settlement check failed (${settledErr.message}) - a completed settlement may exist.` };
+    }
+    if (settled && settled.length > 0) {
+      return {
+        ok: false,
+        code: 'COMPLETED_SETTLEMENT',
+        message: `Refusing retry: a completed ${String((settled[0] as { execution_phase: string }).execution_phase)} settlement already exists for this operation. Replay protection enforced.`,
+      };
+    }
+    return null;
+  };
+  const settledBefore = await settlementRefusal();
+  if (settledBefore) return settledBefore;
 
   // 3. Active HOLD with no terminal sibling ⇒ original may still finish.
   const drift = await checkFinancialDrift(args.surface, args.id);
@@ -453,10 +458,21 @@ export async function safeRetryOperation(args: SafeRetryArgs): Promise<SafeRetry
     args.id,
     args.surface === 'billing_operations' ? 'error' : 'orphan_reaped',
     `safe-retry supersede: ${args.reason}`,
+    currentRow.status,
   );
   if (!updated.ok) {
+    if ('conflict' in updated && updated.conflict) {
+      return { ok: false, code: 'STATE_CHANGED', message: `Refusing retry: ${updated.error}` };
+    }
     return { ok: false, code: 'FAILED', message: ('error' in updated ? updated.error : undefined) ?? 'failed to finalize stuck row' };
   }
+
+  // CLASS 2: re-check settlement AFTER the supersede, BEFORE any fresh key is
+  // issued. The original can write its CONFIRM ledger row before it updates the
+  // operation's status, so the CAS above can still win while money has moved;
+  // a fresh key then would charge / grant a second time.
+  const settledAfter = await settlementRefusal();
+  if (settledAfter) return settledAfter;
 
   // Lineage + audit.
   await recordAdminAudit({
@@ -661,59 +677,50 @@ async function readCurrent(surface: StuckOperation['surface'], id: string): Prom
   return data as RowSummary;
 }
 
+/**
+ * CLASS 2 (2026-11-12): every recovery write is a CAS on the status AS READ
+ * (`expectedStatus`) with a row count. By id alone, an operation that completed
+ * (confirmed / executed) between the safety checks and this write was
+ * overwritten to error / orphan_reaped - and safeRetry then handed the operator
+ * a FRESH key that bypasses the ledger's unique key (a double charge or grant).
+ * A lost CAS returns `conflict: true` and nothing is written.
+ */
 async function applyStatusUpdate(
   surface: StuckOperation['surface'],
   id: string,
   toStatus: string,
   reason: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+  expectedStatus: string,
+): Promise<{ ok: true } | { ok: false; error: string; conflict?: boolean }> {
+  const nowIso = new Date().toISOString();
+  let table: string;
+  let patch: Record<string, unknown>;
   if (surface === 'billing_operations') {
-    const { error } = await supabase
-      .from('billing_operations')
-      .update({
-        status:         toStatus,
-        failure_reason: `recovery: ${reason}`,
-        completed_at:   new Date().toISOString(),
-      })
-      .eq('id', id);
-    return error ? { ok: false, error: error.message } : { ok: true };
+    table = 'billing_operations';
+    patch = { status: toStatus, failure_reason: `recovery: ${reason}`, completed_at: nowIso };
+  } else if (surface === 'job_execution_registry') {
+    // Direct CAS update (the monotonic-status trigger validates the transition).
+    // The previous advance_job_execution call passed an undefined execution
+    // hash and treated "no error" as success without checking any row changed.
+    table = 'job_execution_registry';
+    patch = { status: toStatus, error_message: `recovery: ${reason}`, completed_at: nowIso, last_seen_at: nowIso };
+  } else if (surface === 'credit_action_approvals') {
+    table = 'credit_action_approvals';
+    patch = { status: toStatus, rejected_at: nowIso, rejection_reason: `recovery: ${reason}` };
+  } else {
+    return { ok: false, error: 'unsupported surface' };
   }
-  if (surface === 'job_execution_registry') {
-    // Use the existing RPC so the monotonic-status guard is respected
-    const { error } = await supabase.rpc('advance_job_execution', {
-      p_execution_hash: undefined,  // we'll use the id-based path; if execution_hash needed, look it up first
-      p_status:         toStatus,
-      p_billing_operation_id: null,
-      p_error:          `recovery: ${reason}`,
-    });
-    // Fallback: if the RPC needs execution_hash, do a direct UPDATE (safe
-    // because the monotonic-status trigger validates the transition anyway).
-    if (error) {
-      const { error: directErr } = await supabase
-        .from('job_execution_registry')
-        .update({
-          status:        toStatus,
-          error_message: `recovery: ${reason}`,
-          completed_at:  new Date().toISOString(),
-          last_seen_at:  new Date().toISOString(),
-        })
-        .eq('id', id);
-      if (directErr) return { ok: false, error: directErr.message };
-    }
-    return { ok: true };
+  const { data, error } = await supabase
+    .from(table)
+    .update(patch)
+    .eq('id', id)
+    .eq('status', expectedStatus)
+    .select('id');
+  if (error) return { ok: false, error: error.message };
+  if (!Array.isArray(data) || data.length !== 1) {
+    return { ok: false, error: `STATE_CHANGED: ${surface}:${id} is no longer '${expectedStatus}' - it moved while recovering; nothing was written`, conflict: true };
   }
-  if (surface === 'credit_action_approvals') {
-    const { error } = await supabase
-      .from('credit_action_approvals')
-      .update({
-        status:           toStatus,
-        rejected_at:      new Date().toISOString(),
-        rejection_reason: `recovery: ${reason}`,
-      })
-      .eq('id', id);
-    return error ? { ok: false, error: error.message } : { ok: true };
-  }
-  return { ok: false, error: 'unsupported surface' };
+  return { ok: true };
 }
 
 function surfaceStatusToState(surface: StuckOperation['surface'], status: string): IdempotencyState {
