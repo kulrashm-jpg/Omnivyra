@@ -280,6 +280,26 @@ describe('razorpayStagingService adversarial safety', () => {
     expect(mockLoggerError).toHaveBeenCalledWith('razorpay_staging_purchase_link_failed', expect.anything());
   });
 
+  // MUTANT SURVIVOR (2026-11-12): the same link-failure event is logged on the
+  // webhook path (above) AND the verify path; this pins the verify site alone.
+  it('verify: a failed post-grant link write is best-effort - still processed, and logged', async () => {
+    mockOwnedDbTable.mockImplementation((table: string) => {
+      const chain = tableChain(table);
+      if (table === 'credit_purchases') {
+        let updating = false;
+        chain.update = jest.fn(() => { updating = true; return chain; });
+        chain.eq = jest.fn(() => (updating ? Promise.resolve({ data: null, error: { message: 'down' } }) : chain));
+      }
+      return chain;
+    });
+    const { verifyAndFulfillRazorpayStagingPayment } = await import('../../services/payments/razorpayStagingService');
+    const result = await verifyAndFulfillRazorpayStagingPayment({
+      orderId: 'order_test_1', paymentId: 'pay_test_1', signature: signPayment(), expectedOrganizationId: 'org-1',
+    });
+    expect(result).toMatchObject({ status: 'processed' });
+    expect(mockLoggerError).toHaveBeenCalledWith('razorpay_staging_purchase_link_failed', expect.anything());
+  });
+
   function attachRows(rows: unknown) {
     mockOwnedDbTable.mockImplementation((table: string) => {
       const chain = tableChain(table);

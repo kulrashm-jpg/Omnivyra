@@ -151,6 +151,19 @@ describe('pricing admin', () => {
     expect(mockOpsEvents).toEqual([expect.objectContaining({ alertKey: 'pricing_stale_proposals_pending', alertReady: true, severity: 'ERROR' })]);
   });
 
+  // MUTANT SURVIVOR (2026-11-12): pricing_adjustment_queue is updated TWICE
+  // (call 1 = mark this proposal applied, call 2 = supersede older ones); the
+  // mark failure is now failed on its own and asserted by its own warning.
+  it('apply: MARK-applied update fails (call 1) -> 200 with ITS warning, no supersede alert', async () => {
+    mockOpsEvents.length = 0;
+    mockScript['pricing_adjustment_queue:select'] = () => ({ data: PENDING, error: null });
+    mockScript['pricing_adjustment_queue:update'] = (n) => (n === 1 ? DOWN() : { data: null, error: null });
+    const res = await call(pricingApply, 'POST', {}, { adjustment_id: 'q1' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.warnings).toEqual(['this proposal could not be marked applied']);
+    expect(mockOpsEvents).toEqual([]);
+  });
+
   it('apply control: a clean apply carries no warnings', async () => {
     mockScript['pricing_adjustment_queue:select'] = () => ({ data: PENDING, error: null });
     const res = await call(pricingApply, 'POST', {}, { adjustment_id: 'q1' });
@@ -187,5 +200,17 @@ describe('company/billing/summary (customer-facing)', () => {
     expect(res.statusCode).toBe(500);
     expect(JSON.stringify(res.body)).not.toContain('secret_db_detail');
     expect(mockLogs).toContain('company_billing_summary_failed');
+  });
+
+  // MUTANT SURVIVOR (2026-11-12): credit_transactions is read TWICE (call 1 =
+  // recent events, call 2 = this period's consumption). Each fails on its own.
+  it.each([
+    ['recent events (call 1)', 1],
+    ['period consumption (call 2)', 2],
+  ])('credit_transactions %s read error ALONE -> 500, never a confident zero', async (_l, nth) => {
+    mockScript['credit_transactions:select'] = (n) => (n === nth ? DOWN() : { data: [], error: null });
+    const res = await call(billingSummary, 'GET', { companyId: ORG });
+    expect(res.statusCode).toBe(500);
+    expect(JSON.stringify(res.body)).not.toContain('secret_db_detail');
   });
 });

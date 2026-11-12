@@ -119,3 +119,12 @@ it('an unexpected claim-insert error never returns the database message', async 
   expect(res.statusCode).toBe(500);
   expect(JSON.stringify(res.body)).not.toContain('secret_internal');
 });
+
+// MUTANT SURVIVOR (2026-11-12): the duplicate-claim branch had no case.
+it('duplicate claim (23505) -> 409 "already claimed", nothing granted', async () => {
+  mockScript['free_credit_claims:insert'] = () => ({ data: null, error: { message: 'duplicate key value', code: '23505' } as any });
+  const res = await run();
+  expect(res.statusCode).toBe(409);
+  expect(res.body.error).toMatch(/already been claimed/);
+  expect(mockGrants).toEqual([]);
+});

@@ -126,6 +126,31 @@ describe('top-up invoice', () => {
     await expect(generateTopupInvoice('p1')).rejects.toThrow(/issue failed/);
   });
 
+  // MUTANT SURVIVORS (2026-11-12): invoices is read TWICE (the idempotency
+  // lookup, then the re-read after a failed insert); each is now failed on its
+  // own by call number and asserted by its own message.
+  it('invoice LOOKUP read error (call 1) -> throws "lookup failed", nothing inserted', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:select'] = (n) => (n === 1 ? DOWN() : { data: null, error: null });
+    mockScript['invoices:insert'] = () => ({ data: { id: 'inv1' }, error: null });
+    await expect(generateTopupInvoice('p1')).rejects.toThrow(/invoice lookup failed/);
+    expect(mockWrites).toEqual([]);
+  });
+
+  it('insert fails, then the RE-READ (call 2) errors -> throws "re-read failed", never "insert failed"', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:select'] = (n) => (n === 1 ? { data: null, error: null } : DOWN());
+    mockScript['invoices:insert'] = () => ({ data: null, error: { message: 'duplicate key value' } });
+    await expect(generateTopupInvoice('p1')).rejects.toThrow(/invoice re-read failed/);
+  });
+
+  it('control: insert fails, re-read finds the raced invoice -> returned (created: false)', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:select'] = (n) => (n === 1 ? { data: null, error: null } : { data: { id: 'inv-raced' }, error: null });
+    mockScript['invoices:insert'] = () => ({ data: null, error: { message: 'duplicate key value' } });
+    await expect(generateTopupInvoice('p1')).resolves.toMatchObject({ invoiceId: 'inv-raced', created: false });
+  });
+
   it('control: the happy path inserts the line item BEFORE issuing', async () => {
     mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
     mockScript['invoices:insert'] = () => ({ data: { id: 'inv1' }, error: null });

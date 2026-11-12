@@ -118,6 +118,19 @@ describe('earn/feedback', () => {
   });
 });
 
+describe('earn/feedback admin lookup', () => {
+  // MUTANT SURVIVOR (2026-11-12): user_company_roles is read TWICE (membership
+  // via maybeSingle, then the SUPER_ADMIN list); fail only the second.
+  it('super-admin lookup fails (2nd read) -> saved, 200, the lookup failure is logged', async () => {
+    mockScript['feedback_submissions:insert'] = () => ({ data: { id: 'f1' }, error: null });
+    let n = 0;
+    mockScript['user_company_roles:select'] = () => (++n === 1 ? { data: { company_id: ORG }, error: null } : DOWN());
+    const res = await call(feedback, 'POST', FEEDBACK);
+    expect(res.statusCode).toBe(200);
+    expect(mockLogs).toContain('credits_earn_feedback_admin_lookup_failed');
+  });
+});
+
 describe('earn/referral', () => {
   it('upsert error -> 500, never "success" for an invite that was not recorded', async () => {
     mockScript['referrals:upsert'] = DOWN;
@@ -155,6 +168,38 @@ describe('earn/setup-progress', () => {
     const res = await call(setupProgress, 'PATCH', { step: 'profile_complete' });
     expect(res.statusCode).toBe(200);
     expect(mockNudges).toEqual(['setup_complete']);
+  });
+  // MUTANT SURVIVORS (2026-11-12): the same log event is written by TWO nudge
+  // blocks (setup count, then website), and a website step runs both. Each
+  // block's read now fails ALONE (company_setup_progress by call number).
+  const nth = (failAt: number) => { let n = 0; return () => (++n === failAt ? DOWN() : { data: {}, error: null }); };
+  it('setup-count block ALONE: progress read fails on a non-website step -> logged, no setup nudge', async () => {
+    mockScript['social_accounts:select'] = () => ({ error: null, count: 0 });
+    mockScript['company_setup_progress:select'] = nth(1);
+    const res = await call(setupProgress, 'PATCH', { step: 'profile_complete' });
+    expect(res.statusCode).toBe(200);
+    expect(mockNudges).toEqual([]);
+    expect(mockLogs).toContain('credits_earn_setup_nudge_read_failed');
+  });
+  it('setup-count block ALONE: social count read fails -> logged, no setup nudge', async () => {
+    mockScript['social_accounts:select'] = () => ({ error: { message: 'down' }, count: null });
+    const res = await call(setupProgress, 'PATCH', { step: 'profile_complete' });
+    expect(mockNudges).toEqual([]);
+    expect(mockLogs).toContain('credits_earn_setup_nudge_read_failed');
+  });
+  it('website block ALONE: its read (call 2) fails -> logged; the setup nudge still goes, the website nudge does not', async () => {
+    mockScript['social_accounts:select'] = () => ({ error: null, count: 0 });
+    mockScript['company_setup_progress:select'] = nth(2);
+    const res = await call(setupProgress, 'PATCH', { step: 'website_blog_connected' });
+    expect(res.statusCode).toBe(200);
+    expect(mockNudges).toEqual(['setup_complete']);
+    expect(mockLogs).toContain('credits_earn_setup_nudge_read_failed');
+  });
+  it('control: website step with clean reads sends BOTH nudges', async () => {
+    mockScript['social_accounts:select'] = () => ({ error: null, count: 0 });
+    mockScript['company_setup_progress:select'] = () => ({ data: {}, error: null });
+    await call(setupProgress, 'PATCH', { step: 'website_blog_connected' });
+    expect(mockNudges).toEqual(['setup_complete', 'website_connected']);
   });
 });
 

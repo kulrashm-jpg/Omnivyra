@@ -159,6 +159,21 @@ describe('checkout/create-order', () => {
     }
   });
 
+  // MUTANT SURVIVOR (2026-11-12): the same log event is written at TWO sites
+  // (the failed flip after a provider failure, and the close after an
+  // unrecorded order id). This pins the SECOND one on its own path.
+  it('order id not recorded AND the close flip fails -> 503, the close failure is logged', async () => {
+    mockScript['credit_packages:select'] = () => PKG_OK;
+    mockScript['credit_purchases:insert'] = inserted;
+    mockScript['credit_purchases:update'] = (_op, payload) =>
+      ((payload as any)?.provider_order_id ? { data: null, error: { message: 'timeout' } } : { data: null, error: { message: 'down' } });
+    const res = mockRes();
+    await createOrder(post({ package_id: 'pkg' }), res);
+    expect(res.statusCode).toBe(503);
+    expect(mockLogs).toContainEqual(['error', 'checkout_provider_order_record_failed']);
+    expect(mockLogs).toContainEqual(['error', 'checkout_purchase_fail_mark_failed']);
+  });
+
   it('the recorded happy path still returns the order (unchanged)', async () => {
     mockScript['credit_packages:select'] = () => PKG_OK;
     mockScript['credit_purchases:insert'] = inserted;
