@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, tenantTable, type TenantContext } from '../db/tenantTable';
 /**
  * Active Leads Engine v1/v2 processor.
  * Modes: REACTIVE (explicit) / PREDICTIVE (latent). Dedupe by dedupe_hash, fail-soft per platform, confidence_index.
@@ -71,10 +72,21 @@ function clamp01(n: number): number {
 }
 
 export async function processLeadJobV1(jobId: string): Promise<void> {
+  // S2: the queue payload carries only the job id; the job row names its tenant.
+  // Resolve it once (inside the seam), then every lead_jobs_v1 access - including
+  // re-reading this row - is pinned to that tenant.
+  let tenant: TenantContext | null = null;
   try {
   console.info({ jobId, phase: 'STARTED' });
 
-  const { data: job, error: fetchError } = await ownedDbTable('lead_jobs_v1')
+  tenant = await resolveTenantOfRow('lead_jobs_v1', jobId, 'lead job processor');
+  if (!tenant) {
+    console.error({ jobId, marker: 'LEAD_JOB_TENANT_UNRESOLVED' });
+    return;
+  }
+  const ctx: TenantContext = tenant;
+
+  const { data: job, error: fetchError } = await tenantTable('lead_jobs_v1', ctx)
     .select('id, company_id, status, mode, platforms, regions, keywords, context_payload')
     .eq('id', jobId)
     .single();
@@ -90,7 +102,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   }
 
   if (row.status === 'PENDING') {
-    await ownedDbTable('lead_jobs_v1')
+    await tenantTable('lead_jobs_v1', ctx)
       .update({ status: 'RUNNING', progress_stage: 'INITIALIZING' })
       .eq('id', jobId);
   }
@@ -122,7 +134,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   });
 
   for (const platform of platforms) {
-    await ownedDbTable('lead_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
+    await tenantTable('lead_jobs_v1', ctx).update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     const connector = getConnector(platform);
     if (!connector) {
       platformFailures++;
@@ -142,7 +154,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
         for (const post of posts) {
           if (shouldRejectPost(post.raw_text)) continue;
           if (!qualifyingStageSet) {
-            await ownedDbTable('lead_jobs_v1').update({ progress_stage: 'QUALIFYING' }).eq('id', jobId);
+            await tenantTable('lead_jobs_v1', ctx).update({ progress_stage: 'QUALIFYING' }).eq('id', jobId);
             qualifyingStageSet = true;
           }
 
@@ -325,7 +337,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
 
     console.info({ jobId, platform, phase: 'PLATFORM_DONE' });
 
-    await ownedDbTable('lead_jobs_v1')
+    await tenantTable('lead_jobs_v1', ctx)
       .update({
         total_found: totalFound,
         total_qualified: totalQualified,
@@ -370,7 +382,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
 
   console.info({ jobId, finalStatus, phase: 'COMPLETING' });
 
-  const { data: updatedRow, error: updateError } = await ownedDbTable('lead_jobs_v1')
+  const { data: updatedRow, error: updateError } = await tenantTable('lead_jobs_v1', ctx)
     .update({
       status: finalStatus,
       total_found: totalFound,
@@ -429,7 +441,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   }
 
   if (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_WITH_WARNINGS') {
-    await ownedDbTable('lead_jobs_v1').update({ progress_stage: 'CLUSTERING' }).eq('id', jobId);
+    await tenantTable('lead_jobs_v1', ctx).update({ progress_stage: 'CLUSTERING' }).eq('id', jobId);
     try {
       await generateIntentClusters(companyId);
     } catch {
@@ -453,12 +465,15 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
       marker: 'PROCESSOR_CRASHED',
     });
     console.error('Lead Job Processor Error:', err);
-    await ownedDbTable('lead_jobs_v1')
-      .update({
-        status: 'FAILED',
-        error: message,
-        progress_stage: 'FINISHED',
-      })
-      .eq('id', jobId);
+    // Only a job whose tenant was resolved can be marked failed (through the seam).
+    if (tenant) {
+      await tenantTable('lead_jobs_v1', tenant)
+        .update({
+          status: 'FAILED',
+          error: message,
+          progress_stage: 'FINISHED',
+        })
+        .eq('id', jobId);
+    }
   }
 }
