@@ -486,9 +486,17 @@ set +e
 if [ "$GATE" = "full" ]; then
   W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}" --testPathIgnorePatterns '/node_modules/' "$COMMITTING_SUITES"
   MAIN_STATUS=$?
-  log "Running committing suites (second pass)"
-  W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}" --testPathPattern "$COMMITTING_SUITES"
-  COMMITTING_STATUS=$?
+  # A branch with NO committing suites must not run pass 2: jest exits 1 on "No tests found" (83 overlay
+  # regression, 2026-11-12, CI-129..145). Count them on disk; the workflow's partition check then expects 0.
+  COMMITTING_COUNT=$(find backend/tests/realschema -name '*_concurrency_real.test.ts' -not -path '*/node_modules/*' | wc -l | tr -d ' ')
+  if [ "$COMMITTING_COUNT" -gt 0 ]; then
+    log "Running committing suites (second pass): $COMMITTING_COUNT"
+    W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}" --testPathPattern "$COMMITTING_SUITES"
+    COMMITTING_STATUS=$?
+  else
+    log "No committing (*_concurrency_real) suites on this branch: second pass skipped"
+    COMMITTING_STATUS=0
+  fi
   SUITE_STATUS=$MAIN_STATUS
   [ "$SUITE_STATUS" = "0" ] && SUITE_STATUS=$COMMITTING_STATUS
 else
