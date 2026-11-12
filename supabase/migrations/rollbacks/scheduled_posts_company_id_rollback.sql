@@ -10,6 +10,11 @@
 -- campaign or account was later removed are likewise not re-derivable. Export
 -- (id, company_id) before running this if those values must survive.
 -- ORDER: roll back 20270217000029 FIRST (its hard_delete_company body reads scheduled_posts.company_id).
+-- CODE DEPENDENCY (05 review): once the publish-time account-company guard is deployed
+-- (backend/services/publishAccountCompanyGuard.ts, fix/publish-account-company-check-20261113), it REFUSES to publish
+-- any post without a company_id. Rolling this migration back while that code is live therefore HALTS ALL PUBLISHING
+-- (every post becomes company-less). Order: revert/redeploy the app without that guard FIRST, then 029, then this.
+-- The forward order is the mirror image and equally strict: this migration is applied BEFORE that code deploys.
 -- WARNING: after this, the database no longer refuses a post whose campaign and social account are
 -- in different companies, nor a social account moving between companies; only application code does.
 
