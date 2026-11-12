@@ -33,6 +33,12 @@ jest.mock('../../services/requestAccessService', () => ({
   assertOrgAccess: async () => true,
 }));
 jest.mock('../../services/billing/financeRbacService', () => ({ isFinanceAuditor: async () => true }));
+// pricing/update is gated by requireCapability(BILLING_PLAN_MANAGE, step-up) since
+// the image-credits unit (branch E). The gate itself is pinned by its own suites;
+// this file tests the money error paths BEHIND it, so it admits a platform admin.
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: async () => ({ ok: true, principal: { userId: 'admin' } }),
+}));
 jest.mock('../../services/rbacService', () => ({ isPlatformSuperAdmin: async () => true, isSuperAdmin: async () => true }));
 jest.mock('../../services/billing/payments/billingWalletService', () => ({ getBillingWalletSnapshot: async () => ({}) }));
 jest.mock('../../services/billing/contracts/usageForecastingService', () => ({
