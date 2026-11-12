@@ -59,6 +59,8 @@ export interface StripeSubscriptionObject {
   current_period_end?: number;
   trial_end?: number;
   cancel_at_period_end?: boolean;
+  /** Stripe customer id (a string unless expanded); used only in the unstamped-row audit line. */
+  customer?: string | { id?: string } | null;
   metadata?: Record<string, unknown> | null;
   plan?: { id?: string } | null;
   items?: { data?: Array<{ price?: { id?: string } }> } | null;
@@ -162,11 +164,25 @@ export interface BillingSubDeps {
 //   same id -> duplicate, a no-op.
 // The write is a compare-and-set on the event id it read, so two concurrent deliveries cannot both win; a lost
 // race re-reads and re-decides (bounded).
+// UNSTAMPED rows (written before this fix shipped; ruling e9/05 2026-11-13, option 3): the first event applies and
+// stamps the row. Its order against the pre-fix write cannot be known, so EVERY such transition emits one audit line
+// (ids, event created, prior + applied status, arrival time; no PII) at the only moment the facts exist: once stamped,
+// a row a stale event won is indistinguishable from a correct one, so reconciliation works from these lines, never
+// from "rows still unstamped". An event OLDER than UNSTAMPED_OLD_EVENT_SECONDS is also counted DISTINCTLY. No outbound Stripe call on the webhook path. (An updated_at watermark was
+// rejected: updated_at moves on ANY write, so it would refuse legitimate events.)
+// A stamp that is PRESENT but malformed (not {id: string, created: number}) fails closed: ordering cannot be decided
+// and silently treating it as unstamped would lose ordering without any error.
 export interface ProviderEventRef { id: string; created: number }
 export type EventOrder = 'newer' | 'stale' | 'duplicate';
 
+export function isProviderEventRef(v: unknown): v is ProviderEventRef {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+    && typeof (v as ProviderEventRef).id === 'string' && (v as ProviderEventRef).id !== ''
+    && typeof (v as ProviderEventRef).created === 'number' && Number.isFinite((v as ProviderEventRef).created);
+}
+
 export function compareProviderEvents(incoming: ProviderEventRef, stored: ProviderEventRef | null | undefined): EventOrder {
-  if (!stored || typeof stored.id !== 'string' || typeof stored.created !== 'number') return 'newer';
+  if (!stored) return 'newer';
   if (incoming.id === stored.id) return 'duplicate';
   if (incoming.created > stored.created) return 'newer';
   if (incoming.created < stored.created) return 'stale';
@@ -176,6 +192,12 @@ export function compareProviderEvents(incoming: ProviderEventRef, stored: Provid
 let staleSubscriptionEventsSkipped = 0;
 /** Count of stale provider events refused since process start (observability). */
 export function getStaleSubscriptionEventsSkipped(): number { return staleSubscriptionEventsSkipped; }
+
+/** An event older than this, applied to a row with no stamp, is counted + logged for manual reconciliation. */
+export const UNSTAMPED_OLD_EVENT_SECONDS = 600;
+let unstampedOldEventsApplied = 0;
+/** Count of old provider events applied to UNSTAMPED (pre-fix) rows since process start (observability). */
+export function getUnstampedOldEventsApplied(): number { return unstampedOldEventsApplied; }
 
 const MAX_ORDERED_WRITE_ATTEMPTS = 3;
 
@@ -188,8 +210,10 @@ export async function applyOrderedSubscriptionWrite(
   input: SubscriptionUpsertInput,
   event: ProviderEventRef,
   deps: BillingSubDeps,
+  audit: { providerCustomerId?: string | null } = {},
 ): Promise<{ ok: boolean; skipped?: 'stale_event' | 'duplicate_event'; error?: string }> {
-  const nowIso = new Date(deps.now ? deps.now() : Date.now()).toISOString();
+  const nowMs = deps.now ? deps.now() : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   const row = {
     organization_id: input.organizationId,
     provider: input.provider,
@@ -207,7 +231,7 @@ export async function applyOrderedSubscriptionWrite(
   for (let attempt = 0; attempt < MAX_ORDERED_WRITE_ATTEMPTS; attempt++) {
     const { data: existing, error: readError } = await deps.db
       .from('billing_subscriptions')
-      .select('id, metadata')
+      .select('id, metadata, status')
       .eq('provider', input.provider)
       .eq('provider_subscription_id', input.providerSubscriptionId)
       .maybeSingle();
@@ -220,9 +244,17 @@ export async function applyOrderedSubscriptionWrite(
       return { ok: false, error: error.message };
     }
 
-    const current = existing as { id: string; metadata?: Record<string, unknown> | null };
+    const current = existing as { id: string; metadata?: Record<string, unknown> | null; status?: string | null };
     const metadata = (current.metadata && typeof current.metadata === 'object') ? current.metadata : {};
-    const stored = (metadata as { stripe_last_event?: ProviderEventRef }).stripe_last_event ?? null;
+    const hasStampKey = Object.prototype.hasOwnProperty.call(metadata, 'stripe_last_event');
+    const rawStamp = (metadata as { stripe_last_event?: unknown }).stripe_last_event;
+    if (hasStampKey && !isProviderEventRef(rawStamp)) {
+      console.error('[billingSubscription] malformed stripe_last_event stamp: event NOT applied (fail closed)', {
+        provider_subscription_id: input.providerSubscriptionId, event_id: evt.id, stamp_type: rawStamp === null ? 'null' : typeof rawStamp,
+      });
+      return { ok: false, error: 'invalid_event_stamp' };
+    }
+    const stored: ProviderEventRef | null = hasStampKey ? (rawStamp as ProviderEventRef) : null;
     const order = compareProviderEvents(evt, stored);
     if (order === 'duplicate') return { ok: true, skipped: 'duplicate_event' };
     if (order === 'stale') {
@@ -243,7 +275,26 @@ export async function applyOrderedSubscriptionWrite(
       : update.is('metadata->stripe_last_event', null);
     const { data: written, error: writeError } = await update.select('id');
     if (writeError) return { ok: false, error: writeError.message };
-    if (Array.isArray(written) && written.length === 1) return { ok: true };
+    if (Array.isArray(written) && written.length === 1) {
+      if (!stored) {
+        const ageSeconds = Math.floor(nowMs / 1000) - evt.created;
+        const oldEvent = ageSeconds > UNSTAMPED_OLD_EVENT_SECONDS;
+        if (oldEvent) unstampedOldEventsApplied += 1;
+        console.warn('[billingSubscription] UNSTAMPED_ROW_FIRST_EVENT: reconcile against Stripe', {
+          row_id: current.id,
+          provider_subscription_id: input.providerSubscriptionId,
+          provider_customer_id: audit.providerCustomerId ?? null,
+          event_id: evt.id,
+          event_created: evt.created,
+          prior_status: current.status ?? null,
+          applied_status: input.status,
+          arrived_at: nowIso,
+          age_seconds: ageSeconds,
+          old_event: oldEvent,
+        });
+      }
+      return { ok: true };
+    }
     // 0 rows: another delivery applied an event between our read and write. Re-read and re-decide.
   }
   return { ok: false, error: 'subscription_event_contention' };
@@ -265,7 +316,8 @@ export async function applyStripeSubscriptionEvent(
   const resolution = await resolvePlanId(obj, deps);                 // deterministic, fail-closed
   const input = buildUpsertFromStripeSubscription(eventType, obj, organizationId, resolution.planId);
   if (!input) return { applied: false, reason: 'incomplete_event' };
-  const res = await applyOrderedSubscriptionWrite(input, event, deps);
+  const customer = typeof obj.customer === 'string' ? obj.customer : (obj.customer && typeof obj.customer.id === 'string' ? obj.customer.id : null);
+  const res = await applyOrderedSubscriptionWrite(input, event, deps, { providerCustomerId: customer });
   if (!res.ok) return { applied: false, reason: res.error };
   if (res.skipped) return { applied: false, reason: res.skipped };
   return { applied: true, status: input.status, planId: input.planId, planSource: resolution.source };
