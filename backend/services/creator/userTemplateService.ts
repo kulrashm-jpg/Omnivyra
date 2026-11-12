@@ -458,6 +458,24 @@ async function companyIdFor(id: string): Promise<string | null> {
   }
 }
 
+/**
+ * A user template ONLY if it belongs to `companyId` (SECURITY, 2026-11-11).
+ * The collection/design-system resolvers use this instead of getUserTemplate,
+ * which reads by id alone: an id injected into one tenant's collection must
+ * never resolve another tenant's template. A read failure is null (not
+ * resolvable), which is the safe answer for a resolver.
+ */
+export async function getUserTemplateForCompany(id: string, companyId: string): Promise<CreatorTemplate | null> {
+  if (!id || !companyId) return null;
+  try {
+    const { data, error } = await supabase.from(TABLE).select('*').eq('id', id).eq('company_id', companyId).maybeSingle();
+    if (error || !data) return null;
+    return hydrate(data as Record<string, unknown>);
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve a user template's owning company — the API authorization boundary. */
 export async function getUserTemplateCompanyId(id: string): Promise<string | null> {
   return companyIdFor(id);

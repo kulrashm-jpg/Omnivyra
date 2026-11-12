@@ -71,22 +71,11 @@ export function isContentArchitectSession(req: NextApiRequest): boolean {
 }
 
 /**
- * Returns the pinned company ID if the request is a Content Architect session
- * with a company cookie set; otherwise null (session can still be architect with access to all companies).
- */
-export function getContentArchitectCompanyId(req: NextApiRequest): string | null {
-  const companyId = req.cookies?.content_architect_company_id;
-  if (!companyId || typeof companyId !== 'string') return null;
-  const trimmed = companyId.trim();
-  return trimmed || null;
-}
-
-/**
  * Content Architect is a platform-level role (next to Super Admin) with access to all companies'
  * content so they can help any company refine strategy or campaigns.
  *
  * If the request has a valid Content Architect session, grants access to the requested company
- * (any company). The content_architect_company_id cookie is for UI default only, not for gating.
+ * (any company).
  */
 export function checkContentArchitectAccess(
   req: NextApiRequest,

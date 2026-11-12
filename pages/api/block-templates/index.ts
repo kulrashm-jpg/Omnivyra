@@ -60,7 +60,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       : '').trim();
     if (!id) return res.status(400).json({ error: 'id required' });
     try {
-      await deleteBlockTemplate(id);
+      // Scoped to the authorised company (SECURITY, 2026-11-11).
+      const deleted = await deleteBlockTemplate(id, companyId);
+      if (!deleted) return res.status(404).json({ error: 'Template not found' });
       return res.status(200).json({ success: true, id });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
