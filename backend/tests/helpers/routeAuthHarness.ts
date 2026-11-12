@@ -24,8 +24,9 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export const CO_A = 'co-a-0000-0000-0000-00000000000a';
-export const CO_B = 'co-b-0000-0000-0000-00000000000b';
+// uuid-shaped, as every real company id: the tenant seam (tenantContextFor) refuses anything else.
+export const CO_A = 'c0a00000-0000-4000-8000-00000000000a';
+export const CO_B = 'c0b00000-0000-4000-8000-00000000000b';
 export const USER_A = 'user-a-00-0000-0000-00000000000a';
 export const USER_B = 'user-b-00-0000-0000-00000000000b';
 export const USER_SUPER = 'user-s-00-0000-0000-00000000000s';
