@@ -93,11 +93,21 @@ function normaliseName(name: string): string {
     .trim();
 }
 
+/**
+ * What PROVES the match (e1, 2026-11-12 - disclosure follows the binding evidence):
+ *  'verified_email_domain' - the signed-in user's VERIFIED email domain equals the company's domain;
+ *  'entered_website'       - only the website the user TYPED matches (unverified request input);
+ *  'name'                  - only the company name matches (exact, case-insensitive).
+ * Callers may name the company / its admin, and notify the admin, ONLY for 'verified_email_domain'.
+ */
+export type MatchEvidence = 'verified_email_domain' | 'entered_website' | 'name';
+
 export type MatchedCompany = {
   company_id: string;
   company_name: string;
   /** How the match was made — shown in the notification to the admin. */
   match_type: 'website_domain' | 'admin_email_domain' | 'name';
+  evidence: MatchEvidence;
 };
 
 export type CompanyAdmin = {
@@ -127,6 +137,8 @@ export async function findMatchingCompany(params: {
   userEmail?: string | null;
 }): Promise<MatchedCompany | null> {
   const { companyName, website, userEmail } = params;
+  const emailDomain = userEmail ? extractDomain(userEmail) : null;
+  const isCorporateEmail = emailDomain != null && !isFreeEmailDomain(emailDomain);
 
   // ── 1. Website URL the user entered (primary, no email-domain restriction) ─
   const enteredWebsiteDomain = website ? extractDomain(website) : null;
@@ -142,13 +154,13 @@ export async function findMatchingCompany(params: {
         company_id: rows[0].id,
         company_name: rows[0].name,
         match_type: 'website_domain',
+        // A typed website proves nothing - unless it IS the user's verified email domain.
+        evidence: isCorporateEmail && enteredWebsiteDomain === emailDomain ? 'verified_email_domain' : 'entered_website',
       };
     }
   }
 
   // ── 2. Corporate email domain (skipped for gmail/hotmail/etc.) ────────────
-  const emailDomain = userEmail ? extractDomain(userEmail) : null;
-  const isCorporateEmail = emailDomain != null && !isFreeEmailDomain(emailDomain);
 
   if (isCorporateEmail) {
     // 2a. Against website_domain
@@ -163,6 +175,7 @@ export async function findMatchingCompany(params: {
         company_id: wRows[0].id,
         company_name: wRows[0].name,
         match_type: 'website_domain',
+        evidence: 'verified_email_domain',
       };
     }
 
@@ -178,28 +191,30 @@ export async function findMatchingCompany(params: {
         company_id: aRows[0].id,
         company_name: aRows[0].name,
         match_type: 'admin_email_domain',
+        evidence: 'verified_email_domain',
       };
     }
   }
 
-  // ── 3. Normalised name match (last resort) ────────────────────────────────
-  if (companyName?.trim()) {
-    const normalised = normaliseName(companyName);
-    if (normalised.length >= 3) {
-      const firstWord = normalised.split(' ')[0];
-      const { data: rows } = await ownedDbTable('companies')
-        .select('id, name')
-        .eq('status', 'active')
-        .ilike('name', `%${firstWord}%`)
-        .limit(30);
+  // ── 3. Exact name match (last resort) ─────────────────────────────────────
+  // EXACT only (case-insensitive): candidates come from an ESCAPED pattern (no wildcard reaches the
+  // query - SQL % _ \ escaped, PostgREST * mapped to a single-char _) and the decision is equality in
+  // code. The former first-word `%word%` fallback is gone. A name match binds nothing and discloses
+  // nothing about the company (evidence 'name').
+  const trimmedName = companyName?.trim() ?? '';
+  if (normaliseName(trimmedName).length >= 3) {
+    const pattern = trimmedName.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
+    const { data: rows } = await ownedDbTable('companies')
+      .select('id, name')
+      .eq('status', 'active')
+      .ilike('name', pattern)
+      .limit(10);
 
-      if (rows?.length) {
-        for (const row of rows) {
-          if (normaliseName(row.name) === normalised) {
-            return { company_id: row.id, company_name: row.name, match_type: 'name' };
-          }
-        }
-      }
+    const wanted = trimmedName.toLowerCase();
+    const exact = (rows ?? []).find((row: { name?: unknown }) =>
+      typeof row.name === 'string' && row.name.trim().toLowerCase() === wanted);
+    if (exact) {
+      return { company_id: exact.id, company_name: exact.name, match_type: 'name', evidence: 'name' };
     }
   }
 
