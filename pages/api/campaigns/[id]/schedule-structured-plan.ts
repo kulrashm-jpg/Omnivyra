@@ -231,13 +231,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const result = await scheduleStructuredPlan(plan, id);
 
     // Update campaign status to reflect committed/scheduled state. The old try/catch could not see
-    // a PostgREST error (it is returned, never thrown), so a failure was invisible. The posts ARE
-    // scheduled by now and will publish (the publish path does not read campaigns.status), and
-    // scheduleStructuredPlan is not idempotent: a 500 here would invite the user to schedule AGAIN
-    // and duplicate every post. So the idempotent write is retried once, and a persistent failure is
-    // reported in the 200 body (`activation.ok: false`) and logged at ERROR: visible, without
-    // inviting a duplicate schedule (e9 ACCEPTED, 2026-11-12). The user's way out is "Retry status
-    // update" (retry-activation), which runs ONLY this write, never a schedule.
+    // a PostgREST error (it is returned, never thrown), so a failure was invisible. This write is
+    // what lets the posts PUBLISH: publishAuthorization refuses every campaign-linked post while the
+    // campaign is not 'active' (PUBLISH_BLOCKED_CAMPAIGN_NOT_ACTIVE). So a silent failure meant
+    // scheduled posts that never went out. The posts ARE scheduled by now, and scheduleStructuredPlan
+    // is not idempotent: a 500 here would invite the user to schedule AGAIN and duplicate every post.
+    // So the idempotent write is retried once, and a persistent failure is reported in the 200 body
+    // (`activation.ok: false`) and logged at ERROR, and the user is told the posts will not publish
+    // until the status is updated (e9 ACCEPTED, 2026-11-12). The way out is "Retry status update"
+    // (retry-activation), which runs ONLY this write, never a schedule.
     const activated = await activateScheduledCampaign(id);
     if (!activated.ok) {
       console.error('[schedule-structured-plan] campaign activation failed AFTER scheduling (posts are scheduled)', { campaignId: id, message: activated.error?.message, scheduled_count: result.scheduled_count });

@@ -22,7 +22,7 @@ export function makeActivationRetry(
       }
       setActivationRetry(campaignId, null);
       setUiErrorMessage(null);
-      setUiSuccessMessage('Campaign status updated. Your scheduled posts were not changed.');
+      setUiSuccessMessage('Campaign activated. Your scheduled posts will now publish as planned; none were re-scheduled.');
     } catch {
       setUiErrorMessage('The campaign status still could not be updated. Please try again shortly.');
     }
@@ -83,7 +83,7 @@ export function useStructuredPlanScheduling({
       // which calls ONLY the activation route (e9, 2026-11-12).
       if (data.activation && data.activation.ok === false) {
         setUiErrorMessage(
-          'Your posts were scheduled, but the campaign status could not be updated. Do not schedule again. Use "Retry status update" below.'
+          'Your posts were scheduled, but the campaign could not be activated, so they will NOT publish until it is. Do not schedule again (that would duplicate them). Use "Retry status update" below.'
         );
         setActivationRetry(campaignId, makeActivationRetry(campaignId, setUiErrorMessage, setUiSuccessMessage));
       } else {

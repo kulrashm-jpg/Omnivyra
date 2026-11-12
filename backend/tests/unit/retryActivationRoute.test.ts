@@ -169,7 +169,7 @@ describe('client: makeActivationRetry calls ONLY retry-activation', () => {
     expect(fetchWithAuth.mock.calls[0][0]).toBe('/api/campaigns/camp-1/retry-activation');
     expect(fetchWithAuth.mock.calls.some((c) => String(c[0]).includes('schedule-structured-plan'))).toBe(false);
     expect(setErr).toHaveBeenCalledWith(null);
-    expect(setOk).toHaveBeenCalledWith(expect.stringContaining('not changed'));
+    expect(setOk).toHaveBeenCalledWith(expect.stringContaining('none were re-scheduled'));
     expect(getActivationRetry('camp-1')).toBeNull();
   });
 });
