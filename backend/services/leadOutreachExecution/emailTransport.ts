@@ -82,6 +82,11 @@ export interface EmailProviderResponse {
   rejectionReason?: string | null;
   /** True when the provider recognised the idempotency key as a repeat. */
   duplicate?: boolean;
+  /**
+   * True when the provider says the message MAY have been sent (send-transactional-email: 409
+   * IDEMPOTENCY_UNCERTAIN, or 502 uncertain). Never a rejection: it is the ambiguous `timeout` outcome.
+   */
+  uncertain?: boolean;
   /** Structured provider response, already free of message content. */
   raw?: Record<string, unknown>;
 }
@@ -121,6 +126,20 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
     });
 
     if (res.error) {
+      // An UNCERTAIN answer is not a rejection: the provider may have the message (the function never resends it,
+      // and neither may we). supabase-js carries the HTTP Response on a non-2xx as `error.context`.
+      const ctx = (res.error as { context?: { status?: number; clone?: () => { json: () => Promise<unknown> }; json?: () => Promise<unknown> } }).context;
+      if (ctx && (ctx.status === 409 || ctx.status === 502)) {
+        let answer: { error?: unknown; uncertain?: unknown } | null = null;
+        try {
+          answer = (await (ctx.clone ? ctx.clone().json() : ctx.json?.())) as { error?: unknown; uncertain?: unknown } | null;
+        } catch {
+          answer = null;
+        }
+        if (answer && (answer.error === 'IDEMPOTENCY_UNCERTAIN' || answer.uncertain === true)) {
+          return { accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain', raw: { reason: 'provider_uncertain' } };
+        }
+      }
       return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
     }
     const data = (res.data ?? {}) as { messageId?: string; id?: string; duplicate?: boolean };
@@ -231,6 +250,15 @@ export function createEmailTransport(
 
         const latencyMs = Math.max(0, Date.now() - startedMs);
 
+        if (!response.accepted && response.uncertain === true) {
+          // The provider may have accepted it: the AMBIGUOUS outcome, exactly like a timeout - never a clean
+          // failure that could be repeated.
+          return {
+            ...base, outcome: 'timeout', deliveryStatus: 'failed', latencyMs,
+            response: { reason: 'provider_uncertain' },
+            error: 'the provider may have accepted the message (uncertain); it is never sent again',
+          };
+        }
         if (!response.accepted) {
           return {
             ...base, outcome: 'rejected', deliveryStatus: 'failed', latencyMs,

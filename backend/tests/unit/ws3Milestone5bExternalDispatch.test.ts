@@ -328,6 +328,20 @@ describe('WS-3 M5B (3) — transport failure model', () => {
     // so it must never be mistaken for a clean failure.
     expect(res).toMatchObject({ outcome: 'timeout', transportOutcome: 'timeout' });
     expect(res.reason).toContain('did not respond');
+    // e9 2026-11-13: an ambiguous outcome is NEVER re-queued - a re-dispatch would be a new attempt with a new
+    // idempotency key, i.e. a fresh send. The task goes to `failed` (leaving it needs an explicit `retried`).
+    expect(res.status).toBe('failed');
+    expect((await getOutreachTaskById('co-a', id))?.status).toBe('failed');
+  });
+
+  it('an UNCERTAIN provider answer is the same ambiguous outcome: timeout, task failed, never re-queued', async () => {
+    configureTenant();
+    provider.response = { accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain' };
+    const id = await approvedTask();
+    const res = await dispatch(id);
+    expect(res).toMatchObject({ ok: false, outcome: 'timeout', transportOutcome: 'timeout', status: 'failed' });
+    expect(res.reason).toContain('uncertain');
+    expect((await getOutreachTaskById('co-a', id))?.status).toBe('failed');
   });
 
   it('classifies a thrown provider error', async () => {
