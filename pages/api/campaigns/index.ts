@@ -5,7 +5,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
-import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerOfChildRow, TenantSeamError } from '../../../backend/db/tenantTable';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { insertActivity, updateActivity, deleteActivity } from '../../../backend/services/executionPlannerService';
@@ -215,23 +215,25 @@ async function handleContentPlan(req: NextApiRequest, res: NextApiResponse): Pro
   // anonymous caller learns nothing about row ids), a supplied campaignId must
   // match it, and the row's campaign is what gets authorized below.
   const rowKeyed = (method === 'PUT' || method === 'DELETE') && Boolean(existingRowId);
+  let rowAccess: Awaited<ReturnType<typeof requireCampaignAccess>> = null;
   if (rowKeyed) {
     const { user: caller } = await getSupabaseUserFromRequest(req);
     if (!caller) {
       res.status(401).json({ error: 'UNAUTHORIZED' });
       return;
     }
-    const { data: row } = await supabase
-      .from('daily_content_plans')
-      .select('campaign_id')
-      .eq('id', existingRowId)
-      .maybeSingle();
-    const rowCampaignId = row?.campaign_id ? String(row.campaign_id) : '';
-    if (!rowCampaignId || (campaignId && campaignId !== rowCampaignId)) {
+    // S2 derive-then-authorize (83's ownerOfChildRow, R10): the plan row yields ONLY its parent campaign id and owning
+    // company (null for missing / unreadable / company-less at any hop). The campaign is authorized right below by
+    // requireCampaignAccess(plan.parentId), before any read or write of the row; a supplied campaignId must match.
+    const plan = await ownerOfChildRow('daily_content_plans', existingRowId, 'content plan row-keyed op: owning campaign');
+    if (!plan || (campaignId && campaignId !== plan.parentId)) {
       res.status(404).json({ error: 'Content plan not found' });
       return;
     }
-    campaignId = rowCampaignId;
+    // R10: the derived parent is authorized IN THIS BLOCK, before any read or write of the row.
+    rowAccess = await requireCampaignAccess(req, res, plan.parentId);
+    if (!rowAccess) return;
+    campaignId = plan.parentId;
   }
   if (!campaignId) {
     res.status(400).json({ error: 'campaignId required' });
@@ -241,6 +243,8 @@ async function handleContentPlan(req: NextApiRequest, res: NextApiResponse): Pro
   // Resolve the owning company from the campaign (campaign_versions) and
   // enforce access server-side: 401 before any lookup, foreign/unknown → 404,
   // non-member → 403.
+  // (A row-keyed op was already authorized for this same campaign above, inside its derive block as R10 requires;
+  // this unconditional check stays so every path visibly authenticates before any write.)
   const access = await requireCampaignAccess(req, res, campaignId);
   if (!access) return;
 
