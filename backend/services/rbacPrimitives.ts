@@ -19,17 +19,24 @@ export type Role = (typeof Role)[keyof typeof Role];
 /**
  * The NON-ADMIN tenant roles a member may be placed in by a non-governed path
  * (self-joined confirmation, ownership-recovery demotion). ONE list (05,
- * 2026-11-12): two hand-kept copies drift and fail differently. It is exactly
- * the DB-enforced invitation roles (invitations_role_check) minus
- * COMPANY_ADMIN. The Role map above also carries CONTENT_MANAGER,
- * CONTENT_PLANNER, CONTENT_ENGAGER and VIEWER, which no invitation can grant;
- * they are deliberately NOT here (adding one is a product decision).
+ * 2026-11-12): two hand-kept copies drift and fail differently.
+ * OWNER RULING (e9, 2026-11-12): CONTENT_MANAGER, CONTENT_PLANNER,
+ * CONTENT_ENGAGER and VIEWER are REAL tenant roles and belong here. FINANCE_*
+ * stays OUT. The invitations_role_check widening is a separate migration.
+ * KNOWN GAP (blocking release of this unit): normalizeRole still maps the four
+ * onto CONTENT_CREATOR / VIEW_ONLY for RBAC, and CapabilityService reads the
+ * RAW role, for which ROLE_CAPABILITIES has no entry - so a member stored as
+ * one of the four holds NO capability until the per-role sets are ruled.
  */
 export const NON_ADMIN_TENANT_ROLES = [
   Role.CONTENT_CREATOR,
   Role.CONTENT_REVIEWER,
   Role.CONTENT_PUBLISHER,
   Role.VIEW_ONLY,
+  Role.CONTENT_MANAGER,
+  Role.CONTENT_PLANNER,
+  Role.CONTENT_ENGAGER,
+  Role.VIEWER,
 ] as const;
 
 export const normalizePermissionRole = (role: string) => {

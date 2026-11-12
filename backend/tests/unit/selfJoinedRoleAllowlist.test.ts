@@ -61,7 +61,7 @@ it.each(['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN', 'company_admin', 'anything'])(
   expect(mockUpdates).toEqual([]);
 });
 
-it.each(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY'])('control: %s is confirmable (200)', async (role) => {
+it.each(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY', 'CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER'])('control: %s is confirmable (200)', async (role) => {
   const res = await patch(role);
   expect(res.statusCode).toBe(200);
   expect(mockUpdates).toEqual([expect.objectContaining({ role, join_source: 'invited' })]);
@@ -94,7 +94,9 @@ it('the confirmable roles ARE the shared NON_ADMIN_TENANT_ROLES (same object, no
   const { NON_ADMIN_TENANT_ROLES } = jest.requireActual('../../services/rbacPrimitives');
   expect(SELF_JOINED_CONFIRMABLE_ROLES).toBe(NON_ADMIN_TENANT_ROLES);
 });
-it.each(['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER', 'FINANCE_ADMIN'])('Role-map value %s that no invitation can grant is refused (product decision to add)', async (role) => {
+// Owner ruling (e9, 2026-11-12): the four content roles are real (confirmable
+// above); FINANCE_* stays refused.
+it.each(['FINANCE_ADMIN', 'FINANCE_VIEWER'])('FINANCE role %s is refused (owner ruling: stays out)', async (role) => {
   const res = await patch(role);
   expect(res.statusCode).toBe(400);
 });
