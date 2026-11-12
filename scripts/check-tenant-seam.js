@@ -206,6 +206,25 @@ function scan() {
 }
 
 const stats = { windowCapHits: 0, markersCoveringSeveralCalls: 0 };
+/**
+ * W1 (e9 on C28): tenantTable(...) on a table whose tenant column holds NULL rows in prod, where hiding them is NOT
+ * ruled correct, silently hides those rows. Warn with the C28 counts (never blocking; the reviewer decides).
+ */
+function nullsWarnings() {
+  const reg = fs.readFileSync(path.join(ROOT, 'backend', 'db', 'tenantTables.ts'), 'utf8');
+  const grab = (name) => { const m = reg.match(new RegExp(`export const ${name}[^=]*=\\s*([\\s\\S]*?);\\n`)); try { return m ? JSON.parse(m[1]) : null; } catch { return null; } };
+  const nulls = grab('NULLS_IN_PROD') || {}, ok = new Set(grab('NULLS_HIDING_OK') || []);
+  const files = []; for (const d of ['backend', 'pages', 'lib']) walk(path.join(ROOT, d), files);
+  const out = [];
+  for (const f of files) {
+    const rel = path.relative(ROOT, f).replace(/\\/g, '/');
+    const src = stripComments(fs.readFileSync(f, 'utf8'));
+    for (const m of src.matchAll(/\btenantTable\(\s*'([a-z_][a-z0-9_]*)'/g)) {
+      if (nulls[m[1]] && !ok.has(m[1])) out.push(`${rel}: tenantTable('${m[1]}') hides ${nulls[m[1]][0]} of ${nulls[m[1]][1]} prod rows (NULL tenant)`);
+    }
+  }
+  return out;
+}
 // Pre-launch (owner 2026-11-12): all writes, money/pii/content reads, request-sourced predicates, embeds, and
 // unclassified tables (unknown until classified).
 const prelaunch = (f) => f.kind === 'write' || f.kind === 'context' || f.tag !== 'other' || f.rule === 'R6' || f.rule === 'E' || (f.rule === 'R7' && (f.kind === 'write' || f.tag !== 'other'));
@@ -219,6 +238,7 @@ console.log(`  without ANY tenant predicate in the call chain: ${findings.filter
   console.log(`  predicated sites by value provenance: safe ${c('safe')}, access-checked ${c('checked')}, withRBAC ${c('checked-rbac')}, request-unchecked ${c('request')} (R6), unresolved ${c('unresolved')} (R7, review; pre-launch ${findings.filter((f) => f.rule === 'R7' && prelaunch(f)).length})`);
 }
 console.log(`  request-sourced tenant predicates (R6): ${findings.filter((f) => f.rule === 'R6').length}; embedded selects on tenant chains (E): ${findings.filter((f) => f.rule === 'E').length}; unclassified-table sites (U): ${findings.filter((f) => f.rule === 'U').length}`);
+{ const w = nullsWarnings(); console.log(`  W1 tenantTable on a nulls-in-prod table (C28): ${w.length}`); for (const x of w.slice(0, 20)) console.log('    WARN ' + x); }
 console.log(`  window self-check: ${stats.windowCapHits} chains hit the 600-char window with no terminator (rescanned to 2000), ${stats.markersCoveringSeveralCalls} markers sit within 3 lines of more than one tenant call`);
 console.log('  by area:', by((f) => f.area).map(([k, v]) => `${k}=${v}`).join(' '));
 console.log('  by rule/kind/tag:', by((f) => `${f.rule}/${f.kind}/${f.tag}`).map(([k, v]) => `${k}=${v}`).join(' '));

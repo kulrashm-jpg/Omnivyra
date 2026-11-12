@@ -10,7 +10,7 @@ function builder(table: string): any {
   const record = (op: string) => (...args: unknown[]) => { calls.push({ table, op, args }); return b; };
   const b: any = new Proxy({}, {
     get(_t, prop: string) {
-      if (['select', 'insert', 'upsert', 'update', 'delete', 'eq'].includes(prop)) return record(prop);
+      if (['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'or'].includes(prop)) return record(prop);
       if (prop === 'maybeSingle') return async () => { calls.push({ table, op: 'maybeSingle', args: [] }); return { data: parentRow, error: parentError }; };
       if (prop === 'then') return undefined;
       throw new Error(`hostile double: unexpected builder member ${String(prop)}`);
@@ -24,7 +24,7 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: (fn: string, args: Record<string, unknown>) => { rpcCalls.push({ fn, args }); return Promise.resolve({ data: null, error: null }); },
 }));
 
-import { tenantTable, tenantChildTable, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
+import { tenantTable, tenantChildTable, tenantOrPlatformTable, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
 import { TENANT_TABLES, TENANT_CHILD_TABLES } from '../../db/tenantTables';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -96,6 +96,21 @@ describe('tenantChildTable (indirect tenancy)', () => {
   it('a child payload naming another parent is refused', async () => {
     const t = await tenantChildTable('daily_content_plans', ctxA, 'p-1');
     expect(() => t.insert({ [spec.via]: 'p-2' })).toThrow(/TENANT_MISMATCH/);
+  });
+});
+
+describe('tenantOrPlatformTable (e9 on C28)', () => {
+  it('reads tenant + platform rows; tenantTable refuses a TENANT_OR_PLATFORM table', () => {
+    expect(() => tenantTable('external_api_sources' as never, ctxA)).toThrow(/tenantOrPlatformTable/);
+    tenantOrPlatformTable('external_api_sources' as never, ctxA).select('id');
+    expect(calls.map((c) => c.op)).toEqual(['select', 'or']);
+    expect(calls[1].args).toEqual([`company_id.eq.${A},company_id.is.null`]);
+  });
+  it('writes reach only the tenant rows and cannot move a row to the platform', () => {
+    tenantOrPlatformTable('external_api_sources' as never, ctxA).update({ name: 'x' });
+    expect(calls.filter((c) => c.op === 'eq').map((c) => c.args)).toEqual([['company_id', A]]);
+    expect(() => tenantOrPlatformTable('external_api_sources' as never, ctxA).update({ company_id: null })).toThrow(/TENANT_MISMATCH/);
+    expect(() => tenantOrPlatformTable('campaigns' as never, ctxA)).toThrow(/not TENANT_OR_PLATFORM/);
   });
 });
 

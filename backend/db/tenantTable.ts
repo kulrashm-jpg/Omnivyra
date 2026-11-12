@@ -15,7 +15,7 @@
  * Cross-tenant access stays on `ownedDbTable` and must name an entry in crossTenantAllowList.ts.
  */
 import { ownedDbTable, ownedDbRpc } from './writeOwner';
-import { TENANT_TABLES, TENANT_CHILD_TABLES, type TenantTableName, type TenantChildTableName } from './tenantTables';
+import { TENANT_TABLES, TENANT_CHILD_TABLES, TENANT_OR_PLATFORM_TABLES, type TenantTableName, type TenantChildTableName } from './tenantTables';
 
 declare const TENANT_CONTEXT_BRAND: unique symbol;
 export type TenantContext = {
@@ -104,6 +104,11 @@ function stamp(rows: Row | Row[], column: string, companyId: string): Row | Row[
 export function tenantTable(table: TenantTableName, ctx: TenantContext) {
   const c = requireCtx(ctx);
   const column = columnOf(table);
+  if ((TENANT_OR_PLATFORM_TABLES as readonly string[]).includes(table)) {
+    // e9 on C28: a catalog table's platform (NULL-tenant) rows are readable by every tenant; tenantTable would hide
+    // them. Use tenantOrPlatformTable so the choice is explicit.
+    throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is TENANT_OR_PLATFORM: use tenantOrPlatformTable`);
+  }
   return {
     select(columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
       refuseEmbed(table, columns);
@@ -112,6 +117,41 @@ export function tenantTable(table: TenantTableName, ctx: TenantContext) {
     update(values: Row, options?: Record<string, unknown>) {
       if (values && Object.prototype.hasOwnProperty.call(values, column) && String(values[column]).toLowerCase() !== c.companyId) {
         throw new TenantSeamError('TENANT_MISMATCH', `update may not move a row to another tenant (${column})`);
+      }
+      return (ownedDbTable(table) as any).update(values, options).eq(column, c.companyId);
+    },
+    delete(options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).delete(options).eq(column, c.companyId);
+    },
+    insert(values: Row | Row[], options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).insert(stamp(values, column, c.companyId), options);
+    },
+    upsert(values: Row | Row[], options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).upsert(stamp(values, column, c.companyId), options);
+    },
+  };
+}
+
+/**
+ * TENANT_OR_PLATFORM catalog tables (e9 on C28): READS return the tenant's rows PLUS platform rows (tenant column
+ * NULL); WRITES are tenant-stamped and update/delete reach ONLY the tenant's own rows, so a tenant can never modify a
+ * platform row through the seam (platform rows: allow-listed Super Admin paths on ownedDbTable only).
+ */
+export function tenantOrPlatformTable(table: TenantTableName, ctx: TenantContext) {
+  const c = requireCtx(ctx);
+  if (!(TENANT_OR_PLATFORM_TABLES as readonly string[]).includes(table)) {
+    throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is not TENANT_OR_PLATFORM (use tenantTable)`);
+  }
+  const column = columnOf(table);
+  return {
+    select(columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
+      refuseEmbed(table, columns);
+      // companyId is a validated uuid (requireCtx), so it is safe inside the PostgREST or-filter.
+      return (ownedDbTable(table) as any).select(columns ?? '*', options).or(`${column}.eq.${c.companyId},${column}.is.null`);
+    },
+    update(values: Row, options?: Record<string, unknown>) {
+      if (values && Object.prototype.hasOwnProperty.call(values, column) && String(values[column]).toLowerCase() !== c.companyId) {
+        throw new TenantSeamError('TENANT_MISMATCH', `update may not move a row to another tenant or to the platform (${column})`);
       }
       return (ownedDbTable(table) as any).update(values, options).eq(column, c.companyId);
     },

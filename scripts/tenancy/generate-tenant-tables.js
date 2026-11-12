@@ -56,7 +56,33 @@ const TAG_RULES = [
   ['content', /(content|blog|post|plan|campaign|creator|asset|media|message|thread|comment|draft|template|report|snapshot|engagement|opportunit|knowledge|profile|brand|theme|calendar|render|image|video|document|note|reply|story)/],
 ];
 /** Per-table tag corrections (money > pii > content > other). */
-const TAG_OVERRIDES = {};
+const TAG_OVERRIDES = { integration_credentials: 'money' };
+/**
+ * TENANT_OR_PLATFORM (e9 ruling on C28, 2026-11-12): catalog tables whose NULL-tenant rows are PLATFORM rows
+ * every tenant may READ. Reads go through tenantOrPlatformTable (tenant rows + platform rows); writes are
+ * tenant-stamped; platform rows are writable only on allow-listed Super Admin paths.
+ */
+const TENANT_OR_PLATFORM = ['action_registry', 'expected_event_definitions', 'external_api_sources'];
+/**
+ * SENSITIVE (e9 ruling): platform (NULL-tenant) rows must be INVISIBLE to tenants; tenantTable (tenant rows only)
+ * is the only tenant read; platform-row reads only on allow-listed system / Super Admin paths.
+ */
+const SENSITIVE = ['integration_credentials'];
+/**
+ * NULLS IN PROD (C28, owner-approved prod read 2026-11-12): nullable tenant columns that actually hold NULL rows.
+ * tenantTable hides those rows. For audit/system tables that is CORRECT (e9); for the others the gate warns.
+ * [nullRows, totalRows].
+ */
+const NULLS_IN_PROD = {
+  queue_metrics: [474474, 474474], capability_audit_log: [21623, 22379], audit_logs: [527, 2877],
+  creator_operational_events: [136, 138], creator_audit_log: [65, 65], alerts: [36, 50], cost_anomalies: [36, 1424],
+  external_api_sources: [15, 15], activity_logs: [13, 13], action_registry: [9, 9], campaigns: [7, 28],
+  integration_credentials: [5, 6], campaign_cost_breakdown: [2, 2], report_score_history: [2, 2], expected_event_definitions: [1, 1],
+};
+/** e9: hiding the NULL (platform) rows is CORRECT for these; no warning on conversion. */
+const NULLS_HIDING_OK = ['queue_metrics', 'capability_audit_log', 'audit_logs', 'creator_operational_events', 'creator_audit_log',
+  'alerts', 'cost_anomalies', 'activity_logs', 'campaign_cost_breakdown', 'report_score_history',
+  'campaigns' /* e9: company-less campaigns stay invisible to every tenant until the owner decides */, 'integration_credentials'];
 
 function tablesFrom(sql, out) {
   const create = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(([\s\S]*?)\n\s*\)\s*(?:;|PARTITION|WITH|INHERITS)/gi;
@@ -167,6 +193,14 @@ ${globalBody}
 export const UNCLASSIFIED_TABLES: readonly string[] = [
 ${unclassifiedBody}
 ];
+/** TENANT_OR_PLATFORM catalog tables (e9 on C28): read via tenantOrPlatformTable = tenant rows + platform (NULL) rows. */
+export const TENANT_OR_PLATFORM_TABLES: readonly string[] = ${JSON.stringify(TENANT_OR_PLATFORM)};
+/** SENSITIVE (e9 on C28): platform (NULL-tenant) rows are never visible to tenants; tenantTable only. */
+export const SENSITIVE_TABLES: readonly string[] = ${JSON.stringify(SENSITIVE)};
+/** C28 (prod, 2026-11-12): [nullRows, totalRows] for nullable tenant columns that hold NULLs. */
+export const NULLS_IN_PROD: Readonly<Record<string, readonly [number, number]>> = ${JSON.stringify(NULLS_IN_PROD)};
+/** e9: tenantTable hiding the NULL rows of these is CORRECT (no conversion warning). */
+export const NULLS_HIDING_OK: readonly string[] = ${JSON.stringify(NULLS_HIDING_OK)};
 `;
 }
 

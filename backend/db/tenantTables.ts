@@ -294,7 +294,7 @@ export const TENANT_TABLES = {
   ingestion_throughput_state: { column: 'organization_id', tag: 'other' },
   integration_activity_events: { column: 'company_id', tag: 'other' },
   integration_capabilities: { column: 'organization_id', tag: 'other' },
-  integration_credentials: { column: 'company_id', tag: 'other' },
+  integration_credentials: { column: 'company_id', tag: 'money' },
   integration_health_checks: { column: 'company_id', tag: 'other' },
   integration_logs: { column: 'company_id', tag: 'other' },
   intelligence_actions: { column: 'company_id', tag: 'other' },
@@ -908,3 +908,11 @@ export const UNCLASSIFIED_TABLES: readonly string[] = [
   'worker_dead_letter_queue',
   'worker_health',
 ];
+/** TENANT_OR_PLATFORM catalog tables (e9 on C28): read via tenantOrPlatformTable = tenant rows + platform (NULL) rows. */
+export const TENANT_OR_PLATFORM_TABLES: readonly string[] = ["action_registry","expected_event_definitions","external_api_sources"];
+/** SENSITIVE (e9 on C28): platform (NULL-tenant) rows are never visible to tenants; tenantTable only. */
+export const SENSITIVE_TABLES: readonly string[] = ["integration_credentials"];
+/** C28 (prod, 2026-11-12): [nullRows, totalRows] for nullable tenant columns that hold NULLs. */
+export const NULLS_IN_PROD: Readonly<Record<string, readonly [number, number]>> = {"queue_metrics":[474474,474474],"capability_audit_log":[21623,22379],"audit_logs":[527,2877],"creator_operational_events":[136,138],"creator_audit_log":[65,65],"alerts":[36,50],"cost_anomalies":[36,1424],"external_api_sources":[15,15],"activity_logs":[13,13],"action_registry":[9,9],"campaigns":[7,28],"integration_credentials":[5,6],"campaign_cost_breakdown":[2,2],"report_score_history":[2,2],"expected_event_definitions":[1,1]};
+/** e9: tenantTable hiding the NULL rows of these is CORRECT (no conversion warning). */
+export const NULLS_HIDING_OK: readonly string[] = ["queue_metrics","capability_audit_log","audit_logs","creator_operational_events","creator_audit_log","alerts","cost_anomalies","activity_logs","campaign_cost_breakdown","report_score_history","campaigns","integration_credentials"];
