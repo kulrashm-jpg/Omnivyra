@@ -39,6 +39,9 @@
 --     COMMITTED: a fresh snapshot per statement), so a bulk statement demoting
 --     every admin is refused, a concurrent transaction that committed first is
 --     seen, and multi-statement legitimate flows (hard delete) see their end.
+-- NULL-SAFE BY CONSTRUCTION (05): users.is_deleted and users.status are NOT NULL
+-- (baseline.sql) and `deleted_at IS NOT NULL` is never NULL, so the liveness
+-- disjunction - and its NOT - can never be NULL (no three-valued-logic gap).
 -- "GONE" HAS ONE DEFINITION (05): a user that is is_deleted, has deleted_at, or
 -- status 'deleted' (or no longer exists). It applies to BOTH halves - the removed
 -- admin is exempt when gone, and a REMAINING admin counts only when NOT gone - so

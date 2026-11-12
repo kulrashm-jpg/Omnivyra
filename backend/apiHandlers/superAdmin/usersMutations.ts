@@ -568,6 +568,14 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
       if (rolesError) {
         // Non-fatal: auth + users row are already handled; log and continue.
         logger.error('super_admin_users_delete_role_deactivate_failed', { userId, message: rolesError.message });
+        if (isLastCompanyAdminError(rolesError)) {
+          // Should not fire (Step C committed first -> the guard exempts), but if the
+          // ordering is ever broken this is the half-deleted state: report it as the
+          // actionable 409 Route 1 returns, never an opaque 500 leaking the DB DETAIL (05).
+          const completedG = [...(supabaseUid ? ['auth_account_deleted'] : []), ...(updatedInTable ? ['user_soft_deleted'] : [])];
+          await reportPartial('deactivate_memberships', completedG, 'LAST_COMPANY_ADMIN');
+          return res.status(409).json({ ...LAST_COMPANY_ADMIN_RESPONSE, partial: completedG.length > 0, completed: completedG });
+        }
         const completed = [...(supabaseUid ? ['auth_account_deleted'] : []), ...(updatedInTable ? ['user_soft_deleted'] : [])];
         await reportPartial('deactivate_memberships', completed, rolesError.message);
         return res.status(500).json({ error: 'FAILED_TO_DEACTIVATE_USER_ROLES', details: rolesError.message, partial: completed.length > 0, completed });

@@ -32,3 +32,30 @@ it('Step D writes user_company_roles (so the guard sees the deletion at all)', (
   const before = SRC.slice(Math.max(0, d - 400), d);
   expect(before).toMatch(/from\('user_company_roles'\)/);
 });
+
+// 05: an ordering of three literals cannot see a NEW membership write added above
+// Step C. The invariant as a PROHIBITION: between Route 2's Step A and the Step C
+// users soft-delete there is NO write (update / delete / upsert / insert) to
+// user_company_roles. Reads (the membership lookup) are allowed.
+it('PROHIBITION: no user_company_roles WRITE between Route 2 Step A and Step C', () => {
+  const a = SRC.indexOf('// Step A: look up the user row to get the auth identity');
+  const c = SRC.search(/\.update\(\{\s*is_deleted:\s*true,\s*deleted_at:\s*now\s*\}\)/);
+  expect(a).toBeGreaterThan(-1);
+  expect(c).toBeGreaterThan(a);
+  const slice = SRC.slice(a, c);
+  const writes: string[] = [];
+  const re = /from\('user_company_roles'\)([\s\S]*?);/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(slice))) {
+    if (/\.(update|delete|upsert|insert)\(/.test(m[1])) writes.push(m[0].slice(0, 120));
+  }
+  expect(writes).toEqual([]);
+});
+
+it('control: the prohibition scanner DOES flag a membership write placed in such a slice', () => {
+  const sample = "from('user_company_roles')\n  .update({ status: 'inactive' })\n  .eq('user_id', u);";
+  const re = /from\('user_company_roles'\)([\s\S]*?);/g;
+  const m = re.exec(sample);
+  expect(m && /\.(update|delete|upsert|insert)\(/.test(m[1])).toBe(true);
+});
+
