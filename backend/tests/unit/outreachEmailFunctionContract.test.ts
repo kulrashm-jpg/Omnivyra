@@ -153,7 +153,11 @@ describe('WP1 — what the real outreach provider posts is what the real functio
 
 describe('WP1 — the SES message id survives the round trip', () => {
   it('the function emits the id under the key the outreach provider reads', () => {
-    expect(indexSrc).toMatch(/JSON\.stringify\(\{ ok: true, messageId \}\)/);
+    // Since the idempotency change the success body is built by sendOnce (idempotency.ts) and index.ts sends it
+    // as-is: the id is still emitted under `messageId`.
+    const idemSrc = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', 'send-transactional-email', 'idempotency.ts'), 'utf8');
+    expect(idemSrc).toMatch(/body: \{ ok: true, messageId \}/);
+    expect(indexSrc).toMatch(/JSON\.stringify\(result\.body\)/);
   });
 
   it('the provider returns the id the function sent back', async () => {
@@ -285,11 +289,13 @@ describe('WP3/L5 — the send path (source contract)', () => {
     expect(indexSrc).toMatch(/import \{ SESv2Client, SendEmailCommand as SendEmailV2Command \} from "npm:@aws-sdk\/client-sesv2@3\.658\.1";/);
     expect(v2).toMatch(/ConfigurationSetName: configurationSet,/);
     expect(v2).toMatch(/Headers: envelope\.headers,/);
-    expect(v2).toMatch(/if \(!configurationSet\) throw new Error\("SES_CONFIGURATION_SET_MISSING"\);/);
+    // A PreSendError since the idempotency change: refused BEFORE any request, so it classifies as definite.
+    expect(v2).toMatch(/if \(!configurationSet\) throw new PreSendError\("SES_CONFIGURATION_SET_MISSING"\);/);
   });
 
   it('only lead_outreach is routed to v2; the seven composed templates keep the v1 path', () => {
-    expect(indexSrc).toMatch(/requestedType === "lead_outreach"\s*\n\s*\? await sendOutreachViaSESv2\(envelope\)\s*\n\s*: await sendViaSES\(envelope\);/);
+    // Routed inside sendOnce's `send` since the idempotency change (e9 2026-11-13); the routing itself is unchanged.
+    expect(indexSrc).toMatch(/requestedType === "lead_outreach" \? sendOutreachViaSESv2\(envelope\) : sendViaSES\(envelope\)/);
   });
 
   it('the link is validated BEFORE render and before SES', () => {
