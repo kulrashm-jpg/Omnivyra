@@ -277,9 +277,14 @@ export default function FreeCreditsPage() {
     e.preventDefault();
     if (!grantOrgId || !grantReason.trim()) return;
     setGrantLoading(true);
+    // One key per logical grant: a network retry or re-send of THIS submission
+    // resolves the same grant server-side instead of granting twice.
+    const idempotencyKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     const r = await fetch('/api/super-admin/free-credits/grant', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
       body: JSON.stringify({
         organizationId: grantOrgId,
         creditsAmount:  grantAmount,

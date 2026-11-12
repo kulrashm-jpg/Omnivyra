@@ -13,6 +13,7 @@ type Res = { data?: unknown; error: { message: string } | null };
 let mockScript: Record<string, () => Res> = {};
 const mockWrites: string[] = [];
 const mockGrants: string[] = [];
+const mockLedgerKeys: string[] = [];
 
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../middleware/withIdempotency', () => ({ withIdempotency: (h: unknown) => h }));
@@ -23,7 +24,7 @@ jest.mock('../../services/adminAuditService', () => ({ recordAdminAudit: async (
 jest.mock('../../services/domainEligibilityService', () => ({ invalidateDomainCache: async () => undefined }));
 let mockGrantThrows = false;
 jest.mock('../../services/creditExecutionService', () => ({
-  createCredit: async (a: { referenceId: string }) => { if (mockGrantThrows) throw new Error('rpc down'); mockGrants.push(a.referenceId); },
+  createCredit: async (a: { referenceId: string; idempotencyKey: string }) => { if (mockGrantThrows) throw new Error('rpc down'); mockGrants.push(a.referenceId); mockLedgerKeys.push(a.idempotencyKey); },
   makeIdempotencyKey: (...p: string[]) => p.join(':'),
 }));
 jest.mock('../../db/supabaseClient', () => ({
@@ -55,16 +56,17 @@ function mockRes() {
   r.setHeader = () => r;
   return r;
 }
-async function post(h: (req: any, res: any) => unknown, body: unknown) {
+async function post(h: (req: any, res: any) => unknown, body: unknown, headers: Record<string, string> = {}) {
   const res = mockRes();
-  await h({ method: 'POST', body, headers: {}, query: {} }, res);
+  await h({ method: 'POST', body, headers, query: {} }, res);
   return res;
 }
+const IDEM = { 'idempotency-key': 'grant-key-1' };
 const DOWN = () => ({ data: null, error: { message: 'down' } });
 let errSpy: jest.SpyInstance;
 beforeEach(() => {
   mockScript = { 'manual_credit_grants:insert': () => ({ data: { id: 'g1' }, error: null }) };
-  mockWrites.length = 0; mockGrants.length = 0; mockGrantThrows = false;
+  mockWrites.length = 0; mockGrants.length = 0; mockLedgerKeys.length = 0; mockGrantThrows = false;
   errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 afterEach(() => errSpy.mockRestore());
@@ -87,7 +89,7 @@ describe('super-admin/free-credits/grant', () => {
 
   it('role read error -> credits granted but NO membership inserted; response says role NOT ensured', async () => {
     mockScript['user_company_roles:select'] = DOWN;
-    const res = await post(freeCreditsGrant, BODY);
+    const res = await post(freeCreditsGrant, BODY, IDEM);
     expect(res.statusCode).toBe(200);
     expect(mockGrants).toEqual(['g1']);
     expect(mockWrites).not.toContain('user_company_roles:insert');
@@ -95,15 +97,93 @@ describe('super-admin/free-credits/grant', () => {
   });
 
   it('control: a clean empty role read creates the COMPANY_ADMIN membership', async () => {
-    const res = await post(freeCreditsGrant, BODY);
+    const res = await post(freeCreditsGrant, BODY, IDEM);
     expect(mockWrites).toContain('user_company_roles:insert');
     expect(res.body).toMatchObject({ success: true, roleEnsured: true });
   });
 
   it('role insert error -> reported (roleEnsured false), never a silent success', async () => {
     mockScript['user_company_roles:insert'] = DOWN;
-    const res = await post(freeCreditsGrant, BODY);
+    const res = await post(freeCreditsGrant, BODY, IDEM);
     expect(res.body).toMatchObject({ roleEnsured: false });
+  });
+});
+
+// MONEY class 2 (2026-11-12): free-credits/grant made a NEW grant row (and a
+// new ledger key) per request - a retry / double submit granted twice.
+describe('super-admin/free-credits/grant request idempotency', () => {
+  const BODY = { organizationId: 'o1', creditsAmount: 10, category: 'manual', reason: 'r' };
+  const DUP = () => ({ data: null, error: { message: 'duplicate key value', code: '23505' } as any });
+
+  it('no Idempotency-Key -> 400, nothing written or granted', async () => {
+    const res = await post(freeCreditsGrant, BODY);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('IDEMPOTENCY_KEY_REQUIRED');
+    expect(mockWrites).toEqual([]);
+    expect(mockGrants).toEqual([]);
+  });
+
+  it('a REPEAT of the same key resolves the SAME grant: credit re-applied under the ORIGINAL ledger key (a no-op if already credited)', async () => {
+    mockScript['manual_credit_grants:insert'] = DUP;
+    mockScript['manual_credit_grants:select'] = () => ({ data: { id: 'g-first', granted_by: 'sa-original', organization_id: 'o1', credits_amount: 10 }, error: null });
+    const res = await post(freeCreditsGrant, BODY, IDEM);
+    expect(res.statusCode).toBe(200);
+    expect(mockGrants).toEqual(['g-first']);
+    expect(mockLedgerKeys).toEqual(['sa-original:admin_grant:manual:g-first']);
+  });
+
+  it('first attempt inserted the grant then the credit FAILED; the retry (same key) completes it', async () => {
+    mockGrantThrows = true;
+    const first = await post(freeCreditsGrant, BODY, IDEM);
+    expect(first.statusCode).toBe(500);
+    expect(first.body).toMatchObject({ grantId: 'g1', retryable: true });
+    mockGrantThrows = false;
+    mockScript['manual_credit_grants:insert'] = DUP;
+    mockScript['manual_credit_grants:select'] = () => ({ data: { id: 'g1', granted_by: 'sa1', organization_id: 'o1', credits_amount: 10 }, error: null });
+    const retry = await post(freeCreditsGrant, BODY, IDEM);
+    expect(retry.statusCode).toBe(200);
+    expect(mockGrants).toEqual(['g1']);
+  });
+
+  it('the key reused for a DIFFERENT grant (other org / amount) -> 409, nothing credited', async () => {
+    mockScript['manual_credit_grants:insert'] = DUP;
+    mockScript['manual_credit_grants:select'] = () => ({ data: { id: 'g-x', granted_by: 'sa1', organization_id: 'o-other', credits_amount: 10 }, error: null });
+    const res = await post(freeCreditsGrant, BODY, IDEM);
+    expect(res.statusCode).toBe(409);
+    expect(mockGrants).toEqual([]);
+  });
+
+  it('existing-grant lookup error -> 503, nothing credited', async () => {
+    mockScript['manual_credit_grants:insert'] = DUP;
+    mockScript['manual_credit_grants:select'] = DOWN;
+    const res = await post(freeCreditsGrant, BODY, IDEM);
+    expect(res.statusCode).toBe(503);
+    expect(mockGrants).toEqual([]);
+  });
+});
+
+// MONEY class 2 (2026-11-12): credits/grant answered SUCCESS on 23505 without
+// applying the credit - a retry after a failed createCredit was "success" with
+// nothing granted.
+describe('super-admin/credits/grant duplicate key completes the credit', () => {
+  const BODY = { organization_id: 'o1', credits: 10, reason: 'r' };
+  beforeEach(() => { mockScript['companies:select'] = () => ({ data: { id: 'o1' }, error: null }); });
+
+  it('23505 -> createCredit runs for the EXISTING grant under its original ledger key', async () => {
+    mockScript['manual_credit_grants:insert'] = () => ({ data: null, error: { message: 'dup', code: '23505' } as any });
+    mockScript['manual_credit_grants:select'] = () => ({ data: { id: 'g-first', granted_by: 'sa-original', organization_id: 'o1', credits_amount: 10 }, error: null });
+    const res = await post(creditsGrant, BODY, IDEM);
+    expect(res.statusCode).toBe(200);
+    expect(mockGrants).toEqual(['g-first']);
+    expect(mockLedgerKeys).toEqual(['sa-original:admin_grant:g-first']);
+  });
+
+  it('23505 for a DIFFERENT grant -> 409, nothing credited', async () => {
+    mockScript['manual_credit_grants:insert'] = () => ({ data: null, error: { message: 'dup', code: '23505' } as any });
+    mockScript['manual_credit_grants:select'] = () => ({ data: { id: 'g-x', granted_by: 'sa1', organization_id: 'o1', credits_amount: 99 }, error: null });
+    const res = await post(creditsGrant, BODY, IDEM);
+    expect(res.statusCode).toBe(409);
+    expect(mockGrants).toEqual([]);
   });
 });
 
