@@ -10,6 +10,7 @@ import {
 import { assertMonetizationBetaAccess, getMonetizationBetaRuntimeMode, getOrganizationBetaTag } from '../monetizationBetaAccessService';
 import { getFxConfig } from '../pricingConfigService';
 import { resolvePrice } from '@/lib/billing/currency';
+import { markPaymentEventState, readPaymentEventState, setPaymentEventAttributes } from './paymentEventState';
 
 const PROVIDER = 'razorpay';
 const PROVIDER_MODE = 'test';
@@ -300,18 +301,19 @@ export async function createRazorpayStagingCreditOrder(input: {
   };
 }
 
+// 20270217000003: the ledger row is immutable (this used to UPDATE it - refused,
+// never read). State goes through the guarded forward-only writer (bookkeeping:
+// logged, never throws). A reprocessed FAILED event is requeued before 'processed'.
 async function markProviderEvent(input: {
   eventId: string;
   status: 'processed' | 'duplicate' | 'failed';
   error?: string;
 }): Promise<void> {
-  await ownedDbTable('payment_provider_events')
-    .update({
-      processing_status: input.status,
-      processed_at: new Date().toISOString(),
-      error_message: input.error ?? null,
-    })
-    .eq('id', input.eventId);
+  const r = await markPaymentEventState(input.eventId, input.status, input.error ?? null);
+  if (!r.applied && r.current === 'failed' && input.status === 'processed') {
+    await markPaymentEventState(input.eventId, 'requeued');
+    await markPaymentEventState(input.eventId, 'processed', input.error ?? null);
+  }
 }
 
 async function findPurchaseForPayment(payment: RazorpayPaymentEntity): Promise<any | null> {
@@ -332,8 +334,12 @@ function eventIdForPayload(payload: RazorpayWebhookPayload, payment: RazorpayPay
   throw new Error('razorpay_event_missing_id');
 }
 
-function isProcessedDuplicate(event: { duplicate: boolean; processingStatus?: string | null }): boolean {
-  return event.duplicate && event.processingStatus === 'processed';
+// 20270217000003: the state lives in the side table (the ledger's inline
+// processing_status is permanently 'recorded', so this was never true).
+async function isProcessedDuplicate(event: { id?: string | null; duplicate: boolean }): Promise<boolean> {
+  if (!event.duplicate || !event.id) return false;
+  const st = await readPaymentEventState(event.id);
+  return st === 'processed' || st === 'duplicate';
 }
 
 function isWebhookTooOld(payload: RazorpayWebhookPayload): boolean {
@@ -363,16 +369,8 @@ async function recordRejectedWebhook(input: {
     },
   });
   if (event.id) {
-    await ownedDbTable('payment_provider_events')
-      .update({
-        provider_mode: PROVIDER_MODE,
-        signature_valid: input.signatureValid,
-        signature_algorithm: 'hmac-sha256',
-        processing_status: 'failed',
-        processed_at: new Date().toISOString(),
-        error_message: input.reason,
-      })
-      .eq('id', event.id);
+    await setPaymentEventAttributes(event.id, { provider_mode: PROVIDER_MODE, signature_valid: input.signatureValid, signature_algorithm: 'hmac-sha256' });
+    await markPaymentEventState(event.id, 'failed', input.reason);
   }
   await recordMonetizationOperationalEvent({
     eventName: `monetization.webhook_rejected.${input.reason}`,
@@ -442,7 +440,7 @@ export async function handleRazorpayStagingWebhook(input: {
     payload: payload as Record<string, unknown>,
   });
 
-  if (isProcessedDuplicate(event)) {
+  if (await isProcessedDuplicate(event)) {
     await recordMonetizationOperationalEvent({
       eventName: 'monetization.webhook_duplicate_processed_noop',
       severity: 'WARN',
@@ -479,18 +477,14 @@ export async function handleRazorpayStagingWebhook(input: {
     metadata: { event_type: eventType, previous_processing_status: event.processingStatus ?? null },
   });
 
-  await ownedDbTable('payment_provider_events')
-    .update({
-      provider_mode: PROVIDER_MODE,
-      signature_valid: true,
-      signature_algorithm: 'hmac-sha256',
-      provider_order_id: orderId,
-      provider_payment_id: paymentId,
-      beta_cohort: betaTag.beta_cohort,
-      beta_access_level: betaTag.beta_access_level,
+  if (event.id) {
+    await setPaymentEventAttributes(event.id, {
+      provider_mode: PROVIDER_MODE, signature_valid: true, signature_algorithm: 'hmac-sha256',
+      provider_order_id: orderId, provider_payment_id: paymentId,
+      beta_cohort: betaTag.beta_cohort, beta_access_level: betaTag.beta_access_level,
       monetization_beta_enabled: betaTag.monetization_beta_enabled,
-    })
-    .eq('id', event.id);
+    });
+  }
 
   if (eventType !== 'payment.captured') {
     if (event.id) await markProviderEvent({ eventId: event.id, status: 'processed' });
@@ -708,18 +702,12 @@ export async function verifyAndFulfillRazorpayStagingPayment(input: {
   });
 
   if (!event.duplicate && event.id) {
-    await ownedDbTable('payment_provider_events')
-      .update({
-        provider_mode: PROVIDER_MODE,
-        signature_valid: true,
-        signature_algorithm: 'hmac-sha256',
-        provider_order_id: input.orderId,
-        provider_payment_id: input.paymentId,
-        beta_cohort: betaAccess.beta_cohort,
-        beta_access_level: betaAccess.access_level,
-        monetization_beta_enabled: betaAccess.monetization_beta_enabled,
-      })
-      .eq('id', event.id);
+    await setPaymentEventAttributes(event.id, {
+      provider_mode: PROVIDER_MODE, signature_valid: true, signature_algorithm: 'hmac-sha256',
+      provider_order_id: input.orderId, provider_payment_id: input.paymentId,
+      beta_cohort: betaAccess.beta_cohort, beta_access_level: betaAccess.access_level,
+      monetization_beta_enabled: betaAccess.monetization_beta_enabled,
+    });
   }
 
   const expectedAmount = Number(purchase.amount_subunits ?? toSubunits(Number(purchase.amount_paid), String(purchase.currency)));

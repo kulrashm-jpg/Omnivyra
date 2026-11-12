@@ -4,6 +4,15 @@ const mockOwnedDbTable = jest.fn();
 const mockCompletePurchase = jest.fn();
 const mockFailPurchase = jest.fn();
 const mockRecordPaymentProviderEvent = jest.fn();
+// 20270217000003: an event's STATE lives in payment_provider_event_state (read via
+// paymentEventState), not in the ledger's inline processing_status.
+let mockEventState = 'recorded';
+const mockMarkState = jest.fn(async () => ({ applied: true, current: null }));
+jest.mock('../../services/payments/paymentEventState', () => ({
+  readPaymentEventState: async () => mockEventState,
+  markPaymentEventState: (...a: unknown[]) => mockMarkState(...(a as [])),
+  setPaymentEventAttributes: async () => true,
+}));
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (...args: any[]) => mockOwnedDbTable(...args),
@@ -76,6 +85,7 @@ function tableChain(table: string) {
 
 describe('razorpayStagingService adversarial safety', () => {
   beforeEach(() => {
+    mockEventState = 'recorded'; mockMarkState.mockClear();
     jest.resetModules();
     jest.clearAllMocks();
     process.env.RAZORPAY_STAGING_ENABLED = 'true';
@@ -108,6 +118,7 @@ describe('razorpayStagingService adversarial safety', () => {
 
   it('treats processed duplicate webhooks as no-op and does not re-fulfill', async () => {
     mockRecordPaymentProviderEvent.mockResolvedValue({ id: 'provider-event-1', duplicate: true, processingStatus: 'processed' });
+    mockEventState = 'processed'; // the side-table state decides (20270217000003)
     const { handleRazorpayStagingWebhook } = await import('../../services/payments/razorpayStagingService');
     const rawBody = capturedWebhook();
 
@@ -119,6 +130,7 @@ describe('razorpayStagingService adversarial safety', () => {
 
   it('retries recorded duplicate webhooks to close crash-after-event-before-fulfillment windows', async () => {
     mockRecordPaymentProviderEvent.mockResolvedValue({ id: 'provider-event-1', duplicate: true, processingStatus: 'recorded' });
+    mockEventState = 'recorded';
     const { handleRazorpayStagingWebhook } = await import('../../services/payments/razorpayStagingService');
     const rawBody = capturedWebhook();
 
