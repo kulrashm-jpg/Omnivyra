@@ -28,7 +28,12 @@ export async function setPostPriority(
 }
 
 /**
- * Adjust dates when campaign start date changes
+ * Adjust dates when campaign start date changes.
+ *
+ * DO NOT CALL (e9 ruling, 2026-11-12): its only route, POST /api/campaigns/[id]/adjust-dates, is
+ * retired (410). This never updates campaigns.start_date, so every call re-shifts the scheduled posts;
+ * it shifts row by row with no transaction; and its PostgREST results are unread. The replacement is an
+ * atomic RPC (post-launch item); see the retired route's header.
  */
 export async function adjustCampaignDates(
   campaignId: string,
