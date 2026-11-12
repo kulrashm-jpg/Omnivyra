@@ -314,6 +314,7 @@ export async function dispatchInternalOutreachTask(
   const reservation = await reserveQuota({
     companyId,
     leadId: task.leadId,
+    taskId: task.id, // the database layer's reservation ends when this task's attempt exists (D6)
     at,
     dailyLimitTenant: config.dailyLimitTenant,
     dailyLimitLead: config.dailyLimitLead,

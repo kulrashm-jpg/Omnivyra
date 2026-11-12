@@ -25,7 +25,7 @@
  * the platform already owns rather than constructing one.
  */
 
-import { ownedDbTable } from '../../db/writeOwner';
+import { ownedDbRpc, ownedDbTable } from '../../db/writeOwner';
 import type { LimiterLayer } from './types';
 
 /** Window the limiter counts over. Matches the governance evaluator. */
@@ -190,7 +190,16 @@ export interface QuotaReservation {
   reason: string;
   /** Set when the reservation incremented Redis and may need releasing. */
   reserved: boolean;
+  /** Set when the DATABASE layer granted (Redis unusable): the reservation row, released on a non-dispatch. */
+  reservationId?: string | null;
 }
+
+/**
+ * How long a database-layer reservation counts without its attempt (CLASS-2 D6, e9). A reservation
+ * lives from the grant to appendAttempt - a few database calls, BEFORE the send - so this bounds
+ * only a dispatcher that crashed in between and never released: its unit frees itself after this.
+ */
+export const DB_RESERVATION_TTL_SECONDS = 300;
 
 /**
  * Reserve one unit of quota before dispatch.
@@ -203,6 +212,8 @@ export interface QuotaReservation {
 export async function reserveQuota(input: {
   companyId: string;
   leadId: string;
+  /** The task the unit is reserved for: the database layer's reservation ends when its attempt exists. */
+  taskId: string;
   at: string;
   dailyLimitTenant: number | null;
   dailyLimitLead: number | null;
@@ -221,6 +232,16 @@ export async function reserveQuota(input: {
   const pendingLead = pendingTenant === null ? null : await redisIncr(leadKey(input.companyId, input.leadId));
   const usedRedis = pendingTenant !== null && pendingLead !== null;
   const layer: LimiterLayer = usedRedis ? 'redis' : 'db';
+
+  if (!usedRedis) {
+    // A half-taken Redis reservation is given back: the database layer decides this one.
+    if (pendingTenant !== null) await redisDecr(tenantKey(input.companyId));
+    // No limit configured: there is nothing to exceed, so nothing to reserve - granted as before.
+    if (input.dailyLimitTenant === null && input.dailyLimitLead === null) {
+      return { granted: true, layer: 'db', reserved: false, reservationId: null, tenantCount: durable.tenantCount + 1, leadCount: durable.leadCount + 1, reason: 'within configured limits' };
+    }
+    return reserveInDatabase(input, durable);
+  }
 
   // A Redis counter can only be trusted when it is at least the durable count;
   // a lower value means it was reset or expired, so the truth wins.
@@ -252,8 +273,69 @@ export async function reserveQuota(input: {
   };
 }
 
+/**
+ * The DATABASE layer (Redis unusable) - CLASS-2 D6 (owner ruling via e9, option 2). It used to grant on
+ * a READ of the durable count, so two dispatchers both read N-1 and both took the last unit. Now one
+ * atomic call (outreach_quota_consume, migration 20270217000009): under a per-tenant advisory lock it
+ * counts attempts + live reservations and, under both limits, WRITES a reservation. WS-3's contract
+ * "Redis down: the database answers and grants" still holds - atomically. Any error refuses.
+ */
+async function reserveInDatabase(
+  input: { companyId: string; leadId: string; taskId: string; at: string; dailyLimitTenant: number | null; dailyLimitLead: number | null },
+  durable: { tenantCount: number; leadCount: number },
+): Promise<QuotaReservation> {
+  const since = new Date(Date.parse(input.at) - QUOTA_WINDOW_HOURS * 3_600_000).toISOString();
+  const refused = (reason: string, tenantCount = durable.tenantCount, leadCount = durable.leadCount): QuotaReservation => ({
+    granted: false, layer: 'db', reserved: false, reservationId: null, tenantCount, leadCount, reason,
+  });
+  let res: { data: unknown; error: unknown };
+  try {
+    res = await ownedDbRpc('outreach_quota_consume', {
+      p_company_id: input.companyId,
+      p_lead_id: input.leadId,
+      p_task_id: input.taskId,
+      p_since: since,
+      p_limit_tenant: input.dailyLimitTenant,
+      p_limit_lead: input.dailyLimitLead,
+      p_ttl_seconds: DB_RESERVATION_TTL_SECONDS,
+    }) as unknown as { data: unknown; error: unknown };
+  } catch (err) {
+    return refused(`the database quota could not be reserved (${err instanceof Error ? err.message : String(err)}); refusing rather than assuming capacity`);
+  }
+  if (res.error) return refused('the database quota could not be reserved; refusing rather than assuming capacity');
+  const row = (Array.isArray(res.data) ? res.data[0] : res.data) as
+    { granted?: unknown; reservation_id?: unknown; tenant_used?: unknown; lead_used?: unknown } | null | undefined;
+  if (!row || typeof row.granted !== 'boolean') return refused('the database quota answered nothing; refusing rather than assuming capacity');
+  const tenantCount = Number(row.tenant_used ?? durable.tenantCount);
+  const leadCount = Number(row.lead_used ?? durable.leadCount);
+  if (!row.granted) {
+    const overLead = input.dailyLimitLead !== null && leadCount + 1 > input.dailyLimitLead;
+    return refused(
+      overLead
+        ? `lead limit of ${input.dailyLimitLead} per ${QUOTA_WINDOW_HOURS}h reached`
+        : `tenant limit of ${input.dailyLimitTenant} per ${QUOTA_WINDOW_HOURS}h reached`,
+      tenantCount, leadCount,
+    );
+  }
+  return {
+    granted: true, layer: 'db', reserved: false,
+    reservationId: typeof row.reservation_id === 'string' ? row.reservation_id : null,
+    tenantCount, leadCount,
+    reason: 'within configured limits',
+  };
+}
+
 /** Release a reservation that will not be consumed. Safe to call when none was taken. */
 export async function releaseQuota(companyId: string, leadId: string, reservation: QuotaReservation): Promise<void> {
+  if (reservation.reservationId) {
+    // A failed release over-counts until the reservation's TTL (refuses sooner), never sends more.
+    try {
+      const { error } = await ownedDbRpc('outreach_quota_release', { p_reservation_id: reservation.reservationId, p_company_id: companyId }) as unknown as { error: unknown };
+      if (error) console.warn('[ws3/quota] database reservation not released; it frees itself after the TTL', { reservation_id: reservation.reservationId });
+    } catch {
+      console.warn('[ws3/quota] database reservation not released; it frees itself after the TTL', { reservation_id: reservation.reservationId });
+    }
+  }
   if (!reservation.reserved) return;
   await redisDecr(tenantKey(companyId));
   await redisDecr(leadKey(companyId, leadId));
