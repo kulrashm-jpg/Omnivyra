@@ -267,96 +267,18 @@ function orphanWorld() {
     { id: 'o-old', user_id: CADMIN, company_id: ORPHAN, role: 'VIEW_ONLY', status: 'expired' },
   );
 }
-let deleteSeq = 0;
-const onNthMembershipDelete = (n: number, fn: () => void) => {
-  deleteSeq = 0;
-  mockBeforeWrite.fn = (table, op) => { if (table === 'user_company_roles' && op === 'delete' && ++deleteSeq === n) fn(); };
-};
 
-describe('R-9 (hard delete) — a concurrently activated SUPER_ADMIN membership is never removed', () => {
-  it('ordinary hard delete: every membership (incl. the inactive SUPER_ADMIN row) and the company are removed', async () => {
+describe('R-9 (hard delete) — RPC-ONLY: the statement fallback whose races these tests characterised is REMOVED', () => {
+  // RPC-ONLY (e9 2026-11-12): the multi-call fallback (bulk delete, re-read, per-row deletes,
+  // then the company) is gone. Its races (RACE A-D) cannot occur any more; the
+  // atomic hard_delete_company locks the company row and refuses while an active
+  // SUPER_ADMIN membership exists, in ONE transaction (pinned in closure015l).
+  it('the RPC missing → 503 HARD_DELETE_UNAVAILABLE; every membership and the company are untouched', async () => {
     orphanWorld();
     const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ success: true, mode: 'hard' });
-    expect(orphanRows()).toHaveLength(0);
-    expect(company(ORPHAN)).toBeUndefined();
-  });
-
-  it('an existing ACTIVE SUPER_ADMIN membership: refused by the pre-check; nothing deleted', async () => {
-    orphanWorld();
-    orphanRow('o-sa')!.status = 'active';
-    const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(409);
-    expect(r.body).toMatchObject({ error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP' });
-    expect(orphanRows()).toHaveLength(4); // 3 added + the world inactive r-orphan-gone
-    expect(calls().filter((c) => c.op === 'delete')).toHaveLength(0);
-  });
-
-  it('RACE A: the inactive SUPER_ADMIN row is re-activated after the pre-check, before the bulk delete → kept; company NOT deleted; 409 partial', async () => {
-    orphanWorld();
-    onNthMembershipDelete(1, () => { orphanRow('o-sa')!.status = 'active'; });
-    const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(409);
-    expect(r.body).toMatchObject({ error: 'COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP', partial: true, completed: ['memberships_deleted'], count: 1 });
-    expect(orphanRow('o-sa')).toMatchObject({ role: 'SUPER_ADMIN', status: 'active' });
-    expect(orphanRow('o-member')).toBeUndefined();
-    expect(company(ORPHAN)).toBeDefined();
-    expect(calls().filter((c) => c.table === 'companies' && c.op === 'delete')).toHaveLength(0);
-  });
-
-  it('RACE B: a NEW active SUPER_ADMIN row is inserted (assignSuperAdmin) during the bulk delete → kept; company NOT deleted', async () => {
-    orphanWorld();
-    onNthMembershipDelete(1, () => {
-      rows('user_company_roles').push({ id: 'o-sa-new', user_id: 'u-new-sa', company_id: ORPHAN, role: 'SUPER_ADMIN', status: 'active' });
-    });
-    const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(409);
-    expect(orphanRow('o-sa-new')).toMatchObject({ status: 'active' });
-    expect(company(ORPHAN)).toBeDefined();
-  });
-
-  it('RACE C: the SUPER_ADMIN row is activated after the re-read, before its own conditional delete → kept; 409 STALE_MEMBERSHIP partial', async () => {
-    orphanWorld();
-    // delete #1 = bulk (non-SUPER_ADMIN); the leftover SUPER_ADMIN row is the next conditional delete
-    onNthMembershipDelete(2, () => { orphanRow('o-sa')!.status = 'active'; });
-    const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(409);
-    expect(r.body).toMatchObject({ error: 'STALE_MEMBERSHIP', partial: true, completed: ['memberships_deleted'] });
-    expect(orphanRow('o-sa')).toMatchObject({ role: 'SUPER_ADMIN', status: 'active' });
-    expect(company(ORPHAN)).toBeDefined();
-  });
-
-  it('RACE D (residual, documented): activation AFTER the last membership statement → the company is deleted, but the SUPER_ADMIN row is never removed (authority intact; orphaned row)', async () => {
-    orphanWorld();
-    orphanRow('o-sa')!.status = 'expired';
-    mockBeforeWrite.fn = (table, op) => {
-      if (table === 'companies' && op === 'delete') {
-        rows('user_company_roles').push({ id: 'o-sa-late', user_id: 'u-late-sa', company_id: ORPHAN, role: 'SUPER_ADMIN', status: 'active' });
-      }
-    };
-    const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(200);
-    expect(company(ORPHAN)).toBeUndefined();
-    expect(orphanRow('o-sa-late')).toMatchObject({ role: 'SUPER_ADMIN', status: 'active' });
-  });
-
-  it('failures: bulk delete error → 500 before anything else; re-read error → 503 partial; company kept', async () => {
-    orphanWorld();
-    mockFail.add('user_company_roles:delete');
-    const r1 = await del({ companyId: ORPHAN, hard: true });
-    expect(r1.status).toBe(500);
-    expect(r1.body).toEqual({ error: 'FAILED_TO_DELETE_COMPANY_USERS' });
-    expect(orphanRows()).toHaveLength(4); // 3 added + the world inactive r-orphan-gone
-
-    orphanWorld();
-    mockFail.clear();
-    mockFail.add('user_company_roles:select:id, role, status');
-    const r2 = await del({ companyId: ORPHAN, hard: true });
-    expect(r2.status).toBe(503);
-    expect(r2.body).toMatchObject({ error: 'MEMBERSHIP_LOOKUP_FAILED', partial: true, completed: ['memberships_deleted'] });
-    expect(orphanRow('o-sa')).toMatchObject({ status: 'inactive' });
-    expect(company(ORPHAN)).toBeDefined();
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ error: 'HARD_DELETE_UNAVAILABLE', partial: false });
+    for (const id of ['o-member', 'o-sa', 'o-old']) expect(orphanRow(id)).toBeTruthy();
   });
 });
 

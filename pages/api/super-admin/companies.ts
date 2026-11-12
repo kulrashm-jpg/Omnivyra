@@ -409,92 +409,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(200).json({ success: true, mode: 'hard', atomic: true });
       }
 
-      // Closure-015K (R-9, hard path): the pre-check above is not atomic with
-      // this deletion — a SUPER_ADMIN membership can be granted / re-activated
-      // in between (assignSuperAdmin writes role 'SUPER_ADMIN' by INSERT or by
-      // UPDATE of the existing row). So the bulk DELETE itself excludes
-      // role = 'SUPER_ADMIN': within that single statement no SUPER_ADMIN row is
-      // ever removed, whatever commits concurrently (a row being updated to
-      // SUPER_ADMIN is re-checked against the predicate after its lock is
-      // released). The rows left behind are then re-read: an ACTIVE
-      // SUPER_ADMIN row stops the deletion before the company is touched; every
-      // other remaining row is removed one by one, conditional on id + role +
-      // status as read, so a row activated in between is never removed either.
-      const partial = (error: string, status: number, extra: Record<string, unknown> = {}) =>
-        res.status(status).json({ error, partial: true, completed: ['memberships_deleted'], ...extra });
-      const { error: rolesError } = await supabase
-        .from('user_company_roles')
-        .delete()
-        .eq('company_id', companyId)
-        .neq('role', 'SUPER_ADMIN');
-      if (rolesError) {
-        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_USERS' });
-      }
-      const { data: remaining, error: remainingError } = await supabase
-        .from('user_company_roles')
-        .select('id, role, status')
-        .eq('company_id', companyId);
-      if (remainingError) {
-        return partial('MEMBERSHIP_LOOKUP_FAILED', 503);
-      }
-      const leftover = ((remaining ?? []) as Array<{ id: string; role: string; status: string | null }>)
-        .map((r) => ({ id: r.id, role: r.role, status: r.status }));
-      const activeSuperAdmins = leftover.filter(
-        (r) => r.status === 'active' && String(r.role ?? '').trim().toUpperCase() === 'SUPER_ADMIN',
-      );
-      if (activeSuperAdmins.length > 0) {
-        return partial('COMPANY_HOLDS_SUPER_ADMIN_MEMBERSHIP', 409, {
-          details: 'A platform super-admin membership became active during deletion; it was kept and the company was not deleted.',
-          count: activeSuperAdmins.length,
-        });
-      }
-      for (const row of leftover) {
-        let removal = supabase
-          .from('user_company_roles')
-          .delete()
-          .eq('id', row.id)
-          .eq('role', row.role);
-        removal = row.status === null ? removal.is('status', null) : removal.eq('status', row.status);
-        const { data: removed, error: removeError } = await removal.select('id');
-        if (removeError) {
-          return partial('FAILED_TO_DELETE_COMPANY_USERS', 500);
-        }
-        if (!removed || removed.length === 0) {
-          return partial('STALE_MEMBERSHIP', 409, {
-            details: 'A membership of this company changed during deletion; it was kept and the company was not deleted.',
-          });
-        }
-      }
-
-      const { error: profileError } = await supabase
-        .from('company_profiles')
-        .delete()
-        .eq('company_id', companyId);
-      if (profileError) {
-        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_PROFILE' });
-      }
-
-      const { error: companyError } = await supabase
-        .from('companies')
-        .delete()
-        .eq('id', companyId);
-      if (companyError) {
-        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY' });
-      }
-
-      await insertAuditLogStrict({
-        actorUserId,
-        action: 'SUPER_ADMIN_COMPANY_HARD_DELETE',
-        targetUserId: null,
-        companyId,
-        metadata: {
-          capability: ORGANIZATION_DELETE,
-          reason: reasonText,
-          mode: 'hard',
-        },
-      });
-
-      return res.status(200).json({ success: true, mode: 'hard' });
+      // RPC-ONLY (e9 ruling, 2026-11-12): the multi-call PostgREST fallback that
+      // ran when hard_delete_company was missing is REMOVED. It deleted memberships
+      // in several non-atomic calls while the company was still active - the last-
+      // admin guard (20270217000012) refuses that shape, and 83's C20 catalog shows
+      // hard_delete_company deployed in prod (md5 632ddc62..., SECURITY DEFINER,
+      // service_role only). A missing function now FAILS CLOSED: nothing deleted.
+      logger.error('super_admin_company_hard_delete_rpc_missing', { companyId });
+      return res.status(503).json({ error: 'HARD_DELETE_UNAVAILABLE', partial: false, details: 'hard_delete_company is not deployed; nothing was deleted.' });
     }
 
     // Soft delete (default).

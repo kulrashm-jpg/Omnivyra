@@ -49,3 +49,21 @@ export const roleAndTiers = (role: string | null | undefined): string[] =>
 /** True when `allowed` names the role or one of its base tiers ('*' allows any role). */
 export const roleSatisfies = (role: string | null | undefined, allowed: ReadonlyArray<string>): boolean =>
   !!role && (allowed.includes('*') || roleAndTiers(role).some((r) => allowed.includes(r)));
+
+/**
+ * 20270217000012 (last-admin guard): the deferred constraint trigger raises
+ * P0001 'LAST_COMPANY_ADMIN' when a transaction would leave an ACTIVE company with
+ * no active COMPANY_ADMIN. Routes answer it as 409 (a clean refusal, not a 500).
+ * Matched by NAME (05: never by code alone - P0001 is shared by many RAISEs).
+ */
+export const LAST_COMPANY_ADMIN = 'LAST_COMPANY_ADMIN';
+export const isLastCompanyAdminError = (err: unknown): boolean => {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { message?: unknown; details?: unknown; hint?: unknown };
+  return /\bLAST_COMPANY_ADMIN\b/.test(`${e.message ?? ''} ${e.details ?? ''} ${e.hint ?? ''}`);
+};
+export const LAST_COMPANY_ADMIN_RESPONSE = {
+  error: LAST_COMPANY_ADMIN,
+  details: 'This is the company\'s last active Company Admin. Promote another member to Company Admin first (or disable the company).',
+} as const;
+

@@ -20,6 +20,7 @@ import {
 
 const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
 import { OverrideType, isAllowedOverrideType, requireSuperAdminAccess, allowedRoles, isAllowedRole, findOrCreateUserByEmail, optionalRoleColumns, upsertUserCompanyRole, insertAuditLog } from './usersShared';
+import { isLastCompanyAdminError, LAST_COMPANY_ADMIN_RESPONSE } from '../../../shared/rbac/tenantRoles';
 
 export async function handleUsersGet(req: NextApiRequest, res: NextApiResponse): Promise<unknown> {
   if (req.method === 'GET') {
@@ -234,6 +235,8 @@ export async function handleUsersPatch(req: NextApiRequest, res: NextApiResponse
       .maybeSingle();
 
     if (error) {
+      // e9 2026-11-12: Super Admin intervention may not take a company to zero admins.
+      if (isLastCompanyAdminError(error)) return res.status(409).json(LAST_COMPANY_ADMIN_RESPONSE);
       logger.error('super_admin_users_patch_failed', { userId, companyId, message: error.message });
       return res.status(500).json({ error: 'FAILED_TO_UPDATE_USER', details: error.message });
     }

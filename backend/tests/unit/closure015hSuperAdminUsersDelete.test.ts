@@ -33,13 +33,13 @@ import { seed, rows, calls, invoke, CO_A, CO_B } from '../helpers/routeAuthHarne
 
 const mockSecurityAudit: Record<string, unknown>[] = [];
 const mockAuthDeleteUser = jest.fn(async () => ({ data: {}, error: null }));
-const mockHooks: { beforeWrite: ((op: 'update' | 'delete') => void) | null; failWrite: 'update' | 'delete' | null; failSelect: string | null } = { beforeWrite: null, failWrite: null, failSelect: null };
+const mockHooks: { beforeWrite: ((op: 'update' | 'delete') => void) | null; failWrite: 'update' | 'delete' | null; failSelect: string | null; failMessage?: string } = { beforeWrite: null, failWrite: null, failSelect: null };
 
 function mockFailing(): Record<string, unknown> {
   const failing: Record<string, unknown> = {};
   const chain = () => failing;
   for (const m of ['eq', 'neq', 'in', 'is', 'select', 'limit', 'order']) failing[m] = chain;
-  failing.then = (ok: (v: unknown) => unknown) => Promise.resolve({ data: null, error: { message: 'forced failure' } }).then(ok);
+  failing.then = (ok: (v: unknown) => unknown) => Promise.resolve({ data: null, error: { message: mockHooks.failMessage ?? 'forced failure', code: mockHooks.failMessage ? 'P0001' : undefined } }).then(ok);
   failing.maybeSingle = async () => ({ data: null, error: { message: 'forced failure' } });
   return failing;
 }
@@ -286,6 +286,18 @@ describe('F-5 Route 1 — truthful statuses and stale conditional writes', () =>
     mockHooks.failWrite = 'delete';
     const r = await saDelete(PSA, { userId: TARGET, companyId: CO_A });
     expect(r.status).toBe(500);
+    expect(mem(TARGET)).toBeTruthy();
+    expect(audits('SUPER_ADMIN_USER_DELETE')).toHaveLength(0);
+  });
+
+  it('the DB last-admin guard (P0001 LAST_COMPANY_ADMIN) → 409; Super Admin intervention may not reach zero admins (e9)', async () => {
+    world();
+    mockHooks.failWrite = 'delete';
+    mockHooks.failMessage = 'LAST_COMPANY_ADMIN';
+    const r = await saDelete(PSA, { userId: TARGET, companyId: CO_A });
+    mockHooks.failMessage = undefined;
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: 'LAST_COMPANY_ADMIN' });
     expect(mem(TARGET)).toBeTruthy();
     expect(audits('SUPER_ADMIN_USER_DELETE')).toHaveLength(0);
   });

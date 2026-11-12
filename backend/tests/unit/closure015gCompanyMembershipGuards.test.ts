@@ -250,12 +250,36 @@ describe('PUT — legitimate company-admin changes to ordinary members are prese
     expect(rows('audit_logs')).toContainEqual(expect.objectContaining({ action: 'DEACTIVATE_USER', target_user_id: MEMBER }));
   });
 
-  it('promotion to COMPANY_ADMIN while another active admin exists → 409 ADMIN_TRANSFER_REQUIRED (existing rule preserved)', async () => {
+  // OWNER RULING (e9, 2026-11-12): SEVERAL company admins are allowed - the
+  // one-admin ADMIN_TRANSFER_REQUIRED rule is removed (it never protected the
+  // LAST admin; the DB guard 20270217000012 does).
+  it('promotion to a SECOND COMPANY_ADMIN while another active admin exists → 200 (several admins allowed)', async () => {
     world();
     const r = await put(CADMIN, { userId: MEMBER, role: 'COMPANY_ADMIN' });
+    expect(r.status).toBe(200);
+    expect(mem(MEMBER)).toMatchObject({ role: 'COMPANY_ADMIN' });
+  });
+
+  it('the DB last-admin guard (P0001 LAST_COMPANY_ADMIN) on PUT → 409 LAST_COMPANY_ADMIN, not a 500', async () => {
+    world();
+    failTable('user_company_roles', 'update', { message: 'LAST_COMPANY_ADMIN', code: 'P0001', hint: 'Promote another member to COMPANY_ADMIN first' });
+    const r = await put(CADMIN, { userId: MEMBER, role: 'VIEW_ONLY' });
     expect(r.status).toBe(409);
-    expect(r.body).toMatchObject({ error: 'ADMIN_TRANSFER_REQUIRED' });
-    expect(mem(MEMBER)).toMatchObject({ role: 'CONTENT_CREATOR' });
+    expect(r.body).toMatchObject({ error: 'LAST_COMPANY_ADMIN' });
+  });
+
+  it('the DB last-admin guard on DELETE → 409 LAST_COMPANY_ADMIN, not a 500', async () => {
+    world();
+    failTable('user_company_roles', 'delete', { message: 'LAST_COMPANY_ADMIN', code: 'P0001' });
+    const r = await del(CADMIN, MEMBER);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: 'LAST_COMPANY_ADMIN' });
+  });
+
+  it('control: a DIFFERENT P0001 on PUT stays a 500 (the 409 is matched by NAME, not code)', async () => {
+    world();
+    failTable('user_company_roles', 'update', { message: 'SOME_OTHER_GUARD', code: 'P0001' });
+    expect((await put(CADMIN, { userId: MEMBER, role: 'VIEW_ONLY' })).status).toBe(500);
   });
 
   it('an active platform SA may still change an ordinary member (unchanged)', async () => {

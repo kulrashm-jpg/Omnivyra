@@ -401,12 +401,14 @@ describe('B — company HARD delete: the atomic database function first', () => 
     expect(mockHardDelete).not.toHaveBeenCalled();
   });
 
-  it('function NOT deployed (current state) → the Closure-015K statement path still deletes an ordinary company', async () => {
+  // RPC-ONLY (e9 2026-11-12): the multi-call statement fallback is REMOVED (hard_delete_company
+  // is deployed in prod - 83's C20); a missing function now FAILS CLOSED.
+  it('function NOT deployed → 503 HARD_DELETE_UNAVAILABLE; NOTHING deleted (no statement fallback)', async () => {
     world();
     const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ success: true, mode: 'hard' });
-    expect(company(ORPHAN)).toBeUndefined();
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ error: 'HARD_DELETE_UNAVAILABLE', partial: false });
+    expect(company(ORPHAN)).toBeTruthy();
   });
 
   it('authorization failure (company admin) → 403; the function is not called', async () => {

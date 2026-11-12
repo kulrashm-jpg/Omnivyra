@@ -121,6 +121,7 @@ const state: {
   tables: Record<string, Row[]>;
   calls: Call[];
   failTables: Set<string>;
+  failErrors: Map<string, { message: string; code?: string; hint?: string; details?: string }>;
   /**
    * table → columns that INSERT must find unoccupied (see uniqueKey).
    *
@@ -168,6 +169,7 @@ const state: {
   tables: {},
   calls: [],
   failTables: new Set(),
+  failErrors: new Map(),
   unique: {},
   upsertModes: {},
   poisoned: new Set(),
@@ -743,6 +745,7 @@ export function seed(extra: Record<string, Row[]> = {}): void {
   // (routeAuth001DataAdmin) is a declaring suite.
   state.calls = state.calls.filter((c) => c.refused);
   state.failTables = new Set();
+  state.failErrors = new Map();
   state.genSeq = 0;
   // Deep-copied, so a stored fixture row never aliases the object the suite
   // passed to seed() — a suite that mutates its own fixture literal between
@@ -773,8 +776,17 @@ seed();
  *
  * Both forms are additive and are cleared by seed().
  */
-export function failTable(table: string, op?: 'select' | 'insert' | 'update' | 'upsert' | 'delete'): void {
-  state.failTables.add(op ? `${table}|${op}` : table);
+export function failTable(
+  table: string,
+  op?: 'select' | 'insert' | 'update' | 'upsert' | 'delete',
+  // Optional: the EXACT error to return (e.g. a DB trigger's named RAISE such as
+  // P0001 'LAST_COMPANY_ADMIN'), so a route's mapping of a specific error is
+  // provable. Default: the generic forced failure.
+  error?: { message: string; code?: string; hint?: string; details?: string },
+): void {
+  const key = op ? `${table}|${op}` : table;
+  state.failTables.add(key);
+  if (error) state.failErrors.set(key, error);
 }
 
 /**
@@ -1220,7 +1232,8 @@ function makeBuilder(table: string): any {
     }
     // Table-wide fault, or one scoped to this statement kind. See failTable().
     if (state.failTables.has(table) || state.failTables.has(`${table}|${op}`)) {
-      return { data: null, error: { message: `forced failure on ${table}`, code: 'XX000' }, count: 0 };
+      const custom = state.failErrors.get(`${table}|${op}`) ?? state.failErrors.get(table);
+      return { data: null, error: custom ?? { message: `forced failure on ${table}`, code: 'XX000' }, count: 0 };
     }
     const all = state.tables[table] || (state.tables[table] = []);
     if (op === 'insert' || op === 'upsert') {

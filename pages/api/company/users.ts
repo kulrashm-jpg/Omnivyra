@@ -18,6 +18,7 @@ import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilit
 
 import { ensureCompanyAccess, ensureCompanyAdminAccess, findOrCreateUserByEmail, insertAuditLog, mapAppRoleToRbac, normalizeInviteRole, readTargetMembership, upsertUserCompanyRole } from '../../../backend/apiHandlers/company/usersShared';
 import { INVITABLE_TENANT_ROLES } from '../../../backend/services/rbacPrimitives';
+import { isLastCompanyAdminError, LAST_COMPANY_ADMIN_RESPONSE } from '../../../shared/rbac/tenantRoles';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const rawCompanyId =
@@ -312,24 +313,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       updated_at: new Date().toISOString(),
     };
 
-    if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
-      const { data: anotherAdmin } = await supabase
-        .from('user_company_roles')
-        .select('user_id')
-        .eq('company_id', companyId)
-        .eq('role', Role.COMPANY_ADMIN)
-        .eq('status', 'active')
-        .neq('user_id', userId)
-        .limit(1)
-        .maybeSingle();
-
-      if (anotherAdmin) {
-        return res.status(409).json({
-          error: 'ADMIN_TRANSFER_REQUIRED',
-          details: 'This company already has an active company admin. Reassign the current admin before promoting another user.',
-        });
-      }
-    }
+    // OWNER RULING (e9, 2026-11-12): SEVERAL company admins are allowed - the old
+    // one-admin ADMIN_TRANSFER_REQUIRED refusal is removed. The LAST active admin
+    // is protected atomically by the DB guard (20270217000012) -> 409 below.
     if (status) {
       updates.status = status;
       if (status === 'inactive') {
@@ -352,6 +338,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data: updatedRows, error } = await update.select('id');
 
     if (error) {
+      if (isLastCompanyAdminError(error)) return res.status(409).json(LAST_COMPANY_ADMIN_RESPONSE);
       return res.status(500).json({ error: 'FAILED_TO_UPDATE_ROLE', details: error.message });
     }
     if (!updatedRows || updatedRows.length === 0) {
@@ -416,6 +403,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data: deletedRows, error } = await removal.select('id');
 
     if (error) {
+      if (isLastCompanyAdminError(error)) return res.status(409).json(LAST_COMPANY_ADMIN_RESPONSE);
       return res.status(500).json({ error: 'FAILED_TO_REMOVE_USER', details: error.message });
     }
     if (!deletedRows || deletedRows.length === 0) {

@@ -465,11 +465,13 @@ describe('R-9 — company deletion keeps SUPER_ADMIN authority (revoke first)', 
     expect(mockSoftDelete).toHaveBeenCalledTimes(1);
   });
 
-  it('a company without SUPER_ADMIN memberships is still deletable (hard)', async () => {
+  // RPC-ONLY (e9 2026-11-12): this harness has no hard_delete_company, so the hard path now
+  // fails closed (the atomic RPC's own behaviour is pinned in closure015l).
+  it('hard delete with the RPC missing → 503 HARD_DELETE_UNAVAILABLE (no statement fallback)', async () => {
     world();
     const r = await del({ companyId: ORPHAN, hard: true });
-    expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ mode: 'hard' });
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ error: 'HARD_DELETE_UNAVAILABLE' });
   });
 
   it('lookup failure → 503; nothing deleted', async () => {
