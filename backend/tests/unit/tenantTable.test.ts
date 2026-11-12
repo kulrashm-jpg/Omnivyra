@@ -27,7 +27,7 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbRpc: (fn: string, args: Record<string, unknown>) => { rpcCalls.push({ fn, args }); return Promise.resolve({ data: null, error: null }); },
 }));
 
-import { tenantTable, tenantChildTable, tenantChildTableOf, tenantOrPlatformTable, resolveTenantOfRow, ownerCompanyOfRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
+import { tenantTable, tenantChildTable, tenantChildTableOf, tenantOrPlatformTable, resolveTenantOfRow, ownerCompanyOfRow, ownerOfChildRow, tenantRpc, tenantContextFor, systemTenantContext, TenantSeamError, type TenantContext } from '../../db/tenantTable';
 import { TENANT_TABLES, TENANT_CHILD_TABLES } from '../../db/tenantTables';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -311,6 +311,26 @@ describe('ownerCompanyOfRow (derive-then-authorize, R10)', () => {
     expect(calls.filter((c) => c.table === 'content_core_asset' && c.op === 'limit')).toHaveLength(1); // reached the root: null is the disagreement
     limitRows.content_core_asset = [{ [ccol]: A }, { [ccol]: A }];
     await expect(ownerCompanyOfRow('content_asset_platform_override', 'o-1', 'override by id')).resolves.toBe(A);
+  });
+});
+
+describe('ownerOfChildRow (55: authorize a child row by its PARENT)', () => {
+  const col = TENANT_TABLES.campaigns.column;
+  const via = TENANT_CHILD_TABLES.daily_content_plans.via;
+  it('returns the owning company AND the direct parent link, nothing else', async () => {
+    limitRows.daily_content_plans = [{ [via]: 'c-7' }];
+    limitRows.campaigns = [{ [col]: A }];
+    await expect(ownerOfChildRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toEqual({ companyId: A, parentId: 'c-7' });
+  });
+  it('null for a missing row, a NULL link, or an unresolvable parent; a direct table or a missing reason is refused', async () => {
+    limitRows.daily_content_plans = [];
+    await expect(ownerOfChildRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toBeNull();
+    limitRows.daily_content_plans = [{ [via]: null }];
+    await expect(ownerOfChildRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toBeNull();
+    limitRows.daily_content_plans = [{ [via]: 'c-7' }]; limitRows.campaigns = [{ [col]: null }];
+    await expect(ownerOfChildRow('daily_content_plans', 'plan-1', 'plan by id')).resolves.toBeNull();
+    await expect(ownerOfChildRow('campaigns' as never, 'c-1', 'by id')).rejects.toThrow(/TENANT_TABLE_UNKNOWN/);
+    await expect(ownerOfChildRow('daily_content_plans', 'plan-1', '')).rejects.toThrow(/reason/);
   });
 });
 

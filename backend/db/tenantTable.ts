@@ -381,32 +381,54 @@ export async function ownerCompanyOfRow(table: TenantTableName | TenantChildTabl
     throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'ownerCompanyOfRow must state its reason');
   }
   if (typeof id !== 'string' || id.length === 0) return null;
-  let current: string = table;
-  let key = 'id';
-  let value = id;
+  if (!childSpec(table) && !(table in TENANT_TABLES)) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is not a registered tenant table`);
+  return walkToOwner(table, 'id', id);
+}
+
+/**
+ * Like ownerCompanyOfRow for a CHILD row, but also returns the row's DIRECT parent link (55: campaigns/index.ts
+ * handleContentPlan only has a daily_content_plans id, and authorizes by CAMPAIGN with requireCampaignAccess plus a
+ * campaign-mismatch check). Returns { companyId, parentId } - the owning company and the value of the row's link
+ * column (e.g. its campaign_id) - and NOTHING else from the row. Same rules: null on any missing / unreadable / NULL /
+ * ambiguous hop. The route must then authorize (by company or by the parent) before any read or write: rule R10.
+ */
+export async function ownerOfChildRow(table: TenantChildTableName, id: string, reason: string): Promise<{ companyId: string; parentId: string } | null> {
+  if (typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new TenantSeamError('TENANT_CONTEXT_MISSING', 'ownerOfChildRow must state its reason');
+  }
+  const spec = childSpec(table);
+  if (!spec) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is not a registered child tenant table`);
+  if (typeof id !== 'string' || id.length === 0) return null;
+  const parentId = await readSingleLink(table, spec.via, 'id', id);
+  if (parentId === null) return null;
+  const companyId = await walkToOwner(spec.parent, spec.parentKey ?? 'id', parentId);
+  return companyId === null ? null : { companyId, parentId };
+}
+
+/** The single distinct non-empty value of `column` over rows where key = value (bounded); null otherwise. */
+async function readSingleLink(table: string, column: string, key: string, value: string): Promise<string | null> {
+  const { data, error } = await (ownedDbTable(table as TenantTableName) as any).select(column).eq(key, value).limit(MAX_PARENT_ROWS + 1);
+  if (error) return null;
+  const rows = (data ?? []) as Row[];
+  if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) return null;
+  const vals = new Set(rows.map((r) => (r[column] === null || r[column] === undefined ? '' : String(r[column]))));
+  if (vals.size !== 1 || vals.has('')) return null;
+  return [...vals][0];
+}
+
+/** Walks key = value in `table` up the registered chain to the root's company (lowercase uuid) or null. */
+async function walkToOwner(table: string, key: string, value: string): Promise<string | null> {
+  let current = table;
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     const spec = childSpec(current);
     if (!spec) {
-      if (!(current in TENANT_TABLES)) {
-        if (hop === 0) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${current} is not a registered tenant table`);
-        return null;
-      }
-      const column = columnOf(current as TenantTableName);
-      const { data, error } = await (ownedDbTable(current as TenantTableName) as any).select(column).eq(key, value).limit(MAX_PARENT_ROWS + 1);
-      if (error) return null;
-      const rows = (data ?? []) as Row[];
-      if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) return null;
-      const owners = new Set(rows.map((r) => (typeof r[column] === 'string' && UUIDISH.test(String(r[column])) ? String(r[column]).toLowerCase() : '')));
-      if (owners.size !== 1 || owners.has('')) return null;
-      return [...owners][0];
+      if (!(current in TENANT_TABLES)) return null;
+      const owner = await readSingleLink(current, columnOf(current as TenantTableName), key, value);
+      return owner !== null && UUIDISH.test(owner) ? owner.toLowerCase() : null;
     }
-    const { data, error } = await (ownedDbTable(current as TenantTableName) as any).select(spec.via).eq(key, value).limit(MAX_PARENT_ROWS + 1);
-    if (error) return null;
-    const rows = (data ?? []) as Row[];
-    if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) return null;
-    const links = new Set(rows.map((r) => (r[spec.via] === null || r[spec.via] === undefined ? '' : String(r[spec.via]))));
-    if (links.size !== 1 || links.has('')) return null;
-    value = [...links][0];
+    const next = await readSingleLink(current, spec.via, key, value);
+    if (next === null) return null;
+    value = next;
     key = spec.parentKey ?? 'id';
     current = spec.parent;
   }
