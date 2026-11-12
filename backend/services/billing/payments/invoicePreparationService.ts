@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
 import { incrCounter } from '../billingMetrics';
+import { CONSUMPTION_PHASES } from '../ledgerPhases';
 
 export interface PrepareInvoiceArgs {
   organizationId: string;
@@ -44,12 +45,13 @@ export interface InvoiceDraft {
 export async function prepareDraftInvoice(args: PrepareInvoiceArgs): Promise<InvoiceDraft | null> {
   const currency = args.currency ?? 'USD';
 
-  // 1. Compute the period rollup from credit_transactions CONFIRM rows
+  // 1. Compute the period rollup from credit_transactions CONSUMPTION rows
+  //    (confirm + confirm_partial - token-priced charges are partial confirms).
   const { data: txns, error } = await supabase
     .from('credit_transactions')
     .select('credits_delta, usd_equivalent, reference_type, created_at')
     .eq('organization_id', args.organizationId)
-    .eq('execution_phase', 'confirm')
+    .in('execution_phase', [...CONSUMPTION_PHASES])
     .gte('created_at', args.periodStart)
     .lte('created_at', args.periodEnd);
 

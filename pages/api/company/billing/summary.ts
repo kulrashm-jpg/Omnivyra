@@ -25,6 +25,7 @@ import { resolveActiveContract } from '../../../../backend/services/billing/cont
 import { projectOrgSubscriptions } from '../../../../backend/services/billing/payments/subscriptionProjectionService';
 import { evaluateAllBillingFlags } from '../../../../backend/services/billing/billingFeatureFlags';
 import { checkFinancialControls } from '../../../../backend/services/billing/orgFinancialControlService';
+import { CONSUMPTION_PHASES } from '../../../../backend/services/billing/ledgerPhases';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -60,7 +61,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .limit(20),
     ]);
 
-    // Top consuming modules — group recent CONFIRM rows by reference_type
+    // Top consuming modules — group recent CONSUMPTION rows (confirm + confirm_partial) by reference_type
     // MONEY (customer billing view): a failed read is not "nothing consumed",
     // "no holds" or "no recent events" - throw so the page shows an error
     // rather than a confident zero.
@@ -70,7 +71,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .from('credit_transactions')
       .select('reference_type, credits_delta')
       .eq('organization_id', companyId)
-      .eq('execution_phase', 'confirm')
+      .in('execution_phase', [...CONSUMPTION_PHASES])
       .gte('created_at', periodStart)
       .limit(2000);
     if (confirmErr) throw new Error(`billing summary consumption read failed: ${confirmErr.message}`);

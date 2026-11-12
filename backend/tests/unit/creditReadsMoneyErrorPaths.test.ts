@@ -19,7 +19,7 @@ const mockRpc: string[] = [];
 function mockBuilder(table: string) {
   const b: any = {};
   const result = () => (mockScript[table] ?? (() => ({ data: null, error: null })))();
-  for (const m of ['select', 'eq', 'gt', 'order', 'limit']) b[m] = () => b;
+  for (const m of ['select', 'eq', 'in', 'gt', 'order', 'limit']) b[m] = () => b;
   b.maybeSingle = async () => result();
   b.then = (ok: (v: Res) => unknown, ko: (e: unknown) => unknown) => Promise.resolve(result()).then(ok, ko);
   return b;

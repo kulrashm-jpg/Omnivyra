@@ -50,6 +50,16 @@ describe('groupCreditHistoryByActivity (TASK 4)', () => {
     expect(groups[0].activity).toBe('blog_generation');
   });
 
+  // MONEY (e9, 2026-11-12): token-priced charges settle as 'confirm_partial'.
+  it("a PARTIAL confirm is consumed + a settlement; its remainder row is released, not a settlement", () => {
+    const [g] = groupCreditHistoryByActivity([
+      { execution_phase: 'hold', credits_delta: -20, reference_type: 'llm_chat' },
+      { execution_phase: 'confirm_partial', credits_delta: -12, reference_type: 'llm_chat' },
+      { execution_phase: 'release', credits_delta: 8, reference_type: 'llm_chat' },
+    ]);
+    expect(g).toMatchObject({ activity: 'llm_chat', consumed: 12, reserved: 20, released: 8, settlements: 1, events: 3 });
+  });
+
   it('null reference_type falls back to "unknown"', () => {
     const groups = groupCreditHistoryByActivity([{ execution_phase: 'confirm', credits_delta: -5, reference_type: null }]);
     expect(groups[0].activity).toBe('unknown');

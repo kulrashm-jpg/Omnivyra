@@ -19,7 +19,7 @@ jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const chain: any[] = [];
     const builder: any = {};
-    for (const op of ['select', 'eq', 'gte', 'limit']) {
+    for (const op of ['select', 'eq', 'in', 'gte', 'limit']) {
       builder[op] = (...args: unknown[]) => { chain.push({ op, args }); return builder; };
     }
     // List-resolution (thenable) — used by credit_transactions (velocity) and

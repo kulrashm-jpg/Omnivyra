@@ -26,7 +26,7 @@ jest.mock('../../db/supabaseClient', () => ({
         mockCalls[k] = (mockCalls[k] ?? 0) + 1;
         return (mockScript[k] ?? (() => ({ data: null, error: null })))(mockCalls[k]);
       };
-      for (const m of ['select', 'eq', 'gte', 'lte', 'order', 'limit']) b[m] = () => b;
+      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'order', 'limit']) b[m] = () => b;
       b.insert = () => { op = 'insert'; mockInserts.push(table); return b; };
       b.maybeSingle = async () => result();
       b.single = async () => result();

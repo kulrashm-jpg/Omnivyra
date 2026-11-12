@@ -19,6 +19,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import { supabase } from '../db/supabaseClient';
+import { CONSUMPTION_PHASES } from './billing/ledgerPhases';
 
 export type AlertType =
   // Absolute low-balance ladder (owner policy 2026-07-10): <100 / <50 / <20.
@@ -191,15 +192,15 @@ async function resolveAdminEmail(orgId: string): Promise<string | null> {
   return (u as { email?: string } | null)?.email ?? null;
 }
 
-/** Actual credits consumed in the past 7 days (settled amounts: confirm-phase rows). */
-async function getWeeklyConsumption(orgId: string): Promise<number> {
+/** Actual credits consumed in the past 7 days (settled amounts: confirm + confirm_partial rows). */
+export async function getWeeklyConsumption(orgId: string): Promise<number> {
   const since = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
   // Throw on a failed read: the velocity email (gated on this number) is then
   // not sent; the ladder email's caller substitutes 0 for its copy only.
   const { data, error } = await ownedDbTable('credit_transactions')
     .select('credits_delta, free_delta, paid_delta, incentive_delta')
     .eq('organization_id', orgId)
-    .eq('execution_phase', 'confirm')
+    .in('execution_phase', [...CONSUMPTION_PHASES])
     .gte('created_at', since);
   if (error) throw new Error(`[creditAlert] weekly consumption read failed for org ${orgId}: ${error.message}`);
   let total = 0;

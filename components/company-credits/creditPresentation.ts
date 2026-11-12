@@ -8,6 +8,7 @@
  * Customer-facing vocabulary only: Available / Reserved (Provisional) /
  * Consumed / Settled. No HOLD/CONFIRM/RELEASE jargon.
  */
+import { isConsumptionPhase } from '../../shared/billing/ledgerPhases';
 
 export interface WalletLike {
   freeBalance: number;
@@ -77,6 +78,9 @@ export interface ActivityHistoryGroup {
  * Task 4 — group ledger rows by activity into consumption / reservations /
  * releases / settlements. Phases map to customer terms:
  *   confirm → consumed (settled)   hold → reserved (provisional)   release → released
+ * MONEY (e9, 2026-11-12): a token-priced charge is settled as 'confirm_partial';
+ * it is consumed too. A guarded partial confirm's `<key>:remainder` row is a
+ * release (credits returned), not a separate settlement event.
  */
 export function groupCreditHistoryByActivity(rows: LedgerRowLike[]): ActivityHistoryGroup[] {
   const m = new Map<string, ActivityHistoryGroup>();
@@ -85,7 +89,7 @@ export function groupCreditHistoryByActivity(rows: LedgerRowLike[]): ActivityHis
     const g = m.get(activity) ?? { activity, consumed: 0, reserved: 0, released: 0, settlements: 0, events: 0 };
     const mag = Math.abs(n(r.credits_delta));
     g.events += 1;
-    if (r.execution_phase === 'confirm') {
+    if (isConsumptionPhase(r.execution_phase)) {
       g.consumed += mag;
       g.settlements += 1;
     } else if (r.execution_phase === 'hold') {

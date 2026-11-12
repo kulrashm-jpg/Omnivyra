@@ -8,6 +8,7 @@ import {
 } from './creditExecutionService';
 import type { CreditAction } from './creditDeductionService';
 import type { CategorySplit } from './creditPriorityService';
+import { SETTLEMENT_PHASES, isConsumptionPhase } from './billing/ledgerPhases';
 
 type HoldRow = {
   id: string;
@@ -125,7 +126,7 @@ async function hasTerminalSibling(row: HoldRow): Promise<TerminalRow | null> {
   const { data } = await ownedDbTable('credit_transactions')
     .select('id, parent_transaction_id, execution_phase, idempotency_key')
     .eq('parent_transaction_id', row.id)
-    .in('execution_phase', ['confirm', 'release'])
+    .in('execution_phase', [...SETTLEMENT_PHASES])
     .limit(1)
     .maybeSingle();
   if (data) return data as TerminalRow;
@@ -454,7 +455,7 @@ export async function auditMonetizationInvariants(input?: {
       .limit(limit),
     ownedDbTable('credit_transactions')
       .select('id, organization_id, parent_transaction_id, execution_phase, idempotency_key, created_at')
-      .in('execution_phase', ['confirm', 'release'])
+      .in('execution_phase', [...SETTLEMENT_PHASES])
       .limit(limit),
     ownedDbTable('organization_credits')
       .select('organization_id, reserved_free, reserved_paid, reserved_incentive')
@@ -491,7 +492,7 @@ export async function auditMonetizationInvariants(input?: {
     .map(([idempotency_key, rows]) => ({ idempotency_key, count: rows.length, ids: rows.map((r) => r.id) }))
     .slice(0, limit);
 
-  const terminalParentIds = new Set(allTx.filter((row) => ['confirm', 'release'].includes(row.execution_phase)).map((row) => row.parent_transaction_id));
+  const terminalParentIds = new Set(allTx.filter((row) => (SETTLEMENT_PHASES as readonly string[]).includes(row.execution_phase)).map((row) => row.parent_transaction_id));
   const activeHolds = allTx.filter((row) => row.execution_phase === 'hold' && !terminalParentIds.has(row.id));
   const reservedByOrg = new Map<string, CategorySplit>();
   for (const row of activeHolds) {
@@ -514,7 +515,7 @@ export async function auditMonetizationInvariants(input?: {
     .filter((row) => row.expected.free !== row.actual.free || row.expected.incentive !== row.actual.incentive || row.expected.paid !== row.actual.paid);
 
   const usageKeys = new Set(((usageRes.data ?? []) as any[]).map((row) => `${row.reference_type ?? ''}:${row.reference_id ?? ''}:${row.action_key ?? ''}`));
-  const confirmedRows = allTx.filter((row) => row.execution_phase === 'confirm');
+  const confirmedRows = allTx.filter((row) => isConsumptionPhase(row.execution_phase));
   const missingUsageEvents = confirmedRows
     .filter((row) => {
       const action = actionForReferenceType(row.reference_type) ?? '';

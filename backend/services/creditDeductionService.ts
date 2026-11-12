@@ -20,6 +20,7 @@ import { checkDomainEligibility } from './domainEligibilityService';
 import { reviewableResults } from '../../lib/auth/domainEligibilityModel';
 import { getTotalAvailable } from './creditPriorityService';
 import { getFeatureDisplayGroup, resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
+import { CONSUMPTION_PHASES } from './billing/ledgerPhases';
 
 // ── Credit cost map ───────────────────────────────────────────────────────────
 
@@ -219,7 +220,7 @@ export async function wasRecentlyRun(
     .select('id')
     .eq('organization_id', orgId)
     .eq('reference_type', action)
-    .eq('execution_phase', 'confirm')
+    .in('execution_phase', [...CONSUMPTION_PHASES])
     .gt('created_at', since)
     .limit(1)
     .maybeSingle();

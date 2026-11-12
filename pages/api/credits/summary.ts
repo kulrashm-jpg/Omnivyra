@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as sb } from '@/backend/db/supabaseClient';
 import { withOrgAccess } from '../../../backend/middleware/withOrgAccess';
 import { logger } from '../../../backend/services/logger';
+import { CONSUMPTION_PHASES } from '../../../backend/services/billing/ledgerPhases';
 
 function creditHealth(balance: number): 'healthy' | 'low' | 'critical' | 'empty' {
   if (balance <= 0) return 'empty';
@@ -64,7 +65,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .select('credits_delta, reference_type, execution_phase')
         .eq('organization_id', orgId)
         .gte('created_at', monthStart)
-        .eq('execution_phase', 'confirm'),
+        .in('execution_phase', [...CONSUMPTION_PHASES]),
     ]);
 
     const w = (walletRes.data as any) ?? {};

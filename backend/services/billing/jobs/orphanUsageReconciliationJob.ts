@@ -17,6 +17,7 @@ import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
 import { emitAnomaly } from '../billingAuditEmitter';
 import { incrCounter } from '../billingMetrics';
+import { CONSUMPTION_PHASES } from '../ledgerPhases';
 
 export interface OrphanUsageResult {
   scanned:              number;
@@ -74,7 +75,7 @@ export async function runOrphanUsageReconciliation(opts?: {
       .from('credit_transactions')
       .select('id')
       .eq('organization_id', e.organization_id)
-      .eq('execution_phase', 'confirm')
+      .in('execution_phase', [...CONSUMPTION_PHASES])
       .gte('created_at', lo)
       .lte('created_at', hi)
       .limit(1);

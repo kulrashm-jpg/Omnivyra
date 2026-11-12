@@ -61,6 +61,7 @@ function installSupabase(captured: Array<[string, unknown]>) {
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: (col: string, val: unknown) => { captured.push([col, val]); return chain; },
+      in: (col: string, val: unknown) => { captured.push([col, val]); return chain; },
       gte: () => chain,
       lte: () => chain,
       order: () => chain,

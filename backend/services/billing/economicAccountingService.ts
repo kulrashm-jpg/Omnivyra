@@ -32,6 +32,7 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+import { CONSUMPTION_PHASES, isConsumptionPhase } from './ledgerPhases';
 
 // ── Source-type partition ─────────────────────────────────────────────────────
 export const CUSTOMER_SOURCE_TYPES = ['llm', 'embedding', 'external_api', 'automation_execution'] as const;
@@ -133,7 +134,7 @@ export function aggregateCreditPhases(rows: CreditPhaseRow[]): Map<string, Credi
     const a = m.get(key) ?? { reserved: 0, confirmed: 0, released: 0 };
     const mag = Math.abs(r.credits_delta ?? 0);
     if (r.execution_phase === 'hold') a.reserved += mag;
-    else if (r.execution_phase === 'confirm') a.confirmed += mag;
+    else if (isConsumptionPhase(r.execution_phase)) a.confirmed += mag;
     else if (r.execution_phase === 'release') a.released += mag;
     m.set(key, a);
   }
@@ -290,7 +291,7 @@ async function fetchCreditPhaseRows(w: Window): Promise<CreditPhaseRow[]> {
   let q = supabase
     .from('credit_transactions')
     .select('organization_id, reference_type, execution_phase, credits_delta')
-    .in('execution_phase', ['hold', 'confirm', 'release'])
+    .in('execution_phase', ['hold', ...CONSUMPTION_PHASES, 'release'])
     .gte('created_at', w.since)
     .limit(MAX_ROWS);
   if (w.until) q = q.lte('created_at', w.until);

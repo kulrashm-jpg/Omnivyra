@@ -34,6 +34,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
+import { isRemainderKey } from './billing/ledgerPhases';
 
 const LEDGER_PAGE = 1000;
 
@@ -117,17 +118,20 @@ export function computeFromLedger(rows: LedgerRow[]): ComputedWallet {
   let lh_f = 0, lh_p = 0, lh_i = 0;    // legacy hold
   let lr_f = 0, lr_p = 0, lr_i = 0;    // legacy release
   let lc_f = 0, lc_p = 0, lc_i = 0;    // legacy confirm
+  let lpc_f = 0, lpc_p = 0, lpc_i = 0; // keyless partial confirm (net balance debit)
 
   type Group = {
     hold: [number, number, number];
     confirm: [number, number, number];
     released: boolean;
     confirmed: boolean;
+    /** Settled by a partial confirm: its deltas are the EXACT per-bucket net. */
+    partial: [number, number, number] | null;
   };
   const groups = new Map<string, Group>();
   const groupFor = (base: string): Group => {
     let g = groups.get(base);
-    if (!g) { g = { hold: [0, 0, 0], confirm: [0, 0, 0], released: false, confirmed: false }; groups.set(base, g); }
+    if (!g) { g = { hold: [0, 0, 0], confirm: [0, 0, 0], released: false, confirmed: false, partial: null }; groups.set(base, g); }
     return g;
   };
 
@@ -137,7 +141,31 @@ export function computeFromLedger(rows: LedgerRow[]): ComputedWallet {
     if (isPhase(row, 'expire')) { e_f += deltas[0]; continue; }
     if (isPhase(row, 'expire_incentive')) { e_i += deltas[2]; continue; }
 
+    // A guarded partial confirm writes its unused hold as a 'release' row keyed
+    // <confirm key>:remainder (20270217000023). It belongs to that partial
+    // confirm, whose deltas already account for the whole group (below): it is
+    // neither a release that returns the full hold nor a keyless legacy release.
+    if (isRemainderKey(row.idempotency_key)) continue;
+
     const keyed = reservationBase(row.idempotency_key);
+    if (isPhase(row, 'confirm_partial')) {
+      // MONEY (e9, 2026-11-12): token-priced settlements. Both the live and the
+      // guarded partial confirm release the unused hold and charge any over-run
+      // from the balance, recording the ACTUAL per-bucket consumption in the
+      // row's deltas - so the hold group's net effect on the balance is exactly
+      // these deltas, and nothing stays reserved. (Previously ignored: the hold
+      // read as OPEN - reserved inflated, consumption missing.)
+      c_f += deltas[0]; c_p += deltas[1]; c_i += deltas[2];
+      if (keyed) {
+        const g = groupFor(keyed.base);
+        const prev = g.partial ?? [0, 0, 0];
+        g.partial = [prev[0] + deltas[0], prev[1] + deltas[1], prev[2] + deltas[2]];
+      } else {
+        // Keyless partial confirm: consumption with no pairable hold.
+        lpc_f += deltas[0]; lpc_p += deltas[1]; lpc_i += deltas[2];
+      }
+      continue;
+    }
     if (isPhase(row, 'hold')) {
       if (keyed) { const g = groupFor(keyed.base); g.hold[0] += deltas[0]; g.hold[1] += deltas[1]; g.hold[2] += deltas[2]; }
       else { lh_f += deltas[0]; lh_p += deltas[1]; lh_i += deltas[2]; }
@@ -160,6 +188,10 @@ export function computeFromLedger(rows: LedgerRow[]): ComputedWallet {
   let open_f = 0, open_p = 0, open_i = 0;          // reserved (open holds)
   let spent_f = 0, spent_p = 0, spent_i = 0;       // net leaving balance
   for (const g of groups.values()) {
+    if (g.partial) {                                // settled by a partial confirm
+      spent_f += g.partial[0]; spent_p += g.partial[1]; spent_i += g.partial[2];
+      continue;
+    }
     if (g.released) continue;                       // fully returned; net zero
     const holdTotal = g.hold[0] + g.hold[1] + g.hold[2];
     if (g.confirmed) {
@@ -178,9 +210,9 @@ export function computeFromLedger(rows: LedgerRow[]): ComputedWallet {
   const gz = (n: number) => Math.max(0, Math.trunc(n));
 
   return {
-    free_balance:       gz(g_f - spent_f - (lh_f - lr_f) - e_f),
-    paid_balance:       gz(g_p - spent_p - (lh_p - lr_p)),
-    incentive_balance:  gz(g_i - spent_i - (lh_i - lr_i) - e_i),
+    free_balance:       gz(g_f - spent_f - (lh_f - lr_f) - e_f - lpc_f),
+    paid_balance:       gz(g_p - spent_p - (lh_p - lr_p) - lpc_p),
+    incentive_balance:  gz(g_i - spent_i - (lh_i - lr_i) - e_i - lpc_i),
     reserved_free:      gz(open_f + (lh_f - lr_f - lc_f)),
     reserved_paid:      gz(open_p + (lh_p - lr_p - lc_p)),
     reserved_incentive: gz(open_i + (lh_i - lr_i - lc_i)),

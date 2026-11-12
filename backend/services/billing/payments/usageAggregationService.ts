@@ -12,6 +12,7 @@
 
 import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
+import { CONSUMPTION_PHASES } from '../ledgerPhases';
 
 export interface UsageSnapshotArgs {
   organizationId: string;
@@ -61,12 +62,12 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
     };
   }
 
-  // 2. Aggregate CONFIRM rows in the period.
+  // 2. Aggregate CONSUMPTION rows (confirm + confirm_partial) in the period.
   const { data: confirmRows, error: confirmErr } = await supabase
     .from('credit_transactions')
     .select('credits_delta, usd_equivalent, reference_type')
     .eq('organization_id', args.organizationId)
-    .eq('execution_phase', 'confirm')
+    .in('execution_phase', [...CONSUMPTION_PHASES])
     .gte('created_at', args.periodStart)
     .lte('created_at', args.periodEnd);
 

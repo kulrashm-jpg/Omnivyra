@@ -14,6 +14,7 @@
 
 import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
+import { CONSUMPTION_PHASES } from '../ledgerPhases';
 
 export interface ForecastResult {
   organizationId:    string;
@@ -49,7 +50,7 @@ export async function forecastUsage(args: {
     .from('credit_transactions')
     .select('credits_delta, usd_equivalent, created_at')
     .eq('organization_id', args.organizationId)
-    .eq('execution_phase', 'confirm')
+    .in('execution_phase', [...CONSUMPTION_PHASES])
     .gte('created_at', args.periodStart)
     .lte('created_at', Math.min(now, endMs) === now ? new Date(now).toISOString() : new Date(endMs).toISOString());
 
