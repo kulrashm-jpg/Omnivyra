@@ -117,3 +117,81 @@ describe('no role list names a role normalizeRole rewrites', () => {
     }
   });
 });
+
+/**
+ * SHAPE 2 (05, 2026-11-12): an EQUALITY (=== / !==) or `case` against a
+ * rewritten name, on a value that is ALREADY normalised. In scope only by the
+ * SOURCE of the value: a variable assigned from getUserRole(...) (destructured
+ * `role`, or `role: alias`), getCompanyRoleIncludingInvited(...) or
+ * normalizeRole(...). A raw `.select('role')` value is out of scope (a legacy
+ * row legitimately matches), and so are the normalisers themselves (their
+ * input is raw).
+ */
+export function normalisedComparisons(src: string): Array<{ v: string; name: string }> {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const vars = new Set<string>();
+  for (const m of code.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?(?:getCompanyRoleIncludingInvited|normalizeRole)\s*\(/g)) vars.add(m[1]);
+  for (const m of code.matchAll(/(?:const|let)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?getUserRole\s*\(/g)) {
+    for (const part of m[1].split(',')) {
+      const [k, alias] = part.split(':').map((x) => x.trim());
+      if (k === 'role') vars.add(alias || 'role');
+    }
+  }
+  const out: Array<{ v: string; name: string }> = [];
+  for (const v of vars) {
+    const V = v.replace(/\$/g, '\$');
+    for (const m of code.matchAll(new RegExp(String.raw`\b${V}\s*[!=]==\s*Role\.([A-Z_]+)`, 'g'))) out.push({ v, name: ROLE_KEY_TO_VALUE[m[1]] ?? m[1] });
+    for (const m of code.matchAll(new RegExp(String.raw`Role\.([A-Z_]+)\s*[!=]==\s*${V}\b`, 'g'))) out.push({ v, name: ROLE_KEY_TO_VALUE[m[1]] ?? m[1] });
+    for (const sw of code.matchAll(new RegExp(String.raw`switch\s*\(\s*${V}\s*\)\s*\{([\s\S]*?)\n\s*\}`, 'g'))) {
+      for (const m of sw[1].matchAll(/case\s+Role\.([A-Z_]+)\s*:/g)) out.push({ v, name: ROLE_KEY_TO_VALUE[m[1]] ?? m[1] });
+    }
+  }
+  return out;
+}
+
+// HELD comparisons (same reason as HELD lists: user administration waits for
+// the atomic last-admin guard). Each must STILL compare a rewritten name.
+const HELD_CMP = new Set([
+  'backend/services/userManagementService.ts', // requireUserAdminAccess: role !== Role.ADMIN
+  'pages/api/company/users/[userId]/role.ts', // requireCompanyAdmin: role !== Role.ADMIN
+]);
+
+describe('no comparison of a NORMALISED role against a rewritten name (shape 2)', () => {
+  const all = ['pages', 'backend', 'lib'].flatMap((d) => files(path.join(ROOT, d)));
+  const scanned = all.map((f) => ({
+    file: path.relative(ROOT, f).split(path.sep).join('/'),
+    cmps: normalisedComparisons(fs.readFileSync(f, 'utf8')),
+  }));
+
+  it('non-vacuous: the scan sees normalised-role comparisons (>= 15), incl. known sites', () => {
+    expect(scanned.reduce((n, x) => n + x.cmps.length, 0)).toBeGreaterThanOrEqual(15);
+    for (const f of ['backend/apiHandlers/company/usersShared.ts', 'pages/api/admin/delete-campaign.ts', 'backend/services/userContextService.ts']) {
+      expect(scanned.find((x) => x.file === f)?.cmps.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it('controls: flags each source x syntax; ignores raw values and normalisers', () => {
+    const dead = (src: string) => normalisedComparisons(src).filter((c) => REWRITTEN.has(c.name)).map((c) => c.name);
+    expect(dead('const fallbackRole = await getCompanyRoleIncludingInvited(u, c);\nif (fallbackRole === Role.ADMIN) x();')).toEqual(['ADMIN']);
+    expect(dead('const { role, error } = await getUserRole(u, c);\nif (role !== Role.ADMIN) deny();')).toEqual(['ADMIN']);
+    expect(dead('const { role: r } = await getUserRole(u, c);\nif (Role.VIEWER === r) x();')).toEqual(['VIEWER']);
+    expect(dead('const n = normalizeRole(raw);\nswitch (n) {\n  case Role.CONTENT_MANAGER: a();\n  case Role.COMPANY_ADMIN: b();\n}')).toEqual(['CONTENT_MANAGER']);
+    expect(dead("const { data } = await db.from('user_company_roles').select('role');\nif (data.role === Role.ADMIN) x();")).toEqual([]); // raw value
+    expect(dead('export const normalizePermissionRole = (role: string) => {\n  if (role === Role.ADMIN) return Role.COMPANY_ADMIN;\n};')).toEqual([]); // normaliser input
+  });
+
+  it('no normalised-role comparison names a rewritten role (HELD_CMP excepted)', () => {
+    const offenders = scanned
+      .filter((x) => !HELD_CMP.has(x.file))
+      .map((x) => ({ file: x.file, dead: x.cmps.filter((c) => REWRITTEN.has(c.name)) }))
+      .filter((x) => x.dead.length > 0);
+    expect(offenders).toEqual([]);
+  });
+
+  it('HELD_CMP files still compare a rewritten name (a fixed file must leave HELD_CMP)', () => {
+    for (const f of HELD_CMP) {
+      const x = scanned.find((s) => s.file === f);
+      expect(x && x.cmps.filter((c) => REWRITTEN.has(c.name)).length).toBeGreaterThan(0);
+    }
+  });
+});

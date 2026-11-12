@@ -303,9 +303,8 @@ export const enforceCompanyAccess = async (input: {
   // Closure-015D removed SUPER_ADMIN here; Closure-015E: getCompanyRoleIncludingInvited
   // now resolves ACTIVE memberships only, so an INVITED membership of any role no
   // longer reaches this branch — invited memberships confer nothing before acceptance.
-  const allowedViaInvited =
-    fallbackRole === Role.COMPANY_ADMIN ||
-    fallbackRole === Role.ADMIN;
+  // normalised: a legacy ADMIN row arrives as COMPANY_ADMIN.
+  const allowedViaInvited = fallbackRole === Role.COMPANY_ADMIN;
   if (allowedViaInvited) {
     // SEC-91 W2-G (STEP 3AH-91, W2G-4) — the invited fallback must honour the
     // company's state. The header promises "suspended companies are rejected

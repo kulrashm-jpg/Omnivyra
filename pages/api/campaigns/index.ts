@@ -103,8 +103,7 @@ const requireCompanyRole = async (
     const fallbackRole = await getCompanyRoleIncludingInvited(userId, companyId);
     if (
       fallbackRole &&
-      (fallbackRole === Role.COMPANY_ADMIN ||
-        fallbackRole === Role.ADMIN ||
+      (fallbackRole === Role.COMPANY_ADMIN || // normalised: ADMIN arrives as COMPANY_ADMIN
         fallbackRole === Role.SUPER_ADMIN) &&
       allowedRoles.includes(fallbackRole)
     ) {

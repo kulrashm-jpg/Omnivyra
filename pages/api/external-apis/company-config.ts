@@ -57,7 +57,7 @@ async function requireCompanyAccess(
   if (!roleError && r) role = r;
   if (!role) {
     const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
-    if (fallback === Role.ADMIN || fallback === Role.COMPANY_ADMIN || fallback === Role.SUPER_ADMIN)
+    if (fallback === Role.COMPANY_ADMIN || fallback === Role.SUPER_ADMIN)
       role = fallback;
   }
   const canManage = role ? await hasPermission(role, 'MANAGE_EXTERNAL_APIS') : false;

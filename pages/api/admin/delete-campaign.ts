@@ -39,11 +39,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let isCompanyAdmin = false;
     if (companyId) {
       const { role } = await getUserRole(user.id, companyId);
-      if (role === Role.COMPANY_ADMIN || role === Role.ADMIN) isCompanyAdmin = true;
+      if (role === Role.COMPANY_ADMIN) isCompanyAdmin = true; // getUserRole is normalised: ADMIN arrives as COMPANY_ADMIN
       if (!isCompanyAdmin) {
         const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
-        isCompanyAdmin =
-          fallback === Role.COMPANY_ADMIN || fallback === Role.ADMIN;
+        isCompanyAdmin = fallback === Role.COMPANY_ADMIN; // normalised: ADMIN arrives as COMPANY_ADMIN
       }
     }
 

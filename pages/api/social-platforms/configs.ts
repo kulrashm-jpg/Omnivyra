@@ -46,7 +46,7 @@ const requireExternalApiAccess = async (
   let { role, error: roleError } = await getUserRole(user.id, companyId);
   if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
     const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
-    if (fallbackRole === Role.COMPANY_ADMIN || fallbackRole === Role.ADMIN || fallbackRole === Role.SUPER_ADMIN) {
+    if (fallbackRole === Role.COMPANY_ADMIN || fallbackRole === Role.SUPER_ADMIN) {
       role = fallbackRole;
       roleError = null;
     }

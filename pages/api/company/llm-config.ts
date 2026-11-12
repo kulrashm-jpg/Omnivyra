@@ -53,7 +53,7 @@ async function requireCompanyLlmAccess(
   let { role, error: roleError } = await getUserRole(user.id, companyId);
   if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
     const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
-    if (fallback === Role.COMPANY_ADMIN || fallback === Role.ADMIN || fallback === Role.SUPER_ADMIN) {
+    if (fallback === Role.COMPANY_ADMIN || fallback === Role.SUPER_ADMIN) { // normalised: no ADMIN
       role = fallback;
       roleError = null;
     }

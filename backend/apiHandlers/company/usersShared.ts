@@ -43,7 +43,6 @@ export const ensureCompanyAccess = async (
     const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
     if (
       fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN ||
       fallbackRole === Role.SUPER_ADMIN
     ) {
       role = fallbackRole;

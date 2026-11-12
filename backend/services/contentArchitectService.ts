@@ -126,8 +126,7 @@ export async function resolveCompanyAccess(
     // now resolves ACTIVE memberships only, so an INVITED membership of any role no
     // longer reaches this branch — invited memberships confer nothing before acceptance.
     if (
-      fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN
+      fallbackRole === Role.COMPANY_ADMIN
     ) {
       role = fallbackRole;
       roleError = null;
