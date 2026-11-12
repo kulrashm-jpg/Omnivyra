@@ -73,11 +73,14 @@ function makeStore(seed: Array<{ provider: string; ref: string; state: Settlemen
     },
     applySettlementTransition: async (input) => {
       transitions.push(input);
+      let applied = false;
       for (const [key, s] of sessions) {
         if (s.idempotencyKey === input.idempotencyKey) {
           sessions.set(key, { ...s, settlementStatus: input.settlementStatus });
+          applied = true;
         }
       }
+      return applied ? { applied: true as const } : { applied: false as const, reason: 'state_changed' as const };
     },
   };
   return { deps, sessions, events, transitions };

@@ -168,7 +168,7 @@ describe('expiry sweeper — terminal-state preservation', () => {
         settlementStatus: 'succeeded', createdAt: agoMin(999), lastReconciledAt: null,
       }],
       recordSettlementEvent: async () => ({ duplicate: false }),
-      applySettlementTransition: async (input) => { transitions.push(input); },
+      applySettlementTransition: async (input) => { transitions.push(input); return { applied: true as const }; },
     };
     const r = await sweepStaleSettlements({ nowMs: NOW }, deps);
     expect(r.expired).toBe(0);
