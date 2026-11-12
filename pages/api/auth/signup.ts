@@ -28,14 +28,15 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import {
-  validateCompanyIdentity,
-  COMPANY_IDENTITY_VALIDATION_VERSION,
-} from '../../../backend/services/companyIdentityValidationService';
+  lookupExistingAccount,
+  mintSignupIntent,
+  resolveClaimedDomainRefusal,
+  runSignupIdentityGate,
+} from '../../../backend/services/signupIntentMint';
 import { httpStatusFor, ELIGIBILITY_MESSAGES } from '../../../lib/auth/domainEligibilityModel';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
-import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
 import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
 import {
   emitSignupEvent,
@@ -53,15 +54,6 @@ type ErrorResponse = {
   /** CLAIMED_DOMAIN only: masked admin email shown on the contact-admin screen. */
   adminEmailMasked?: string | null;
 };
-
-/** "jo••••@acme.com" — enough to recognise the admin without leaking the full address. */
-function maskEmail(email: string | null): string | null {
-  if (!email) return null;
-  const [local, host] = email.split('@');
-  if (!local || !host) return null;
-  const shown = local.slice(0, 2);
-  return `${shown}${'•'.repeat(Math.max(1, local.length - shown.length))}@${host}`;
-}
 
 async function handler(
   req: NextApiRequest,
@@ -138,27 +130,15 @@ async function handler(
   // Canonical "completed account" signal is an active row in
   // user_company_roles. users.company_id / users.role are deprecated and
   // no longer read here.
-  const { data: existingUser } = await supabase
-    .from('users')
-    .select('id, is_deleted, onboarding_state')
-    .eq('email', normalizedEmail)
-    .maybeSingle();
+  const existingAccount = await lookupExistingAccount(normalizedEmail);
 
-  if (existingUser && (existingUser as any).is_deleted) {
+  if (existingAccount.kind === 'deleted') {
     await emitOutcome('SignupRejected', 'denied', 'ACCOUNT_DELETED');
     return res.status(403).json({ error: 'This account has been deactivated.', code: 'ACCOUNT_DELETED' });
   }
 
-  if (existingUser) {
-    const { data: companyRole } = await supabase
-      .from('user_company_roles')
-      .select('id')
-      .eq('user_id', (existingUser as any).id)
-      .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
-
-    if (companyRole) {
+  if (existingAccount.kind !== 'none') {
+    if (existingAccount.kind === 'active') {
       await emitOutcome('SignupRejected', 'denied', 'ACCOUNT_EXISTS');
       return res.status(409).json({
         error: 'An account with this email already exists. Please log in.',
@@ -210,73 +190,10 @@ async function handler(
   // The first user of a domain is unaffected: their company row doesn't
   // exist yet at signup time, so there's nothing to match.
   {
-    const { data: byWebsite } = await supabase
-      .from('companies')
-      .select('id, name')
-      .eq('website_domain', domain)
-      .maybeSingle();
-    const claimedCompany =
-      byWebsite ??
-      (
-        await supabase
-          .from('companies')
-          .select('id, name')
-          .eq('admin_email_domain', domain)
-          .maybeSingle()
-      ).data;
-
-    if (claimedCompany) {
-      const company = claimedCompany as { id: string; name: string | null };
-
-      // Resolve the company admin's email for the masked display.
-      const { data: adminRole } = await supabase
-        .from('user_company_roles')
-        .select('user_id')
-        .eq('company_id', company.id)
-        .eq('role', 'COMPANY_ADMIN')
-        .eq('status', 'active')
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      const adminUserId = (adminRole as { user_id?: string } | null)?.user_id ?? null;
-      const { data: adminUser } = adminUserId
-        ? await supabase.from('users').select('email').eq('id', adminUserId).maybeSingle()
-        : { data: null };
-      const adminEmail = (adminUser as { email?: string } | null)?.email ?? null;
-
-      // alreadyReferred = the prospect was already emailed on a prior attempt.
-      const { data: priorReferral } = await supabase
-        .from('signup_referrals')
-        .select('admin_email_sent_at')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-      const alreadyReferred = !!(priorReferral as { admin_email_sent_at?: string | null } | null)
-        ?.admin_email_sent_at;
-
-      // Fire both emails (idempotent / deduped inside the service; never throws).
-      await notifyAdminAndProspectOfClaimedDomain(supabase, {
-        prospectEmail: normalizedEmail,
-        emailDomain:   domain,
-        companyId:     company.id,
-        companyName:   company.name,
-        nowIso:        new Date().toISOString(),
-      });
-
-      logger.info('auth_signup_company_claimed_blocked', {
-        email:     normalizedEmail,
-        domain,
-        companyId: company.id,
-        alreadyReferred,
-        correlationId,
-      });
-      await emitOutcome('CompanyExists', 'denied', 'CLAIMED_DOMAIN', company.id);
-
-      return res.status(httpStatusFor('CLAIMED_DOMAIN')).json({
-        error:            ELIGIBILITY_MESSAGES.CLAIMED_DOMAIN,
-        code:             'CLAIMED_DOMAIN',
-        alreadyReferred,
-        adminEmailMasked: maskEmail(adminEmail),
-      });
+    const claimed = await resolveClaimedDomainRefusal({ normalizedEmail, domain, correlationId });
+    if (claimed) {
+      await emitOutcome('CompanyExists', 'denied', 'CLAIMED_DOMAIN', claimed.companyId);
+      return res.status(httpStatusFor('CLAIMED_DOMAIN')).json(claimed.body);
     }
   }
 
@@ -288,19 +205,16 @@ async function handler(
   // so the verdict must be settled here. Rule 5 (already-claimed) is owned by
   // §4 above, so it is disabled in this call to avoid a second, side-effect-free
   // claimed check racing the notify/referral flow.
-  let identity;
-  try {
-    identity = await validateCompanyIdentity(normalizedEmail, {
-      lookupClaimedCompany: async () => null,
-    });
-  } catch (err: any) {
-    logger.error('auth_signup_identity_validation_threw', { email: normalizedEmail, message: err?.message, correlationId });
+  const identityGate = await runSignupIdentityGate(normalizedEmail);
+  if (identityGate.kind === 'unavailable') {
+    logger.error('auth_signup_identity_validation_threw', { email: normalizedEmail, message: identityGate.message, correlationId });
     await emitOutcome('SystemFailure', 'denied', 'IDENTITY_VALIDATION_UNAVAILABLE');
     return res.status(503).json({
       error: 'We could not verify your organization right now. Please try again in a moment.',
       code:  'IDENTITY_VALIDATION_UNAVAILABLE',
     });
   }
+  const identity = identityGate.identity;
 
   // PROD-CX-004 §6 — auto-approve the narrow, provably-real case: MX valid + a
   // web host resolves in DNS, only the website was unreachable from our egress
@@ -309,10 +223,11 @@ async function handler(
   // the signup_intent here never creates an unverified account. The intent is
   // tagged for operator visibility. Flag-gated (default ON) for instant rollback;
   // when off, the case falls through to the normal review-block below.
-  const autoApproveEnabled = (process.env.IDENTITY_HARDENING_AUTO_APPROVE ?? 'true').toLowerCase() !== 'false';
-  const autoApproveReview = identity.autoApprovable === true && autoApproveEnabled;
+  // The decision itself lives in runSignupIdentityGate (shared with
+  // /api/onboarding/revalidate-signup).
+  const autoApproveReview = identityGate.kind === 'pass' && identityGate.autoApproved;
 
-  if (!identity.eligible && !autoApproveReview) {
+  if (identityGate.kind === 'refused') {
     // PUBLIC_EMAIL / NO_EMAIL_CAPABILITY / NO_WEBSITE_FOUND / FORWARDING_DOMAIN /
     // DOMAIN_NOT_CANONICAL / DOMAIN_MISMATCH / BLOCKED — all messaged from the
     // single ELIGIBILITY_MESSAGES source. Review-needed cases surface the
@@ -344,54 +259,25 @@ async function handler(
   // ── 5. Fresh signup path — upsert signup_intents and let the client proceed.
   // The validated identity is persisted on the intent so onboarding/setup-company
   // consume the verdict instead of re-deriving it (system-of-record handoff).
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const intentData = {
-    company_name:             trimmedCompany,
-    validated_company_domain: identity.companyIdentityDomain,
-    validated_website_domain: identity.normalizedWebsiteDomain,
-    validated_website_url:    identity.websiteUrl,
-    validated_at:             new Date().toISOString(),
-    validation_version:       COMPANY_IDENTITY_VALIDATION_VERSION,
-    // AUTH-001 §10 — journey correlation ID; later stages (verify-email,
-    // setup-company, credits) recover it from here by email.
-    correlation_id:           correlationId,
-    // PROD-CX-004 §6 — ops-visible marker when this signup was admitted via the
-    // auto-approve path (DNS web host present, site unreachable from our egress)
-    // rather than a clean live-website pass. Null on the normal eligible path.
-    ...(autoApproveReview
-      ? { auto_approved: true, auto_approved_reason: identity.validationReason }
-      : {}),
-  };
+  // Shared with /api/onboarding/revalidate-signup (backend/services/signupIntentMint).
+  const minted = await mintSignupIntent({
+    email:       normalizedEmail,
+    companyName: trimmedCompany,
+    identity,
+    autoApproved: autoApproveReview,
+    correlationId,
+    source:      'signup_form',
+    // e1 2026-11-13: a returning user whose pending intent EXPIRED used to get a 500 (the one-pending-per-email
+    // unique index rejected the new insert); refresh that row in place instead, exactly as revalidate-signup does.
+    refreshExpiredPending: true,
+  });
 
-  const { data: existingIntent } = await supabase
-    .from('signup_intents')
-    .select('id')
-    .eq('email', normalizedEmail)
-    .eq('status', 'pending')
-    .gt('expires_at', new Date().toISOString())
-    .maybeSingle();
-
-  if (!existingIntent) {
-    const { error: insertErr } = await supabase.from('signup_intents').insert({
-      email:       normalizedEmail,
-      source:      'signup_form',
-      status:      'pending',
-      expires_at:  expiresAt,
-      intent_data: intentData,
-    });
-
-    if (insertErr) {
-      logger.error('auth_signup_intent_insert_failed', { email: normalizedEmail, message: insertErr.message, correlationId });
-      await emitOutcome('SystemFailure', 'denied', 'INTENT_INSERT_FAILED');
-      return res.status(500).json({ error: 'Failed to initiate signup' });
-    }
-  } else {
-    // Refresh the existing pending intent with the latest company name +
-    // validated identity in case the user changed it before re-submitting.
-    await supabase
-      .from('signup_intents')
-      .update({ intent_data: intentData })
-      .eq('id', (existingIntent as { id: string }).id);
+  // A failed refresh of an existing pending intent was never surfaced here;
+  // only a failed INSERT fails the request (unchanged behaviour).
+  if (!minted.ok && minted.stage === 'insert') {
+    logger.error('auth_signup_intent_insert_failed', { email: normalizedEmail, message: minted.error, correlationId });
+    await emitOutcome('SystemFailure', 'denied', 'INTENT_INSERT_FAILED');
+    return res.status(500).json({ error: 'Failed to initiate signup' });
   }
 
   await emitOutcome('SignupValidated', 'allowed');
