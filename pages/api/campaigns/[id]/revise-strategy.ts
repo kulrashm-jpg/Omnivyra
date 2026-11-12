@@ -9,6 +9,7 @@ import {
   type getLatestCampaignVersion,
 } from '../../../../backend/db/campaignVersionStore';
 import { resolveCampaignOwnership } from '../../../../backend/services/campaignOwnershipService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 type CampaignVersionRow = Awaited<ReturnType<typeof getLatestCampaignVersion>>;
 
@@ -91,6 +92,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'selected_improvement_ids required' });
   }
 
+  // S2 tenant seam (e9 ruling 2026-11-13: child-of-campaigns verification is STRICT). weekly_content_refinements is a
+  // child of campaigns: the handle proves campaigns(id).company_id = the company resolveCampaignOwnership authorized.
+  // An orphan (version rows, no campaigns row; C36: none in prod) or a company-less campaigns row is refused with the
+  // same uniform 404. Made BEFORE any write, so a refusal never leaves a saved version behind.
+  let refinements: Awaited<ReturnType<typeof tenantChildTable>>;
+  try {
+    refinements = await tenantChildTable('weekly_content_refinements', tenantContextFor({ userId: user.id }, companyId), id);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    throw err;
+  }
+
   const { failed: latestFailed, row: latestVersion } = await latestCompanyVersion(companyId, id);
   if (latestFailed) {
     return res.status(500).json({ error: 'Failed to load campaign version' });
@@ -117,15 +130,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   console.warn('DEPRECATED: weekly_content_refinements write path triggered (revise-strategy)');
-  const { error: refinementError } = await supabase
-    .from('weekly_content_refinements')
+  const { error: refinementError } = await refinements
     .update({
       refinement_status: 'ai_enhanced',
       finalized: false,
       finalized_at: null,
       updated_at: new Date().toISOString(),
-    })
-    .eq('campaign_id', id);
+    });
 
   if (refinementError) {
     return res.status(500).json({ error: 'Failed to reset weekly refinements' });

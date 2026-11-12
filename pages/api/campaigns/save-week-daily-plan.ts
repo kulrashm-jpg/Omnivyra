@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { updateActivity } from '../../../backend/services/executionPlannerService';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -86,17 +87,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       })
       .map((item) => ({ id: item.id, dayOfWeek: item.dayOfWeek.trim() }));
 
+    // S2 tenant seam: daily_content_plans and weekly_content_refinements are children of campaigns. Both are
+    // reached through tenantChildTable, with the tenant built from the company requireCampaignTenantAccess
+    // authorized (access.organizationId) for this campaignId. Both handles are made (and the campaign proven to
+    // be in that tenant) BEFORE any write below, so a refusal writes nothing.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+    const dailyPlansTable = await tenantChildTable('daily_content_plans', tenant, campaignId);
+    const refinementsTable = await tenantChildTable('weekly_content_refinements', tenant, campaignId);
+
     const { data: rows } =
       validItems.length > 0
-        ? await supabase
-            .from('daily_content_plans')
+        ? await dailyPlansTable
             .select('id, content')
             .in('id', validItems.map((i) => i.id))
-            .eq('campaign_id', campaignId)
             .eq('week_number', weekNumber)
         : { data: [] as Array<{ id: string; content: unknown }> };
-    const rowById = new Map(
-      (rows ?? []).map((r: { id: string; content: unknown }) => [r.id, r])
+    const rowById = new Map<string, { id: string; content: unknown }>(
+      ((rows ?? []) as Array<{ id: string; content: unknown }>).map((r) => [r.id, r])
     );
 
     await Promise.all(
@@ -118,13 +125,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       })
     );
 
-    await supabase
-      .from('weekly_content_refinements')
+    await refinementsTable
       .update({
         daily_plan_populated: true,
         updated_at: new Date().toISOString(),
       })
-      .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber);
 
     res.status(200).json({
@@ -133,6 +138,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       weekNumber,
     });
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     console.error('Error in save-week-daily-plan API:', error);
     res.status(500).json({
       error: 'Internal server error',

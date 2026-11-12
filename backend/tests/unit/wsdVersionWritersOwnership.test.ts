@@ -187,15 +187,35 @@ describe.each(WRITERS)('$name', (w) => {
     expect([...seen]).toEqual([`${w.expectedBuiltOn}@5`]);
   });
 
-  it('orphan versions (no campaigns row) are still owned by their company', async () => {
+  // CONTRACT CHANGE (e9 ruling 2026-11-13, S2): revise-strategy also writes weekly_content_refinements, a CHILD of
+  // campaigns, through the tenant seam, whose verification is STRICT: the campaigns row must exist and name the
+  // authorized company. An orphan (versions, no campaigns row; C36: none in prod) or a company-less campaigns row is
+  // the uniform 404 and NOTHING is written (the seam is checked before the version write). The other writers do
+  // not touch a campaign child table and keep the version-owned contract.
+  const strictChild = w.name === 'revise-strategy';
+
+  it('orphan versions (no campaigns row): owned by their company; revise-strategy (strict child write) 404s, nothing written', async () => {
     world(null, VERSIONS_A);
-    expect((await post('A')).status).toBe(200);
+    const r = await post('A');
+    if (strictChild) {
+      expect(r.status).toBe(404);
+      expect(r.body).toEqual({ error: 'Campaign not found' });
+      expect(newVersions()).toEqual([]);
+      return;
+    }
+    expect(r.status).toBe(200);
     expect(newVersions()).toEqual([expect.objectContaining({ company_id: CO_A })]);
   });
 
-  it('a campaigns row with no company plus versions A → owned by A', async () => {
+  it('a campaigns row with no company plus versions A → owned by A; revise-strategy (strict child write) 404s', async () => {
     world({ company_id: null }, VERSIONS_A);
-    expect((await post('A')).status).toBe(200);
+    const r = await post('A');
+    if (strictChild) {
+      expect(r.status).toBe(404);
+      expect(newVersions()).toEqual([]);
+      return;
+    }
+    expect(r.status).toBe(200);
   });
 
   // ── cross tenant / caller substitution ─────────────────────────────────────

@@ -1,8 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -26,9 +26,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, String(campaignId));
     if (!access) return;
 
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized (access.companyId), never the
+    // body; tenantChildTable proves the campaign belongs to it and pins every row to this campaign.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const refinements = await tenantChildTable('weekly_content_refinements', tenant, String(campaignId));
+
     // Update the weekly refinement status to 'finalized'
-    const { data: updatedRefinement, error: updateError } = await supabase
-      .from('weekly_content_refinements')
+    const { data: updatedRefinement, error: updateError } = await refinements
       .update({
         refinement_status: 'finalized',
         finalized: true,
@@ -36,7 +40,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         finalized_by: user.id,
         updated_at: new Date().toISOString()
       })
-      .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber)
       .select()
       .single();
@@ -99,6 +102,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error in commit-weekly-plan API:', error);
     res.status(500).json({ 
       error: 'Internal server error', 

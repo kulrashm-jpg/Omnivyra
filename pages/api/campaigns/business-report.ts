@@ -2,8 +2,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getDecisionReportView } from '../../../backend/services/decisionReportService';
-import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 const fetchPlaybookContext = async (companyId: string, playbookId: string | null) => {
   if (!playbookId) return null;
@@ -30,20 +31,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'companyId and campaignId are required' });
     }
 
-    const companyContext = await requireCompanyContext({
+    // S2 tenant seam: enforceCompanyAccess is the check requireCompanyContext delegated to (same arguments, same
+    // denials); it is called directly because the seam's context needs the principal it returns. It proves the
+    // caller may act for companyId and binds campaignId to that company.
+    const user = await enforceCompanyAccess({
       req,
       res,
       companyId,
       campaignId,
       requireCampaignId: false,
     });
-    if (!companyContext) return;
+    if (!user) return;
+    const companyContext = { companyId };
+    const tenant = tenantContextFor(user, companyContext.companyId);
 
-    const { data: versionRow } = await supabase
-      .from('campaign_versions')
+    const { data: versionRow } = await tenantTable('campaign_versions', tenant)
       .select('campaign_snapshot')
       .eq('campaign_id', campaignId)
-      .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -79,6 +83,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       playbook_objective: playbookContext?.objective ?? null,
     });
   } catch (error: any) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     return res.status(500).json({ error: error?.message || 'Failed to build business report' });
   }
 }

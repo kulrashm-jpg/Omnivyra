@@ -134,13 +134,15 @@ jest.mock('../../db/supabaseClient', () => ({
       b.order = () => b;
       const resolve = () => {
         if (table === 'recommendation_jobs') {
-          jobFilters = { id: f.id, companyIds: f.company_id };
+          // The ROUTE's own authorization read is the first one; the tenant seam's parent check (S2) re-reads the
+          // job scoped to its company (.eq company_id) and must not overwrite what the route did.
+          if (Object.keys(jobFilters).length === 0) jobFilters = { id: f.id, companyIds: f.company_id };
           let rows = JOBS.filter(j => j.id === f.id);
           // The route only applies .in('company_id', …) for non-admins; when it
           // does, honour it exactly so a missing predicate is visible.
           if (f.company_id !== undefined) {
-            const ids = f.company_id as string[];
-            rows = rows.filter(j => ids.includes(j.company_id));
+            const scope = f.company_id;
+            rows = rows.filter(j => (Array.isArray(scope) ? scope.includes(j.company_id) : scope === j.company_id));
           }
           return { data: rows[0] ?? null, error: null };
         }

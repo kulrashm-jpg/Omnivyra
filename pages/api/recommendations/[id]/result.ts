@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { isSuperAdmin } from '../../../../backend/services/rbacService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantChildTable, tenantContextFor } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -49,10 +50,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  const { data: analysis, error: analysisError } = await supabase
-    .from('recommendation_analysis')
+  // S2 tenant seam: the tenant is the job's OWN company (job.company_id, read above), which the read above
+  // authorized: it is one of the caller's companies (the .in filter) unless the caller is a platform admin.
+  // Never the request. A job whose company cannot form a context answers the same 404 as a missing one.
+  let analysisTable: Awaited<ReturnType<typeof tenantChildTable>>;
+  try {
+    analysisTable = await tenantChildTable(
+      'recommendation_analysis',
+      tenantContextFor({ userId: userContext.userId }, String(job.company_id)),
+      String(job.id),
+    );
+  } catch {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  const { data: analysis, error: analysisError } = await analysisTable
     .select('*')
-    .eq('job_id', jobId)
     .single();
 
   if (analysisError || !analysis) {

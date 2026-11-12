@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -18,9 +18,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
 
+    // S2 tenant seam: the tenant is the company requireCampaignTenantAccess authorized (access.organizationId),
+    // never the body; tenantChildTable proves the campaign belongs to it and pins campaign_id on the upsert.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+    const plans = await tenantChildTable('weekly_content_plans', tenant, String(campaignId));
+
     // Save weekly plan
-    const { data: planData, error: planError } = await supabase
-      .from('weekly_content_plans')
+    const { data: planData, error: planError } = await plans
       .upsert({
         campaign_id: campaignId,
         week_number: weeklyPlan.weekNumber,
@@ -53,6 +57,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     console.error('Error in save-weekly-plan API:', error);
     res.status(500).json({
       error: 'Internal server error',

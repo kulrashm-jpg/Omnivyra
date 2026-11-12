@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -34,11 +35,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: 'Failed to fetch campaign' });
     }
 
-    // Get weekly content refinements
-    const { data: refinements, error: refinementsError } = await supabase
-      .from('weekly_content_refinements')
+    // Get weekly content refinements.
+    // S2 tenant seam: read through tenantChildTable (child of campaigns), with the tenant built from the
+    // company requireCampaignAccess authorized and the campaign id it checked (never the raw query value).
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const refinementsTable = await tenantChildTable('weekly_content_refinements', tenant, access.campaignId);
+    const { data: refinements, error: refinementsError } = await refinementsTable
       .select('*')
-      .eq('campaign_id', campaignId)
       .order('week_number', { ascending: true });
 
     if (refinementsError) {
@@ -121,6 +124,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error in 12week-plans/[planId] API:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

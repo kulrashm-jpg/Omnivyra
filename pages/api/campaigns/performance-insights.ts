@@ -14,9 +14,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 import {
   analyzeCampaignPerformance,
   type SlotMetrics,
@@ -60,10 +60,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
 
     // ── Fetch slots ──────────────────────────────────────────────────────────
-    const { data: slots, error: slotsError } = await supabase
-      .from('daily_content_plans')
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized (access.companyId);
+    // tenantChildTable proves the campaign belongs to it and applies the campaign_id predicate itself.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const { data: slots, error: slotsError } = await (await tenantChildTable('daily_content_plans', tenant, campaignId))
       .select('platform, status, week_number, content_type, actual_metrics')
-      .eq('campaign_id', campaignId)
       .order('week_number', { ascending: true });
 
     if (slotsError) {
@@ -149,6 +150,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('[PLANNER][PERFORMANCE][ERROR] Unexpected error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }

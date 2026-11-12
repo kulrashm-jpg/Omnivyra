@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 type AiHistoryEntry = {
   snapshot_hash: string;
@@ -36,10 +37,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       throw new Error(`Failed to load campaign plans: ${plansError.message}`);
     }
 
-    const { data: scheduledPosts, error: scheduledError } = await supabase
-      .from('scheduled_posts')
+    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized (access.companyId);
+    // tenantChildTable proves the campaign belongs to it and applies the campaign_id predicate itself.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const { data: scheduledPosts, error: scheduledError } = await (await tenantChildTable('scheduled_posts', tenant, id))
       .select('id, platform, content, scheduled_for, status, created_at')
-      .eq('campaign_id', id)
       .order('created_at', { ascending: false });
 
     if (scheduledError) {
@@ -72,6 +74,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ history: planEntries });
   } catch (error: any) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error in AI history API:', error);
     return res.status(500).json({ error: 'Failed to load AI history' });
   }

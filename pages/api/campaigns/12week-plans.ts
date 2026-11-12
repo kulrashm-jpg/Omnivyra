@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,12 +20,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId as string);
     if (!access) return;
 
-    // Get weekly refinements from existing table structure
-    const { data: weeklyRefinements, error } = await supabase
-      .from('weekly_content_refinements')
-      .select('*, daily_content_plans(count)')
-      .eq('campaign_id', access.campaignId)
+    // Get weekly refinements from existing table structure.
+    // S2 tenant seam: read through tenantChildTable (child of campaigns), with the tenant built from the
+    // company requireCampaignAccess authorized and the campaign id it checked.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const refinementsTable = await tenantChildTable('weekly_content_refinements', tenant, access.campaignId);
+    const { data: weeklyRefinements, error: refinementsError } = await refinementsTable
+      .select('*')
       .order('week_number');
+
+    // The per-week daily plan count used to be an embed (daily_content_plans(count)); the seam refuses embeds,
+    // so this campaign's daily plans are read once through their own seam (child of the same campaign) and
+    // counted per refinement over the FK daily_content_plans.source_refinement_id -> weekly_content_refinements.id.
+    // A failed read is treated like the failed embed was: the whole read falls back below.
+    let error = refinementsError;
+    const dailyPlansCountByRefinement = new Map<string, number>();
+    if (!error && (weeklyRefinements ?? []).length > 0) {
+      const dailyPlansTable = await tenantChildTable('daily_content_plans', tenant, access.campaignId);
+      const { data: dailyRows, error: dailyError } = await dailyPlansTable
+        .select('source_refinement_id')
+        .not('source_refinement_id', 'is', null);
+      if (dailyError) {
+        error = dailyError;
+      } else {
+        for (const row of (dailyRows ?? []) as Array<{ source_refinement_id: string | null }>) {
+          const key = String(row.source_refinement_id);
+          dailyPlansCountByRefinement.set(key, (dailyPlansCountByRefinement.get(key) ?? 0) + 1);
+        }
+      }
+    }
 
     if (error) {
       console.log('No weekly refinements found:', error?.message);
@@ -75,7 +99,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       successMetrics: refinement.success_metrics,
       createdAt: refinement.created_at,
       status: refinement.refinement_status,
-      dailyPlansCount: refinement.daily_content_plans?.[0]?.count || 0,
+      dailyPlansCount: dailyPlansCountByRefinement.get(refinement.id) || 0,
       aiGenerated: refinement.ai_enhancement_applied,
       finalized: refinement.finalized,
       dailyPopulated: refinement.daily_plan_populated
@@ -88,6 +112,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
     console.error('Error in 12week-plans API:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

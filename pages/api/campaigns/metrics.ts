@@ -1,7 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { requireCampaignAccess, type CampaignAccessResult } from '../../../backend/services/campaignAccessService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -124,7 +125,7 @@ async function handleSaveMetrics(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Update campaign completion percentage based on metrics
-    await updateCampaignCompletion(access.campaignId);
+    await updateCampaignCompletion(access);
 
     res.status(200).json({
       success: true,
@@ -250,13 +251,16 @@ function validateMetricsData(metricsData: any[]) {
   }));
 }
 
-async function updateCampaignCompletion(campaignId: string) {
+async function updateCampaignCompletion(access: CampaignAccessResult) {
+  const campaignId = access.campaignId;
   try {
-    // Get all weekly plans for the campaign
-    const { data: weeklyPlans, error: weeklyError } = await supabase
-      .from('weekly_content_plans')
-      .select('week_number, completion_percentage')
-      .eq('campaign_id', campaignId);
+    // Get all weekly plans for the campaign.
+    // S2 tenant seam: weekly_content_plans is a child of campaigns; read through tenantChildTable with the
+    // tenant built from the company requireCampaignAccess authorized and the campaign id it checked.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const weeklyPlansTable = await tenantChildTable('weekly_content_plans', tenant, campaignId);
+    const { data: weeklyPlans, error: weeklyError } = await weeklyPlansTable
+      .select('week_number, completion_percentage');
 
     if (weeklyError) {
       console.error('Error fetching weekly plans for completion update:', weeklyError);
@@ -286,6 +290,10 @@ async function updateCampaignCompletion(campaignId: string) {
       .eq('id', campaignId);
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      console.warn('Campaign completion update refused by the tenant seam:', error.code);
+      return;
+    }
     console.error('Error updating campaign completion:', error);
   }
 }

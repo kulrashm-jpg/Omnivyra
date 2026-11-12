@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { isSuperAdmin } from '../../../../backend/services/rbacService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantChildTable, tenantContextFor } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -40,10 +41,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(404).json({ error: 'Job not found' });
   }
 
-  const { data: signals } = await supabase
-    .from('recommendation_raw_signals')
-    .select('id, region_code, api_id, status, created_at')
-    .eq('job_id', jobId);
+  // S2 tenant seam: the tenant is the job's OWN company (job.company_id, read above), which the read above
+  // authorized: it is one of the caller's companies (the .in filter) unless the caller is a platform admin.
+  // Never the request. A job whose company cannot form a context answers the same 404 as a missing one.
+  let signalsTable: Awaited<ReturnType<typeof tenantChildTable>>;
+  try {
+    signalsTable = await tenantChildTable(
+      'recommendation_raw_signals',
+      tenantContextFor({ userId: userContext.userId }, String(job.company_id)),
+      String(job.id),
+    );
+  } catch {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  const { data: signals } = await signalsTable
+    .select('id, region_code, api_id, status, created_at');
 
   const signalsList = (signals ?? []) as { id: string; region_code: string; api_id: string; status: string; created_at: string }[];
   const byRegion = signalsList.reduce<Record<string, { success: number; failed: number }>>((acc, s) => {

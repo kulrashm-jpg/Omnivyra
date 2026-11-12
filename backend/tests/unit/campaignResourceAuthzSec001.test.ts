@@ -23,11 +23,15 @@
 export {};
 
 /* ── canary fixtures ──────────────────────────────────────────────────────── */
-const CO_A = 'co-a-0000-0000-0000-00000000000a';
-const CO_B = 'co-b-0000-0000-0000-00000000000b';
+// uuid-shaped, as every real company id: the tenant seam (tenantContextFor) refuses anything else.
+const CO_A = 'c0a00000-0000-4000-8000-00000000000a';
+const CO_B = 'c0b00000-0000-4000-8000-00000000000b';
 const CAMPAIGN_A = 'camp-a-00-0000-0000-00000000000a';
 const CAMPAIGN_B = 'camp-b-00-0000-0000-00000000000b';
 const UNKNOWN_CAMPAIGN = 'camp-x-00-0000-0000-00000000000x';
+/** VERSION-LESS campaigns (C36: 3 in prod): no campaign_versions row; access falls back to campaigns.company_id. */
+const CAMPAIGN_VA = 'camp-va-0-0000-0000-00000000000a';
+const CAMPAIGN_VB = 'camp-vb-0-0000-0000-00000000000b';
 const USER_A = 'user-a-00-0000-0000-00000000000a';
 
 /** If this string ever reaches a response, tenant isolation has failed. */
@@ -36,6 +40,8 @@ const CANARY = 'CANARY-COMPANY-B-CONFIDENTIAL';
 const CAMPAIGN_ROWS = [
   { id: CAMPAIGN_A, company_id: CO_A, name: 'Company A campaign', description: 'a', status: 'planning', created_at: '2026-01-01', weekly_themes: null, duration_weeks: 4, start_date: '2026-07-06T00:00:00.000Z' },
   { id: CAMPAIGN_B, company_id: CO_B, name: `Company B campaign ${CANARY}`, description: CANARY, status: 'planning', created_at: '2026-01-01', weekly_themes: null, duration_weeks: 4, start_date: '2026-07-06T00:00:00.000Z' },
+  { id: CAMPAIGN_VA, company_id: CO_A, name: 'A version-less', description: 'va', status: 'planning', created_at: '2026-01-01', weekly_themes: null, duration_weeks: 4, start_date: '2026-07-06T00:00:00.000Z' },
+  { id: CAMPAIGN_VB, company_id: CO_B, name: `B version-less ${CANARY}`, description: CANARY, status: 'planning', created_at: '2026-01-01', weekly_themes: null, duration_weeks: 4, start_date: '2026-07-06T00:00:00.000Z' },
 ];
 const VERSION_ROWS = [
   { campaign_id: CAMPAIGN_A, company_id: CO_A, version: 1, created_at: '2026-01-01', campaign_snapshot: null },
@@ -46,6 +52,8 @@ const REFINEMENT_ROWS = [
 ];
 const SLOT_ROWS = [
   { campaign_id: CAMPAIGN_B, platform: 'linkedin', status: 'published', week_number: 1, content_type: 'post', actual_metrics: { reach: 4242 } },
+  { campaign_id: CAMPAIGN_VA, platform: 'linkedin', status: 'published', week_number: 1, content_type: 'post', actual_metrics: { reach: 1111 } },
+  { campaign_id: CAMPAIGN_VB, platform: 'linkedin', status: 'published', week_number: 1, content_type: 'post', actual_metrics: { reach: 9393 } },
 ];
 /** USER_A is an active COMPANY_ADMIN of company A, and of nothing else. */
 const ROLE_ROWS = [
@@ -362,6 +370,22 @@ describe('performance-insights', () => {
     expect(updateCampaignMemory as jest.Mock).toHaveBeenCalled();
     expect((updateCampaignMemory as jest.Mock).mock.calls[0][1]).toBe(CO_A);
     expect((updateCampaignMemory as jest.Mock).mock.calls[0][1]).not.toBe(STALE_CONTEXT_CO);
+  });
+
+  // e9 (S2): a VERSION-LESS campaign stays reachable after the seam conversion: requireCampaignAccess falls back to
+  // campaigns.company_id, which is exactly the column the seam's parent check reads, so the two agree.
+  it('version-less campaign: its owner reaches it through the seam (slots read)', async () => {
+    const res = await call({ campaignId: CAMPAIGN_VA });
+    expect(res.statusCode).toBe(200);
+    expect(calls.filter((c) => c.table === 'daily_content_plans').length).toBeGreaterThan(0);
+  });
+
+  it('CRITICAL version-less campaign of ANOTHER company: refused (the existing route denial), no slot read, nothing leaks', async () => {
+    const res = await call({ campaignId: CAMPAIGN_VB });
+    expect([403, 404]).toContain(res.statusCode);
+    expect(calls.filter((c) => c.table === 'daily_content_plans')).toEqual([]);
+    expect(JSON.stringify(res.body ?? {})).not.toContain('9393');
+    expect(updateCampaignMemory as jest.Mock).not.toHaveBeenCalled();
   });
 
   it('a nonexistent campaign is refused without reading slots', async () => {

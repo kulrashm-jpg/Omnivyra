@@ -1,8 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getUserRole, Role } from '../../../backend/services/rbacService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
@@ -34,11 +34,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ? req.query.snapshot_hashes.split(',').map((value) => value.trim()).filter(Boolean)
     : [];
 
-  const { data: logs, error } = await supabase
-    .from('audit_logs')
+  // S2 tenant seam: companyId is the company getUserRole above proved the caller holds an active, allowed role in
+  // (no role -> 403 before this point); the seam applies the company predicate on every read below.
+  let tenant: ReturnType<typeof tenantContextFor>;
+  let auditLogsTable: ReturnType<typeof tenantTable>;
+  try {
+    tenant = tenantContextFor({ userId: user.id }, companyId);
+    auditLogsTable = tenantTable('audit_logs', tenant);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
+    throw err;
+  }
+
+  const { data: logs, error } = await auditLogsTable
     .select('actor_user_id, created_at, metadata')
     .eq('action', 'RECOMMENDATION_STATE_CHANGED')
-    .eq('company_id', companyId)
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -160,12 +170,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   let recommendationMap: Record<string, string> = {};
   if (snapshotHashes.length > 0) {
-    const { data: snapshotRows } = await supabase
-      .from('recommendation_snapshots')
+    const { data: snapshotRows } = await tenantTable('recommendation_snapshots', tenant)
       .select('id, snapshot_hash, confidence, final_score')
-      .eq('company_id', companyId)
       .in('snapshot_hash', snapshotHashes);
-    recommendationMap = (snapshotRows || []).reduce<Record<string, string>>((acc, row: any) => {
+    recommendationMap = ((snapshotRows || []) as any[]).reduce<Record<string, string>>((acc, row: any) => {
       if (row?.snapshot_hash && row?.id) {
         acc[String(row.snapshot_hash)] = String(row.id);
       }

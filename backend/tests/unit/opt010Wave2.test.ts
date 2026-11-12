@@ -156,7 +156,9 @@ describe('W2-2 save-comprehensive-plan — single bulk upsert', () => {
 
 describe('W2-4 save-week-daily-plan — one .in() select + parallel writes', () => {
   test('one batched select; updateActivity per valid item; invalid/missing skipped', async () => {
-    (requireCampaignTenantAccess as jest.Mock).mockResolvedValue({ companyId: 'c1' });
+    // The REAL shape: requireCampaignTenantAccess resolves the principal and the company (a uuid); the tenant seam
+    // builds its context from exactly these (tenantContextFor refuses a non-uuid company).
+    (requireCampaignTenantAccess as jest.Mock).mockResolvedValue({ userId: 'u1', organizationId: 'c0a00000-0000-4000-8000-00000000000a' });
     (updateActivity as jest.Mock).mockResolvedValue({ updated: true });
     mockTableResponses['campaigns'] = { data: { id: 'camp-1', start_date: '2026-01-05' }, error: null };
     mockTableResponses['daily_content_plans'] = {

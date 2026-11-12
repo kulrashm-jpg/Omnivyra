@@ -14,6 +14,7 @@ import { PaymentRequiredError } from '@/backend/services/billing/phase2Enforceme
 import { evaluatePredictionAccuracy } from '@/backend/services/predictionAccuracyService';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { supabase as adminSupabase } from '@/backend/db/supabaseClient';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '@/backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
@@ -51,10 +52,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── GET — fetch latest stored prediction ──────────────────────────────────
   if (req.method === 'GET') {
-    const { data: prediction } = await adminSupabase
-      .from('campaign_predictions')
+    // S2 tenant seam: campaign_predictions is a child of campaigns; read through tenantChildTable with the
+    // tenant built from the company requireCompanyAccess just authorized (campaign.company_id) for this user.
+    let predictionsTable: Awaited<ReturnType<typeof tenantChildTable>>;
+    try {
+      const tenant = tenantContextFor({ userId: auth.user.id }, campaign.company_id);
+      predictionsTable = await tenantChildTable('campaign_predictions', tenant, campaign.id);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+      throw err;
+    }
+    const { data: prediction } = await predictionsTable
       .select('*')
-      .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
