@@ -99,6 +99,11 @@ const TENANT_ROLES: ReadonlyArray<CanonicalRole> = [
   'CONTENT_REVIEWER',
   'CONTENT_CREATOR',
   'VIEW_ONLY',
+  // Roles Approach A (e9 2026-11-12): covered by the platform-isolation check.
+  'CONTENT_MANAGER',
+  'CONTENT_PLANNER',
+  'CONTENT_ENGAGER',
+  'VIEWER',
 ];
 
 /**

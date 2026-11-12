@@ -7,6 +7,7 @@ jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => { throw ne
 import { Role, ROLE_BASE_TIERS, roleSatisfies, normalizeRole, normalizePermissionRole } from '../../services/rbacPrimitives';
 import { COMMUNITY_AI_CAPABILITIES, hasCommunityAiCapability } from '../../services/rbac/communityAiCapabilities';
 import { PERMISSIONS } from '../../services/rbacService';
+import { capabilitiesForRole } from '../../security/capabilityRegistry';
 
 const ADMIN_ROLES = [Role.SUPER_ADMIN, Role.COMPANY_ADMIN, Role.ADMIN];
 const FOUR = [Role.CONTENT_MANAGER, Role.CONTENT_PLANNER, Role.CONTENT_ENGAGER, Role.VIEWER];
@@ -74,3 +75,24 @@ it('control: an unknown role satisfies nothing but a wildcard; tiers are not tra
   expect(roleSatisfies(Role.VIEWER, ['*'])).toBe(true);
   expect(Object.keys(COMMUNITY_AI_CAPABILITIES).length).toBeGreaterThan(5);
 });
+
+// R2 - CapabilityService passes the RAW stored role, so each of the four needs
+// its own registry entry (before this, they held NO capability, not even MFA).
+it('R2: each of the four holds exactly the capabilities of its tiers (raw stored role)', () => {
+  const sorted = (r: string) => [...capabilitiesForRole(r)].sort();
+  expect(sorted('VIEWER')).toEqual(sorted('VIEW_ONLY'));
+  expect(sorted('CONTENT_ENGAGER')).toEqual(sorted('VIEW_ONLY'));
+  expect(sorted('CONTENT_PLANNER')).toEqual(sorted('CONTENT_CREATOR'));
+  const union = Array.from(new Set([...capabilitiesForRole('CONTENT_PUBLISHER'), ...capabilitiesForRole('CONTENT_REVIEWER'), ...capabilitiesForRole('CONTENT_CREATOR')])).sort();
+  expect(sorted('CONTENT_MANAGER')).toEqual(union);
+  for (const r of FOUR) {
+    expect(capabilitiesForRole(r)).toContain('mfa.enroll');
+    expect(capabilitiesForRole(r).length).toBeGreaterThan(0);
+  }
+});
+
+it('R2: none of the four holds a capability COMPANY_ADMIN-only roles hold beyond content (org / billing / integration / identity / prospect)', () => {
+  const contentUniverse = new Set([...capabilitiesForRole('CONTENT_PUBLISHER'), ...capabilitiesForRole('CONTENT_REVIEWER'), ...capabilitiesForRole('CONTENT_CREATOR'), ...capabilitiesForRole('VIEW_ONLY')]);
+  for (const r of FOUR) for (const c of capabilitiesForRole(r)) expect(contentUniverse.has(c)).toBe(true);
+});
+

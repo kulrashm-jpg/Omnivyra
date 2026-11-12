@@ -70,9 +70,14 @@ import {
 } from '../../shared/contracts/security';
 
 /**
- * The runtime role surface. Anchored on rbacPrimitives.Role values; legacy
- * aliases (ADMIN, CONTENT_MANAGER, etc.) are normalized BEFORE reaching this
- * mapping by rbacPrimitives.normalizeRole.
+ * The runtime role surface. Anchored on rbacPrimitives.Role values.
+ * CORRECTED (roles Approach A, e9 2026-11-12): the previous comment said legacy
+ * aliases are normalised before reaching this mapping - FALSE: CapabilityService
+ * passes the RAW user_company_roles.role, so CONTENT_MANAGER / CONTENT_PLANNER /
+ * CONTENT_ENGAGER / VIEWER held NO capability at all. They are real roles now
+ * and carry explicit sets below, mirroring their ROLE_BASE_TIERS
+ * (rbacPrimitives). Only the ADMIN alias has no entry (0 such rows in prod
+ * after data step D1; the role CHECK 20270217000011 forbids it).
  */
 export type CanonicalRole =
   | 'SUPER_ADMIN'
@@ -81,7 +86,11 @@ export type CanonicalRole =
   | 'CONTENT_CREATOR'
   | 'CONTENT_REVIEWER'
   | 'CONTENT_PUBLISHER'
-  | 'VIEW_ONLY';
+  | 'VIEW_ONLY'
+  | 'CONTENT_MANAGER'
+  | 'CONTENT_PLANNER'
+  | 'CONTENT_ENGAGER'
+  | 'VIEWER';
 
 /**
  * ROLE_CAPABILITIES — the canonical mapping.
@@ -209,6 +218,32 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
   VIEW_ONLY: [
     CAMPAIGN_VIEW,
     MFA_ENROLL,                 // a viewer may still self-enroll their own MFA
+    MFA_VIEW_FACTORS,
+  ],
+  // Roles Approach A (e9 2026-11-12) - each mirrors its ROLE_BASE_TIERS; none
+  // holds an organisation / billing / integration / API-key / identity capability.
+  CONTENT_MANAGER: [            // = PUBLISHER u REVIEWER (incl. create)
+    CAMPAIGN_VIEW,
+    CONTENT_PUBLISH,            // expansion: review + create
+    CONTENT_REVIEW,
+    CONTENT_CREATE,
+    MFA_ENROLL,
+    MFA_VIEW_FACTORS,
+  ],
+  CONTENT_PLANNER: [            // = CREATOR (+ planning, granted on its routes)
+    CAMPAIGN_VIEW,
+    CONTENT_CREATE,
+    MFA_ENROLL,
+    MFA_VIEW_FACTORS,
+  ],
+  CONTENT_ENGAGER: [            // = VIEW_ONLY (+ engagement, community-AI layer)
+    CAMPAIGN_VIEW,
+    MFA_ENROLL,
+    MFA_VIEW_FACTORS,
+  ],
+  VIEWER: [                     // = VIEW_ONLY
+    CAMPAIGN_VIEW,
+    MFA_ENROLL,
     MFA_VIEW_FACTORS,
   ],
 };

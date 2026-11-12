@@ -1272,6 +1272,11 @@ describe('WS-4B · the gating capability is granted to administrators only', () 
     'CONTENT_PUBLISHER',
     'CONTENT_REVIEWER',
     'CONTENT_CREATOR',
+    // Roles Approach A (e9 2026-11-12): real roles with explicit capability sets.
+    'CONTENT_MANAGER',
+    'CONTENT_PLANNER',
+    'CONTENT_ENGAGER',
+    'VIEWER',
   ];
 
   it.each(NON_ADMIN_ROLES)('%s does not hold the gating capability', (role) => {
