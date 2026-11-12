@@ -661,7 +661,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         // Record the actual text being sent (may differ from generated_text
         // if the user edited the suggestion in the UI).
-        const { error: approveErr } = await supabase
+        const { data: approvedRows, error: approveErr } = await supabase
           .from('ai_message_drafts')
           .update({
             status: 'approved',
@@ -670,11 +670,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           })
           .eq('id', body.ai_draft_id)
           .eq('thread_id', draft.thread_id)
-          .eq('status', 'draft');
+          .eq('status', 'draft')
+          .select('id');
         if (approveErr) {
           return res.status(500).json({
             error: `ai_draft approve failed: ${approveErr.message}`,
             code: 'AI_DRAFT_APPROVE_FAILED',
+          });
+        }
+        // CLASS-2 A16 (e9 sweep): the compare-and-set's row count IS the decision. Two operators who
+        // both read `draft` both ran this update; the one whose update moved nothing went on to SEND
+        // the same draft a second time. It now stops: the draft is someone else's send.
+        if (!Array.isArray(approvedRows) || approvedRows.length === 0) {
+          return res.status(409).json({
+            error: 'This AI draft was just approved by someone else and is being sent. Reload the thread.',
+            code: 'AI_DRAFT_ALREADY_APPROVED',
           });
         }
       }

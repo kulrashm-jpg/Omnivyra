@@ -63,8 +63,11 @@ function builder(table: string) {
           return Promise.resolve({ data: hit[0] ?? null, error: null });
         },
         then(res: (v: unknown) => unknown) {
-          for (const r of rows()) Object.assign(r, patch);
-          return Promise.resolve({ error: null }).then(res);
+          // The moved rows, as PostgREST answers .update().select(): a compare-and-set reads its
+          // row count from this (CLASS-2 A16). Matched BEFORE the patch, which may change a filter column.
+          const hit = rows();
+          for (const r of hit) Object.assign(r, patch);
+          return Promise.resolve({ data: hit.map((r) => ({ ...r })), error: null }).then(res);
         },
       };
       return upd;
@@ -408,5 +411,34 @@ describe('bulk AI safety', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.sent).toBe(0);
     expect(res.body.skipped).toBe(1);
+  });
+});
+
+describe('CLASS-2 A16: two operators send the same AI draft at once', () => {
+  it('the one whose approve moved nothing is refused (409) and does NOT send the draft a second time', async () => {
+    actionableThreads.add(THREAD);
+    // Both read `draft`; the OTHER operator's approve lands between this request's read and its write.
+    const mod = require('../../db/supabaseClient');
+    const realFrom = mod.supabase.from;
+    let flipped = false;
+    mod.supabase.from = (t: string) => {
+      const b = realFrom(t);
+      if (t === 'ai_message_drafts') {
+        const realUpdate = b.update;
+        b.update = (patch: Row) => {
+          if (!flipped) { flipped = true; db.ai_message_drafts[0].status = 'approved'; }
+          return realUpdate(patch);
+        };
+      }
+      return b;
+    };
+    try {
+      const res = await send(AI_SEND);
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ code: 'AI_DRAFT_ALREADY_APPROVED' });
+      expect(executeActionMock).not.toHaveBeenCalled();
+    } finally {
+      mod.supabase.from = realFrom;
+    }
   });
 });
