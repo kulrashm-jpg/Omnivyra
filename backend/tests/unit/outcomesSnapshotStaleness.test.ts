@@ -10,6 +10,9 @@
  * snapshot read and the measurement (the route's I/O). Both sides of the boundary are pinned,
  * and the boundary itself (exactly 6 h is stale).
  */
+// A module, not a global script: without this, this file's top-level names collide with other test
+// files in the backend-tests typecheck (CI-89: TS2300 / TS2451).
+export {};
 const NOW = Date.parse('2026-11-12T12:00:00.000Z');
 const HOUR = 60 * 60 * 1000;
 const CAMPAIGN = 'c1000000-0000-4000-8000-000000000001';

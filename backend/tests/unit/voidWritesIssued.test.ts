@@ -14,6 +14,9 @@
  * One case per site; restoring `void` at a site fails exactly that site's cases (mutants run by
  * hand, recorded in the commit).
  */
+// A module, not a global script: without this, this file's top-level names collide with other test
+// files in the backend-tests typecheck (CI-89: TS2300 / TS2451).
+export {};
 type Op = { method: string; args: unknown[] };
 type Issued = { table: string; ops: Op[] };
 type Answer = { data?: unknown; error?: { message: string } | null; count?: number | null };
