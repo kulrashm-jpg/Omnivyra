@@ -96,8 +96,12 @@ const state = (r: string) => one('SELECT status, wa_message_id, error_code, erro
 async function runQueued(): Promise<void> {
   for (const job of mockJobs.splice(0)) await svc.processBatch(job.broadcast_id, job.recipient_ids);
 }
+/** A provider event time RELATIVE TO NOW (CLASS-2, 8e066d443: an event older than the current send's claim is an
+ * earlier message of the same recipient and attaches nothing). The literal keeps its offset from the original
+ * fixed base 1762600000, so the order between a test's events is unchanged. */
+const ts = (fixed: number): string => String(Math.floor(Date.now() / 1000) + (fixed - 1762600000));
 const statusJob = (wamid: string, status: string, over: Record<string, unknown>) => ({
-  data: { payload: { entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: PHONE_NUMBER_ID }, statuses: [{ id: wamid, status, timestamp: '1762600000', ...over }] } }] }] } },
+  data: { payload: { entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: PHONE_NUMBER_ID }, statuses: [{ id: wamid, status, timestamp: ts(1762600000), ...over }] } }] }] } },
 });
 
 describe('WhatsApp send-once on the real schema (L-4)', () => {
@@ -114,8 +118,8 @@ describe('WhatsApp send-once on the real schema (L-4)', () => {
     const wamid = `wamid.late.${rnd()}`;
     await processWhatsAppWebhookJob(statusJob(wamid, 'sent', { biz_opaque_callback_data: r, recipient_id: '15551230001' }));
     expect(await state(r)).toMatchObject({ status: 'sent', wa_message_id: wamid });
-    await processWhatsAppWebhookJob(statusJob(wamid, 'delivered', { biz_opaque_callback_data: r, recipient_id: '15551230001', timestamp: '1762600100' }));
-    await processWhatsAppWebhookJob(statusJob(wamid, 'delivered', { biz_opaque_callback_data: r, recipient_id: '15551230001', timestamp: '1762600100' }));
+    await processWhatsAppWebhookJob(statusJob(wamid, 'delivered', { biz_opaque_callback_data: r, recipient_id: '15551230001', timestamp: ts(1762600100) }));
+    await processWhatsAppWebhookJob(statusJob(wamid, 'delivered', { biz_opaque_callback_data: r, recipient_id: '15551230001', timestamp: ts(1762600100) }));
     expect(await state(r)).toMatchObject({ status: 'delivered', wa_message_id: wamid });
     const ledger = await db.query('SELECT event_status FROM public.whatsapp_provider_events WHERE wa_message_id = $1 ORDER BY event_status', [wamid]);
     expect(ledger.rows.map((x: { event_status: string }) => x.event_status)).toEqual(['delivered', 'sent']);

@@ -100,8 +100,12 @@ const age = (r: string, ms = 2 * HOUR) =>
 const state = (r: string) => one('SELECT status, wa_message_id, error_code, delivered_at, read_at FROM public.whatsapp_broadcast_recipients WHERE id = $1', [r]);
 const audit = async (r: string) => (await db.query(
   'SELECT outcome, from_status, to_status, wa_message_id, company_id FROM public.whatsapp_send_reconciliations WHERE recipient_id = $1 ORDER BY outcome', [r])).rows;
+/** A provider event time RELATIVE TO NOW (CLASS-2, 8e066d443: an event older than the current send's claim is an
+ * earlier message of the same recipient and attaches nothing). The literal keeps its offset from the original
+ * fixed base 1762600000, so the order between a test's events is unchanged. */
+const ts = (fixed: number): string => String(Math.floor(Date.now() / 1000) + (fixed - 1762600000));
 const statusJob = (wamid: string, status: string, over: Record<string, unknown>) => ({
-  data: { payload: { entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: PHONE_NUMBER_ID }, statuses: [{ id: wamid, status, timestamp: '1762600000', ...over }] } }] }] } },
+  data: { payload: { entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: PHONE_NUMBER_ID }, statuses: [{ id: wamid, status, timestamp: ts(1762600000), ...over }] } }] }] } },
 });
 /** Verified evidence in the ledger with NO recipient change: what a webhook job leaves when it runs out of attempts. */
 async function strandedEvidence(r: string, wamid: string, status: string, over: Record<string, unknown> = {}): Promise<void> {
@@ -133,7 +137,7 @@ describe('evidence stranded by an exhausted webhook job is attached by the sweep
     const { r } = await uncertainRecipient();
     const wamid = `wamid.s.${rnd()}`;
     await strandedEvidence(r, wamid, 'sent');
-    await strandedEvidence(r, wamid, 'delivered', { timestamp: '1762600100' });
+    await strandedEvidence(r, wamid, 'delivered', { timestamp: ts(1762600100) });
     expect(await state(r)).toMatchObject({ status: 'send_uncertain', wa_message_id: null });
     const ev = (await db.query('SELECT count(*)::int AS n FROM public.whatsapp_provider_events WHERE verified_recipient_id = $1', [r])).rows[0].n;
     expect(ev).toBe(2);
@@ -157,9 +161,9 @@ describe('evidence stranded by an exhausted webhook job is attached by the sweep
     const wamid = `wamid.l.${rnd()}`;
     await strandedEvidence(r, wamid, 'sent');
     await run();
-    await processWhatsAppWebhookJob(statusJob(wamid, 'delivered', { biz_opaque_callback_data: r, recipient_id: WA_ID, timestamp: '1762600200' }));
-    await processWhatsAppWebhookJob(statusJob(wamid, 'read', { biz_opaque_callback_data: r, recipient_id: WA_ID, timestamp: '1762600300' }));
-    await processWhatsAppWebhookJob(statusJob(wamid, 'sent', { biz_opaque_callback_data: r, recipient_id: WA_ID, timestamp: '1762600000' }));
+    await processWhatsAppWebhookJob(statusJob(wamid, 'delivered', { biz_opaque_callback_data: r, recipient_id: WA_ID, timestamp: ts(1762600200) }));
+    await processWhatsAppWebhookJob(statusJob(wamid, 'read', { biz_opaque_callback_data: r, recipient_id: WA_ID, timestamp: ts(1762600300) }));
+    await processWhatsAppWebhookJob(statusJob(wamid, 'sent', { biz_opaque_callback_data: r, recipient_id: WA_ID, timestamp: ts(1762600000) }));
     expect(await state(r)).toMatchObject({ status: 'read', wa_message_id: wamid });
     expect(metaCalls).toBe(1);
   }), 120_000);
@@ -250,7 +254,7 @@ describe('no evidence: nothing is inferred', () => {
   it('evidence naming two message ids attaches nothing and is flagged as a conflict', () => inRollback(async () => {
     const { r } = await uncertainRecipient();
     await strandedEvidence(r, `wamid.a.${rnd()}`, 'sent');
-    await strandedEvidence(r, `wamid.b.${rnd()}`, 'sent', { timestamp: '1762600050' });
+    await strandedEvidence(r, `wamid.b.${rnd()}`, 'sent', { timestamp: ts(1762600050) });
     expect(await run()).toMatchObject({ attached: 0, conflicting: 1, flaggedForReview: 1 });
     expect(await state(r)).toMatchObject({ status: 'send_uncertain', wa_message_id: null });
     expect((await audit(r)).map((x: { outcome: string }) => x.outcome)).toEqual(['awaiting_operator_review', 'conflicting_provider_evidence']);
