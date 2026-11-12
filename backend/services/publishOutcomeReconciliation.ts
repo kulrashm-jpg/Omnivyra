@@ -23,6 +23,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getScheduledPost, updateScheduledPostOnPublish } from '../db/queries';
 import { publishOutcomeBlocksAttempt, PUBLISH_RECONCILED_NOT_PUBLISHED } from '../queue/publishOutcome';
+import { PUBLISH_OUTCOME_UNCERTAIN } from '../queue/publishRetryState';
 import { hasPlatformWriteAuthority, type PlatformWriteActor } from '../security/platformWriteAuthority';
 
 export type PublishReconciliationResolution = 'published' | 'not_published';
@@ -93,7 +94,12 @@ export async function reconcileUncertainPublish(
     .from('scheduled_posts')
     .update({
       status: 'failed',
-      error_code: input.resolution === 'published' ? null : PUBLISH_RECONCILED_NOT_PUBLISHED,
+      // CLASS-2 D9: for 'published' this is only the FIRST of two writes. It used to clear error_code
+      // here, leaving `failed` + no code + no platform_post_id between the two writes - a CLAIMABLE
+      // row, so a concurrent Publish now / queue retry could publish a post the operator had just
+      // confirmed is live. It stays UNCERTAIN (never claimable) until the published write below
+      // replaces it; if that write does not land, the row is still awaiting reconciliation.
+      error_code: input.resolution === 'published' ? PUBLISH_OUTCOME_UNCERTAIN : PUBLISH_RECONCILED_NOT_PUBLISHED,
       error_message: stamp,
       updated_at: new Date().toISOString(),
     })
