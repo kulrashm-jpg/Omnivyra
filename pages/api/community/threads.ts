@@ -10,6 +10,10 @@ import { resolveUserContext } from '../../../backend/services/userContextService
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 
+/** Newest posts a company-wide listing reads its rows from (bounded: the .in() list and PostgREST's row cap). */
+const POST_WINDOW = 200;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
@@ -33,18 +37,44 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const companyContext = await requireCompanyContext({ req, res, companyId });
     if (!companyContext) return;
 
-    const { data: postIds, error: postsError } = await supabase
-      .from('community_posts')
-      .select('id')
-      .eq('company_id', companyContext.companyId);
-    if (postsError) {
-      console.error('[community/threads] posts lookup failed', postsError.message);
-      return res.status(500).json({ error: 'Failed to load posts' });
-    }
-    const ids = (postIds ?? []).map((r: { id: string }) => r.id);
-    // A post that is not this company's - another company's, or none at all - is the SAME 404.
-    if (postId && !ids.includes(postId)) {
-      return res.status(404).json({ error: 'Post not found' });
+    // The post scope. With a postId, an O(1) existence check scoped to this company decides the 404 - never
+    // membership in a list a PostgREST row cap could silently truncate. A post that is not this company's
+    // (another company's, an unknown id, or not an id at all) is the SAME 404. Without one, the company's newest
+    // POST_WINDOW posts, and the response says when that window was full instead of hiding older posts' rows.
+    let scopeIds: string[];
+    let truncated = false;
+    if (postId) {
+      if (!UUID_RE.test(postId)) {
+        return res.status(404).json({ error: 'Post not found' });
+      }
+      const { data: own, error: ownError } = await supabase
+        .from('community_posts')
+        .select('id')
+        .eq('company_id', companyContext.companyId)
+        .eq('id', postId)
+        .maybeSingle();
+      if (ownError) {
+        console.error('[community/threads] post lookup failed', ownError.message);
+        return res.status(500).json({ error: 'Failed to load posts' });
+      }
+      if (!own) {
+        return res.status(404).json({ error: 'Post not found' });
+      }
+      scopeIds = [postId];
+    } else {
+      const { data: postRows, error: postsError } = await supabase
+        .from('community_posts')
+        .select('id')
+        .eq('company_id', companyContext.companyId)
+        .order('created_at', { ascending: false })
+        .limit(POST_WINDOW + 1);
+      if (postsError) {
+        console.error('[community/threads] posts lookup failed', postsError.message);
+        return res.status(500).json({ error: 'Failed to load posts' });
+      }
+      const rows = (postRows ?? []) as Array<{ id: string }>;
+      truncated = rows.length > POST_WINDOW;
+      scopeIds = rows.slice(0, POST_WINDOW).map((r) => r.id);
     }
 
     let query = supabase
@@ -59,10 +89,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       query = query.eq('thread_type', threadType);
     }
 
-    if (ids.length === 0) {
-      return res.status(200).json({ threads: [] });
+    if (scopeIds.length === 0) {
+      return res.status(200).json({ threads: [], truncated: false });
     }
-    query = query.in('post_id', ids);
+    query = query.in('post_id', scopeIds);
 
     const { data, error } = await query.order('created_at', { ascending: false }).limit(50);
 
@@ -79,7 +109,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       created_at: r.created_at,
     }));
 
-    return res.status(200).json({ threads });
+    return res.status(200).json({ threads, truncated });
   } catch (err) {
     const message = (err as Error)?.message ?? 'Failed to fetch community threads';
     console.error('[community/threads]', message);
