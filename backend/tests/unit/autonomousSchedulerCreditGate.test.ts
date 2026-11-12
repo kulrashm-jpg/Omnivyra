@@ -94,3 +94,19 @@ it('settings read error -> "Scheduler failed", never a clean zero', async () => 
   expect(r.errors.join(' ')).toMatch(/Scheduler failed: autonomous settings read failed/);
   expect(gen).not.toHaveBeenCalled();
 });
+
+// 05 residual (2026-11-12): a failed pending-expiry update was reported as
+// expired_pending: 0 (a fabricated number). It is now null + an error line.
+it('pending expiry update error -> expired_pending is null (unknown), never 0', async () => {
+  credits.mockResolvedValue({ sufficient: true, balance: 1000, required: 50 });
+  mockClean.delete('pending_campaigns');
+  const r = await runAutonomousScheduler();
+  expect(r.expired_pending).toBeNull();
+  expect(r.errors.join(' ')).toMatch(/pending campaign expiry failed/);
+});
+it('control: clean expiry reports the real count', async () => {
+  credits.mockResolvedValue({ sufficient: true, balance: 1000, required: 50 });
+  mockRows.pending_campaigns = [{ id: 'a' }, { id: 'b' }];
+  const r = await runAutonomousScheduler();
+  expect(r.expired_pending).toBe(2);
+});

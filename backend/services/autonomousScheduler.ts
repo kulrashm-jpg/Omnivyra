@@ -24,7 +24,8 @@ export type SchedulerRunResult = {
   campaigns_auto_activated: number;
   pending_created: number;
   learnings_distilled: number;
-  expired_pending: number;
+  /** null = UNKNOWN (the expiry update failed) - never a fabricated 0. */
+  expired_pending: number | null;
   errors: string[];
 };
 
@@ -108,27 +109,27 @@ async function notifyPendingApproval(companyId: string, pendingId: string, planN
 }
 
 /** Expire pending campaigns past their expiry date. */
-async function expireOldPending(): Promise<number> {
-  // Best-effort housekeeping: a failure is logged, never reported as "0 expired"
-  // silently. Not fatal - the next daily run retries.
+async function expireOldPending(): Promise<number | null> {
+  // Best-effort housekeeping: a failure is logged and reported as null
+  // (unknown), never as "0 expired". Not fatal - the next daily run retries.
   const { data, error } = await ownedDbTable('pending_campaigns')
     .update({ status: 'expired' })
     .eq('status', 'pending')
     .lt('expires_at', new Date().toISOString())
     .select('id');
-  if (error) console.error('[autonomousScheduler] pending expiry failed:', error.message);
+  if (error) { console.error('[autonomousScheduler] pending expiry failed:', error.message); return null; }
   return data?.length ?? 0;
 }
 
 /** Find campaigns that just ended (for learning distillation). */
-async function getRecentlyCompletedCampaigns(): Promise<Array<{ id: string; company_id: string }>> {
+async function getRecentlyCompletedCampaigns(): Promise<Array<{ id: string; company_id: string }> | null> {
   const since = new Date(Date.now() - 25 * 3600_000).toISOString(); // last 25h
   // Best-effort (learning only, no money): log a failed read, never silent.
   const { data, error } = await ownedDbTable('campaigns')
     .select('id, company_id')
     .in('status', ['completed', 'ended'])
     .gte('updated_at', since);
-  if (error) console.error('[autonomousScheduler] completed campaigns read failed:', error.message);
+  if (error) { console.error('[autonomousScheduler] completed campaigns read failed:', error.message); return null; }
   return (data ?? []) as Array<{ id: string; company_id: string }>;
 }
 
@@ -150,10 +151,12 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
     const campaignGenerationCost = await getCreditCost('campaign_generation');
     // ── 1. Expire stale pending campaigns ─────────────────────────────────
     result.expired_pending = await expireOldPending();
+    if (result.expired_pending === null) result.errors.push('pending campaign expiry failed (count unknown)');
 
     // ── 2. Distil learnings from campaigns completed in last 24h ──────────
     const completed = await getRecentlyCompletedCampaigns();
-    for (const { id, company_id } of completed) {
+    if (completed === null) result.errors.push('completed campaigns read failed (learning distillation skipped)');
+    for (const { id, company_id } of completed ?? []) {
       const n = await distilCampaignLearnings(company_id, id).catch(() => 0);
       result.learnings_distilled += n;
     }
