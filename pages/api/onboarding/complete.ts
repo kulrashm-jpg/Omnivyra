@@ -271,7 +271,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // to ask); the admin lets them in through the normal invite flow, choosing the role there.
         // Deduped per prospect email via signup_referrals; best-effort, never throws.
         // Decided BEFORE any write that binds the user to the company.
-        await notifyAdminAndProspectOfClaimedDomain(supabase, {
+        const notice = await notifyAdminAndProspectOfClaimedDomain(supabase, {
           prospectUserId: userId,
           prospectEmail:  authEmail.toLowerCase(),
           emailDomain,
@@ -279,10 +279,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           companyName:    domainCompanyName,
           nowIso:         new Date().toISOString(),
         });
+        // Only claim a request was made when the admin notice actually went out (05 review).
+        const joinRequested = notice.adminNotice === 'sent';
         return res.status(403).json({
-          code:          'INVITE_REQUIRED',
-          joinRequested: true,
-          error:         "Your company already uses Omnivyra; we've asked your admin to let you in.",
+          code:  'INVITE_REQUIRED',
+          joinRequested,
+          error: joinRequested
+            ? "Your company already uses Omnivyra; we've asked your admin to let you in."
+            : 'Your company already uses Omnivyra, but we could not reach your admin. Please ask them to invite you, or contact support.',
         });
       }
       companyId = domainCompanyId;
