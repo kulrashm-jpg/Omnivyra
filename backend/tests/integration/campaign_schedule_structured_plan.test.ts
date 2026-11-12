@@ -41,6 +41,9 @@ jest.mock('../../db/supabaseClient', () => ({
 jest.mock('../../services/structuredPlanScheduler', () => ({
   scheduleStructuredPlan: jest.fn(),
 }));
+// The activation-failed operational event (e9): asserted, and never a real insert.
+const mockRecordOpsEvent = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('../../services/monetizationOpsService', () => ({ recordMonetizationOperationalEvent: (...a: unknown[]) => mockRecordOpsEvent(...a) }));
 jest.mock('../../services/GovernanceEventService', () => ({
   recordGovernanceEvent: jest.fn().mockResolvedValue(undefined),
 }));
@@ -237,13 +240,20 @@ describe('Structured plan scheduling API — unread errors', () => {
     expect(scheduleStructuredPlan).not.toHaveBeenCalled();
   });
 
-  it('activation fails twice: 200 (posts ARE scheduled) with activation.ok false, after one retry', async () => {
-    activationAnswers = [fail, fail];
+  it('activation fails 3 times: 200 (posts ARE scheduled) with activation.ok false, and an alert-ready event', async () => {
+    mockRecordOpsEvent.mockClear();
+    activationAnswers = [fail, fail, fail];
     const res = makeAssertable(createMockRes());
     await handler(req(), res);
     expect(res.status).toHaveBeenCalledWith(200);
     expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ scheduled_count: 2, activation: { ok: false, code: 'CAMPAIGN_ACTIVATION_FAILED' } });
-    expect(activationCalls).toHaveLength(2);
+    expect(activationCalls).toHaveLength(3);
+    expect(mockRecordOpsEvent).toHaveBeenCalledTimes(1);
+    expect(mockRecordOpsEvent.mock.calls[0][0]).toMatchObject({
+      eventName: 'scheduling.campaign_activation_failed', severity: 'ERROR', alertReady: true,
+      organizationId: 'company-123',
+      metadata: expect.objectContaining({ campaign_id: 'campaign-123', source: 'schedule-structured-plan' }),
+    });
   });
 
   it('activation fails once: the retry succeeds and activation.ok is true', async () => {

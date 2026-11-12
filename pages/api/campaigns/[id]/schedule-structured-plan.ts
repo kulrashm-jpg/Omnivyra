@@ -240,7 +240,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // (`activation.ok: false`) and logged at ERROR, and the user is told the posts will not publish
     // until the status is updated (e9 ACCEPTED, 2026-11-12). The way out is "Retry status update"
     // (retry-activation), which runs ONLY this write, never a schedule.
-    const activated = await activateScheduledCampaign(id);
+    const activated = await activateScheduledCampaign(id, { companyId, source: 'schedule-structured-plan' });
     if (!activated.ok) {
       console.error('[schedule-structured-plan] campaign activation failed AFTER scheduling (posts are scheduled)', { campaignId: id, message: activated.error?.message, scheduled_count: result.scheduled_count });
     }

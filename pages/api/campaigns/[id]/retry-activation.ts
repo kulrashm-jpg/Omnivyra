@@ -20,7 +20,7 @@ import { requireCampaignAccess } from '../../../../backend/services/campaignAcce
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
 import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../../backend/services/CampaignFinalizationGuard';
 import { normalizeExecutionState } from '../../../../backend/governance/ExecutionStateMachine';
-import { activateScheduledCampaign } from '../../../../backend/services/campaignScheduleActivation';
+import { activateScheduledCampaign, recordActivationRecovered } from '../../../../backend/services/campaignScheduleActivation';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -67,11 +67,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(409).json({ code: 'NOTHING_SCHEDULED', message: 'This campaign has no scheduled posts to activate. Schedule the plan first.' });
   }
 
-  const activated = await activateScheduledCampaign(id);
+  const companyId = (access as { companyId?: string | null }).companyId ?? null;
+  const activated = await activateScheduledCampaign(id, { companyId, source: 'retry-activation' });
   if (!activated.ok) {
     console.error('[retry-activation] activation failed again', { campaignId: id, message: activated.error?.message });
     return res.status(503).json({ code: 'CAMPAIGN_ACTIVATION_FAILED', message: 'The campaign status still could not be updated. Please try again shortly.' });
   }
+  // The success marker the post-launch sweeper keys on (failed, then fixed), alongside the failure event.
+  await recordActivationRecovered(id, companyId, 'retry-activation');
   return res.status(200).json({ activation: { ok: true }, scheduled_posts: count });
 }
 

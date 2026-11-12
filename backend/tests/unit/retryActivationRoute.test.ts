@@ -50,6 +50,8 @@ jest.mock('../../services/campaignAccessService', () => ({
     return { userId: 'u-1', companyId: 'co-1', campaignId };
   }),
 }));
+const mockRecordOpsEvent = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('../../services/monetizationOpsService', () => ({ recordMonetizationOperationalEvent: (...a: unknown[]) => mockRecordOpsEvent(...a) }));
 jest.mock('../../services/GovernanceLockdownService', () => ({ isGovernanceLocked: jest.fn(async () => locked) }));
 // The scheduler must never be reached from this route: make reaching it LOUD.
 const scheduleStructuredPlan = jest.fn(async (..._args: unknown[]) => { throw new Error('retry-activation must never schedule'); });
@@ -85,8 +87,10 @@ afterEach(() => {
 });
 
 describe('POST /api/campaigns/[id]/retry-activation', () => {
-  it('activates a scheduled campaign with ONLY the activation write', async () => {
+  it('activates a scheduled campaign with ONLY the activation write, and records the RECOVERED marker', async () => {
+    mockRecordOpsEvent.mockClear();
     const res = await call();
+    expect(mockRecordOpsEvent.mock.calls.map((c) => (c[0] as { eventName: string }).eventName)).toEqual(['scheduling.campaign_activation_recovered']);
     expect(res.statusCode).toBe(200);
     expect(res.body).toMatchObject({ activation: { ok: true }, scheduled_posts: 3 });
     expect(activationWrites).toHaveLength(1);
@@ -125,12 +129,14 @@ describe('POST /api/campaigns/[id]/retry-activation', () => {
     expect(activationWrites).toHaveLength(0);
   });
 
-  it('activation fails on both attempts: 503 CAMPAIGN_ACTIVATION_FAILED (retryable)', async () => {
-    activationAnswers = [fail, fail];
+  it('activation fails on all 3 attempts: 503 CAMPAIGN_ACTIVATION_FAILED (retryable), and the failure event', async () => {
+    mockRecordOpsEvent.mockClear();
+    activationAnswers = [fail, fail, fail];
     const res = await call();
     expect(res.statusCode).toBe(503);
     expect(res.body).toMatchObject({ code: 'CAMPAIGN_ACTIVATION_FAILED' });
-    expect(activationWrites).toHaveLength(2);
+    expect(activationWrites).toHaveLength(3);
+    expect(mockRecordOpsEvent.mock.calls.map((c) => (c[0] as { eventName: string }).eventName)).toEqual(['scheduling.campaign_activation_failed']);
   });
 
   it('no access: refused by the access check, nothing read or written', async () => {
