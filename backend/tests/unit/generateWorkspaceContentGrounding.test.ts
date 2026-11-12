@@ -16,7 +16,7 @@ type Row = Record<string, unknown>;
 const completionCalls: Row[] = [];
 let completionOutput = '{"linkedin": "raw linkedin copy"}';
 let plannerStateFixture: Row | null = null;
-let owningCompanyId: string | null = 'co-1';
+let owningCompanyId: string | null = '00000000-0000-4000-8000-0000000000c1';
 
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1' })),
@@ -68,6 +68,24 @@ jest.mock('../../services/creatorAssetPersistenceService', () => ({
 }));
 jest.mock('../../services/campaignAccessService', () => ({
   resolveCampaignCompanyId: jest.fn(async () => owningCompanyId),
+}));
+// S2: the planner snapshot is read through the tenant seam (tenantTable -> ownedDbTable). Company ids
+// are uuids (the seam refuses anything else). The fake records the tenant predicate it was given.
+const mockSeamFilters: Array<Record<string, unknown>> = [];
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbRpc: jest.fn(async () => ({ data: null, error: null })),
+  ownedDbTable: () => {
+    const filters: Record<string, unknown> = {};
+    const b: any = {
+      select: () => b, order: () => b, limit: () => b,
+      eq: (c: string, v: unknown) => { filters[c] = v; return b; },
+      maybeSingle: async () => {
+        mockSeamFilters.push({ ...filters });
+        return { data: plannerStateFixture ? { campaign_snapshot: { planner_state: plannerStateFixture } } : null, error: null };
+      },
+    };
+    return b;
+  },
 }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -144,7 +162,7 @@ const LIBRARY_RECORD = {
 };
 
 const groundedBody = (over: Row = {}): Row => ({
-  companyId: 'co-1',
+  companyId: '00000000-0000-4000-8000-0000000000c1',
   topic: 'Why CFOs adopt AI',
   platforms: ['linkedin'],
   contentTypes: { linkedin: 'carousel' },
@@ -163,7 +181,7 @@ beforeEach(() => {
   completionCalls.length = 0;
   completionOutput = '{"linkedin": "raw linkedin copy"}';
   plannerStateFixture = PLANNER_STATE;
-  owningCompanyId = 'co-1';
+  owningCompanyId = '00000000-0000-4000-8000-0000000000c1';
   libraryRecords = [LIBRARY_RECORD];
 });
 
@@ -299,7 +317,7 @@ describe('P3-C — asset facts and user intent reach the model', () => {
 
 describe('authorization and ownership', () => {
   it('rejects a campaign that belongs to another company (403)', async () => {
-    owningCompanyId = 'other-co';
+    owningCompanyId = '00000000-0000-4000-8000-0000000000c2';
     const res = mockRes();
     await handler(post(groundedBody()), res);
     expect(res.statusCode).toBe(403);
@@ -373,7 +391,7 @@ describe('structured failure instead of ungrounded generation', () => {
 describe('backward compatibility — ungrounded callers unchanged', () => {
   it('without campaignId/slot_id the prompt keeps the pre-P2 CAMPAIGN CONTEXT block', async () => {
     await handler(post({
-      companyId: 'co-1', topic: 'Topic', platforms: ['linkedin'],
+      companyId: '00000000-0000-4000-8000-0000000000c1', topic: 'Topic', platforms: ['linkedin'],
       theme: 'Legacy theme', objective: 'Legacy objective', week: 3,
     }), mockRes());
     const p = userPrompt();
@@ -387,9 +405,18 @@ describe('backward compatibility — ungrounded callers unchanged', () => {
 
   it('campaignId WITHOUT slot_id stays on the legacy path (both are required)', async () => {
     await handler(post({
-      companyId: 'co-1', topic: 'Topic', platforms: ['linkedin'], campaignId: 'camp-a', theme: 'Legacy theme',
+      companyId: '00000000-0000-4000-8000-0000000000c1', topic: 'Topic', platforms: ['linkedin'], campaignId: 'camp-a', theme: 'Legacy theme',
     }), mockRes());
     expect(userPrompt()).toContain('CAMPAIGN CONTEXT:');
     expect(userPrompt()).not.toContain('CAMPAIGN STRATEGY (why this campaign exists)');
+  });
+});
+
+describe('S2 tenant seam', () => {
+  it("the planner snapshot is read through the seam, pinned to the authorized company AND the campaign", async () => {
+    mockSeamFilters.length = 0;
+    await handler(post(groundedBody()), mockRes());
+    expect(mockSeamFilters[0]).toMatchObject({ company_id: '00000000-0000-4000-8000-0000000000c1' });
+    expect(Object.keys(mockSeamFilters[0])).toContain('campaign_id');
   });
 });

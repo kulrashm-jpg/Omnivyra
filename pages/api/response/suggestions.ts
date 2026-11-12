@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 
 const SUGGESTED_INTENTS = [
   'greeting',
@@ -53,16 +54,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       )
     );
 
-    const { data: threads } = await supabase
-      .from('engagement_threads')
-      .select('id')
-      .eq('organization_id', organizationId);
+    // S2: threads and messages are read under the company enforceCompanyAccess authorized.
+    const tenant = tenantContextFor(access, organizationId);
+    const { data: threads } = await tenantTable('engagement_threads', tenant)
+      .select('id');
     const threadIds = (threads ?? []).map((t: { id: string }) => t.id);
 
     let intentCounts: Record<string, number> = {};
     if (threadIds.length > 0) {
-      const { data: messages } = await supabase
-        .from('engagement_messages')
+      const { data: messages } = await tenantTable('engagement_messages', tenant)
         .select('id')
         .in('thread_id', threadIds.slice(0, 500));
       const messageIds = (messages ?? []).map((m: { id: string }) => m.id);

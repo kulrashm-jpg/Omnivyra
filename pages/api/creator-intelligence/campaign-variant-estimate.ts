@@ -21,6 +21,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 import { estimateCampaignVariantBilling } from '../../../backend/services/creator/campaignVariantBillingEstimator';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -58,8 +59,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .filter(Boolean);
 
   try {
-    const { data: campaignRow, error } = await supabase
-      .from('campaign_versions')
+    // S2: the campaign was verified as this company's by the access check; the read is pinned too.
+    const { data: campaignRow, error } = await tenantTable('campaign_versions', tenantContextFor(access, companyId))
       .select('campaign_snapshot')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })

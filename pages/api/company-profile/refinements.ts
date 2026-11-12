@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -18,15 +19,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!access) return;
 
   try {
-    let query = supabase
-      .from('company_profile_refinements')
+    // S2: pinned to the company resolveCompanyAccess authorized.
+    const { data, error } = await tenantTable('company_profile_refinements', tenantContextFor(access, companyId))
       .select('*')
       .order('created_at', { ascending: false })
       .limit(5);
-
-    query = query.eq('company_id', companyId);
-
-    const { data, error } = await query;
     if (error) {
       return res.status(500).json({ error: 'Failed to load refinements' });
     }

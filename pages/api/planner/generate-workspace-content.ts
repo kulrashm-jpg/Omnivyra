@@ -8,6 +8,7 @@ import {
 } from '../../../lib/campaign/generationContext';
 import { resolveCampaignCompanyId } from '../../../backend/services/campaignAccessService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantContextFor, tenantTable, type TenantContext } from '../../../backend/db/tenantTable';
 
 /**
  * POST /api/planner/generate-workspace-content
@@ -50,10 +51,10 @@ import {
  * missing or unreadable snapshot yields null, which the resolver turns into a
  * structured MISSING_SKELETON_CONTEXT rather than ungrounded generation.
  */
-async function loadPlannerState(campaignId: string): Promise<Record<string, unknown> | null> {
+async function loadPlannerState(tenant: TenantContext, campaignId: string): Promise<Record<string, unknown> | null> {
   try {
-    const { data } = await supabase
-      .from('campaign_versions')
+    // S2: pinned to the company whose ownership of the campaign the caller verified.
+    const { data } = await tenantTable('campaign_versions', tenant)
       .select('campaign_snapshot')
       .eq('campaign_id', campaignId)
       .order('version', { ascending: false })
@@ -180,7 +181,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           error: 'That campaign does not belong to this company.',
         });
       }
-      const plannerState = await loadPlannerState(campaignIdIn);
+      const plannerState = await loadPlannerState(tenantContextFor(access, companyId.trim()), campaignIdIn);
       // P3-C — asset FACTS, resolved company-scoped AFTER the tenancy check
       // above. The client never supplies asset identity or contents; it only
       // named the slot. An assignment pointing at an asset outside this
