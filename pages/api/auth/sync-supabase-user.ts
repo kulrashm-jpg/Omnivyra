@@ -20,10 +20,6 @@ import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { extractDomain } from '../../../backend/services/companyMatchService';
 import { grantInitialFreeCredit } from '../../../backend/services/initialFreeCreditService';
-import {
-  sendCompanyAdminReferral,
-  sendInboundSignupNoticeToAdmin,
-} from '../../../backend/services/emailService';
 import { ensureSessionForUser } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { issueMfaIntent, userHasVerifiedMfaFactor } from '../../../backend/security/MfaIntent';
@@ -31,8 +27,6 @@ import { sendAuthError } from '../../../backend/services/sendAuthError';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { incrementAuthMetric } from '../../../backend/services/authMetrics';
 
-
-const SUPPORT_EMAIL = 'support@omnivyra.com';
 
 type SuccessResponse = {
   ok: true;
@@ -529,136 +523,6 @@ async function reconcileInitialFreeCreditForUser(
       email,
       message: err instanceof Error ? err.message : String(err),
     });
-  }
-}
-
-/**
- * Fires when a freshly-verified user's email domain is already claimed by
- * an existing company. We:
- *   1) Email the prospect with the existing admin's contact details so
- *      they know who to ask for access (replaces the old signup-time mail).
- *   2) Email the admin so they know a real, verified person from their
- *      domain just tried to sign up.
- * Both emails are deduped per (prospect, company) via signup_referrals so
- * repeat verifies / bouncing email links don't keep notifying the admin.
- */
-async function notifyAdminAndProspectOfClaimedDomain(input: {
-  prospectUserId: string;
-  prospectEmail: string;
-  emailDomain: string;
-  companyId: string;
-  companyName: string | null;
-  nowIso: string;
-}): Promise<void> {
-  // Find an active COMPANY_ADMIN of the claimed company.
-  const { data: adminRoleRow } = await supabase
-    .from('user_company_roles')
-    .select('user_id, created_at')
-    .eq('company_id', input.companyId)
-    .eq('status', 'active')
-    .eq('role', 'COMPANY_ADMIN')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  const adminUserId = (adminRoleRow as { user_id?: string } | null)?.user_id ?? null;
-  const { data: adminUser } = adminUserId
-    ? await supabase.from('users').select('name, email').eq('id', adminUserId).maybeSingle()
-    : { data: null };
-  const adminEmail = (adminUser as { email?: string } | null)?.email ?? null;
-  const adminName = (adminUser as { name?: string | null } | null)?.name ?? null;
-
-  // Dedupe via signup_referrals — one row per (prospect email). Tracks
-  // separately whether each of the two emails has already gone out.
-  const { data: existingReferral } = await supabase
-    .from('signup_referrals')
-    .select('id, admin_email_sent_at, attempt_count')
-    .eq('email', input.prospectEmail)
-    .maybeSingle();
-
-  let shouldSendProspectEmail = false;
-  let referralId: string | null = (existingReferral as { id?: string } | null)?.id ?? null;
-
-  if (!existingReferral) {
-    const { data: inserted, error: insertErr } = await supabase
-      .from('signup_referrals')
-      .insert({
-        email:            input.prospectEmail,
-        domain:           input.emailDomain,
-        company_id:       input.companyId,
-        admin_user_id:    adminUserId,
-        first_attempt_at: input.nowIso,
-        last_attempt_at:  input.nowIso,
-        attempt_count:    1,
-      })
-      .select('id')
-      .maybeSingle();
-    if (insertErr) {
-      logger.warn('auth_sync_referral_insert_failed', {
-        email:   input.prospectEmail,
-        message: insertErr.message,
-      });
-    } else {
-      shouldSendProspectEmail = true;
-      referralId = (inserted as { id?: string } | null)?.id ?? null;
-    }
-  } else {
-    await supabase
-      .from('signup_referrals')
-      .update({
-        last_attempt_at: input.nowIso,
-        attempt_count:   ((existingReferral as { attempt_count?: number }).attempt_count ?? 1) + 1,
-      })
-      .eq('id', (existingReferral as { id: string }).id);
-    shouldSendProspectEmail = !(existingReferral as { admin_email_sent_at?: string | null }).admin_email_sent_at;
-  }
-
-  // 1) Prospect email — admin contact details (deduped via admin_email_sent_at).
-  if (shouldSendProspectEmail) {
-    try {
-      await sendCompanyAdminReferral(
-        input.prospectEmail,
-        {
-          admin:        adminEmail ? { name: adminName, email: adminEmail } : null,
-          companyName:  input.companyName,
-          supportEmail: SUPPORT_EMAIL,
-        },
-        `company-referral:${input.prospectEmail}`,
-      );
-      if (referralId) {
-        await supabase
-          .from('signup_referrals')
-          .update({ admin_email_sent_at: input.nowIso })
-          .eq('id', referralId);
-      }
-    } catch (err) {
-      logger.warn('auth_sync_prospect_email_send_failed', {
-        email:   input.prospectEmail,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // 2) Admin notification — best-effort; idempotent via Supabase email
-  //    enqueue idempotency key so repeat verifies don't double-send.
-  if (adminEmail) {
-    try {
-      await sendInboundSignupNoticeToAdmin(
-        adminEmail,
-        {
-          prospectEmail: input.prospectEmail,
-          companyName:   input.companyName,
-          supportEmail:  SUPPORT_EMAIL,
-        },
-        `inbound-signup-notice:${input.companyId}:${input.prospectEmail}`,
-      );
-    } catch (err) {
-      logger.warn('auth_sync_admin_notice_send_failed', {
-        adminEmail,
-        prospectEmail: input.prospectEmail,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
   }
 }
 
