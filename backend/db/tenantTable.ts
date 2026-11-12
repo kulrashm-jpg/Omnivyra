@@ -276,6 +276,77 @@ export async function tenantChildTable(table: TenantChildTableName, ctx: TenantC
   };
 }
 
+/** Most parents one batch call may name (a URL-length and blast-radius bound; CHOSEN, not measured). */
+const MAX_BATCH_PARENTS = 200;
+
+/**
+ * A child table across MANY parents of the same tenant (e1 S2, e.g. scheduled_posts for all of a company's
+ * campaigns): ONE parent read verifies the whole set, then every verb is pinned with `.in(via, parents)`.
+ *  - Any foreign, missing or unreadable parent refuses the WHOLE call (TENANT_MISMATCH; never silently dropped).
+ *  - An empty list returns verbs that match nothing (`.in(via, [])`), never "no filter".
+ *  - insert/upsert REQUIRE `via` on each row and refuse a value outside the verified set (there is no single
+ *    parent to stamp); update may not move a row outside the set.
+ *  - More than MAX_BATCH_PARENTS ids -> TENANT_PARENT_FANOUT (split the call).
+ * A direct parent keyed by id is verified in one read; other parent shapes (multi-hop / non-id key) fall back to
+ * verifyParent per id.
+ */
+export async function tenantChildTableOf(table: TenantChildTableName, ctx: TenantContext, parentIds: readonly string[]) {
+  const c = requireCtx(ctx);
+  const spec = childSpec(table);
+  if (!spec) throw new TenantSeamError('TENANT_TABLE_UNKNOWN', `${table} is not a registered child tenant table`);
+  if (!Array.isArray(parentIds) || parentIds.some((p) => typeof p !== 'string' || p.length === 0)) {
+    throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ids must be non-empty strings`);
+  }
+  const ids = [...new Set(parentIds)];
+  if (ids.length > MAX_BATCH_PARENTS) {
+    throw new TenantSeamError('TENANT_PARENT_FANOUT', `${table}: ${ids.length} parents in one call (limit ${MAX_BATCH_PARENTS}; split it)`);
+  }
+  const key = spec.parentKey ?? 'id';
+  if (ids.length > 0) {
+    if (key === 'id' && !childSpec(spec.parent) && spec.parent in TENANT_TABLES) {
+      const { data, error } = await tenantTable(spec.parent as TenantTableName, c).select('id').in('id', ids).limit(MAX_BATCH_PARENTS + 1);
+      if (error) throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ${spec.parent} unreadable (${(error as { code?: string }).code ?? 'error'})`);
+      const found = new Set(((data ?? []) as Row[]).map((r) => String(r.id)));
+      const missing = ids.filter((id) => !found.has(id));
+      if (missing.length) throw new TenantSeamError('TENANT_MISMATCH', `${table}: ${missing.length} of ${ids.length} parents are not in this tenant`);
+    } else {
+      for (const id of ids) await verifyParent(table, c, spec.parent, key, id, 1);
+    }
+  }
+  const via = spec.via;
+  const allowed = new Set(ids);
+  const check = (rows: Row | Row[]): Row | Row[] => {
+    const one = (r: Row): Row => {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) throw new TenantSeamError('TENANT_PAYLOAD_INVALID', 'insert/upsert payload must be an object');
+      if (r[via] === undefined || r[via] === null) throw new TenantSeamError('TENANT_PAYLOAD_INVALID', `${table}: each row must name its parent (${via}) in a batch call`);
+      if (!allowed.has(String(r[via]))) throw new TenantSeamError('TENANT_MISMATCH', `${table}: payload ${via} is not one of the verified parents`);
+      return r;
+    };
+    return Array.isArray(rows) ? rows.map(one) : one(rows);
+  };
+  return {
+    select(columns?: string, options?: { count?: 'exact' | 'planned' | 'estimated'; head?: boolean }) {
+      refuseEmbed(table, columns);
+      return (ownedDbTable(table) as any).select(columns ?? '*', options).in(via, ids);
+    },
+    update(values: Row, options?: Record<string, unknown>) {
+      if (values && Object.prototype.hasOwnProperty.call(values, via) && !allowed.has(String(values[via]))) {
+        throw new TenantSeamError('TENANT_MISMATCH', `${table}: update may not move a row outside the verified parents (${via})`);
+      }
+      return (ownedDbTable(table) as any).update(values, options).in(via, ids);
+    },
+    delete(options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).delete(options).in(via, ids);
+    },
+    insert(values: Row | Row[], options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).insert(check(values), options);
+    },
+    upsert(values: Row | Row[], options?: Record<string, unknown>) {
+      return (ownedDbTable(table) as any).upsert(check(values), options);
+    },
+  };
+}
+
 /**
  * DERIVE-THEN-AUTHORIZE for request handlers keyed by a row id (playbooks/[id], user templates, proposals, ...):
  * "which company owns this row?" - and NOTHING else. It returns only the owning company id (lowercase), never row
