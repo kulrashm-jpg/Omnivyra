@@ -12,7 +12,7 @@ import { supabase } from '../db/supabaseClient';
 
 export type GuardrailResult = {
   allowed: boolean;
-  reason?: 'auto_disabled' | 'daily_platform_limit' | 'per_post_limit' | 'per_evaluation_limit';
+  reason?: 'auto_disabled' | 'daily_platform_limit' | 'per_post_limit' | 'per_evaluation_limit' | 'guardrail_unreadable';
 };
 
 export type CommunityAiAction = {
@@ -36,8 +36,29 @@ function tenMinutesAgo(): string {
 }
 
 /**
+ * Actions that count against a limit: EXECUTED in the window, plus EXECUTING ones (claimed, in flight,
+ * executed_at not yet set). CLASS-2 A19 (e9 sweep): only `executed` rows were counted, so a scheduler
+ * and an auto-rule run (or two schedulers) each saw room and both sent - real replies past the
+ * per-post / daily limit. Counting the in-flight claims closes all but the gap between this check and
+ * the claim; closing that needs an atomic counter (a database function), listed as the follow-up.
+ * Returns null when either count is unreadable: the caller then REFUSES (it used to allow).
+ */
+async function countAgainstLimit(build: (q: any) => any, executedSince: string | null): Promise<number | null> {
+  let executed = build(supabase.from('community_ai_actions').select('id', { count: 'exact', head: true }))
+    .eq('status', 'executed')
+    .not('executed_at', 'is', null);
+  if (executedSince) executed = executed.gte('executed_at', executedSince);
+  const inFlight = build(supabase.from('community_ai_actions').select('id', { count: 'exact', head: true }))
+    .eq('status', 'executing');
+  const [done, flying] = await Promise.all([executed, inFlight]);
+  if (done.error || flying.error || done.count == null || flying.count == null) return null;
+  return done.count + flying.count;
+}
+
+/**
  * Check if an action is allowed by company guardrails.
- * If no guardrail row exists → allow (default open).
+ * If no guardrail row exists → allow (default open). An UNREADABLE guardrail or count refuses
+ * (CLASS-2 A19: every read error used to answer `allowed: true`).
  */
 export async function canExecuteAction(
   action: CommunityAiAction,
@@ -52,8 +73,8 @@ export async function canExecuteAction(
     .maybeSingle();
 
   if (loadError) {
-    console.warn('[executionGuardrail] load error', loadError.message);
-    return { allowed: true };
+    console.warn('[executionGuardrail] guardrails unreadable; refusing (fail closed)', loadError.message);
+    return { allowed: false, reason: 'guardrail_unreadable' };
   }
 
   if (!row) {
@@ -68,17 +89,9 @@ export async function canExecuteAction(
   const orgId = action.organization_id ?? companyId;
 
   if (row.daily_platform_limit != null) {
-    const startToday = startOfToday();
-    const { count, error } = await supabase
-      .from('community_ai_actions')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', orgId)
-      .eq('platform', platform)
-      .eq('status', 'executed')
-      .not('executed_at', 'is', null)
-      .gte('executed_at', startToday);
-
-    if (!error && count != null && count >= row.daily_platform_limit) {
+    const count = await countAgainstLimit((q) => q.eq('organization_id', orgId).eq('platform', platform), startOfToday());
+    if (count === null) return { allowed: false, reason: 'guardrail_unreadable' };
+    if (count >= row.daily_platform_limit) {
       return { allowed: false, reason: 'daily_platform_limit' };
     }
   }
@@ -87,33 +100,20 @@ export async function canExecuteAction(
     (action.action_type || '').toString().toLowerCase() === 'reply' &&
     row.per_post_reply_limit != null
   ) {
-    const { count, error } = await supabase
-      .from('community_ai_actions')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', orgId)
-      .eq('platform', platform)
-      .eq('target_id', action.target_id)
-      .eq('action_type', 'reply')
-      .eq('status', 'executed')
-      .not('executed_at', 'is', null);
-
-    if (!error && count != null && count >= row.per_post_reply_limit) {
+    const count = await countAgainstLimit(
+      (q) => q.eq('organization_id', orgId).eq('platform', platform).eq('target_id', action.target_id).eq('action_type', 'reply'),
+      null,
+    );
+    if (count === null) return { allowed: false, reason: 'guardrail_unreadable' };
+    if (count >= row.per_post_reply_limit) {
       return { allowed: false, reason: 'per_post_limit' };
     }
   }
 
   if (context.source === 'evaluation' && row.per_evaluation_limit != null) {
-    const windowStart = tenMinutesAgo();
-    const { count, error } = await supabase
-      .from('community_ai_actions')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', orgId)
-      .eq('platform', platform)
-      .eq('status', 'executed')
-      .not('executed_at', 'is', null)
-      .gte('executed_at', windowStart);
-
-    if (!error && count != null && count >= row.per_evaluation_limit) {
+    const count = await countAgainstLimit((q) => q.eq('organization_id', orgId).eq('platform', platform), tenMinutesAgo());
+    if (count === null) return { allowed: false, reason: 'guardrail_unreadable' };
+    if (count >= row.per_evaluation_limit) {
       return { allowed: false, reason: 'per_evaluation_limit' };
     }
   }

@@ -727,6 +727,8 @@ const runExecution = async (
     organization_id: action.organization_id,
     resource_key: 'automation_executions',
     projected_increment: 1,
+    // CLASS-2 A20: a real reply / DM is never sent on an unverifiable plan usage.
+    failClosed: true,
   });
   if (!enforcement.allowed) {
     return {
