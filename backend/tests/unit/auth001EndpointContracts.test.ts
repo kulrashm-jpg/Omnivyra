@@ -22,6 +22,7 @@ describe('AUTH-001 §1 — app-level email-verification gate', () => {
       'pages/api/onboarding/complete.ts',
       'pages/api/onboarding/profile.ts',
       'pages/api/onboarding/request-company-access.ts',
+      'pages/api/onboarding/revalidate-signup.ts',
       'pages/api/auth/verify-email.ts',
     ]) {
       const src = read(file);
@@ -95,11 +96,14 @@ describe('AUTH-001 §9/§10 — events + correlation persisted end to end', () =
   test('signup.ts mints/reuses the journey ID and persists it on the intent', () => {
     containsAll(read('pages/api/auth/signup.ts'), [
       'ensureSignupCorrelationId',
-      'correlation_id:           correlationId',
+      // P1: the intent is minted by the shared producer, which persists the ID.
+      'mintSignupIntent({',
+      '    correlationId,',
       "emitOutcome('SignupAttempted', 'allowed')",
       "emitOutcome('SignupValidated', 'allowed')",
       'signupRejectionEventFor',
     ]);
+    expect(read('backend/services/signupIntentMint.ts')).toContain('correlation_id:           correlationId');
   });
 
   test('verification, onboarding, company, and credit stages all emit journey events', () => {
