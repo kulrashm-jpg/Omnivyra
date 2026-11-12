@@ -75,6 +75,22 @@ async function isBlocked(): Promise<boolean> {
   return rows[0]?.wait_event_type === 'Lock';
 }
 
+// Isolation between tests: the two-connection tests COMMIT claims, and an `executing` (or executed-today) row
+// counts against every limit for the rest of the suite - A19 counts in-flight sends by design. Before each test,
+// this suite's own earlier actions are settled to `failed`, so a test sees only the rows it creates.
+// (Found on the CI-faithful replay, CI 43193095547: the no-lock CONTROL and two parity tests were refused
+// GUARDRAIL_DAILY_PLATFORM_LIMIT by an earlier test's committed claim.)
+beforeEach(async () => {
+  if (created.length === 0) return;
+  await db.query(
+    `UPDATE public.community_ai_actions SET status = 'failed', executed_at = NULL
+      WHERE id = ANY($1::uuid[]) AND status IN ('executing', 'executed', 'approved')`, [created]);
+  const { rows } = await db.query(
+    `SELECT count(*)::int AS n FROM public.community_ai_actions
+      WHERE organization_id = $1 AND (status = 'executing' OR (status = 'executed' AND executed_at IS NOT NULL))`, [ORG_A]);
+  if (rows[0].n !== 0) throw new Error(`isolation: ${rows[0].n} in-flight/executed actions of ORG_A remain`);
+});
+
 beforeAll(async () => {
   await db.query('BEGIN');
   await seedTenants();
@@ -188,7 +204,13 @@ describe('A19 parity with canExecuteAction (single connection, rolled back)', ()
       const recent = await action();
       await setStatus(recent, 'executed', new Date(Date.now() - 5 * 60_000).toISOString());
       expect((await within(db, await action(), 'evaluation', 'auto')).code).toBe('GUARDRAIL_PER_EVALUATION_LIMIT');
-      expect((await within(db, await action(), 'scheduler')).claimed).toBe(true);
+      // The scheduler source is not subject to the per-evaluation limit ...
+      const viaScheduler = await action();
+      expect((await within(db, viaScheduler, 'scheduler')).claimed).toBe(true);
+      // ... but its claim leaves the row EXECUTING, and an in-flight row counts for every limit (A19 by design).
+      // Settle it, so the next claim tests only the 10-minute window of `recent`.
+      expect(await statusOf(db, viaScheduler)).toBe('executing');
+      await setStatus(viaScheduler, 'failed', null);
       await setStatus(recent, 'executed', new Date(Date.now() - 11 * 60_000).toISOString());
       expect((await within(db, await action(), 'evaluation', 'auto')).claimed).toBe(true);
     });

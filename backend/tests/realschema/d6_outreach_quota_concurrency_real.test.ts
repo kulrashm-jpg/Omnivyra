@@ -12,18 +12,23 @@
  * the migration pins its own body hashes, so a whole-file mutant would be refused, a false kill) is
  * replaced with a copy WITHOUT the lock line: connection 2 does not wait and both are granted.
  *
- * Window: every call passes p_since = this suite's start, so attempts other committing suites left
- * in the shared tenant are outside it and the counts are exact. Each arrangement is asserted before
- * the subject. This file COMMITS its rows (two connections), so it runs in the committing pass.
+ * Window: every call passes p_since = THIS TEST's start (the database clock, taken in beforeEach), so
+ * attempts left by earlier tests - and by other committing suites in the shared tenant - are outside it
+ * and the counts are exact. outreach_attempts is APPEND-ONLY in the real schema (ws3_append_only trigger)
+ * and outreach_tasks is RESTRICT-referenced by it, so attempts are never deleted: the window, not a
+ * DELETE, isolates the tests (found on the CI-faithful replay, CI 43193095547). Each arrangement is
+ * asserted before the subject. This file COMMITS its rows (two connections), so it runs in the
+ * committing pass.
  */
 import fs from 'fs';
 import path from 'path';
 
 import { Client } from 'pg';
-import { db, seedTenants, ORG_B } from './setup';
+import { db, seedTenants, ORG_A, ORG_B } from './setup';
 
 const ORG = ORG_B;
-const SINCE = new Date().toISOString();
+/** This test's window start (database clock), set in beforeEach. */
+let SINCE = '';
 const MIGRATION = fs.readFileSync(path.resolve(__dirname, '../../../supabase/migrations/20270217000009_outreach_quota_atomic_consume.sql'), 'utf8');
 function consumeSql(): string {
   const start = MIGRATION.indexOf('CREATE OR REPLACE FUNCTION public.outreach_quota_consume(');
@@ -92,18 +97,21 @@ afterAll(async () => {
     await c1.query(consumeSql()); // a failed control must not leave the no-lock copy installed
     await c1.query(`DELETE FROM public.outreach_quota_reservations WHERE company_id = $1`, [ORG]);
     if (tasks.length) {
-      await c1.query(`DELETE FROM public.outreach_attempts WHERE task_id = ANY($1::uuid[])`, [tasks]);
-      await c1.query(`DELETE FROM public.outreach_tasks WHERE id = ANY($1::uuid[])`, [tasks]);
+      // Attempts are append-only, and a task with an attempt is RESTRICT-protected: only attempt-less tasks go.
+      await c1.query(`DELETE FROM public.outreach_tasks t WHERE t.id = ANY($1::uuid[])
+                        AND NOT EXISTS (SELECT 1 FROM public.outreach_attempts a WHERE a.task_id = t.id)`, [tasks]);
     }
   }
   await c1?.end().catch(() => undefined);
   await c2?.end().catch(() => undefined);
 });
-// Every case starts with NO reservation and NO attempt of this suite's tasks in the window (the
-// tenant limit counts every attempt in the window - one left by an earlier case would skew it).
+// Every case starts with NO reservation and NO attempt in ITS window (the tenant limit counts every
+// attempt in the window - one left by an earlier case would skew it). The window opens strictly after
+// every earlier commit: a short pause, then the database clock.
 beforeEach(async () => {
   await clearReservations();
-  if (tasks.length) await db.query(`DELETE FROM public.outreach_attempts WHERE task_id = ANY($1::uuid[])`, [tasks]);
+  await new Promise((r) => setTimeout(r, 20));
+  SINCE = ((await db.query('SELECT clock_timestamp() AS t')).rows[0].t as Date).toISOString();
   const { rows } = await db.query(`SELECT count(*)::int AS n FROM public.outreach_attempts WHERE company_id = $1 AND started_at >= $2::timestamptz`, [ORG, SINCE]);
   expect(rows[0].n).toBe(0); // arrangement: an empty window
 });
@@ -142,7 +150,7 @@ describe('D6 outreach_quota_consume - single connection', () => {
     const g1 = await consume(db, lead, await newTask(lead), 1, null);
     expect(g1.granted).toBe(true);
     expect((await consume(db, lead, await newTask(lead), 1, null)).granted).toBe(false);
-    const other = await db.query(`SELECT public.outreach_quota_release($1, $2) AS ok`, [g1.reservation_id, 'another-company']);
+    const other = await db.query(`SELECT public.outreach_quota_release($1, $2) AS ok`, [g1.reservation_id, ORG_A]);
     expect(other.rows[0].ok).toBe(false);
     const own = await db.query(`SELECT public.outreach_quota_release($1, $2) AS ok`, [g1.reservation_id, ORG]);
     expect(own.rows[0].ok).toBe(true);
@@ -157,8 +165,8 @@ describe('D6 outreach_quota_consume - single connection', () => {
     const { rows } = await db.query(`SELECT
       has_table_privilege('anon', 'public.outreach_quota_reservations', 'SELECT') AS a_sel,
       has_table_privilege('authenticated', 'public.outreach_quota_reservations', 'INSERT') AS u_ins,
-      has_function_privilege('anon', 'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)', 'EXECUTE') AS a_exec,
-      has_function_privilege('service_role', 'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)', 'EXECUTE') AS s_exec`);
+      has_function_privilege('anon', 'public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)', 'EXECUTE') AS a_exec,
+      has_function_privilege('service_role', 'public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)', 'EXECUTE') AS s_exec`);
     expect(rows[0]).toEqual({ a_sel: false, u_ins: false, a_exec: false, s_exec: true });
   });
 });
@@ -182,7 +190,7 @@ describe('D6 outreach_quota_consume - two connections', () => {
     await db.query(consumeWithoutLock());
     try {
       const { rows } = await db.query(`SELECT position('CONTROL: no lock' in prosrc) > 0 AS mutated FROM pg_proc
-                                        WHERE oid = to_regprocedure('public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)')`);
+                                        WHERE oid = to_regprocedure('public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)')`);
       expect(rows[0].mutated).toBe(true); // arrangement: the no-lock copy IS installed
       await c1.query('BEGIN');
       expect((await consume(c1, lead, t1, 1, null)).granted).toBe(true);
@@ -197,7 +205,7 @@ describe('D6 outreach_quota_consume - two connections', () => {
       await db.query(consumeSql());
     }
     const { rows } = await db.query(`SELECT position('CONTROL: no lock' in prosrc) > 0 AS mutated FROM pg_proc
-                                      WHERE oid = to_regprocedure('public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)')`);
+                                      WHERE oid = to_regprocedure('public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)')`);
     expect(rows[0].mutated).toBe(false); // restored
   });
 });

@@ -297,7 +297,7 @@ export async function proofOperationalSafety(): Promise<void> {
       // so a limiter that silently started granting would be invisible behind
       // that. The limiter must refuse on its own terms.
       const reservation = await reserveQuota({
-        companyId: s.co, leadId: 'L1', at: NOW, dailyLimitTenant: 1, dailyLimitLead: 1,
+        companyId: s.co, leadId: 'L1', taskId: s.taskId, at: NOW, dailyLimitTenant: 1, dailyLimitLead: 1,
       });
       check('an unreadable limiter REFUSES rather than assuming capacity',
         reservation.granted === false, `granted=${reservation.granted}: ${reservation.reason}`);

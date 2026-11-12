@@ -21,6 +21,10 @@
 -- attempt (and never released) frees its unit after the TTL instead of holding it for ever (e9).
 -- Every mismatch errs toward COUNTING a reservation (refusing sooner), never toward a second grant.
 --
+-- TYPES follow the real schema: outreach_tasks/outreach_attempts.company_id are uuid (retyped by
+-- 20261011000000_a3_outreach_person_anchor) and lead_id stays text, so the reservation's company_id and
+-- p_company_id are uuid (a text company id here raised 42883 uuid = text on the CI-faithful replay).
+--
 -- Used ONLY when Redis is unusable; the Redis path is unchanged. The table holds no message
 -- content: ids, tenant, lead and times.
 --
@@ -45,18 +49,18 @@ BEGIN
   -- as this migration makes them (a re-apply) - the table's column names, TYPES and NOT NULL, its FK,
   -- and each function's BODY (md5 of prosrc, LF or CRLF). to_reg* only: the casts raise on absence.
   IF (to_regclass('public.outreach_quota_reservations') IS NOT NULL
-      OR to_regprocedure('public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)') IS NOT NULL
-      OR to_regprocedure('public.outreach_quota_release(uuid, text)') IS NOT NULL)
+      OR to_regprocedure('public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)') IS NOT NULL
+      OR to_regprocedure('public.outreach_quota_release(uuid, uuid)') IS NOT NULL)
      AND NOT (
       (SELECT array_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
                         ORDER BY a.attname) FROM pg_attribute a
         WHERE a.attrelid = to_regclass('public.outreach_quota_reservations') AND a.attnum > 0 AND NOT a.attisdropped)
-        = ARRAY['company_id text not null', 'id uuid not null', 'lead_id text not null', 'released_at timestamp with time zone',
+        = ARRAY['company_id uuid not null', 'id uuid not null', 'lead_id text not null', 'released_at timestamp with time zone',
                 'reserved_at timestamp with time zone not null', 'task_id uuid not null']
       AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('public.outreach_quota_reservations')
                    AND conname = 'outreach_quota_reservations_task_fk')
-      AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)') AND md5(p.prosrc) = ANY (ARRAY['bed8abcbdd7ca1b61d2a5ea53499bc97', '81ede0e1d63b0f71cb1f4b1173a0bfbf']))
-      AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.outreach_quota_release(uuid, text)') AND md5(p.prosrc) = ANY (ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4']))) THEN
+      AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)') AND md5(p.prosrc) = ANY (ARRAY['3a9b03d037ec06dcb7d629bfba2e6aaf', '545c906bdc14c73939ef09ed414b0472']))
+      AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.outreach_quota_release(uuid, uuid)') AND md5(p.prosrc) = ANY (ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4']))) THEN
     RAISE EXCEPTION 'OQAC preflight: outreach_quota_reservations / outreach_quota_consume / outreach_quota_release partly exist or differ - they predate this migration; refusing (its rollback must never drop them)';
   END IF;
 END
@@ -65,7 +69,7 @@ $preflight$;
 
 CREATE TABLE IF NOT EXISTS public.outreach_quota_reservations (
   id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id  text        NOT NULL,
+  company_id  uuid        NOT NULL,
   lead_id     text        NOT NULL,
   task_id     uuid        NOT NULL
     CONSTRAINT outreach_quota_reservations_task_fk
@@ -116,7 +120,7 @@ GRANT SELECT, INSERT, UPDATE ON TABLE public.outreach_quota_reservations TO serv
 
 
 CREATE OR REPLACE FUNCTION public.outreach_quota_consume(
-  p_company_id    text,
+  p_company_id    uuid,
   p_lead_id       text,
   p_task_id       uuid,
   p_since         timestamptz,
@@ -145,7 +149,7 @@ BEGIN
   END IF;
 
   -- One tenant at a time: a concurrent consume for this tenant waits here, then counts our row.
-  PERFORM pg_advisory_xact_lock(hashtextextended('ws3_outreach_quota:' || p_company_id, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('ws3_outreach_quota:' || p_company_id::text, 0));
 
   v_live_after := greatest(p_since, now() - make_interval(secs => p_ttl_seconds));
 
@@ -185,14 +189,14 @@ BEGIN
 END
 $fn$;
 
-COMMENT ON FUNCTION public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer) IS
+COMMENT ON FUNCTION public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer) IS
   'WS-3 database limiter layer: atomically (per-tenant advisory lock) count attempts + live '
   'reservations and, under both limits, write a reservation. granted=false writes nothing.';
 
 
 CREATE OR REPLACE FUNCTION public.outreach_quota_release(
   p_reservation_id uuid,
-  p_company_id     text
+  p_company_id     uuid
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -210,15 +214,15 @@ BEGIN
 END
 $fn$;
 
-COMMENT ON FUNCTION public.outreach_quota_release(uuid, text) IS
+COMMENT ON FUNCTION public.outreach_quota_release(uuid, uuid) IS
   'Release a WS-3 database-layer quota reservation whose dispatch did not proceed. true = released now.';
 
 
-REVOKE ALL ON FUNCTION public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)
+REVOKE ALL ON FUNCTION public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer) TO service_role;
-REVOKE ALL ON FUNCTION public.outreach_quota_release(uuid, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.outreach_quota_release(uuid, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer) TO service_role;
+REVOKE ALL ON FUNCTION public.outreach_quota_release(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.outreach_quota_release(uuid, uuid) TO service_role;
 
 
 DO $verify$
@@ -233,8 +237,8 @@ DECLARE
   v_secdef    boolean;
   v_config    text[];
   v_fns       text[] := ARRAY[
-    'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)',
-    'public.outreach_quota_release(uuid, text)'];
+    'public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)',
+    'public.outreach_quota_release(uuid, uuid)'];
   v_sig       text;
 BEGIN
   IF to_regclass('public.outreach_quota_reservations') IS NULL THEN
@@ -298,7 +302,7 @@ BEGIN
     SELECT p.prosecdef, p.proconfig INTO v_secdef, v_config FROM pg_proc p WHERE p.oid = v_fn;
     -- The installed body matches the hashes this migration pins (both DERIVED from it, LF-normalised).
     IF NOT EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN LATERAL (SELECT replace(p.prosrc, E'\r\n', E'\n') AS lf) n
-                  WHERE p.oid = v_fn AND md5(n.lf) = ((CASE v_sig WHEN 'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)' THEN ARRAY['bed8abcbdd7ca1b61d2a5ea53499bc97', '81ede0e1d63b0f71cb1f4b1173a0bfbf'] ELSE ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4'] END))[1] AND md5(replace(n.lf, E'\n', E'\r\n')) = ((CASE v_sig WHEN 'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)' THEN ARRAY['bed8abcbdd7ca1b61d2a5ea53499bc97', '81ede0e1d63b0f71cb1f4b1173a0bfbf'] ELSE ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4'] END))[2]) THEN
+                  WHERE p.oid = v_fn AND md5(n.lf) = ((CASE v_sig WHEN 'public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)' THEN ARRAY['3a9b03d037ec06dcb7d629bfba2e6aaf', '545c906bdc14c73939ef09ed414b0472'] ELSE ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4'] END))[1] AND md5(replace(n.lf, E'\n', E'\r\n')) = ((CASE v_sig WHEN 'public.outreach_quota_consume(uuid, text, uuid, timestamptz, integer, integer, integer)' THEN ARRAY['3a9b03d037ec06dcb7d629bfba2e6aaf', '545c906bdc14c73939ef09ed414b0472'] ELSE ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4'] END))[2]) THEN
       RAISE EXCEPTION 'OQAC postcondition: the installed body of % does not match the hashes in this migration - update them with the body', v_sig;
     END IF;
     IF v_secdef THEN

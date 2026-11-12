@@ -175,7 +175,9 @@ export async function proofRedis(): Promise<void> {
   await r.del(tenantKey);
   await r.del(leadKey);
 
-  const base = { companyId: co, leadId: 'L1', at: NOW, dailyLimitTenant: 3, dailyLimitLead: 3 };
+  // taskId (required since D6, 20270217000009): the database layer keys its reservation to the task. This proof
+  // exercises the REDIS fast path, which never writes that table, so a fixed placeholder id is enough here.
+  const base = { companyId: co, leadId: 'L1', taskId: '00000000-0000-4000-8000-0000000000d6', at: NOW, dailyLimitTenant: 3, dailyLimitLead: 3 };
 
   const r1 = await reserveQuota(base);
   check('a reservation is granted through the Redis fast path', r1.granted && r1.layer === 'redis', `${r1.layer}: ${r1.reason}`);
