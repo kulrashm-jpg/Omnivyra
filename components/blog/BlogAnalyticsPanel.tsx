@@ -603,7 +603,14 @@ export default function BlogAnalyticsPanel({ accountId }: Props) {
       </div>
     );
   }
-  if (error || !data) return null;
+  // An unreadable dashboard says so - it never renders as an empty one or vanishes (e9, 2026-11-12).
+  if (error || !data) {
+    return (
+      <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-6 text-sm text-amber-800">
+        Blog analytics are temporarily unavailable. Your numbers are not zero - we could not load them. Please try again later.
+      </div>
+    );
+  }
 
   // Cold start
   if (data.cold_start) {

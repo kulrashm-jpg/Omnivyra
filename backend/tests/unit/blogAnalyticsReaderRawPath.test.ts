@@ -4,11 +4,17 @@
  * retired; with no daily rows the totals come from the raw events. The reader's preference for the
  * rollup is all-or-nothing - the second test pins that hazard, so re-introducing a partial rollup
  * without fixing the reader is caught here.
+ *
+ * Every read's error is read (e9): a failed read answers 500 ANALYTICS_UNAVAILABLE, never 0 views.
  */
 import fs from 'fs';
 import path from 'path';
 
-const mockDb = { daily: [] as Record<string, unknown>[], pageviews: [] as Record<string, unknown>[], leaves: [] as Record<string, unknown>[] };
+const mockDb = {
+  daily: [] as Record<string, unknown>[], pageviews: [] as Record<string, unknown>[], leaves: [] as Record<string, unknown>[],
+  /** Which read fails: 'daily' | 'pageview' | 'pageleave', optionally ':prior' for the previous-7d window only. */
+  fail: null as string | null,
+};
 
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../services/userContextService', () => ({ enforceCompanyAccess: async () => ({ userId: 'u1' }) }));
@@ -19,8 +25,13 @@ jest.mock('../../db/supabaseClient', () => ({
       const b: any = {};
       b.select = () => b;
       b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
-      b.gte = () => b; b.lt = () => b; b.order = () => b;
+      b.gte = () => b; b.order = () => b;
+      b.lt = () => { filters.prior = true; return b; };
       b.then = (res: (v: unknown) => unknown) => {
+        const name = table === 'blog_analytics_daily' ? 'daily' : String(filters.event_type);
+        if (mockDb.fail === name || mockDb.fail === `${name}:${filters.prior ? 'prior' : 'x'}`) {
+          return Promise.resolve({ data: null, error: { message: 'canceling statement due to statement timeout' } }).then(res);
+        }
         const data = table === 'blog_analytics_daily' ? mockDb.daily
           : filters.event_type === 'pageview' ? mockDb.pageviews : mockDb.leaves;
         return Promise.resolve({ data, error: null }).then(res);
@@ -42,6 +53,7 @@ async function call() {
 }
 
 beforeEach(() => {
+  mockDb.fail = null;
   mockDb.daily = [];
   mockDb.pageviews = Array.from({ length: 7 }, () => ({ url_slug: 'post-a' }));
   mockDb.leaves = [{ url_slug: 'post-a', time_on_page: 30, scroll_depth: 50 }];
@@ -67,4 +79,26 @@ it('the retired cron route is gone, and nothing schedules it', () => {
   expect(vercel).not.toContain('aggregate-blog-analytics');
   const allowlist = fs.readFileSync(path.join(root, 'scripts/route-auth-allowlist.json'), 'utf8');
   expect(allowlist).not.toContain('aggregate-blog-analytics');
+});
+
+describe('a failed read is UNAVAILABLE, never zero views', () => {
+  let errSpy: jest.SpyInstance;
+  beforeEach(() => { errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
+  afterEach(() => errSpy.mockRestore());
+
+  it.each(['daily', 'pageview', 'pageleave', 'pageview:prior', 'pageleave:prior'])('%s read fails -> 500 ANALYTICS_UNAVAILABLE, logged', async (which) => {
+    mockDb.fail = which;
+    const res = await call();
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toEqual(expect.objectContaining({ code: 'ANALYTICS_UNAVAILABLE' }));
+    expect(res.body.total_views).toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith('[track/analytics] read failed', expect.objectContaining({ account_id: 'co-a' }));
+  });
+
+  it('NEGATIVE CONTROL: every read succeeds -> 200 with the real totals, nothing logged', async () => {
+    const res = await call();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.total_views).toBe(7);
+    expect(errSpy).not.toHaveBeenCalled();
+  });
 });

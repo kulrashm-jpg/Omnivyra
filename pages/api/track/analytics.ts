@@ -18,6 +18,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * for the whole window - so a rollup that covers only some days (and never today) would UNDERCOUNT.
  * Re-introduce a rollup only together with a reader that uses daily rows for complete past days and
  * raw events for the rest (and a backfill).
+ *
+ * UNREADABLE != ZERO (e9, 2026-11-12): every query's error is read. A failed read answers 500
+ * ANALYTICS_UNAVAILABLE and the panel says so - it never renders "0 views" or a fake trend from a
+ * read that did not happen.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -165,6 +169,19 @@ function aggregateSlice(pageviews: any[], leaves: any[]) {
   return { totalViews, avgTime, avgScroll, pages };
 }
 
+/** The rows of a read, or a throw naming it - a failed read is never an empty result. */
+function rowsOf<T>(result: { data: T[] | null; error: { message?: string } | null }, what: string): T[] {
+  if (result.error) throw new AnalyticsReadError(what, result.error.message ?? 'unknown error');
+  return result.data ?? [];
+}
+
+class AnalyticsReadError extends Error {
+  constructor(readonly what: string, detail: string) {
+    super(`${what}: ${detail}`);
+    this.name = 'AnalyticsReadError';
+  }
+}
+
 function pctChange(cur: number, prev: number): number | null {
   if (prev === 0) return null;
   return Math.round(((cur - prev) / prev) * 100);
@@ -173,6 +190,16 @@ function pctChange(cur: number, prev: number): number | null {
 // ── Handler ────────────────────────────────────────────────────────────────
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    return await analyticsHandler(req, res);
+  } catch (err) {
+    if (!(err instanceof AnalyticsReadError)) throw err;
+    console.error('[track/analytics] read failed', { account_id: req.query.account_id, read: err.what, error: err.message });
+    return res.status(500).json({ code: 'ANALYTICS_UNAVAILABLE', error: 'Blog analytics are temporarily unavailable.' });
+  }
+}
+
+async function analyticsHandler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -190,19 +217,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const prev7Start = new Date(now - 14 * 86_400_000).toISOString();
 
   // ── Try pre-aggregated daily table first ──────────────────────────────
-  const { data: dailyRows } = await supabase
+  const dailyRows = rowsOf(await supabase
     .from('blog_analytics_daily')
     .select('url_slug, views, avg_time, avg_scroll, sessions, date')
     .eq('account_id', accountId)
     .gte('date', since.slice(0, 10))
-    .order('date', { ascending: false });
+    .order('date', { ascending: false }), 'blog_analytics_daily');
 
   let totalViews: number;
   let avgTime:    number;
   let avgScroll:  number;
   let rawPages:   Array<{ slug: string; views: number; avg_time: number; avg_scroll: number }>;
 
-  if (dailyRows && dailyRows.length > 0) {
+  if (dailyRows.length > 0) {
     // Use pre-aggregated data
     const slugMap = new Map<string, { views: number; times: number[]; scrolls: number[] }>();
     for (const r of dailyRows as any[]) {
@@ -225,7 +252,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       supabase.from('blog_analytics').select('url_slug').eq('account_id', accountId).eq('event_type', 'pageview').gte('created_at', since),
       supabase.from('blog_analytics').select('url_slug, time_on_page, scroll_depth').eq('account_id', accountId).eq('event_type', 'pageleave').gte('created_at', since),
     ]);
-    const agg = aggregateSlice(pvRes.data ?? [], lvRes.data ?? []);
+    const agg = aggregateSlice(rowsOf(pvRes, 'pageviews'), rowsOf(lvRes, 'pageleaves'));
     totalViews = agg.totalViews; avgTime = agg.avgTime; avgScroll = agg.avgScroll; rawPages = agg.pages;
   }
 
@@ -237,8 +264,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     supabase.from('blog_analytics').select('url_slug, time_on_page, scroll_depth').eq('account_id', accountId).eq('event_type', 'pageleave').gte('created_at', prev7Start).lt('created_at', cur7Start),
   ]);
 
-  const cur  = aggregateSlice(curPv.data  ?? [], curLv.data  ?? []);
-  const prev = aggregateSlice(prevPv.data ?? [], prevLv.data ?? []);
+  const cur  = aggregateSlice(rowsOf(curPv, 'pageviews 7d'),       rowsOf(curLv, 'pageleaves 7d'));
+  const prev = aggregateSlice(rowsOf(prevPv, 'pageviews prior 7d'), rowsOf(prevLv, 'pageleaves prior 7d'));
 
   const delta: PeriodDelta = {
     views_delta:  pctChange(cur.totalViews, prev.totalViews),
