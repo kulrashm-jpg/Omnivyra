@@ -135,14 +135,15 @@ export async function grantInitialFreeCredit(input: {
     const ledgerRow = existingLedgerRow as { id: string; free_delta?: number | null; category?: string | null };
     const ledgerCredits = Math.abs(ledgerRow.free_delta ?? credits);
 
-    // Repair miscategorized ledger row (legacy default 'paid' bug).
+    // Miscategorized ledger row (legacy default 'paid' bug): REPORTED, never
+    // rewritten. credit_transactions is immutable in prod
+    // (credit_transactions_immutable_update, 83/C17) - the old UPDATE failed on
+    // every login and could never repair anything. The label is bookkeeping:
+    // balances live on organization_credits, not on this column.
     // best-effort repairs below: the credit was already granted; each failure is
     // logged so the drift stays visible (and the next login retries it).
     if (ledgerRow.category !== 'free') {
-      const { error: catErr } = await ownedDbTable('credit_transactions')
-        .update({ category: 'free' })
-        .eq('id', ledgerRow.id);
-      if (catErr) logger.warn('initial_free_credit_category_repair_failed', { orgId: input.orgId, message: catErr.message });
+      logger.warn('initial_free_credit_ledger_category_mismatch', { orgId: input.orgId, ledgerId: ledgerRow.id, category: ledgerRow.category ?? null });
     }
 
     // Repair missing claim row.
