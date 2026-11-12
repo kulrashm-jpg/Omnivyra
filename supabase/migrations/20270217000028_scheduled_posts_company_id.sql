@@ -7,8 +7,12 @@
 -- campaign or its social account, and a live defect (fixed on fix/schedule-social-account-company-
 -- 20261113) attached a post to ANOTHER company's social account, publishing company A's post through
 -- company B's account. The tenant seam (S2) also needs a column to key on: campaign-less posts are
--- unreachable through the campaign parent. This makes the company explicit and the defect class
--- impossible at the database level.
+-- unreachable through the campaign parent. This makes the company explicit, and makes the defect
+-- impossible AT WRITE TIME of the post. NOT covered (05 review): a social account can later move to
+-- another company (OAuth re-connect writes social_accounts.company_id), and a post that already
+-- carries an account is published without re-resolving it. Closing that is an application change
+-- this column enables (compare the persisted account's company with scheduled_posts.company_id at
+-- publish time), tracked as a follow-up, not part of this migration.
 --
 -- THE THREE POPULATIONS (each backfilled from one source; any row that cannot be derived honestly
 -- makes the preflight RAISE, listing ids; a NULL company is never written):
@@ -36,6 +40,11 @@
 -- scheduled_posts goes live. The fast-track code (resolver) should be deployed first so no new
 -- cross-company row is written between 83's counts and this apply; the preflight refuses one anyway.
 --
+-- PROVENANCE (05 review). The preflight REFUSES a scheduled_posts.company_id column that exists
+-- WITHOUT this migration's guard function: such a column was not created here, and adopting it would
+-- let the rollback drop something this migration never created. A re-apply (column AND guard present)
+-- is allowed and is a no-op.
+--
 -- GRANTS. No table grant changes. The trigger function's EXECUTE is revoked from PUBLIC, anon and
 -- authenticated (a new function's proacl NULL means EXECUTE for PUBLIC).
 -- Postcondition ($verify$): attnotnull; exactly one FK scheduled_posts(company_id) -> companies(id)
@@ -58,6 +67,16 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.campaigns'::regclass
                   AND attname = 'company_id' AND attnotnull AND NOT attisdropped) THEN
     RAISE EXCEPTION 'SP-COMPANY preflight: campaigns.company_id is not NOT NULL; apply 20270217000025 first';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.scheduled_posts'::regclass
+              AND attname = 'company_id' AND NOT attisdropped)
+     AND to_regprocedure('public.scheduled_posts_company_id_guard()') IS NULL THEN
+    RAISE EXCEPTION 'SP-COMPANY preflight: scheduled_posts.company_id already exists but was not created by this migration (no guard function); refusing to adopt it';
+  END IF;
+  IF to_regclass('public.idx_scheduled_posts_company_id') IS NOT NULL
+     AND to_regprocedure('public.scheduled_posts_company_id_guard()') IS NULL THEN
+    RAISE EXCEPTION 'SP-COMPANY preflight: index idx_scheduled_posts_company_id already exists but was not created by this migration; refusing to adopt it';
   END IF;
 
   -- Re-apply: if the column already exists, only rows still NULL are examined below.

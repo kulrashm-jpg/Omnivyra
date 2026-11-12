@@ -192,6 +192,16 @@ describe('the migration itself', () => {
     const col = (await c.query(`SELECT count(*)::int AS n FROM pg_attribute WHERE attrelid = 'public.scheduled_posts'::regclass AND attname = 'company_id' AND NOT attisdropped`)).rows[0].n;
     expect(col).toBe(0);
   }));
+  it('PROVENANCE: a company_id column 028 did not create is refused by the apply AND by the rollback', () => rolledBack(async (c) => {
+    await c.query(unwrapped(ROLLBACK_FILE));
+    await c.query('ALTER TABLE public.scheduled_posts ADD COLUMN company_id uuid'); // someone else's column
+    const apply = await attemptIn(c, unwrapped(MIGRATION_FILE));
+    expect(apply).toMatchObject({ ok: false });
+    expect(apply.message).toMatch(/refusing to adopt it/);
+    const rb = await attemptIn(c, unwrapped(ROLLBACK_FILE));
+    expect(rb).toMatchObject({ ok: false });
+    expect(rb.message).toMatch(/refusing to drop it/);
+  }));
   it('CONTROL: its verify block CATCHES a SECURITY DEFINER guard', () => rolledBack(async (c) => {
     await c.query('ALTER FUNCTION public.scheduled_posts_company_id_guard() SECURITY DEFINER');
     const r = await attemptIn(c, verifyBlock());
