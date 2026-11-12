@@ -296,11 +296,13 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // Only the provider side of PI-041-A-O was adopted. The Email Engine, and the
     // transport hooks that compose it, depend on tables that are not on main.
     // WP3 / L5 changed the transport (it now mints the unsubscribe link) and is
-    // re-pinned here; dispatch is unchanged.
+    // re-pinned here. Email idempotency (fix/email-idempotency-20261113, "an uncertain send is never re-queued") changed both: the transport
+    // now reports an ambiguous provider answer as uncertain, and dispatch fails such a task instead of
+    // re-queuing it (a re-dispatch mints a new key). Neither touches authentication or tenancy - re-pinned.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('eb4963aea1b7a6d2');
-    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('3c366bcc862b7bd4');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('26f32357c83318f8');
+    expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('989fd50aa3a32041');
   });
 
   it('THE TRANSPORT PAYLOAD MATCHES WHAT THE FUNCTION NOW ACCEPTS', () => {
