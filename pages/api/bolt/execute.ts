@@ -212,6 +212,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       source_blog_type: resolvedBoltBlogType,
     };
 
+    // generatedCampaignId reaches PostgREST filters, the run row (target_campaign_id is text, so the
+    // database would not reject garbage) and the pipeline. It is a uuid or absent, decided HERE, before
+    // any use (05 finding, BLOCKING per e9). Empty / whitespace means absent.
+    {
+      const rawCampaignId = payload.generatedCampaignId as unknown;
+      const absent = rawCampaignId === null || rawCampaignId === undefined
+        || (typeof rawCampaignId === 'string' && rawCampaignId.trim() === '');
+      if (absent) {
+        payload.generatedCampaignId = null;
+      } else {
+        const validCampaignId = normalizeOptionalUuid(rawCampaignId);
+        if (!validCampaignId) {
+          return res.status(400).json({ error: 'generatedCampaignId must be a UUID', code: 'INVALID_CAMPAIGN_ID' });
+        }
+        payload.generatedCampaignId = validCampaignId;
+      }
+    }
+
     // ── Blog source integrity validation ────────────────────────────────────
     if (payload.source_blog_id && payload.source_blog_type) {
       const blogTable = payload.source_blog_type === 'company' ? 'blogs' : 'public_blogs';
@@ -293,28 +311,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const generatedCampaignId = payload.generatedCampaignId;
-    if (generatedCampaignId && typeof generatedCampaignId === 'string' && generatedCampaignId.trim()) {
-      // The id is interpolated into a PostgREST `or` filter below, so it must be a uuid HERE (05 finding).
-      // The campaign-version preflight also rejects a non-uuid today, but that is another module's
-      // choice; this guard must not depend on it.
-      const campaignIdForGuard = normalizeOptionalUuid(generatedCampaignId);
-      if (!campaignIdForGuard) {
-        return res.status(400).json({ error: 'generatedCampaignId must be a UUID', code: 'INVALID_CAMPAIGN_ID' });
-      }
+    if (generatedCampaignId) {
+      // Validated as a uuid above. Parameterised .eq per column (no string filter), scoped to the
+      // AUTHORIZED company (enforceCompanyAccess above): another company's run for the same campaign
+      // id must neither block this start nor be returned as this caller's run.
       // A query FAILURE is not "no existing run". Reading `data` while
       // discarding `error` turns a transport/PostgREST fault into a silent
       // green light to start a second execution — the exact class this guard
       // exists to prevent.
-      // Scoped to the AUTHORIZED company (enforceCompanyAccess above): another company's run for the
-      // same campaign id must neither block this start nor be returned as this caller's run.
-      const { data: existingRun, error: existingRunError } = await supabase
-        .from('bolt_execution_runs')
-        .select('id')
-        .eq('company_id', companyId)
-        .or(`campaign_id.eq.${campaignIdForGuard},target_campaign_id.eq.${campaignIdForGuard}`)
-        .in('status', ['running', 'started'])
-        .limit(1)
-        .maybeSingle();
+      let existingRun: { id?: string } | null = null;
+      let existingRunError: unknown = null;
+      for (const column of ['campaign_id', 'target_campaign_id'] as const) {
+        const { data, error } = await supabase
+          .from('bolt_execution_runs')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq(column, generatedCampaignId)
+          .in('status', ['running', 'started'])
+          .limit(1)
+          .maybeSingle();
+        if (error) { existingRunError = error; break; }
+        if (data && (data as { id?: string }).id) { existingRun = data as { id: string }; break; }
+      }
 
       if (existingRunError) {
         console.error('[bolt/execute] duplicate-run lookup failed:', existingRunError);

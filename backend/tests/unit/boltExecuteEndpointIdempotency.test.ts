@@ -236,6 +236,21 @@ describe('E. the campaign duplicate-run guard (05 finding): uuid-only and scoped
     expect(insertedCount).toBe(0);
   });
 
+  test('a live run that names the campaign as its TARGET is found too (own company only)', async () => {
+    runs.push({ id: 'live-target-2', company_id: 'company-2', target_campaign_id: CAMP, status: 'started' });
+    runs.push({ id: 'live-target-1', company_id: 'company-1', target_campaign_id: CAMP, status: 'started' });
+    const res = await post({ ...BODY, generatedCampaignId: CAMP });
+    expect(res.body.run_id).toBe('live-target-1');
+    expect(insertedCount).toBe(0);
+  });
+
+  test('a non-string generatedCampaignId is refused (400) and nothing is persisted', async () => {
+    const res = await post({ ...BODY, generatedCampaignId: 12345 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('INVALID_CAMPAIGN_ID');
+    expect(insertedCount).toBe(0);
+  });
+
   test('a non-uuid generatedCampaignId is refused (400) before any filter is built, even if the preflight passed it', async () => {
     live('company-1');
     const res = await post({ ...BODY, generatedCampaignId: `${CAMP},status.eq.failed` });
