@@ -19,7 +19,7 @@
 --   No privilege change: the new columns inherit the table grants (20270111000002 revoked client privileges on
 --   notifications; message_reads / message_mentions grants unchanged).
 --
--- ROLLBACK: rollbacks/notifications_collab_company_id_rollback.sql (drops the indexes, FKs and columns; any
+-- ROLLBACK: rollbacks/notifications_and_message_reads_company_id_rollback.sql (drops the indexes, FKs and columns; any
 --   company_id values written after apply are lost - recoverable from the writers' logs only).
 
 -- Preflight: a pre-existing company_id of another type, or an index / constraint of the same name on a different

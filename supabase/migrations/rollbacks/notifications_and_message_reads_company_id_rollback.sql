@@ -1,4 +1,4 @@
--- Rollback of 20270217000035_notifications_collab_company_id.sql (6f).
+-- Rollback of 20270217000035_notifications_and_message_reads_company_id.sql (6f).
 -- Drops what 035 created: the three company_id indexes, FKs and columns. Any company_id values written after the
 -- apply are LOST (recoverable from the writers' logs only). Writers that stamp company_id must be rolled back first,
 -- or their inserts fail on the missing column (exactly the defect 035 repairs).
