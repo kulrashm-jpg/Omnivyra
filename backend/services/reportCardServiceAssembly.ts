@@ -214,8 +214,11 @@ async function releaseReportCreditReservation(report: ReportRecord, reason: stri
   // `released` and `already_released` free the hold. `already_confirmed` means a FAILED report's
   // hold was charged: nothing is released, and a person must look.
   if (result.status !== 'released' && result.status !== 'already_released') {
+    // Exhaustive by type (e1): the only non-freeing status today is already_confirmed. A status
+    // added to CreditReservationRelease fails to compile here instead of being mislabelled.
+    const unreleased: 'already_confirmed' = result.status;
     await reportUnreleasedHold(report, reservation, reason, 'monetization.report_reservation_already_confirmed',
-      `release returned ${result.status}`);
+      `release returned ${unreleased}`);
     return;
   }
   console.warn('[reportCardService] report credit reservation released', {
