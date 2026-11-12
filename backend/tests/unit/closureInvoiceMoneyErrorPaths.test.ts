@@ -151,6 +151,32 @@ describe('top-up invoice', () => {
     await expect(generateTopupInvoice('p1')).resolves.toMatchObject({ invoiceId: 'inv-raced', created: false });
   });
 
+  it('line-item READ error -> throws "line-item read failed", no line inserted, not issued', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:insert'] = () => ({ data: { id: 'inv1' }, error: null });
+    mockScript['invoice_line_items:select'] = DOWN;
+    await expect(generateTopupInvoice('p1')).rejects.toThrow(/line-item read failed/);
+    expect(mockWrites.map((w) => `${w.table}:${w.op}`)).toEqual(['invoices:insert']);
+  });
+
+  it('issue matched 0 rows and the status RE-READ (invoices select call 2) errors -> throws "issue re-read failed"', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:insert'] = () => ({ data: { id: 'inv1' }, error: null });
+    mockScript['invoice_line_items:select'] = () => ({ data: [{ id: 'l1' }], error: null });
+    mockScript['invoices:update'] = () => ({ data: [], error: null });
+    mockScript['invoices:select'] = (n) => (n === 1 ? { data: null, error: null } : DOWN());
+    await expect(generateTopupInvoice('p1')).rejects.toThrow(/issue re-read failed/);
+  });
+
+  it('control: issue matched 0 rows but a concurrent call issued it (re-read paid) -> fine', async () => {
+    mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
+    mockScript['invoices:insert'] = () => ({ data: { id: 'inv1' }, error: null });
+    mockScript['invoice_line_items:select'] = () => ({ data: [{ id: 'l1' }], error: null });
+    mockScript['invoices:update'] = () => ({ data: [], error: null });
+    mockScript['invoices:select'] = (n) => (n === 1 ? { data: null, error: null } : { data: { status: 'paid' }, error: null });
+    await expect(generateTopupInvoice('p1')).resolves.toMatchObject({ invoiceId: 'inv1' });
+  });
+
   it('control: the happy path inserts the line item BEFORE issuing', async () => {
     mockScript['credit_purchases:select'] = () => ({ data: PAID_PURCHASE, error: null });
     mockScript['invoices:insert'] = () => ({ data: { id: 'inv1' }, error: null });

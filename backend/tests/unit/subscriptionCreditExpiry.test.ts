@@ -7,7 +7,7 @@ import { expireSubscriptionCreditsForOrg, type ExpiryDeps } from '../../services
 const NOW = Date.parse('2026-06-25T00:00:00Z');
 const iso = (days: number) => new Date(NOW + days * 86_400_000).toISOString();
 
-function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolean; allocFree?: number; priorExpiry?: boolean; priorExpiryErr?: boolean; expiryRows?: string[] }, captured: { rpc: any[] }): ExpiryDeps {
+function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolean; allocFree?: number; priorExpiry?: boolean; priorExpiryErr?: boolean; expiryRows?: string[]; allocErr?: boolean; idemErr?: boolean }, captured: { rpc: any[] }): ExpiryDeps {
   const allocFree = opts.allocFree ?? 1_000_000; // default: cap >= free so full free expires
   const db = {
     from(table: string) {
@@ -24,7 +24,11 @@ function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolea
         eq: (c: string, v: unknown) => { filters[c] = v; return api; },
         maybeSingle: () => {
           if (table === 'organization_credits') return Promise.resolve({ data: opts.free != null ? { free_balance: opts.free, paid_balance: 50, incentive_balance: 10 } : null });
-          if (table === 'credit_transactions') return Promise.resolve({ data: opts.existingTxn ? { id: 't' } : null });
+          if (table === 'credit_transactions') {
+            // the idempotency-key read (by idempotency_key) - fails ALONE with idemErr
+            if (opts.idemErr) return Promise.resolve({ data: null, error: { message: 'down' } });
+            return Promise.resolve({ data: opts.existingTxn ? { id: 't' } : null });
+          }
           return Promise.resolve({ data: null });
         },
         then: (res: any) => {
@@ -47,6 +51,7 @@ function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolea
               return true;
             });
           }
+          else if (table === 'credit_transactions' && opts.allocErr) return Promise.resolve({ data: null, error: { message: 'down' } }).then(res);
           else if (table === 'credit_transactions') data = [{ id: 'alloc-1', created_at: '2026-06-24T00:00:00Z', free_delta: allocFree, credits_delta: allocFree }]; // subscription_allocation
           return Promise.resolve({ data }).then(res);
         },
@@ -242,5 +247,25 @@ describe('subscription_expiry has exactly one writer', () => {
     expect(hits).toEqual(['backend/services/subscriptionCreditExpiryService.ts']);
     const src = fs.readFileSync(path.join(ROOT, hits[0]), 'utf8');
     expect(src.match(/p_reference_type:\s*'subscription_expiry'/g) ?? []).toHaveLength(1);
+  });
+});
+
+// MUTANT SURVIVORS (2026-11-12): credit_transactions is read THREE times
+// (allocation, idempotency key, prior expiry); each now fails on its own.
+describe('subscription expiry - each credit_transactions read fails alone', () => {
+  let spy: jest.SpyInstance;
+  beforeEach(() => { spy = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
+  afterEach(() => spy.mockRestore());
+  it('allocation read error -> read_failed:allocation, nothing expired', async () => {
+    const cap = { rpc: [] as any[] };
+    const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 500, allocFree: 200, allocErr: true }, cap));
+    expect(r.reason).toBe('read_failed:allocation');
+    expect(cap.rpc).toHaveLength(0);
+  });
+  it('idempotency-key read error -> read_failed:idempotency, nothing expired', async () => {
+    const cap = { rpc: [] as any[] };
+    const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 500, allocFree: 200, idemErr: true }, cap));
+    expect(r.reason).toBe('read_failed:idempotency');
+    expect(cap.rpc).toHaveLength(0);
   });
 });

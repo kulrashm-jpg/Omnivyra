@@ -153,3 +153,14 @@ it('control: two DIFFERENT orgs get different keys', async () => {
   await runExpiryCheck();
   expect(new Set(mockRpcKeys.filter((_, i) => mockRpc[i] === 'expire')).size).toBe(2);
 });
+
+// MUTANT SURVIVOR (2026-11-12): credit_transactions is read twice on the free
+// path (call 1 = idempotency key, call 2 = prior free expiry); the existing case
+// failed both. Each now fails ALONE.
+it('free path: idempotency read (call 1) error ALONE -> per-org error, nothing expired', async () => {
+  mockScript['credit_transactions:select'] = (n) => (n === 1 ? DOWN() : { data: null, error: null });
+  const r = await runExpiryCheck();
+  expect(r.errors).toBe(1);
+  expect(mockRpc).toEqual([]);
+  expect(errSpy.mock.calls.some((c) => String(c.join(' ')).includes('idempotency read failed'))).toBe(true);
+});
