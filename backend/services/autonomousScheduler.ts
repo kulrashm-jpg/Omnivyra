@@ -16,7 +16,7 @@ import { supabase } from '../db/supabaseClient';
 import { generateNextCampaign, getAutonomousSettings } from './autonomousCampaignAgent';
 import { distilCampaignLearnings } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
-import { getCreditCost } from './creditDeductionService';
+import { getCreditCost, hasEnoughCredits } from './creditDeductionService';
 
 export type SchedulerRunResult = {
   companies_evaluated: number;
@@ -34,12 +34,15 @@ const ENDING_SOON_DAYS = 7;
 async function hasActiveCampaign(companyId: string): Promise<boolean> {
   const threshold = new Date(Date.now() + ENDING_SOON_DAYS * 86400_000).toISOString();
 
-  const { data } = await ownedDbTable('campaigns')
+  // A failed read is not "no active campaign" (that would generate - and
+  // charge for - a duplicate campaign). Throw: the per-company catch skips it.
+  const { data, error } = await ownedDbTable('campaigns')
     .select('id, end_date, status')
     .eq('company_id', companyId)
     .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan'])
     .or(`end_date.is.null,end_date.gt.${threshold}`)
     .limit(1);
+  if (error) throw new Error(`active campaign read failed: ${error.message}`);
 
   return (data?.length ?? 0) > 0;
 }
@@ -88,8 +91,10 @@ async function autoActivateCampaign(
 
 /** Notify user of pending campaign awaiting approval. */
 async function notifyPendingApproval(companyId: string, pendingId: string, planName: string): Promise<void> {
+  // Best-effort: supabase returns {error} rather than throwing, so the error is
+  // read and logged here; the catch only covers a thrown transport fault.
   try {
-    await ownedDbTable('notifications').insert({
+    const { error } = await ownedDbTable('notifications').insert({
       company_id: companyId,
       type:       'campaign_pending_approval',
       title:      'New campaign ready for approval',
@@ -98,26 +103,32 @@ async function notifyPendingApproval(companyId: string, pendingId: string, planN
       created_at: new Date().toISOString(),
       read:       false,
     });
+    if (error) console.error('[autonomousScheduler] pending-approval notification failed:', error.message);
   } catch (_) { /* non-blocking */ }
 }
 
 /** Expire pending campaigns past their expiry date. */
 async function expireOldPending(): Promise<number> {
-  const { data } = await ownedDbTable('pending_campaigns')
+  // Best-effort housekeeping: a failure is logged, never reported as "0 expired"
+  // silently. Not fatal - the next daily run retries.
+  const { data, error } = await ownedDbTable('pending_campaigns')
     .update({ status: 'expired' })
     .eq('status', 'pending')
     .lt('expires_at', new Date().toISOString())
     .select('id');
+  if (error) console.error('[autonomousScheduler] pending expiry failed:', error.message);
   return data?.length ?? 0;
 }
 
 /** Find campaigns that just ended (for learning distillation). */
 async function getRecentlyCompletedCampaigns(): Promise<Array<{ id: string; company_id: string }>> {
   const since = new Date(Date.now() - 25 * 3600_000).toISOString(); // last 25h
-  const { data } = await ownedDbTable('campaigns')
+  // Best-effort (learning only, no money): log a failed read, never silent.
+  const { data, error } = await ownedDbTable('campaigns')
     .select('id, company_id')
     .in('status', ['completed', 'ended'])
     .gte('updated_at', since);
+  if (error) console.error('[autonomousScheduler] completed campaigns read failed:', error.message);
   return (data ?? []) as Array<{ id: string; company_id: string }>;
 }
 
@@ -148,9 +159,12 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
     }
 
     // ── 3. Load all companies with autonomous_mode = true ─────────────────
-    const { data: settingsRows } = await ownedDbTable('company_settings')
+    // A failed read is not "no autonomous companies": throw so the run reports
+    // "Scheduler failed" instead of a clean zero.
+    const { data: settingsRows, error: settingsErr } = await ownedDbTable('company_settings')
       .select('company_id, autonomous_mode, approval_required, risk_tolerance')
       .eq('autonomous_mode', true);
+    if (settingsErr) throw new Error(`autonomous settings read failed: ${settingsErr.message}`);
 
     if (!settingsRows?.length) return result;
 
@@ -165,7 +179,14 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
         if (hasActive) continue; // campaign in flight — skip
 
         // ── Credit gate — skip generation if balance is critically low ─────
-        const creditCheck = { balance: campaignGenerationCost * 10, required: campaignGenerationCost, sufficient: true };
+        // REAL balance read (2026-11-12): this was hard-coded sufficient with a
+        // fake balance of 10x cost, so the gate never closed and the low-credit
+        // flag below never fired. A wallet read error THROWS (getWalletSnapshot)
+        // and the per-company catch skips this company - never generate on an
+        // unread balance. The charge itself is still enforced by
+        // reserveCreditsForWork in generateNextCampaign; this gate keeps a
+        // short-balance company from being attempted at all.
+        const creditCheck = await hasEnoughCredits(companyId, 'campaign_generation');
         if (!creditCheck.sufficient) {
           result.errors.push(`[${companyId}] Insufficient credits (${creditCheck.balance ?? 0}/${creditCheck.required}) — skipping campaign generation`);
           continue;
