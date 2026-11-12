@@ -103,7 +103,12 @@ export interface WorkerRunResult {
 /**
  * An existing job with the same key may be RE-ARMED (its payload and timing replaced, and run
  * again) only from these states - nothing of it is in flight and nothing of it is live. `failed`
- * is terminal-unsupported (no call was made); `cancelled` never ran.
+ * is terminal-unsupported (no call was made: only Squarespace answers `unsupported`, before any
+ * fetch); `cancelled` has no writer for publishing_jobs today.
+ *
+ * RULE for any new writer of these states, or a new status added here: the job must be one whose
+ * provider was NEVER called (or definitely did not publish). A state reachable after a provider
+ * call that may have published must never be re-armable - re-arming it publishes a duplicate (05).
  */
 const REARMABLE_STATUSES: readonly PublishingJobStatus[] = ['queued', 'retrying', 'scheduled', 'failed', 'cancelled'];
 
@@ -178,9 +183,16 @@ async function readJobByKey(companyId: string, idempotencyKey: string): Promise<
  * Every write that acts on the claim filters on it, so a run whose lock expired - and whose job was
  * recovered and claimed again - cannot write over the newer run (CLASS-2). A worker process reuses
  * one locked_by for every claim, so locked_at is what tells two claims apart.
+ *
+ * What that rests on (05): locked_at is minted in Node at MILLISECOND precision, so two claims of
+ * one row never share it because a re-claim needs an intervening release or recovery - not because
+ * the clock guarantees distinct values. If locked_at ever becomes database-generated inside one
+ * statement that can release and re-claim, this fence needs a real claim token.
+ * Callers hold a job with both fields set (executeClaimedPublishingJob refuses one without them):
+ * PostgREST `eq.null` matches nothing, which would misreport a missing claim as a lost one.
  */
 function whereClaimHeld<Q>(query: Q, job: PublishingJob): Q {
-  return (query as any).eq('status', 'processing').eq('locked_by', job.locked_by ?? null).eq('locked_at', job.locked_at ?? null);
+  return (query as any).eq('status', 'processing').eq('locked_by', job.locked_by).eq('locked_at', job.locked_at);
 }
 
 export async function claimDuePublishingJobs(input: {
@@ -250,6 +262,13 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
   if (!isCmsProvider(job.provider)) {
     await markJobFailure(job, `Unsupported CMS provider: ${job.provider}`, 'validation');
     return { success: false, message: `Unsupported CMS provider: ${job.provider}` };
+  }
+
+  // A job with no claim identity cannot be fenced: refused by NAME (not run, nothing written),
+  // rather than every fenced write silently matching nothing and reading as "claim lost" (05).
+  if (!job.locked_by || !job.locked_at) {
+    console.error('[publishingJob] job passed to run without a claim identity (locked_by/locked_at); not run', { job_id: job.id, worker_id: workerId });
+    return { success: false, notClaimed: true, message: 'This publishing job was not claimed by this run.' };
   }
 
   const started = Date.now();

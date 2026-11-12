@@ -162,6 +162,14 @@ describe('the double click: two Publish requests for one blog publish ONCE', () 
     expect(blog()).toMatchObject({ status: 'published', external_id: 'wp-1', external_url: 'https://site/p/1' });
   });
 
+  it('Publish after a create that came back WITHOUT a post id: needs review, said plainly - never a false "already published"', async () => {
+    seed([jobRow({ status: 'published', external_id: null })]);
+    const r = await publishBlogPost('b1', CO);
+    expect(mockAdapter.calls).toBe(0);
+    expect(r).toMatchObject({ success: false, needs_review: true, message: expect.stringContaining('returned no post id') });
+    expect(blog().status).toBe('draft');
+  });
+
   it('Publish on an outcome-unknown dead letter: NOT re-run (the confirmed retry is the only way), blog untouched', async () => {
     seed([jobRow({ status: 'dead_letter', dead_letter_at: DL, failure_category: UNCERTAIN_PUBLISH_CATEGORY })]);
     const r = await publishBlogPost('b1', CO);
@@ -219,6 +227,14 @@ describe('#6/#7 a run that lost its claim writes nothing over the newer run', ()
     expect(job()).toMatchObject({ status: 'processing', locked_by: 'w2' });
     expect(fakeDb.tables.publishing_attempts[0].status).toBe('succeeded');
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('lost its claim'), expect.objectContaining({ external_id: 'wp-9' }));
+  });
+
+  it('a job with no claim identity is refused by name: not run, nothing written (not misreported as a lost claim)', async () => {
+    seed([jobRow({ status: 'processing', locked_by: null, locked_at: null })]);
+    expect(await executeClaimedPublishingJob({ ...jobRow({ status: 'processing' }), request_payload: {} } as any, 'w')).toMatchObject({ notClaimed: true });
+    expect(mockAdapter.calls).toBe(0);
+    expect(fakeDb.tables.publishing_attempts).toHaveLength(0);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('without a claim identity'), expect.objectContaining({ job_id: 'j1' }));
   });
 
   it('NEGATIVE CONTROL: claim held throughout -> the failure is written (retrying)', async () => {

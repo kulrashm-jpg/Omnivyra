@@ -101,6 +101,15 @@ export interface PublishResult {
  * is never reset: a processing job is another run's, a published one is live (its ids are reported
  * so the blog row is repaired), a dead-lettered one goes through the confirmed retry only.
  * Returns null when the job is waiting and this request should run it.
+ *
+ * A PUBLISHED create job WITHOUT an external id (the CMS answered 2xx with no post id - CustomBlogApi,
+ * Drupal and Ghost return success that way): the post is live but cannot be updated from here, and
+ * the create key would otherwise answer "already published" for ever while sending nothing. It is
+ * NEEDS REVIEW, said plainly - never a false success (05).
+ *
+ * Relies on: deleting a blog (pages/api/blogs/[id].ts DELETE) HARD-deletes its row, so a blog whose
+ * create job is published is never re-published after a remote delete. If that route ever
+ * soft-deletes, this short-circuit blocks the re-publish and must learn about the delete job.
  */
 export function publishOutcomeForExistingJob(job: PublishingJob): PublishResult | null {
   switch (job.status) {
@@ -109,6 +118,13 @@ export function publishOutcomeForExistingJob(job: PublishingJob): PublishResult 
     case 'scheduled':
       return null;
     case 'published':
+      if (!job.external_id) {
+        return {
+          success: false,
+          needs_review: true,
+          message: `This post was published to ${job.provider}, but ${job.provider} returned no post id, so it cannot be updated from here. Check the post on your site and edit it there.`,
+        };
+      }
       return {
         success: true,
         message: `Already published to ${job.provider}.`,
