@@ -55,6 +55,7 @@ import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
 import { resolveBillingPolicy } from './billing/billingPolicyResolver';
 import { runWithCreditHandle, type CreditHandle } from './billing/aiGatewayBillingGuard';
 import { assertUuid, canonicalizeReference, type Uuid } from '@/lib/shared/uuid';
+import { recordMonetizationOperationalEvent } from './monetizationOpsService';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 import { fireAlerts, type LlmUsageSource, type LlmExecutorResult, type LlmPricingSpec, type ExecuteBase, type ExecuteWithCreditsOptions, type SettlementReport, type ExecuteResult, type CreditReservationHandle, type CreditReservationResult, type CreateCreditOptions, makeIdempotencyKey, scaleSplitToActual, getReservationKeys, assertCanonicalBillingIdentifiers, assertCanonicalCreditAction, reserveCreditsForWork, confirmCreditReservation, releaseCreditReservation } from './creditExecutionServiceContracts';
@@ -266,6 +267,40 @@ export async function executeWithCredits<T>(
         incentive: usedSplit.incentive,
         paid: usedSplit.paid,
       });
+    }
+  }
+
+  // ── 3a. Every settlement needs its HOLD (e9 option C, 2026-11-12) ─────────
+  // holdId is null when an existing hold's split could not be loaded, or when
+  // the hold RPC succeeded without returning an id. The guarded functions
+  // refuse a parentless settlement, and settling without a parent is how a hold
+  // gets confirmed AND released. Re-resolve the hold by its deterministic key
+  // (and its split); if it still cannot be found, REFUSE before any paid work
+  // runs - nothing was reserved that we can identify - with a CRITICAL log and
+  // an alert-ready monetization event.
+  if (!holdId) {
+    const again = await findCreditTransaction(holdKey);
+    const againSplit = again?.id ? await loadCreditHoldSplit(again.id) : null;
+    if (again?.id && againSplit) {
+      holdId = again.id;
+      usedSplit = againSplit;
+      logger.warn('credit_hold_reresolved', { orgId, action, idempotencyKey: baseKey, holdId });
+    } else {
+      logger.error('CRITICAL credit_hold_unresolved: no HOLD row for this execution - refusing to run or settle', {
+        orgId, action, idempotencyKey: baseKey, holdKey, holdFound: Boolean(again?.id),
+      });
+      try {
+        await recordMonetizationOperationalEvent({
+          eventName: 'monetization.credit_hold_unresolved',
+          severity: 'CRITICAL',
+          organizationId: orgId,
+          alertKey: 'credit_hold_unresolved',
+          metadata: { action, idempotency_key: baseKey, hold_key: holdKey, hold_found: Boolean(again?.id) },
+        });
+      } catch (eventErr) {
+        logger.error('credit_hold_unresolved_event_failed', { orgId, message: (eventErr as Error)?.message });
+      }
+      throw new Error(`[creditExecution] HOLD_UNRESOLVED: no hold row for ${holdKey} - refusing to execute or settle without a parent hold`);
     }
   }
 

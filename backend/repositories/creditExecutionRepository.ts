@@ -54,6 +54,22 @@ export interface CreditPartialConfirmCommand {
 }
 
 /**
+ * GUARDED FUNCTIONS (20270217000023, e9 option C): every write goes through
+ * apply_credit_reservation_guarded / apply_credit_partial_confirm_guarded. For a
+ * settlement they REQUIRE the parent hold, serialise on a per-hold advisory lock
+ * and refuse a second settlement under ANY key (HOLD_ALREADY_SETTLED) - the
+ * atomic guard the app-side check below could not be. DEPLOY ORDER: the
+ * migration must be applied BEFORE this code runs (an absent function fails
+ * every credit write closed). The old pair is not called from app code
+ * (pinned by creditLegacyRpcNotCalled.test.ts); its service_role EXECUTE is
+ * revoked later by 20270217000024.
+ *
+ * The app-side check stays as DEFENCE IN DEPTH (and to return a clean
+ * HOLD_ALREADY_SETTLED before a round trip). Settlement rows are confirm,
+ * release and confirm_partial; the guarded partial confirm also writes the
+ * released remainder as its own 'release' row keyed <confirm key>:remainder,
+ * which belongs to that settlement (never "another" one).
+ *
  * SETTLE-ONCE GUARD (2026-11-12, e9 URGENT ruling). The prod body of
  * apply_credit_reservation does NOT refuse a second settlement of a HOLD (the
  * 20260625 "HOLD already settled" guard was never installed - 83/C17, 05). Its
@@ -70,24 +86,19 @@ export interface CreditPartialConfirmCommand {
  * NOT atomic (two different-key settles in the same instant can both pass) -
  * the post-check below detects that and logs CRITICAL; the DB guard
  * (apply_credit_reservation_guarded) closes it.
- * COVERAGE BOUND (05): the guard relates settlements by SAME PARENT or SAME KEY
- * FAMILY. A settlement with a NULL parent_transaction_id under a DIFFERENT key
- * family (e.g. a safeRetry `retry:<key>:<lineage>` base) is invisible to both
- * and is NOT refused - prod does not require p_parent_id (a 20260625 guard
- * that was never installed). Closing that needs the mandatory parent of the
- * guarded function; until then this is not complete coverage. The bound is
- * confined to settlements written through apply_credit_reservation: the LIVE
- * apply_credit_partial_confirm (83/C21 body, reviewed by 05 2026-11-12)
- * requires the hold row and always writes parent_transaction_id = the hold, so
- * the by-parent half sees every partial-confirm settlement.
- * apply_credit_partial_confirm (live, md5 ff208f60, matches NO repo version):
- * it has NO "already settled" refusal and no FOR UPDATE on the hold row, so
- * this app-side guard is the ONLY double-settlement protection on that path
- * (measured, 05). Its key is optional live (IF p_idempotency_key IS NOT NULL)
- * and it handles a duplicate key; the same-key pass-through above relies on
- * that and on apply_credit_reservation's idempotent return.
+ * COVERAGE BOUND (05): the app check relates settlements by SAME PARENT or SAME
+ * KEY FAMILY. A settlement with a NULL parent under a DIFFERENT key family (e.g.
+ * a safeRetry `retry:<key>:<lineage>` base) is invisible to both. The guarded
+ * functions close that: they REFUSE a parentless settlement
+ * (SETTLEMENT_PARENT_REQUIRED). A partial confirm always writes
+ * parent_transaction_id = the hold with execution_phase 'confirm_partial'; the
+ * by-parent half reads that phase (it did NOT before 2026-11-12 - the key-family
+ * half was what saw partial confirms, via the <base>:confirm key).
  */
 const SETTLE_PHASES = ['confirm', 'release'] as const;
+/** Ledger phases that settle a hold (the partial confirm writes 'confirm_partial'). */
+const SETTLEMENT_ROW_PHASES = ['confirm', 'release', 'confirm_partial'] as const;
+const REMAINDER_SUFFIX = ':remainder';
 
 function keyBase(key: string): string | null {
   const m = /^(.*):(confirm|release)$/.exec(key);
@@ -101,7 +112,7 @@ async function findOtherSettlement(holdId: string | null | undefined, ownKey: st
       .from('credit_transactions')
       .select('id, idempotency_key, execution_phase')
       .eq('parent_transaction_id', holdId)
-      .in('execution_phase', [...SETTLE_PHASES]);
+      .in('execution_phase', [...SETTLEMENT_ROW_PHASES]);
     if (error) return { error: new Error(`[creditExecution] settle-once check failed for hold ${holdId}: ${error.message}`), other: null };
     rows.push(...((data ?? []) as typeof rows));
   }
@@ -114,7 +125,8 @@ async function findOtherSettlement(holdId: string | null | undefined, ownKey: st
     if (error) return { error: new Error(`[creditExecution] settle-once check failed for ${base}: ${error.message}`), other: null };
     rows.push(...((data ?? []) as typeof rows));
   }
-  const other = rows.find((r) => r.idempotency_key !== ownKey) ?? null;
+  const own = new Set([ownKey, `${ownKey}${REMAINDER_SUFFIX}`]);
+  const other = rows.find((r) => !own.has(r.idempotency_key)) ?? null;
   return { error: null, other };
 }
 
@@ -122,15 +134,18 @@ async function postCheckSingleSettlement(holdId: string | null | undefined, key:
   if (!holdId) return;
   const { data, error } = await supabase
     .from('credit_transactions')
-    .select('id')
+    .select('id, idempotency_key')
     .eq('parent_transaction_id', holdId)
-    .in('execution_phase', [...SETTLE_PHASES]);
+    .in('execution_phase', [...SETTLEMENT_ROW_PHASES]);
   if (error) {
     console.error('[creditExecution] settle-once post-check read failed:', holdId, error.message);
     return;
   }
-  if (Array.isArray(data) && data.length > 1) {
-    console.error('[creditExecution] CRITICAL HOLD_DOUBLE_SETTLED: hold has more than one terminal settlement', { holdId, key, settlements: data.length });
+  // A released remainder belongs to its partial confirm: count settlements, not rows.
+  const settlements = (Array.isArray(data) ? data : []).filter(
+    (r) => !String((r as { idempotency_key?: string }).idempotency_key ?? '').endsWith(REMAINDER_SUFFIX));
+  if (settlements.length > 1) {
+    console.error('[creditExecution] CRITICAL HOLD_DOUBLE_SETTLED: hold has more than one terminal settlement', { holdId, key, settlements: settlements.length });
   }
 }
 
@@ -149,7 +164,7 @@ export async function callCreditReservation(command: CreditReservationCommand): 
     }
   }
   const category = command.category ?? deriveCategory(command.split);
-  const { error, data } = await supabase.rpc('apply_credit_reservation', {
+  const { error, data } = await supabase.rpc('apply_credit_reservation_guarded', {
     p_org_id: command.orgId,
     p_phase: command.phase,
     p_free_amount: command.split.free,
@@ -201,7 +216,7 @@ export async function callCreditPartialConfirm(command: CreditPartialConfirmComm
   if (other) {
     return { error: new Error(`HOLD_ALREADY_SETTLED: hold ${command.holdTxnId} already has a ${other.execution_phase} (${other.id}); refusing partial confirm`), data: null };
   }
-  const { error, data } = await supabase.rpc('apply_credit_partial_confirm', {
+  const { error, data } = await supabase.rpc('apply_credit_partial_confirm_guarded', {
     p_org_id: command.orgId,
     p_hold_txn_id: command.holdTxnId,
     p_actual_free: command.actualSplit.free,

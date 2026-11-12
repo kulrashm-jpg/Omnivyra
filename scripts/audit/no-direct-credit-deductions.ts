@@ -7,8 +7,8 @@
  * Fails the PR with exit code 1 if any of these patterns appear outside
  * the approved files:
  *
- *   1. `supabase.rpc('apply_credit_reservation'`
- *   2. `supabase.rpc('apply_credit_partial_confirm'`
+ *   1. `supabase.rpc('apply_credit_reservation'`      (and its `_guarded` form)
+ *   2. `supabase.rpc('apply_credit_partial_confirm'`  (and its `_guarded` form)
  *   3. `.from('credit_transactions').insert(`
  *   4. `.from('credit_transactions').update(`
  *   5. `.from('credit_transactions').delete(`
@@ -18,6 +18,7 @@
  *   - backend/repositories/creditExecutionRepository.ts
  *   - backend/services/creditExecutionService.ts
  *   - backend/services/creditExpiryService.ts            (expire phase only)
+ *   - backend/services/subscriptionCreditExpiryService.ts (expire phase only)
  *   - backend/services/creditOrphanHoldReaper.ts         (release phase only)
  *   - supabase/migrations/*                              (schema changes)
  *
@@ -40,12 +41,13 @@ const ALLOWED_FILES = new Set<string>([
   'backend/repositories/creditExecutionRepository.ts',
   'backend/services/creditExecutionService.ts',
   'backend/services/creditExpiryService.ts',
+  'backend/services/subscriptionCreditExpiryService.ts',
   'backend/services/creditOrphanHoldReaper.ts',
 ]);
 
 const HARD_PATTERNS: Array<{ pattern: RegExp; description: string }> = [
-  { pattern: /supabase\.rpc\(['"]apply_credit_reservation['"]/, description: 'direct apply_credit_reservation RPC call' },
-  { pattern: /supabase\.rpc\(['"]apply_credit_partial_confirm['"]/, description: 'direct apply_credit_partial_confirm RPC call' },
+  { pattern: /supabase\.rpc\(['"]apply_credit_reservation(?:_guarded)?['"]/, description: 'direct apply_credit_reservation(_guarded) RPC call' },
+  { pattern: /supabase\.rpc\(['"]apply_credit_partial_confirm(?:_guarded)?['"]/, description: 'direct apply_credit_partial_confirm(_guarded) RPC call' },
   { pattern: /\.from\(['"]credit_transactions['"]\)\.insert\(/, description: 'direct insert into credit_transactions' },
   { pattern: /\.from\(['"]credit_transactions['"]\)\.update\(/, description: 'direct update on credit_transactions (immutable ledger)' },
   { pattern: /\.from\(['"]credit_transactions['"]\)\.delete\(/, description: 'direct delete on credit_transactions (immutable ledger)' },

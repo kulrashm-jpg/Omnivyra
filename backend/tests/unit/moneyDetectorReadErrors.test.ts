@@ -51,6 +51,18 @@ describe('reservation reconciliation', () => {
     expect(r.unverifiable).toBe(1);
   });
 
+  // 20270217000023: a hold settled ONLY by a partial confirm (fully consumed, no
+  // remainder row) is not awaiting reap. The fake returns that child only if the
+  // sibling query asks for 'confirm_partial'.
+  it("an expired hold settled by a PARTIAL confirm is not counted as awaiting reap", async () => {
+    mockRows = (c) => (c.table === 'credit_transactions' && c.filters.execution_phase === 'hold' ? [{ id: 'h1', organization_id: 'o1', idempotency_key: 'k:hold' }]
+      : c.table === 'credit_transactions' && 'parent_transaction_id' in c.filters && (c.filters.execution_phase as string[]).includes('confirm_partial') ? [{ id: 'p1', execution_phase: 'confirm_partial' }]
+      : []);
+    const r = await runReservationReconciliation();
+    expect(r.expiredHoldsAwaitingReap).toBe(0);
+    expect(r.unverifiable).toBe(0);
+  });
+
   it('per-row ledger read error -> UNVERIFIABLE, never a false CRITICAL mismatch', async () => {
     mockRows = (c) => (c.table === 'billing_operations' && c.filters.status === 'confirmed' ? [{ id: 'op1', idempotency_key: 'k', confirm_txn_id: null }] : []);
     mockFailWhen = (c) => c.table === 'credit_transactions' && c.filters.idempotency_key === 'k:confirm';

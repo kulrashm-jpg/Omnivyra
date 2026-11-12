@@ -637,7 +637,7 @@ export async function checkFinancialDrift(surface: StuckOperation['surface'], id
     .from('credit_transactions')
     .select('id, execution_phase')
     .eq('parent_transaction_id', holdId)
-    .in('execution_phase', ['confirm', 'release'])
+    .in('execution_phase', ['confirm', 'release', 'confirm_partial'] /* a partial confirm settles its hold */)
     .limit(1);
   if (siblingErr) {
     logger.error('financial_drift_check_read_failed', { surface, id, step: 'sibling', message: siblingErr.message });

@@ -42,7 +42,7 @@ export interface SubscriptionExpiryResult {
 export function defaultExpiryDeps(): ExpiryDeps {
   return {
     db: supabase as any,
-    rpc: (args) => supabase.rpc('apply_credit_reservation', args) as any,
+    rpc: (args) => supabase.rpc('apply_credit_reservation_guarded', args) as any,
   };
 }
 

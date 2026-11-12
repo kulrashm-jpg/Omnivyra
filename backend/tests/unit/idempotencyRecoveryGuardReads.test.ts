@@ -81,6 +81,14 @@ describe('checkFinancialDrift', () => {
   it('control: clean reads with no hold -> "ok"', async () => {
     await expect(checkFinancialDrift('billing_operations', 'b1')).resolves.toBe('ok');
   });
+  // 20270217000023: a hold settled ONLY by a partial confirm (fully consumed, no
+  // remainder row) is settled - the sibling read must include 'confirm_partial'.
+  // The fake applies the phase filter: the child is returned only if asked for.
+  it("a hold settled by a PARTIAL confirm is not drift (the sibling read asks for 'confirm_partial')", async () => {
+    mockRows = (c) => (isOp(c) ? { idempotency_key: 'op-1' } : isHold(c) ? [{ id: 'h1' }]
+      : isSibling(c) && (c.filters.execution_phase as string[]).includes('confirm_partial') ? [{ id: 'p1', execution_phase: 'confirm_partial' }] : []);
+    await expect(checkFinancialDrift('billing_operations', 'b1')).resolves.toBe('ok');
+  });
 });
 
 describe('safeRetryOperation refuses on every unread guard', () => {

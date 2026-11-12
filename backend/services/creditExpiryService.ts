@@ -197,7 +197,7 @@ async function expireOrgFreeCredits(
 
   // ── DB call — expire phase only touches free_balance ─────────────────────
   // The DB function will RAISE EXCEPTION if paidAmount or incentive != 0.
-  const { error: expireErr } = await supabase.rpc('apply_credit_reservation', {
+  const { error: expireErr } = await supabase.rpc('apply_credit_reservation_guarded', {
     p_org_id:           orgId,
     p_phase:            'expire',
     p_free_amount:      toExpire,
@@ -310,7 +310,7 @@ async function expireOrgIncentiveCredits(
   const toExpire = Math.min(totalGrantedBefore, before.incentive_balance);
   if (toExpire <= 0) return 0;
 
-  const { error: expireErr } = await supabase.rpc('apply_credit_reservation', {
+  const { error: expireErr } = await supabase.rpc('apply_credit_reservation_guarded', {
     p_org_id:           orgId,
     p_phase:            'expire_incentive', // separate named phase — cannot touch paid
     p_free_amount:      0,                  // guarded at DB: free must be 0

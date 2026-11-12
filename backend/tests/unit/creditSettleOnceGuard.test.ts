@@ -8,11 +8,18 @@
  * The ledger fake applies eq / in over stored rows; the RPC fake APPENDS a
  * terminal row like the live function would (and returns the existing row on
  * a same-key repeat, as prod does), so a missing guard double-settles here.
+ * FAITHFUL PHASES (2026-11-12): a partial confirm writes execution_phase
+ * 'confirm_partial' (the live and guarded bodies both do) - this fake used to
+ * write 'confirm', which hid that the by-parent check never read that phase.
+ * The guarded partial confirm also writes its released remainder as its own
+ * 'release' row keyed <key>:remainder.
  */
 export {};
 type Row = { id: string; idempotency_key: string; execution_phase: string; parent_transaction_id: string | null };
 let mockLedger: Row[] = [];
 let mockReadErr = false;
+let mockPartialRemainder = false;
+let mockRacer = false;
 const mockRpcCalls: string[] = [];
 
 function mockQuery() {
@@ -33,10 +40,15 @@ jest.mock('../../db/supabaseClient', () => ({
       mockRpcCalls.push(`${fn}:${key}`);
       const existing = mockLedger.find((r) => r.idempotency_key === key);
       if (existing) return { data: existing, error: null }; // prod: same-key idempotent return
-      const phase = fn === 'apply_credit_partial_confirm' ? 'confirm' : a.p_phase;
-      const parent = fn === 'apply_credit_partial_confirm' ? a.p_hold_txn_id : a.p_parent_id;
+      const isPartial = fn === 'apply_credit_partial_confirm_guarded';
+      const phase = isPartial ? 'confirm_partial' : a.p_phase;
+      const parent = isPartial ? a.p_hold_txn_id : a.p_parent_id;
       const row = { id: `t${mockLedger.length + 1}`, idempotency_key: key, execution_phase: phase, parent_transaction_id: parent };
       mockLedger.push(row);
+      if (isPartial && mockPartialRemainder) {
+        mockLedger.push({ id: `t${mockLedger.length + 1}`, idempotency_key: `${key}:remainder`, execution_phase: 'release', parent_transaction_id: parent });
+      }
+      if (mockRacer) mockLedger.push({ id: `t${mockLedger.length + 1}`, idempotency_key: 'racer:release', execution_phase: 'release', parent_transaction_id: parent });
       return { data: row, error: null };
     },
   },
@@ -47,12 +59,14 @@ import { callCreditReservation, callCreditPartialConfirm } from '../../repositor
 const SPLIT = { free: 5, paid: 0, incentive: 0 };
 const settle = (phase: 'confirm' | 'release', key: string, parentId: string | undefined = 'h1') =>
   callCreditReservation({ orgId: 'o1', phase, split: SPLIT, idempotencyKey: key, referenceType: 'x', note: 'n', performedBy: 'u', parentId });
-const settledRows = () => mockLedger.filter((r) => r.parent_transaction_id === 'h1' && ['confirm', 'release'].includes(r.execution_phase));
+const settledRows = () => mockLedger.filter((r) => r.parent_transaction_id === 'h1' && ['confirm', 'release', 'confirm_partial'].includes(r.execution_phase) && !r.idempotency_key.endsWith(':remainder'));
+const partialConfirm = (key = 'k:confirm') =>
+  callCreditPartialConfirm({ orgId: 'o1', holdTxnId: 'h1', actualSplit: SPLIT, idempotencyKey: key, referenceType: 'x', note: 'n', performedBy: 'u' });
 
 let errSpy: jest.SpyInstance;
 beforeEach(() => {
   mockLedger = [{ id: 'h1', idempotency_key: 'k:hold', execution_phase: 'hold', parent_transaction_id: null }];
-  mockReadErr = false; mockRpcCalls.length = 0;
+  mockReadErr = false; mockPartialRemainder = false; mockRacer = false; mockRpcCalls.length = 0;
   errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 afterEach(() => errSpy.mockRestore());
@@ -126,26 +140,35 @@ it('KNOWN BOUND: a NULL-parent settlement under a different key family is NOT de
   expect(r.error).toBeNull();
 });
 
-// The chokepoint is only a chokepoint while nothing else calls the RPCs.
-it('fs: apply_credit_reservation / apply_credit_partial_confirm are called ONLY via the repository (expiry services excepted - no HOLD)', () => {
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
-  const ROOT = path.resolve(__dirname, '../../..');
-  const out: string[] = [];
-  const walk = (d: string) => {
-    let es: import('fs').Dirent[] = [];
-    try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of es) {
-      if (['node_modules', '.next', 'tests', '__tests__'].includes(e.name)) continue;
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (/\.(ts|tsx|js)$/.test(e.name) && /rpc\(\s*['"]apply_credit_(reservation|partial_confirm)['"]/.test(fs.readFileSync(p, 'utf8'))) out.push(path.relative(ROOT, p).split(path.sep).join('/'));
-    }
-  };
-  for (const d of ['backend', 'pages', 'lib', 'shared', 'app']) walk(path.join(ROOT, d));
-  expect(out.sort()).toEqual([
-    'backend/repositories/creditExecutionRepository.ts',
-    'backend/services/creditExpiryService.ts',
-    'backend/services/subscriptionCreditExpiryService.ts',
-  ]);
+// 20270217000023: the repository calls the GUARDED functions (the DB guard is
+// the atomic one); the static "no app code calls the old pair" pin lives in
+// creditLegacyRpcNotCalled.test.ts.
+it('the repository calls the GUARDED functions, never the legacy pair', async () => {
+  await settle('confirm', 'k:confirm');
+  await partialConfirm('p:confirm').catch(() => undefined);
+  expect(mockRpcCalls.every((c) => /^apply_credit_(reservation|partial_confirm)_guarded:/.test(c))).toBe(true);
+  expect(mockRpcCalls.length).toBeGreaterThan(0);
+});
+
+it("RELEASE under an UNRELATED key after a PARTIAL confirm -> refused BY PARENT (the 'confirm_partial' phase is read)", async () => {
+  await partialConfirm('k:confirm');
+  const r = await settle('release', 'reaper-other:release'); // a key outside the k: family: only the by-parent half can see it
+  expect(r.error?.message).toMatch(/HOLD_ALREADY_SETTLED/);
+  expect(settledRows()).toHaveLength(1);
+});
+
+it("a partial confirm's OWN remainder row is not 'another settlement': a same-key repeat passes, the post-check stays quiet", async () => {
+  mockPartialRemainder = true;
+  await partialConfirm('k:confirm');
+  expect(mockLedger.some((r) => r.idempotency_key === 'k:confirm:remainder')).toBe(true);
+  const r = await partialConfirm('k:confirm');
+  expect(r.error).toBeNull();
+  expect(errSpy.mock.calls.some((c) => String(c[0]).includes('HOLD_DOUBLE_SETTLED'))).toBe(false);
+});
+
+it('control: a REAL second settlement (a racer behind the pre-check) -> the post-check logs CRITICAL', async () => {
+  mockRacer = true; // the fake writes another key's release of h1 in the same instant
+  mockPartialRemainder = true;
+  await partialConfirm('k:confirm');
+  expect(errSpy.mock.calls.some((c) => String(c[0]).includes('HOLD_DOUBLE_SETTLED'))).toBe(true);
 });

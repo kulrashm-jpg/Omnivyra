@@ -173,7 +173,7 @@ async function call(user: string | null, body: Row) {
   await (route as (q: unknown, s: unknown) => Promise<unknown>)({ headers: user ? { 'x-test-user': user } : {}, query: {}, body, method: 'POST', url: '/api/super-admin/purchases/complete', socket: {} }, res);
   return res;
 }
-const grants = () => mockRpc.filter((c) => c.fn === 'apply_credit_reservation' && c.args.p_phase === 'grant');
+const grants = () => mockRpc.filter((c) => c.fn === 'apply_credit_reservation_guarded' && c.args.p_phase === 'grant');
 const row = (id: string) => mockDb.credit_purchases.find((r) => r.id === id)!;
 const purchaseEffects = () => ({
   purchaseReads: mockReads.filter((t) => t === 'credit_purchases' || t === 'payment_provider_events').length,
