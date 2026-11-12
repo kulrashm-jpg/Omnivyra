@@ -302,11 +302,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // 'publishing' row, a 'published' one, or the uncertain record, so
       // nothing is written.
       if (!result.suppressed) {
+        // CLASS-2 D8: a mirror of what publishNow wrote, so it lands only on that status - once
+        // `failed` the post is claimable and another execution may hold it already.
         await updatePostPublishStatus({
           post_id: post.id,
           status: result.status,
           external_post_id: result.external_post_id,
           last_error: result.status === 'PUBLISHED' ? undefined : result.message,
+          expectedFromStatus: result.status.toLowerCase(),
         });
       }
 
@@ -337,10 +340,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     } catch (error: any) {
       console.error('[publish] error:', error);
       try {
+        // Only over the status this request READ (publishNow restores it when nothing was sent):
+        // an uncertain outcome, or another execution's claim, is not this request's to overwrite.
         await updatePostPublishStatus({
           post_id,
           status: 'FAILED',
           last_error: error?.message || 'Publish failed',
+          ...(post.status ? { expectedFromStatus: String(post.status) } : {}),
         });
       } catch (_) {}
       return res.status(500).json({

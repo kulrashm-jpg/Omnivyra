@@ -31,7 +31,14 @@ export async function updatePostPublishStatus(input: {
   status: string;
   external_post_id?: string;
   last_error?: string;
-}): Promise<void> {
+  /**
+   * CLASS-2 D8: write only if the post is still in this status (compare-and-set, row count
+   * checked). A caller that read the post earlier must pass it: between that read and this write
+   * another execution may have claimed the post (`publishing`), and a blind status write flipped
+   * that live claim. Without it the write is blind, as before. Returns whether a row moved.
+   */
+  expectedFromStatus?: string;
+}): Promise<boolean> {
   // Normalise to lowercase — DB chk_status constraint requires lowercase values
   const dbStatus = input.status.toLowerCase();
 
@@ -50,12 +57,15 @@ export async function updatePostPublishStatus(input: {
     payload.published_at = new Date().toISOString();
   }
 
-  const { error } = await supabase
+  const write = supabase
     .from('scheduled_posts')
     .update(payload)
     .eq('id', input.post_id);
+  const { data, error } = await (input.expectedFromStatus === undefined ? write : write.eq('status', input.expectedFromStatus))
+    .select('id');
 
   if (error) {
     throw new Error(`Failed to update scheduled post: ${error.message}`);
   }
+  return Array.isArray(data) && data.length > 0;
 }

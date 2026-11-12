@@ -15,7 +15,8 @@ jest.mock('../../services/rbacService', () => ({ isSuperAdmin: async () => false
 jest.mock('../../db/queries', () => ({
   getScheduledPost: async () => ({ id: 'p1', user_id: 'u1', platform: 'linkedin', content: 'hello', media_urls: [], campaign_id: null, social_account_id: null, status: 'scheduled' }),
 }));
-jest.mock('../../db/scheduledPostsStore', () => ({ updatePostPublishStatus: async () => undefined }));
+const mockStatusWrites: Array<Record<string, unknown>> = [];
+jest.mock('../../db/scheduledPostsStore', () => ({ updatePostPublishStatus: async (i: Record<string, unknown>) => { mockStatusWrites.push(i); return true; } }));
 jest.mock('../../services/publishNowService', () => ({ publishNow: (...a: unknown[]) => (mockPublishNow as any)(...a) }));
 jest.mock('../../../lib/campaign/publishAuthorization', () => ({ authorizePostPublish: () => ({ authorized: true }) }));
 jest.mock('../../services/engagementCapabilityMap', () => ({ resolveEngagementCapability: () => ({ status: 'api_verified' }) }));
@@ -56,6 +57,7 @@ async function call(body: Record<string, unknown>) {
 beforeEach(() => {
   mockDb.acctFails = false; mockDb.patchFails = false; mockDb.patched.length = 0;
   mockPublishNow.mockClear();
+  mockStatusWrites.length = 0;
   jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 afterEach(() => jest.restoreAllMocks());
@@ -79,4 +81,18 @@ it('NEGATIVE CONTROL (dry run): the account is resolved and saved, 200 DRY_RUN',
   expect(res.statusCode).toBe(200);
   expect(res.body).toMatchObject({ status: 'DRY_RUN', social_account_id: 'sa1' });
   expect(mockDb.patched).toEqual([{ social_account_id: 'sa1' }]);
+});
+
+describe('CLASS-2 D8: the status writes of the route name the status they expect', () => {
+  it('the result mirror lands only on the status publishNow wrote', async () => {
+    (mockPublishNow as jest.Mock).mockResolvedValueOnce({ status: 'FAILED', message: 'token expired' });
+    await call({ post_id: 'p1' });
+    expect(mockStatusWrites).toEqual([expect.objectContaining({ status: 'FAILED', expectedFromStatus: 'failed' })]);
+  });
+
+  it('publishNow threw: failed only over the status this request read', async () => {
+    (mockPublishNow as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+    await call({ post_id: 'p1' });
+    expect(mockStatusWrites).toEqual([expect.objectContaining({ status: 'FAILED', expectedFromStatus: 'scheduled' })]);
+  });
 });

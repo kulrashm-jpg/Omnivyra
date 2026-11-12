@@ -9,6 +9,7 @@ jest.mock('../../db/supabaseClient', () => ({
 
 import { fakeDb, resetFakeDb } from '../helpers/fakeWhatsappDb';
 import { updateScheduledPostOnFailure } from '../../db/queries';
+import { updatePostPublishStatus } from '../../db/scheduledPostsStore';
 
 const post = () => fakeDb.tables.scheduled_posts[0];
 beforeEach(() => resetFakeDb({ scheduled_posts: [{ id: 'sp-1', status: 'publishing', error_code: 'PUBLISH_CLAIMED:mine' }], daily_content_plans: [] }));
@@ -32,4 +33,17 @@ it.each([
 it('a claim pin without a status compare-and-set is refused (it would be a blind write wearing a fence)', async () => {
   await expect(updateScheduledPostOnFailure('sp-1', 'x', undefined, 'C', 'PUBLISH_CLAIMED:mine')).rejects.toThrow('requires expectedFromStatus');
   expect(post().status).toBe('publishing');
+});
+
+describe('CLASS-2 D8: updatePostPublishStatus with expectedFromStatus is a compare-and-set', () => {
+  it('the post was claimed since the read (publishing): nothing written, false', async () => {
+    expect(await updatePostPublishStatus({ post_id: 'sp-1', status: 'FAILED', last_error: 'x', expectedFromStatus: 'scheduled' })).toBe(false);
+    expect(post()).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:mine' });
+  });
+
+  it('NEGATIVE CONTROL: still in the expected status -> written, true', async () => {
+    post().status = 'scheduled';
+    expect(await updatePostPublishStatus({ post_id: 'sp-1', status: 'FAILED', last_error: 'x', expectedFromStatus: 'scheduled' })).toBe(true);
+    expect(post()).toMatchObject({ status: 'failed', error_message: 'x' });
+  });
 });
