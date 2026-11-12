@@ -72,7 +72,14 @@ async function handler(
 
   let route = '/onboarding/profile';
 
-  if (user.email) {
+  // 05 (2026-11-12): the email bears authority (it selects the invitation, and with it the company
+  // the user joins) ONLY once it is VERIFIED. resolveAuthenticatedUser reports emailVerified and
+  // leaves the decision to routes. An unverified session never activates an invitation; it is
+  // logged and continues as a plain password set.
+  if (user.email && !user.emailVerified) {
+    logger.warn('auth_set_password_unverified_email_no_invite_activation', { userId: user.id });
+  }
+  if (user.email && user.emailVerified) {
     // cross-tenant: invite-set-password-own-email
     const { data: invitation } = await supabase.from('invitations')
       .select('id, company_id, expires_at, token_consumed_at')

@@ -29,7 +29,7 @@ jest.mock('../../services/authResolver', () => ({
   resolveAuthenticatedUser: async (req: { headers?: Record<string, unknown> }) => {
     const id = req?.headers?.['x-test-user'];
     return typeof id === 'string' && id
-      ? { user: { id, supabaseUid: `sb-${id}`, email: 'invitee@example.test', status: 'active' }, error: null }
+      ? { user: { id, supabaseUid: `sb-${id}`, email: 'invitee@example.test', emailVerified: true /* the real resolver always sets it; invitees arrive via the magic link */, status: 'active' }, error: null }
       : { user: null, error: 'NO_TOKEN' };
   },
 }));
