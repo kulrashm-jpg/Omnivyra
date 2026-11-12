@@ -55,6 +55,12 @@
 -- is one of 000001's POST-fix forms (LF/CRLF): prod 03d616e6 / 90bcbfb5,
 -- full-replay 7799ec27 / 7ee214ad.
 --
+-- SCOPE OF THE LOCK (e9): the advisory lock serialises GUARDED settlements
+-- only. A settlement written through the legacy apply_credit_reservation /
+-- apply_credit_partial_confirm takes no such lock and is unserialised against
+-- these until every caller has moved and 20270217000024 revokes the legacy
+-- pair's EXECUTE (app code calls only the guarded names - pinned by
+-- creditLegacyRpcNotCalled.test.ts).
 -- LOCKING NOTE: the hold row is NOT locked FOR UPDATE. SELECT ... FOR UPDATE
 -- needs UPDATE privilege on credit_transactions (an append-only ledger whose
 -- grants differ between hosted and replayed builds); the advisory lock gives
