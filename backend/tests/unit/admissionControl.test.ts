@@ -71,16 +71,20 @@ describe('canStartActivity — 9 validation cases', () => {
     expect(d).toMatchObject({ allowed: false, reason: 'insufficient_credits', effectiveCredits: 10, requiredCredits: 15, shortfall: 5 });
   });
 
-  it('4. existing active reservations reduce effective → blocked', async () => {
-    priority.getWalletSnapshot.mockResolvedValue(wallet(20, 0, 0, 10)); // 20 balance, 10 reserved
+  // SINGLE COUNT (20270217000001): a HOLD has already LEFT the balance (balance -= n;
+  // reserved += n), so open reservations are reported but NOT subtracted again. This
+  // case used to pin the double count (effective 10 for a 20 balance with 10 held).
+  it('4. open reservations are reported but NOT subtracted again (they already left the balance) → allowed', async () => {
+    priority.getWalletSnapshot.mockResolvedValue(wallet(20, 0, 0, 10)); // 20 still spendable, 10 already held
     const d = await canStartActivity({ organizationId: ORG, activity: ACTION });
-    expect(d).toMatchObject({ availableCredits: 20, activeReservations: 10, effectiveCredits: 10, allowed: false, shortfall: 5 });
+    expect(d).toMatchObject({ availableCredits: 20, activeReservations: 10, effectiveCredits: 20, allowed: true, shortfall: 0 });
   });
 
   it('5. multiple concurrent activities (reservations consume capacity) → blocked', async () => {
-    priority.getWalletSnapshot.mockResolvedValue(wallet(30, 0, 0, 30)); // fully reserved in-flight
+    // fully reserved in-flight: the holds moved ALL 30 out of the balance
+    priority.getWalletSnapshot.mockResolvedValue(wallet(0, 0, 0, 30));
     const d = await canStartActivity({ organizationId: ORG, activity: ACTION });
-    expect(d).toMatchObject({ effectiveCredits: 0, allowed: false, shortfall: 15 });
+    expect(d).toMatchObject({ effectiveCredits: 0, activeReservations: 30, allowed: false, shortfall: 15 });
   });
 
   it('6. entry-consumption engine → same verdict (engine-agnostic)', async () => {

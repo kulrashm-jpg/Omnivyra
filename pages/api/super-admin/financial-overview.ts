@@ -115,8 +115,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const rp = Number(w.reserved_paid ?? 0);
       const ri = Number(w.reserved_incentive ?? 0);
       const rate = Number(w.credit_rate_usd ?? 0.01);
+      // SINGLE COUNT (20270217000001): a HOLD already moves credits OUT of the balance (balance -= n; reserved += n), so the balance IS the available amount; subtracting reserved again counted every open hold twice.
       const totalAvailable =
-        Math.max(0, free - rf) + Math.max(0, paid - rp) + Math.max(0, inc - ri);
+        Math.max(0, free) + Math.max(0, paid) + Math.max(0, inc);
 
       // Per-org enrichment — parallelizable; sequential is fine at limit≤500
       const [controls, contract, anomaly, lastTx] = await Promise.all([

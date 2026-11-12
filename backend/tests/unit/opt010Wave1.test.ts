@@ -143,8 +143,9 @@ describe('A2 — canStartActivity wallet snapshot pass-through', () => {
   test('caller-supplied snapshot: internal getWalletSnapshot NOT called; math identical', async () => {
     const d = await canStartActivity({ organizationId: 'org-1', activity: 'ai_reply', walletSnapshot: SNAPSHOT });
     expect(walletMock).not.toHaveBeenCalled();
-    // effective = (100+50+0) − (10+0+0) = 140
-    expect(d.effectiveCredits).toBe(140);
+    // effective = 100+50+0 = 150 (SINGLE COUNT, 20270217000001: the 10 reserved
+    // already left the balance; it is reported, not subtracted again)
+    expect(d.effectiveCredits).toBe(150);
     expect(d.availableCredits).toBe(150);
     expect(d.activeReservations).toBe(10);
   });
@@ -160,7 +161,7 @@ describe('A2 — canStartActivity wallet snapshot pass-through', () => {
     walletMock.mockResolvedValue(SNAPSHOT);
     const d = await canStartActivity({ organizationId: 'org-1', activity: 'ai_reply' });
     expect(walletMock).toHaveBeenCalledTimes(1);
-    expect(d.effectiveCredits).toBe(140);
+    expect(d.effectiveCredits).toBe(150);
   });
 });
 

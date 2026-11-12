@@ -16,8 +16,8 @@
  * free_balance - reserved_free, subtracting open holds a SECOND time
  * (pre-existing production defect, reported 2026-11-12): a second concurrent
  * hold is refused while credits remain. Final charges are unaffected (confirm
- * only clears reserved_free). The 'both fit' case pins the CORRECT behaviour as
- * it.failing until the function is fixed.
+ * only clears reserved_free). FIXED by 20270217000001_credit_reservation_single_count
+ * (availability = balance); the 'both fit' case pins that as a plain it().
  *
  * The ledger (credit_transactions) is append-only, so the committed rows this
  * suite writes stay in the disposable CI database; each case uses its own
@@ -95,11 +95,10 @@ describe('apply_credit_reservation under real concurrency (image credits)', () =
     expect(await holdsFor(o)).toBe(1);
   });
 
-  // KNOWN DEFECT (pre-existing, reported): the availability check double-counts
-  // open holds, so the second hold is refused with 'need 5, have 0' although 5
-  // remain. it.failing keeps CI honest and turns red the day the function is
-  // fixed - then make this a plain it().
-  it.failing('a pair where BOTH fit: one hold each, the balance reaches zero and no lower', async () => {
+  // Was it.failing (the availability check double-counted open holds: the
+  // second hold was refused with 'need 5, have 0' although 5 remained). Fixed by
+  // 20270217000001_credit_reservation_single_count.
+  it('a pair where BOTH fit: one hold each, the balance reaches zero and no lower', async () => {
     const o = org(2);
     await seedOrg(o, 10);
     const { bErr } = await race(o, { amount: 5, key: `ic-${tag}-c:hold` }, { amount: 5, key: `ic-${tag}-d:hold` });

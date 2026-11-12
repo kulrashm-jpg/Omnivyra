@@ -70,9 +70,10 @@ export async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot |
  */
 export function computeAvailable(wallet: WalletSnapshot, opts?: { topupUsable?: boolean }): AvailableBalance {
   const topupUsable = opts?.topupUsable !== false; // default true (backward compatible)
-  const free      = Math.max(0, wallet.free_balance      - wallet.reserved_free);
-  const incentive = Math.max(0, wallet.incentive_balance - wallet.reserved_incentive);
-  const paid      = topupUsable ? Math.max(0, wallet.paid_balance - wallet.reserved_paid) : 0;
+  // SINGLE COUNT (20270217000001): a HOLD already moves credits OUT of the balance (balance -= n; reserved += n), so the balance IS the available amount; subtracting reserved again counted every open hold twice.
+  const free      = Math.max(0, wallet.free_balance);
+  const incentive = Math.max(0, wallet.incentive_balance);
+  const paid      = topupUsable ? Math.max(0, wallet.paid_balance) : 0;
   return { free, incentive, paid, total: free + incentive + paid };
 }
 

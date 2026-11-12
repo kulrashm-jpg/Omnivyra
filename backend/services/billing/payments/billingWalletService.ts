@@ -56,9 +56,10 @@ export async function getBillingWalletSnapshot(orgId: string): Promise<BillingWa
   const rate = Number(w.credit_rate_usd ?? 0.01);
 
   const totalAvailable =
-    Math.max(0, free - reservedFree) +
-    Math.max(0, paid - reservedPaid) +
-    Math.max(0, incentive - reservedIncentive);
+    // SINGLE COUNT (20270217000001): a HOLD already moves credits OUT of the balance (balance -= n; reserved += n), so the balance IS the available amount; subtracting reserved again counted every open hold twice.
+    Math.max(0, free) +
+    Math.max(0, paid) +
+    Math.max(0, incentive);
 
   const { data: lastTx } = await supabase
     .from('credit_transactions')
@@ -111,7 +112,8 @@ export async function getPortfolioWalletAggregate(limit = 100): Promise<BillingW
     const rp   = Number(r.reserved_paid ?? 0);
     const ri   = Number(r.reserved_incentive ?? 0);
     const rate = Number(r.credit_rate_usd ?? 0.01);
-    const avail = Math.max(0, free - rf) + Math.max(0, paid - rp) + Math.max(0, inc - ri);
+    // SINGLE COUNT (20270217000001): a HOLD already moves credits OUT of the balance (balance -= n; reserved += n), so the balance IS the available amount; subtracting reserved again counted every open hold twice.
+    const avail = Math.max(0, free) + Math.max(0, paid) + Math.max(0, inc);
     totalAvail    += avail;
     totalUsd      += avail * rate;
     totalReserved += rf + rp + ri;

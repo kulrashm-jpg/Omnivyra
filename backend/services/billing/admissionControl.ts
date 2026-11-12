@@ -5,8 +5,9 @@
  * cover the activity's MAXIMUM exposure given what it has already committed?
  *
  *   availableCredits   = free + paid + incentive balance (gross spendable)
- *   activeReservations = reserved_free + reserved_paid + reserved_incentive
- *   effectiveCredits   = availableCredits − activeReservations
+ *   activeReservations = reserved_free + reserved_paid + reserved_incentive (reported only)
+ *   effectiveCredits   = availableCredits  (SINGLE COUNT, 20270217000001: a HOLD has
+ *                        already left the balance; subtracting reserved double-counted it)
  *   requiredCredits    = resolveActivityEconomics(activity).maximumCredits
  *   allowed            = effectiveCredits >= requiredCredits        // MAX, not min/entry
  *
@@ -138,9 +139,11 @@ export async function canStartActivity(input: {
     return decision;
   }
 
+  // SINGLE COUNT (20270217000001): a HOLD already moves credits OUT of the balance (balance -= n; reserved += n), so the balance IS the available amount; subtracting reserved again counted every open hold twice.
   const availableCredits   = wallet.free_balance + wallet.paid_balance + wallet.incentive_balance;
+  // reported for observability only - it is NOT subtracted (see above).
   const activeReservations = wallet.reserved_free + wallet.reserved_paid + wallet.reserved_incentive;
-  const effectiveCredits   = availableCredits - activeReservations;
+  const effectiveCredits   = Math.max(0, availableCredits);
   const allowed            = effectiveCredits >= requiredCredits;
   const shortfall          = allowed ? 0 : Math.max(0, requiredCredits - effectiveCredits);
 

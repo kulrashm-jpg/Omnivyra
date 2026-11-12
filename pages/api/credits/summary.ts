@@ -77,7 +77,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const totalBalance = freeBalance + paidBalance + incentiveBalance;
     const totalReserved = reservedFree + reservedPaid + reservedIncentive;
-    const totalAvailable = Math.max(0, totalBalance - totalReserved);
+    // SINGLE COUNT (20270217000001): a HOLD already moves credits OUT of the balance (balance -= n; reserved += n), so the balance IS the available amount; subtracting reserved again counted every open hold twice.
+    const totalAvailable = Math.max(0, totalBalance);
 
     const expiryRows = (expiryRes.data ?? []) as Array<{ initial_credits: number; credit_expiry_at: string }>;
     const expiringSoonCredits = expiryRows.reduce((sum, row) => sum + (row.initial_credits ?? 0), 0);

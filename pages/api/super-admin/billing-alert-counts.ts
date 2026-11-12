@@ -46,9 +46,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let lowBalanceOrgs = 0;
     for (const w of ((wallets.data ?? []) as Array<Record<string, unknown>>)) {
       const avail =
-        Math.max(0, Number(w.free_balance ?? 0) - Number(w.reserved_free ?? 0)) +
-        Math.max(0, Number(w.paid_balance ?? 0) - Number(w.reserved_paid ?? 0)) +
-        Math.max(0, Number(w.incentive_balance ?? 0) - Number(w.reserved_incentive ?? 0));
+        // SINGLE COUNT (20270217000001): the balance already excludes open holds.
+        Math.max(0, Number(w.free_balance ?? 0)) +
+        Math.max(0, Number(w.paid_balance ?? 0)) +
+        Math.max(0, Number(w.incentive_balance ?? 0));
       if (avail < lowBalanceThreshold) lowBalanceOrgs += 1;
     }
 
