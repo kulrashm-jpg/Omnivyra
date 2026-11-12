@@ -26,7 +26,13 @@
 const mockTables: Record<string, Record<string, unknown>[]> = {};
 const mockWrites: { table: string; op: string; payload?: Record<string, unknown> }[] = [];
 function mockBuilder(table: string) {
-  let rows = [...(mockTables[table] ?? [])];
+  // FAITHFUL fake (MONEY, 2026-11-12): inserts PERSIST and updates APPLY to the rows
+  // their filters match, returning them. The staging service now refuses to hand out
+  // an order whose id did not attach to exactly one pending purchase - a fake that
+  // dropped inserts and matched nothing was kinder than the database.
+  if (!mockTables[table]) mockTables[table] = [];
+  let rows = [...mockTables[table]];
+  let patch: Record<string, unknown> | null = null;
   const b: Record<string, unknown> = {};
   const chain = () => b;
   Object.assign(b, {
@@ -40,14 +46,17 @@ function mockBuilder(table: string) {
     insert: (payload: Record<string, unknown>) => {
       const row = { id: `${table}-${mockWrites.length + 1}`, ...payload };
       mockWrites.push({ table, op: 'insert', payload });
+      mockTables[table].push(row);
       rows = [row];
       return b;
     },
-    update: (payload: Record<string, unknown>) => { mockWrites.push({ table, op: 'update', payload }); return b; },
+    update: (payload: Record<string, unknown>) => { mockWrites.push({ table, op: 'update', payload }); patch = payload; return b; },
     upsert: (payload: Record<string, unknown>) => { mockWrites.push({ table, op: 'upsert', payload }); return b; },
     delete: () => { mockWrites.push({ table, op: 'delete' }); return b; },
-    then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-      Promise.resolve({ data: rows, error: null }).then(res, rej),
+    then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => {
+      if (patch) for (const r of rows) Object.assign(r, patch); // rows are the STORED objects
+      return Promise.resolve({ data: rows, error: null }).then(res, rej);
+    },
   });
   return b;
 }

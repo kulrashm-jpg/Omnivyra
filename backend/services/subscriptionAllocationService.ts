@@ -145,6 +145,9 @@ export interface AllocationSweepSummary {
   processed: number;
   allocated: number;
   skipped: number;
+  /** Orgs whose allocation THREW this run (no monthly credits) - never silent. */
+  failed: number;
+  failedOrgIds: string[];
   dryRun: boolean;
   results: AllocationResult[];
 }
