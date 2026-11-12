@@ -53,10 +53,84 @@ export interface CreditPartialConfirmCommand {
   performedBy: string;
 }
 
+/**
+ * SETTLE-ONCE GUARD (2026-11-12, e9 URGENT ruling). The prod body of
+ * apply_credit_reservation does NOT refuse a second settlement of a HOLD (the
+ * 20260625 "HOLD already settled" guard was never installed - 83/C17, 05). Its
+ * idempotent return only collapses a repeat of the SAME key, so a CONFIRM and a
+ * RELEASE (different keys) of one hold can BOTH apply. Until the guarded
+ * function lands, every confirm / release / partial confirm checks - by
+ * BUSINESS IDENTITY, not by key - that no terminal settlement of that hold
+ * exists under another key:
+ *   - by parent:   credit_transactions.parent_transaction_id = <hold id>
+ *   - by key family: <base>:confirm / <base>:release (holds settled before
+ *     parent ids were always written)
+ * A settlement under the SAME key passes through (the RPC returns it). A read
+ * error refuses. NOT atomic (two different-key settles in the same instant can
+ * both pass) - the post-check below detects that and raises CRITICAL; the DB
+ * guard (apply_credit_reservation_guarded) closes it.
+ */
+const SETTLE_PHASES = ['confirm', 'release'] as const;
+
+function keyBase(key: string): string | null {
+  const m = /^(.*):(confirm|release)$/.exec(key);
+  return m ? m[1] : null;
+}
+
+async function findOtherSettlement(holdId: string | null | undefined, ownKey: string): Promise<{ error: Error | null; other: { id: string; idempotency_key: string; execution_phase: string } | null }> {
+  const rows: Array<{ id: string; idempotency_key: string; execution_phase: string }> = [];
+  if (holdId) {
+    const { data, error } = await supabase
+      .from('credit_transactions')
+      .select('id, idempotency_key, execution_phase')
+      .eq('parent_transaction_id', holdId)
+      .in('execution_phase', [...SETTLE_PHASES]);
+    if (error) return { error: new Error(`[creditExecution] settle-once check failed for hold ${holdId}: ${error.message}`), other: null };
+    rows.push(...((data ?? []) as typeof rows));
+  }
+  const base = keyBase(ownKey);
+  if (base) {
+    const { data, error } = await supabase
+      .from('credit_transactions')
+      .select('id, idempotency_key, execution_phase')
+      .in('idempotency_key', [`${base}:confirm`, `${base}:release`]);
+    if (error) return { error: new Error(`[creditExecution] settle-once check failed for ${base}: ${error.message}`), other: null };
+    rows.push(...((data ?? []) as typeof rows));
+  }
+  const other = rows.find((r) => r.idempotency_key !== ownKey) ?? null;
+  return { error: null, other };
+}
+
+async function postCheckSingleSettlement(holdId: string | null | undefined, key: string): Promise<void> {
+  if (!holdId) return;
+  const { data, error } = await supabase
+    .from('credit_transactions')
+    .select('id')
+    .eq('parent_transaction_id', holdId)
+    .in('execution_phase', [...SETTLE_PHASES]);
+  if (error) {
+    console.error('[creditExecution] settle-once post-check read failed:', holdId, error.message);
+    return;
+  }
+  if (Array.isArray(data) && data.length > 1) {
+    console.error('[creditExecution] CRITICAL HOLD_DOUBLE_SETTLED: hold has more than one terminal settlement', { holdId, key, settlements: data.length });
+  }
+}
+
 export async function callCreditReservation(command: CreditReservationCommand): Promise<{
   error: Error | null;
   transactionId: string | null;
 }> {
+  if ((SETTLE_PHASES as readonly string[]).includes(command.phase)) {
+    const { error: checkErr, other } = await findOtherSettlement(command.parentId, command.idempotencyKey);
+    if (checkErr) return { error: checkErr, transactionId: null };
+    if (other) {
+      return {
+        error: new Error(`HOLD_ALREADY_SETTLED: hold ${command.parentId ?? '(by key)'} already has a ${other.execution_phase} (${other.id}); refusing ${command.phase}`),
+        transactionId: null,
+      };
+    }
+  }
   const category = command.category ?? deriveCategory(command.split);
   const { error, data } = await supabase.rpc('apply_credit_reservation', {
     p_org_id: command.orgId,
@@ -74,6 +148,9 @@ export async function callCreditReservation(command: CreditReservationCommand): 
   });
 
   const txId = (data as { id?: string } | null)?.id ?? null;
+  if (!error && (SETTLE_PHASES as readonly string[]).includes(command.phase)) {
+    await postCheckSingleSettlement(command.parentId, command.idempotencyKey);
+  }
   return { error: error as Error | null, transactionId: txId };
 }
 
@@ -101,6 +178,12 @@ export async function callCreditPartialConfirm(command: CreditPartialConfirmComm
   error: Error | null;
   data: unknown;
 }> {
+  // SETTLE-ONCE GUARD (see above): a partial confirm is a settlement too.
+  const { error: checkErr, other } = await findOtherSettlement(command.holdTxnId, command.idempotencyKey);
+  if (checkErr) return { error: checkErr, data: null };
+  if (other) {
+    return { error: new Error(`HOLD_ALREADY_SETTLED: hold ${command.holdTxnId} already has a ${other.execution_phase} (${other.id}); refusing partial confirm`), data: null };
+  }
   const { error, data } = await supabase.rpc('apply_credit_partial_confirm', {
     p_org_id: command.orgId,
     p_hold_txn_id: command.holdTxnId,
@@ -114,6 +197,7 @@ export async function callCreditPartialConfirm(command: CreditPartialConfirmComm
     p_performed_by: command.performedBy,
   });
 
+  if (!error) await postCheckSingleSettlement(command.holdTxnId, command.idempotencyKey);
   return { error: error as Error | null, data };
 }
 
