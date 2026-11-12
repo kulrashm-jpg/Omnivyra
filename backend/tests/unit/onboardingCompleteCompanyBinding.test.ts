@@ -124,6 +124,14 @@ it('an invited member with a second stale row is NEVER promoted (05: multi-row r
   expect(mockDb.user_company_roles.map((x) => x.role)).toEqual(['CONTENT_CREATOR', 'CONTENT_CREATOR']);
 });
 
+it('filter syntax inside the verified email never resolves to ANOTHER user row (no interpolated .or())', async () => {
+  mockDb.users = [{ id: 'u-victim', supabase_uid: 'sb-victim', email: 'v@acme.com', is_deleted: false }];
+  mockEmail = 'a,supabase_uid.eq.sb-victim,email.eq.z@acme.com';
+  await post();
+  expect(mockDb.users.find((u) => u.id === 'u-victim')).toMatchObject({ supabase_uid: 'sb-victim' });
+  expect(mockWrites.filter((w) => w.table === 'users' && w.row.id === 'u-victim')).toEqual([]);
+});
+
 it('control: the first registrant of a NEW company is its COMPANY_ADMIN', async () => {
   mockEmail = 'founder@newco.io';
   const r = await post();
