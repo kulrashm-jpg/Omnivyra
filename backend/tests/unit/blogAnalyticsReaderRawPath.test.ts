@@ -12,7 +12,7 @@ import path from 'path';
 
 const mockDb = {
   daily: [] as Record<string, unknown>[], pageviews: [] as Record<string, unknown>[], leaves: [] as Record<string, unknown>[],
-  /** Which read fails: 'daily' | 'pageview' | 'pageleave', optionally ':prior' for the previous-7d window only. */
+  /** Which ONE read fails: 'daily', or `${event}:${window}` - event pageview|pageleave, window 30d|7d|prior. */
   fail: null as string | null,
 };
 
@@ -25,11 +25,16 @@ jest.mock('../../db/supabaseClient', () => ({
       const b: any = {};
       b.select = () => b;
       b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
-      b.gte = () => b; b.order = () => b;
+      b.order = () => b;
+      b.gte = (_c: string, v: string) => { filters.since = v; return b; };
       b.lt = () => { filters.prior = true; return b; };
       b.then = (res: (v: unknown) => unknown) => {
-        const name = table === 'blog_analytics_daily' ? 'daily' : String(filters.event_type);
-        if (mockDb.fail === name || mockDb.fail === `${name}:${filters.prior ? 'prior' : 'x'}`) {
+        // The window is keyed on the dates the route passes: .lt => the prior 7d; else the
+        // lower bound's age says 30d or 7d. Each of the 7 reads can fail on its own.
+        const ageDays = (Date.now() - Date.parse(String(filters.since))) / 86_400_000;
+        const win = filters.prior ? 'prior' : ageDays > 20 ? '30d' : '7d';
+        const name = table === 'blog_analytics_daily' ? 'daily' : `${String(filters.event_type)}:${win}`;
+        if (mockDb.fail === name) {
           return Promise.resolve({ data: null, error: { message: 'canceling statement due to statement timeout' } }).then(res);
         }
         const data = table === 'blog_analytics_daily' ? mockDb.daily
@@ -86,7 +91,7 @@ describe('a failed read is UNAVAILABLE, never zero views', () => {
   beforeEach(() => { errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
   afterEach(() => errSpy.mockRestore());
 
-  it.each(['daily', 'pageview', 'pageleave', 'pageview:prior', 'pageleave:prior'])('%s read fails -> 500 ANALYTICS_UNAVAILABLE, logged', async (which) => {
+  it.each(['daily', 'pageview:30d', 'pageleave:30d', 'pageview:7d', 'pageleave:7d', 'pageview:prior', 'pageleave:prior'])('%s read fails -> 500 ANALYTICS_UNAVAILABLE, logged', async (which) => {
     mockDb.fail = which;
     const res = await call();
     expect(res.statusCode).toBe(500);
@@ -101,4 +106,17 @@ describe('a failed read is UNAVAILABLE, never zero views', () => {
     expect(res.body.total_views).toBe(7);
     expect(errSpy).not.toHaveBeenCalled();
   });
+});
+
+it('the mock keys every read on its own window - each of the 7 names is hit exactly once per request', async () => {
+  const seen: string[] = [];
+  for (const which of ['daily', 'pageview:30d', 'pageleave:30d', 'pageview:7d', 'pageleave:7d', 'pageview:prior', 'pageleave:prior']) {
+    mockDb.fail = which;
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const res = await call();
+    spy.mockRestore();
+    if (res.statusCode === 500) seen.push(which);
+  }
+  mockDb.fail = null;
+  expect(seen).toHaveLength(7);
 });

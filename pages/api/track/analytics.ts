@@ -169,17 +169,17 @@ function aggregateSlice(pageviews: any[], leaves: any[]) {
   return { totalViews, avgTime, avgScroll, pages };
 }
 
-/** The rows of a read, or a throw naming it - a failed read is never an empty result. */
-function rowsOf<T>(result: { data: T[] | null; error: { message?: string } | null }, what: string): T[] {
-  if (result.error) throw new AnalyticsReadError(what, result.error.message ?? 'unknown error');
-  return result.data ?? [];
-}
-
 class AnalyticsReadError extends Error {
   constructor(readonly what: string, detail: string) {
     super(`${what}: ${detail}`);
     this.name = 'AnalyticsReadError';
   }
+}
+
+/** The rows of a read, or a throw naming it - a failed read is never an empty result. */
+function rowsOf<T>(result: { data: T[] | null; error: { message?: string } | null }, what: string): T[] {
+  if (result.error) throw new AnalyticsReadError(what, result.error.message ?? 'unknown error');
+  return result.data ?? [];
 }
 
 function pctChange(cur: number, prev: number): number | null {
