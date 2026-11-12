@@ -35,6 +35,7 @@ import {
   type ConfigurationDraft,
 } from '../../../backend/services/listeningConfigurationService';
 import { getMonitoringStatusSnapshot } from '../../../backend/services/monitoringOrchestrationService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import {
   isIndustryVolatility,
   isListeningMode,
@@ -54,10 +55,12 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
 
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  // S2 tenant seam: the configuration service takes the context of THIS access check.
+  const tenant = tenantContextFor(ctx, companyId);
 
   try {
     const [configuration, monitoringStatus] = await Promise.all([
-      getListeningConfiguration(companyId),
+      getListeningConfiguration(tenant),
       getMonitoringStatusSnapshot(companyId),
     ]);
     return res.status(200).json({ configuration, monitoring_status: monitoringStatus });
@@ -89,6 +92,8 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
+  // S2 tenant seam: the configuration service takes the context of the access check above.
+  const tenant = tenantContextFor(ctx, companyId);
 
   const platforms = Array.isArray(body.platforms) ? body.platforms.filter((p) => typeof p === 'string') : [];
   const keywordCount = typeof body.keywordCount === 'number' ? body.keywordCount : 0;
@@ -101,7 +106,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const result = await activateListeningConfiguration({
-      organizationId: companyId,
+      tenant,
       mode: body.mode,
       platforms,
       keywordCount,
@@ -144,9 +149,11 @@ async function handleDelete(req: NextApiRequest, res: NextApiResponse) {
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
+  // S2 tenant seam: the configuration service takes the context of the access check above.
+  const tenant = tenantContextFor(ctx, companyId);
 
   try {
-    const configuration = await suspendListeningConfiguration(companyId);
+    const configuration = await suspendListeningConfiguration(tenant);
     return res.status(200).json({ ok: true, configuration });
   } catch (err: any) {
     console.error('[configuration DELETE] failed:', err?.message);

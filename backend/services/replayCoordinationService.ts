@@ -20,6 +20,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../db/tenantTable';
 import { safeEnqueue } from '../middleware/queueBackpressure';
 import {
   REPLAY_PARTITION_DEFAULT_SIZE,
@@ -199,11 +200,12 @@ export async function processReplayPartition(partitionId: string): Promise<Repla
 
   try {
     if (op.target_kind === 'projection') {
+      // S2 tenant seam: the worker's tenant is the partition row's own organization (read by id above).
+      const tenant = systemTenantContext(partition.organization_id, `replay partition worker ${partition.id}`);
       for (let i = startIndex; i < partition.item_ids.length; i += 1) {
         const id = partition.item_ids[i];
-        const { data: row } = await ownedDbTable('projection_sync_state')
+        const { data: row } = await tenantTable('projection_sync_state', tenant)
           .select('*')
-          .eq('organization_id', partition.organization_id)
           .eq('id', id)
           .maybeSingle();
         if (!row) {
@@ -218,7 +220,7 @@ export async function processReplayPartition(partitionId: string): Promise<Repla
           });
           if (r.cursor_position) {
             await advanceProjectionCursor({
-              organizationId: partition.organization_id,
+              tenant,
               projectionKind: r.projection_kind as 'opportunity_feed' | 'graph' | 'alerts' | 'clusters' | 'lifecycle',
               cursor: r.cursor_position,
             });

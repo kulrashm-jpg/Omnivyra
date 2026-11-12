@@ -21,6 +21,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import type { TenantContext } from '../db/tenantTable';
 import { writeLeadSignal, buildContactKey } from './canonicalLeadSignalService';
 import {
   evaluateModeration,
@@ -45,7 +46,8 @@ import { publishRealtime } from './realtimePublisherService';
 import { advanceProjectionCursor } from './projectionSyncService';
 
 export type SignalPipelineInput = {
-  organizationId: string;
+  /** S2 tenant seam: the tenant this execution runs for (replaces the raw organization id). */
+  tenant: TenantContext;
   listeningExecutionId: string;
   rawSignals: RawSignal[];
   keywords: string[];
@@ -178,6 +180,8 @@ async function recordDedupAndCheck(args: {
 export async function processRawSignals(
   input: SignalPipelineInput,
 ): Promise<SignalPipelineResult> {
+  const { tenant } = input;
+  const organizationId = tenant.companyId;
   let detected = 0;
   let persisted = 0;
   let deduplicated = 0;
@@ -192,7 +196,7 @@ export async function processRawSignals(
     const decision: ModerationDecision = decisionMaybe instanceof Promise ? await decisionMaybe : decisionMaybe;
 
     await recordModerationDecision({
-      organizationId: input.organizationId,
+      organizationId,
       executionId: input.listeningExecutionId,
       platform: raw.platform,
       decision,
@@ -201,7 +205,7 @@ export async function processRawSignals(
     if (decision.outcome === 'blocked') {
       blocked += 1;
       await recordDedupAndCheck({
-        organizationId: input.organizationId,
+        organizationId,
         platform: raw.platform,
         contentHash: decision.content_hash,
         executionId: input.listeningExecutionId,
@@ -215,7 +219,7 @@ export async function processRawSignals(
     // Dedup
     const contentHash = decision.content_hash;
     const dedup = await recordDedupAndCheck({
-      organizationId: input.organizationId,
+      organizationId,
       platform: raw.platform,
       contentHash,
       executionId: input.listeningExecutionId,
@@ -233,7 +237,7 @@ export async function processRawSignals(
     try {
       const result = await writeLeadSignal({
         canonical: {
-          organization_id: input.organizationId,
+          organization_id: organizationId,
           source_type: 'listening',
           source_id: raw.upstream_id,
           thread_id: null,
@@ -266,11 +270,11 @@ export async function processRawSignals(
         persisted += 1;
         await ownedDbTable('listening_signal_dedup')
           .update({ was_persisted: true })
-          .eq('organization_id', input.organizationId)
+          .eq('organization_id', organizationId)
           .eq('platform', raw.platform)
           .eq('content_hash', contentHash);
         await publishLeadSignalCreatedEvent({
-          organization_id: input.organizationId,
+          organization_id: organizationId,
           lead_signal_id: result.canonical.id,
           platform: raw.platform,
           source_type: 'listening',
@@ -281,7 +285,7 @@ export async function processRawSignals(
         // canonical signal that already succeeded.
         try {
           const oppResult = await recordOpportunityFromSignal({
-            organizationId: input.organizationId,
+            organizationId,
             signalId: result.canonical.id,
             listeningExecutionId: input.listeningExecutionId,
             raw,
@@ -293,7 +297,7 @@ export async function processRawSignals(
           if (oppResult?.created && oppResult.feed_item) {
             try {
               await projectOpportunityIntoGraph({
-                organizationId: input.organizationId,
+                organizationId,
                 opportunity: oppResult.feed_item,
               });
             } catch (graphErr: any) {
@@ -305,7 +309,7 @@ export async function processRawSignals(
             // Phase 6 — initialise lifecycle to 'detected' (idempotent).
             try {
               await initialiseLifecycleForOpportunity({
-                organizationId: input.organizationId,
+                organizationId,
                 opportunityFeedItemId: oppResult.feed_item.id,
               });
             } catch (lifecycleErr: any) {
@@ -318,7 +322,7 @@ export async function processRawSignals(
             // no-op if Supabase Realtime is unreachable).
             try {
               await publishRealtime({
-                organizationId: input.organizationId,
+                organizationId,
                 topic: 'opportunity_feed',
                 eventName: 'opportunity.added',
                 payload: {
@@ -331,7 +335,7 @@ export async function processRawSignals(
                 },
               });
               await advanceProjectionCursor({
-                organizationId: input.organizationId,
+                tenant,
                 projectionKind: 'opportunity_feed',
                 cursor: oppResult.feed_item.created_at,
               });
@@ -348,7 +352,7 @@ export async function processRawSignals(
             ) {
               try {
                 await raiseAlert({
-                  organizationId: input.organizationId,
+                  tenant,
                   alertType: 'high_intent_detected',
                   severity: oppResult.feed_item.opportunity_score >= 0.9 ? 'high' : 'medium',
                   dedupKey: `cluster:${oppResult.feed_item.cluster_id ?? oppResult.feed_item.id}`,
@@ -392,7 +396,7 @@ export async function processRawSignals(
   // so subscribers can refresh once per execution rather than once per
   // persisted signal.
   if (persisted > 0) {
-    await publishFeedBatchUpdated(input.organizationId, persisted);
+    await publishFeedBatchUpdated(organizationId, persisted);
   }
 
   // Phase 8 — record ingestion throughput + attribute execution cost.
@@ -400,7 +404,7 @@ export async function processRawSignals(
   if (detected > 0) {
     try {
       await recordIngestion({
-        organizationId: input.organizationId,
+        organizationId,
         scope: 'org',
         bucket: 'org',
         count: detected,
@@ -412,7 +416,7 @@ export async function processRawSignals(
     }
     try {
       await recordCost({
-        organizationId: input.organizationId,
+        organizationId,
         category: 'execution',
         units: persisted,
         decision: 'allowed',

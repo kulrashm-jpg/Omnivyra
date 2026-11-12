@@ -18,6 +18,7 @@ import {
   listAlerts,
   upsertAlertRule,
 } from '../../../backend/services/alertRoutingService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import type { AlertSeverity, AlertType } from '../../../backend/types/alert';
 import { ALERT_SEVERITIES, ALERT_TYPES } from '../../../backend/types/alert';
 
@@ -34,13 +35,15 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  // S2 tenant seam: the alert service takes the context of THIS access check.
+  const tenant = tenantContextFor(ctx, companyId);
   try {
     if (req.query.rules === '1' || req.query.rules === 'true') {
-      const rules = await listAlertRules(companyId);
+      const rules = await listAlertRules(tenant);
       return res.status(200).json({ rules });
     }
     const onlyUnack = req.query.onlyUnacknowledged === '1' || req.query.onlyUnacknowledged === 'true';
-    const items = await listAlerts(companyId, { onlyUnacknowledged: onlyUnack });
+    const items = await listAlerts(tenant, { onlyUnacknowledged: onlyUnack });
     return res.status(200).json({ items, total: items.length });
   } catch (err: any) {
     console.error('[alerts GET] failed:', err?.message);
@@ -56,8 +59,10 @@ async function handleAck(req: NextApiRequest, res: NextApiResponse) {
   if (body.action !== 'acknowledge') return res.status(400).json({ error: 'action must be acknowledge' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  // S2 tenant seam: the alert service takes the context of THIS access check.
+  const tenant = tenantContextFor(ctx, companyId);
   try {
-    const alert = await acknowledgeAlert(companyId, alertId, ctx.userId);
+    const alert = await acknowledgeAlert(tenant, alertId, ctx.userId);
     return res.status(200).json({ ok: true, alert });
   } catch (err: any) {
     console.error('[alerts POST] failed:', err?.message);
@@ -94,9 +99,11 @@ async function handleUpsertRule(req: NextApiRequest, res: NextApiResponse) {
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
+  // S2 tenant seam: the alert service takes the context of the access check above.
+  const tenant = tenantContextFor(ctx, companyId);
   try {
     const rule = await upsertAlertRule({
-      organizationId: companyId,
+      tenant,
       alertType: body.rule.alertType as AlertType,
       enabled: body.rule.enabled !== false,
       minSeverity,

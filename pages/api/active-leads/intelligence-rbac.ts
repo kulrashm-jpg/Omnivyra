@@ -19,6 +19,7 @@ import {
   seedIntelligenceRoles,
   upsertIntelligenceRole,
 } from '../../../backend/services/intelligenceRbacService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import {
   INTELLIGENCE_CAPABILITIES,
   type IntelligenceCapability,
@@ -36,12 +37,14 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  // S2 tenant seam: the RBAC service takes the context of THIS access check.
+  const tenant = tenantContextFor(ctx, companyId);
   try {
     if (req.query.userId) {
-      const items = await listAssignmentsForUser(companyId, String(req.query.userId));
+      const items = await listAssignmentsForUser(tenant, String(req.query.userId));
       return res.status(200).json({ assignments: items });
     }
-    const items = await listIntelligenceRoles(companyId);
+    const items = await listIntelligenceRoles(tenant);
     return res.status(200).json({ items, total: items.length });
   } catch (err: any) {
     console.error('[intelligence-rbac GET] failed:', err?.message);
@@ -63,9 +66,11 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
+  // S2 tenant seam: the RBAC service takes the context of the access check above.
+  const tenant = tenantContextFor(ctx, companyId);
   try {
     if (action === 'seed') {
-      const seeded = await seedIntelligenceRoles({ organizationId: companyId, createdBy: ctx.userId });
+      const seeded = await seedIntelligenceRoles({ tenant, createdBy: ctx.userId });
       return res.status(200).json({ ok: true, roles: seeded });
     }
     if (action === 'upsert_role') {
@@ -73,7 +78,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         ? (body.capabilities as string[]).filter((c): c is IntelligenceCapability => INTELLIGENCE_CAPABILITIES.includes(c as IntelligenceCapability))
         : [];
       const result = await upsertIntelligenceRole({
-        organizationId: companyId,
+        tenant,
         roleKey: String(body.roleKey ?? ''),
         displayName: String(body.displayName ?? ''),
         capabilities: caps,
@@ -84,7 +89,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     }
     if (action === 'assign') {
       const result = await assignIntelligenceRole({
-        organizationId: companyId,
+        tenant,
         userId: String(body.userId ?? ''),
         roleId: String(body.roleId ?? ''),
         assignedBy: ctx.userId,
@@ -93,7 +98,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({ ok: true, assignment: result });
     }
     const result = await revokeIntelligenceRoleAssignment({
-      organizationId: companyId,
+      tenant,
       assignmentId: String(body.assignmentId ?? ''),
     });
     return res.status(200).json({ ok: true, assignment: result });
