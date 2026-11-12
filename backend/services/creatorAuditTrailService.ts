@@ -19,6 +19,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import { logger } from './logger';
 import { getCurrentTrace } from './creatorOperationalTelemetryService';
 
@@ -153,15 +154,19 @@ export function __resetCreatorAuditTrailForTests(): void {
 // Forensic reconstruction helpers
 // ──────────────────────────────────────────────────────────────────────
 
+// S2 tenant seam: the forensic readers take the caller's TenantContext and read creator_audit_log UNDER that
+// tenant (another tenant's entries for the same plan / post id are never returned; NULL-company entries are
+// hidden, which e9 ruled correct for this table - NULLS_HIDING_OK).
+
 /** Reconstruct the audit history for a single daily_content_plan row. */
 export async function getAuditHistoryForPlan(
+  tenant: TenantContext,
   dailyPlanId: string,
   options: { limit?: number } = {},
 ): Promise<Array<Record<string, unknown>>> {
   const limit = Math.max(1, Math.min(options.limit ?? 200, 1000));
   try {
-    const { data } = await supabase
-      .from('creator_audit_log')
+    const { data } = await tenantTable('creator_audit_log', tenant)
       .select('*')
       .eq('daily_plan_id', dailyPlanId)
       .order('created_at', { ascending: true })
@@ -174,13 +179,13 @@ export async function getAuditHistoryForPlan(
 
 /** Reconstruct the audit history for a single scheduled_post. */
 export async function getAuditHistoryForScheduledPost(
+  tenant: TenantContext,
   scheduledPostId: string,
   options: { limit?: number } = {},
 ): Promise<Array<Record<string, unknown>>> {
   const limit = Math.max(1, Math.min(options.limit ?? 200, 1000));
   try {
-    const { data } = await supabase
-      .from('creator_audit_log')
+    const { data } = await tenantTable('creator_audit_log', tenant)
       .select('*')
       .eq('scheduled_post_id', scheduledPostId)
       .order('created_at', { ascending: true })

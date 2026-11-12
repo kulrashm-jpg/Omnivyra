@@ -3,7 +3,7 @@ import { runCampaignAiPlan } from './campaignAiOrchestrator';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { getCampaignPlanningInputs } from './campaignPlanningInputsService';
 import { buildStrategyInstructions, extractStrategyProfile } from '../../lib/content/companyStrategyPerspective';
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 
 type RecommendationSnapshot = {
   id: string;
@@ -52,13 +52,20 @@ const stringifyContext = (snapshot: RecommendationSnapshot, profile: any) => {
   return JSON.stringify(context, null, 2);
 };
 
+/**
+ * S2 tenant seam: takes the caller's TenantContext (built after its access check, or a system context for a
+ * job acting for one company). The recommendation is read UNDER that tenant (another tenant's id answers
+ * 'Recommendation not found'), the campaign is created stamped with that tenant's company_id, and the link-back
+ * update is pinned to the tenant.
+ */
 export async function buildCampaignFromRecommendation(input: {
+  tenant: TenantContext;
   recommendationId: string;
   durationWeeks?: number;
 }): Promise<{ campaign_id: string; plan: any; recommendation_used: RecommendationSnapshot }> {
-  const { recommendationId, durationWeeks } = input;
+  const { tenant, recommendationId, durationWeeks } = input;
 
-  const { data: recommendation, error: recError } = await ownedDbTable('recommendation_snapshots')
+  const { data: recommendation, error: recError } = await tenantTable('recommendation_snapshots', tenant)
     .select('*')
     .eq('id', recommendationId)
     .single();
@@ -67,9 +74,9 @@ export async function buildCampaignFromRecommendation(input: {
     throw new Error('Recommendation not found');
   }
 
-  const profile = await getProfile(recommendation.company_id, { autoRefine: true });
+  const profile = await getProfile(tenant.companyId, { autoRefine: true });
 
-  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
+  const { data: campaign, error: campaignError } = await tenantTable('campaigns', tenant)
     .insert({
       name: `Trend: ${recommendation.trend_topic}`,
       description: `Auto-generated from recommendation ${recommendation.id}`,
@@ -119,7 +126,7 @@ export async function buildCampaignFromRecommendation(input: {
     collectedPlanningContext: finalCollectedPlanningContext,
   });
 
-  const { error: linkError } = await ownedDbTable('recommendation_snapshots')
+  const { error: linkError } = await tenantTable('recommendation_snapshots', tenant)
     .update({ campaign_id: campaign.id })
     .eq('id', recommendation.id);
 
