@@ -87,7 +87,7 @@ describe('WSF-ORD-007 — campaigns/save create race', () => {
       { campaign_versions: [{ campaign_id: RACED_ID, company_id: CO_B, version: 1, created_at: '2026-01-01' }] },
     );
 
-    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: RACED_ID, name: 'pwned' } });
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: RACED_ID, companyId: CO_A, name: 'pwned' } });
 
     expect([403, 404]).toContain(r.status);
     const raced = campaign(RACED_ID)!;
@@ -100,7 +100,7 @@ describe('WSF-ORD-007 — campaigns/save create race', () => {
   it("THE EXPLOIT (orphan variant): a mid-flight row with no owner record cannot be taken over either", async () => {
     raceInCampaignsWrite({ company_id: null, user_id: USER_B, name: 'orphan' });
 
-    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: RACED_ID, name: 'pwned' } });
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: RACED_ID, companyId: CO_A, name: 'pwned' } });
 
     expect(r.status).toBe(404);
     expect(campaign(RACED_ID)!.user_id).toBe(USER_B);
@@ -113,7 +113,7 @@ describe('WSF-ORD-007 — campaigns/save create race', () => {
       { campaign_versions: [{ campaign_id: RACED_ID, company_id: CO_A, version: 1, created_at: '2026-01-01' }] },
     );
 
-    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: RACED_ID, name: 'second write' } });
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: RACED_ID, companyId: CO_A, name: 'second write' } });
 
     expect(r.status).toBe(200);
     expect(campaign(RACED_ID)!.name).toBe('second write');
@@ -147,12 +147,27 @@ describe('WSF-ORD-007 — the unraced paths are unchanged', () => {
   });
 
   it('a genuinely new id is created with an INSERT, not an upsert → 200', async () => {
-    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', name: 'New' } });
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', companyId: CO_A, name: 'New' } });
     expect(r.status).toBe(200);
     const writes = writeCalls(['campaigns']);
     expect(writes).toHaveLength(1);
     expect(writes[0].op).toBe('insert');
-    expect(writes[0].payload).toMatchObject({ id: 'camp-brand-new', user_id: USER_A });
+    // TENANT (NULL company_id trace, e9 2026-11-12): the new row is owned by the authorized company.
+    expect(writes[0].payload).toMatchObject({ id: 'camp-brand-new', user_id: USER_A, company_id: CO_A });
+  });
+
+  it('TENANT: a new id with NO companyId is refused (400) and nothing is written (was a company-less campaign)', async () => {
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', name: 'New' } });
+    expect(r.status).toBe(400);
+    // The route's own refusal (the tenant guard would also reject an empty company, with a different body).
+    expect(r.body).toMatchObject({ code: 'COMPANY_REQUIRED' });
+    expect(writeCalls(['campaigns'])).toHaveLength(0);
+  });
+
+  it("TENANT: a new id under a company the caller is NOT a member of is refused and nothing is written", async () => {
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', companyId: CO_B, name: 'New' } });
+    expect([403, 404]).toContain(r.status);
+    expect(writeCalls(['campaigns'])).toHaveLength(0);
   });
 
   it('a campaign lookup failure is still a retryable 503 with nothing written', async () => {
