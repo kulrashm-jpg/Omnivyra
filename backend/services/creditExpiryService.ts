@@ -137,10 +137,17 @@ async function expireOrgFreeCredits(
   amount:    number,
   expiredAt: string,
 ): Promise<number> {
-  // ── Runtime guard 1: idempotency key (one expiry per org per day) ────────
-  const dayKey = expiredAt.slice(0, 10); // YYYY-MM-DD
+  // ── Runtime guard 1: idempotency key - ONE free expiry per ORG ───────────
+  // CLASS 2 (2026-11-12): the key was per org per profile-DAY. Guard 1b below
+  // enforces "one free expiry per org" with a plain READ, so two overlapping
+  // cron runs handling different profiles of one org (different day keys) both
+  // passed it and expired twice. The key is now per ORG, so the ledger's unique
+  // idempotency_key makes the second write a no-op (apply_credit_reservation
+  // returns the existing row on a duplicate key). Rows written under the OLD
+  // per-day key are still honoured by guard 1b (business identity, any key).
+  const dayKey = expiredAt.slice(0, 10); // YYYY-MM-DD (note text only)
   const idempotencyKey = createHash('sha256')
-    .update(`expire:free:${orgId}:${dayKey}`)
+    .update(`expire:free:org:${orgId}`)
     .digest('hex')
     .slice(0, 32);
 
@@ -151,7 +158,7 @@ async function expireOrgFreeCredits(
     .maybeSingle();
   if (existingErr) throw new Error(`[creditExpiry] idempotency read failed for ${orgId}: ${existingErr.message}`);
 
-  if (existing) return 0; // already processed this expiry window
+  if (existing) return 0; // this org's free expiry already exists (per-org key)
 
   // ── Runtime guard 1b: at most ONE free expiry per ORG (2026-11-12, e1/05) ──
   // free_credit_profiles is UNIQUE per USER (several profiles per org are

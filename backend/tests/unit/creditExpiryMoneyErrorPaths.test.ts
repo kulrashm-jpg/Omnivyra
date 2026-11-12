@@ -15,6 +15,7 @@ type Res = { data?: unknown; error: { message: string } | null };
 let mockScript: Record<string, (n: number) => Res> = {};
 const mockCalls: Record<string, number> = {};
 const mockRpc: string[] = [];
+const mockRpcKeys: string[] = [];
 
 function mockBuilder(table: string) {
   let op = 'select';
@@ -32,7 +33,7 @@ function mockBuilder(table: string) {
 }
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => mockBuilder(t) }));
 jest.mock('../../db/supabaseClient', () => ({
-  supabase: { rpc: async (_fn: string, a: { p_phase: string }) => { mockRpc.push(a.p_phase); return { error: null }; } },
+  supabase: { rpc: async (_fn: string, a: { p_phase: string; p_idempotency_key: string }) => { mockRpc.push(a.p_phase); mockRpcKeys.push(a.p_idempotency_key); return { error: null }; } },
 }));
 
 import { runExpiryCheck } from '../../services/creditExpiryService';
@@ -48,6 +49,7 @@ beforeEach(() => {
   };
   for (const k of Object.keys(mockCalls)) delete mockCalls[k];
   mockRpc.length = 0;
+  mockRpcKeys.length = 0;
   errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 afterEach(() => errSpy.mockRestore());
@@ -127,4 +129,27 @@ it('prior-expiry read error -> per-org error, nothing expired', async () => {
   const r = await runExpiryCheck();
   expect(r.errors).toBe(1);
   expect(mockRpc).toEqual([]);
+});
+
+// CLASS 2 (2026-11-12): guard 1b ("one free expiry per org") is a plain READ.
+// Two OVERLAPPING runs that each see no prior expiry - handling different
+// profiles (different expiry dates) of one org - used different per-day keys
+// and both expired. The key is now per ORG, so the ledger's unique key makes
+// the second write a no-op. Modelled: two runs, neither sees the other's row.
+it('overlapping runs on two profiles of ONE org write the SAME idempotency key (the ledger unique stops the 2nd)', async () => {
+  mockScript['free_credit_profiles:select'] = () => ({ data: [{ user_id: 'u1', organization_id: 'o1', initial_credits: 30, credit_expiry_at: '2026-11-01T00:00:00Z' }], error: null });
+  await runExpiryCheck();
+  for (const k of Object.keys(mockCalls)) delete mockCalls[k];
+  mockScript['free_credit_profiles:select'] = () => ({ data: [{ user_id: 'u2', organization_id: 'o1', initial_credits: 30, credit_expiry_at: '2026-11-05T00:00:00Z' }], error: null });
+  await runExpiryCheck();
+  expect(mockRpcKeys.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(mockRpcKeys.filter((_, i) => mockRpc[i] === 'expire')).size).toBe(1);
+});
+it('control: two DIFFERENT orgs get different keys', async () => {
+  mockScript['free_credit_profiles:select'] = () => ({ data: [
+    { user_id: 'u1', organization_id: 'o1', initial_credits: 30, credit_expiry_at: '2026-11-01T00:00:00Z' },
+    { user_id: 'u2', organization_id: 'o2', initial_credits: 30, credit_expiry_at: '2026-11-01T00:00:00Z' },
+  ], error: null });
+  await runExpiryCheck();
+  expect(new Set(mockRpcKeys.filter((_, i) => mockRpc[i] === 'expire')).size).toBe(2);
 });
