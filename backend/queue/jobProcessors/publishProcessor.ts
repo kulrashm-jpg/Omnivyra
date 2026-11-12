@@ -32,7 +32,7 @@
  * because these paths run in more than one runtime.
  */
 
-import { Job } from 'bullmq';
+import { Job, UnrecoverableError } from 'bullmq';
 import { supabase } from '../../db/supabaseClient';
 import {
   getQueueJob,
@@ -71,6 +71,11 @@ import {
   releaseScheduledPostPublishClaim,
 } from '../../services/publishNowService';
 import { resolvePublishingOrganization, PublishingOrgReadError } from '../../services/creator/publishingOrganizationResolver';
+import {
+  checkPublishAccountCompany,
+  ACCOUNT_COMPANY_MISMATCH,
+  PUBLISH_COMPANY_UNVERIFIED,
+} from '../../services/publishAccountCompanyGuard';
 import { logPipelineEvent } from '../../../lib/shared/observability';
 import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
@@ -99,8 +104,9 @@ interface PublishJobData {
  * retry semantics for queue processors; the runner adds the tenant-guard
  * + idempotency + audit layer without double-retrying.
  *
- * Tenant binding: the social_account_id is resolved to the owning
- * organizationId BEFORE any mutation. If the org is soft-deleted /
+ * Tenant binding: the POST's company_id (canonical since migration 20270217000028) is the owning
+ * organizationId, and the social_account_id must belong to it (shared guard, checked BEFORE any
+ * mutation and before runJob). Only a post without a company falls back to the account's company. If the org is soft-deleted /
  * missing, the job short-circuits with `tenant_invalid` — no platform
  * call, no scheduled_posts mutation, no analytics write.
  *
@@ -110,11 +116,25 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
   const { scheduled_post_id, social_account_id, user_id } = job.data;
   const jobId = job.id;
 
-  // Resolve the owning organization BEFORE the runner so the tenant
-  // guard has the canonical org id. social_accounts.company_id IS the
-  // canonical owning tenant — we never trust caller-supplied org ids.
-  // Canonical organization identity (the single resolver) — social_accounts.company_id
-  // is the owning tenant; never a caller-supplied id, never userId-as-companyId.
+  const isFinalAttempt = ((job.attemptsMade ?? 0) + 1) >= (job.opts?.attempts ?? 1);
+
+  // ── CANONICAL ORGANIZATION (e9 ruling after migration 20270217000028) ──────────────────────────
+  // The POST's company_id is the canonical publishing organization; the connected account must MATCH
+  // it and never defines it. The tenant guard and the rate-limit bucket below use it. This is a
+  // READ-ONLY pre-read: the correct-sending refusal itself runs inside the handler (after the job-level
+  // cancellation / completion / exhaustion checks and the idempotent short-circuit, before any claim:
+  // see "Step 3b"), so a cancelled or completed delivery still ends quietly, exactly as before.
+  // A failed pre-read is not fatal here: the handler re-reads the post and fails visibly itself.
+  let postCompanyId: string | null = null;
+  try {
+    const preRead = await getScheduledPost(scheduled_post_id);
+    postCompanyId = (preRead as { company_id?: string | null } | null)?.company_id ?? null;
+  } catch {
+    postCompanyId = null;
+  }
+
+  // Fallback ONLY when the post carries no company (a schema without 028, an unreadable or vanished post:
+  // the handler then refuses or reports it): the single resolver, as before.
   //
   // unread-error pkg 2: a FAILED org read throws PublishingOrgReadError. It used to answer null, and a
   // null tenantId makes runJob SKIP the tenant check (platform-wide job), so the publish ran without the
@@ -122,11 +142,10 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
   // exponential backoff). The throw happens before runJob, so the handler's own failure marking never
   // runs: on the FINAL attempt the post is marked failed here, with a named code, so a permanently
   // failing read ends visibly instead of leaving the post silently in its pre-publish state.
-  let resolvedOrgId: string | null;
-  try {
+  let resolvedOrgId: string | null = postCompanyId;
+  if (!resolvedOrgId) try {
     resolvedOrgId = await resolvePublishingOrganization({ socialAccountId: social_account_id });
   } catch (orgError) {
-    const isFinalAttempt = ((job.attemptsMade ?? 0) + 1) >= (job.opts?.attempts ?? 1);
     if (isFinalAttempt && orgError instanceof PublishingOrgReadError) {
       await updateScheduledPostOnFailure(
         scheduled_post_id,
@@ -180,7 +199,7 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
     async () => processPublishJobInner({
       scheduled_post_id, social_account_id, user_id, jobId,
       // Only the LAST BullMQ attempt notifies the user (avoids 3x retry spam — RULE 5).
-      isFinalAttempt: ((job.attemptsMade ?? 0) + 1) >= (job.opts?.attempts ?? 1),
+      isFinalAttempt,
     }),
   );
 
@@ -543,6 +562,59 @@ async function processPublishJobInner(params: {
       }
     }
 
+    // ── Step 3b: CORRECT-SENDING GUARD (BLOCKING, 05 / e9 option B) ──────────────────────────────
+    // The ONE shared helper (publishAccountCompanyGuard), on the same social_account_id this job publishes
+    // with (publishToPlatform / publishThread below). Same placement as publishNow: after the job-level
+    // checks (Step 1), the idempotent short-circuit (Step 2) and authorization (Step 3); before ANY claim
+    // (Step 4 / 4a), so a refused post is never claimed or sent, and thread roots are covered too.
+    //   mismatch   -> queue job failed + post marked failed (ACCOUNT_COMPANY_MISMATCH); UnrecoverableError,
+    //                 so BullMQ does not retry (the account will not change company by itself);
+    //   unverified -> nothing written; the attempt fails and BullMQ retries; the FINAL attempt marks the
+    //                 post failed (PUBLISH_COMPANY_UNVERIFIED) so it ends visibly.
+    {
+      const check = await checkPublishAccountCompany(
+        scheduledPost as { id?: string; company_id?: string | null },
+        social_account_id,
+      );
+      if (check.verdict === 'mismatch') {
+        try {
+          await updateQueueJobStatus(jobId as string, 'failed', {
+            error_message: check.message ?? ACCOUNT_COMPANY_MISMATCH,
+            error_code: ACCOUNT_COMPANY_MISMATCH,
+          });
+          await createQueueJobLog(jobId as string, 'warn', check.message ?? ACCOUNT_COMPANY_MISMATCH, {
+            scheduled_post_id, social_account_id,
+            post_company_id: check.postCompanyId, account_company_id: check.accountCompanyId,
+          });
+          await updateScheduledPostOnFailure(scheduled_post_id, check.message ?? ACCOUNT_COMPANY_MISMATCH, undefined, ACCOUNT_COMPANY_MISMATCH);
+        } catch (markError) {
+          console.error('[publishProcessor] could not record the account/company refusal', {
+            scheduled_post_id, message: markError instanceof Error ? markError.message : String(markError),
+          });
+        }
+        const refusal: Error & { skipQueueStatusUpdate?: true } = new UnrecoverableError(`${ACCOUNT_COMPANY_MISMATCH}:${scheduled_post_id}`);
+        refusal.skipQueueStatusUpdate = true;
+        throw refusal;
+      }
+      if (check.verdict === 'unverified') {
+        if (isFinalAttempt) {
+          await updateScheduledPostOnFailure(
+            scheduled_post_id,
+            'Publishing stopped: the post\'s company could not be confirmed against its account. Please retry the post.',
+            undefined,
+            PUBLISH_COMPANY_UNVERIFIED,
+          ).catch((markError: unknown) => {
+            console.error('[publishProcessor] could not mark the post failed after the final company check', {
+              scheduled_post_id, message: markError instanceof Error ? markError.message : String(markError),
+            });
+          });
+        }
+        const unverified: Error & { skipQueueStatusUpdate?: true } = new Error(`${PUBLISH_COMPANY_UNVERIFIED}:${scheduled_post_id}`);
+        unverified.skipQueueStatusUpdate = true;
+        throw unverified;
+      }
+    }
+
     // Step 4: Claim the job row — compare-and-set into 'processing'.
     //
     // Was an unconditional write, which re-animated a row cancelled after the
@@ -884,7 +956,9 @@ async function processPublishJobInner(params: {
 
       // Schedule analytics polls at +15min and +24h
       try {
-        const pollOrgId = await resolvePublishingOrganization({ socialAccountId: social_account_id });
+        // The post's company is canonical (028); the resolver only when the row carries none.
+        const pollOrgId = (scheduledPost as { company_id?: string | null }).company_id
+          ?? await resolvePublishingOrganization({ socialAccountId: social_account_id });
         if (pollOrgId) {
           await schedulePostPolls({
             scheduledPostId:  scheduled_post_id,

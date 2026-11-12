@@ -81,6 +81,7 @@ import {
   classifyThreadOutcome,
 } from '../../../lib/thread/threadPublishStates';
 import { logger } from '../logger';
+import { checkPublishAccountCompany } from '../publishAccountCompanyGuard';
 
 export type ThreadPublishResult = {
   status: 'PUBLISHED' | 'FAILED';
@@ -694,6 +695,21 @@ export async function resumeThreadPublish(input: {
       failed_count: 0,
       blocked_count: 0,
       message: 'Thread root is missing social_account_id or user_id; cannot resume',
+      timestamp,
+    };
+  }
+  // Correct-sending guard (the ONE shared helper, e9 option B): resume publishes through the root's own
+  // account, so it must belong to the root's company. Mismatch or unverifiable: nothing is published.
+  const companyCheck = await checkPublishAccountCompany(root as { id?: string; company_id?: string | null }, socialAccountId);
+  if (companyCheck.verdict !== 'ok') {
+    return {
+      status: 'FAILED',
+      root_id: input.root_scheduled_post_id,
+      total_nodes: 0,
+      published_count: 0,
+      failed_count: 0,
+      blocked_count: 0,
+      message: companyCheck.message ?? 'Publish refused: account/company check failed',
       timestamp,
     };
   }

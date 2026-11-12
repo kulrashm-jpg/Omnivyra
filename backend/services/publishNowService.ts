@@ -28,6 +28,7 @@ import { validatePublishReadiness } from './publishReadinessValidator';
 import { refreshDurableMediaBeforePublish } from './mediaReferenceResolver';
 import { resolvePublishMedia } from './creator/creatorPublishResolution';
 import { resolvePublishingOrganization } from './creator/publishingOrganizationResolver';
+import { checkPublishAccountCompany } from './publishAccountCompanyGuard';
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { logger } from './logger';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
@@ -494,9 +495,10 @@ export async function refreshScheduledPostMediaFromRefs(input: {
   try {
     const post = (input.post ?? (await getScheduledPost(input.scheduledPostId))) as Record<string, unknown> | null;
     if (!post) return;
-    // Canonical organization identity — never userId-as-companyId. Resolved from the
-    // connected account / campaign so the server asset resolver receives the real org.
+    // Canonical organization identity — never userId-as-companyId. The post's own company (028) first,
+    // then the connected account / campaign, so the server asset resolver receives the real org.
     const organizationId = await resolvePublishingOrganization({
+      postCompanyId: (post.company_id as string | null) ?? null,
       socialAccountId: (post.social_account_id as string | null) ?? null,
       campaignId: (post.campaign_id as string | null) ?? null,
       scheduledPostId: input.scheduledPostId,
@@ -522,15 +524,9 @@ export async function refreshScheduledPostMediaFromRefs(input: {
 }
 
 /**
- * CORRECT-SENDING GUARD (BLOCKING, e9 option B, 2026-11-13). A post is published ONLY through an account
- * of the post's own company: the account actually used (the caller's social_account_id, which the
- * platform adapter publishes with) must belong to scheduled_posts.company_id (migration 20270217000028).
- *
- * - mismatch (including an account with no company, or no such account): FAILED, visible, NOT suppressed:
- *   the caller records the failure; nothing reaches the platform.
- * - cannot verify (account read failed; the post carries no company, i.e. the code runs against a
- *   schema without 028): FAILED + suppressed, so NO status is written and the post stays as it was for a
- *   later retry. Never published unverified. CRITICAL log when the post has no company.
+ * Thin adapter over the ONE shared guard (backend/services/publishAccountCompanyGuard.ts), mapping its verdict
+ * onto this path's result: mismatch -> FAILED, visible (the caller records it; nothing is claimed or sent);
+ * unverified -> FAILED + suppressed, refusal 'company_unverified' (no status written, left for retry).
  * Returns null when the check passes.
  */
 export async function refuseUnlessAccountMatchesPostCompany(
@@ -538,50 +534,19 @@ export async function refuseUnlessAccountMatchesPostCompany(
   socialAccountId: string,
   timestamp: string,
 ): Promise<PublishNowResult | null> {
-  const postCompany = scheduledPost.company_id ?? null;
-  if (!postCompany) {
-    console.error('[publishNow] CRITICAL: post has no company_id (schema without migration 20270217000028?); not publishing', {
-      scheduled_post_id: scheduledPost.id,
-    });
-    return {
-      status: 'FAILED',
-      message: 'Publish refused: the post\'s company could not be determined; it was left unchanged for retry.',
-      timestamp,
-      suppressed: true,
-      refusal: 'company_unverified',
-    };
+  const check = await checkPublishAccountCompany(scheduledPost, socialAccountId);
+  if (check.verdict === 'ok') return null;
+  if (check.verdict === 'unverified') {
+    return { status: 'FAILED', message: check.message ?? undefined, timestamp, suppressed: true, refusal: 'company_unverified' };
   }
-  const { data, error } = await supabase
-    .from('social_accounts')
-    .select('id, company_id')
-    .eq('id', socialAccountId)
-    .maybeSingle();
-  if (error) {
-    console.error('[publishNow] account company read failed; not publishing', { scheduled_post_id: scheduledPost.id, error: error.message });
-    return {
-      status: 'FAILED',
-      message: 'Publish refused: could not verify the account\'s company; it was left unchanged for retry.',
-      timestamp,
-      suppressed: true,
-      refusal: 'company_unverified',
-    };
-  }
-  const accountCompany = (data as { company_id?: string | null } | null)?.company_id ?? null;
-  if (!data || accountCompany !== postCompany) {
-    logger.warn('publishNow.account_company_mismatch', {
-      surface: 'publishNow',
-      scheduledPostId: scheduledPost.id,
-      socialAccountId,
-      postCompanyId: postCompany,
-      accountCompanyId: accountCompany,
-    });
-    return {
-      status: 'FAILED',
-      message: `Publish refused (ACCOUNT_COMPANY_MISMATCH): the social account is not connected in this post's company. Reconnect the account in this company's Settings → Social Accounts.`,
-      timestamp,
-    };
-  }
-  return null;
+  logger.warn('publishNow.account_company_mismatch', {
+    surface: 'publishNow',
+    scheduledPostId: scheduledPost.id,
+    socialAccountId,
+    postCompanyId: check.postCompanyId,
+    accountCompanyId: check.accountCompanyId,
+  });
+  return { status: 'FAILED', message: check.message ?? undefined, timestamp };
 }
 
 export async function publishNow(input: PublishNowInput): Promise<PublishNowResult> {

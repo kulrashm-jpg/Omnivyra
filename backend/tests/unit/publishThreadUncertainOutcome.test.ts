@@ -191,6 +191,7 @@ import sweepStuckPublishing from '../../../pages/api/cron/sweep-stuck-publishing
 
 const USER = '00000000-0000-4000-8000-0000000000a1';
 const ACCOUNT = '00000000-0000-4000-8000-0000000000b1';
+const COMPANY = '00000000-0000-4000-8000-0000000000c1';
 const STALE = (): string => new Date(Date.now() - 40 * 60 * 1000).toISOString();
 
 /** A three-node X thread: root t0 (position 0) + children t1, t2. */
@@ -199,6 +200,7 @@ function seedThread(overrides: Record<string, Row> = {}): void {
     id,
     user_id: USER,
     social_account_id: ACCOUNT,
+    company_id: COMPANY,
     campaign_id: null,
     platform: 'twitter',
     content_type: 'thread',
@@ -254,6 +256,11 @@ const ORIGINAL_SECRET = process.env.CRON_SECRET;
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
   for (const t of ['scheduled_posts', 'queue_jobs', 'queue_job_logs', 'campaigns', 'daily_content_plans', 'worker_dead_letter_queue']) store[t] = [];
+  // 028: every post has a company and its account must belong to it (shared publish guard); the tenant guard
+  // (runJob) checks the post's company: it exists, is active, and the job's user belongs to it.
+  store.social_accounts = [{ id: ACCOUNT, user_id: USER, company_id: COMPANY, is_active: true }];
+  store.companies = [{ id: COMPANY, status: 'active' }];
+  store.user_company_roles = [{ user_id: USER, company_id: COMPANY, role: 'COMPANY_ADMIN', status: 'active' }];
   writeLock = Promise.resolve();
   platformCalls.length = 0;
   outcomeFor.clear();
@@ -529,7 +536,7 @@ describe('R3 — duplicate and concurrent delivery of the same thread', () => {
 describe('Closure-003 — sweeper: pre-call claims vs possibly-started calls', () => {
   const singlePost = (over: Row): void => {
     store.scheduled_posts.push({
-      id: 'sp-1', user_id: USER, social_account_id: ACCOUNT, campaign_id: null, platform: 'twitter',
+      id: 'sp-1', user_id: USER, social_account_id: ACCOUNT, company_id: COMPANY, campaign_id: null, platform: 'twitter',
       content_type: 'tweet', content: 'single', media_urls: [], scheduled_for: new Date(Date.now() - 60_000).toISOString(),
       platform_post_id: null, error_message: null, is_thread_start: false, parent_post_id: null, thread_position: null,
       created_at: new Date().toISOString(), updated_at: STALE(), ...over,
@@ -627,5 +634,22 @@ describe('Closure-003 — a node that becomes uncertain between the read and its
     expect(platformCalls).toHaveLength(0);
     expect(r.status).toBe('FAILED');
     expect(node('t0')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_OUTCOME_UNCERTAIN' });
+  });
+});
+
+/* ── Correct-sending guard on the super-admin RESUME path (05 / e9): the shared helper ── */
+describe('resumeThreadPublish — the root\'s account must belong to the root\'s company', () => {
+  test('CRITICAL: a root on an account of ANOTHER company is refused; no node is published', async () => {
+    seedThread();
+    store.social_accounts = [{ id: ACCOUNT, user_id: USER, company_id: '00000000-0000-4000-8000-0000000000c9', is_active: true }];
+    const r = await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(r).toMatchObject({ status: 'FAILED' });
+    expect(String((r as { message?: string }).message)).toContain('ACCOUNT_COMPANY_MISMATCH');
+    expect(platformCalls).toEqual([]);
+  });
+  test('CONTROL: a same-company root resumes and publishes', async () => {
+    seedThread();
+    await resumeThreadPublish({ root_scheduled_post_id: 't0' });
+    expect(platformCalls.map((c) => c.rowId)).toEqual(['t0', 't1', 't2']);
   });
 });

@@ -116,7 +116,7 @@ async function rpc(name: string, args: Row) {
   return serialised(() => {
     const posts = store.scheduled_posts;
     const childRow = (root: Row, node: Row): Row => ({
-      id: `node-${++idSeq}`, user_id: root.user_id, social_account_id: root.social_account_id, campaign_id: root.campaign_id,
+      id: `node-${++idSeq}`, user_id: root.user_id, social_account_id: root.social_account_id, company_id: root.company_id, campaign_id: root.campaign_id,
       platform: root.platform, content_type: root.content_type, content: node.content, media_urls: [],
       scheduled_for: root.scheduled_for, status: 'draft', parent_post_id: root.id, thread_position: node.position,
       is_thread_start: false, platform_post_id: null, error_code: null, error_message: null,
@@ -135,7 +135,9 @@ async function rpc(name: string, args: Row) {
       const p = args.p_payload as Row;
       const nodes = p.nodes as Row[];
       const root: Row = {
-        id: `root-${++idSeq}`, user_id: p.user_id, social_account_id: p.social_account_id, campaign_id: p.campaign_id,
+        id: `root-${++idSeq}`, user_id: p.user_id, social_account_id: p.social_account_id,
+        // 028 trigger: company_id derived from the account when not given (this payload never carries it).
+        company_id: p.company_id ?? (store.social_accounts ?? []).find((x: Row) => x.id === p.social_account_id)?.company_id ?? null, campaign_id: p.campaign_id,
         platform: p.platform, content_type: p.platform === 'twitter' ? 'thread' : 'post', content: nodes[0].content,
         media_urls: [], scheduled_for: p.scheduled_for, status: p.root_status ?? 'scheduled', title: p.title,
         is_thread_start: true, parent_post_id: null, thread_position: 0, platform_post_id: null, error_code: null,
@@ -179,6 +181,8 @@ jest.mock('../../security/IdentityResolver', () => ({
 }));
 /** Company-level campaign access: OWNER and OTHER are both members of COMPANY. */
 jest.mock('../../security/TenantGuard', () => ({
+  // The REAL tenant check over the in-memory store: runJob now runs it, because the post carries its company (028).
+  assertTenantAccess: (...args: unknown[]) => jest.requireActual('../../security/TenantGuard').assertTenantAccess(...args),
   requireCampaignTenantAccess: jest.fn(async (_req: unknown, res: { status: (c: number) => { json: (b: unknown) => void } }, campaignId: string) => {
     if (campaignId === CAMPAIGN && (authUser === OWNER || authUser === OTHER)) return { organizationId: COMPANY };
     res.status(403).json({ error: 'FORBIDDEN' });
@@ -295,6 +299,12 @@ beforeEach(() => {
   store.social_accounts = [
     { id: 'acct-owner', user_id: OWNER, is_active: true, company_id: COMPANY, platform: 'twitter' },
     { id: 'acct-other', user_id: OTHER, is_active: true, company_id: COMPANY, platform: 'twitter' },
+  ];
+  // 028: the tenant guard (runJob) checks the post's company (canonical): active, and the job's user a member.
+  store.companies = [{ id: COMPANY, status: 'active' }];
+  store.user_company_roles = [
+    { user_id: OWNER, company_id: COMPANY, role: 'COMPANY_ADMIN', status: 'active' },
+    { user_id: OTHER, company_id: COMPANY, role: 'COMPANY_ADMIN', status: 'active' },
   ];
   writeLock = Promise.resolve();
   platformCalls.length = 0;

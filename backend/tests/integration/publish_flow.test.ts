@@ -183,6 +183,7 @@ import { getScheduledPost } from '../../db/queries';
 const TEST_USER_ID = process.env.TEST_USER_ID || '00000000-0000-0000-0000-000000000001';
 const TEST_SOCIAL_ACCOUNT_ID = '00000000-0000-0000-0000-000000000002';
 const TEST_SCHEDULED_POST_ID = '00000000-0000-0000-0000-000000000003';
+const TEST_COMPANY_ID = '00000000-0000-0000-0000-0000000000c1';
 
 // TODO: Setup Jest before running these tests:
 // npm install --save-dev jest @types/jest ts-jest
@@ -197,6 +198,9 @@ async function runIntegrationTest() {
   store.queue_jobs = [];
   store.queue_job_logs = [];
   store.campaigns = [];
+  // 028: the tenant guard checks the post's company: active, and the user a member.
+  store.companies = [{ id: TEST_COMPANY_ID, status: 'active' }];
+  store.user_company_roles = [{ user_id: TEST_USER_ID, company_id: TEST_COMPANY_ID, role: 'COMPANY_ADMIN', status: 'active' }];
 
   // Ensure USE_MOCK_PLATFORMS is enabled for testing
   process.env.USE_MOCK_PLATFORMS = 'true';
@@ -313,6 +317,7 @@ async function seedTestData() {
     user_id: TEST_USER_ID,
     platform: 'linkedin',
     platform_user_id: 'test_linkedin_user_123',
+    company_id: TEST_COMPANY_ID, // 028: the post's company; the account must belong to it
     account_name: 'Test LinkedIn Account',
     username: 'test_linkedin',
     access_token: 'mock_encrypted_token', // In real test, this would be encrypted
@@ -330,6 +335,7 @@ async function seedTestData() {
     id: TEST_SCHEDULED_POST_ID,
     user_id: TEST_USER_ID,
     social_account_id: TEST_SOCIAL_ACCOUNT_ID,
+    company_id: TEST_COMPANY_ID,
     platform: 'linkedin',
     content_type: 'post',
     content: 'Test post content for integration test',

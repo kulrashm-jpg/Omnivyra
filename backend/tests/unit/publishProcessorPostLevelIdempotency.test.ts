@@ -220,12 +220,16 @@ import { processPublishJob } from '../../queue/jobProcessors/publishProcessor';
 
 const USER = '00000000-0000-0000-0000-0000000000u1';
 const ACCOUNT = '00000000-0000-0000-0000-0000000000a1';
+/** The post's company and its account's company (migration 20270217000028 gives every post one). */
+const COMPANY = '00000000-0000-0000-0000-0000000000c1';
+const OTHER_COMPANY = '00000000-0000-0000-0000-0000000000c2';
 
 function seedPost(id: string, overrides: Row = {}): Row {
   const row: Row = {
     id,
     user_id: USER,
     social_account_id: ACCOUNT,
+    company_id: COMPANY,
     campaign_id: null,
     platform: 'linkedin',
     content_type: 'post',
@@ -275,6 +279,11 @@ const publishesFor = (id: string) => platformCalls.filter((p) => p === id).lengt
 
 beforeEach(() => {
   Object.keys(store).forEach((k) => { store[k] = []; });
+  store.social_accounts = [{ id: ACCOUNT, company_id: COMPANY }];
+  // The tenant guard (runJob) now checks the POST's company (canonical since 028): it must exist, be active,
+  // and the job's user must belong to it.
+  store.companies = [{ id: COMPANY, status: 'active' }];
+  store.user_company_roles = [{ user_id: USER, company_id: COMPANY, role: 'COMPANY_ADMIN', status: 'active' }];
   platformCalls.length = 0;
   threadCalls.length = 0;
   platformOutcome = 'success';
@@ -461,7 +470,8 @@ describe('publishProcessor — an unreadable publishing organization (unread-err
   };
 
   test('a NON-final attempt fails (BullMQ retries), publishes nothing, and leaves the post untouched', async () => {
-    seedPost('sp-1');
+    // The resolver is only the FALLBACK now (028: the post's own company is canonical): a post without a company.
+    seedPost('sp-1', { company_id: null });
     seedJob('qj-1', 'sp-1');
     const before = { ...post('sp-1') };
     resolver().mockRejectedValueOnce(readError());
@@ -471,11 +481,68 @@ describe('publishProcessor — an unreadable publishing organization (unread-err
   });
 
   test('the FINAL attempt marks the post failed with a named code (bounded and visible), and publishes nothing', async () => {
-    seedPost('sp-1');
+    // The resolver is only the FALLBACK now (028: the post's own company is canonical): a post without a company.
+    seedPost('sp-1', { company_id: null });
     seedJob('qj-1', 'sp-1');
     resolver().mockRejectedValueOnce(readError());
     await expect(processPublishJob(job('qj-1', 'sp-1', 2))).rejects.toMatchObject({ code: 'PUBLISHING_ORG_READ_FAILED' });
     expect(publishesFor('sp-1')).toBe(0);
     expect(post('sp-1')).toMatchObject({ status: 'failed', error_code: 'PUBLISHING_ORG_READ_FAILED' });
+  });
+});
+
+/* ── Correct-sending guard on the WORKER path (05 / e9, BLOCKING): the shared helper, Step 3b (before any claim) ── */
+describe('publishProcessor — the publishing account must belong to the post\'s company', () => {
+  test('CRITICAL: an account in ANOTHER company: nothing published; job and post failed visibly; no BullMQ retry', async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: OTHER_COMPANY }];
+    seedPost('sp-x');
+    seedJob('qj-x', 'sp-x');
+    const err = await processPublishJob(job('qj-x', 'sp-x')).catch((e: unknown) => e);
+    expect((err as Error)?.name).toBe('UnrecoverableError');
+    expect(publishesFor('sp-x')).toBe(0);
+    expect(qjob('qj-x')).toMatchObject({ status: 'failed', error_code: 'ACCOUNT_COMPANY_MISMATCH' });
+    expect(post('sp-x')).toMatchObject({ status: 'failed', error_code: 'ACCOUNT_COMPANY_MISMATCH' });
+  });
+
+  test('a thread ROOT on a foreign account never reaches the thread orchestrator', async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: OTHER_COMPANY }];
+    seedPost('sp-t', { is_thread_start: true });
+    seedJob('qj-t', 'sp-t');
+    await processPublishJob(job('qj-t', 'sp-t')).catch(() => undefined);
+    expect(threadCalls).toEqual([]);
+  });
+
+  test('unverifiable (post without company), NOT final attempt: nothing published, post untouched, attempt fails for retry', async () => {
+    seedPost('sp-u', { company_id: null });
+    seedJob('qj-u', 'sp-u');
+    const err = await processPublishJob(job('qj-u', 'sp-u', 0)).catch((e: unknown) => e);
+    expect(String((err as Error)?.message)).toContain('PUBLISH_COMPANY_UNVERIFIED');
+    expect((err as Error)?.name).not.toBe('UnrecoverableError');
+    expect(publishesFor('sp-u')).toBe(0);
+    expect(post('sp-u').status).toBe('scheduled');
+  });
+
+  test('unverifiable on the FINAL attempt: the post ends visibly failed (PUBLISH_COMPANY_UNVERIFIED)', async () => {
+    seedPost('sp-f', { company_id: null });
+    seedJob('qj-f', 'sp-f');
+    await processPublishJob(job('qj-f', 'sp-f', 2)).catch(() => undefined);
+    expect(publishesFor('sp-f')).toBe(0);
+    expect(post('sp-f')).toMatchObject({ status: 'failed', error_code: 'PUBLISH_COMPANY_UNVERIFIED' });
+  });
+
+  test('CONTROL: an already-published row is not re-judged (no refusal, no publish)', async () => {
+    store.social_accounts = [{ id: ACCOUNT, company_id: OTHER_COMPANY }];
+    seedPost('sp-p', { platform_post_id: 'ext-1', status: 'published' });
+    seedJob('qj-p', 'sp-p');
+    const err = await processPublishJob(job('qj-p', 'sp-p')).catch((e: unknown) => e);
+    expect((err as Error | undefined)?.name).not.toBe('UnrecoverableError');
+    expect(publishesFor('sp-p')).toBe(0);
+  });
+
+  test('CONTROL: the same-company account publishes', async () => {
+    seedPost('sp-ok');
+    seedJob('qj-ok', 'sp-ok');
+    await processPublishJob(job('qj-ok', 'sp-ok'));
+    expect(publishesFor('sp-ok')).toBe(1);
   });
 });

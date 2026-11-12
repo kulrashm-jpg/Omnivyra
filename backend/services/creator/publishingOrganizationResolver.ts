@@ -3,9 +3,11 @@
  *
  * The ONE runtime source of organization (company) identity for publishing. Every
  * publishing path resolves the owning org through here instead of ad-hoc lookups or
- * the userId-as-companyId fallback. The canonical owner is `social_accounts.company_id`
- * (the tenant that owns the connected account — never a caller-supplied id), with
- * `campaigns.company_id` and the scheduled post's own bindings as ordered fallbacks.
+ * the userId-as-companyId fallback. AUTHORITY (e9 ruling after migration 20270217000028): the
+ * scheduled POST's own `company_id` is canonical when the caller has it (`postCompanyId`); the
+ * connected account must MATCH it (publishAccountCompanyGuard) and never defines it. Only for a post
+ * without a company: `social_accounts.company_id`, then `campaigns.company_id`, then the post's
+ * own bindings, in that order. Never a caller-supplied id.
  *
  * This consolidates the lookup that `publishProcessor` previously inlined (twice) so
  * the server asset resolver always receives the real company id, lifting hit-rate.
@@ -23,6 +25,8 @@
 import { supabase } from '../../db/supabaseClient';
 
 export interface PublishingOrgInput {
+  /** scheduled_posts.company_id (canonical since 028); used first when present. */
+  postCompanyId?: string | null;
   socialAccountId?: string | null;
   campaignId?: string | null;
   scheduledPostId?: string | null;
@@ -69,6 +73,7 @@ async function companyOfCampaign(id: string): Promise<string | null> {
  * THROWS PublishingOrgReadError when a read fails.
  */
 export async function resolvePublishingOrganization(input: PublishingOrgInput): Promise<string | null> {
+  if (input.postCompanyId) return String(input.postCompanyId);
   if (input.socialAccountId) {
     const org = await companyOfSocialAccount(String(input.socialAccountId));
     if (org) return org;

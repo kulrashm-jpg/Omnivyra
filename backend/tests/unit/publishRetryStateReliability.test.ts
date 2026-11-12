@@ -309,6 +309,7 @@ jest.mock('../../services/executionGovernor', () => ({
 
 const USER = '00000000-0000-4000-8000-0000000000a1';
 const ACCOUNT = '00000000-0000-4000-8000-0000000000b1';
+const COMPANY = '00000000-0000-4000-8000-0000000000c1';
 
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () => ({ user: { id: '00000000-0000-4000-8000-0000000000a1' }, error: null })),
@@ -331,6 +332,7 @@ function seedPost(id: string, overrides: Row = {}): Row {
     id,
     user_id: USER,
     social_account_id: ACCOUNT,
+    company_id: COMPANY,
     campaign_id: null,
     platform: 'linkedin',
     content_type: 'post',
@@ -416,6 +418,11 @@ async function callRetry(scheduledPostId: string): Promise<RouteRes> {
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
   for (const t of ['scheduled_posts', 'queue_jobs', 'queue_job_logs', 'campaigns', 'worker_dead_letter_queue']) store[t] = [];
+  // 028: every post has a company and its account must belong to it (shared publish guard); the tenant guard
+  // (runJob) checks the post's company: it exists, is active, and the job's user belongs to it.
+  store.social_accounts = [{ id: ACCOUNT, user_id: USER, company_id: COMPANY, is_active: true }];
+  store.companies = [{ id: COMPANY, status: 'active' }];
+  store.user_company_roles = [{ user_id: USER, company_id: COMPANY, role: 'COMPANY_ADMIN', status: 'active' }];
   schema.migrated = true;
   beforeQueueJobUpdate = null;
   queueJobFault = null;
