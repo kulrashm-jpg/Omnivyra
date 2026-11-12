@@ -477,23 +477,28 @@ export async function grantCredits(params: {
   usdEquivalent?: number;
   note?: string;
   performedBy: string;
+  /** The request's Idempotency-Key: one logical grant = one key. */
+  requestIdempotencyKey: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  // Time-bucketed idempotency key (minute precision) — allows multiple distinct
-  // grants per org per admin, while making retries within 1 minute safe.
-  const minuteBucket = new Date().toISOString().slice(0, 16); // 'YYYY-MM-DDTHH:MM'
+  // MONEY (2026-11-12, class 2): keyed by the REQUEST, not a minute bucket. The
+  // bucket granted twice on a retry after the minute rolled over, and collapsed
+  // two distinct grants inside one minute into one while both reported success.
+  const reqKey = params.requestIdempotencyKey?.trim();
+  if (!reqKey) return { ok: false, error: 'IDEMPOTENCY_KEY_REQUIRED' };
+  const refId = `${params.organizationId}:req:${reqKey}`;
   try {
     await createCredit({
       orgId:          params.organizationId,
       amount:         params.credits,
       category:       'paid',
       referenceType:  'manual_grant',
-      referenceId:    `${params.organizationId}:${minuteBucket}`,
+      referenceId:    refId,
       note:           params.note ?? undefined,
       performedBy:    params.performedBy,
       idempotencyKey: makeIdempotencyKey(
         params.performedBy,
         'manual_grant',
-        `${params.organizationId}:${minuteBucket}`,
+        refId,
       ),
     });
     return { ok: true };
@@ -507,9 +512,14 @@ export async function adjustCredits(params: {
   credits: number;  // positive = add credit, negative = deduct credit
   note: string;
   performedBy: string;
+  /** The request's Idempotency-Key: one logical adjustment = one key. */
+  requestIdempotencyKey: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const minuteBucket = new Date().toISOString().slice(0, 16);
-  const refId = `adj:${params.organizationId}:${minuteBucket}`;
+  // MONEY (2026-11-12, class 2): keyed by the REQUEST, not a minute bucket
+  // (see grantCredits above) - applies to both the credit and the deduction.
+  const reqKey = params.requestIdempotencyKey?.trim();
+  if (!reqKey) return { ok: false, error: 'IDEMPOTENCY_KEY_REQUIRED' };
+  const refId = `adj:${params.organizationId}:req:${reqKey}`;
 
   if (params.credits > 0) {
     // Positive adjustment — grant path

@@ -149,6 +149,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       expiryDays,
       allowOverLimit,
       clientKey,
+      // withIdempotency guarantees this header on POST.
+      requestIdempotencyKey: String(req.headers['idempotency-key'] ?? '').trim() || undefined,
       metadata,
     });
   } catch (err: any) {
@@ -161,6 +163,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const statusCode =
       failure.code === 'LEDGER_FAILED'         ? 500 :
       failure.code === 'GRANT_LIMIT_EXCEEDED'  ? 429 :
+      failure.code === 'GRANT_LIMIT_UNVERIFIABLE' ? 503 :
                                                  400;
     return billingFail(res, statusCode, { rawMessage: failure.error, legacyCode: failure.code });
   }

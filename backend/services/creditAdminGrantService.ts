@@ -14,11 +14,17 @@ import { ownedDbTable } from '../db/writeOwner';
  *   - Expiry mirrors initial grants: default 14 days, overridable per-grant.
  *     Caller can pass expiryDays=0 for a no-expiry grant.
  *
- * Idempotency:
- *   - Minute-bucket key (or caller-supplied clientKey) means retries within the
- *     same bucket are absorbed by both the ledger
- *     (credit_transactions.idempotency_key) and the audit row
- *     (credit_admin_grants.idempotency_key UNIQUE).
+ * Idempotency (2026-11-12, class 2):
+ *   - The key scope is the caller's clientKey, else the REQUEST's
+ *     Idempotency-Key (the route's withIdempotency requires it). A retry of the
+ *     same request is absorbed by the ledger (credit_transactions.idempotency_key)
+ *     and the audit row (credit_admin_grants.idempotency_key UNIQUE).
+ *   - It used to fall back to a MINUTE bucket: a retry after the minute rolled
+ *     over granted twice, and two distinct grants inside one minute collapsed
+ *     into one while both reported success. With no key at all the grant is
+ *     now refused (IDEMPOTENCY_KEY_REQUIRED).
+ *   - KNOWN GAP (needs the DB): the 3-per-24h cap is a count-then-act, so
+ *     concurrent requests can each pass it. Raised for an atomic RPC.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -49,6 +55,8 @@ export interface AdminGrantOpts {
   expiryDays?:    number;
   /** Optional caller-supplied uniqueness scope (e.g. request id). */
   clientKey?:     string;
+  /** The request's Idempotency-Key; used when no clientKey is given. */
+  requestIdempotencyKey?: string;
   /** Extra context for the audit row. */
   metadata?:      Record<string, unknown>;
   /** Bypass the 3-per-24h limit (escalation use only). */
@@ -60,17 +68,19 @@ function isValidReasonType(v: unknown): v is AdminGrantReasonType {
     && (ADMIN_GRANT_REASON_TYPES as readonly string[]).includes(v);
 }
 
-async function countRecentGrants(orgId: string): Promise<number> {
+async function countRecentGrants(orgId: string): Promise<number | null> {
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { count, error } = await ownedDbTable('credit_admin_grants')
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', orgId)
     .gt('created_at', since24h);
   if (error) {
+    // MONEY (2026-11-12): a failed count is NOT "0 recent grants". Failing open
+    // here silently disabled the per-org velocity cap during any read outage
+    // (the idempotency UNIQUE stops replays, not NEW grants). Unknown -> null,
+    // and the caller refuses.
     logger.warn('admin_grant_rate_count_failed', { orgId, message: error.message });
-    // Fail-open on rate-count errors — the hard DB UNIQUE on idempotency_key
-    // still prevents replay; only the per-org velocity guard is affected.
-    return 0;
+    return null;
   }
   return count ?? 0;
 }
@@ -100,6 +110,13 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
   // ── Velocity guard: max 3 admin grants per org per 24h ──────────────────
   if (!opts.allowOverLimit) {
     const recent = await countRecentGrants(opts.organizationId);
+    if (recent === null) {
+      return {
+        ok:    false,
+        error: 'Could not verify the admin grant limit; nothing granted. Retry, or pass allowOverLimit=true for escalation.',
+        code:  'GRANT_LIMIT_UNVERIFIABLE',
+      };
+    }
     if (recent >= ADMIN_GRANT_MAX_PER_DAY) {
       logger.warn('admin_grant_limit_exceeded', {
         orgId: opts.organizationId,
@@ -116,8 +133,10 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
     }
   }
 
-  const minuteBucket = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
-  const scope        = opts.clientKey ?? minuteBucket;
+  const scope = opts.clientKey?.trim() || opts.requestIdempotencyKey?.trim() || null;
+  if (!scope) {
+    return { ok: false, error: 'An idempotency key (clientKey or Idempotency-Key) is required', code: 'IDEMPOTENCY_KEY_REQUIRED' };
+  }
   const idempotencyKey = makeIdempotencyKey(
     opts.actorUserId,
     'admin_credit_extension',
