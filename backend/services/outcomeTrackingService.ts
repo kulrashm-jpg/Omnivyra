@@ -215,6 +215,22 @@ export async function measureOutcomeScore(campaignId: string, companyId: string)
 }
 
 /**
+ * A stored snapshot older than this is re-measured on read (e9 ruling, 2026-11-12). Before the
+ * campaign_outcomes upsert was actually issued the store was always empty, so every read
+ * re-measured. Once snapshots persist, a read-only caller (the admin dashboard only GETs) would
+ * otherwise see the first measurement forever.
+ */
+export const OUTCOME_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** True when the snapshot exists and was taken within OUTCOME_SNAPSHOT_MAX_AGE_MS of `nowMs`. An unparseable time is stale. */
+export function isOutcomeSnapshotFresh(snapshot: Pick<OutcomeScore, 'snapshot_at'> | null, nowMs: number = Date.now()): boolean {
+  if (!snapshot) return false;
+  const at = Date.parse(snapshot.snapshot_at);
+  if (!Number.isFinite(at)) return false;
+  return nowMs - at < OUTCOME_SNAPSHOT_MAX_AGE_MS;
+}
+
+/**
  * Return the most recent outcome snapshot for a campaign (DB read — no recompute).
  */
 export async function getOutcomeSnapshot(campaignId: string): Promise<OutcomeScore | null> {

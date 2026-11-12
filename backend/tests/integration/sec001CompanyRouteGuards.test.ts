@@ -129,7 +129,7 @@ describe('GET /api/companies/[id]/efficiency-score', () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  test('member with a score row: 200 row unchanged', async () => {
+  test('member with a score row: 200, tier fields only, no discount (informational; e9 2026-11-12)', async () => {
     grantAccess();
     const row = {
       efficiency_tier: 'efficient',
@@ -143,10 +143,12 @@ describe('GET /api/companies/[id]/efficiency-score', () => {
     const res = createMockRes();
     await efficiencyHandler(createApiRequestMock({ id: 'company-1' }), res);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual(row);
+    const { discount_multiplier: _notApplied, ...tierFields } = row;
+    expect(res.body).toEqual({ ...tierFields, applied_to_pricing: false });
+    expect(res.body).not.toHaveProperty('discount_multiplier');
   });
 
-  test('member with no row: default standard-tier object unchanged', async () => {
+  test('member with no row: default standard-tier object, no discount', async () => {
     grantAccess();
     mockTableResponses['credit_efficiency_scores'] = { data: null, error: null };
     const res = createMockRes();
@@ -154,10 +156,10 @@ describe('GET /api/companies/[id]/efficiency-score', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({
       efficiency_tier: 'standard',
-      discount_multiplier: 1.0,
       credits_per_outcome_avg: 0,
       credits_saved_total: 0,
       total_outcomes: 0,
+      applied_to_pricing: false,
     });
   });
 

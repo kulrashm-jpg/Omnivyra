@@ -35,7 +35,6 @@ type OutcomeHistory = {
 
 type EfficiencyScore = {
   efficiency_tier: string;
-  discount_multiplier: number;
   credits_per_outcome_avg: number;
   credits_saved_total: number;
   total_outcomes: number;
@@ -243,8 +242,9 @@ export default function BrandIntelligencePanel({ companyId }: BrandIntelligenceP
               Next: <span className="text-slate-400 capitalize">{tierInfo.next}</span> tier — keep reducing credits_per_outcome
             </div>
           )}
+          {/* e9 ruling 2026-11-12: the tier is NOT applied to pricing, so no discount is shown. */}
           <div className="text-xs text-slate-500 mt-1">
-            Current discount: <span className="text-violet-300">{Math.round((1 - efficiency.discount_multiplier) * 100)}% off intelligence actions</span>
+            Efficiency tier is informational and is not applied to pricing.
           </div>
         </div>
       )}

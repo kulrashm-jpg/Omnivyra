@@ -1,14 +1,14 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
- * GET  /api/campaigns/[id]/outcomes  — fetch or compute outcome score
+ * GET  /api/campaigns/[id]/outcomes  — the stored snapshot if fresh (< OUTCOME_SNAPSHOT_MAX_AGE_MS, 6 h), else re-measure
  * POST /api/campaigns/[id]/outcomes  — trigger re-measurement
  *
  * Auth: requireAuth + requireCompanyAccess
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { measureOutcomeScore, getOutcomeSnapshot } from '../../../../backend/services/outcomeTrackingService';
+import { measureOutcomeScore, getOutcomeSnapshot, isOutcomeSnapshotFresh } from '../../../../backend/services/outcomeTrackingService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '../../../../backend/middleware/authMiddleware';
 
@@ -39,7 +39,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (req.method === 'GET') {
       const snapshot = await getOutcomeSnapshot(campaignId);
-      if (snapshot) return res.status(200).json(snapshot);
+      if (snapshot && isOutcomeSnapshotFresh(snapshot)) return res.status(200).json(snapshot);
 
       const result = await measureOutcomeScore(campaignId, companyId);
       return res.status(200).json(result);
