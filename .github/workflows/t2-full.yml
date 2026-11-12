@@ -1,0 +1,428 @@
+name: T2 full verification
+
+# Owner decision #28 (2026-11-10): the heavy T2 runs (gates, full typecheck,
+# real-schema replay, whole-repo jest with base-ref parity) run here instead of
+# on a 4-CPU laptop. Under #27 this file is MIGRATION-CLASS tooling: full review
+# (virality-05) on every change.
+#
+# SAFETY PROPERTIES (each one is load-bearing; do not weaken without review):
+#   - No `secrets.*` anywhere, no `environment:` on any job: nothing production or
+#     E2E is reachable. The database is a localhost service container with a
+#     CI-only literal password; jest runs on hermetic placeholders.
+#   - Triggers are `push` and `workflow_dispatch` only. NEVER `pull_request_target`
+#     or `workflow_run` (both run untrusted code with the base repo's privileges).
+#   - `permissions: contents: read` at workflow level.
+#   - Third-party actions are pinned to commit SHAs.
+#   - Gating jobs have no `continue-on-error`; every piped command runs under
+#     `set -o pipefail`; minimum test counts are asserted, so a run that executes
+#     nothing fails instead of passing.
+#   - The jest shards record results and do NOT gate on jest's exit code (the base
+#     ref has known failures). The `parity` job is the gate: it fails on any test
+#     failing on HEAD but not on BASE, on a missing shard, on a test floor, and on an
+#     empty comparison set.
+
+on:
+  push:
+    branches:
+      - 'integration/**'
+      - 'release/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t2-full-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Hermetic placeholders (as pi-verification.yml / typecheck-baseline.yml). They
+  # satisfy backend/tests/setupEnv.ts and reach nothing.
+  SUPABASE_URL: https://placeholder.supabase.co
+  SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+  NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+  REDIS_URL: 'redis://localhost:6379'
+  OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+  # ENCRYPTION_KEY is NOT a literal here: each job generates an ephemeral one (see the
+  # "Generate an ephemeral ENCRYPTION_KEY" step), so the repo carries no secret-shaped value.
+  CI: 'true'
+
+jobs:
+  gates:
+    name: Gates (route-auth, route-policy, migration-quality, tenant-authz, schema-drift, SSRF, RBAC/org-access binding)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate an ephemeral ENCRYPTION_KEY (no literal in the repo)
+        shell: bash
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-route-auth.js
+          node scripts/check-route-policy.js
+          node scripts/check-migration-quality.js
+          node scripts/check-tenant-authz.js
+          node scripts/check-schema-drift.js
+          # Security guards from typecheck-baseline.yml (pull_request only there), repeated
+          # here because direct pushes to integration/release branches bypass that workflow.
+          node scripts/check-outbound-ssrf.js
+          node scripts/check-withrbac-binding.js
+          node scripts/check-orgaccess-binding.js
+
+  typecheck:
+    name: Typecheck (CI baseline, worker, backend tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate an ephemeral ENCRYPTION_KEY (no literal in the repo)
+        shell: bash
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript non-regression baseline
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node scripts/typecheck-baseline.js
+      - name: Worker compilation typecheck
+        run: node node_modules/typescript/bin/tsc -p tsconfig.worker.json --noEmit --incremental false
+      - name: Backend-tests typecheck baseline (net-new)
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node scripts/backend-tests-typecheck-baseline.js
+
+  floating-promises:
+    # virality-55 gate (e9-approved 2026-11-12). Runs only where the script exists on the branch.
+    # Exit 1 = NEW floating promise(s); exit 2 = self-check failure or an unanalysable file (never soft).
+    name: Floating promises (self-checked, baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: check-floating-promises
+        shell: bash
+        run: |
+          if [ ! -f scripts/ci/check-floating-promises.js ]; then echo "floating-promises gate not on this branch: skipped"; exit 0; fi
+          node --max-old-space-size=7168 scripts/ci/check-floating-promises.js
+
+  tenant-seam:
+    # 83 tenant-seam gate (owner-approved plan, 2026-11-12): "block new" against the frozen baseline from day one.
+    # Runs only where the gate exists on the branch.
+    name: Tenant seam (block new vs frozen baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - name: tenant registry current + block new
+        shell: bash
+        run: |
+          if [ ! -f scripts/check-tenant-seam.js ]; then echo "tenant-seam gate not on this branch: skipped"; exit 0; fi
+          node scripts/tenancy/generate-tenant-tables.js --check
+          node scripts/check-tenant-seam.js --baseline scripts/tenancy/tenant-seam-baseline.json --block-new
+
+  real-schema:
+    name: Real-schema replay + suites (${{ matrix.side }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # base = merge base with main, replayed the same way, so the actor-FK check is judged
+        # by parity: main itself carries pre-existing ERROR findings (9 on 2026-11-10).
+        side: [head, base]
+    services:
+      postgres:
+        # Digest-pinned 2026-11-11 (multi-arch index of pg17) so a tag re-push cannot change the
+        # database under test. Bump deliberately, with a run.
+        image: pgvector/pgvector:pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
+        env:
+          # CI-only literal (the harness bootstrap also uses it). Never a real credential.
+          POSTGRES_PASSWORD: w6
+          POSTGRES_DB: w6
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d w6"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # Redis for real-schema suites that exercise the Redis-backed paths (CI-1/CI-2, 2026-11-10:
+      # d01_claim_human_approval failed with ECONNREFUSED 127.0.0.1:6379). Workflow env already sets
+      # REDIS_URL=redis://localhost:6379. Ephemeral, per job, no auth, reachable only from the runner.
+      redis:
+        # Digest-pinned 2026-11-11 (multi-arch index of 7.4-alpine). Bump deliberately, with a run.
+        image: redis:7.4-alpine@sha256:7b1753b4c5ad8458906c272a8132b8c15f5557b000379eb115fb239706a384b7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      W6_DB_URL: postgres://postgres:w6@localhost:5432/w6
+      W6_CI_SERVICE_DB: '1'
+      PGPASSWORD: w6
+      # Floor: the real-schema baseline has run at 28 suites / 525 tests; fewer means
+      # the suite did not really run.
+      MIN_REALSCHEMA_TESTS: '500'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Check out the base ref (merge base with main)
+        if: matrix.side == 'base'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          base=$(git merge-base HEAD origin/main)
+          echo "base ref: $base"
+          git checkout --detach "$base"
+      - name: Generate an ephemeral ENCRYPTION_KEY (no literal in the repo)
+        shell: bash
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Real-schema CI (bootstrap, baseline, replay, suites)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/real-schema-ci.sh 2>&1 | tee /tmp/realschema.log
+      - name: Assert the real-schema suites actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A real-schema-ci.sh may run more than one jest pass (e.g. committing *_concurrency_real suites in
+          # a second pass on the same DB; virality-55, 2026-11-11), each printing its own `Tests:` line.
+          # SUM every pass; reading only the last line would count just the final pass.
+          lines=$( { grep -E '^Tests:' /tmp/realschema.log || true; } )
+          echo "jest summaries (one per pass):"
+          printf '%s\n' "${lines:-<none>}" | sed 's/^/  /'
+          total=$(printf '%s\n' "$lines" | { grep -oE '[0-9]+ total' || true; } | awk '{s+=$1} END {print s+0}')
+          echo "total across passes: $total"
+          # Per pass, not only in aggregate (virality-05): a sum cannot see a pass that contributed NOTHING
+          # (e.g. a renamed suite or a changed ignore glob makes a pass match zero files).
+          #  - jest prints "No tests found" instead of a Tests: line when a pass matches no file -> fail;
+          #  - every reported pass must have run at least one test;
+          #  - the largest pass must clear the floor (the main pass carries the suite).
+          if grep -qE 'No tests found' /tmp/realschema.log; then
+            echo "::error::a real-schema jest pass matched NO test files ('No tests found'); a pass went missing"
+            exit 1
+          fi
+          zero=$(printf '%s\n' "$lines" | { grep -oE '[0-9]+ total' || true; } | awk '$1 == 0' | wc -l)
+          if [ "$zero" -gt 0 ]; then
+            echo "::error::$zero real-schema jest pass(es) ran 0 tests"
+            exit 1
+          fi
+          largest=$(printf '%s\n' "$lines" | { grep -oE '[0-9]+ total' || true; } | awk '$1 > m {m = $1} END {print m+0}')
+          echo "largest pass: $largest"
+          if [ "${largest:-0}" -lt "$MIN_REALSCHEMA_TESTS" ]; then
+            echo "::error::the largest real-schema pass executed ${largest:-0} tests, below the floor of $MIN_REALSCHEMA_TESTS"
+            exit 1
+          fi
+          # EVERY realschema suite on disk must have executed (e9/05 rule, 2026-11-12): a new suite that no pass
+          # selects would otherwise never run while the job stays green (the ALWAYS_RUN_JOBS shape). Sum the
+          # `Test Suites: … N total` line of every pass and compare with the files jest.realschema.config.js matches.
+          suite_lines=$( { grep -E '^Test Suites:' /tmp/realschema.log || true; } )
+          executed=$(printf '%s\n' "$suite_lines" | { grep -oE '[0-9]+ total' || true; } | awk '{s+=$1} END {print s+0}')
+          on_disk=$(find backend/tests/realschema -name '*.test.ts' -not -path '*/node_modules/*' | wc -l | tr -d ' ')
+          echo "realschema suites executed: $executed of $on_disk on disk"
+          if [ "$executed" -lt "$on_disk" ]; then
+            echo "::error::only $executed of $on_disk realschema suite files executed; a suite is not selected by any pass"
+            exit 1
+          fi
+      - name: Actor-FK / CHECK compatibility (replayed catalog; recorded, gated by actor-fk-parity)
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p actorfk
+          # The commit that produced this result, carried to the parity job (never recomputed there).
+          git rev-parse HEAD > actorfk/${{ matrix.side }}.ref
+          rc=0
+          # --json: one structured document (findings, known_open, stale_known, counts, coverage);
+          # the parity job compares fields, never printed text.
+          node scripts/ci/check-actor-fk-compatibility.js --db "$W6_DB_URL" --json > actorfk/${{ matrix.side }}.json 2> actorfk/err.txt || rc=$?
+          echo "actor-fk exit: $rc"
+          cat actorfk/err.txt
+          node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(JSON.stringify({counts:r.counts,known_open:r.known_open.length,stale_known:r.stale_known.length,coverage:r.coverage}))' actorfk/${{ matrix.side }}.json || true
+          # 0 = clean, 1 = findings (judged by parity); anything else means the checker itself broke.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then echo "::error::actor-fk checker failed (exit $rc)"; exit 1; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: actorfk-${{ matrix.side }}
+          path: |
+            actorfk/${{ matrix.side }}.json
+            actorfk/${{ matrix.side }}.ref
+          if-no-files-found: error
+          retention-days: 7
+
+  actor-fk-parity:
+    name: Actor-FK parity (HEAD vs base, by finding)
+    needs: real-schema
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Generate an ephemeral ENCRYPTION_KEY (no literal in the repo)
+        shell: bash
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: actorfk-*
+          path: actorfk
+          merge-multiple: true
+      - name: Hash the actor-FK detector at the commit each side actually ran
+        id: det
+        shell: bash
+        run: |
+          set -uo pipefail
+          # GitHub's bash runs with -e. Push-5 self-test (run 42824451045): a missing head.ref made the
+          # `cat` below fail under pipefail and killed this step before it could explain itself. Every
+          # command here must tolerate a missing input; the parity script is what decides.
+          f=scripts/ci/check-actor-fk-compatibility.js
+          for s in head base; do
+            ref=$( { cat "actorfk/$s.ref" 2>/dev/null || true; } | tr -d '[:space:]')
+            # A missing or malformed ref leaves the output empty; the parity script then fails closed.
+            if ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then echo "::error::no valid $s.ref"; continue; fi
+            # An absent blob would hash to sha256("") and look valid; prove it exists first.
+            git cat-file -e "$ref:$f" 2>/dev/null || { echo "::error::detector $f missing at $s ref ($ref)"; continue; }
+            sha=$(git show "$ref:$f" | sha256sum | cut -d' ' -f1)
+            echo "$s ref=$ref detector sha256=$sha"
+            echo "$s=$sha" >> "$GITHUB_OUTPUT"
+          done
+      - name: Actor-FK parity gate
+        # always(): even if an earlier step of this job failed, the script runs and states WHY it
+        # cannot compare (it fails closed on empty hashes or missing results).
+        if: always()
+        # A broken BASE (main) blocks every HEAD branch until main is fixed (deliberate: cannot
+        # compare != nothing new). Once main is green, re-run via workflow_dispatch.
+        run: >-
+          node scripts/ci/t2-actor-fk-parity.js --head actorfk/head.json --base actorfk/base.json
+          --head-detector-sha "${{ steps.det.outputs.head }}" --base-detector-sha "${{ steps.det.outputs.base }}"
+          --detector-ack scripts/ci/t2-detector-change-acks.txt
+
+  jest-shard:
+    name: Jest ${{ matrix.side }} shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [head, base]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Check out the base ref (merge base with main)
+        if: matrix.side == 'base'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          base=$(git merge-base HEAD origin/main)
+          echo "base ref: $base"
+          git checkout --detach "$base"
+      - name: Generate an ephemeral ENCRYPTION_KEY (no literal in the repo)
+        shell: bash
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run jest shard (recorded, gated by the parity job)
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p t2-results
+          # GitHub's bash runs with -e; a failing test (exit 1) is expected on either side and is
+          # judged by the parity job, so capture the exit instead of letting it abort the step.
+          rc=0
+          node ./node_modules/jest/bin/jest.js --shard=${{ matrix.shard }}/4 --forceExit --silent \
+            --json --outputFile=t2-results/raw.json > t2-results/jest.log 2>&1 || rc=$?
+          echo "jest exit: $rc"
+          tail -5 t2-results/jest.log
+          test -s t2-results/raw.json || { echo "::error::jest produced no JSON for this shard"; exit 1; }
+      - name: Make test paths repo-relative
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const j = JSON.parse(fs.readFileSync("t2-results/raw.json", "utf8"));
+            for (const s of j.testResults || []) s.name = path.relative(process.cwd(), s.name).split(path.sep).join("/");
+            if (!j.numTotalTests) { console.error("::error::shard executed 0 tests"); process.exit(1); }
+            fs.writeFileSync("t2-results/${{ matrix.side }}-shard-${{ matrix.shard }}.json", JSON.stringify(j));
+            console.log("tests:", j.numTotalTests, "failed:", j.numFailedTests, "suites failed:", j.numFailedTestSuites);
+          '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: t2-${{ matrix.side }}-shard-${{ matrix.shard }}
+          path: t2-results/${{ matrix.side }}-shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  parity:
+    name: Parity (HEAD vs base, by test name)
+    needs: jest-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Generate an ephemeral ENCRYPTION_KEY (no literal in the repo)
+        shell: bash
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: t2-head-shard-*
+          path: t2/head
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: t2-base-shard-*
+          path: t2/base
+          merge-multiple: true
+      - name: Parity gate
+        # --min-tests is only a total-collapse trip; the relative HEAD-vs-BASE check
+        # (--max-drop-pct, measured in this same run) and the by-name removal check carry the weight.
+        run: node scripts/ci/t2-parity.js --head t2/head --base t2/base --shards 4 --min-tests 1000 --max-drop-pct 2 --ack scripts/ci/t2-acknowledged-removals.txt
