@@ -4,6 +4,7 @@ import {
   classifyPendingReservationAge,
   CustomerRecoveryStatus,
 } from './customerBillingStatusService';
+import { overlayPaymentEventState } from './payments/paymentEventState';
 
 export type MonetizationIncidentClass =
   | 'pending_purchase'
@@ -161,7 +162,6 @@ export async function listMonetizationSupportCases(input?: { limit?: number }): 
     ownedDbTable('payment_provider_events')
       .select('id, organization_id, provider_event_id, provider_order_id, provider_payment_id, purchase_id, processing_status, error_message, received_at')
       .eq('provider', 'razorpay')
-      .in('processing_status', ['recorded', 'failed', 'duplicate'])
       .order('received_at', { ascending: false })
       .limit(limit),
     ownedDbTable('credit_transactions')
@@ -190,7 +190,13 @@ export async function listMonetizationSupportCases(input?: { limit?: number }): 
     });
   }
 
-  for (const row of (providerEvents.data ?? []) as any[]) {
+  // 20270217000003: the ledger's inline processing_status is permanently 'recorded';
+  // the real state is overlaid from the side tables, and the status FILTER is
+  // applied AFTER the overlay (a SQL filter on the inline column matched everything).
+  if (providerEvents.error) throw new Error(`[supportRunbook] provider events read failed: ${providerEvents.error.message}`);
+  const overlaidEvents = (await overlayPaymentEventState((providerEvents.data ?? []) as any[]))
+    .filter((r: any) => ['recorded', 'failed', 'duplicate', 'requeued'].includes(String(r.processing_status)));
+  for (const row of overlaidEvents as any[]) {
     const failedVerification = String(row.error_message ?? '').includes('mismatch') || String(row.error_message ?? '').includes('signature');
     const incident: MonetizationIncidentClass = failedVerification ? 'failed_verification' : 'delayed_webhook';
     cases.push({

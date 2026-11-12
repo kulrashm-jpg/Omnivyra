@@ -2,6 +2,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { listCustomerBillingEvents } from './customerBillingProjectionService';
 import { getMonetizationAlertSummary, recordMonetizationOperationalEvent } from './monetizationOpsService';
 import { listMonetizationBetaHealthSummary } from './monetizationBetaAccessService';
+import { overlayPaymentEventState } from './payments/paymentEventState';
 
 export type MonetizationTimelineAudience = 'support' | 'customer_safe';
 
@@ -121,7 +122,10 @@ export async function buildMonetizationIncidentTimeline(input: {
     });
   }
 
-  for (const row of providerEvents.data ?? []) {
+  // 20270217000003: overlay the real state / order ids from the side tables.
+  if (providerEvents.error) throw new Error(`[incidentOps] provider events read failed: ${providerEvents.error.message}`);
+  const overlaidProviderEvents = await overlayPaymentEventState((providerEvents.data ?? []) as any[]);
+  for (const row of overlaidProviderEvents) {
     if (customerSafeOnly) continue;
     items.push({
       id: `provider:${row.id}`,

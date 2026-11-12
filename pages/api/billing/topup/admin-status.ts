@@ -12,6 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as sb } from '@/backend/db/supabaseClient';
 import { withOrgAccess } from '../../../../backend/middleware/withOrgAccess';
 import { logger } from '../../../../backend/services/logger';
+import { overlayPaymentEventState } from '../../../../backend/services/payments/paymentEventState';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
@@ -24,9 +25,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       sb.from('credit_purchases')
         .select('id, credits, amount_paid, currency, status, fulfillment_status, provider, provider_order_id, created_at')
         .eq('organization_id', orgId).order('created_at', { ascending: false }).limit(limit),
+      // The select named event_id / status / created_at, which do NOT exist on
+      // payment_provider_events - the query always failed and provider_events was
+      // silently []. Real columns; state overlaid from the side table (000003).
       sb.from('payment_provider_events')
-        .select('id, provider, event_id, event_type, status, created_at')
-        .order('created_at', { ascending: false }).limit(limit),
+        .select('id, provider, provider_event_id, event_type, processing_status, received_at')
+        .order('received_at', { ascending: false }).limit(limit),
       sb.from('credit_transactions')
         .select('credits_delta, reference_type, reference_id, execution_phase, created_at')
         .eq('organization_id', orgId).eq('reference_type', 'credit_purchase')
@@ -44,7 +48,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         credits_allocated: (credits.data ?? []).reduce((s: number, r: any) => s + Math.max(0, Number(r.credits_delta ?? 0)), 0),
       },
       purchases: p,
-      provider_events: events.data ?? [],
+      provider_events: events.error ? [] : await overlayPaymentEventState((events.data ?? []) as any[]),
+      ...(events.error ? { provider_events_error: events.error.message } : {}),
       allocation_ledger: credits.data ?? [],
     });
   } catch (err: any) {

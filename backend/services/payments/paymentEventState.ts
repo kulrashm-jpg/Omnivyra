@@ -78,3 +78,37 @@ export async function setPaymentEventAttributes(eventId: string, attrs: PaymentE
     return false;
   }
 }
+
+/**
+ * READERS (20270217000003): overlay each ledger row with its STATE and ATTRIBUTES
+ * from the side tables. TRANSITIONAL fallback (e9): a row with no state /
+ * attribute row keeps its inline ledger value (rows written before the side
+ * tables were adopted; C18: 0 events in prod, so this is likely moot - a
+ * post-launch backfill item is logged). THROWS on a read error (a reader must
+ * not report a stale state as current).
+ */
+export async function overlayPaymentEventState<T extends { id: string; processing_status?: string | null; error_message?: string | null; processed_at?: string | null; provider_order_id?: string | null; provider_payment_id?: string | null }>(
+  rows: T[],
+): Promise<T[]> {
+  if (!rows.length) return rows;
+  const ids = rows.map((r) => r.id);
+  const [st, at] = await Promise.all([
+    ownedDbTable('payment_provider_event_state').select('provider_event_pk, processing_status, error_message, processed_at').in('provider_event_pk', ids),
+    ownedDbTable('payment_provider_event_attributes').select('provider_event_pk, provider_order_id, provider_payment_id').in('provider_event_pk', ids),
+  ]);
+  if (st.error) throw new Error(`[paymentEventState] state overlay read failed: ${st.error.message}`);
+  if (at.error) throw new Error(`[paymentEventState] attributes overlay read failed: ${at.error.message}`);
+  const sMap = new Map((st.data ?? []).map((r: any) => [r.provider_event_pk, r]));
+  const aMap = new Map((at.data ?? []).map((r: any) => [r.provider_event_pk, r]));
+  return rows.map((r) => {
+    const s: any = sMap.get(r.id); const a: any = aMap.get(r.id);
+    return {
+      ...r,
+      processing_status: s?.processing_status ?? r.processing_status ?? 'recorded',
+      error_message: s ? s.error_message : r.error_message,
+      processed_at: s ? s.processed_at : r.processed_at,
+      provider_order_id: a?.provider_order_id ?? r.provider_order_id ?? null,
+      provider_payment_id: a?.provider_payment_id ?? r.provider_payment_id ?? null,
+    };
+  });
+}

@@ -32,6 +32,7 @@ import {
   listMonetizationBetaDrillSummary,
   recordMonetizationBetaDrill,
 } from '@/backend/services/monetizationIncidentOpsService';
+import { overlayPaymentEventState } from '../../../../backend/services/payments/paymentEventState';
 
 function numberFromQuery(v: unknown, fallback: number): number {
   if (typeof v !== 'string') return fallback;
@@ -45,7 +46,6 @@ async function loadOperationalSnapshot(limit: number) {
     ownedDbTable('payment_provider_events')
       .select('id, provider, provider_event_id, event_type, purchase_id, organization_id, processing_status, error_message, provider_order_id, provider_payment_id, received_at')
       .eq('provider', 'razorpay')
-      .in('processing_status', ['recorded', 'failed', 'duplicate'])
       .order('received_at', { ascending: false })
       .limit(limit),
     ownedDbTable('credit_purchases')
@@ -72,7 +72,9 @@ async function loadOperationalSnapshot(limit: number) {
     beta_runtime: getMonetizationBetaRuntimeMode(),
     beta_health: betaHealth,
     events,
-    rejected_provider_events: rejectedEvents.data ?? [],
+    // 20270217000003: real state overlaid; the status filter applies AFTER the overlay.
+    rejected_provider_events: rejectedEvents.error ? [] : (await overlayPaymentEventState((rejectedEvents.data ?? []) as any[]))
+      .filter((r: any) => ['recorded', 'failed', 'duplicate', 'requeued'].includes(String(r.processing_status))),
     unresolved_purchases: unresolvedPurchases.data ?? [],
     quarantined_reservations: quarantinedReservations.data ?? [],
     support_cases: supportCases,
