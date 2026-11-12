@@ -51,7 +51,9 @@ const mockResolveCapability = jest.fn();
 const mockValidateReadiness = jest.fn();
 
 /** Rows returned for `campaigns` lookups, keyed by id. */
-let campaignRows: Record<string, { status?: string } | null> = {};
+let campaignRows: Record<string, { status?: string; company_id?: string | null } | null> = {};
+/** Connected social accounts (FAITHFUL: a row matches only when every eq / in filter matches). */
+let accounts: Array<Record<string, unknown>> = [];
 /** Set to simulate an unreadable campaign (fail-closed path). */
 let campaignReadError: { message: string } | null = null;
 /** Every `scheduled_posts` update the route performs. */
@@ -61,13 +63,22 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (table: string) => {
       const builder: any = {};
+      const filters: Array<[string, string, unknown]> = [];
+      const matches = (r: Record<string, unknown>) =>
+        filters.every(([op, c, v]) => (op === 'in' ? (v as unknown[]).includes(r[c]) : r[c] === v));
       builder.select = () => builder;
       builder.eq = (col: string, val: unknown) => {
         if (col === 'id') builder.__id = String(val);
+        filters.push(['eq', col, val]);
         return builder;
       };
-      builder.in = () => builder;
+      builder.in = (col: string, vals: unknown[]) => { filters.push(['in', col, vals]); return builder; };
       builder.limit = () => builder;
+      builder.order = () => builder;
+      builder.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => {
+        const data = table === 'social_accounts' ? accounts.filter(matches) : [];
+        return Promise.resolve({ data, error: null }).then(ok, ko);
+      };
       builder.single = () => {
         if (table === 'campaigns') {
           if (campaignReadError) return Promise.resolve({ data: null, error: campaignReadError });
@@ -78,7 +89,11 @@ jest.mock('../../db/supabaseClient', () => ({
       };
       builder.maybeSingle = () => {
         if (table === 'social_accounts') {
-          return Promise.resolve({ data: { id: 'acct-1' }, error: null });
+          return Promise.resolve({ data: accounts.find(matches) ?? null, error: null });
+        }
+        if (table === 'campaigns') {
+          if (campaignReadError) return Promise.resolve({ data: null, error: campaignReadError });
+          return Promise.resolve({ data: campaignRows[builder.__id] ?? null, error: null });
         }
         return Promise.resolve({ data: null, error: null });
       };
@@ -169,6 +184,7 @@ beforeEach(() => {
   campaignRows = {};
   campaignReadError = null;
   postUpdates = [];
+  accounts = [];
   mockIsSuperAdmin.mockResolvedValue(false);
   mockResolveCapability.mockReturnValue({ status: 'api_verified' });
   mockValidateReadiness.mockReturnValue({ ok: true, warnings: [] });
@@ -417,5 +433,33 @@ describe('11. SOURCE GATE — the predicate is reused, never reproduced', () => 
   it('publishNowService itself was NOT modified by R6-B', () => {
     const svc = readFileSync(join(ROOT, 'backend/services/publishNowService.ts'), 'utf8');
     expect(svc).not.toContain('authorizePostPublish');
+  });
+});
+
+/* ── BLOCKING fast-track: a post with no account takes one from its CAMPAIGN company only ── */
+
+describe('cross-company account (e9 fast-track): manual publish never uses another company\'s account', () => {
+  const CO_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const CO_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  beforeEach(() => {
+    campaignRows['camp-A'] = { status: 'active', company_id: CO_A };
+    campaignRows['camp-B'] = { status: 'active', company_id: CO_B };
+    // user-1 belongs to both companies; their LinkedIn account is in company B only.
+    accounts = [{ id: 'acct-B', user_id: 'user-1', company_id: CO_B, platform: 'linkedin', is_active: true }];
+  });
+
+  it("CRITICAL: company A's post (no account) is refused (422 NO_CONNECTED_ACCOUNT), never published through B's account", async () => {
+    const res = await call({ campaign_id: 'camp-A', social_account_id: null });
+    expect(res.statusCode).toBe(422);
+    expect(res.body).toMatchObject({ code: 'NO_CONNECTED_ACCOUNT' });
+    expect(mockPublishNow).not.toHaveBeenCalled();
+    expect(postUpdates.filter((u) => u.social_account_id)).toEqual([]);
+  });
+
+  it("CONTROL: company B's post (no account) is published through the company-B account", async () => {
+    const res = await call({ campaign_id: 'camp-B', social_account_id: null });
+    expect(res.statusCode).toBe(200);
+    expect(postUpdates.find((u) => u.social_account_id)).toMatchObject({ social_account_id: 'acct-B' });
+    expect(mockPublishNow).toHaveBeenCalled();
   });
 });

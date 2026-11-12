@@ -2,6 +2,7 @@
 /** Structured plan scheduler — execution — split from structuredPlanScheduler.ts (barrel preserved; importers unchanged). */
 import { supabase } from '../db/supabaseClient';
 import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCodes';
+import { resolvePostSocialAccount } from './postSocialAccountResolver';
 import { recordRowFailureBatch, type RowFailureRecord } from './boltRowFailureDiagnostics';
 // `getCreatorGovernance` is already imported below from the creator
 // governance registry — kept there to avoid duplicate identifier.
@@ -114,25 +115,33 @@ async function validatePlatformAndType(input: { platform: string; contentType: s
   };
 }
 
+/**
+ * The legacy ad-hoc (standalone, no campaign) post's account. CROSS-TENANT FIX (BLOCKING): this used to take
+ * the user's newest active account for the platform in ANY company. Through the shared resolver a standalone
+ * post gets an account only when the user's matching accounts are all in ONE company; otherwise it is
+ * refused as ambiguous (the caller passes an explicit accountId instead).
+ */
 async function resolveActiveSocialAccountId(userId: string, canonicalPlatform: string): Promise<string | null> {
   const candidates = new Set<string>([canonicalPlatform, toDbPlatformKey(canonicalPlatform)]);
   if (canonicalPlatform === 'x') candidates.add('twitter');
 
-  const { data, error } = await ownedDbTable('social_accounts')
-    .select('id, platform')
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .in('platform', Array.from(candidates))
-    .order('created_at', { ascending: false })
-    .limit(1);
-
-  if (error) throw new BoltError(
-    BOLT_ERROR_CODES.SCHEDULING_SOCIAL_ACCOUNTS_FAILED,
-    `Failed to load social accounts: ${error.message}`,
-    { cause: error, details: { db_error: error.message } }
-  );
-  const row = (data || [])[0];
-  return row?.id ? String(row.id) : null;
+  const resolved = await resolvePostSocialAccount({ userId, platforms: Array.from(candidates), campaignId: null });
+  if (resolved.ok && resolved.socialAccountId) return resolved.socialAccountId;
+  if (resolved.retryable) {
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_SOCIAL_ACCOUNTS_FAILED,
+      `Failed to load social accounts: ${resolved.code}`,
+      { details: { reason: resolved.code } },
+    );
+  }
+  if (resolved.code === 'ACCOUNT_AMBIGUOUS') {
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_NO_ACCOUNT_FOR_PLATFORM,
+      resolved.message ?? 'Ambiguous social account',
+      { details: { platform: canonicalPlatform, reason: resolved.code } },
+    );
+  }
+  return null; // NO_CONNECTED_ACCOUNT: the caller raises SCHEDULING_NO_ACCOUNT_FOR_PLATFORM
 }
 
 export async function listLegacyScheduledPosts(input: {
