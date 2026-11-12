@@ -15,6 +15,7 @@ import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { activateScheduledCampaign } from '../../../../backend/services/campaignScheduleActivation';
 import {
   CreatorScheduleGovernanceError,
   assertCreatorFormatsSchedulable,
@@ -235,24 +236,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // scheduleStructuredPlan is not idempotent: a 500 here would invite the user to schedule AGAIN
     // and duplicate every post. So the idempotent write is retried once, and a persistent failure is
     // reported in the 200 body (`activation.ok: false`) and logged at ERROR: visible, without
-    // inviting a duplicate schedule. (Disposition put to e9, 2026-11-12.)
-    const activate = () => supabase
-      .from('campaigns')
-      .update({
-        status: 'active',
-        current_stage: 'schedule',
-        blueprint_status: 'ACTIVE',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
-    let { error: activateError } = await activate();
-    if (activateError) ({ error: activateError } = await activate());
-    if (activateError) {
-      console.error('[schedule-structured-plan] campaign activation failed AFTER scheduling (posts are scheduled)', { campaignId: id, message: activateError.message, scheduled_count: result.scheduled_count });
+    // inviting a duplicate schedule (e9 ACCEPTED, 2026-11-12). The user's way out is "Retry status
+    // update" (retry-activation), which runs ONLY this write, never a schedule.
+    const activated = await activateScheduledCampaign(id);
+    if (!activated.ok) {
+      console.error('[schedule-structured-plan] campaign activation failed AFTER scheduling (posts are scheduled)', { campaignId: id, message: activated.error?.message, scheduled_count: result.scheduled_count });
     }
-    const activation = activateError
-      ? { ok: false as const, code: 'CAMPAIGN_ACTIVATION_FAILED' }
-      : { ok: true as const };
+    const activation = activated.ok
+      ? { ok: true as const }
+      : { ok: false as const, code: 'CAMPAIGN_ACTIVATION_FAILED' };
 
     void checkAndCompleteCampaignIfEligible(id).catch(() => {});
     void syncCampaignVersionStage(id, 'schedule', companyId).catch(() => {});
