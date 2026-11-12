@@ -121,8 +121,11 @@ describe('wiring — the middleware can actually take effect', () => {
     // Caller scoping makes replay same-caller-only; the handler must still be
     // the thing that decides tenant/role access on a cache MISS.
     const src = read(rel);
+    // loadAuthorizedPlanRow (plan-row-oracle): resolveUserContext + enforceCompanyAccess on the row's
+    // server-resolved company, inside the handler; registered as a tenant primitive in
+    // scripts/check-route-auth.js (7a63290fc).
     const authorizes =
-      /getSupabaseUserFromRequest|enforceCompanyAccess|enforceRole|requireCampaignAccess|resolveAuthenticatedUser/.test(src);
+      /getSupabaseUserFromRequest|enforceCompanyAccess|enforceRole|requireCampaignAccess|resolveAuthenticatedUser|loadAuthorizedPlanRow/.test(src);
     expect({ file: rel, authorizes }).toEqual({ file: rel, authorizes: true });
   });
 
