@@ -11,6 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getPlatformAdapter } from '../../../backend/services/platformAdapters';
 import { validatePlatformKey } from '../../../backend/services/platformRegistryService';
+import { assertTestableEnvVarName } from '../../../backend/services/externalApi/testEnvAllowlist';
 
 type TestConnectionBody = {
   platform_key: string;
@@ -30,12 +31,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
+    // SECURITY (2026-11-13): resolveUserContext does NOT refuse - an anonymous caller gets an unauthenticated
+    // context with no default company. This route used to run the access check only `if (organizationId)`, so an
+    // anonymous request reached process.env[<any body-supplied name>] and the platform adapter. Now: authenticated,
+    // a company ALWAYS access-checked BEFORE any credential is resolved, and an env name only from the existing
+    // external-API credential allowlist (assertTestableEnvVarName - same boundary as /api/external-apis/test).
     const user = await resolveUserContext(req);
+    if (!user?.authenticated || !user.userId) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
     const body = (req.body || {}) as TestConnectionBody;
     const platformKey = (body.platform_key ?? '').toString().trim();
     const credentials = body.credentials ?? {};
     const apiKeyEnvName = (body.api_key_env_name ?? '').toString().trim();
-    const organizationId = body.organization_id ?? user?.defaultCompanyId;
+    const organizationId = (body.organization_id ?? '').toString().trim() || user.defaultCompanyId;
+
+    if (!organizationId) {
+      return res.status(400).json({ success: false, error: 'organization_id required' });
+    }
+    const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
+    if (!access) return;
 
     if (!platformKey) {
       return res.status(400).json({ success: false, error: 'platform_key required' });
@@ -43,7 +58,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let accessToken = credentials.access_token;
     if (!accessToken && apiKeyEnvName) {
-      accessToken = process.env[apiKeyEnvName] ?? null;
+      const envDecision = await assertTestableEnvVarName(apiKeyEnvName);
+      if (!envDecision.allowed || !envDecision.envName) {
+        return res.status(400).json({
+          success: false,
+          error: 'Unsupported api_key_env_name',
+          code: 'ENV_VAR_NOT_TESTABLE',
+        });
+      }
+      accessToken = process.env[envDecision.envName] ?? null;
     }
     if (!accessToken) {
       return res.status(400).json({
@@ -63,11 +86,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         success: false,
         error: `No adapter available for platform: ${platformKey}`,
       });
-    }
-
-    if (organizationId) {
-      const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
-      if (!access) return;
     }
 
     const result = await adapter.testConnection({

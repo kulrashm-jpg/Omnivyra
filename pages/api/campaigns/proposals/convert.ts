@@ -90,6 +90,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       duration_weeks: weeks.length || 6,
       ai_generated_summary: (pd.campaign_objective as string) ?? '',
       user_id: access.userId,
+      // TENANT: owned by the proposal's company, which enforceCompanyAccess authorized above (it was
+      // written only to campaign_versions, leaving the campaign itself company-less).
+      company_id: organizationId,
       thread_id: `thread_${Date.now()}`,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

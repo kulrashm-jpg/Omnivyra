@@ -1,18 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 import { mergeRecommendationsIntoPlan } from '../../../../backend/services/campaignRecommendationExtensionService';
-
-async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from('campaign_versions')
-    .select('company_id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-  return data?.company_id ? (data.company_id as string) : null;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -26,20 +15,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const campaignId = id;
 
-  let companyId = await getCompanyId(campaignId);
-  if (!companyId && typeof req.body?.companyId === 'string') companyId = req.body.companyId;
-  if (!companyId) {
-    return res.status(400).json({ error: 'Campaign must be linked to a company. Pass companyId in body if needed.' });
-  }
-
-  const access = await enforceCompanyAccess({
-    req,
-    res,
-    companyId,
-    campaignId,
-    requireCampaignId: false,
-  });
+  // TENANT (e9, BLOCKING): this route took the company from campaign_versions and, when that read
+  // found nothing (or FAILED, unread), from the request BODY, then authorized the caller against that
+  // company without binding the campaign to it (requireCampaignId:false). A member of A could pass
+  // their own company with B's company-less campaign and merge into B's plan. The campaign is now
+  // bound by requireCampaignAccess: its company is resolved server-side (campaign_versions, then
+  // campaigns.company_id) and the caller's membership in exactly that company is proven; a lookup
+  // failure is refused (fail-closed). A body companyId is only ever a claim that must MATCH.
+  const access = await requireCampaignAccess(req, res, campaignId);
   if (!access) return;
+  const claimedCompanyId = typeof req.body?.companyId === 'string' ? req.body.companyId.trim() : '';
+  if (claimedCompanyId && claimedCompanyId !== access.companyId) {
+    return res.status(403).json({ code: 'CAMPAIGN_NOT_IN_COMPANY', error: 'Campaign does not belong to the given company' });
+  }
 
   const { sessionId, weekNumbers } = req.body || {};
   if (!sessionId || typeof sessionId !== 'string') {

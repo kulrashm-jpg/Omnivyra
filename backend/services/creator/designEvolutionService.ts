@@ -18,7 +18,7 @@ import {
   analyzeEvolution,
 } from '../../../lib/creator-templates/designEvolution';
 import type { PerfRollup } from '../../../lib/creator-templates/designPerformance';
-import { getCollection, buildResolver, removeTemplateFromCollection, replaceTemplateInCollection } from './collectionService';
+import { getCollection, buildResolver, removeTemplateFromCollection, replaceTemplateInCollection, getCollectionCompanyId } from './collectionService';
 import { getCampaignDesignSystem } from './campaignDesignSystemService';
 import { getCampaignDesignPerformance, getCompanyDesignPerformance, type ScoredRollup } from './designPerformanceService';
 
@@ -59,7 +59,7 @@ function buildMembers(members: CreatorTemplate[], templateRollups: ScoredRollup[
 async function analyze(collectionId: string, templateRollups: ScoredRollup[], requiredFamilies: TemplateAssetFamily[], targetPlatforms: string[], audience: string | null): Promise<EvolutionAnalysis | null> {
   const collection = await getCollection(collectionId);
   if (!collection) return null;
-  const resolve = await buildResolver(collection.templateIds);
+  const resolve = await buildResolver(collection.templateIds, await getCollectionCompanyId(collectionId));
   const members = collection.templateIds.map(resolve).filter((t): t is CreatorTemplate => t !== null);
   const presentFamilies = Array.from(new Set(members.map((m) => m.assetFamily)));
   const input: EvolutionInput = {

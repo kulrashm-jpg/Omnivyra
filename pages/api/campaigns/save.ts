@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -42,6 +43,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!access) return;
     }
 
+    // TENANT: a NEW campaign is owned by an AUTHORIZED company, never created company-less (this
+    // route used to resolve no company at all). The tenant guard's doctrine is "no active_company_id
+    // inference", so the caller names the company and must be a member of it; without it nothing is
+    // written. An existing campaign keeps its own company: the update payload never carries one.
+    let newCampaignCompanyId: string | null = null;
+    if (!existed) {
+      const bodyCompanyId = typeof req.body.companyId === 'string' ? req.body.companyId.trim() : '';
+      if (!bodyCompanyId) {
+        return res.status(400).json({ code: 'COMPANY_REQUIRED', error: 'companyId is required to create a campaign. Nothing was created.' });
+      }
+      const tenantAccess = await requireTenantAccess(req, res, bodyCompanyId);
+      if (!tenantAccess) return; // guard already responded
+      newCampaignCompanyId = tenantAccess.organizationId;
+    }
+
     // WSF-ORD-007 — the binding above and the write below used to be an
     // existence CHECK followed by an unconditional UPSERT: two statements with
     // a gap between them. A campaign created by another tenant inside that gap
@@ -74,7 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let { data: campaign, error } = existed
       ? await writeExisting()
-      : await supabase.from('campaigns').insert(payload).select().single();
+      : await supabase.from('campaigns').insert({ ...payload, company_id: newCampaignCompanyId }).select().single();
 
     // 23505 = unique_violation: we lost the create race for this id.
     if (!existed && (error as { code?: string } | null)?.code === '23505') {
