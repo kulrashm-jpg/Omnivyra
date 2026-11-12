@@ -299,9 +299,14 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // re-pinned here. Email idempotency (fix/email-idempotency-20261113, "an uncertain send is never re-queued") changed both: the transport
     // now reports an ambiguous provider answer as uncertain, and dispatch fails such a task instead of
     // re-queuing it (a re-dispatch mints a new key). Neither touches authentication or tenancy - re-pinned.
+    // A re-derived hash passes by construction: the CHECK is the diff review, so this records only what happened.
+    // Re-derived by its AUTHOR (virality-6f). virality-05 read the emailTransport/dispatch diff (2026-11-12) and
+    // found that a 409/502 with an unreadable body lost its ambiguity; fixed by classifyFunctionError (status
+    // decides, the body only proves a 5xx definite) and re-pinned. 05's review of THAT fix: pending. 05 confirmed
+    // the one companyId line passes the existing tenant-scoped id to the state transition.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('26f32357c83318f8');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('9d33ec4f5d8b4052');
     expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('989fd50aa3a32041');
   });
 

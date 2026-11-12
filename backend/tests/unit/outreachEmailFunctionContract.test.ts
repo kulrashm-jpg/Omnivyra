@@ -307,28 +307,56 @@ describe('WP3/L5 — the send path (source contract)', () => {
   });
 });
 
-// e9 2026-11-13: an UNCERTAIN answer from send-transactional-email (409 IDEMPOTENCY_UNCERTAIN, or 502 uncertain)
-// reaches the outreach provider as `uncertain` - never a plain rejection that dispatch could re-queue.
-describe('send-transactional-email UNCERTAIN answer -> provider `uncertain`', () => {
+// e9 2026-11-13 + 05 review: whether send-transactional-email MAY have sent is decided from what is KNOWN. The
+// status decides; an unreadable body means we know LESS, so it can never downgrade an ambiguous status to a
+// definite rejection (which dispatch re-queues -> a NEW key -> a fresh send).
+describe('send-transactional-email non-2xx -> provider `uncertain` unless DEFINITELY not sent', () => {
   const nonOk = (status: number, body: unknown) =>
-    ({ error: { message: 'Edge Function returned a non-2xx status code', context: new Response(JSON.stringify(body), { status }) } }) as never;
+    ({ error: { message: 'Edge Function returned a non-2xx status code', context: new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }) } }) as never;
 
   it.each([
     ['409 IDEMPOTENCY_UNCERTAIN', 409, { ok: false, error: 'IDEMPOTENCY_UNCERTAIN', duplicate: true, retryable: false }],
+    ['409 IN_FLIGHT (this key may be sending right now)', 409, { ok: false, error: 'IDEMPOTENCY_IN_FLIGHT', duplicate: true, retryable: true }],
     ['502 uncertain send', 502, { ok: false, error: 'socket hang up', uncertain: true, retryable: false }],
+    ['409 with an UNPARSEABLE body (proxy HTML)', 409, '<html>bad gateway</html>'],
+    ['502 with an EMPTY body', 502, ''],
+    ['502 even when the body claims retryable (the status decides)', 502, { ok: false, retryable: true }],
+    ['504 gateway timeout', 504, '<html>504</html>'],
+    ['546 worker limit', 546, { code: 'WORKER_LIMIT' }],
+    ["500 that is NOT the function's definite answer (crash / gateway)", 500, { error: 'boom' }],
+    ['503 non-JSON', 503, 'Service Unavailable'],
+    ['500 flagged uncertain', 500, { ok: false, retryable: true, uncertain: true }],
+    ['500 ok:false WITHOUT retryable:true (not the definite shape of the function)', 500, { ok: false, error: 'x' }],
   ])('%s -> uncertain, not accepted', async (_n, status, body) => {
     functionResponse = nonOk(status, body);
     const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
     expect(res).toMatchObject({ accepted: false, uncertain: true, rejectionReason: 'provider_uncertain' });
   });
 
+  it('NO HTTP answer at all (network / relay failure) -> uncertain', async () => {
+    functionResponse = { error: { message: 'Failed to send a request to the Edge Function', context: new TypeError('fetch failed') } } as never;
+    expect(await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST)).toMatchObject({ accepted: false, uncertain: true });
+    functionResponse = { error: { message: 'no context' } } as never;
+    expect(await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST)).toMatchObject({ accepted: false, uncertain: true });
+  });
+
   it.each([
-    ['409 IN_FLIGHT (retryable)', 409, { ok: false, error: 'IDEMPOTENCY_IN_FLIGHT', duplicate: true, retryable: true }],
-    ['500 definite failure', 500, { ok: false, error: 'ses 400', retryable: true }],
+    ["500 the function's definite failure", 500, { ok: false, error: 'ses 400', retryable: true }],
+    ['503 store unavailable (nothing sent)', 503, { ok: false, error: 'IDEMPOTENCY_STORE_UNAVAILABLE', retryable: true }],
+    ['400 validation', 400, { error: "Missing 'type' field" }],
+    ['401 auth', 401, { error: 'unauthorized' }],
+    ['400 with an unparseable body (a 4xx is refused before sending)', 400, '<html>'],
   ])('CONTROL: %s stays a plain rejection (never marked uncertain)', async (_n, status, body) => {
     functionResponse = nonOk(status, body);
     const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
     expect(res.accepted).toBe(false);
     expect(res.uncertain).toBeUndefined();
+  });
+
+  it('the body is read from a CLONE: the Response stays readable afterwards', async () => {
+    const r = new Response(JSON.stringify({ ok: false, error: 'ses 400', retryable: true }), { status: 500 });
+    functionResponse = { error: { message: 'x', context: r } } as never;
+    await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
+    expect(r.bodyUsed).toBe(false);
   });
 });

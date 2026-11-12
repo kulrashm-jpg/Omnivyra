@@ -83,8 +83,8 @@ export interface EmailProviderResponse {
   /** True when the provider recognised the idempotency key as a repeat. */
   duplicate?: boolean;
   /**
-   * True when the provider says the message MAY have been sent (send-transactional-email: 409
-   * IDEMPOTENCY_UNCERTAIN, or 502 uncertain). Never a rejection: it is the ambiguous `timeout` outcome.
+   * True when the message MAY have been sent (send-transactional-email: see classifyFunctionError - 409, 502, an
+   * unrecognised 5xx, or no answer). Never a rejection: it is the ambiguous `timeout` outcome.
    */
   uncertain?: boolean;
   /** Structured provider response, already free of message content. */
@@ -106,6 +106,33 @@ export interface EmailProviderPort {
  * recognise that type before anything can actually be delivered, which is why
  * this transport ships disabled.
  */
+/**
+ * Could send-transactional-email have sent, given a non-2xx (or no) answer? Decided from what is KNOWN (05 review):
+ *   - no HTTP answer at all (network / relay failure): the request may have reached the function -> UNCERTAIN;
+ *   - 409 (IDEMPOTENCY_UNCERTAIN, or IN_FLIGHT: this key may be sending right now) or 502 (uncertain send):
+ *     UNCERTAIN on the STATUS alone - the body can never downgrade it (a truncated or proxy body means we know LESS);
+ *   - any other 5xx (a gateway timeout, a killed worker, a crash): UNCERTAIN, unless the body is positively the
+ *     function's own DEFINITE answer ({ ok: false, retryable: true }, not flagged uncertain: 500 send failure,
+ *     503 store unavailable - nothing was sent);
+ *   - any other 4xx: refused before sending -> DEFINITE.
+ * supabase-js carries the HTTP Response as `error.context` (cloned before reading, so the body stays intact).
+ */
+export async function classifyFunctionError(error: unknown): Promise<'uncertain' | 'definite'> {
+  const ctx = (error as { context?: { status?: unknown; clone?: () => { json: () => Promise<unknown> }; json?: () => Promise<unknown> } } | null)?.context;
+  const status = ctx?.status;
+  if (typeof status !== 'number') return 'uncertain';
+  if (status === 409 || status === 502) return 'uncertain';
+  if (status < 500) return 'definite';
+  let answer: { ok?: unknown; retryable?: unknown; uncertain?: unknown } | null = null;
+  try {
+    answer = (await (ctx?.clone ? ctx.clone().json() : ctx?.json?.())) as typeof answer;
+  } catch {
+    answer = null;
+  }
+  const definite = !!answer && typeof answer === 'object' && answer.ok === false && answer.retryable === true && answer.uncertain !== true;
+  return definite ? 'definite' : 'uncertain';
+}
+
 export const supabaseEdgeEmailProvider: EmailProviderPort = {
   name: SES_EDGE_PROVIDER_NAME,
   async send(request: EmailProviderRequest): Promise<EmailProviderResponse> {
@@ -127,18 +154,9 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
 
     if (res.error) {
       // An UNCERTAIN answer is not a rejection: the provider may have the message (the function never resends it,
-      // and neither may we). supabase-js carries the HTTP Response on a non-2xx as `error.context`.
-      const ctx = (res.error as { context?: { status?: number; clone?: () => { json: () => Promise<unknown> }; json?: () => Promise<unknown> } }).context;
-      if (ctx && (ctx.status === 409 || ctx.status === 502)) {
-        let answer: { error?: unknown; uncertain?: unknown } | null = null;
-        try {
-          answer = (await (ctx.clone ? ctx.clone().json() : ctx.json?.())) as { error?: unknown; uncertain?: unknown } | null;
-        } catch {
-          answer = null;
-        }
-        if (answer && (answer.error === 'IDEMPOTENCY_UNCERTAIN' || answer.uncertain === true)) {
-          return { accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain', raw: { reason: 'provider_uncertain' } };
-        }
+      // and neither may we - a re-dispatch mints a NEW key). See classifyFunctionError.
+      if ((await classifyFunctionError(res.error)) === 'uncertain') {
+        return { accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain', raw: { reason: 'provider_uncertain' } };
       }
       return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
     }
