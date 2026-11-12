@@ -217,3 +217,18 @@ describe('earn/progress', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+// CLASS 2 (20270217000002): the partial UNIQUE index is the authority; a 23505
+// on the insert (the concurrent loser) is a 409, never a 500.
+describe('earn/feedback concurrent submit', () => {
+  it('insert hits the one-open-per-user UNIQUE (23505) -> 409, not 500', async () => {
+    mockScript['feedback_submissions:insert'] = () => ({ data: null, error: { message: 'duplicate key value violates unique constraint "feedback_submissions_one_open_per_user"', code: '23505' } as any });
+    const res = await call(feedback, 'POST', FEEDBACK);
+    expect(res.statusCode).toBe(409);
+  });
+  it('control: any other insert error is still a 500 (never a false "already submitted")', async () => {
+    mockScript['feedback_submissions:insert'] = () => ({ data: null, error: { message: 'connection reset', code: '08006' } as any });
+    const res = await call(feedback, 'POST', FEEDBACK);
+    expect(res.statusCode).toBe(500);
+  });
+});

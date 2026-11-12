@@ -71,7 +71,8 @@
 
     { "version": "20270120000000", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (orchestration recovery)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
     { "version": "20270120000001", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (orchestration recovery)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
-    { "version": "20270120000002", "slug": "whatsapp_broadcast_recipient_unique", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (WhatsApp send-once)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." }
+    { "version": "20270120000002", "slug": "whatsapp_broadcast_recipient_unique", "status": "occupied_elsewhere", "owner": "integration/outreach-engines-20261102 (WhatsApp send-once)", "evidence": "CODE_VERIFIED", "note": "To be renumbered into the integration branch's block (GD-4). Keep occupied until that rename lands." },
+    { "version": "20270217000002", "slug": "feedback_submissions_open_unique", "status": "reserved", "owner": "Billing virality-e1 (e9, 2026-11-12)", "evidence": "PRODUCTION_CATALOG_VERIFIED", "note": "Partial unique index on feedback_submissions (user_id) WHERE status IN (pending, approved), with a preflight that RAISEs on duplicates; 23505 -> 409 in code. C18 (prod, 2026-11-12): 0 users with duplicates. GOV-SECURITY: virality-83; review: virality-05." }
   ],
   "free_versions_note": "20270114000000 is free. 20270119* is free. The integration branch's renumbered block is claimed in the same change as its rename (GD-4); every version above that block is free. Claim one by adding it here in the same change as the migration."
 }

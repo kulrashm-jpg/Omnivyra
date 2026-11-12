@@ -87,6 +87,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .single();
 
   if (insertErr) {
+    // CLASS 2 (20270217000002): the partial UNIQUE index (one pending/approved
+    // submission per user) is the authority; the two reads above are only the
+    // early answer. A 23505 here is the concurrent loser -> 409, never a 500.
+    if ((insertErr as { code?: string }).code === '23505') {
+      return res.status(409).json({ error: 'You already have feedback pending review or accepted.' });
+    }
     logger.error('credits_earn_feedback_insert_failed', { userId: user.id, message: insertErr.message });
     return res.status(500).json({ error: 'feedback_not_saved' });
   }
