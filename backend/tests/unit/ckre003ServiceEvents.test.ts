@@ -2,7 +2,7 @@
  * CKRE-003 §8/§9/§10 — knowledge events + canonical API.
  */
 
-jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
+jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn(), rpc: jest.fn() } }));
 jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async () => undefined) }));
 jest.mock('../../observability', () => ({ recordRawCounter: jest.fn() }));
 jest.mock('../../services/signupEventService', () => ({
@@ -10,6 +10,7 @@ jest.mock('../../services/signupEventService', () => ({
 }));
 
 import { supabase } from '../../db/supabaseClient';
+import { rpcOver } from '../helpers/reportSettingsRpcFake';
 import { logSecurityEvent } from '../../security/audit/SecurityAuditService';
 import { recordRawCounter } from '../../observability';
 import { emitKnowledgeEvent, metricForKnowledgeEvent, KNOWLEDGE_EVENT_CAPABILITY_PREFIX } from '../../services/knowledge/knowledgeEventService';
@@ -19,14 +20,21 @@ const mockFrom = (supabase as any).from as jest.Mock;
 const mockLog = logSecurityEvent as jest.MockedFunction<typeof logSecurityEvent>;
 const mockCounter = recordRawCounter as jest.Mock;
 
-/** Chainable supabase mock: select/eq/maybeSingle returns configured row; update/eq captures + resolves. */
+/**
+ * Chainable supabase mock: select/eq/maybeSingle returns the configured row; update/eq captures and
+ * resolves. report_settings writes go through public.merge_report_settings_keys (report_settings
+ * unit 1), so rpc is the faithful fake over the SAME row: it applies the merge as the SQL does, and
+ * onUpdate sees the merged column.
+ */
 function stub(row: Record<string, unknown> | null, onUpdate?: (u: any) => void) {
+  const stored = row ? JSON.parse(JSON.stringify(row)) : null;
   mockFrom.mockReturnValue({
     select: jest.fn().mockReturnValue({
-      eq: jest.fn().mockReturnValue({ maybeSingle: jest.fn().mockResolvedValue({ data: row }) }),
+      eq: jest.fn().mockReturnValue({ maybeSingle: jest.fn().mockResolvedValue({ data: stored, error: null }) }),
     }),
     update: jest.fn((u: any) => { onUpdate?.(u); return { eq: jest.fn().mockResolvedValue({ error: null }) }; }),
   });
+  (supabase as any).rpc = rpcOver(() => stored, (merged) => onUpdate?.({ report_settings: merged.report_settings }));
 }
 
 const PROFILE = {

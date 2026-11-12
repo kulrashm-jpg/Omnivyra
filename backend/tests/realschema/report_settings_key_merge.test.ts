@@ -63,8 +63,17 @@ beforeEach(async () => {
   await seedProfile(CO, '{"brand_voice":{"tone":"warm"},"user_report_pref":42,"orchestration_tasks":[1]}');
 });
 
+// Cleanup uses its OWN client: setup.ts registers its afterAll (which ends the shared `db`) when it is
+// imported, before this file's hooks, and same-level afterAll hooks run in registration order. So `db`
+// is already closed here (CI-80: "Client was closed and is not queryable").
 afterAll(async () => {
-  await db.query(`DELETE FROM public.company_profiles WHERE company_id = ANY($1::text[])`, [[CO, CO_LEGACY]]);
+  const c = new Client({ connectionString: url });
+  await c.connect();
+  try {
+    await c.query(`DELETE FROM public.company_profiles WHERE company_id = ANY($1::text[])`, [[CO, CO_LEGACY]]);
+  } finally {
+    await c.end();
+  }
 });
 
 describe('catalog state', () => {
