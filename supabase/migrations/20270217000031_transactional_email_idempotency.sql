@@ -115,6 +115,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.transactional_email_sends T
 
 -- The operator resolution AUDIT. Append-only: service_role may only SELECT and INSERT (no UPDATE / DELETE), so a
 -- recorded decision cannot be rewritten. It outlives the ledger row ('not_delivered' deletes that row).
+-- NO FOREIGN KEY to transactional_email_sends - DELIBERATELY (05 review): 'not_delivered' deletes the send row, so an
+-- FK with ON DELETE CASCADE would destroy the record of the very decision that deleted it, and any other FK action
+-- would block that delete. Do not "fix" this. A row that is a RECORD OF a decision must not share its subject's
+-- lifecycle; contrast a MARKER ABOUT a row (signup_referrals.admin_user_id), where the FK coupling was the hazard.
 CREATE TABLE IF NOT EXISTS public.transactional_email_resolutions (
   id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   idempotency_key text        NOT NULL,
