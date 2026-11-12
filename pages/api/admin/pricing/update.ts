@@ -22,6 +22,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *     action_key:      string,    // must resolve via resolveActionKey or be in credit_cost_config
  *     credit_cost?:    number,    // optional override
  *     cost_multiplier: number,    // 1.0 = no margin adjustment
+ *     source_type?:    string,    // carried from the active row when omitted; required for a new action_key
  *     effective_from?: ISO timestamp
  *   }
  *
@@ -39,10 +40,15 @@ import { requireCapability } from '../../../../backend/security/requireCapabilit
 import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { refreshPricingCache, getActionPricing } from '../../../../backend/services/pricingService';
+import { getActionPricing } from '../../../../backend/services/pricingService';
 import { resolveActionKey } from '../../../../backend/services/usageLedgerService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { logger } from '../../../../backend/services/logger';
+import {
+  applyActionPricingChange,
+  applyModelPricingChange,
+  ActionPricingInputError,
+} from '../../../../backend/services/actionPricingApplyService';
 
 type ModelUpdateBody = {
   target: 'model';
@@ -63,6 +69,8 @@ type ActionUpdateBody = {
   ceiling_usd?: number | null;
   effective_from?: string;
   notes?: string;
+  /** Optional: carried from the action's active row when omitted; required for a brand-new action_key. */
+  source_type?: string;
 };
 
 type UpdateBody = ModelUpdateBody | ActionUpdateBody;
@@ -96,51 +104,38 @@ async function handleModelUpdate(body: ModelUpdateBody, actorId: string, res: Ne
   const modelName  = body.model_name.toLowerCase().trim();
   const effective  = body.effective_from ?? new Date().toISOString();
 
-  // Versioned insert: deactivate prior active row, then insert new active row.
-  // Two statements — acceptable since admin writes are rare and the UNIQUE
-  // partial index protects against concurrent duplicate is_active=true rows.
-  const { error: deactivateErr } = await supabase
-    .from('llm_model_pricing')
-    .update({ is_active: false })
-    .eq('provider', provider)
-    .eq('model_name', modelName)
-    .eq('kind', kind)
-    .eq('is_active', true);
-  if (deactivateErr) {
-    logger.error('pricing_deactivate_failed', { message: deactivateErr.message });
-    return res.status(500).json({ error: 'Failed to deactivate prior pricing row', code: 'DEACTIVATE_FAILED' });
-  }
-
-  const { data, error: insertErr } = await supabase
-    .from('llm_model_pricing')
-    .insert({
+  // B-1 follow-up: ONE atomic write (the database function deactivates-then-
+  // inserts in a single transaction and carries the token limits). The old
+  // two-statement path here is gone.
+  let newId: string;
+  try {
+    const result = await applyModelPricingChange({
       provider,
-      model_name:        modelName,
+      modelName,
       kind,
-      input_per_1k_usd:  body.input_per_1k_usd,
-      output_per_1k_usd: body.output_per_1k_usd,
-      effective_from:    effective,
-      is_active:         true,
-      notes:             body.notes ?? null,
-    })
-    .select('id')
-    .single();
-
-  if (insertErr) {
-    logger.error('pricing_insert_failed', { message: insertErr.message });
-    return res.status(500).json({ error: 'Failed to insert pricing row', code: 'INSERT_FAILED' });
+      inputPer1kUsd:  body.input_per_1k_usd,
+      outputPer1kUsd: body.output_per_1k_usd,
+      effectiveFrom:  effective,
+      notes:          body.notes,
+    });
+    newId = result.id;
+  } catch (err) {
+    if (err instanceof ActionPricingInputError) {
+      return res.status(400).json({ error: err.message, code: 'PRICING_INPUT_REJECTED' });
+    }
+    logger.error('model_pricing_update_failed', { message: err instanceof Error ? err.message : String(err) });
+    return res.status(500).json({ error: 'Failed to apply model-pricing change', code: 'APPLY_FAILED' });
   }
 
-  await refreshPricingCache();
   await recordAdminAudit({
     actorUserId:    actorId,
     action:         'ADMIN_PRICING_UPDATE_MODEL',
     targetType:     'llm_model_pricing',
-    targetId:       (data as any).id,
+    targetId:       newId,
     metadata:       { provider, model_name: modelName, kind, input_per_1k_usd: body.input_per_1k_usd, output_per_1k_usd: body.output_per_1k_usd, effective_from: effective },
-    idempotencyKey: String((data as any).id),
+    idempotencyKey: String(newId),
   });
-  return res.status(200).json({ ok: true, id: (data as any).id, target: 'model' });
+  return res.status(200).json({ ok: true, id: newId, target: 'model' });
 }
 
 async function handleActionUpdate(body: ActionUpdateBody, actorId: string, res: NextApiResponse) {
@@ -191,52 +186,49 @@ async function handleActionUpdate(body: ActionUpdateBody, actorId: string, res: 
   }
 
   const effective = body.effective_from ?? new Date().toISOString();
-
-  const { error: deactivateErr } = await supabase
-    .from('action_pricing_config')
-    .update({ is_active: false })
-    .eq('action_key', actionKey)
-    .eq('is_active', true);
-  if (deactivateErr) {
-    logger.error('action_pricing_deactivate_failed', { message: deactivateErr.message });
-    return res.status(500).json({ error: 'Failed to deactivate prior action-pricing row', code: 'DEACTIVATE_FAILED' });
+  if (body.source_type != null && (typeof body.source_type !== 'string' || !body.source_type.trim())) {
+    return res.status(400).json({ error: 'source_type must be a non-empty string when provided', code: 'INVALID_SOURCE_TYPE' });
   }
 
-  const { data, error: insertErr } = await supabase
-    .from('action_pricing_config')
-    .insert({
-      action_key:      actionKey,
-      cost_multiplier: body.cost_multiplier,
-      minimum_charge_usd: body.minimum_charge_usd ?? 0,
-      ceiling_usd: body.ceiling_usd ?? null,
-      effective_from:  effective,
-      is_active:       true,
-      notes:           body.notes ?? null,
-    })
-    .select('id')
-    .single();
-
-  if (insertErr) {
-    logger.error('action_pricing_insert_failed', { message: insertErr.message });
-    return res.status(500).json({ error: 'Failed to insert action-pricing row', code: 'INSERT_FAILED' });
+  // Billing defect B-1: ONE atomic write through the shared helper (the database
+  // function deactivates-then-inserts in a single transaction and carries or
+  // requires source_type). The old two-statement path here is gone.
+  let newId: string;
+  try {
+    const result = await applyActionPricingChange({
+      actionKey,
+      costMultiplier:   body.cost_multiplier,
+      minimumChargeUsd: body.minimum_charge_usd ?? 0,
+      ceilingUsd:       body.ceiling_usd ?? null,
+      effectiveFrom:    effective,
+      notes:            body.notes,
+      sourceType:       body.source_type?.trim(),
+    });
+    newId = result.id;
+  } catch (err) {
+    if (err instanceof ActionPricingInputError) {
+      return res.status(400).json({ error: err.message, code: 'PRICING_INPUT_REJECTED' });
+    }
+    logger.error('action_pricing_update_failed', { message: err instanceof Error ? err.message : String(err) });
+    return res.status(500).json({ error: 'Failed to apply action-pricing change', code: 'APPLY_FAILED' });
   }
 
-  await refreshPricingCache();
   await recordAdminAudit({
     actorUserId:    actorId,
     action:         'ADMIN_PRICING_UPDATE_ACTION',
     targetType:     'action_pricing_config',
-    targetId:       (data as any).id,
+    targetId:       newId,
     metadata:       {
       action_key: actionKey,
       cost_multiplier: body.cost_multiplier,
       minimum_charge_usd: body.minimum_charge_usd ?? 0,
       ceiling_usd: body.ceiling_usd ?? null,
       effective_from: effective,
+      source_type: body.source_type?.trim() ?? null,
     },
-    idempotencyKey: String((data as any).id),
+    idempotencyKey: String(newId),
   });
-  return res.status(200).json({ ok: true, id: (data as any).id, target: 'action' });
+  return res.status(200).json({ ok: true, id: newId, target: 'action' });
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
