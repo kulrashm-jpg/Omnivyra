@@ -52,6 +52,9 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
     return true;
   }
 
+  // MERGE ORDER (e9, 2026-11-12): fix/remove-legacy-super-admin-session-20261111
+  // DELETES getLegacySuperAdminSession and bans reading its cookie. Whichever
+  // of the two branches lands SECOND must drop the legacy-session check above.
   // PRIVILEGE (e9 ruling, 2026-11-12): the canonical super-admin source is an
   // ACTIVE user_company_roles SUPER_ADMIN row (isPlatformSuperAdmin), exactly as
   // the sibling read routes plans/list and plans/get-organization-plan. This
