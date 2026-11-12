@@ -20,6 +20,15 @@ import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
 
+/**
+ * PRIVILEGE (2026-11-12): roles a self-joined member may be CONFIRMED into.
+ * `role` used to come from the request body unvalidated, so an org admin could
+ * make a self-joined user COMPANY_ADMIN here - bypassing the governed
+ * promotion path (step-up, single-admin rule, audit). Admin roles go through
+ * that path only; any other value is refused.
+ */
+export const SELF_JOINED_CONFIRMABLE_ROLES = ['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY'] as const;
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { companyId, userId } = req.query as { companyId?: string; userId?: string };
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
@@ -69,8 +78,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'PATCH') {
     if (!userId) return res.status(400).json({ error: 'userId is required' });
     const { role = 'CONTENT_CREATOR' } = (req.body ?? {}) as { role?: string };
+    if (!(SELF_JOINED_CONFIRMABLE_ROLES as readonly string[]).includes(role)) {
+      return res.status(400).json({
+        error: `role must be one of ${SELF_JOINED_CONFIRMABLE_ROLES.join(', ')}; admin roles are granted through the governed promotion flow`,
+        code: 'ROLE_NOT_CONFIRMABLE',
+      });
+    }
 
-    const { error } = await supabaseAdmin
+    const { data: confirmed, error } = await supabaseAdmin
       .from('user_company_roles')
       .update({
         join_source: 'invited',
@@ -79,12 +94,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       })
       .eq('company_id', companyId)
       .eq('user_id', userId)
-      .eq('join_source', 'self_joined');
+      .eq('join_source', 'self_joined')
+      .select('user_id');
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: 'Failed to confirm the member' });
+    // 0 rows: not (or no longer) a self-joined member - never a 200 for nothing.
+    if (!Array.isArray(confirmed) || confirmed.length === 0) {
+      return res.status(404).json({ error: 'No self-joined membership for this user', code: 'NOT_SELF_JOINED' });
+    }
 
     // Notify the user they've been formally added
-    await supabaseAdmin.from('notifications').insert({
+    // best-effort: the role change is done; a failed notice is logged, not silent.
+    const { error: notifyErr } = await supabaseAdmin.from('notifications').insert({
       user_id: userId,
       type: 'role_updated',
       title: 'Your company membership was confirmed',
@@ -92,6 +113,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       metadata: { company_id: companyId, role, confirmed_by: user.userId },
       is_read: false,
     });
+    if (notifyErr) console.error('[team/self-joined] confirmation notification failed:', userId, notifyErr.message);
 
     return res.status(200).json({ success: true });
   }
