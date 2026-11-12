@@ -237,17 +237,28 @@ function scan() {
     if (rel.startsWith('pages/api/')) {
       for (const m of code.matchAll(/\bownerCompanyOfRow\s*\(/g)) {
         const line = lineAt(m.index);
-        const head = code.slice(Math.max(0, code.lastIndexOf('\n', m.index) + 1), m.index);
+        // 05 FP-2: the binding may wrap (`const owner =\n  await ownerCompanyOfRow(...)`), so look back up to 200 chars.
+        const head = code.slice(Math.max(0, m.index - 200), m.index);
         const bound = head.match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?$/);
         const r10 = (why) => findings.push({ rule: 'R10', file: rel, line, table: '-', kind: 'context', tag: 'pii', area: areaOf(rel), mode: '-', why });
         if (!bound) { r10('result not bound to a variable'); continue; }
         const v = bound[1];
-        const rest = code.slice(m.index);
+        // 05 FN-1: only the ENCLOSING BLOCK counts (brace depth from the call until it closes), never the rest of the
+        // file - an access check in another handler must not excuse this one.
+        let depth = 0, end = code.length;
+        for (let k = m.index; k < code.length; k++) {
+          const ch = code[k];
+          if (ch === '{') depth++;
+          else if (ch === '}') { if (depth === 0) { end = k; break; } depth--; }
+        }
+        const rest = code.slice(m.index, end);
         const esc = v.replace(/[$]/g, '\\$');
+        // 05 FP-3: the access call is recognised by SHAPE - it must be named require*/enforce*/assert* and take v.
         const access = rest.search(new RegExp('\\b(?:require|enforce|assert)[A-Z]\\w*\\s*\\([^;]*\\b' + esc + '\\b'));
         const use = rest.slice(1).search(/\b(?:tenantContextFor|tenantTable|tenantChildTable|ownedDbTable|supabase\s*\.\s*from)\s*\(/);
-        if (access < 0) r10(`no access check takes ${v}`);
-        else if (use >= 0 && use + 1 < access) r10(`${v} is used before its access check`);
+        if (access < 0) r10(`no access check takes ${v} in the same block (an access call must be named require*/enforce*/assert* and receive ${v})`);
+        // 05 FP-1: the STRICT rule, stated as such - no seam or DB access of ANY table between deriving and authorizing.
+        else if (use >= 0 && use + 1 < access) r10(`a seam/DB call runs between deriving ${v} and its access check (nothing may be read or written before the owner is authorized)`);
       }
     }
     for (const m of code.matchAll(/tenantContextFor\s*\(([^;]*?)\)/g)) {
