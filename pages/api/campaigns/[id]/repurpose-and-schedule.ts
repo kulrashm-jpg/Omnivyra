@@ -75,13 +75,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'No daily plans found for this campaign. Generate daily plans first.',
       });
     }
-    const { data: versionRow } = await supabase
+    const { data: versionRow, error: versionError } = await supabase
       .from('campaign_versions')
       .select('campaign_snapshot')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    // A failed read must not default the profile to 'text': that SKIPS the creator schedule
+    // governance gate below (unread-error pkg 2). Nothing is locked or scheduled yet.
+    if (versionError) {
+      console.error('[repurpose-and-schedule] version context unreadable; refusing to schedule without the governance gate', { campaignId, message: versionError.message });
+      return res.status(503).json({
+        success: false,
+        code: 'CAMPAIGN_VERSION_READ_FAILED',
+        error: 'Could not read the campaign version to check scheduling rules. Nothing was scheduled. Please try again.',
+      });
+    }
     const executionProfile = String(((versionRow as any)?.campaign_snapshot?.execution_config?.[['campaign', 'mode'].join('_')]) || 'text');
 
     if (executionProfile === 'creator') {

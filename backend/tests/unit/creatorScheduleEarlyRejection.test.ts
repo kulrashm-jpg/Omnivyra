@@ -35,6 +35,8 @@ function createRes() {
 }
 
 let supabaseRows: Record<string, unknown> = {};
+/** unread-error pkg 2: a PostgREST error for a `<table>:single` read (returned, never thrown). */
+let supabaseReadErrors: Record<string, { message: string }> = {};
 
 function createSupabaseMock() {
   const from = jest.fn((table: string) => {
@@ -45,7 +47,11 @@ function createSupabaseMock() {
       order: jest.fn(() => api),
       limit: jest.fn(() => api),
       update: jest.fn(() => api),
-      maybeSingle: jest.fn(async () => ({ data: supabaseRows[`${state.table}:single`] ?? null, error: null })),
+      maybeSingle: jest.fn(async () => {
+        const err = supabaseReadErrors[`${state.table}:single`];
+        if (err) return { data: null, error: err };
+        return { data: supabaseRows[`${state.table}:single`] ?? null, error: null };
+      }),
       single: jest.fn(async () => ({ data: supabaseRows[`${state.table}:single`] ?? null, error: null })),
       then(resolve: any, reject: any) {
         return Promise.resolve({ data: supabaseRows[state.table] ?? [], error: null }).then(resolve, reject);
@@ -180,6 +186,7 @@ describe('creator schedule early rejection', () => {
     resetIdempotency();
     jest.clearAllMocks();
     setSupabaseRows('reel');
+    supabaseReadErrors = {};
     isGovernanceLocked.mockResolvedValue(false);
     requireCampaignAccess.mockResolvedValue({ campaignId: 'campaign-1' });
     acquireSchedulerLock.mockResolvedValue('lock-1');
@@ -229,6 +236,20 @@ describe('creator schedule early rejection', () => {
     const bodyCode = (res.body as { code?: unknown } | null)?.code;
     expect(bodyCode).not.toBe('CREATOR_SCHEDULE_BLOCKED_BY_GOVERNANCE');
     expect(res.status).not.toHaveBeenCalledWith(409);
+  });
+
+  test('repurpose-and-schedule: an UNREADABLE version is 503, never a "text" default that skips the creator gate (unread-error pkg 2)', async () => {
+    supabaseReadErrors = { 'campaign_versions:single': { message: 'boom' } };
+    const { default: handler } = await import('../../../pages/api/campaigns/[id]/repurpose-and-schedule');
+    const req = { method: 'POST', headers: idempotencyHeaders(), query: { id: 'campaign-1' }, body: {} } as any;
+    const res = makeAssertable(createRes()) as any;
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.body as { code?: unknown }).code).toBe('CAMPAIGN_VERSION_READ_FAILED');
+    expect(acquireSchedulerLock).not.toHaveBeenCalled();
+    expect(scheduleStructuredPlan).not.toHaveBeenCalled();
   });
 
   test('valid autonomous creator schedule still reaches lock acquisition and scheduler', async () => {
