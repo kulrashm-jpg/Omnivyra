@@ -9,8 +9,13 @@
  *   2) the company admin gets a notice that a real, verified person from
  *      their domain just tried to sign up.
  *
- * Both emails are deduped per prospect email via `signup_referrals` so repeat
- * verifies / bouncing email links don't keep notifying the admin.
+ * Both emails are deduped per prospect email via `signup_referrals` (one row per prospect):
+ *   - the prospect email by `admin_email_sent_at` (it carries the ADMIN's contact - hence the name);
+ *   - the admin notice by `admin_user_id`, written ONLY after the notice was actually sent - so a
+ *     failed send is retried on the next attempt, and a sent one is never repeated.
+ * (e1 2026-11-12, 05 review: the admin notice used to be gated only by `if (adminEmail)`, and its
+ * `inbound-signup-notice:<company>:<prospect>` idempotency key is never applied by the email
+ * function - it only reaches a log context - so every attempt re-notified the admin.)
  *
  * This used to live (unreachable) inside pages/api/auth/sync-supabase-user.ts.
  * It is now a shared service so the live onboarding path
@@ -45,12 +50,14 @@ export interface ClaimedDomainNotifyInput {
 /**
  * What happened to the ADMIN notice - so a caller never tells the prospect "we've asked your admin"
  * when nobody was asked (05 review, 2026-11-12):
- *   'sent'     - the notice was handed to the email function (idempotent per company + prospect);
+ *   'sent'         - the notice was handed to the email function by THIS call;
+ *   'already_sent' - an earlier attempt by this prospect already notified this admin;
  *   'no_admin' - the company has no active COMPANY_ADMIN with an email (a recovery case);
  *   'failed'   - the send (or a lookup) failed.
  */
-export type ClaimedDomainAdminNotice = 'sent' | 'no_admin' | 'failed';
+export type ClaimedDomainAdminNotice = 'sent' | 'already_sent' | 'no_admin' | 'failed';
 export interface ClaimedDomainNotifyOutcome { adminNotice: ClaimedDomainAdminNotice }
+
 
 /**
  * Best-effort. Never throws — failures are logged so the caller's response is
@@ -86,7 +93,7 @@ export async function notifyAdminAndProspectOfClaimedDomain(
     // separately whether each of the two emails has already gone out.
     const { data: existingReferral } = await db
       .from('signup_referrals')
-      .select('id, admin_email_sent_at, attempt_count')
+      .select('id, admin_email_sent_at, attempt_count, admin_user_id')
       .eq('email', input.prospectEmail)
       .maybeSingle();
 
@@ -100,7 +107,8 @@ export async function notifyAdminAndProspectOfClaimedDomain(
           email:            input.prospectEmail,
           domain:           input.emailDomain,
           company_id:       input.companyId,
-          admin_user_id:    adminUserId,
+          // admin_user_id is the ADMIN-NOTICE marker: written only after a successful send (below).
+          admin_user_id:    null,
           first_attempt_at: input.nowIso,
           last_attempt_at:  input.nowIso,
           attempt_count:    1,
@@ -153,9 +161,12 @@ export async function notifyAdminAndProspectOfClaimedDomain(
       }
     }
 
-    // 2) Admin notification — best-effort; idempotent via the Supabase email
-    //    enqueue idempotency key so repeat verifies don't double-send.
-    if (adminEmail) {
+    // 2) Admin notification — best-effort, deduped by the admin_user_id marker (the idempotency key
+    //    below is NOT applied by the email function; it is kept only for log correlation).
+    const priorNotifiedAdmin = (existingReferral as { admin_user_id?: string | null } | null)?.admin_user_id ?? null;
+    if (priorNotifiedAdmin) {
+      adminNotice = 'already_sent';
+    } else if (adminEmail) {
       try {
         await sendInboundSignupNoticeToAdmin(
           adminEmail,
@@ -167,6 +178,12 @@ export async function notifyAdminAndProspectOfClaimedDomain(
           `inbound-signup-notice:${input.companyId}:${input.prospectEmail}`,
         );
         adminNotice = 'sent';
+        if (referralId) {
+          await db
+            .from('signup_referrals')
+            .update({ admin_user_id: adminUserId })
+            .eq('id', referralId);
+        }
       } catch (err) {
         logger.warn('claimed_domain_admin_notice_send_failed', {
           adminUserId,

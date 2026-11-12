@@ -64,7 +64,7 @@ function mockTable(table: string) {
 let mockEmail = 'mallory@acme.io';
 const mockGrants: unknown[] = [];
 const mockNotified: Array<Record<string, unknown>> = [];
-let mockAdminNotice: 'sent' | 'no_admin' | 'failed' = 'sent';
+let mockAdminNotice: 'sent' | 'already_sent' | 'no_admin' | 'failed' = 'sent';
 jest.mock('../../services/claimedDomainNotifyService', () => ({
   notifyAdminAndProspectOfClaimedDomain: async (_db: unknown, input: Record<string, unknown>) => { mockNotified.push(input); return { adminNotice: mockAdminNotice }; },
 }));
@@ -119,6 +119,24 @@ describe('decision 1+2: matching and binding', () => {
     expect(bindingWrites()).toEqual([]);
     expect(mockGrants).toEqual([]);
     expect(mockNotified).toEqual([expect.objectContaining({ companyId: VICTIM, companyName: 'Acme', prospectEmail: 'newbie@acme.com', emailDomain: 'acme.com', prospectUserId: USER })]);
+  });
+
+  it('same domain, admin ALREADY notified on an earlier attempt: the request is still in place', async () => {
+    mockAdminNotice = 'already_sent';
+    mockEmail = 'newbie@acme.com';
+    const r = await post();
+    expect(r.body.joinRequested).toBe(true);
+    expect(r.body.error).toMatch(/asked your admin/);
+  });
+
+  it('a public-provider domain is evidence of nothing, even if a company row carries it', async () => {
+    mockDb.companies.push({ id: OTHER, name: 'Gmail Co', admin_email_domain: 'gmail.com' });
+    mockEmail = 'someone@gmail.com';
+    const r = await post();
+    expect(mockNotified).toEqual([]);
+    expect(rolesIn(OTHER)).toEqual([]);
+    expect(JSON.stringify(r.body)).not.toContain('Gmail Co');
+    expect(mockDb.companies.filter((c) => c.admin_email_domain === 'gmail.com')).toHaveLength(1);
   });
 
   it('same domain, admin notice NOT sent: never claims a join request was made', async () => {

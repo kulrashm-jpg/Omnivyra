@@ -165,7 +165,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       companyName:    matchedCompanyName,
       nowIso:         new Date().toISOString(),
     });
-    return notice.adminNotice === 'sent';
+    // A request is genuinely in place only when the admin was notified, now or on an earlier attempt.
+    return notice?.adminNotice === 'sent' || notice?.adminNotice === 'already_sent';
   };
 
   // Service role bypasses RLS — required for inserts into companies,
