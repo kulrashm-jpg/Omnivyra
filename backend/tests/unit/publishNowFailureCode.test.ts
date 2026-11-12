@@ -7,7 +7,8 @@
 jest.mock('../../db/queries', () => ({
   getScheduledPost: jest.fn(),
   updateScheduledPostOnPublish: jest.fn(),
-  updateScheduledPostOnFailure: jest.fn(),
+  // As the real one answers: a moved row. (A bare jest.fn() answered undefined, which the real one never does.)
+  updateScheduledPostOnFailure: jest.fn(async () => ({ applied: true })),
   // Post-level claim protocol (#151): the call-started marker and the
   // uncertain-outcome record. The marker lands, so the adapter is reachable.
   markScheduledPostPlatformCallStarted: jest.fn(async () => true),
@@ -72,16 +73,26 @@ function fakePost(overrides: Partial<Awaited<ReturnType<typeof getScheduledPost>
 
 beforeEach(() => { jest.clearAllMocks(); });
 
-test('a capability rejection records status AND code in ONE failure write (4th argument = the code)', async () => {
+test('a capability rejection records status AND code in ONE failure write (4th argument = the code), pinned to the claim of this run', async () => {
   mockedGetScheduledPost.mockResolvedValue(fakePost({ platform: 'instagram', content_type: 'post', media_urls: [] }));
   const result = await publishNow({ scheduled_post_id: 'sp-1', social_account_id: 'acct-1', user_id: 'user-1', publish_source: 'queue' });
   expect(result.status).toBe('FAILED');
   expect(mockedPublishToPlatform).not.toHaveBeenCalled();
   expect(mockedUpdateOnFailure).toHaveBeenCalledTimes(1);
-  const [postId, message, expectedFrom, code] = mockedUpdateOnFailure.mock.calls[0];
+  const [postId, message, expectedFrom, code, expectedErrorCode] = mockedUpdateOnFailure.mock.calls[0];
   expect(postId).toBe('sp-1');
   expect(typeof message).toBe('string');
-  expect(expectedFrom).toBeUndefined();
+  // CLASS-2 D5: only while THIS execution holds its claim (status publishing AND its claim code).
+  expect(expectedFrom).toBe('publishing');
+  expect(String(expectedErrorCode)).toMatch(/^PUBLISH_CLAIMED:.+/);
   expect(typeof code).toBe('string');
   expect(String(code).length).toBeGreaterThan(0);
+}, 60_000);
+
+test('CLASS-2 D5: the claim was taken over before the pre-call failure write -> nothing written over the new holder; the run reports it was superseded', async () => {
+  mockedGetScheduledPost.mockResolvedValue(fakePost({ platform: 'instagram', content_type: 'post', media_urls: [] }));
+  mockedUpdateOnFailure.mockResolvedValueOnce({ applied: false, reason: 'cas_mismatch' } as never);
+  const result = await publishNow({ scheduled_post_id: 'sp-1', social_account_id: 'acct-1', user_id: 'user-1', publish_source: 'queue' });
+  expect(result).toMatchObject({ status: 'FAILED', suppressed: true, refusal: 'held_by_another_execution' });
+  expect(mockedPublishToPlatform).not.toHaveBeenCalled();
 }, 60_000);

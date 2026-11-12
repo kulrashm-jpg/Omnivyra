@@ -740,6 +740,25 @@ async function runSingleRowPublish(
 ): Promise<PublishNowResult> {
   const { scheduled_post_id, social_account_id, user_id } = input;
 
+  // CLASS-2 D5: a PRE-CALL failure is written only while THIS execution still holds its claim
+  // (status publishing AND error_code PUBLISH_CLAIMED:<its token>). These checks can be slow
+  // (media liveness, refresh): if the claim was taken over meanwhile, the new holder may already
+  // have written PUBLISH_CALL_STARTED and be calling the platform - a blind `failed` + claimable
+  // code here erased that marker, and the next cron / queue / Publish now published AGAIN.
+  // Lost claim -> nothing written, the caller is told this run was superseded.
+  const failBeforeCall = async (message: string, code: string): Promise<PublishNowResult | null> => {
+    const write = await updateScheduledPostOnFailure(scheduled_post_id, message, 'publishing', code, publishClaimCode(attempt.claimToken));
+    if (write.applied) return null;
+    logger.warn('publishNow.claim_lost_before_call', { surface: 'publishNow', scheduledPostId: scheduled_post_id, code });
+    return {
+      status: 'FAILED',
+      message: 'Publish stopped before the platform call: another execution holds this post now, and its state was not overwritten.',
+      timestamp,
+      suppressed: true,
+      refusal: 'held_by_another_execution',
+    };
+  };
+
   // Re-resolve creator asset refs and refresh the media snapshot BEFORE any media
   // is consumed (validation + adapter), so late/cron publishes upload the current
   // rendering payload — not the schedule-time snapshot. No-op/fallback when refs
@@ -777,7 +796,8 @@ async function runSingleRowPublish(
     const message = failure.message;
     // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
     // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
-    await updateScheduledPostOnFailure(scheduled_post_id, message, undefined, failure.code);
+    const lostCapability = await failBeforeCall(message, failure.code);
+    if (lostCapability) return lostCapability;
     return {
       status: 'FAILED',
       message,
@@ -815,7 +835,8 @@ async function runSingleRowPublish(
     });
     // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
     // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
-    await updateScheduledPostOnFailure(scheduled_post_id, message, undefined, 'CREATOR_ATTACHMENT_PUBLISH_VALIDATION_FAILED');
+    const lostAttachment = await failBeforeCall(message, 'CREATOR_ATTACHMENT_PUBLISH_VALIDATION_FAILED');
+    if (lostAttachment) return lostAttachment;
     return {
       status: 'FAILED',
       message,
@@ -853,7 +874,8 @@ async function runSingleRowPublish(
     });
     // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
     // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
-    await updateScheduledPostOnFailure(scheduled_post_id, failure.reason, undefined, 'PUBLISH_MEDIA_REVALIDATION_FAILED');
+    const lostMedia = await failBeforeCall(failure.reason, 'PUBLISH_MEDIA_REVALIDATION_FAILED');
+    if (lostMedia) return lostMedia;
     await markAttachmentRowPublishFailed({
       scheduledPostId: scheduled_post_id,
       reason: failure.reason,
@@ -892,7 +914,8 @@ async function runSingleRowPublish(
     });
     // Code and message in ONE write (updateScheduledPostOnFailure throws on error): the separate
     // error_code write was unread, so a failure there left a code-less failed row (unread-error census).
-    await updateScheduledPostOnFailure(scheduled_post_id, schedReadiness.message, undefined, schedReadiness.code);
+    const lostReadiness = await failBeforeCall(schedReadiness.message, schedReadiness.code);
+    if (lostReadiness) return lostReadiness;
     return { status: 'FAILED', message: schedReadiness.message, timestamp };
   }
   if (schedReadiness.warnings.length > 0) {

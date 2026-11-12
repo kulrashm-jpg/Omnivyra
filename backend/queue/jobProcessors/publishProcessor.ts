@@ -905,14 +905,11 @@ async function processPublishJobInner(params: {
       // PUBLISH_CALL_STARTED marker), so the row is never failed-without-code.
       await updateScheduledPostOnFailure(scheduled_post_id, platformError.user_message, undefined, platformError.code);
       
-      // Update scheduled_post with error code
-      await supabase
-        .from('scheduled_posts')
-        .update({
-          error_code: platformError.code,
-          error_message: platformError.user_message,
-        })
-        .eq('id', scheduled_post_id);
+      // CLASS-2 D6: a second, blind write of the same error_code/message used to follow. It was
+      // redundant (the write above carries both) and harmful: by then the row was `failed` with a
+      // claimable code, so another execution could already hold it - and this write erased that
+      // run's PUBLISH_CLAIMED fence or its PUBLISH_CALL_STARTED evidence. Removed (publishNow
+      // removed its mirror the same way).
 
       // Calculate next retry time (exponential backoff)
       const attempts = queueJob.attempts || 0;

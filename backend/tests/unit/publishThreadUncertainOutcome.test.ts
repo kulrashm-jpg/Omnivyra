@@ -496,6 +496,18 @@ describe('R3/R5 — adapter outcomes on a thread node', () => {
     await publishThread({ root_scheduled_post_id: 't0', social_account_id: ACCOUNT, user_id: USER });
     expect(platformCalls.map((c) => c.rowId)).toEqual(['t0', 't1', 't2']);
   });
+  test('CLASS-2 D7: the marker write fails AND another run re-claims the node meanwhile: the not-attempted write does not land on its claim', async () => {
+    seedThread();
+    postUpdateFault = (payload) => {
+      if (payload.error_code !== 'PUBLISH_CALL_STARTED') return null;
+      // Swept and re-claimed by another run while this one's marker write was failing.
+      Object.assign(node('t0'), { status: 'publishing', error_code: 'PUBLISH_CLAIMED:another-run' });
+      return { code: '08006', message: 'connection terminated' };
+    };
+    await publishThread({ root_scheduled_post_id: 't0', social_account_id: ACCOUNT, user_id: USER });
+    expect(platformCalls).toHaveLength(0);
+    expect(node('t0')).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:another-run' });
+  });
 });
 
 // ─── Duplicate and concurrent delivery ──────────────────────────────────────

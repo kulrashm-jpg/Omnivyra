@@ -14,7 +14,8 @@
 jest.mock('../../db/queries', () => ({
   getScheduledPost: jest.fn(),
   updateScheduledPostOnPublish: jest.fn(),
-  updateScheduledPostOnFailure: jest.fn(),
+  // As the real one answers: a moved row. (A bare jest.fn() answered undefined, which the real one never does.)
+  updateScheduledPostOnFailure: jest.fn(async () => ({ applied: true })),
   // Post-level claim protocol (#151): the call-started marker and the
   // uncertain-outcome record. The marker lands, so the adapter is reachable.
   markScheduledPostPlatformCallStarted: jest.fn(async () => true),

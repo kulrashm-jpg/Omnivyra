@@ -59,6 +59,9 @@ function matches(row: Row, state: any): boolean {
   return true;
 }
 
+/** Runs after a scheduled_posts update lands (what another execution does next, in a race). */
+let afterPostWrite: ((patch: Row) => void) | null = null;
+
 function buildChain(table: string) {
   const state: any = { eq: {}, in: {}, lt: {}, is: {}, contains: {}, update: null, insert: null, del: false };
   if (!store[table]) store[table] = [];
@@ -85,6 +88,7 @@ function buildChain(table: string) {
     }
     if (state.update) {
       hit.forEach((r) => Object.assign(r, state.update));
+      if (table === 'scheduled_posts' && hit.length > 0 && afterPostWrite) afterPostWrite(state.update);
     }
     return { data: hit, error: null };
   });
@@ -373,6 +377,23 @@ describe('publishProcessor — post-level publish claim', () => {
 
     expect(publishesFor('sp-1')).toBe(2); // the failed attempt + the retry
     expect(post('sp-1').status).toBe('published');
+  });
+
+  test('CLASS-2 D6: once a definite failure is written, another execution may claim the post - nothing of this run overwrites that claim', async () => {
+    seedPost('sp-1');
+    seedJob('qj-1', 'sp-1');
+    platformOutcome = 'failure';
+    afterPostWrite = (patch) => {
+      // The failure write made the post claimable; another execution claims it at once.
+      if (patch.status === 'failed') { afterPostWrite = null; Object.assign(post('sp-1'), { status: 'publishing', error_code: 'PUBLISH_CLAIMED:another-run' }); }
+    };
+    try {
+      await expect(processPublishJob(job('qj-1', 'sp-1'))).rejects.toThrow();
+    } finally {
+      afterPostWrite = null;
+    }
+    // A second, blind error_code write used to follow and erase the new holder's fence.
+    expect(post('sp-1')).toMatchObject({ status: 'publishing', error_code: 'PUBLISH_CLAIMED:another-run' });
   });
 
   test('an unexpected throw restores the pre-claim status, so nothing is stranded', async () => {

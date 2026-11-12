@@ -355,7 +355,9 @@ async function publishOneNode(input: {
     // If even this write fails the node stays 'publishing' and the sweeper
     // labels it uncertain — the fail-closed direction.
     try {
-      await updateScheduledPostOnFailure(row.id, message, 'publishing', PUBLISH_NOT_ATTEMPTED);
+      // CLASS-2 D7: pinned to THIS node's claim, not only to `publishing`: a node swept and re-claimed
+      // by another run (mid-call) is `publishing` too, and a status-only write here made it claimable.
+      await updateScheduledPostOnFailure(row.id, message, 'publishing', PUBLISH_NOT_ATTEMPTED, publishClaimCode(nodeClaimToken));
     } catch { /* see above */ }
     return { ok: false, message };
   }

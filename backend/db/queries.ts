@@ -584,7 +584,16 @@ export async function updateScheduledPostOnFailure(
   errorMessage: string,
   expectedFromStatus?: string,
   errorCode?: string,
+  /**
+   * CLASS-2: with expectedFromStatus, ALSO require this error_code - the writer's own claim code
+   * (PUBLISH_CLAIMED:<token>). A status-only CAS let a run whose claim was taken over write
+   * `failed` + a claimable code over the new holder's claim, or its PUBLISH_CALL_STARTED marker.
+   */
+  expectedErrorCode?: string,
 ): Promise<ScheduledPostTerminalWriteResult> {
+  if (expectedErrorCode !== undefined && !expectedFromStatus) {
+    throw new Error('updateScheduledPostOnFailure: expectedErrorCode requires expectedFromStatus');
+  }
   const updatePayload: Record<string, unknown> = {
     status: 'failed',
     error_message: errorMessage,
@@ -596,11 +605,12 @@ export async function updateScheduledPostOnFailure(
   if (errorCode) updatePayload.error_code = errorCode;
 
   if (expectedFromStatus) {
-    const { data, error } = await supabase
+    const cas = supabase
       .from('scheduled_posts')
       .update(updatePayload)
       .eq('id', postId)
-      .eq('status', expectedFromStatus)
+      .eq('status', expectedFromStatus);
+    const { data, error } = await (expectedErrorCode === undefined ? cas : cas.eq('error_code', expectedErrorCode))
       .select('id');
     if (error) {
       throw new Error(`Failed to update scheduled post: ${error.message}`);
