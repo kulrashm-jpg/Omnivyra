@@ -1,5 +1,11 @@
 -- Decision events: the trigger function writes decision_events.company_id (e9, 2026-11-12;
--- found by 05's MIG-2R work). VERSION IS A PLACEHOLDER until 83 assigns one.
+-- found by 05's MIG-2R work). Version 20270217000019 assigned by the registry owner (83, 78ba018a4).
+--
+-- PROD STATE (83, C20/C21 owner-approved catalog reads, 2026-11-12): the live body is 20260411's
+-- (md5(prosrc) 64faad0ef8a81658661c1dbef94e5ddf, a CRLF body); proconfig search_path=pg_catalog,
+-- public (20270111000003 applied); proacl postgres + service_role only; SECURITY INVOKER; the
+-- trigger is enabled. CREATE OR REPLACE keeps the grants but drops proconfig unless it is restated,
+-- so the SET clause below restates it exactly.
 --
 -- THE DEFECT (prod). 20260430_decision_events_company_id_fix was applied only IN PART:
 --   * its DDL half is live: decision_events.company_id is NOT NULL (no default), with
@@ -51,6 +57,17 @@ BEGIN
 
   IF to_regprocedure('public.omnivyra_log_decision_event()') IS NULL THEN
     RAISE EXCEPTION 'DEC-EVT preflight: public.omnivyra_log_decision_event() not found';
+  END IF;
+
+  -- Replace ONLY a body we know. Accepted md5(prosrc):
+  --   64faad0ef8a81658661c1dbef94e5ddf  20260411 body, CRLF (prod today, per C20)
+  --   8bad7afa08dc1226d6982f268ed92a28  20260411 body, LF (the committed baseline / CI replay)
+  --   91053ed21f92b1fab46db0cdc09d7ecb  this migration's body (a re-run)
+  -- Anything else was changed by someone this migration does not know about: refuse, do not overwrite.
+  IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = 'public.omnivyra_log_decision_event()'::regprocedure)
+     NOT IN ('64faad0ef8a81658661c1dbef94e5ddf', '8bad7afa08dc1226d6982f268ed92a28', '91053ed21f92b1fab46db0cdc09d7ecb') THEN
+    RAISE EXCEPTION 'DEC-EVT preflight: public.omnivyra_log_decision_event() has an unexpected body (md5 %); refusing to replace it',
+      (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = 'public.omnivyra_log_decision_event()'::regprocedure);
   END IF;
 
   -- The trigger this function serves: AFTER INSERT OR UPDATE, FOR EACH ROW, enabled.
@@ -134,6 +151,15 @@ BEGIN
       RAISE EXCEPTION 'DEC-EVT postcondition: % has EXECUTE', v_role;
     END IF;
   END LOOP;
+  -- CREATE OR REPLACE keeps the existing grants; prod's service_role grant must survive.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')
+     AND NOT has_function_privilege('service_role', r.oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'DEC-EVT postcondition: service_role lost EXECUTE';
+  END IF;
+  -- The body is exactly this migration's (the md5 the preflight accepts for a re-run).
+  IF md5(r.prosrc) <> '91053ed21f92b1fab46db0cdc09d7ecb' THEN
+    RAISE EXCEPTION 'DEC-EVT postcondition: unexpected body md5 % (expected 91053ed21f92b1fab46db0cdc09d7ecb)', md5(r.prosrc);
+  END IF;
 
   -- The trigger still points at this function (nothing here changes it; asserted, not assumed).
   IF NOT EXISTS (

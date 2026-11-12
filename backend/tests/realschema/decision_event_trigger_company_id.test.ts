@@ -106,10 +106,10 @@ describe('CONTROL: the 20260411 body (prod today) aborts every decision write', 
       return c.query(INSERT_DECISION, [CO]);
     });
     expect(out.ok).toBe(false);
-    if (!out.ok) {
-      expect(out.code).toBe('23502');
-      expect(out.message).toMatch(/company_id/);
-    }
+    // Explicit narrowing: the backend-tests compiler settings do not narrow `!out.ok` on this union.
+    const failure = out as { ok: false; code: string; message: string };
+    expect(failure.code).toBe('23502');
+    expect(failure.message).toMatch(/company_id/);
   });
 });
 
