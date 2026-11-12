@@ -8,11 +8,16 @@
  * This suite runs on the replayed schema WITH the new migration installed:
  *   - CONTROL: inside a rolled-back transaction, the 20260411 body (read from its migration file)
  *     is installed and a decision_objects insert raises 23502. That reproduces prod.
- *   - FIX: an insert as service_role writes a `created` decision_events row with the decision's
+ *   - FIX: an insert writes a `created` decision_events row with the decision's
  *     company_id; resolve and reopen write their events with it too.
  *   - CATALOG: SECURITY INVOKER, proconfig exactly {search_path=pg_catalog, public} (what
  *     20270111000003 expects), no EXECUTE for anon/authenticated.
  * decision_objects refuses DELETE (a guard trigger), so every write here is ROLLED BACK.
+ * The writes run as the connection's OWN role, not service_role (CI-99): this suite tests the
+ * TRIGGER's behaviour, not grants. The replayed baseline carries no grants and 20270111000003 revokes
+ * PUBLIC, so service_role there is denied (42501) on tables and functions the trigger path touches,
+ * a state that says nothing about the trigger. Grants are asserted in the CATALOG case above and in
+ * the migration's own $verify$.
  *
  *     npm run test:realschema -- decision_event_trigger_company_id
  */
@@ -66,9 +71,8 @@ async function inRolledBackTx<T>(role: string | null, body: (c: Client) => Promi
 beforeAll(async () => {
   const fn = (await db.query(`SELECT to_regprocedure($1) AS f`, [FN])).rows[0];
   if (!fn?.f) throw new Error(`${FN} is not installed in this database`);
-  // baseline carries no privileges; model the hosted default for the tables under test so the
-  // TRIGGER, not a missing table grant, decides the outcomes below.
-  await db.query('GRANT SELECT, INSERT, UPDATE ON public.decision_objects, public.decision_events TO service_role');
+  // No GRANT here: the cases run as the connection's own role (see the header), and a GRANT would
+  // change privileges in the shared CI database for every other suite.
   await db.query(`INSERT INTO public.companies (id, name) VALUES ($1, 'dec-evt tenant') ON CONFLICT (id) DO NOTHING`, [CO]);
   await db.query(`INSERT INTO public.action_registry (action_type, handler_key, required_payload_fields, is_active)
                   VALUES ('improve_content', 'ContentService.generate', ARRAY[]::text[], TRUE)
@@ -102,7 +106,6 @@ describe('CONTROL: the 20260411 body (prod today) aborts every decision write', 
   it('a decision_objects insert raises 23502 on decision_events.company_id', async () => {
     const out = await inRolledBackTx(null, async (c) => {
       await c.query(body0411());
-      await c.query('SET LOCAL ROLE service_role');
       return c.query(INSERT_DECISION, [CO]);
     });
     expect(out.ok).toBe(false);
@@ -115,7 +118,7 @@ describe('CONTROL: the 20260411 body (prod today) aborts every decision write', 
 
 describe('FIX: decision writes succeed and every event carries company_id', () => {
   it('insert writes a `created` event with the decision company_id', async () => {
-    const out = await inRolledBackTx('service_role', async (c) => {
+    const out = await inRolledBackTx(null, async (c) => {
       const id = (await c.query(INSERT_DECISION, [CO])).rows[0].id;
       return (await c.query(`SELECT event_type, company_id, changed_by FROM public.decision_events WHERE decision_id = $1`, [id])).rows;
     });
@@ -126,7 +129,7 @@ describe('FIX: decision writes succeed and every event carries company_id', () =
   });
 
   it('resolve and reopen write `resolved` and `reopened` events with company_id', async () => {
-    const out = await inRolledBackTx('service_role', async (c) => {
+    const out = await inRolledBackTx(null, async (c) => {
       const id = (await c.query(INSERT_DECISION, [CO])).rows[0].id;
       await c.query(`UPDATE public.decision_objects SET status = 'resolved', resolved_at = now() WHERE id = $1`, [id]);
       await c.query(`UPDATE public.decision_objects SET status = 'open', resolved_at = NULL WHERE id = $1`, [id]);

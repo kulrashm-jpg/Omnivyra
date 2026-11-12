@@ -124,6 +124,18 @@ $$;
 
 REVOKE ALL ON FUNCTION public.omnivyra_log_decision_event() FROM PUBLIC, anon, authenticated;
 
+-- Where service_role's EXECUTE came only from PUBLIC (an environment where 20270111000003 has not
+-- run), the REVOKE above would strip it as a side effect. Keep it exactly as found: grant it back
+-- explicitly when the preflight recorded it as held. Prod (an explicit grant) and a baseline replay
+-- (none, PUBLIC already revoked) are unchanged by this.
+DO $keep_service_role$
+BEGIN
+  IF current_setting('dec_evt.service_role_exec_before', true) = 'true' THEN
+    GRANT EXECUTE ON FUNCTION public.omnivyra_log_decision_event() TO service_role;
+  END IF;
+END
+$keep_service_role$;
+
 DO $verify$
 DECLARE
   r      record;
