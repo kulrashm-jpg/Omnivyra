@@ -1,4 +1,4 @@
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantChildTableOf, tenantTable, type TenantContext } from '../db/tenantTable';
 /**
  * Narrative Engine
  * Converts content opportunities into story-driven campaign angles.
@@ -61,10 +61,11 @@ export type GenerateCampaignNarrativesResult = {
 };
 
 /**
- * Load content opportunities (recent, not yet converted to narratives).
+ * Load THIS tenant's content opportunities (recent, not yet converted to narratives).
+ * S2 tenant seam (e1, 83 ruling 2): this used to read the latest 100 opportunities across ALL tenants.
  */
-async function loadOpportunitiesWithoutNarratives(): Promise<OpportunityRow[]> {
-  const { data: opportunities, error: oppError } = await ownedDbTable('content_opportunities')
+async function loadOpportunitiesWithoutNarratives(tenant: TenantContext): Promise<OpportunityRow[]> {
+  const { data: opportunities, error: oppError } = await tenantTable('content_opportunities', tenant)
     .select('id, opportunity_title, opportunity_description, opportunity_type')
     .order('created_at', { ascending: false })
     .limit(100);
@@ -74,20 +75,24 @@ async function loadOpportunitiesWithoutNarratives(): Promise<OpportunityRow[]> {
 
   if (opps.length === 0) return [];
 
-  const { data: existing } = await ownedDbTable('campaign_narratives')
-    .select('opportunity_id')
-    .in('opportunity_id', opps.map((o) => o.id));
+  // campaign_narratives is a child of content_opportunities: every opportunity id is verified as this tenant's.
+  const narratives = await tenantChildTableOf('campaign_narratives', tenant, opps.map((o) => o.id));
+  const { data: existing, error: existingErr } = await narratives.select('opportunity_id');
+  // A failed read is not "no narratives yet" - proceeding would duplicate every narrative.
+  if (existingErr) throw new Error(`Failed to load campaign_narratives: ${existingErr.message}`);
 
   const hasNarrative = new Set((existing ?? []).map((r: { opportunity_id: string }) => r.opportunity_id));
   return opps.filter((o) => !hasNarrative.has(o.id));
 }
 
 /**
- * Generate campaign narratives from content opportunities.
+ * Generate campaign narratives from ONE tenant's content opportunities.
  * Creates 3 narrative angles × 4 platforms per opportunity.
  */
-export async function generateCampaignNarratives(): Promise<GenerateCampaignNarrativesResult> {
-  const opportunities = await loadOpportunitiesWithoutNarratives();
+export async function generateCampaignNarratives(tenant: TenantContext): Promise<GenerateCampaignNarrativesResult> {
+  const opportunities = await loadOpportunitiesWithoutNarratives(tenant);
+  // Inserts go through the child seam: each row's opportunity_id must be one of this tenant's verified opportunities.
+  const narratives = await tenantChildTableOf('campaign_narratives', tenant, opportunities.map((o) => o.id));
   let narrativesCreated = 0;
   let narrativesSkipped = 0;
 
@@ -112,7 +117,7 @@ export async function generateCampaignNarratives(): Promise<GenerateCampaignNarr
 
   let bulkDone = false;
   if (allRows.length > 0) {
-    const { error } = await ownedDbTable('campaign_narratives').insert(allRows);
+    const { error } = await narratives.insert(allRows);
     if (!error) {
       narrativesCreated = allRows.length;
       bulkDone = true;
@@ -125,7 +130,7 @@ export async function generateCampaignNarratives(): Promise<GenerateCampaignNarr
 
   if (!bulkDone) {
     for (const row of allRows) {
-      const { error } = await ownedDbTable('campaign_narratives').insert(row);
+      const { error } = await narratives.insert(row);
       if (error) {
         if (error.code === '23503') narrativesSkipped++;
         else throw new Error(`campaign_narratives insert failed: ${error.message}`);

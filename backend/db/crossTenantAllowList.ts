@@ -62,6 +62,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: "SYSTEM-WRITER SINK (83 ruling 4, 2026-11-12): recordAuditEntry buffers best-effort audit entries from many call sites and flush() INSERTS them in one batch, so a batch mixes tenants and NULL-company system entries (prod: 65/65 rows NULL company) - there is no single tenant to scope the write to. Each row carries its OWN company_id (entry.companyId or the ambient trace's), never another entry's. WRITE-ONLY: flush() only ever inserts - it never selects, updates or deletes, and returns nothing to any caller; the readers (getAuditHistoryForPlan / getAuditHistoryForScheduledPost) go through tenantTable, so nothing is read back to a tenant by this path. Pinned by backend/tests/unit/s2CreatorAuditSink.test.ts 'flush only inserts, and each row keeps its own company'. Reads nothing cross-tenant; writes only creator_audit_log. Follow-up (NON-BLOCKING-SCHEDULED): an optional tenant per entry so stamped entries go through the seam.",
     owner: 'virality-e1',
   },
+  {
+    id: 'narrative-cron-company-discovery',
+    tables: ['content_opportunities'],
+    file: 'backend/scheduler/schedulerIntelligenceJobs.ts',
+    reason: "SYSTEM JOB WORK-SET DISCOVERY (83 ruling 2, 2026-11-12): runNarrativeEngine must find WHICH companies have work before it can run per company, so it reads content_opportunities across tenants - selecting company_id ONLY, for rows created in the last 7 days, capped at 5000 rows. No title, description or any other content column is read, nothing is written by this read, and nothing from it reaches a tenant: each discovered company is then processed under systemTenantContext(companyId) through tenantTable/tenantChildTableOf (generateCampaignNarratives). Pinned by backend/tests/unit/s2NarrativeEngineTenant.test.ts 'discovery reads company_id only' and 'each company is processed only with its own opportunities'. Reads nothing else cross-tenant.",
+    owner: 'virality-e1',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));

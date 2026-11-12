@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext } from '../db/tenantTable';
 import { safeEnqueue } from '../middleware/queueBackpressure';
 /**
  * Intelligence & engine scheduling jobs.
@@ -267,12 +268,66 @@ export async function runContentOpportunityEngine() {
   return runWithConfig('content_opportunities', null, () => generateContentOpportunities());
 }
 
+/** Companies with content opportunities created in this window are the narrative engine's work set. */
+const NARRATIVE_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Bounds the discovery read (ids only); a company with no opportunity in this sample waits for the next run. */
+const NARRATIVE_DISCOVERY_ROW_CAP = 5000;
+
 /**
  * Run narrative engine: convert content opportunities into campaign narratives.
  * Call every 4 hours (e.g. from cron).
+ *
+ * S2 tenant seam (e1, 83 ruling 2): runs PER COMPANY under systemTenantContext (it used to read the latest 100
+ * opportunities across all tenants in one call). The fan-out is bounded to companies with work: those with a
+ * content opportunity created in the last 7 days - so dormant tenants add nothing. Per-company overrides of the
+ * 'narrative_engine' config now apply. The cap of 100 opportunities is per company.
  */
+/** The narrative engine's work set: companies with a content opportunity created in the discovery window. */
+export async function discoverNarrativeWorkCompanies(now: number = Date.now()): Promise<string[]> {
+  const since = new Date(now - NARRATIVE_DISCOVERY_WINDOW_MS).toISOString();
+  // cross-tenant: narrative-cron-company-discovery
+  const { data: recent, error } = await ownedDbTable('content_opportunities')
+    .select('company_id')
+    .gte('created_at', since)
+    .not('company_id', 'is', null)
+    .limit(NARRATIVE_DISCOVERY_ROW_CAP);
+  if (error) throw new Error(`narrative engine: company discovery failed (${error.message})`);
+  return [...new Set(((recent ?? []) as Array<{ company_id: string | null }>)
+    .map((r) => r.company_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0))];
+}
+
 export async function runNarrativeEngine() {
-  return runWithConfig('narrative_engine', null, () => generateCampaignNarratives());
+  const companyIds = await discoverNarrativeWorkCompanies();
+
+  const total = { opportunities_processed: 0, narratives_created: 0, narratives_skipped: 0, companies_processed: companyIds.length, errors: [] as string[] };
+  if (companyIds.length === 0) return total;
+
+  const preloadedGlobal = await getGlobalConfig('narrative_engine');
+  const results = await mapWithConcurrency(
+    companyIds,
+    getSchedulerConcurrency(),
+    (companyId) => runWithConfig(
+      'narrative_engine',
+      companyId,
+      () => generateCampaignNarratives(systemTenantContext(companyId, 'narrative engine cron: this company\'s opportunities')),
+      'scheduler',
+      preloadedGlobal,
+    ),
+  );
+  for (let i = 0; i < results.length; i++) {
+    const slot = results[i];
+    if (!slot.ok || slot.value === undefined) {
+      total.errors.push(`company ${companyIds[i]}: ${slot.error?.message ?? 'unknown error'}`);
+      continue;
+    }
+    const r = slot.value;
+    if ('skipped' in r) continue;
+    total.opportunities_processed += r.opportunities_processed;
+    total.narratives_created += r.narratives_created;
+    total.narratives_skipped += r.narratives_skipped;
+  }
+  return total;
 }
 
 /**
