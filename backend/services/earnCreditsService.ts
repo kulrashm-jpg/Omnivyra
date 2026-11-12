@@ -35,7 +35,9 @@ export async function grantEarnCredit(params: {
   userId:       string;
   actionType:   EarnActionType;
   referenceId?: string;
-}): Promise<{ granted: boolean; credits: number }> {
+}): Promise<{ granted: boolean; credits: number; reason?: 'already_granted' | 'read_failed' | 'grant_failed' }> {
+  // `reason` (2026-11-12) lets a caller tell "already granted" (fine) from a
+  // failure (retry needed); `granted: false` alone could not.
   const { orgId, userId, actionType, referenceId } = params;
   const action = EARN_ACTIONS[actionType];
   const refId  = referenceId ?? actionType;
@@ -53,10 +55,10 @@ export async function grantEarnCredit(params: {
     .maybeSingle();
   if (existingErr) {
     console.error('[earnCreditsService] idempotency read failed - not granted this time:', actionType, existingErr.message);
-    return { granted: false, credits: 0 };
+    return { granted: false, credits: 0, reason: 'read_failed' };
   }
 
-  if (existing) return { granted: false, credits: 0 };
+  if (existing) return { granted: false, credits: 0, reason: 'already_granted' };
 
   try {
     await createCredit({
@@ -88,7 +90,7 @@ export async function grantEarnCredit(params: {
     return { granted: true, credits: action.credits };
   } catch (err: any) {
     console.error('[earnCreditsService] grant failed:', actionType, err.message);
-    return { granted: false, credits: 0 };
+    return { granted: false, credits: 0, reason: 'grant_failed' };
   }
 }
 

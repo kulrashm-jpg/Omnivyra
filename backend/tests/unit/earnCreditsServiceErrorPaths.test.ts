@@ -45,7 +45,7 @@ afterEach(() => errSpy.mockRestore());
 it('grant: idempotency read error -> NOT granted, nothing written', async () => {
   mockScript['earn_credit_actions:select'] = DOWN;
   const r = await grantEarnCredit({ orgId: 'o1', userId: 'u1', actionType: 'setup_complete' });
-  expect(r).toEqual({ granted: false, credits: 0 });
+  expect(r).toEqual({ granted: false, credits: 0, reason: 'read_failed' });
   expect(mockGrants).toEqual([]);
   expect(mockWrites).toEqual([]);
 });
