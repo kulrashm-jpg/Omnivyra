@@ -88,13 +88,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const nowIso = new Date().toISOString();
-  const { error: updateErr } = await supabase
+  // PRIVILEGE (2026-11-12, class 2): CAS on 'suspended' AND not deleted, with a
+  // row count. By id alone, an account SOFT-DELETED between the read and this
+  // write was set back to 'active'.
+  const { data: resumed, error: updateErr } = await supabase
     .from('users')
     .update({ status: 'active', updated_at: nowIso })
-    .eq('id', userId);
+    .eq('id', userId)
+    .eq('status', 'suspended')
+    .eq('is_deleted', false)
+    .select('id');
   if (updateErr) {
     logger.error('super_admin_resume_status_update_failed', { userId, message: updateErr.message });
     return res.status(500).json({ error: 'STATUS_UPDATE_FAILED', details: updateErr.message });
+  }
+  if (!Array.isArray(resumed) || resumed.length !== 1) {
+    return res.status(409).json({ error: 'USER_STATE_CHANGED', details: 'The account changed while resuming (e.g. deleted); nothing was resumed.' });
   }
 
   await insertAuditLogStrict({

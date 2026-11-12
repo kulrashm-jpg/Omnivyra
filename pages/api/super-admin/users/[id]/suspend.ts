@@ -113,13 +113,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // 1. Flip status to suspended (the resolver short-circuits ahead of the
   //    epoch check on this branch — defense-in-depth).
   const nowIso = new Date().toISOString();
-  const { error: updateErr } = await supabase
+  // CLASS 2 (2026-11-12): CAS on the state as READ (status + not deleted) with a
+  // row count. By id alone, a concurrent delete / status change between the
+  // read and this write was overwritten.
+  let suspend = supabase
     .from('users')
     .update({ status: 'suspended', updated_at: nowIso })
-    .eq('id', userId);
+    .eq('id', userId)
+    .eq('is_deleted', false);
+  suspend = u.status === null ? suspend.is('status', null) : suspend.eq('status', u.status);
+  const { data: suspended, error: updateErr } = await suspend.select('id');
   if (updateErr) {
     logger.error('super_admin_suspend_status_update_failed', { userId, message: updateErr.message });
     return res.status(500).json({ error: 'STATUS_UPDATE_FAILED', details: updateErr.message });
+  }
+  if (!Array.isArray(suspended) || suspended.length !== 1) {
+    return res.status(409).json({ error: 'USER_STATE_CHANGED', details: 'The account changed while suspending; reload and retry.' });
   }
 
   // 2. Invalidate all sessions (epoch bump + auth_sessions revoke + Supabase signOut).
