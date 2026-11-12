@@ -14,7 +14,7 @@
  *   • No autonomous role grant. Every assignment row carries `assigned_by`.
  */
 
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import type {
   IntelligenceCapability,
   IntelligenceRole,
@@ -26,7 +26,8 @@ import {
 } from '../types/intelligenceRbac';
 
 export async function upsertIntelligenceRole(input: {
-  organizationId: string;
+  /** S2 tenant seam: the caller's tenant (replaces the raw organization id). */
+  tenant: TenantContext;
   roleKey: string;
   displayName: string;
   capabilities: IntelligenceCapability[];
@@ -36,21 +37,20 @@ export async function upsertIntelligenceRole(input: {
   const caps = [...new Set(input.capabilities)].filter((c): c is IntelligenceCapability =>
     (INTELLIGENCE_CAPABILITIES as readonly string[]).includes(c),
   );
+  // organization_id is stamped by the tenant seam.
   const payload = {
-    organization_id: input.organizationId,
     role_key: input.roleKey,
     display_name: input.displayName,
     capabilities: caps,
     sso_external_id: input.ssoExternalId ?? null,
     created_by: input.createdBy,
   };
-  const { data: existing } = await ownedDbTable('intelligence_roles')
+  const { data: existing } = await tenantTable('intelligence_roles', input.tenant)
     .select('id')
-    .eq('organization_id', input.organizationId)
     .eq('role_key', input.roleKey)
     .maybeSingle();
   if (existing && (existing as { id?: string }).id) {
-    const { data, error } = await ownedDbTable('intelligence_roles')
+    const { data, error } = await tenantTable('intelligence_roles', input.tenant)
       .update(payload)
       .eq('id', (existing as { id: string }).id)
       .select('*')
@@ -58,7 +58,7 @@ export async function upsertIntelligenceRole(input: {
     if (error || !data) throw new Error(`intelligence_role_update_failed:${error?.message ?? 'unknown'}`);
     return data as IntelligenceRole;
   }
-  const { data, error } = await ownedDbTable('intelligence_roles')
+  const { data, error } = await tenantTable('intelligence_roles', input.tenant)
     .insert(payload)
     .select('*')
     .single();
@@ -67,24 +67,23 @@ export async function upsertIntelligenceRole(input: {
 }
 
 export async function listIntelligenceRoles(
-  organizationId: string,
+  tenant: TenantContext,
 ): Promise<IntelligenceRole[]> {
-  const { data, error } = await ownedDbTable('intelligence_roles')
+  const { data, error } = await tenantTable('intelligence_roles', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .order('role_key', { ascending: true });
   if (error) throw new Error(`intelligence_role_list_failed:${error.message}`);
   return (data as IntelligenceRole[]) ?? [];
 }
 
 export async function seedIntelligenceRoles(args: {
-  organizationId: string;
+  tenant: TenantContext;
   createdBy: string | null;
 }): Promise<IntelligenceRole[]> {
   const results: IntelligenceRole[] = [];
   for (const seed of SEED_INTELLIGENCE_ROLES) {
     const role = await upsertIntelligenceRole({
-      organizationId: args.organizationId,
+      tenant: args.tenant,
       roleKey: seed.role_key,
       displayName: seed.display_name,
       capabilities: seed.capabilities,
@@ -96,23 +95,22 @@ export async function seedIntelligenceRoles(args: {
 }
 
 export async function assignIntelligenceRole(input: {
-  organizationId: string;
+  tenant: TenantContext;
   userId: string;
   roleId: string;
   assignedBy: string | null;
   expiresAt?: string | null;
 }): Promise<IntelligenceRoleAssignment> {
   // Revoke any previous active assignment for this triple.
-  await ownedDbTable('intelligence_role_assignments')
+  await tenantTable('intelligence_role_assignments', input.tenant)
     .update({ revoked_at: new Date().toISOString() })
-    .eq('organization_id', input.organizationId)
     .eq('user_id', input.userId)
     .eq('role_id', input.roleId)
     .is('revoked_at', null);
 
-  const { data, error } = await ownedDbTable('intelligence_role_assignments')
+  // organization_id is stamped by the tenant seam.
+  const { data, error } = await tenantTable('intelligence_role_assignments', input.tenant)
     .insert({
-      organization_id: input.organizationId,
       user_id: input.userId,
       role_id: input.roleId,
       assigned_by: input.assignedBy,
@@ -125,12 +123,11 @@ export async function assignIntelligenceRole(input: {
 }
 
 export async function revokeIntelligenceRoleAssignment(args: {
-  organizationId: string;
+  tenant: TenantContext;
   assignmentId: string;
 }): Promise<IntelligenceRoleAssignment | null> {
-  const { data, error } = await ownedDbTable('intelligence_role_assignments')
+  const { data, error } = await tenantTable('intelligence_role_assignments', args.tenant)
     .update({ revoked_at: new Date().toISOString() })
-    .eq('organization_id', args.organizationId)
     .eq('id', args.assignmentId)
     .is('revoked_at', null)
     .select('*')
@@ -140,22 +137,20 @@ export async function revokeIntelligenceRoleAssignment(args: {
 }
 
 export async function hasIntelligenceCapability(args: {
-  organizationId: string;
+  tenant: TenantContext;
   userId: string;
   capability: IntelligenceCapability;
 }): Promise<boolean> {
-  const { data: assignments } = await ownedDbTable('intelligence_role_assignments')
+  const { data: assignments } = await tenantTable('intelligence_role_assignments', args.tenant)
     .select('role_id, expires_at')
-    .eq('organization_id', args.organizationId)
     .eq('user_id', args.userId)
     .is('revoked_at', null);
   const valid = ((assignments ?? []) as Array<{ role_id: string; expires_at: string | null }>)
     .filter((a) => !a.expires_at || new Date(a.expires_at).getTime() > Date.now());
   if (valid.length === 0) return false;
   const roleIds = valid.map((a) => a.role_id);
-  const { data: roles } = await ownedDbTable('intelligence_roles')
+  const { data: roles } = await tenantTable('intelligence_roles', args.tenant)
     .select('capabilities')
-    .eq('organization_id', args.organizationId)
     .in('id', roleIds);
   for (const r of (roles ?? []) as Array<{ capabilities: string[] }>) {
     if (r.capabilities.includes(args.capability)) return true;
@@ -164,12 +159,11 @@ export async function hasIntelligenceCapability(args: {
 }
 
 export async function listAssignmentsForUser(
-  organizationId: string,
+  tenant: TenantContext,
   userId: string,
 ): Promise<IntelligenceRoleAssignment[]> {
-  const { data, error } = await ownedDbTable('intelligence_role_assignments')
+  const { data, error } = await tenantTable('intelligence_role_assignments', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .eq('user_id', userId)
     .is('revoked_at', null);
   if (error) throw new Error(`intelligence_role_user_assignments_failed:${error.message}`);

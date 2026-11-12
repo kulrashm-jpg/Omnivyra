@@ -9,7 +9,7 @@
  * DLQ producer can fire (Phase 6 doesn't auto-produce DLQ events).
  */
 
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import {
   MAX_PROJECTION_RETRIES,
   PROJECTION_PAYLOAD_VERSION,
@@ -18,18 +18,17 @@ import {
 } from '../types/projectionSync';
 
 async function ensureSyncRow(
-  organizationId: string,
+  tenant: TenantContext,
   projectionKind: ProjectionKind,
 ): Promise<ProjectionSyncState> {
-  const { data: existing } = await ownedDbTable('projection_sync_state')
+  const { data: existing } = await tenantTable('projection_sync_state', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .eq('projection_kind', projectionKind)
     .maybeSingle();
   if (existing) return existing as ProjectionSyncState;
-  const { data, error } = await ownedDbTable('projection_sync_state')
+  // organization_id is stamped by the tenant seam.
+  const { data, error } = await tenantTable('projection_sync_state', tenant)
     .insert({
-      organization_id: organizationId,
       projection_kind: projectionKind,
       payload_version: PROJECTION_PAYLOAD_VERSION,
     })
@@ -37,9 +36,8 @@ async function ensureSyncRow(
     .single();
   if (error || !data) {
     if (error?.code === '23505') {
-      const { data: raced } = await ownedDbTable('projection_sync_state')
+      const { data: raced } = await tenantTable('projection_sync_state', tenant)
         .select('*')
-        .eq('organization_id', organizationId)
         .eq('projection_kind', projectionKind)
         .maybeSingle();
       if (raced) return raced as ProjectionSyncState;
@@ -54,16 +52,16 @@ async function ensureSyncRow(
  * advances monotonically.
  */
 export async function advanceProjectionCursor(args: {
-  organizationId: string;
+  tenant: TenantContext;
   projectionKind: ProjectionKind;
   cursor: string;
 }): Promise<ProjectionSyncState> {
-  const row = await ensureSyncRow(args.organizationId, args.projectionKind);
+  const row = await ensureSyncRow(args.tenant, args.projectionKind);
   // Refuse cursors that move backwards.
   if (row.cursor_position && args.cursor < row.cursor_position) {
     return row;
   }
-  const { data, error } = await ownedDbTable('projection_sync_state')
+  const { data, error } = await tenantTable('projection_sync_state', args.tenant)
     .update({
       cursor_position: args.cursor,
       last_synced_at: new Date().toISOString(),
@@ -77,13 +75,13 @@ export async function advanceProjectionCursor(args: {
 }
 
 export async function recordProjectionRetry(args: {
-  organizationId: string;
+  tenant: TenantContext;
   projectionKind: ProjectionKind;
   reason: string;
 }): Promise<{ exhausted: boolean; state: ProjectionSyncState }> {
-  const row = await ensureSyncRow(args.organizationId, args.projectionKind);
+  const row = await ensureSyncRow(args.tenant, args.projectionKind);
   const next = Math.min(MAX_PROJECTION_RETRIES, row.pending_retry_count + 1);
-  const { data, error } = await ownedDbTable('projection_sync_state')
+  const { data, error } = await tenantTable('projection_sync_state', args.tenant)
     .update({
       pending_retry_count: next,
       metadata: { ...row.metadata, last_retry_reason: args.reason, last_retry_at: new Date().toISOString() },
@@ -96,12 +94,12 @@ export async function recordProjectionRetry(args: {
 }
 
 export async function markProjectionReplayed(args: {
-  organizationId: string;
+  tenant: TenantContext;
   projectionKind: ProjectionKind;
   cursor: string;
 }): Promise<ProjectionSyncState> {
-  const row = await ensureSyncRow(args.organizationId, args.projectionKind);
-  const { data, error } = await ownedDbTable('projection_sync_state')
+  const row = await ensureSyncRow(args.tenant, args.projectionKind);
+  const { data, error } = await tenantTable('projection_sync_state', args.tenant)
     .update({
       cursor_position: args.cursor,
       last_replayed_at: new Date().toISOString(),
@@ -115,11 +113,10 @@ export async function markProjectionReplayed(args: {
 }
 
 export async function listProjectionSyncStates(
-  organizationId: string,
+  tenant: TenantContext,
 ): Promise<ProjectionSyncState[]> {
-  const { data, error } = await ownedDbTable('projection_sync_state')
+  const { data, error } = await tenantTable('projection_sync_state', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .order('projection_kind', { ascending: true });
   if (error) throw new Error(`projection_sync_list_failed:${error.message}`);
   return (data as ProjectionSyncState[]) ?? [];

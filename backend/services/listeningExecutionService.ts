@@ -24,6 +24,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext, type TenantContext } from '../db/tenantTable';
 import { enqueueOrThrow } from '../middleware/queueBackpressure';
 import {
   listeningExecutionQueue,
@@ -65,7 +66,8 @@ const EXECUTION_TIMEOUT_MS = Math.max(30_000, parseInt(process.env.LISTENING_EXE
 // ---------------------------------------------------------------------------
 
 export type CreateExecutionInput = {
-  organizationId: string;
+  /** S2 tenant seam: the caller's tenant (replaces the raw organization id). */
+  tenant: TenantContext;
   listeningSourceId: string;
   executionMode: ExecutionMode;
   createdBy: string | null;
@@ -122,10 +124,11 @@ async function evaluatePerPlatformEligibility(
 }
 
 async function assertBudgetAllows(
-  organizationId: string,
+  tenant: TenantContext,
   estimatedCost: number,
 ): Promise<{ ok: true } | { ok: false; detail: string }> {
-  const config = await getListeningConfiguration(organizationId);
+  const organizationId = tenant.companyId;
+  const config = await getListeningConfiguration(tenant);
   if (!config || config.monthly_credit_ceiling <= 0) return { ok: true };
 
   const monthStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -151,8 +154,10 @@ async function assertBudgetAllows(
 export async function createOnDemandExecution(
   input: CreateExecutionInput,
 ): Promise<CreateExecutionResult> {
+  const { tenant } = input;
+  const organizationId = tenant.companyId;
   // Load source (tenant scoped).
-  const source = await getListeningSource(input.organizationId, input.listeningSourceId);
+  const source = await getListeningSource(organizationId, input.listeningSourceId);
   if (!source) return { ok: false, reason: 'source_not_found', detail: 'listening_source_id' };
 
   // Platform lookup. listening_sources doesn't directly carry a platform
@@ -163,11 +168,11 @@ export async function createOnDemandExecution(
       : 'reddit'; // Phase 3 default — Reddit is the only live connector
 
   if (!input.prevalidated) {
-    const eligibility = await evaluatePerPlatformEligibility(input.organizationId, platform);
+    const eligibility = await evaluatePerPlatformEligibility(organizationId, platform);
     if (!eligibility.ok) {
       const failure = eligibility as Extract<typeof eligibility, { ok: false }>;
       await publishExecutionBlockedEvent({
-        organization_id: input.organizationId,
+        organization_id: organizationId,
         listening_source_id: input.listeningSourceId,
         reason: failure.reason as never,
         detail: failure.detail,
@@ -180,7 +185,7 @@ export async function createOnDemandExecution(
     // governance_enforcement_events regardless of outcome. A 'denied'
     // result hard-blocks the execution.
     const governanceDecision = await evaluateGovernance({
-      organizationId: input.organizationId,
+      organizationId,
       action: 'execution.create',
       actorUserId: input.createdBy,
       context: {
@@ -191,7 +196,7 @@ export async function createOnDemandExecution(
     });
     if (governanceDecision.decision === 'denied') {
       await publishExecutionBlockedEvent({
-        organization_id: input.organizationId,
+        organization_id: organizationId,
         listening_source_id: input.listeningSourceId,
         reason: 'capability_disabled' as never,
         detail: `governance:${governanceDecision.policy_key}:${governanceDecision.reasons.join(',')}`,
@@ -215,12 +220,12 @@ export async function createOnDemandExecution(
   }
 
   const connectorEligibility = await connector.validateEligibility({
-    organizationId: input.organizationId,
+    organizationId,
     sourceIdentifier: source.source_identifier,
   });
   if (!connectorEligibility.eligible) {
     await publishExecutionBlockedEvent({
-      organization_id: input.organizationId,
+      organization_id: organizationId,
       listening_source_id: input.listeningSourceId,
       reason: 'source_not_ready',
       detail: connectorEligibility.reasons.join(','),
@@ -233,7 +238,7 @@ export async function createOnDemandExecution(
     };
   }
 
-  const config = await getListeningConfiguration(input.organizationId);
+  const config = await getListeningConfiguration(tenant);
   const keywords = (input.keywords && input.keywords.length > 0)
     ? input.keywords
     : (Array.isArray((source.metadata as { keywords?: unknown }).keywords)
@@ -246,11 +251,11 @@ export async function createOnDemandExecution(
     maxComments: MAX_COMMENTS_PER_RUN,
   });
 
-  const budget = await assertBudgetAllows(input.organizationId, estimate.per_run);
+  const budget = await assertBudgetAllows(tenant, estimate.per_run);
   if (!budget.ok) {
     const budgetFailure = budget as Extract<typeof budget, { ok: false }>;
     await publishExecutionBlockedEvent({
-      organization_id: input.organizationId,
+      organization_id: organizationId,
       listening_source_id: input.listeningSourceId,
       reason: 'budget_blocked',
       detail: budgetFailure.detail,
@@ -264,7 +269,7 @@ export async function createOnDemandExecution(
   const now = new Date().toISOString();
   const { data: created, error } = await ownedDbTable('listening_executions')
     .insert({
-      organization_id: input.organizationId,
+      organization_id: organizationId,
       listening_source_id: input.listeningSourceId,
       configuration_id: config?.id ?? null,
       execution_mode: input.executionMode,
@@ -296,7 +301,7 @@ export async function createOnDemandExecution(
     'listening-execution',
     {
       executionId: execution.id,
-      organizationId: input.organizationId,
+      organizationId,
       listeningSourceId: input.listeningSourceId,
     },
     { jobId },
@@ -306,7 +311,7 @@ export async function createOnDemandExecution(
     .eq('id', execution.id);
 
   await publishExecutionPlannedEvent({
-    organization_id: input.organizationId,
+    organization_id: organizationId,
     listening_execution_id: execution.id,
     listening_source_id: input.listeningSourceId,
     execution_mode: input.executionMode,
@@ -396,7 +401,8 @@ export async function processListeningExecution(executionId: string): Promise<vo
   let pipelineStats;
   try {
     pipelineStats = await processRawSignals({
-      organizationId: execution.organization_id,
+      // S2 tenant seam: the job's tenant is the execution row's own organization (read by id above).
+      tenant: systemTenantContext(execution.organization_id, `listening execution job ${executionId}`),
       listeningExecutionId: executionId,
       rawSignals: fetchResult.signals,
       keywords,

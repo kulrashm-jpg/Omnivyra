@@ -21,6 +21,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import { publishRealtime } from './realtimePublisherService';
 import { advanceProjectionCursor } from './projectionSyncService';
 import type {
@@ -216,13 +217,15 @@ export async function approveReplay(args: {
 }
 
 export async function executeReplay(args: {
-  organizationId: string;
+  /** S2 tenant seam: the caller's tenant (replaces the raw organization id). */
+  tenant: TenantContext;
   replayId: string;
   executorUserId: string | null;
 }): Promise<ReplayOperation> {
+  const organizationId = args.tenant.companyId;
   const { data: existing } = await ownedDbTable('replay_operations')
     .select('*')
-    .eq('organization_id', args.organizationId)
+    .eq('organization_id', organizationId)
     .eq('id', args.replayId)
     .maybeSingle();
   const op = existing as ReplayOperation | null;
@@ -242,9 +245,8 @@ export async function executeReplay(args: {
       // Re-emit a projection.replayed event per item. Bounded by batch_size
       // already; executeReplay never traverses beyond the requested items.
       for (const id of op.requested_items) {
-        const { data: row } = await ownedDbTable('projection_sync_state')
+        const { data: row } = await tenantTable('projection_sync_state', args.tenant)
           .select('*')
-          .eq('organization_id', args.organizationId)
           .eq('id', id)
           .maybeSingle();
         if (!row) {
@@ -253,7 +255,7 @@ export async function executeReplay(args: {
         }
         const r = row as { projection_kind: string; cursor_position: string | null };
         await publishRealtime({
-          organizationId: args.organizationId,
+          organizationId,
           topic: 'opportunity_feed',
           eventName: 'projection.replayed',
           payload: {
@@ -264,7 +266,7 @@ export async function executeReplay(args: {
         });
         if (r.cursor_position) {
           await advanceProjectionCursor({
-            organizationId: args.organizationId,
+            tenant: args.tenant,
             projectionKind: r.projection_kind as 'opportunity_feed' | 'graph' | 'alerts' | 'clusters' | 'lifecycle',
             cursor: r.cursor_position,
           });

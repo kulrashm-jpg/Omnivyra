@@ -16,7 +16,7 @@
  */
 
 import { createHash } from 'crypto';
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import type {
   Alert,
   AlertRule,
@@ -26,7 +26,8 @@ import type {
 import { ALERT_TYPES, SEVERITY_RANK } from '../types/alert';
 
 export type RaiseAlertInput = {
-  organizationId: string;
+  /** S2 tenant seam: the caller's tenant (replaces the raw organization id). */
+  tenant: TenantContext;
   alertType: AlertType;
   severity: AlertSeverity;
   dedupKey: string;
@@ -46,9 +47,8 @@ function shortHash(input: string): string {
 export async function raiseAlert(input: RaiseAlertInput): Promise<RaiseAlertResult> {
   // Load (or implicitly create) the rule. We do not auto-create — if the
   // org has no rule for this type, fall back to defaults but never persist.
-  const { data: ruleRow } = await ownedDbTable('alert_rules')
+  const { data: ruleRow } = await tenantTable('alert_rules', input.tenant)
     .select('*')
-    .eq('organization_id', input.organizationId)
     .eq('alert_type', input.alertType)
     .maybeSingle();
   const rule = (ruleRow as AlertRule | null) ?? null;
@@ -67,9 +67,8 @@ export async function raiseAlert(input: RaiseAlertInput): Promise<RaiseAlertResu
 
   if (rateLimitMinutes > 0) {
     const cutoff = new Date(Date.now() - rateLimitMinutes * 60 * 1000).toISOString();
-    const { data: recent } = await ownedDbTable('alerts')
+    const { data: recent } = await tenantTable('alerts', input.tenant)
       .select('id')
-      .eq('organization_id', input.organizationId)
       .eq('alert_type', input.alertType)
       .eq('dedup_key', dedupKey)
       .gt('created_at', cutoff)
@@ -80,9 +79,9 @@ export async function raiseAlert(input: RaiseAlertInput): Promise<RaiseAlertResu
     }
   }
 
-  const { data, error } = await ownedDbTable('alerts')
+  // organization_id is stamped by the tenant seam.
+  const { data, error } = await tenantTable('alerts', input.tenant)
     .insert({
-      organization_id: input.organizationId,
       alert_rule_id: rule?.id ?? null,
       alert_type: input.alertType,
       severity: input.severity,
@@ -99,12 +98,11 @@ export async function raiseAlert(input: RaiseAlertInput): Promise<RaiseAlertResu
 }
 
 export async function listAlerts(
-  organizationId: string,
+  tenant: TenantContext,
   options?: { onlyUnacknowledged?: boolean; limit?: number },
 ): Promise<Alert[]> {
-  let q = ownedDbTable('alerts')
+  let q = tenantTable('alerts', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
     .limit(Math.min(500, Math.max(1, options?.limit ?? 100)));
   if (options?.onlyUnacknowledged) q = q.is('acknowledged_at', null);
@@ -114,16 +112,15 @@ export async function listAlerts(
 }
 
 export async function acknowledgeAlert(
-  organizationId: string,
+  tenant: TenantContext,
   id: string,
   userId: string | null,
 ): Promise<Alert | null> {
-  const { data, error } = await ownedDbTable('alerts')
+  const { data, error } = await tenantTable('alerts', tenant)
     .update({
       acknowledged_at: new Date().toISOString(),
       acknowledged_by: userId,
     })
-    .eq('organization_id', organizationId)
     .eq('id', id)
     .is('acknowledged_at', null)
     .select('*')
@@ -133,7 +130,8 @@ export async function acknowledgeAlert(
 }
 
 export async function upsertAlertRule(input: {
-  organizationId: string;
+  /** S2 tenant seam: the caller's tenant (replaces the raw organization id). */
+  tenant: TenantContext;
   alertType: AlertType;
   enabled: boolean;
   minSeverity: AlertSeverity;
@@ -144,8 +142,8 @@ export async function upsertAlertRule(input: {
   if (!ALERT_TYPES.includes(input.alertType)) {
     throw new Error(`unknown_alert_type:${input.alertType}`);
   }
+  // organization_id is stamped by the tenant seam.
   const payload = {
-    organization_id: input.organizationId,
     alert_type: input.alertType,
     enabled: input.enabled,
     min_severity: input.minSeverity,
@@ -153,13 +151,12 @@ export async function upsertAlertRule(input: {
     scope: input.scope ?? {},
     created_by: input.createdBy,
   };
-  const { data: existing } = await ownedDbTable('alert_rules')
+  const { data: existing } = await tenantTable('alert_rules', input.tenant)
     .select('id')
-    .eq('organization_id', input.organizationId)
     .eq('alert_type', input.alertType)
     .maybeSingle();
   if (existing && (existing as { id?: string }).id) {
-    const { data, error } = await ownedDbTable('alert_rules')
+    const { data, error } = await tenantTable('alert_rules', input.tenant)
       .update(payload)
       .eq('id', (existing as { id: string }).id)
       .select('*')
@@ -167,7 +164,7 @@ export async function upsertAlertRule(input: {
     if (error || !data) throw new Error(`alert_rule_update_failed:${error?.message ?? 'unknown'}`);
     return data as AlertRule;
   }
-  const { data, error } = await ownedDbTable('alert_rules')
+  const { data, error } = await tenantTable('alert_rules', input.tenant)
     .insert(payload)
     .select('*')
     .single();
@@ -175,10 +172,9 @@ export async function upsertAlertRule(input: {
   return data as AlertRule;
 }
 
-export async function listAlertRules(organizationId: string): Promise<AlertRule[]> {
-  const { data, error } = await ownedDbTable('alert_rules')
+export async function listAlertRules(tenant: TenantContext): Promise<AlertRule[]> {
+  const { data, error } = await tenantTable('alert_rules', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .order('alert_type', { ascending: true });
   if (error) throw new Error(`alert_rules_list_failed:${error.message}`);
   return (data as AlertRule[]) ?? [];

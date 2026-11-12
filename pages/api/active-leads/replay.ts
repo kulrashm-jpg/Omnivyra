@@ -26,6 +26,7 @@ import {
 } from '../../../backend/types/replayOps';
 import { evaluateGovernance } from '../../../backend/services/governanceEnforcementService';
 import { publishRealtime } from '../../../backend/services/realtimePublisherService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -117,7 +118,8 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
     } else if (action === 'approve') {
       result = await approveReplay({ organizationId: companyId, replayId, approverUserId: ctx.userId });
     } else {
-      result = await executeReplay({ organizationId: companyId, replayId, executorUserId: ctx.userId });
+      // S2 tenant seam: executeReplay takes the context of the access check above.
+      result = await executeReplay({ tenant: tenantContextFor(ctx, companyId), replayId, executorUserId: ctx.userId });
       void publishRealtime({
         organizationId: companyId,
         topic: 'governance' as never,

@@ -27,6 +27,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getUserRole } from '../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../backend/services/rbac/communityAiCapabilities';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import {
   cancelExecution,
   createOnDemandExecution,
@@ -91,10 +92,12 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const executionMode = body.executionMode === 'SCHEDULED' ? 'SCHEDULED' : 'ON_DEMAND';
+  // S2 tenant seam: the execution service takes the context of the access check above.
+  const tenant = tenantContextFor(ctx, companyId);
 
   try {
     const result = await createOnDemandExecution({
-      organizationId: companyId,
+      tenant,
       listeningSourceId,
       executionMode,
       createdBy: ctx.userId,

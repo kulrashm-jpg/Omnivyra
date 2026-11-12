@@ -17,7 +17,7 @@
  * existing /api/leads/job/create path and are gated there.
  */
 
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import { normalizePlatform } from '../constants/platforms';
 import { invalidateCapabilityAggregate } from './capabilityCacheService';
 import { buildCapabilityAggregate } from './capabilityAggregationService';
@@ -48,7 +48,8 @@ export type ConfigurationDraft = {
 };
 
 export type ActivationInput = ConfigurationDraft & {
-  organizationId: string;
+  /** S2 tenant seam: the caller's tenant (replaces the raw organizationId). */
+  tenant: TenantContext;
   confirmedBy: string | null;
   estimateHash: string;
   acknowledgeCreditEstimate: boolean;
@@ -79,11 +80,10 @@ export type ActivationSuccess = {
 export type ActivationResult = ActivationSuccess | ActivationRefusal;
 
 export async function getListeningConfiguration(
-  organizationId: string,
+  tenant: TenantContext,
 ): Promise<ListeningConfiguration | null> {
-  const { data, error } = await ownedDbTable('listening_configurations')
+  const { data, error } = await tenantTable('listening_configurations', tenant)
     .select('*')
-    .eq('organization_id', organizationId)
     .maybeSingle();
   if (error) throw new Error(`Failed to load configuration: ${error.message}`);
   return (data as ListeningConfiguration | null) ?? null;
@@ -97,6 +97,8 @@ export async function getListeningConfiguration(
 export async function activateListeningConfiguration(
   input: ActivationInput,
 ): Promise<ActivationResult> {
+  const { tenant } = input;
+  const organizationId = tenant.companyId;
   if (!isListeningMode(input.mode)) {
     return { ok: false, reason: 'invalid_mode', detail: String(input.mode) };
   }
@@ -153,7 +155,7 @@ export async function activateListeningConfiguration(
   // CACHE-MISS path on purpose — activation decisions never read from the
   // TTL cache (consistent with the cache service's documented contract).
   if (requiresActivationGates) {
-    const aggregate = await buildCapabilityAggregate(input.organizationId);
+    const aggregate = await buildCapabilityAggregate(organizationId);
     const ineligible: ActivationRefusal['ineligible_platforms'] = [];
     for (const rawPlatform of input.platforms) {
       const platform = normalizePlatform(rawPlatform);
@@ -175,10 +177,10 @@ export async function activateListeningConfiguration(
     ? new Date(now.getTime() + FREQUENCY_INTERVAL_HOURS[input.mode] * 60 * 60 * 1000).toISOString()
     : null;
 
-  const existing = await getListeningConfiguration(input.organizationId);
+  const existing = await getListeningConfiguration(tenant);
 
+  // organization_id is stamped by the tenant seam.
   const payload = {
-    organization_id: input.organizationId,
     mode: input.mode,
     platforms: [...new Set(input.platforms.map(normalizePlatform))].sort(),
     keyword_count: input.keywordCount,
@@ -198,7 +200,7 @@ export async function activateListeningConfiguration(
 
   let configuration: ListeningConfiguration;
   if (existing) {
-    const { data, error } = await ownedDbTable('listening_configurations')
+    const { data, error } = await tenantTable('listening_configurations', tenant)
       .update(payload)
       .eq('id', existing.id)
       .select('*')
@@ -208,7 +210,7 @@ export async function activateListeningConfiguration(
     }
     configuration = data as ListeningConfiguration;
   } else {
-    const { data, error } = await ownedDbTable('listening_configurations')
+    const { data, error } = await tenantTable('listening_configurations', tenant)
       .insert(payload)
       .select('*')
       .single();
@@ -220,7 +222,7 @@ export async function activateListeningConfiguration(
 
   // Cache invalidation: configuration affects monitoring eligibility, which
   // is part of the capability aggregate.
-  invalidateCapabilityAggregate(input.organizationId);
+  invalidateCapabilityAggregate(organizationId);
 
   return { ok: true, configuration };
 }
@@ -230,11 +232,11 @@ export async function activateListeningConfiguration(
  * planned run so any orchestration scan skips this org.
  */
 export async function suspendListeningConfiguration(
-  organizationId: string,
+  tenant: TenantContext,
 ): Promise<ListeningConfiguration | null> {
-  const existing = await getListeningConfiguration(organizationId);
+  const existing = await getListeningConfiguration(tenant);
   if (!existing) return null;
-  const { data, error } = await ownedDbTable('listening_configurations')
+  const { data, error } = await tenantTable('listening_configurations', tenant)
     .update({
       mode: 'manual_only',
       next_planned_run_at: null,
@@ -245,6 +247,6 @@ export async function suspendListeningConfiguration(
   if (error || !data) {
     throw new Error(`Failed to suspend configuration: ${error?.message ?? 'unknown'}`);
   }
-  invalidateCapabilityAggregate(organizationId);
+  invalidateCapabilityAggregate(tenant.companyId);
   return data as ListeningConfiguration;
 }
