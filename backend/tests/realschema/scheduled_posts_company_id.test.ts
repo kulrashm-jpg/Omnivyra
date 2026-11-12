@@ -274,3 +274,18 @@ describe('05 review: enforced rollback order and the orphan repair path', () => 
     expect(await attemptIn(c, `UPDATE public.social_accounts SET company_id = NULL WHERE id = $1`, [w.saA])).toMatchObject({ ok: false, code: '23514' });
   }));
 });
+
+describe('05 review F3: the orphan existence test is not answered under the caller\'s RLS', () => {
+  it('company_row_exists is SECURITY DEFINER, STABLE, search_path pg_catalog, public; EXECUTE for service_role only', async () => {
+    const r = (await db.query(`SELECT prosecdef, provolatile, proconfig,
+        has_function_privilege('anon', oid, 'EXECUTE') AS anon, has_function_privilege('authenticated', oid, 'EXECUTE') AS auth,
+        has_function_privilege('service_role', oid, 'EXECUTE') AS svc
+      FROM pg_proc WHERE oid = 'public.company_row_exists(uuid)'::regprocedure`)).rows[0];
+    expect(r).toEqual({ prosecdef: true, provolatile: 's', proconfig: ['search_path=pg_catalog, public'], anon: false, auth: false, svc: true });
+  });
+  it('the immutability trigger calls the helper (not an inline RLS-subject EXISTS)', async () => {
+    const src = (await db.query(`SELECT prosrc FROM pg_proc WHERE oid = 'public.social_accounts_company_id_immutable()'::regprocedure`)).rows[0].prosrc as string;
+    expect(src).toContain('public.company_row_exists(OLD.company_id)');
+    expect(src).not.toMatch(/FROM public\.companies/);
+  });
+});

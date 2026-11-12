@@ -253,6 +253,23 @@ CREATE TRIGGER scheduled_posts_company_id_guard_upd
      OR OLD.company_id IS DISTINCT FROM NEW.company_id)
   EXECUTE FUNCTION public.scheduled_posts_company_id_guard();
 
+-- Existence test for the orphan carve-out. SECURITY DEFINER on purpose (05 review): the carve-out treats
+-- "company not found" as PERMISSION, so it must not be answered under the caller's RLS, where an
+-- invisible live company would also look "not found" (fail open). It returns one boolean and reads
+-- nothing else; EXECUTE only for service_role (another caller gets permission denied: fail closed).
+CREATE OR REPLACE FUNCTION public.company_row_exists(p_company_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $fn$
+  SELECT EXISTS (SELECT 1 FROM public.companies c WHERE c.id = p_company_id)
+$fn$;
+
+REVOKE ALL ON FUNCTION public.company_row_exists(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.company_row_exists(uuid) TO service_role;
+
 -- A social account never moves between companies (closes the publish-through-a-moved-account path).
 CREATE OR REPLACE FUNCTION public.social_accounts_company_id_immutable()
 RETURNS trigger
@@ -264,7 +281,7 @@ BEGIN
   -- Repair path (05 review): social_accounts.company_id has no FK to companies, so a hard-deleted
   -- company can leave a dangling id. Clearing it (X -> NULL) is allowed ONLY when company X no longer
   -- exists; an account can never move between two live companies, nor be cleared from a live one.
-  IF NEW.company_id IS NULL AND NOT EXISTS (SELECT 1 FROM public.companies c WHERE c.id = OLD.company_id) THEN
+  IF NEW.company_id IS NULL AND NOT public.company_row_exists(OLD.company_id) THEN
     RETURN NEW;
   END IF;
   RAISE EXCEPTION 'social_accounts: account % belongs to company % and cannot move to company %; connect it under the other company instead (a new row)',
@@ -325,6 +342,17 @@ BEGIN
                     AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
                     AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')) THEN
     RAISE EXCEPTION 'SP-COMPANY verify: social_accounts_company_id_immutable trigger/function missing, disabled, DEFINER, wrong search_path or executable by anon/authenticated';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p
+                  WHERE p.oid = 'public.company_row_exists(uuid)'::regprocedure
+                    AND p.prosecdef AND p.provolatile = 's'
+                    AND p.proconfig @> ARRAY['search_path=pg_catalog, public']::text[]
+                    AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+                    AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                    AND has_function_privilege('service_role', p.oid, 'EXECUTE')
+                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                                     WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')) THEN
+    RAISE EXCEPTION 'SP-COMPANY verify: company_row_exists must be SECURITY DEFINER, STABLE, search_path pg_catalog, public, EXECUTE for service_role only';
   END IF;
   SELECT count(*) INTO v_n FROM public.scheduled_posts sp
     JOIN public.campaigns c ON c.id = sp.campaign_id

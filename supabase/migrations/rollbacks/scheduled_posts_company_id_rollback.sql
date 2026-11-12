@@ -33,6 +33,7 @@ $provenance$;
 
 DROP TRIGGER IF EXISTS social_accounts_company_id_immutable ON public.social_accounts;
 DROP FUNCTION IF EXISTS public.social_accounts_company_id_immutable();
+DROP FUNCTION IF EXISTS public.company_row_exists(uuid);
 DROP TRIGGER IF EXISTS scheduled_posts_company_id_guard_ins ON public.scheduled_posts;
 DROP TRIGGER IF EXISTS scheduled_posts_company_id_guard_upd ON public.scheduled_posts;
 DROP FUNCTION IF EXISTS public.scheduled_posts_company_id_guard();
