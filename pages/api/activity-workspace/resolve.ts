@@ -6,8 +6,6 @@ import { supabase } from '@/backend/db/supabaseClient';
 // row > blueprint execution items > legacy, preserving execution_id).
 import { canonicalExecutionAdapter, resolveAuthoritativeWorkspace } from '@/backend/services/orchestration';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import {
-} from '@/backend/services/contentArchitectService';
 import { blueprintItemToUnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
 import { buildRepurposingContext } from '@/lib/planning/repurposingContext';
 import { buildMasterContentDocument } from '@/lib/planning/masterContentDocument';

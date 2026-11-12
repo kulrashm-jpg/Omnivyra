@@ -310,7 +310,10 @@ describe('F — route and panel keep the same promises', () => {
 
   it('CRITICAL: the route uses the workspace access gate', () => {
     expect(ROUTE).toContain('enforceCompanyAccess');
-    expect(ROUTE).toContain('isContentArchitectSession');
+    // E-4 resolved (e9 C): a content architect is an ordinary member - the gate is
+    // enforceCompanyAccess ALONE; no synthetic architect-session bypass remains.
+    expect(ROUTE).not.toContain('isContentArchitectSession');
+    expect(ROUTE).not.toContain('checkContentArchitectAccess');
   });
 
   it('CRITICAL: a foreign activity is 404; a real failure is 422', () => {
