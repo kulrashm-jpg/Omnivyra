@@ -95,7 +95,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
     // CROSS-TENANT FIX: the request's TARGET is the campaign the approval preempts - bind it to the same company
-    // (a request row created before the fix may name another company's campaign). The service re-checks both.
+    // (a request row created before the fix may name a target OWNED BY ANOTHER COMPANY). The service re-checks both.
+    // ORDER MATTERS: both bindings precede assertCampaignNotFinalized, whose BLOCKED branch is a governance write.
+    // (The request and initiator reads above are deliberately unbound: they only find the campaigns to bind; no write
+    // happens before both bindings, and a foreign / unknown row answers the same 404.)
     const targetAccess = await enforceCompanyAccess({
       req,
       res,

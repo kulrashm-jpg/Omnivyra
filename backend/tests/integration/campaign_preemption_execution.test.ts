@@ -11,7 +11,7 @@ jest.mock('../../services/PortfolioTimelineProjection', () => ({
 }));
 
 import { supabase } from '../../db/supabaseClient';
-import { executeCampaignPreemption, PreemptionValidationError } from '../../services/CampaignPreemptionService';
+import { executeCampaignPreemption, PreemptionValidationError, type ExecutePreemptionResult } from '../../services/CampaignPreemptionService';
 import { evaluatePortfolioConstraints } from '../../services/PortfolioConstraintEvaluator';
 
 // Cross-tenant fix (6f, 2026-11-13): a preemption now REQUIRES companyId and both campaigns canonically owned by it.
@@ -95,11 +95,14 @@ describe('Campaign Preemption Execution', () => {
         justification: 'Revenue-critical board commitment for Q4 launch.',
       });
 
-      expect(result.success).toBe(true);
-      expect(result.preemptedCampaignId).toBe(preemptedId);
-      expect(result.preemptedExecutionStatus).toBe('PREEMPTED');
-      expect(result.preemptedBlueprintStatus).toBe('INVALIDATED');
-      expect(result.logId).toBe(logId);
+      // The result is a union (executed | approval required): assert which, then narrow (was 5x TS2339).
+      expect('success' in result).toBe(true);
+      const executed = result as ExecutePreemptionResult;
+      expect(executed.success).toBe(true);
+      expect(executed.preemptedCampaignId).toBe(preemptedId);
+      expect(executed.preemptedExecutionStatus).toBe('PREEMPTED');
+      expect(executed.preemptedBlueprintStatus).toBe('INVALIDATED');
+      expect(executed.logId).toBe(logId);
 
       expect(supabase.from).toHaveBeenCalledWith('campaigns');
       const updateCall = (supabase.from as jest.Mock).mock.results.find(

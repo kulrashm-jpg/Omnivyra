@@ -11,6 +11,10 @@
  * (now REQUIRED), before any read, write or event - in executeCampaignPreemption (which also gates
  * createApprovalRequest) and again at approval (executePreemptionFromRequest), since a request row may predate the fix.
  *
+ * COVERAGE CONDITION (05): this suite must bind EVERY campaign a preemption touches (today: initiator + target). If
+ * a third campaign ever enters the flow, extend it here - the 8 rules suites mock ownership as 'owned' and will stay
+ * silent.
+ *
  * Only the database, identity, governance-event sink and pre-planning are faked; enforceCompanyAccess ->
  * TenantGuard -> campaignOwnershipService run for real. The approve route's cross-company request row is pinned in
  * wsfOrd001ApprovePreemption.
@@ -28,7 +32,7 @@ jest.mock('../../services/GovernanceLockdownService', () => ({ isGovernanceLocke
 jest.mock('../../services/CampaignPrePlanningService', () => ({ runPrePlanning: async () => ({ ok: true }) }));
 
 import {
-  executeCampaignPreemption, executePreemptionFromRequest, PreemptionOwnershipError,
+  createApprovalRequest, executeCampaignPreemption, executePreemptionFromRequest, PreemptionOwnershipError,
 } from '../../services/CampaignPreemptionService';
 /* eslint-disable @typescript-eslint/no-var-requires */
 const executeRoute = require('../../../pages/api/campaigns/execute-preemption').default;
@@ -94,6 +98,21 @@ describe('service: both campaigns must be owned by companyId', () => {
   it("a target that exists NOWHERE is refused on ownership ('not_found' is never 'owned')", async () => {
     await expect(executeCampaignPreemption({ initiatorCampaignId: CAMPAIGN_A, preemptedCampaignId: 'camp-nowhere-0000-0000-000000000000', justification: JUST, companyId: CO_A }))
       .rejects.toMatchObject({ name: 'PreemptionOwnershipError', kind: 'not_owned' });
+  });
+
+  it.each([['empty', ''], ['blank', '   ']])('companyId %s is refused by the INTENTIONAL guard (its own reason), never left to the lookup', async (_n, companyId) => {
+    await expect(executeCampaignPreemption({ initiatorCampaignId: CAMPAIGN_A, preemptedCampaignId: CAMPAIGN_A2, justification: JUST, companyId }))
+      .rejects.toMatchObject({ name: 'PreemptionOwnershipError', message: 'companyId is required for a preemption.' });
+    untouched(CAMPAIGN_A2);
+  });
+
+  it("createApprovalRequest itself refuses another company's target (exercised directly; no request row)", async () => {
+    const before = rows('campaign_preemption_requests').length;
+    await expect(createApprovalRequest(CAMPAIGN_A, CAMPAIGN_B, CO_A)).rejects.toBeInstanceOf(PreemptionOwnershipError);
+    expect(rows('campaign_preemption_requests')).toHaveLength(before);
+    // CONTROL: its own pair is accepted and the row is written
+    await expect(createApprovalRequest(CAMPAIGN_A, CAMPAIGN_A2, CO_A)).resolves.toMatchObject({ status: 'APPROVAL_REQUIRED' });
+    expect(rows('campaign_preemption_requests')).toHaveLength(before + 1);
   });
 
   it('companyId is REQUIRED (missing -> refused before any read)', async () => {

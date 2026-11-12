@@ -70,11 +70,14 @@ export class PreemptionOwnershipError extends Error {
  * preempt).
  */
 async function assertBothOwnedBy(companyId: string, initiatorCampaignId: string, preemptedCampaignId: string): Promise<void> {
-  if (typeof companyId !== 'string' || companyId.trim() === '') {
+  // INTENTIONAL (05): a missing / blank company is refused HERE, with its own reason, before any ownership read -
+  // never left to checkCampaignOwnership's behaviour for an empty string. Trimmed once, and the trimmed value is used.
+  const company = typeof companyId === 'string' ? companyId.trim() : '';
+  if (company === '') {
     throw new PreemptionOwnershipError('not_owned', 'companyId is required for a preemption.');
   }
   for (const campaignId of [initiatorCampaignId, preemptedCampaignId]) {
-    const ownership = await checkCampaignOwnership(String(campaignId ?? ''), companyId);
+    const ownership = await checkCampaignOwnership(String(campaignId ?? ''), company);
     if (ownership === 'lookup_error') throw new PreemptionOwnershipError('unverified', 'Campaign ownership could not be verified.');
     if (ownership !== 'owned') throw new PreemptionOwnershipError('not_owned', 'Campaign not found.');
   }
@@ -100,13 +103,15 @@ function requiresApproval(target: { is_protected?: boolean; priority_level?: str
 /**
  * Create a preemption request and return APPROVAL_REQUIRED.
  */
-async function createApprovalRequest(
+export async function createApprovalRequest(
   initiatorCampaignId: string,
   preemptedCampaignId: string,
   companyId: string
 ): Promise<ApprovalRequiredResult> {
   // A request row names a target another company could later "approve" into a preemption: never create one for a
   // campaign pair the caller's company does not own (also re-checked at approval - executePreemptionFromRequest).
+  // Exported and TESTED directly (05): today its only caller, executeCampaignPreemption, has already checked both
+  // campaigns, so without a direct test this guard would be a comment, not a control.
   await assertBothOwnedBy(companyId, initiatorCampaignId, preemptedCampaignId);
   const { data: requestRow, error } = await ownedDbTable('campaign_preemption_requests')
     .insert({
@@ -430,7 +435,9 @@ export async function executePreemptionFromRequest(
     throw new PreemptionValidationError(`Request is not pending. Current status: ${request.status}`);
   }
 
-  // The request row may predate the cross-tenant fix (a target of ANOTHER company): re-check both at approval.
+  // A request row created BEFORE this fix may name a target OWNED BY ANOTHER COMPANY (target_campaign_id is NOT NULL
+  // and references campaigns since 20260701000000 - the risk is a populated foreign target, never a missing one):
+  // re-check both at approval.
   await assertBothOwnedBy(companyId, request.initiator_campaign_id, request.target_campaign_id);
 
   const result = await performPreemption(
