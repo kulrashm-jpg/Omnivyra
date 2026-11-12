@@ -190,7 +190,8 @@ describe('041-A-O — the SES request', () => {
   });
 
   it('RETURNS THE SES MessageId WITHOUT INVENTING ONE', () => {
-    expect(indexSrc).toMatch(/async function sendViaSES\(envelope: Envelope\): Promise<string \| null>/);
+    // CLASS-2 D3 added `progress` (set just before client.send); the return contract is unchanged.
+    expect(indexSrc).toMatch(/async function sendViaSES\(envelope: Envelope, progress: SendProgress\): Promise<string \| null>/);
     expect(indexSrc).toMatch(/typeof result\?\.MessageId === "string" \? result\.MessageId : null/);
     expect(indexSrc).toMatch(/JSON\.stringify\(\{ ok: true, messageId \}\)/);
     // `ok` keeps its meaning, so callers that read only `ok` are unaffected.
@@ -243,9 +244,11 @@ describe('041-A-O — every pre-existing template is unchanged', () => {
     // the imports, the `lead_outreach` variant and `Envelope`; the three helpers
     // are additionally pinned one by one below so a change to any of them is
     // caught on its own.
+    // Re-pinned by CLASS-2 D3: the only change in this region is the import of ./outcome.ts (the
+    // three helpers below are pinned one by one and are unchanged).
     const helpers = indexSrc.slice(0, indexSrc.indexOf('function render(t: Template)'));
     expect(crypto.createHash('sha256').update(helpers).digest('hex').slice(0, 16))
-      .toBe('2ddc9b5d7373092b');
+      .toBe('75694257d1203f9e');
   });
 
   it.each([

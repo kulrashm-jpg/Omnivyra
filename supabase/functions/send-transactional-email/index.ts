@@ -37,6 +37,7 @@ import { SESClient, SendEmailCommand } from "npm:@aws-sdk/client-ses@3.658.1";
 import { SESv2Client, SendEmailCommand as SendEmailV2Command } from "npm:@aws-sdk/client-sesv2@3.658.1";
 import { authorizeServiceCaller } from "./auth.ts";
 import { escapeHtml, escapeHtmlBlock, safeHref } from "./escape.ts";
+import { classifySendFailure, type SendProgress } from "./outcome.ts";
 import {
   listUnsubscribeHeaders,
   UNSUBSCRIBE_LINK_LABEL,
@@ -323,7 +324,7 @@ function render(t: Template): Envelope {
  * correlated to a send. It is never manufactured — when SES returns nothing,
  * this returns null.
  */
-async function sendViaSES(envelope: Envelope): Promise<string | null> {
+async function sendViaSES(envelope: Envelope, progress: SendProgress): Promise<string | null> {
   // Region is sourced EXCLUSIVELY from AWS_SES_REGION. No fallback to
   // AWS_REGION, no hardcoded default, no `||` chain. If unset, fail loud.
   // .trim() defends against whitespace pasted into the Supabase secrets UI.
@@ -375,6 +376,7 @@ async function sendViaSES(envelope: Envelope): Promise<string | null> {
     },
   });
 
+  progress.providerCalled = true; // CLASS-2 D3: from here a failure may be a lost answer (outcome.ts)
   const result = await client.send(command);
   return typeof result?.MessageId === "string" ? result.MessageId : null;
 }
@@ -388,7 +390,7 @@ async function sendViaSES(envelope: Envelope): Promise<string | null> {
  * events for this message, so a bounce or complaint could never become a
  * suppression. Same credential and region sources as `sendViaSES`.
  */
-async function sendOutreachViaSESv2(envelope: Envelope): Promise<string | null> {
+async function sendOutreachViaSESv2(envelope: Envelope, progress: SendProgress): Promise<string | null> {
   const from             = Deno.env.get("EMAIL_FROM");
   const region           = Deno.env.get("AWS_SES_REGION")?.trim();
   const accessKeyId      = Deno.env.get("AWS_ACCESS_KEY_ID");
@@ -421,6 +423,7 @@ async function sendOutreachViaSESv2(envelope: Envelope): Promise<string | null> 
     },
   });
 
+  progress.providerCalled = true; // CLASS-2 D3: from here a failure may be a lost answer (outcome.ts)
   const result = await client.send(command);
   return typeof result?.MessageId === "string" ? result.MessageId : null;
 }
@@ -521,11 +524,12 @@ Deno.serve(async (req) => {
     }
   }
 
+  const progress: SendProgress = { providerCalled: false };
   try {
     const envelope = render(body);
     const messageId = requestedType === "lead_outreach"
-      ? await sendOutreachViaSESv2(envelope)
-      : await sendViaSES(envelope);
+      ? await sendOutreachViaSESv2(envelope, progress)
+      : await sendViaSES(envelope, progress);
     // PI-041-A-O: `messageId` is ADDITIVE. `ok` keeps its meaning and position, so
     // every existing caller — all of which inspect only `ok` — is unaffected.
     return new Response(JSON.stringify({ ok: true, messageId }), {
@@ -534,7 +538,8 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: message }), {
+    // CLASS-2 D3: `outcome` says whether a retry is safe (not_sent) or may send twice (uncertain).
+    return new Response(JSON.stringify({ error: message, outcome: classifySendFailure(err, progress.providerCalled) }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });

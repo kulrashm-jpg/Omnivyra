@@ -289,7 +289,8 @@ describe('WP3/L5 — the send path (source contract)', () => {
   });
 
   it('only lead_outreach is routed to v2; the seven composed templates keep the v1 path', () => {
-    expect(indexSrc).toMatch(/requestedType === "lead_outreach"\s*\n\s*\? await sendOutreachViaSESv2\(envelope\)\s*\n\s*: await sendViaSES\(envelope\);/);
+    // CLASS-2 D3 added the `progress` argument (where the SES call starts); the routing is unchanged.
+    expect(indexSrc).toMatch(/requestedType === "lead_outreach"\s*\n\s*\? await sendOutreachViaSESv2\(envelope, progress\)\s*\n\s*: await sendViaSES\(envelope, progress\);/);
   });
 
   it('the link is validated BEFORE render and before SES', () => {

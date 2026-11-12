@@ -44,6 +44,7 @@ import {
   computeNextAttemptAt,
 } from '../../../backend/services/emailJobsService';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { EMAIL_OUTCOME_UNCERTAIN_PREFIX, emailSendFailureOutcome } from '../../../backend/services/emailJobSendOutcome';
 
 const BATCH_SIZE = 20;
 
@@ -161,7 +162,7 @@ async function processOne(job: ClaimedJob): Promise<'sent' | 'failed' | 'dead' |
       body,
     });
     if (error) {
-      throw new Error(error.message || 'EDGE_FUNCTION_ERROR');
+      throw Object.assign(new Error(error.message || 'EDGE_FUNCTION_ERROR'), { invokeError: error });
     }
     // The function responds `{ ok, messageId }`, with `messageId: null` when SES
     // returned none — so only a real string is recorded, never the text "null".
@@ -173,6 +174,15 @@ async function processOne(job: ClaimedJob): Promise<'sent' | 'failed' | 'dead' |
     return 'sent';
   } catch (err: any) {
     const message = err?.message ?? String(err);
+    // CLASS-2 D3: a failure that may have SENT (a lost answer, a timeout, a 5xx after SES was called)
+    // is never retried - the retry would send it twice. Dead-lettered for a person, the same verdict
+    // as CMS publishing. Only a failure known to have sent nothing takes the retry path below.
+    const outcome = await emailSendFailureOutcome(err?.invokeError ?? err);
+    if (outcome === 'uncertain') {
+      logger.error('email_jobs_worker_outcome_uncertain', { jobId: job.id, template: job.template_key, error: message });
+      await finalize(job.id, 'dead', { error: `${EMAIL_OUTCOME_UNCERTAIN_PREFIX}: the email may have been sent; check before any resend (${message})` });
+      return 'dead';
+    }
     const willRetry = job.retry_count + 1 < job.max_retries;
     if (willRetry) {
       const next = computeNextAttemptAt(job.retry_count);
