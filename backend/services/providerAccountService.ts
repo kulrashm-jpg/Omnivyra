@@ -348,18 +348,42 @@ export async function createProviderAccount(input: {
   return data as ProviderAccount;
 }
 
+/** A compare-and-set update lost: the stored credentials changed since they were read. */
+export class ProviderAccountConflictError extends Error {
+  constructor(id: string) {
+    super(`updateProviderAccount: credentials for ${id} changed concurrently`);
+    this.name = 'ProviderAccountConflictError';
+  }
+}
+
 export async function updateProviderAccount(
   id: string,
   patch: Partial<Pick<
     ProviderAccount,
     'account_name' | 'credentials_encrypted' | 'rate_limit_per_min' | 'rate_limit_per_day' | 'priority' | 'is_active'
-  >>
+  >>,
+  /**
+   * CLASS 2 (2026-11-12): when the patch's credentials were MERGED onto a read
+   * of the stored envelope, pass that read here. The update then only applies
+   * if the envelope is unchanged (else ProviderAccountConflictError) - a
+   * concurrent PUT or token-refresh write is never silently reverted.
+   */
+  opts?: { expectCredentialsEncrypted: string | null },
 ): Promise<ProviderAccount> {
-  const { data, error } = await ownedDbTable('api_provider_accounts')
+  let q = ownedDbTable('api_provider_accounts')
     .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
+    .eq('id', id);
+  if (opts) {
+    q = opts.expectCredentialsEncrypted === null
+      ? q.is('credentials_encrypted', null)
+      : q.eq('credentials_encrypted', opts.expectCredentialsEncrypted);
+    const { data, error } = await q.select();
+    if (error) throw new Error(`updateProviderAccount: ${error.message}`);
+    const rows = (data ?? []) as ProviderAccount[];
+    if (rows.length !== 1) throw new ProviderAccountConflictError(id);
+    return rows[0];
+  }
+  const { data, error } = await q.select().single();
 
   if (error) throw new Error(`updateProviderAccount: ${error.message}`);
   return data as ProviderAccount;

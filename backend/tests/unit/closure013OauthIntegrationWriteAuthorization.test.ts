@@ -150,6 +150,7 @@ jest.mock('../../services/providerAccountService', () => ({
   buildCredentialEnvelope: via('buildCredentialEnvelope'),
   createProviderAccount: via('createProviderAccount'),
   updateProviderAccount: via('updateProviderAccount'),
+  ProviderAccountConflictError: class ProviderAccountConflictError extends Error {},
   deactivateProviderAccount: via('deactivateProviderAccount'),
   listAccountsForApi: via('listAccountsForApi'),
 }));
