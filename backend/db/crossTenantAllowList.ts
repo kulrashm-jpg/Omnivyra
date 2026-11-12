@@ -97,6 +97,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: "TENANT-FACING HEALTH VIEW (83 ruling, 2026-11-12). external_api_health holds HEALTH METRICS (freshness/reliability scores, last test status/latency, success/failure counts), keyed by api_source_id - never tenant content and never credentials; the stored row also has an informational account_id (the last account to produce a health event), which EVERY reader drops by mapping explicit metric fields (getHealthSnapshot, fetchHealthMapForApiIds, the GET /api/external-apis health map). Its parent external_api_sources is TENANT-OR-PLATFORM (15 platform rows, company_id NULL) whose health is updated by shared fetchers for every tenant, so tenantChildTable (which refuses a tenant-or-platform parent) cannot scope it. GET /api/external-apis reads health ONLY for the sources it just listed after its access check: getPlatformConfigs (tenantOrPlatformTable: own + platform), the catalog (company_id IS NULL), or every source for a platform admin (requirePlatformAdmin). A tenant therefore sees health for its own and platform sources only. Pinned by backend/tests/unit/s2ExternalApiHealthTenant.test.ts 'a tenant never sees another tenant's source or its health'. Reads nothing else cross-tenant.",
     owner: 'virality-e1',
   },
+  {
+    id: 'credit-approval-expiry-sweep',
+    tables: ['credit_action_approvals'],
+    file: 'backend/services/billing/creditApprovalService.ts',
+    reason: "SYSTEM CRON SWEEP (e1, 2026-11-12): expirePendingApprovals runs daily across ALL organizations and sets status = 'expired' on rows that are status = 'pending' AND past expires_at - nothing else. It writes ONE column, only on pending rows (an approved / executed / rejected approval is never touched; the DB guard_approval_post_execute trigger freezes executed rows), returns only the expired ids to the cron, and discloses nothing to any tenant. Pinned by backend/tests/unit/s2CreditApprovalTenant.test.ts 'the expiry sweep only expires pending rows past expires_at'. Reads nothing else cross-tenant.",
+    owner: 'virality-e1',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));

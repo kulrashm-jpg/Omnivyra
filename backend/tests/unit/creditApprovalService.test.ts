@@ -10,6 +10,11 @@
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { rpc: jest.fn(), from: jest.fn() },
 }));
+// S2: approval rows go through the tenant seam (ownedDbTable) - route it to the same `from` mock.
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbTable: (t: string) => jest.requireMock('../../db/supabaseClient').supabase.from(t),
+}));
+const ORG = '11111111-1111-4111-8111-111111111111';
 
 import { supabase } from '../../db/supabaseClient';
 import {
@@ -46,17 +51,17 @@ describe('creditApprovalService', () => {
 
     it('auto-approves when required_approvals = 1', async () => {
       (supabase.rpc as AnyMock).mockResolvedValueOnce({ data: 1, error: null });
-      const upsertMock = jest.fn().mockReturnValue({
+      const insertMock = jest.fn().mockReturnValue({
         select: () => ({
           single: () => Promise.resolve({ data: { id: 'app-1', status: 'approved', required_approvals: 1 }, error: null }),
         }),
       });
-      (supabase.from as AnyMock).mockReturnValue({ upsert: upsertMock });
+      (supabase.from as AnyMock).mockReturnValue({ insert: insertMock });
 
       const res = await proposeApproval({
         actionType: 'admin_grant',
         proposedBy: 'u1',
-        payload: { organizationId: 'o', reason: 'r', amountCredits: 100 },
+        payload: { organizationId: ORG, reason: 'r', amountCredits: 100 },
       });
       expect(res.ok).toBe(true);
       if (res.ok) {
@@ -67,17 +72,17 @@ describe('creditApprovalService', () => {
 
     it('returns pending when threshold > 1', async () => {
       (supabase.rpc as AnyMock).mockResolvedValueOnce({ data: 2, error: null });
-      const upsertMock = jest.fn().mockReturnValue({
+      const insertMock = jest.fn().mockReturnValue({
         select: () => ({
           single: () => Promise.resolve({ data: { id: 'app-2', status: 'pending', required_approvals: 2 }, error: null }),
         }),
       });
-      (supabase.from as AnyMock).mockReturnValue({ upsert: upsertMock });
+      (supabase.from as AnyMock).mockReturnValue({ insert: insertMock });
 
       const res = await proposeApproval({
         actionType: 'admin_grant',
         proposedBy: 'u1',
-        payload: { organizationId: 'o', reason: 'r', amountCredits: 10_000 },
+        payload: { organizationId: ORG, reason: 'r', amountCredits: 10_000 },
       });
       expect(res.ok).toBe(true);
       if (res.ok) {

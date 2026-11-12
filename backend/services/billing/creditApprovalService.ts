@@ -19,6 +19,7 @@
 
 import { randomUUID } from 'crypto';
 import { supabase } from '../../db/supabaseClient';
+import { ownerCompanyOfRow, systemTenantContext, tenantChildTable, tenantTable } from '../../db/tenantTable';
 import { logger } from '../logger';
 import { emitAnomaly, emitFinancialAudit } from './billingAuditEmitter';
 import { incrCounter } from './billingMetrics';
@@ -66,7 +67,7 @@ export type ProposeApprovalResult =
     }
   | {
       ok:      false;
-      code:    'INVALID_PAYLOAD' | 'INSERT_FAILED' | 'INVALID_AMOUNT';
+      code:    'INVALID_PAYLOAD' | 'INSERT_FAILED' | 'INVALID_AMOUNT' | 'CLIENT_REQUEST_CONFLICT';
       message: string;
     };
 
@@ -101,10 +102,25 @@ export async function proposeApproval(args: ProposeApprovalArgs): Promise<Propos
     }
   }
 
+  // S2 tenant seam (e1, 2026-11-12): the approval row belongs to the organization it acts on; a platform admin
+  // proposes it, so the context is a SYSTEM context for that organization (the route already required the
+  // super-admin capability). An organizationId that is not a uuid is refused by the seam.
+  let tenant;
+  try {
+    tenant = systemTenantContext(args.payload.organizationId, 'platform-admin credit approval for this organization');
+  } catch {
+    return { ok: false, code: 'INVALID_PAYLOAD', message: 'organizationId must be a uuid' };
+  }
+  const approvals = tenantTable('credit_action_approvals', tenant);
+
+  // INSERT, never upsert (e1, 2026-11-12). The former `.upsert(..., { onConflict: 'client_request_id' })` OVERWROTE
+  // the existing approval on a retried request - a new primary key, status and approvals_received recomputed (a
+  // pending approval with signatures reset, an approved one un-approved) - and client_request_id is unique across
+  // ALL organizations, so a colliding key could rewrite another organization's approval. Now a duplicate key
+  // REPLAYS the original approval when it is this organization's, and is refused otherwise.
   const id = randomUUID();
-  const { data: row, error } = await supabase
-    .from('credit_action_approvals')
-    .upsert({
+  const { data: row, error } = await approvals
+    .insert({
       id,
       action_type:        args.actionType,
       organization_id:    args.payload.organizationId,
@@ -116,9 +132,28 @@ export async function proposeApproval(args: ProposeApprovalArgs): Promise<Propos
       approval_threshold_met_at: required <= 1 ? new Date().toISOString() : null,
       client_request_id:  args.clientRequestId ?? null,
       metadata:           args.payload.metadata ?? {},
-    }, { onConflict: 'client_request_id', ignoreDuplicates: false })
+    })
     .select('id, status, required_approvals')
     .single();
+
+  if (error && (error as { code?: string }).code === '23505' && args.clientRequestId) {
+    const { data: original, error: replayErr } = await tenantTable('credit_action_approvals', tenant)
+      .select('id, status, required_approvals')
+      .eq('client_request_id', args.clientRequestId)
+      .maybeSingle();
+    const o = original as { id: string; status: string; required_approvals: number } | null;
+    if (!replayErr && o && (o.status === 'pending' || o.status === 'approved')) {
+      return {
+        ok:                true,
+        approvalId:        o.id,
+        requiredApprovals: Number(o.required_approvals),
+        status:            o.status,
+        autoApproved:      false,
+      };
+    }
+    // Not this organization's request, or already executed / rejected / expired: never reuse or overwrite it.
+    return { ok: false, code: 'CLIENT_REQUEST_CONFLICT', message: 'client request id already used' };
+  }
 
   if (error) {
     logger.error('approval_insert_failed', { actionType: args.actionType, message: error.message });
@@ -219,9 +254,11 @@ export async function markApprovalExecuted(args: {
   executedIdempotencyKey: string;
   actorUserId:          string;
 }): Promise<{ ok: true } | { ok: false; code: 'NOT_FOUND' | 'ALREADY_EXECUTED' | 'NOT_APPROVED'; message: string }> {
-  // 1. Lock + fetch
-  const { data: current, error: fetchErr } = await supabase
-    .from('credit_action_approvals')
+  // 1. Fetch - under the approval's OWN organization (derived from the row, S2 seam).
+  const owner = await ownerCompanyOfRow('credit_action_approvals', args.approvalId, 'execute a platform-admin credit approval');
+  if (!owner) return { ok: false, code: 'NOT_FOUND', message: 'approval row not found' };
+  const tenant = systemTenantContext(owner, 'execute a platform-admin credit approval');
+  const { data: current, error: fetchErr } = await tenantTable('credit_action_approvals', tenant)
     .select('id, status, executed_at, payload, action_type, organization_id')
     .eq('id', args.approvalId)
     .maybeSingle();
@@ -237,8 +274,7 @@ export async function markApprovalExecuted(args: {
     return { ok: false, code: 'NOT_APPROVED', message: `status=${row.status}` };
   }
 
-  const { error: updErr } = await supabase
-    .from('credit_action_approvals')
+  const { error: updErr } = await tenantTable('credit_action_approvals', tenant)
     .update({
       executed_at:              new Date().toISOString(),
       executed_idempotency_key: args.executedIdempotencyKey,
@@ -277,9 +313,15 @@ export async function getApprovalDetails(approvalId: string): Promise<{
   approval: Record<string, unknown> | null;
   signatures: Array<Record<string, unknown>>;
 }> {
+  // S2 seam: read under the approval's OWN organization (derived from the row); an unknown id reads nothing.
+  const owner = await ownerCompanyOfRow('credit_action_approvals', approvalId, 'inspect a platform-admin credit approval');
+  if (!owner) return { approval: null, signatures: [] };
+  const tenant = systemTenantContext(owner, 'inspect a platform-admin credit approval');
+  // tenantChildTable is async: it verifies the parent approval is this organization's before returning the handle.
+  const signatures = await tenantChildTable('credit_action_approval_signatures', tenant, approvalId);
   const [approvalRes, sigRes] = await Promise.all([
-    supabase.from('credit_action_approvals').select('*').eq('id', approvalId).maybeSingle(),
-    supabase.from('credit_action_approval_signatures').select('*').eq('approval_id', approvalId).order('signed_at', { ascending: true }),
+    tenantTable('credit_action_approvals', tenant).select('*').eq('id', approvalId).maybeSingle(),
+    signatures.select('*').order('signed_at', { ascending: true }),
   ]);
   return {
     approval:   (approvalRes.data as Record<string, unknown> | null) ?? null,
@@ -291,6 +333,8 @@ export async function getApprovalDetails(approvalId: string): Promise<{
  * Reaper for expired pending approvals — called from a daily cron.
  */
 export async function expirePendingApprovals(): Promise<{ expired: number }> {
+  // A daily cron across ALL organizations: pending approvals past expires_at become 'expired' (status only).
+  // cross-tenant: credit-approval-expiry-sweep
   const { data, error } = await supabase
     .from('credit_action_approvals')
     .update({ status: 'expired' })
