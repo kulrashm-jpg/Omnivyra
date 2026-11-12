@@ -9,6 +9,7 @@ import {
   reorderCollection,
   deleteCollection,
   getCollectionCompanyId,
+  ForeignTemplateReferenceError,
 } from '../../../../backend/services/creator/collectionService';
 
 /**
@@ -39,6 +40,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const body = (req.body || {}) as Record<string, unknown>;
     const op = String(body.op || 'edit');
     let updated = null;
+    // A template id from ANOTHER company (add / cover / reorder) is refused
+    // (SECURITY 2026-11-11) - 400, never stored, never resolved.
+    try {
     if (op === 'add' && typeof body.template_id === 'string') updated = await addTemplateToCollection(id, body.template_id);
     else if (op === 'remove' && typeof body.template_id === 'string') updated = await removeTemplateFromCollection(id, body.template_id);
     else if (op === 'reorder' && Array.isArray(body.ordered_ids)) updated = await reorderCollection(id, body.ordered_ids.filter((x): x is string => typeof x === 'string'));
@@ -50,6 +54,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       tags: Array.isArray(body.tags) ? body.tags.filter((x): x is string => typeof x === 'string') : undefined,
       coverTemplateId: typeof body.cover_template_id === 'string' ? body.cover_template_id : undefined,
     });
+    } catch (err) {
+      if (err instanceof ForeignTemplateReferenceError) return res.status(400).json({ error: 'A referenced template is not available to this company.', code: 'FOREIGN_TEMPLATE' });
+      throw err;
+    }
     if (!updated) return res.status(503).json({ error: 'Could not update collection.' });
     return res.status(200).json({ collection: updated });
   }

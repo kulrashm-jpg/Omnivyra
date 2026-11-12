@@ -64,7 +64,7 @@ export async function recommendDesignSystems(input: { companyId: string; strateg
   if (!collections.length) return [];
 
   const allIds = Array.from(new Set(collections.flatMap((c) => c.templateIds)));
-  const resolve = await buildResolver(allIds);
+  const resolve = await buildResolver(allIds, input.companyId);
   const context = await assembleContext(input.companyId, input.strategy);
 
   // REAL historical compatibility + measured reasons from published-asset
