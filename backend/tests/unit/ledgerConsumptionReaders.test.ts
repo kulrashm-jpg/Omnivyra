@@ -13,6 +13,7 @@ export {};
 
 type Row = Record<string, any>;
 const mockTables: Record<string, Row[]> = {};
+const mockFailing = new Set<string>();
 
 function mockFrom(table: string) {
   const filters: Array<(r: Row) => boolean> = [];
@@ -43,9 +44,9 @@ function mockFrom(table: string) {
       return b;
     },
     upsert: (v: Row) => b.insert(v),
-    maybeSingle: async () => ({ data: rows()[0] ?? null, error: null }),
-    single: async () => ({ data: rows()[0] ?? null, error: null }),
-    then: (ok: any, ko: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, ko),
+    maybeSingle: async () => (mockFailing.has(table) ? { data: null, error: { message: 'down' } } : { data: rows()[0] ?? null, error: null }),
+    single: async () => (mockFailing.has(table) ? { data: null, error: { message: 'down' } } : { data: rows()[0] ?? null, error: null }),
+    then: (ok: any, ko: any) => Promise.resolve(mockFailing.has(table) ? { data: null, error: { message: 'down' } } : { data: rows(), error: null, count: rows().length }).then(ok, ko),
   };
   return b;
 }
@@ -79,6 +80,7 @@ const PERIOD = { periodStart: new Date(NOW - 2 * 86400_000).toISOString(), perio
 const EXPECTED_CONSUMED = 22;
 function seed() {
   for (const k of Object.keys(mockTables)) delete mockTables[k];
+  mockFailing.clear();
   const tx = (r: Row): Row => ({ organization_id: ORG, usd_equivalent: null, reference_id: null, metadata: null, free_delta: 0, paid_delta: 0, incentive_delta: 0, ...r });
   mockTables.credit_transactions = [
     tx({ id: 'g1', execution_phase: 'grant', idempotency_key: 'g:grant', credits_delta: 100, free_delta: 100, reference_type: 'grant', created_at: at(60) }),
@@ -179,6 +181,83 @@ it('CROSS-READER CONSISTENCY: every reader agrees with the ledger (sum of consum
   expect({ forecast, weekly, exported, econConfirmed, snapshot, invoiced }).toEqual({
     forecast: EXPECTED_CONSUMED, weekly: EXPECTED_CONSUMED, exported: EXPECTED_CONSUMED,
     econConfirmed: EXPECTED_CONSUMED, snapshot: EXPECTED_CONSUMED, invoiced: EXPECTED_CONSUMED,
+  });
+});
+
+describe("USD at read time (e9 ruling b): a charge with no recorded USD is derived from the current rate and LABELLED estimated", () => {
+  // p2 (the partial confirm) carries NO usd_equivalent, as the live bodies write it.
+  const noUsd = () => {
+    mockTables.credit_transactions = mockTables.credit_transactions.map((r) => (r.id === 'p2' ? { ...r, usd_equivalent: null } : r));
+    mockTables.organization_credits[0].credit_rate_usd = 0.02; // 12 credits -> 0.24 USD
+  };
+
+  it('forecastUsage: observedUsd includes the derived 0.24 and usdEstimated is true', async () => {
+    noUsd();
+    const f = await forecastUsage({ organizationId: ORG, ...PERIOD });
+    expect(f!.observedUsd).toBeCloseTo(0.1 + 0.24, 6);
+    expect(f!.usdEstimated).toBe(true);
+  });
+
+  it('takeUsageSnapshot: totalUsd includes it; the action is flagged in by_action (persisted) and on the result', async () => {
+    noUsd();
+    const s = await takeUsageSnapshot({ organizationId: ORG, ...PERIOD });
+    expect(s.totalUsd).toBeCloseTo(0.34, 6);
+    expect(s.usdEstimated).toBe(true);
+    expect(s.byAction.llm_chat).toMatchObject({ usdEstimated: true });
+    expect(s.byAction.content_basic.usdEstimated).toBeUndefined();
+    const stored = mockTables.usage_billing_snapshots[0];
+    expect(stored.by_action.llm_chat.usdEstimated).toBe(true);           // the label survives the snapshot
+    const again = await takeUsageSnapshot({ organizationId: ORG, ...PERIOD });
+    expect(again).toMatchObject({ alreadyExists: true, usdEstimated: true });
+  });
+
+  it('prepareDraftInvoice: the line bills 0.24 and is LABELLED estimated (description + metadata); the recorded line is not', async () => {
+    noUsd();
+    const inv = (await prepareDraftInvoice({ organizationId: ORG, ...PERIOD, preparedBy: 'admin' }))!;
+    const llm = inv.lineItems.find((li) => li.referenceType === 'llm_chat')!;
+    expect(llm.subtotal).toBeCloseTo(0.24, 6);
+    expect(llm.usdEstimated).toBe(true);
+    expect(llm.description).toMatch(/USD estimated at the current credit rate/);
+    expect(inv.lineItems.find((li) => li.referenceType === 'content_basic')!.usdEstimated).toBeUndefined();
+    expect(inv.usdEstimated).toBe(true);
+    expect(mockTables.invoices[0].metadata).toMatchObject({ usd_estimated: true });
+    expect(mockTables.invoice_line_items.find((li) => li.reference_type === 'llm_chat')!.description).toMatch(/estimated/);
+  });
+
+  it('exportCompanyUsage: each row carries usd_amount + usd_estimated; the recorded column is exported unchanged', async () => {
+    noUsd();
+    const rows = JSON.parse((await exportCompanyUsage({ format: 'json' as any, requestedBy: 'a', organizationId: ORG })).body);
+    const p2 = rows.find((r: Row) => r.id === 'p2');
+    expect(p2).toMatchObject({ usd_equivalent: null, usd_estimated: true });
+    expect(p2.usd_amount).toBeCloseTo(0.24, 6);
+    expect(rows.find((r: Row) => r.id === 'c1')).toMatchObject({ usd_amount: 0.1, usd_estimated: false });
+  });
+
+  it('the ledger is NEVER rewritten: no credit_transactions row changes', async () => {
+    noUsd();
+    const before = JSON.stringify(mockTables.credit_transactions);
+    await prepareDraftInvoice({ organizationId: ORG, ...PERIOD, preparedBy: 'a' });
+    await takeUsageSnapshot({ organizationId: ORG, ...PERIOD });
+    expect(JSON.stringify(mockTables.credit_transactions)).toBe(before);
+  });
+
+  it('a FAILED rate read refuses (never prices from a guessed rate): no invoice, no snapshot, no forecast, nothing written', async () => {
+    noUsd();
+    mockFailing.add('organization_credits');
+    await expect(prepareDraftInvoice({ organizationId: ORG, ...PERIOD, preparedBy: 'a' })).resolves.toBeNull();
+    await expect(takeUsageSnapshot({ organizationId: ORG, ...PERIOD })).resolves.toMatchObject({ ok: false });
+    await expect(forecastUsage({ organizationId: ORG, ...PERIOD })).resolves.toBeNull();
+    await expect(exportCompanyUsage({ format: 'json' as any, requestedBy: 'a', organizationId: ORG })).rejects.toThrow(/credit rate read failed/);
+    expect(mockTables.invoices ?? []).toEqual([]);
+    expect(mockTables.usage_billing_snapshots ?? []).toEqual([]);
+  });
+
+  it('control: every charge has a recorded USD -> nothing estimated and the rate is never read', async () => {
+    delete mockTables.organization_credits; // a rate read would now find nothing
+    const inv = (await prepareDraftInvoice({ organizationId: ORG, ...PERIOD, preparedBy: 'a' }))!;
+    expect(inv.usdEstimated).toBe(false);
+    expect(inv.lineItems.every((li) => li.usdEstimated === undefined)).toBe(true);
+    expect((await forecastUsage({ organizationId: ORG, ...PERIOD }))!.usdEstimated).toBe(false);
   });
 });
 

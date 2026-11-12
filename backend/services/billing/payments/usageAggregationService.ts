@@ -13,6 +13,7 @@
 import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
 import { CONSUMPTION_PHASES } from '../ledgerPhases';
+import { loadCurrentCreditRateUsd, needsDerivedUsd, rowUsd } from '../ledgerUsd';
 
 export interface UsageSnapshotArgs {
   organizationId: string;
@@ -27,7 +28,9 @@ export interface UsageSnapshotResult {
   totalUsd:        number;
   llmInputTokens:  number;
   llmOutputTokens: number;
-  byAction:        Record<string, { credits: number; usd: number; count: number }>;
+  byAction:        Record<string, { credits: number; usd: number; count: number; usdEstimated?: boolean }>;
+  /** true when part of totalUsd was derived at read time (e9 ruling b); per action in byAction. */
+  usdEstimated?:   boolean;
   alreadyExists?:  boolean;
   error?:          string;
 }
@@ -57,7 +60,8 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
       totalUsd:        Number(e.total_usd_equivalent ?? 0),
       llmInputTokens:  Number(e.llm_input_tokens ?? 0),
       llmOutputTokens: Number(e.llm_output_tokens ?? 0),
-      byAction:        (e.by_action ?? {}) as Record<string, { credits: number; usd: number; count: number }>,
+      byAction:        (e.by_action ?? {}) as Record<string, { credits: number; usd: number; count: number; usdEstimated?: boolean }>,
+      usdEstimated:    Object.values((e.by_action ?? {}) as Record<string, { usdEstimated?: boolean }>).some((a) => a?.usdEstimated === true),
       alreadyExists:   true,
     };
   }
@@ -76,19 +80,29 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
   }
   const txns = (confirmRows ?? []) as Array<{ credits_delta: number; usd_equivalent: number | null; reference_type: string | null }>;
 
+  // A charge with no recorded USD is priced at read time and marked estimated
+  // (the flag is stored per action in by_action, so it survives the snapshot).
+  let rate = 0;
+  if (needsDerivedUsd(txns)) {
+    try { rate = await loadCurrentCreditRateUsd(args.organizationId); } catch (e) {
+      return { ok: false, totalCredits: 0, totalUsd: 0, llmInputTokens: 0, llmOutputTokens: 0, byAction: {}, error: (e as Error).message };
+    }
+  }
   let totalCredits = 0;
   let totalUsd = 0;
-  const byAction: Record<string, { credits: number; usd: number; count: number }> = {};
+  let usdEstimated = false;
+  const byAction: Record<string, { credits: number; usd: number; count: number; usdEstimated?: boolean }> = {};
   for (const r of txns) {
     const credits = Math.abs(Number(r.credits_delta ?? 0));
-    const usd     = Number(r.usd_equivalent ?? 0);
+    const u       = rowUsd(r, rate);
     const key     = r.reference_type ?? 'unknown';
     totalCredits += credits;
-    totalUsd     += usd;
+    totalUsd     += u.usd;
     byAction[key] = byAction[key] ?? { credits: 0, usd: 0, count: 0 };
     byAction[key].credits += credits;
-    byAction[key].usd     += usd;
+    byAction[key].usd     += u.usd;
     byAction[key].count   += 1;
+    if (u.estimated) { byAction[key].usdEstimated = true; usdEstimated = true; }
   }
 
   // 3. Pull LLM token rollup if usage_meter_monthly exists for this period.
@@ -161,6 +175,6 @@ export async function takeUsageSnapshot(args: UsageSnapshotArgs): Promise<UsageS
 
   return {
     ok: true, snapshotId: (inserted as { id?: string } | null)?.id,
-    totalCredits, totalUsd, llmInputTokens, llmOutputTokens, byAction,
+    totalCredits, totalUsd, llmInputTokens, llmOutputTokens, byAction, usdEstimated,
   };
 }

@@ -17,6 +17,7 @@ import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
 import { incrCounter } from '../billingMetrics';
 import { CONSUMPTION_PHASES } from '../ledgerPhases';
+import { ESTIMATED_USD_LABEL, loadCurrentCreditRateUsd, needsDerivedUsd, rowUsd } from '../ledgerUsd';
 
 export interface PrepareInvoiceArgs {
   organizationId: string;
@@ -39,7 +40,11 @@ export interface InvoiceDraft {
     unitPrice:      number;
     subtotal:       number;
     referenceType?: string;
+    /** true when the line's USD was derived at read time (e9 ruling b). */
+    usdEstimated?:  boolean;
   }>;
+  /** true when any line's USD was derived at read time; the draft is labelled. */
+  usdEstimated:     boolean;
 }
 
 export async function prepareDraftInvoice(args: PrepareInvoiceArgs): Promise<InvoiceDraft | null> {
@@ -62,16 +67,27 @@ export async function prepareDraftInvoice(args: PrepareInvoiceArgs): Promise<Inv
   const rows = (txns ?? []) as Array<{ credits_delta: number; usd_equivalent: number | null; reference_type: string | null }>;
   if (rows.length === 0) return null;
 
+  // A charge with no recorded USD is priced at read time (the ledger is never
+  // rewritten) and the line is LABELLED estimated (e9 ruling b).
+  let rate = 0;
+  if (needsDerivedUsd(rows)) {
+    try { rate = await loadCurrentCreditRateUsd(args.organizationId); } catch (e) {
+      logger.error('invoice_rate_read_failed', { org: args.organizationId, message: (e as Error).message });
+      return null;
+    }
+  }
+
   // 2. Group by reference_type so each action is a line item.
-  const groups = new Map<string, { credits: number; usd: number; count: number }>();
+  const groups = new Map<string, { credits: number; usd: number; count: number; estimated: boolean }>();
   for (const r of rows) {
     const key = r.reference_type ?? 'unknown';
-    const usd = Number(r.usd_equivalent ?? 0);
+    const u = rowUsd(r, rate);
     const credits = Math.abs(Number(r.credits_delta ?? 0));
-    const cur = groups.get(key) ?? { credits: 0, usd: 0, count: 0 };
+    const cur = groups.get(key) ?? { credits: 0, usd: 0, count: 0, estimated: false };
     cur.credits += credits;
-    cur.usd     += usd;
+    cur.usd     += u.usd;
     cur.count   += 1;
+    if (u.estimated) cur.estimated = true;
     groups.set(key, cur);
   }
 
@@ -80,11 +96,12 @@ export async function prepareDraftInvoice(args: PrepareInvoiceArgs): Promise<Inv
   for (const [refType, agg] of groups) {
     const unitPrice = agg.credits > 0 ? agg.usd / agg.credits : 0;
     lineItems.push({
-      description:   `Usage: ${refType} (${agg.count} events, ${agg.credits} credits)`,
+      description:   `Usage: ${refType} (${agg.count} events, ${agg.credits} credits)${agg.estimated ? ` - ${ESTIMATED_USD_LABEL}` : ''}`,
       quantity:      agg.credits,
       unitPrice,
       subtotal:      agg.usd,
       referenceType: refType,
+      ...(agg.estimated ? { usdEstimated: true } : {}),
     });
     subtotal += agg.usd;
   }
@@ -103,7 +120,7 @@ export async function prepareDraftInvoice(args: PrepareInvoiceArgs): Promise<Inv
     tax_amount:     0,
     total_amount:   subtotal,
     status:         'draft',
-    metadata:       { prepared_by: args.preparedBy, ...(args.metadata ?? {}) },
+    metadata:       { prepared_by: args.preparedBy, ...(args.metadata ?? {}), ...(lineItems.some((li) => li.usdEstimated) ? { usd_estimated: true } : {}) },
   });
   if (invErr) {
     logger.error('invoice_draft_insert_failed', { org: args.organizationId, message: invErr.message });
@@ -137,5 +154,6 @@ export async function prepareDraftInvoice(args: PrepareInvoiceArgs): Promise<Inv
     totalAmount:    subtotal,
     currency,
     lineItems,
+    usdEstimated: lineItems.some((li) => li.usdEstimated === true),
   };
 }

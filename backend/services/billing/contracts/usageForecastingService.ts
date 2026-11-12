@@ -15,6 +15,7 @@
 import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
 import { CONSUMPTION_PHASES } from '../ledgerPhases';
+import { loadCurrentCreditRateUsd, needsDerivedUsd, rowUsd } from '../ledgerUsd';
 
 export interface ForecastResult {
   organizationId:    string;
@@ -28,6 +29,8 @@ export interface ForecastResult {
   daysRemaining:     number;
   dailyBurnRate:     number;
   isAccelerating:    boolean;            // 7d avg > 30d avg
+  /** true when part of observedUsd / projectedUsd was derived at read time (e9 ruling b). */
+  usdEstimated:      boolean;
 }
 
 export async function forecastUsage(args: {
@@ -59,6 +62,15 @@ export async function forecastUsage(args: {
     return null;
   }
   const rows = (data ?? []) as Array<{ credits_delta: number; usd_equivalent: number | null; created_at: string }>;
+  // A charge with no recorded USD is priced at read time and marked estimated.
+  let rate = 0;
+  if (needsDerivedUsd(rows)) {
+    try { rate = await loadCurrentCreditRateUsd(args.organizationId); } catch (e) {
+      logger.warn('forecast_rate_read_failed', { orgId: args.organizationId, message: (e as Error).message });
+      return null;
+    }
+  }
+  let usdEstimated = false;
 
   let observedCredits = 0;
   let observedUsd     = 0;
@@ -69,7 +81,9 @@ export async function forecastUsage(args: {
   for (const r of rows) {
     const credits = Math.abs(Number(r.credits_delta ?? 0));
     observedCredits += credits;
-    observedUsd     += Number(r.usd_equivalent ?? 0);
+    const u = rowUsd(r, rate);
+    observedUsd     += u.usd;
+    if (u.estimated) usdEstimated = true;
     const ts = Date.parse(r.created_at);
     if (ts >= sevenDaysAgoMs)  recent7dCredits  += credits;
     if (ts >= thirtyDaysAgoMs) recent30dCredits += credits;
@@ -91,6 +105,7 @@ export async function forecastUsage(args: {
     daysRemaining,
     dailyBurnRate,
     isAccelerating:   (recent7dCredits / 7) > (recent30dCredits / 30),
+    usdEstimated,
   };
 }
 
