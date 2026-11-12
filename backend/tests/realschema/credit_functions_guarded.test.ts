@@ -310,6 +310,33 @@ describe('apply_credit_partial_confirm_guarded (owner over-confirm rulings)', ()
     });
   });
 
+  // e9 ruling (2026-11-12): the charge carries its USD. Neither live body wrote
+  // usd_equivalent, so every partial-confirm charge billed $0.
+  it("usd_equivalent = consumed x the org's credit rate at settle time (no rate on the hold)", async () => {
+    await inRollback(async () => {
+      await seed(ORG, { free: 10, paid: 50 });
+      await db.query('UPDATE public.organization_credits SET credit_rate_usd = 0.02 WHERE organization_id = $1', [ORG]);
+      const h = await hold(ORG, { free: 10 }, 'usd1:hold');
+      const r = await partial(ORG, h, { free: 15 }, 'usd1:confirm'); // over-run: 15 consumed
+      expect(Number(r.usd_equivalent)).toBeCloseTo(0.3, 6);
+      const row = (await db.query(`SELECT usd_equivalent FROM public.credit_transactions WHERE idempotency_key = 'usd1:confirm'`)).rows[0];
+      expect(Number(row.usd_equivalent)).toBeCloseTo(0.3, 6);
+    });
+  });
+
+  it("a HOLD that carries a USD rate wins over the wallet's current rate", async () => {
+    await inRollback(async () => {
+      await seed(ORG, { free: 10 });
+      // a hold priced at 0.05/credit (written directly: the delegate never sets usd)
+      const h = (await db.query(
+        `INSERT INTO public.credit_transactions (organization_id, transaction_type, credits_delta, idempotency_key, execution_phase, category, free_delta, paid_delta, incentive_delta, usd_equivalent)
+         VALUES ($1, 'deduction', -10, 'usd2:hold', 'hold', 'free', -10, 0, 0, 0.5) RETURNING id`, [ORG])).rows[0].id;
+      await db.query('UPDATE public.organization_credits SET free_balance = 0, reserved_free = 10 WHERE organization_id = $1', [ORG]);
+      const r = await partial(ORG, h, { free: 4 }, 'usd2:confirm');
+      expect(Number(r.usd_equivalent)).toBeCloseTo(0.2, 6); // 4 x 0.05, not 4 x 0.01
+    });
+  });
+
   it('refuses a missing parent / key, a foreign-org parent and negative amounts', async () => {
     await inRollback(async () => {
       await seed(ORG, { free: 10 });

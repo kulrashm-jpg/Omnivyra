@@ -44,6 +44,10 @@
 --         (prod today draws each category's excess from that category only);
 --       - an uncovered shortfall is RECORDED (is_underfunded + note), never
 --         refused; no balance goes negative;
+--       - usd_equivalent is WRITTEN on the confirm_partial row (e9 ruling):
+--         consumed credits x the HOLD's rate when the hold carries one, else
+--         the org's credit_rate_usd at settle time (the locked wallet row).
+--         Neither live body writes it, so those charges billed $0 USD;
 --       - the released remainder gets its OWN ledger row (execution_phase
 --         'release', parent = the hold, key <confirm key>:remainder) for audit
 --         truth; prod folds it into the confirm row.
@@ -95,7 +99,7 @@ BEGIN
   END IF;
   SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p
    WHERE p.oid = to_regprocedure('public.apply_credit_partial_confirm_guarded(uuid,uuid,integer,integer,integer,text,text,text,text,uuid)');
-  IF v_md5 IS NOT NULL AND v_md5 NOT IN ('cce149fbd1c7a1ffa41b59e9cf59ffe6', '764384d45f4ef841117ffb46d537d4c3') THEN
+  IF v_md5 IS NOT NULL AND v_md5 NOT IN ('e21be030abde5f40fe2e20fe5faaa9e5', 'bf49865c2c169166343f1f86ee372931') THEN
     RAISE EXCEPTION 'credit_guarded: apply_credit_partial_confirm_guarded already exists with a FOREIGN body (md5 %) - nothing changed', v_md5;
   END IF;
 END
@@ -224,6 +228,7 @@ DECLARE
   v_consumed_total  int;
   v_released_total  int;
   v_remainder_key   text;
+  v_rate            numeric;
 BEGIN
   IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: partial confirm requires an idempotency key';
@@ -293,6 +298,15 @@ BEGIN
     RAISE EXCEPTION 'no_credit_account: org %', p_org_id;
   END IF;
 
+  -- USD rate for this charge (e9 ruling, 2026-11-12): the HOLD's own rate if it
+  -- carries one; otherwise the org's credit rate at settle time, read from the
+  -- wallet row this transaction has just locked.
+  IF v_hold.usd_equivalent IS NOT NULL AND COALESCE(v_hold.credits_delta, 0) <> 0 THEN
+    v_rate := abs(v_hold.usd_equivalent) / abs(v_hold.credits_delta);
+  ELSE
+    v_rate := v_wallet.credit_rate_usd;
+  END IF;
+
   -- (1) consume from reserved + (2) release the unused hold back to the balance.
   UPDATE public.organization_credits SET
     reserved_free      = GREATEST(0, reserved_free      - v_consume_free      - v_release_free),
@@ -352,7 +366,7 @@ BEGIN
     organization_id, transaction_type, credits_delta, balance_after,
     reference_type, reference_id, note, performed_by, idempotency_key,
     execution_phase, parent_transaction_id, category,
-    free_delta, paid_delta, incentive_delta, is_underfunded, created_at
+    free_delta, paid_delta, incentive_delta, is_underfunded, usd_equivalent, created_at
   ) VALUES (
     p_org_id, 'deduction', -v_consumed_total,
     (v_wallet.free_balance + v_wallet.paid_balance + v_wallet.incentive_balance)
@@ -365,7 +379,7 @@ BEGIN
     -(v_consume_free      + v_extra_free),
     -(v_consume_paid      + v_extra_paid),
     -(v_consume_incentive + v_extra_incentive),
-    v_is_underfunded, NOW()
+    v_is_underfunded, round(v_consumed_total * v_rate, 6), NOW()
   )
   RETURNING * INTO v_tx_row;
 
@@ -381,7 +395,8 @@ BEGIN
     'shortfall_total',    v_shortfall,
     'is_underfunded',     v_is_underfunded,
     'total_consumed',     v_consumed_total,
-    'total_released',     v_released_total
+    'total_released',     v_released_total,
+    'usd_equivalent',     v_tx_row.usd_equivalent
   );
 END;
 $fn$;
@@ -398,7 +413,7 @@ BEGIN
   FOR r IN
     SELECT p.oid::regprocedure AS sig, p.prosecdef, p.proconfig, md5(p.prosrc) AS m,
            CASE WHEN p.proname = 'apply_credit_reservation_guarded' THEN ARRAY['d48341eac02fe4482c132ed0c5215a41', 'ceb593fd52a7438aea55ed0d939b6ac2']
-                ELSE ARRAY['cce149fbd1c7a1ffa41b59e9cf59ffe6', '764384d45f4ef841117ffb46d537d4c3'] END AS expect
+                ELSE ARRAY['e21be030abde5f40fe2e20fe5faaa9e5', 'bf49865c2c169166343f1f86ee372931'] END AS expect
       FROM pg_proc p
      WHERE p.oid IN (to_regprocedure('public.apply_credit_reservation_guarded(uuid,text,integer,integer,integer,text,text,text,text,uuid,uuid,text)'),
                      to_regprocedure('public.apply_credit_partial_confirm_guarded(uuid,uuid,integer,integer,integer,text,text,text,text,uuid)'))
