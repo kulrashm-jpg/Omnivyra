@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../../lib/auth/emailAddressPolicy';
 
 /**
  * POST /api/auth/verify-email
@@ -23,6 +24,7 @@ import {
   resolveAuthenticatedUser,
 } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
+import { incrementAuthMetric } from '../../../backend/services/authMetrics';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 import {
@@ -111,6 +113,14 @@ async function handler(
     }
 
     const email = identity.email?.toLowerCase() ?? '';
+
+    // Email-address policy (e1, 2026-11-12; e9 ruling): this path CREATES the users row, so a refused address
+    // creates nothing. Terminal and non-500 (403 EMAIL_NOT_ACCEPTED).
+    if (!isAcceptableEmailAddress(email)) {
+      logger.warn('auth.email_policy_refused', { endpoint: 'verify-email', supabaseUid: identity.supabaseUid });
+      incrementAuthMetric('auth_email_policy_refused', { endpoint: 'verify-email' });
+      return res.status(403).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE, code: 'EMAIL_NOT_ACCEPTED' });
+    }
 
     const insertResult = await supabase
       .from('users')

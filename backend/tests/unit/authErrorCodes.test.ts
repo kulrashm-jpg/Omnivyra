@@ -17,11 +17,13 @@ import {
 } from '../../../shared/contracts/security/AuthErrorCodes';
 
 describe('SESSION_FATAL_AUTH_CODES', () => {
-  it('includes exactly the three codes that should force sign-out', () => {
+  it('includes exactly the four codes that should force sign-out', () => {
     expect(SESSION_FATAL_AUTH_CODES.has(AUTH_ERROR_CODE.INVALID_SESSION)).toBe(true);
     expect(SESSION_FATAL_AUTH_CODES.has(AUTH_ERROR_CODE.ACCOUNT_DELETED)).toBe(true);
     expect(SESSION_FATAL_AUTH_CODES.has(AUTH_ERROR_CODE.ACCOUNT_DISABLED)).toBe(true);
-    expect(SESSION_FATAL_AUTH_CODES.size).toBe(3);
+    // e1 2026-11-12: a refused email address is permanent for that address - sign out and explain, never loop.
+    expect(SESSION_FATAL_AUTH_CODES.has(AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED)).toBe(true);
+    expect(SESSION_FATAL_AUTH_CODES.size).toBe(4);
   });
 
   it('does NOT include any lifecycle / schema / load-failure code', () => {

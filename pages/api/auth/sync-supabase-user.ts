@@ -29,6 +29,7 @@ import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditS
 import { issueMfaIntent, userHasVerifiedMfaFactor } from '../../../backend/security/MfaIntent';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
+import { isAcceptableEmailAddress } from '../../../lib/auth/emailAddressPolicy';
 import { incrementAuthMetric } from '../../../backend/services/authMetrics';
 
 // The signup-intent company bootstrap is disabled (see
@@ -278,6 +279,20 @@ async function handler(
     }
     await projectSession(existingUserId);
     return res.status(200).json({ ok: true });
+  }
+
+  // ── Email-address policy (e1, 2026-11-12; e9 ruling) ─────────────────────
+  // The provider (GoTrue / OAuth) may accept an address this app refuses - e.g. a quoted local part with commas.
+  // From here on the address is WRITTEN or used to LINK a row, so a refused address creates nothing: no users row,
+  // no supabase_uid stamped on an existing row found by email. A returning user whose row is already bound to this
+  // exact supabase_uid (the branch above) is not re-judged - that update never writes the address, and refusing it
+  // would lock out an existing account. Terminal and session-fatal (EMAIL_NOT_ACCEPTED, 403): the clients sign out
+  // and explain, so there is no login loop.
+  if (!isAcceptableEmailAddress(email)) {
+    logger.warn('auth.email_policy_refused', { endpoint: 'sync-supabase-user', supabaseUid });
+    incrementAuthMetric('auth_email_policy_refused', { endpoint: 'sync-supabase-user' });
+    sendAuthError(res, AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED);
+    return;
   }
 
   // Second try: row exists by email (invited user or Firebase-migrated user) —

@@ -44,7 +44,7 @@ async function handler(
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { email } = body as { email?: string };
 
-  if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
+  if (typeof email !== 'string' || !email.trim()) return res.status(400).json({ error: 'email is required' });
   // Conservative address policy where an address first enters (defence in depth).
   if (!isAcceptableEmailAddress(email)) return res.status(400).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE });
 

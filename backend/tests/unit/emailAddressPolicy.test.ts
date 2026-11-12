@@ -33,6 +33,10 @@ it('refuses the crafted takeover payload and every quoted / comma / space / cont
     'jöhn@acme.com',
     `${'a'.repeat(65)}@acme.com`,
     `a@${'b'.repeat(250)}.com`,
+    // total > 254 although EVERY label is a legal length (<= 60): the whole-address bound, not the label bound
+    `${'a'.repeat(60)}@${Array.from({ length: 4 }, () => 'b'.repeat(60)).join('.')}.com`,
+    // punycode (IDN) TLD refused BY DESIGN: the TLD must be alphabetic, so xn-- TLDs are out (stated in the docblock)
+    'john@acme.xn--p1ai',
     '',
     null,
     42,
@@ -47,6 +51,8 @@ it('accepts ordinary addresses (incl. plus-tags, dots, hyphens, sub-domains, sur
     'j_doe-1@acme-corp.io',
     'JOHN@ACME.COM',
     '  john@acme.com  ',
+    // punycode in a NON-TLD label is fine (only the TLD must be alphabetic)
+    'john@xn--bcher-kva.com',
   ];
   for (const v of accepted) expect([v, isAcceptableEmailAddress(v)]).toEqual([v, true]);
 });

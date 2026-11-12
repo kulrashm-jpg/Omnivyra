@@ -170,10 +170,13 @@ export default function AuthCallback() {
         });
 
         if (syncRes.status === 403) {
+          const refusal = await syncRes.clone().json().catch(() => ({})) as { code?: string };
           await supabase.auth.signOut();
           await clearServerAuthSession();
           clearBrowserAuthState({ preservePkce: false });
-          router.replace('/login?error=account_deleted');
+          router.replace(refusal.code === 'EMAIL_NOT_ACCEPTED'
+            ? '/login?error=email_not_accepted'
+            : '/login?error=account_deleted');
           return;
         }
 

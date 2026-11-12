@@ -80,7 +80,7 @@ async function handler(
     captchaToken?: string | null;
   };
 
-  if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
+  if (typeof email !== 'string' || !email.trim()) return res.status(400).json({ error: 'email is required' });
 
   // ── 0. CAPTCHA (no-op until CAPTCHA_PROVIDER is configured) ──────────────
   const captcha = await verifyCaptchaToken(captchaToken, ip);

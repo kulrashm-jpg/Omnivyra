@@ -14,6 +14,12 @@
  *   whole        at most 254 chars, exactly one "@"
  * Rejected by construction: quotes, commas, spaces, control characters, "%", "(", ")", "<", ">", ";", ":",
  * backslash, IP-literal domains and any non-ASCII.
+ * Rejected BY DESIGN: a punycode (IDN) TLD such as `john@acme.xn--p1ai` - the TLD must be alphabetic. Punycode in a
+ * non-TLD label (`xn--bcher-kva.com`) is accepted. Pinned in backend/tests/unit/emailAddressPolicy.test.ts.
+ *
+ * NOT a query-safety guarantee: "_" is accepted (it is common in real addresses) and "_" is the single-character
+ * wildcard in SQL LIKE / PostgREST ilike. An accepted address is still DATA - match it with .eq(), or escape "_"
+ * and "%" before any LIKE / ilike, and never interpolate it into .or() / filter strings.
  */
 const LOCAL = /^[A-Za-z0-9_+-]+(?:\.[A-Za-z0-9_+-]+)*$/;
 const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
