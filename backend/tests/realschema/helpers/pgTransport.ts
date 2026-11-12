@@ -7,6 +7,8 @@
  * runs race BETWEEN calls, at the real unique index, instead of corrupting savepoints.
  */
 
+import { selectList } from './computedFields';
+
 type Row = Record<string, unknown>;
 type Filter = { col: string; op: string; val: unknown };
 
@@ -52,6 +54,7 @@ export function pgTable(client: () => PgClient, table: string): Row {
   const exec = async () => {
     const c = client();
     const params: unknown[] = [];
+    const sel = await selectList(c, table, st.cols);
     let sql: string;
     if (st.op === 'insert' || st.op === 'upsert') {
       const rows = (Array.isArray(st.payload) ? st.payload : [st.payload ?? {}]) as Row[];
@@ -63,17 +66,17 @@ export function pgTable(client: () => PgClient, table: string): Row {
         const sets = keys.filter((k) => !target.includes(k)).map((k) => `"${k}" = EXCLUDED."${k}"`).join(', ');
         sql += ` ON CONFLICT (${target.map((k) => `"${k}"`).join(', ')}) DO ${sets && !st.ignoreDuplicates ? `UPDATE SET ${sets}` : 'NOTHING'}`;
       }
-      sql += ` RETURNING ${st.cols}`;
+      sql += ` RETURNING ${sel}`;
     } else if (st.op === 'update') {
       const row = (st.payload ?? {}) as Row;
       const sets = Object.keys(row).map((k) => { params.push(render(row[k])); return `"${k}" = $${params.length}`; }).join(', ');
-      sql = `UPDATE public."${table}" SET ${sets}${where(params)} RETURNING ${st.cols}`;
+      sql = `UPDATE public."${table}" SET ${sets}${where(params)} RETURNING ${sel}`;
     } else if (st.op === 'delete') {
-      sql = `DELETE FROM public."${table}"${where(params)} RETURNING ${st.cols}`;
+      sql = `DELETE FROM public."${table}"${where(params)} RETURNING ${sel}`;
     } else if (st.count) {
       sql = `SELECT count(*)::int AS n FROM public."${table}"${where(params)}`;
     } else {
-      sql = `SELECT ${st.cols} FROM public."${table}"${where(params)}`;
+      sql = `SELECT ${sel} FROM public."${table}"${where(params)}`;
       if (st.orders.length) sql += ` ORDER BY ${st.orders.map((o) => `"${o.col}" ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`;
       if (st.limit !== null) sql += ` LIMIT ${st.limit}`;
       if (st.offset !== null) sql += ` OFFSET ${st.offset}`;
