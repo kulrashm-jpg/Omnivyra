@@ -76,7 +76,10 @@ beforeAll(() => {
 });
 afterAll(() => { expect(fetchCalls).toBe(0); });
 
-const dbNow = async (): Promise<string> => new Date((await one('SELECT now() AS t')).t as Date).toISOString();
+// The database instant at FULL precision, as PostgREST renders it (microseconds, +00:00). A node-pg Date ->
+// toISOString cut it to milliseconds, which made a hold written in the same transaction look 'not yet started'
+// once the transport stopped cutting effective_from the same way (harness rows fix, 2026-11-13).
+const dbNow = async (): Promise<string> => String((await one(`SELECT to_json(now()) #>> '{}' AS t`)).t);
 
 async function allowed(org: string, channel: string, who: { personId?: string; target?: string }, at?: string): Promise<boolean> {
   const loaded = await loadGovernanceRecords({ organizationId: org, personId: who.personId ?? null, target: who.target ?? null, channel });
