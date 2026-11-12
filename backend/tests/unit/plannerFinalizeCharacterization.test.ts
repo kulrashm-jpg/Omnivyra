@@ -402,3 +402,12 @@ describe('planner-finalize — unread errors fail closed', () => {
     expect(campaignUpdates.some((u) => 'start_date' in u)).toBe(true);
   });
 });
+
+describe('TENANT: a new campaign row is owned by the authorized company (NULL company_id trace, e9 2026-11-12)', () => {
+  it('the inserted campaigns row carries company_id = the requireTenantAccess organization, never NULL', async () => {
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody()), res);
+    expect(campaignInserts).toHaveLength(1);
+    expect((campaignInserts[0] as Row).company_id).toBe('co-1');
+  });
+});

@@ -173,9 +173,9 @@ describe('campaigns/save', () => {
     expect(completedWrites(['campaigns'])).toHaveLength(1);
   });
   it('a genuinely new id is still created → 200', async () => {
-    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', name: 'New' } });
+    const r = await invoke(saveCampaign, { method: 'POST', as: 'A', body: { campaignId: 'camp-brand-new', companyId: CO_A, name: 'New' } });
     expect(r.status).toBe(200);
-    expect(completedWrites(['campaigns'])[0].payload).toMatchObject({ id: 'camp-brand-new', user_id: USER_A });
+    expect(completedWrites(['campaigns'])[0].payload).toMatchObject({ id: 'camp-brand-new', user_id: USER_A, company_id: CO_A });
   });
 });
 

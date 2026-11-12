@@ -476,6 +476,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           start_date: startDate,
           duration_weeks: durationWeeks,
           user_id: user.id,
+          // TENANT: the campaign row is owned by the AUTHORIZED company (requireTenantAccess above),
+          // never left NULL (it was written only to campaign_versions, so the campaign itself was
+          // company-less and invisible to company-scoped reads).
+          company_id: tenantAccess.organizationId,
           thread_id: 'planner_' + Date.now(),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
