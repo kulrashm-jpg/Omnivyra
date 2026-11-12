@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { ownedDbTable } from '../db/writeOwner';
+import type { TenantContext } from '../db/tenantTable';
 
 export interface StrategyTemplate {
   id: string;
@@ -84,7 +85,6 @@ export async function getStrategyTemplate(
 export async function createStrategyTemplate(
   userId: string,
   template: {
-    company_id?: string | null;
     name: string;
     description?: string | null;
     objective: string;
@@ -96,14 +96,17 @@ export async function createStrategyTemplate(
     distribution_preferences?: Record<string, any> | null;
     tags?: string[];
     is_public?: boolean;
-  }
+  },
+  /** The company to attach, ONLY as the context of the route's access check; absent = a personal template. */
+  tenantCtx?: TenantContext,
 ): Promise<StrategyTemplate> {
-  // user_id is the authenticated caller; a company_id is written only after the route's enforceCompanyAccess.
+  const companyId = tenantCtx ? tenantCtx.companyId : null;
+  // user_id is the authenticated caller; company_id comes only from an access-checked TenantContext, never the body.
   // cross-tenant: strategy-templates-user-owned-or-public
   const { data, error } = await ownedDbTable('strategy_templates')
     .insert({
       user_id: userId,
-      company_id: template.company_id ?? null,
+      company_id: companyId,
       name: template.name,
       description: template.description ?? null,
       objective: template.objective,

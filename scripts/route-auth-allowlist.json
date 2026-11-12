@@ -1005,6 +1005,17 @@
           "external-call fetch() pages/api/social/comments.ts"
         ]
       }
+    ],
+    "pages/api/strategy-templates/index.ts": [
+      {
+        "rule": "R6-ORDER",
+        "pattern": "identity-owned-resource",
+        "reason": "A strategy template is USER-owned (83 ruling 3, allow-list strategy-templates-user-owned-or-public): without a company_id the insert is a PERSONAL template whose user_id is the session user (the body's user_id is stripped) and company_id is NULL; a requested company_id is attached only as tenantContextFor(access, companyId) after enforceCompanyAccess, which refuses (403) before any write.",
+        "evidence": "const template = await createStrategyTemplate\\(user\\.id, templateData, tenant\\);",
+        "effects": [
+          "db-write .insert() backend/services/strategyTemplateService.ts"
+        ]
+      }
     ]
   },
   "authFirst": {

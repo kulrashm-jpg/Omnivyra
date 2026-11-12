@@ -6,6 +6,7 @@ import {
 } from '../../../backend/services/strategyTemplateService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 
 /**
  * ROUTE-AUTH-001 (STEP 3AH-85) — strategy templates are owned by `user_id`
@@ -47,19 +48,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    // `user_id` is stripped: the owner is the authenticated caller.
-    const { user_id: _ignoredUserId, ...templateData } = req.body || {};
+    // `user_id` is stripped: the owner is the authenticated caller. `company_id` is taken out of the payload and
+    // attached only as the context of the access check below.
+    const { user_id: _ignoredUserId, company_id: requestedCompanyId, ...templateData } = req.body || {};
     if (!templateData.name || !templateData.objective || !templateData.target_audience) {
       return res.status(400).json({ error: 'Missing required template fields' });
     }
     if (!templateData.key_platforms || templateData.key_platforms.length === 0) {
       return res.status(400).json({ error: 'key_platforms is required' });
     }
-    if (templateData.company_id) {
-      const access = await enforceCompanyAccess({ req, res, companyId: String(templateData.company_id) });
+    let tenant: ReturnType<typeof tenantContextFor> | undefined;
+    if (requestedCompanyId) {
+      const companyId = String(requestedCompanyId);
+      const access = await enforceCompanyAccess({ req, res, companyId });
       if (!access) return;
+      tenant = tenantContextFor(access, companyId);
     }
-    const template = await createStrategyTemplate(user.id, templateData);
+    const template = await createStrategyTemplate(user.id, templateData, tenant);
     return res.status(201).json({ success: true, data: template });
   } catch (error: any) {
     return res.status(500).json({
