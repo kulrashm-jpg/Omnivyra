@@ -753,8 +753,8 @@
     },
     "pages/api/strategy-templates/[id].ts": {
       "kind": "identity-scoped",
-      "reason": "Template is owned by its user_id: GET only for the owner or a public template; PUT/DELETE owner-only (404 when not visible, 403 when public but not owned); PUT strips id/user_id/company_id.",
-      "evidence": "template!\\.user_id === user\\.id"
+      "reason": "Template is owned by its user_id: getStrategyTemplateForViewer(id, session user) decides visibility (owner, or a public template as content only) - GET only then; PUT/DELETE owner-only (404 when not visible, 403 when public but not owned) and the writes are pinned to .eq('user_id', owner); PUT strips id/user_id/company_id.",
+      "evidence": "getStrategyTemplateForViewer\\(id, user\\.id\\)"
     },
     "pages/api/stripe/webhook.ts": {
       "kind": "webhook-signature",
