@@ -36,8 +36,9 @@ async function handler(
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { data, error: dbErr } = await supabaseAdmin
-    .from('free_credit_profiles')
+  // Identity-scoped (S2): the caller's OWN phone, selected by the authenticated user id - no tenant.
+  // cross-tenant: own-phone-identity-scoped
+  const { data, error: dbErr } = await supabaseAdmin.from('free_credit_profiles')
     .select('phone_number')
     .eq('user_id', user.id)
     .single();

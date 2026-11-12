@@ -24,7 +24,7 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     id: 'invite-accept-token-bearer',
     tables: ['invitations'],
     file: 'pages/api/auth/accept-invite.ts',
-    reason: "BEARER: possession of the secret invitation token (looked up by sha256(token), unauthenticated). The actor cannot be a member yet - accepting is how they join - so no principal resolves a tenant; the invitation row names it. Every later write goes through systemTenantContext(row.company_id, reason). Reads nothing else cross-tenant; all other access is tenant-scoped.",
+    reason: "BEARER: possession of the secret invitation token - the lookup is .eq('token_hash', sha256(token)) (the row stores a digest, never the token), unauthenticated, rate-limited per IP (ACCEPT_INVITE_LIMIT: 10 / 15 min). The actor cannot be a member yet - accepting is how they join - so no principal resolves a tenant; the invitation row names it. Every later write (consume CAS, expiry revoke, un-consume on OTP failure) goes through systemTenantContext(row.company_id, reason); pinned by backend/tests/unit/s2InvitationBearerTenant.test.ts 'the consume write carries the invitation's OWN tenant (B)'. Reads nothing else cross-tenant; all other access is tenant-scoped.",
     owner: 'virality-e1',
   },
   {
@@ -38,7 +38,14 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     id: 'invite-resend-self-serve',
     tables: ['invitations'],
     file: 'pages/api/auth/resend-invitation.ts',
-    reason: "BEARER: an email address (self-serve resend, rate-limited per IP and per email). The requester is not a member - they lost their invitation - so the row names the tenant. The response is a CONSTANT 200 whether or not an invitation exists (no enumeration), pinned by backend/tests/unit/s2InvitationBearerTenant.test.ts 'self-serve resend answers the same 200 body whether or not an invitation exists'. Every later write goes through systemTenantContext(row.company_id, reason). Reads nothing else cross-tenant; all other access is tenant-scoped.",
+    reason: "BEARER: an email address whose only authority is to cause an invitation email to be delivered TO THAT SAME ADDRESS - it gains the requester nothing they did not already control. Rate-limited per IP AND per email (two checkRateLimit calls, EMAIL_LINK_LIMIT) so one known address cannot be spammed. The requester is not a member - they lost their invitation - so the row names the tenant. The response is a CONSTANT 200 whether or not an invitation exists (no enumeration), pinned by backend/tests/unit/s2InvitationBearerTenant.test.ts 'self-serve resend answers the same 200 body whether or not an invitation exists'. Every later write (revoke of the old row) goes through systemTenantContext(row.company_id, reason); pinned by 'the revoke of the old invitation carries its OWN tenant (B)'. Reads nothing else cross-tenant; all other access is tenant-scoped.",
+    owner: 'virality-e1',
+  },
+  {
+    id: 'own-phone-identity-scoped',
+    tables: ['free_credit_profiles'],
+    file: 'pages/api/auth/get-stored-phone.ts',
+    reason: "IDENTITY-SCOPED, no tenant involved: the caller's OWN phone number, selected by .eq('user_id', user.id) where user comes from getSupabaseUserFromRequest (401 without a session). It reads one column (phone_number) of the caller's own row - never another user's - pinned by backend/tests/unit/s2OwnPhoneIdentityScoped.test.ts 'returns only the caller's own phone, never another user's'. Reads nothing else cross-tenant; writes nothing.",
     owner: 'virality-e1',
   },
 ] as const;
