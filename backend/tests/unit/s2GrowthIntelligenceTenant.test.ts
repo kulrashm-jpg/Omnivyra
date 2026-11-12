@@ -10,16 +10,22 @@ type Row = Record<string, any>;
 const mockDb: Record<string, Row[]> = {};
 function mockTable(table: string) {
   const tests: Array<(r: Row) => boolean> = []; let head = false; let counted = false; let cap = Infinity;
+  let range: [number, number] | null = null; let orderBy: string | null = null;
   const b: any = {
     select: (_c?: string, o?: { count?: string; head?: boolean }) => { counted = !!o?.count; head = !!o?.head; return b; },
     eq: (c: string, v: unknown) => { tests.push((r) => r[c] === v); return b; },
     in: (c: string, v: unknown[]) => { tests.push((r) => v.includes(r[c])); return b; },
     is: (c: string, v: unknown) => { tests.push((r) => (r[c] ?? null) === v); return b; },
     limit: (n: number) => { cap = n; return b; },
-    order: () => b,
+    order: (c: string) => { orderBy = c; return b; },
+    range: (from: number, to: number) => { range = [from, to]; return b; },
     then: (ok: any, ko: any) => {
-      const hit = (mockDb[table] ?? []).filter((r) => tests.every((t) => t(r))).slice(0, cap);
-      return Promise.resolve({ data: head ? null : hit, count: counted ? hit.length : null, error: null }).then(ok, ko);
+      let hit = (mockDb[table] ?? []).filter((r) => tests.every((t) => t(r)));
+      const count = hit.length;
+      if (orderBy) { const k = orderBy; hit = [...hit].sort((x, y) => String(x[k]).localeCompare(String(y[k]))); }
+      // PostgREST: a read returns at most max-rows (1000) rows unless a range is requested.
+      hit = range ? hit.slice(range[0], range[1] + 1) : hit.slice(0, Math.min(cap, 1000));
+      return Promise.resolve({ data: head ? null : hit, count: counted ? count : null, error: null }).then(ok, ko);
     },
   };
   return b;
@@ -90,4 +96,12 @@ it("A's content-velocity is computed over A's campaign only - never a campaign a
   const r = await call(velocity, { companyId: A });
   expect(r.statusCode).toBe(200);
   expect(mockVelocityIds).toEqual([['camp-a']]);
+});
+
+it('large accounts: posts and analytics above PostgREST max-rows (1000) are counted exactly', async () => {
+  const many = Array.from({ length: 1201 }, (_, i) => `post-a-${String(i).padStart(5, '0')}`);
+  mockDb.scheduled_posts = [...many.map((id) => ({ id, campaign_id: 'camp-a' })), { id: 'post-b1', campaign_id: 'camp-b' }];
+  mockDb.content_analytics = [...many.map((id) => ({ id: `an-${id}`, scheduled_post_id: id })), { id: 'an-b1', scheduled_post_id: 'post-b1' }];
+  const r = await call(health, { companyId: A });
+  expect(r.body.data.counts).toMatchObject({ scheduledPosts: 1201, analyticsRecords: 1201 });
 });

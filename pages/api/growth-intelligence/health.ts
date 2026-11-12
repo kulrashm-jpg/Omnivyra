@@ -15,6 +15,8 @@ import { tenantChildTableOf, tenantContextFor, tenantTable } from '../../../back
 
 /** tenantChildTableOf verifies at most 200 parents per call; larger sets are counted chunk by chunk. */
 const PARENT_CHUNK = 200;
+/** PostgREST returns at most max-rows (1000 by default) per unpaginated read: ids are paged explicitly. */
+const PAGE = 1000;
 function chunks<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -55,15 +57,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { count, error: countErr } = await posts.select('id', { count: 'exact', head: true });
       if (countErr) throw new Error('scheduled posts unreadable');
       scheduledPostCount += count ?? 0;
-      // Ids feed the analytics count only. NOTE (pre-existing, unchanged): an unpaginated select returns at most
-      // PostgREST's max-rows (1000 by default), so analyticsRecords can undercount for very large accounts.
-      const { data, error } = await posts.select('id');
-      if (error) throw new Error('scheduled posts unreadable');
-      for (const r of (data ?? []) as Array<{ id?: string | null }>) if (r.id) postIds.push(r.id);
+      // Ids feed the analytics count. Paged with a stable order: an unpaginated read stops at PostgREST's
+      // max-rows (1000) and used to undercount analyticsRecords for large accounts (e9: a shown metric being wrong
+      // is a finding).
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await posts.select('id').order('id', { ascending: true }).range(from, from + PAGE - 1);
+        if (error) throw new Error('scheduled posts unreadable');
+        const rows = (data ?? []) as Array<{ id?: string | null }>;
+        for (const r of rows) if (r.id) postIds.push(r.id);
+        if (rows.length < PAGE) break;
+      }
     }
 
     // content_analytics has no tenant column (registry: UNCLASSIFIED); it is read ONLY for post ids that were
-    // just read through the seam above, so every counted row belongs to this tenant's posts.
+    // just read through the seam above, so every counted row belongs to this tenant's posts. Exact counts per chunk.
+    // TODO(S2): once 55's migration 20270217000026 (content_analytics.company_id, denormalised + backfilled) lands,
+    // read content_analytics through the seam directly instead of by verified post ids.
     for (const part of chunks(postIds, PARENT_CHUNK)) {
       const { count, error } = await supabase
         .from('content_analytics')
