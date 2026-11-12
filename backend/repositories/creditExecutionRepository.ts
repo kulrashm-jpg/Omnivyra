@@ -75,9 +75,17 @@ export interface CreditPartialConfirmCommand {
  * family (e.g. a safeRetry `retry:<key>:<lineage>` base) is invisible to both
  * and is NOT refused - prod does not require p_parent_id (a 20260625 guard
  * that was never installed). Closing that needs the mandatory parent of the
- * guarded function; until then this is not complete coverage.
- * apply_credit_partial_confirm: its prod body matches NO repo version (83/C20);
- * nothing here assumes how it behaves internally - the refusal is app-side.
+ * guarded function; until then this is not complete coverage. The bound is
+ * confined to settlements written through apply_credit_reservation: the LIVE
+ * apply_credit_partial_confirm (83/C21 body, reviewed by 05 2026-11-12)
+ * requires the hold row and always writes parent_transaction_id = the hold, so
+ * the by-parent half sees every partial-confirm settlement.
+ * apply_credit_partial_confirm (live, md5 ff208f60, matches NO repo version):
+ * it has NO "already settled" refusal and no FOR UPDATE on the hold row, so
+ * this app-side guard is the ONLY double-settlement protection on that path
+ * (measured, 05). Its key is optional live (IF p_idempotency_key IS NOT NULL)
+ * and it handles a duplicate key; the same-key pass-through above relies on
+ * that and on apply_credit_reservation's idempotent return.
  */
 const SETTLE_PHASES = ['confirm', 'release'] as const;
 
