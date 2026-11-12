@@ -12,6 +12,7 @@ import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdown
 import {
   executePreemptionFromRequest,
   PreemptionValidationError,
+  PreemptionOwnershipError,
 } from '../../../backend/services/CampaignPreemptionService';
 import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../backend/services/CampaignFinalizationGuard';
 import { InvalidExecutionTransitionError, normalizeExecutionState } from '../../../backend/governance/ExecutionStateMachine';
@@ -62,7 +63,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { data: request, error: fetchError } = await supabase
       .from('campaign_preemption_requests')
-      .select('id, initiator_campaign_id, status')
+      .select('id, initiator_campaign_id, target_campaign_id, status')
       .eq('id', requestId)
       .maybeSingle();
 
@@ -93,6 +94,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: true,
     });
     if (!access) return;
+    // CROSS-TENANT FIX: the request's TARGET is the campaign the approval preempts - bind it to the same company
+    // (a request row created before the fix may name another company's campaign). The service re-checks both.
+    const targetAccess = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId: (request as { target_campaign_id?: string }).target_campaign_id,
+      requireCampaignId: true,
+    });
+    if (!targetAccess) return;
 
     const initiatorExecutionStatus = normalizeExecutionState((initiatorCampaign as any).execution_status);
     try {
@@ -150,6 +161,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         code: 'INVALID_EXECUTION_TRANSITION',
         message: 'Illegal execution state transition',
       });
+    }
+    if (err instanceof PreemptionOwnershipError) {
+      // A campaign of another company (or none) is "not found" - never an existence oracle.
+      return err.kind === 'unverified'
+        ? res.status(503).json({ error: 'Campaign ownership check is temporarily unavailable. Please try again.', code: 'CAMPAIGN_LOOKUP_ERROR', retryable: true })
+        : res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     }
     if (err instanceof PreemptionValidationError) {
       return res.status(400).json({

@@ -8,6 +8,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { recordGovernanceEvent } from './GovernanceEventService';
+import { checkCampaignOwnership } from './campaignOwnershipService';
 import {
 
   assertValidExecutionTransition,
@@ -27,8 +28,11 @@ export interface ExecutePreemptionParams {
   reason?: string;
   /** Required: non-empty justification (min 15 chars). Stage 9C-A. */
   justification: string;
-  /** Optional: for governance event persistence. When provided, events are recorded. */
-  companyId?: string;
+  /**
+   * REQUIRED (cross-tenant fix): the company the caller was authorized for. BOTH campaigns must be canonically
+   * owned by it, or nothing is read further, written or recorded. Also the company of the governance events.
+   */
+  companyId: string;
 }
 
 export interface ExecutePreemptionResult {
@@ -46,6 +50,35 @@ export interface ApprovalRequiredResult {
 }
 
 export type PreemptionAttemptResult = ExecutePreemptionResult | ApprovalRequiredResult;
+
+/**
+ * A campaign of the preemption is not owned by the caller's company ('not_owned': another company's, or none),
+ * or ownership could not be read ('unverified'). Routes answer 404 / 503.
+ */
+export class PreemptionOwnershipError extends Error {
+  constructor(readonly kind: 'not_owned' | 'unverified', message: string) {
+    super(message);
+    this.name = 'PreemptionOwnershipError';
+  }
+}
+
+/**
+ * CROSS-TENANT FIX (6f, 2026-11-13): a preemption WRITES the preempted campaign (PREEMPTED + blueprint
+ * INVALIDATED) and records governance events for both. Before, only the initiator was bound to the caller's company
+ * (by the route), so any member could preempt ANOTHER company's campaign. Both campaigns must now be canonically
+ * owned (checkCampaignOwnership === 'owned') by `companyId`; 'not_found' is refused too (there is nothing to
+ * preempt).
+ */
+async function assertBothOwnedBy(companyId: string, initiatorCampaignId: string, preemptedCampaignId: string): Promise<void> {
+  if (typeof companyId !== 'string' || companyId.trim() === '') {
+    throw new PreemptionOwnershipError('not_owned', 'companyId is required for a preemption.');
+  }
+  for (const campaignId of [initiatorCampaignId, preemptedCampaignId]) {
+    const ownership = await checkCampaignOwnership(String(campaignId ?? ''), companyId);
+    if (ownership === 'lookup_error') throw new PreemptionOwnershipError('unverified', 'Campaign ownership could not be verified.');
+    if (ownership !== 'owned') throw new PreemptionOwnershipError('not_owned', 'Campaign not found.');
+  }
+}
 
 export class PreemptionValidationError extends Error {
   constructor(message: string) {
@@ -70,8 +103,11 @@ function requiresApproval(target: { is_protected?: boolean; priority_level?: str
 async function createApprovalRequest(
   initiatorCampaignId: string,
   preemptedCampaignId: string,
-  companyId?: string
+  companyId: string
 ): Promise<ApprovalRequiredResult> {
+  // A request row names a target another company could later "approve" into a preemption: never create one for a
+  // campaign pair the caller's company does not own (also re-checked at approval - executePreemptionFromRequest).
+  await assertBothOwnedBy(companyId, initiatorCampaignId, preemptedCampaignId);
   const { data: requestRow, error } = await ownedDbTable('campaign_preemption_requests')
     .insert({
       initiator_campaign_id: initiatorCampaignId,
@@ -297,6 +333,8 @@ export async function executeCampaignPreemption(
   params: ExecutePreemptionParams
 ): Promise<PreemptionAttemptResult> {
   const { initiatorCampaignId, preemptedCampaignId } = params;
+  // Before ANY read, write or governance event: both campaigns must belong to the caller's company.
+  await assertBothOwnedBy(params.companyId, initiatorCampaignId, preemptedCampaignId);
 
   const { data: campaigns, error: fetchError } = await ownedDbTable('campaigns')
     .select('id, priority_level, execution_status, blueprint_status, is_protected')
@@ -377,7 +415,7 @@ export async function executeCampaignPreemption(
 export async function executePreemptionFromRequest(
   requestId: string,
   justification: string,
-  companyId?: string
+  companyId: string
 ): Promise<ExecutePreemptionResult> {
   const { data: request, error: fetchError } = await ownedDbTable('campaign_preemption_requests')
     .select('id, initiator_campaign_id, target_campaign_id, status')
@@ -391,6 +429,9 @@ export async function executePreemptionFromRequest(
   if (String(request.status).toUpperCase() !== 'PENDING') {
     throw new PreemptionValidationError(`Request is not pending. Current status: ${request.status}`);
   }
+
+  // The request row may predate the cross-tenant fix (a target of ANOTHER company): re-check both at approval.
+  await assertBothOwnedBy(companyId, request.initiator_campaign_id, request.target_campaign_id);
 
   const result = await performPreemption(
     {
