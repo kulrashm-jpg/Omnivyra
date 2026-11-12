@@ -299,6 +299,9 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // re-pinned here. Email idempotency (fix/email-idempotency-20261113, "an uncertain send is never re-queued") changed both: the transport
     // now reports an ambiguous provider answer as uncertain, and dispatch fails such a task instead of
     // re-queuing it (a re-dispatch mints a new key). Neither touches authentication or tenancy - re-pinned.
+    // A re-derived hash passes by construction: the CHECK was the diff review. The emailTransport/dispatch diff
+    // CONTENT was reviewed by virality-6f (author) and virality-05 (review PASS, 2026-11-12); the one companyId
+    // line passes the existing tenant-scoped id to the state transition.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
     expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('26f32357c83318f8');
