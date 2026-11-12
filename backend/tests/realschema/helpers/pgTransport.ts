@@ -17,6 +17,11 @@
  *   - INSERT / UPDATE / DELETE ... RETURNING: wrapped in a CTE and rendered the same way.
  * RPC answers follow PostgREST too: a scalar function returns the bare value, a non-set composite one
  * object, a SETOF / TABLE function an array of objects, a void function null.
+ *
+ * DETERMINISTIC ZONE (83 review): to_jsonb renders a timestamptz in the SESSION TimeZone, so the output
+ * would depend on the runner. PostgREST on Supabase renders UTC; each call therefore renders under
+ * TimeZone 'UTC' (transaction-local, set after the call's SAVEPOINT) and restores the caller's setting
+ * afterwards - a failed call is reverted by ROLLBACK TO SAVEPOINT. The caller's session is never changed.
  */
 
 import { selectList } from './computedFields';
@@ -34,6 +39,14 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const SQL_OP: Record<string, string> = { eq: '=', gte: '>=', lte: '<=', gt: '>', lt: '<', neq: '<>' };
+/** Run `fn` with TimeZone 'UTC' (transaction-local), then restore the caller's value. Call inside a SAVEPOINT. */
+async function inUtc<T>(c: PgClient, fn: () => Promise<T>): Promise<T> {
+  const prev = String(((await c.query(`SELECT current_setting('TimeZone') AS tz`)).rows[0] as Row).tz);
+  await c.query(`SELECT set_config('TimeZone', 'UTC', true)`);
+  const out = await fn();
+  await c.query(`SELECT set_config('TimeZone', $1, true)`, [prev]);
+  return out;
+}
 /** The select list as a row source inside LATERAL: a bare `*` must name the table there. */
 const lateralList = (sel: string, table: string): string =>
   sel.split(',').map((item) => (item.trim() === '*' ? `"${table}".*` : item)).join(',');
@@ -95,7 +108,7 @@ export function pgTable(client: () => PgClient, table: string): Row {
     }
     await c.query('SAVEPOINT pg_adapter');
     try {
-      const res = await c.query(sql, params);
+      const res = await inUtc(c, () => c.query(sql, params));
       await c.query('RELEASE SAVEPOINT pg_adapter');
       if (st.count) return { data: null, count: Number(res.rows[0].n), error: null };
       const out = res.rows.map((r) => r.__row as Row);
@@ -133,14 +146,22 @@ export function pgTable(client: () => PgClient, table: string): Row {
 
 type RpcShape = 'scalar' | 'composite' | 'set' | 'void';
 const rpcShapeCache = new Map<string, RpcShape>();
-/** PostgREST's answer shape for public.<fn>: from pg_proc (SETOF / TABLE -> set; row type -> composite). */
+/**
+ * PostgREST's answer shape for public.<fn>: from pg_proc (SETOF / TABLE -> set; row type -> composite).
+ * An OVERLOADED name is refused (83 review): overloads may answer in different shapes, and picking one would
+ * be a guess. The cache is per name, which is sound only because a name with more than one overload never
+ * reaches it.
+ */
 async function rpcShape(c: PgClient, fn: string): Promise<RpcShape> {
   const hit = rpcShapeCache.get(fn);
   if (hit) return hit;
   const r = await c.query(
     `SELECT p.proretset AS set, t.typtype AS kind, t.typname AS name
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_type t ON t.oid = p.prorettype
-      WHERE n.nspname = 'public' AND p.proname = $1 ORDER BY p.oid LIMIT 1`, [fn]);
+      WHERE n.nspname = 'public' AND p.proname = $1`, [fn]);
+  if (r.rows.length > 1) {
+    throw new Error(`pg adapter: public.${fn} is overloaded (${r.rows.length}); its PostgREST answer shape cannot be inferred`);
+  }
   const row = r.rows[0] as { set?: boolean; kind?: string; name?: string } | undefined;
   const shape: RpcShape = !row ? 'set'
     : row.set ? 'set'
@@ -161,7 +182,7 @@ export function pgRpc(client: () => PgClient) {
       const shape = await rpcShape(c, fn);
       const sql = shape === 'scalar' || shape === 'void' ? `SELECT to_jsonb(${call}) AS __v`
         : `SELECT to_jsonb(r) AS __row FROM ${call} r`;
-      const res = await c.query(sql, keys.map((k) => args[k]));
+      const res = await inUtc(c, () => c.query(sql, keys.map((k) => args[k])));
       await c.query('RELEASE SAVEPOINT pg_rpc');
       if (shape === 'void') return { data: null, error: null };
       if (shape === 'scalar') return { data: (res.rows[0] as Row | undefined)?.__v ?? null, error: null };

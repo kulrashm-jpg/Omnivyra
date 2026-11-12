@@ -86,3 +86,30 @@ describe('real-schema transport: rows as PostgREST renders them', () => {
     });
   });
 });
+
+describe('real-schema transport: deterministic zone and no guessing (83 review)', () => {
+  it('renders UTC whatever the SESSION TimeZone, and leaves the caller\'s TimeZone as it was', async () => {
+    await inRollback(async () => {
+      await fixture();
+      await db.query(`SET LOCAL TimeZone = 'Asia/Kolkata'`);
+      const read = await t('harness_tr_rows').select('id, updated_at').eq('id', 1).maybeSingle();
+      expect(read.data).toEqual({ id: 1, updated_at: '2026-11-12T10:00:00.123456+00:00' });
+      const { rows } = await db.query(`SELECT current_setting('TimeZone') AS tz`);
+      expect(rows[0].tz).toBe('Asia/Kolkata');
+      // CONTROL: the session itself really renders +05:30, so the case above is not vacuous.
+      const raw = await db.query(`SELECT to_jsonb(updated_at) #>> '{}' AS v FROM public.harness_tr_rows WHERE id = 1`);
+      expect(raw.rows[0].v).toBe('2026-11-12T15:30:00.123456+05:30');
+    });
+  });
+
+  it('an overloaded function is REFUSED rather than answered in a guessed shape', async () => {
+    await inRollback(async () => {
+      await fixture();
+      await db.query(`CREATE FUNCTION public.harness_tr_over(p_x int) RETURNS int LANGUAGE sql AS 'SELECT p_x'`);
+      await db.query(`CREATE FUNCTION public.harness_tr_over(p_x text) RETURNS SETOF public.harness_tr_rows LANGUAGE sql AS 'SELECT * FROM public.harness_tr_rows'`);
+      const out = await pgRpc(client)('harness_tr_over', { p_x: 1 });
+      expect(out.data).toBeNull();
+      expect(String((out.error as Error)?.message)).toMatch(/overloaded/);
+    });
+  });
+});
