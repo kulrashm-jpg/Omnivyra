@@ -22,6 +22,8 @@ function mockTable(table: string) {
     }
     const hit = rows.filter((r) => tests.every((t) => t(r))).slice(0, cap);
     if (op === 'update') { hit.forEach((r) => { Object.assign(r, payload); mockWrites.push({ table, op, row: { ...r } }); }); return { data: null, error: null }; }
+    // PostgREST: maybeSingle/single over >1 row -> PGRST116 error, data null (05 review)
+    if (one && hit.length > 1) return { data: null, error: { code: 'PGRST116', message: 'multiple rows' } };
     return { data: one ? hit[0] ?? null : hit, error: null };
   };
   const b: any = {
@@ -109,6 +111,17 @@ it('control: an INVITED user lands on the existing company without being promote
   const r = await post();
   expect(r.statusCode).toBe(200);
   expect(mockDb.user_company_roles).toEqual([{ id: 'r1', user_id: USER, company_id: VICTIM, role: 'CONTENT_CREATOR', status: 'invited' }]);
+});
+
+it('an invited member with a second stale row is NEVER promoted (05: multi-row read error)', async () => {
+  mockEmail = 'invitee@acme.com';
+  mockDb.user_company_roles = [
+    { id: 'r1', user_id: USER, company_id: VICTIM, role: 'CONTENT_CREATOR', status: 'invited' },
+    { id: 'r2', user_id: USER, company_id: VICTIM, role: 'CONTENT_CREATOR', status: 'expired' },
+  ];
+  const r = await post();
+  expect(r.statusCode).toBe(200);
+  expect(mockDb.user_company_roles.map((x) => x.role)).toEqual(['CONTENT_CREATOR', 'CONTENT_CREATOR']);
 });
 
 it('control: the first registrant of a NEW company is its COMPANY_ADMIN', async () => {
