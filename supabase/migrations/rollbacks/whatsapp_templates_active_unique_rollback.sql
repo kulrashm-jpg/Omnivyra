@@ -1,6 +1,12 @@
 -- Rollback of 20270217000006_whatsapp_templates_active_unique.sql.
 -- ORDER: roll the CODE back first (it calls whatsapp_apply_template_status). Drops the function, the
--- unique index and status_event_at (loses only the last-applied event times; ordering protection ends).
+-- unique index and status_event_at.
+-- SOUND TO DROP: the apply's preflight refuses unless none of the three existed before it (or all
+-- three exist exactly as it makes them - a re-apply), so nothing that predated it is removed.
+-- CONSEQUENCE (stated, 05): dropping status_event_at DISCARDS every recorded event time. After a
+-- roll-forward each template's next status event applies unconditionally (no time to compare against
+-- - the function's v_last IS NULL branch), and an older event arriving in that window is applied, not
+-- ignored, until a timed event is recorded again. Template rows themselves are untouched.
 BEGIN;
 DROP FUNCTION IF EXISTS public.whatsapp_apply_template_status(uuid, text, timestamptz, text);
 DROP INDEX IF EXISTS public.whatsapp_templates_one_active;

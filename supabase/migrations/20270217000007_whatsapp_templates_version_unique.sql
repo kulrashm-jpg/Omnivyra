@@ -26,6 +26,18 @@ BEGIN
   IF v_dups > 0 THEN
     RAISE EXCEPTION 'WTVU preflight: % (company, template_name, version) triple(s) are duplicated - resolve them (an owner-approved data step) before this migration; it does not renumber', v_dups;
   END IF;
+  -- ROLLBACK SOUNDNESS (05 / e1 rule): an existing object of this name must be EXACTLY this index (a
+  -- re-apply); anything else predates the migration and its rollback must never drop it.
+  IF to_regclass('public.whatsapp_templates_version_unique') IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+     WHERE i.indrelid = 'public.whatsapp_templates'::regclass AND c.relname = 'whatsapp_templates_version_unique'
+       AND i.indisunique AND i.indnullsnotdistinct AND i.indpred IS NULL
+       AND (SELECT array_agg(a.attname ORDER BY k.ord) FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum)
+           = ARRAY['company_id', 'template_name', 'version']::name[]
+  ) THEN
+    RAISE EXCEPTION 'WTVU preflight: an object named whatsapp_templates_version_unique already exists with a different definition - it predates this migration; refusing';
+  END IF;
 END
 $preflight$;
 

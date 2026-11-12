@@ -50,6 +50,25 @@ BEGIN
                 AND pg_get_function_identity_arguments(p.oid) <> 'p_template_id uuid, p_event text, p_event_at timestamp with time zone, p_reason text') THEN
     RAISE EXCEPTION 'WTAU preflight: another whatsapp_apply_template_status signature exists - refusing to overload it';
   END IF;
+  -- ROLLBACK SOUNDNESS (05 / e1 rule): the rollback drops the column, the index and the function, so
+  -- this apply must PROVE none of them predates it. IF NOT EXISTS / CREATE OR REPLACE alone would
+  -- tolerate a pre-existing one and the rollback would remove it. Allowed: none present (first apply)
+  -- or ALL present exactly as this migration makes them (a re-apply). Anything in between refuses.
+  DECLARE
+    v_col boolean := EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.whatsapp_templates'::regclass
+                               AND attname = 'status_event_at' AND NOT attisdropped);
+    v_col_exact boolean := EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.whatsapp_templates'::regclass
+                               AND attname = 'status_event_at' AND NOT attisdropped AND atttypid = 'timestamptz'::regtype AND NOT attnotnull);
+    v_idx boolean := to_regclass('public.whatsapp_templates_one_active') IS NOT NULL;
+    v_idx_exact boolean := EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+                               WHERE i.indrelid = 'public.whatsapp_templates'::regclass AND c.relname = 'whatsapp_templates_one_active'
+                                 AND i.indisunique AND i.indnullsnotdistinct AND pg_get_expr(i.indpred, i.indrelid) = 'is_active');
+    v_fn boolean := to_regprocedure('public.whatsapp_apply_template_status(uuid, text, timestamptz, text)') IS NOT NULL;
+  BEGIN
+    IF (v_col OR v_idx OR v_fn) AND NOT (v_col_exact AND v_idx_exact AND v_fn) THEN
+      RAISE EXCEPTION 'WTAU preflight: status_event_at / whatsapp_templates_one_active / whatsapp_apply_template_status partly exist or differ (column %, index %, function %) - they predate this migration; refusing (its rollback must never drop them)', v_col, v_idx, v_fn;
+    END IF;
+  END;
 END
 $preflight$;
 
