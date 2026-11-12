@@ -2,7 +2,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { tenantContextFor, tenantTable } from '../../../../backend/db/tenantTable';
-import { requireCapability } from '../../../../backend/security/requireCapability';
+import { requireCapabilityUniform } from '../../../../backend/security/requireCapabilityUniform';
+import { UNIFORM_NOT_FOUND } from '../../../../backend/services/userContextService';
 import { ORGANIZATION_MANAGE } from '../../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -17,15 +18,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .eq('id', id)
     .single();
 
+  // Unknown and another tenant's id answer the SAME 404 (e9, 2026-11-12: no existence oracle).
   if (playbookError || !playbook) {
-    return res.status(404).json({ error: 'Playbook not found' });
+    return res.status(404).json(UNIFORM_NOT_FOUND);
   }
 
   if (req.method === 'PUT') {
     // Wave 2C-B: capability-based gate with org scope. organization.manage
     // is granted to COMPANY_ADMIN + SUPER_ADMIN. No step-up required for
     // playbook updates (medium-risk; not in STEP_UP_REQUIRED_CAPABILITIES).
-    const guard = await requireCapability(req, res, {
+    const guard = await requireCapabilityUniform(req, res, {
       capability: ORGANIZATION_MANAGE,
       organizationId: playbook.company_id,
       reason: 'update virality playbook',

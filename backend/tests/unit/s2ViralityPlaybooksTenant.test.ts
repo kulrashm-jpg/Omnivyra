@@ -42,6 +42,7 @@ jest.mock('../../services/rbacService', () => ({
   Role: {}, isPlatformSuperAdmin: async () => false, isSuperAdmin: async () => false,
   getUserRole: async (_u: string, companyId: string) => (companyId === '11111111-1111-4111-8111-111111111111' ? { role: 'COMPANY_ADMIN', error: null } : { role: null, error: null }),
 }));
+jest.mock('../../services/userContextService', () => jest.requireActual('../../services/userContextService'));
 jest.mock('../../security/requireCapability', () => ({
   // A's admin holds organization.manage for A only.
   requireCapability: async (_req: unknown, res: any, o: { organizationId: string }) =>
@@ -81,9 +82,12 @@ it('POST is stamped with the authorized company - a body company_id cannot redir
   if (r.statusCode === 201) expect(mockDb.virality_playbooks.find((p) => p.name === 'n')).toMatchObject({ company_id: A });
 });
 
-it("PUT B's playbook by A's admin is refused; nothing written", async () => {
+it("PUT B's playbook by A's admin: the SAME 404 as an unknown id (no existence oracle); nothing written", async () => {
   const r = await call(item, 'PUT', { id: 'pb' }, { name: 'hijack' });
-  expect(r.statusCode).toBe(403);
+  const unknown = await call(item, 'PUT', { id: 'pb-nope' }, { name: 'x' });
+  expect(r.statusCode).toBe(404);
+  expect(unknown.statusCode).toBe(404);
+  expect(JSON.stringify(r.body)).toBe(JSON.stringify(unknown.body));
   expect(mockWrites.filter((w) => w.op === 'update')).toHaveLength(0);
   expect(mockDb.virality_playbooks.find((p) => p.id === 'pb')!.name).toBe('B secret');
 });
