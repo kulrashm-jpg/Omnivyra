@@ -159,3 +159,99 @@ describe('Structured plan scheduling API', () => {
     expect(payload.skipped_count).toBe(1);
   });
 });
+
+// ── Unread errors (unread-error pkg 2, e9 2026-11-12) ─────────────────────────
+// PostgREST reports a failure in `error` and never throws. ONE fault per case; reverting a site's
+// check fails exactly its own case.
+describe('Structured plan scheduling API — unread errors', () => {
+  type Ans = { data: any; error: any };
+  let versionContextAns: Ans;
+  let companyAns: Ans;
+  let activationAnswers: Ans[];
+  const activationCalls: unknown[] = [];
+
+  /** Per-chain double: records the chain so the two campaign_versions reads are distinguishable. */
+  function table(name: string) {
+    const ops: string[] = [];
+    const b: any = {};
+    for (const op of ['select', 'eq', 'in', 'limit', 'range', 'insert', 'upsert', 'delete']) b[op] = () => { ops.push(op); return b; };
+    b.order = () => { ops.push('order'); return b; };
+    b.update = (payload: unknown) => {
+      ops.push('update');
+      if (name === 'campaigns') activationCalls.push(payload);
+      return b;
+    };
+    b.maybeSingle = async () => {
+      if (name === 'campaigns') return { data: { execution_status: 'ACTIVE', blueprint_status: 'ACTIVE', duration_locked: true }, error: null };
+      if (name === 'campaign_versions') return ops.includes('order') ? versionContextAns : companyAns;
+      return { data: null, error: null };
+    };
+    b.then = (res: any, rej: any) => {
+      const out = name === 'campaigns' && ops.includes('update')
+        ? (activationAnswers.shift() ?? { data: null, error: null })
+        : { data: [], error: null };
+      return Promise.resolve(out).then(res, rej);
+    };
+    return b;
+  }
+
+  const req = () => ({
+    method: 'POST', headers: idempotencyHeaders(),
+    query: { id: 'campaign-123' },
+    body: { plan: { weeks: [{ week: 1, theme: 'T', daily: [{ day: 'Monday', objective: 'A', content: 'C', platforms: { linkedin: 'L' } }] }] } },
+  }) as unknown as NextApiRequest;
+  const fail = { data: null, error: { message: 'boom', code: '08006' } };
+
+  beforeEach(() => {
+    requireCampaignAccessMock.mockImplementation(async (_r: any, _s: any, campaignId: string) => ({
+      userId: 'test-caller-1', companyId: 'company-456', campaignId, campaignAuth: { role: 'COMPANY_ADMIN' },
+    }));
+    resetIdempotency();
+    versionContextAns = { data: { company_id: 'company-123', campaign_snapshot: {} }, error: null };
+    companyAns = { data: { company_id: 'company-123' }, error: null };
+    activationAnswers = [];
+    activationCalls.length = 0;
+    (supabase.from as jest.Mock).mockImplementation((name: string) => table(name));
+    (scheduleStructuredPlan as jest.Mock).mockReset().mockResolvedValue({ scheduled_count: 2, skipped_count: 0, skipped_platforms: [] });
+    const lock = jest.requireMock('../../services/SchedulerLockService');
+    (lock.acquireSchedulerLock as jest.Mock).mockClear();
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('version-context read fails: 503 CAMPAIGN_VERSION_READ_FAILED, nothing scheduled (no "text" default skipping the creator gate)', async () => {
+    versionContextAns = fail;
+    const res = makeAssertable(createMockRes());
+    await handler(req(), res);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ code: 'CAMPAIGN_VERSION_READ_FAILED' });
+    expect(scheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('company read fails: 503 CAMPAIGN_COMPANY_READ_FAILED BEFORE the lock, nothing scheduled', async () => {
+    companyAns = fail;
+    const res = makeAssertable(createMockRes());
+    await handler(req(), res);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ code: 'CAMPAIGN_COMPANY_READ_FAILED' });
+    expect(jest.requireMock('../../services/SchedulerLockService').acquireSchedulerLock).not.toHaveBeenCalled();
+    expect(scheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('activation fails twice: 200 (posts ARE scheduled) with activation.ok false, after one retry', async () => {
+    activationAnswers = [fail, fail];
+    const res = makeAssertable(createMockRes());
+    await handler(req(), res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ scheduled_count: 2, activation: { ok: false, code: 'CAMPAIGN_ACTIVATION_FAILED' } });
+    expect(activationCalls).toHaveLength(2);
+  });
+
+  it('activation fails once: the retry succeeds and activation.ok is true', async () => {
+    activationAnswers = [fail, { data: null, error: null }];
+    const res = makeAssertable(createMockRes());
+    await handler(req(), res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ activation: { ok: true } });
+    expect(activationCalls).toHaveLength(2);
+  });
+});

@@ -26,32 +26,51 @@ const isScheduleEligibilityError = (error: unknown): error is ScheduleEligibilit
   return typeof ScheduleEligibilityError === 'function' && error instanceof ScheduleEligibilityError;
 };
 
-async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data } = await supabase
+/** The campaign's company, CHECKED: a failed read is reported, never "no company". */
+async function readCompanyId(campaignId: string): Promise<{ companyId: string | null; error: { message: string } | null }> {
+  const { data, error } = await supabase
     .from('campaign_versions')
     .select('company_id')
     .eq('campaign_id', campaignId)
     .limit(1)
     .maybeSingle();
-  return (data as any)?.company_id ?? null;
+  if (error) return { companyId: null, error };
+  return { companyId: (data as any)?.company_id ?? null, error: null };
+}
+
+/**
+ * best-effort(audit): the company for a governance event on an ERROR path (finalized / lock /
+ * integrity / freeze). The response is already decided there; a failed read only loses the event,
+ * so it is logged at ERROR, never thrown (e9: audit after the outcome is B with an ERROR log).
+ */
+async function getCompanyId(campaignId: string): Promise<string | null> {
+  const r = await readCompanyId(campaignId);
+  if (r.error) {
+    console.error('[schedule-structured-plan] company lookup failed; governance event not recorded', { campaignId, message: r.error.message });
+  }
+  return r.companyId;
 }
 
 async function getCampaignVersionContext(campaignId: string): Promise<{
   companyId: string | null;
   executionProfile: string;
+  error: { message: string } | null;
 }> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('campaign_versions')
     .select('company_id, campaign_snapshot')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  // A failed read must not default the profile to 'text': that SKIPS the creator governance gate.
+  if (error) return { companyId: null, executionProfile: '', error };
   const snapshot = (data as any)?.campaign_snapshot ?? {};
   const executionConfig = snapshot.execution_config ?? snapshot.executionConfig ?? {};
   return {
     companyId: (data as any)?.company_id ?? null,
     executionProfile: String(executionConfig.campaign_mode || executionConfig.campaignMode || 'text').trim().toLowerCase(),
+    error: null,
   };
 }
 
@@ -87,6 +106,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const versionContext = await getCampaignVersionContext(id);
+  if (versionContext.error) {
+    console.error('[schedule-structured-plan] version context unreadable; refusing to schedule without the governance gate', { campaignId: id, message: versionContext.error.message });
+    return res.status(503).json({
+      code: 'CAMPAIGN_VERSION_READ_FAILED',
+      message: 'Could not read the campaign version to check scheduling rules. Nothing was scheduled. Please try again.',
+    });
+  }
   if (versionContext.executionProfile === 'creator') {
     try {
       assertCreatorFormatsSchedulable(getCreatorFormatsFromStructuredPlanWeeks(plan.weeks));
@@ -149,7 +175,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     assertSchedulerExecutable(campaign);
 
-    const companyId = await getCompanyId(id);
+    // CHECKED before the lock: a failed read used to make companyId null and SILENTLY skip every
+    // governance event of the run (lock acquired, started, completed) and the version-stage sync.
+    const companyRead = await readCompanyId(id);
+    if (companyRead.error) {
+      console.error('[schedule-structured-plan] company lookup failed before scheduling', { campaignId: id, message: companyRead.error.message });
+      return res.status(503).json({
+        code: 'CAMPAIGN_COMPANY_READ_FAILED',
+        message: 'Could not read the campaign\'s company. Nothing was scheduled. Please try again.',
+      });
+    }
+    const companyId = companyRead.companyId;
 
     lockId = await acquireSchedulerLock(id);
     if (companyId) {
@@ -193,20 +229,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const result = await scheduleStructuredPlan(plan, id);
 
-    // Update campaign status to reflect committed/scheduled state
-    try {
-      await supabase
-        .from('campaigns')
-        .update({
-          status: 'active',
-          current_stage: 'schedule',
-          blueprint_status: 'ACTIVE',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', id);
-    } catch (updateErr) {
-      console.warn('[schedule-structured-plan] Failed to update campaign row, continuing:', updateErr);
+    // Update campaign status to reflect committed/scheduled state. The old try/catch could not see
+    // a PostgREST error (it is returned, never thrown), so a failure was invisible. The posts ARE
+    // scheduled by now and will publish (the publish path does not read campaigns.status), and
+    // scheduleStructuredPlan is not idempotent: a 500 here would invite the user to schedule AGAIN
+    // and duplicate every post. So the idempotent write is retried once, and a persistent failure is
+    // reported in the 200 body (`activation.ok: false`) and logged at ERROR: visible, without
+    // inviting a duplicate schedule. (Disposition put to e9, 2026-11-12.)
+    const activate = () => supabase
+      .from('campaigns')
+      .update({
+        status: 'active',
+        current_stage: 'schedule',
+        blueprint_status: 'ACTIVE',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id);
+    let { error: activateError } = await activate();
+    if (activateError) ({ error: activateError } = await activate());
+    if (activateError) {
+      console.error('[schedule-structured-plan] campaign activation failed AFTER scheduling (posts are scheduled)', { campaignId: id, message: activateError.message, scheduled_count: result.scheduled_count });
     }
+    const activation = activateError
+      ? { ok: false as const, code: 'CAMPAIGN_ACTIVATION_FAILED' }
+      : { ok: true as const };
 
     void checkAndCompleteCampaignIfEligible(id).catch(() => {});
     void syncCampaignVersionStage(id, 'schedule', companyId).catch(() => {});
@@ -232,7 +278,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    return res.status(200).json(result);
+    return res.status(200).json({ ...result, activation });
   } catch (error: any) {
     // The guard could not READ the blueprint state. That is not a policy
     // verdict (409) and not a server bug (500): it is retryable, and nothing

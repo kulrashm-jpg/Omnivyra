@@ -51,6 +51,13 @@ export function useStructuredPlanScheduling({
       setUiSuccessMessage(
         `Scheduled ${data.scheduled_count || 0} posts. Skipped ${data.skipped_count || 0}. Use **View submitted plan** above to open your plan.`
       );
+      // The posts ARE scheduled; only the campaign's status update failed. Say so, and do not invite
+      // a second schedule (that would duplicate every post).
+      if (data.activation && data.activation.ok === false) {
+        setUiErrorMessage(
+          'Your posts were scheduled, but the campaign status could not be updated. Do not schedule again; reload the page, and contact support if the campaign still does not show as active.'
+        );
+      }
 
       const refetchRes = await fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`);
       if (refetchRes.ok) {
