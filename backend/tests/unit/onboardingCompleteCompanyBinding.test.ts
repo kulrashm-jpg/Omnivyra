@@ -63,6 +63,10 @@ function mockTable(table: string) {
 }
 let mockEmail = 'mallory@acme.io';
 const mockGrants: unknown[] = [];
+const mockNotified: Array<Record<string, unknown>> = [];
+jest.mock('../../services/claimedDomainNotifyService', () => ({
+  notifyAdminAndProspectOfClaimedDomain: async (_db: unknown, input: Record<string, unknown>) => { mockNotified.push(input); },
+}));
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => mockTable(t) } }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../services/authResolver', () => ({
@@ -96,7 +100,7 @@ const bindingWrites = () => mockWrites.filter((w) => w.table !== 'users' || w.ro
 const rolesIn = (companyId: string) => mockDb.user_company_roles.filter((r) => r.company_id === companyId);
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
-  mockWrites.length = 0; mockGrants.length = 0; mockSeq = 0;
+  mockWrites.length = 0; mockGrants.length = 0; mockNotified.length = 0; mockSeq = 0;
   mockDb.users = [{ id: USER, supabase_uid: 'sb-user', email: 'x', is_deleted: false }];
   // acme.com's company: created by an admin flow, so it has NO initial free-credit claim
   mockDb.companies = [{ id: VICTIM, name: 'Acme', admin_email_domain: 'acme.com' }];
@@ -105,13 +109,15 @@ beforeEach(() => {
 });
 
 describe('decision 1+2: matching and binding', () => {
-  it('same domain, no membership: NO access, refused before any write binds them', async () => {
-    mockEmail = 'mallory@acme.com';
+  it('same domain, no membership: NO access, a join request goes to the admin, nothing bound', async () => {
+    mockEmail = 'Newbie@acme.com';
     const r = await post();
     expect(r.statusCode).toBe(403);
-    expect(r.body.code).toBe('INVITE_REQUIRED');
+    expect(r.body).toMatchObject({ code: 'INVITE_REQUIRED', joinRequested: true });
+    expect(r.body.error).toMatch(/asked your admin/);
     expect(bindingWrites()).toEqual([]);
     expect(mockGrants).toEqual([]);
+    expect(mockNotified).toEqual([expect.objectContaining({ companyId: VICTIM, companyName: 'Acme', prospectEmail: 'newbie@acme.com', emailDomain: 'acme.com', prospectUserId: USER })]);
   });
 
   it('same domain, INACTIVE former member: refused the same way', async () => {
@@ -128,6 +134,7 @@ describe('decision 1+2: matching and binding', () => {
     mockDb.user_company_roles = [{ id: 'r1', user_id: USER, company_id: VICTIM, role: 'CONTENT_CREATOR', status: 'invited' }];
     const r = await post();
     expect(r.statusCode).toBe(200);
+    expect(mockNotified).toEqual([]);
     expect(mockDb.companies).toHaveLength(1);
     expect(rolesIn(VICTIM)).toEqual([{ id: 'r1', user_id: USER, company_id: VICTIM, role: 'CONTENT_CREATOR', status: 'invited' }]);
     expect(mockDb.free_credit_profiles[0].organization_id).toBe(VICTIM);
@@ -141,6 +148,7 @@ describe('decision 1+2: matching and binding', () => {
     expect(own).toBeTruthy();
     expect(own!.id).not.toBe(VICTIM);
     expect(rolesIn(VICTIM)).toEqual([]);
+    expect(mockNotified).toEqual([]);
     expect(rolesIn(own!.id)).toEqual([expect.objectContaining({ user_id: USER, role: 'COMPANY_ADMIN', status: 'active', join_source: 'self_joined' })]);
   });
 

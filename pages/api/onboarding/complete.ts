@@ -36,6 +36,7 @@ import {
 } from '../../../backend/services/initialFreeCreditService';
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
 import { getTrustedClientIp } from '../../../lib/security/clientIp';
+import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
 import {
   emitSignupEvent,
   ensureSignupCorrelationId,
@@ -197,7 +198,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //     acme.com's company 'acme'; its .limit(1) also refused members of a 2nd same-name company.)
     //  2. BINDING: an existing company is reachable ONLY via companies.admin_email_domain AND an
     //     active/invited membership the user already holds. A domain match without one gets NO access
-    //     (join requests to the company's admins follow separately). No domain match -> a NEW company,
+    //     - a join request goes to the company's admin, who invites them (step 3 below). No domain match -> a NEW company,
     //     even if another company has the same name (names are not unique; admin_email_domain is).
     //  3. PROMOTION: COMPANY_ADMIN only for a company THIS request created - never because a company
     //     "has no initial credit claim" (that billing-as-identity gate is removed; a company with no
@@ -209,13 +210,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let createdThisRequest = false;
 
     let domainCompanyId: string | null = null;
+    let domainCompanyName: string | null = null;
     if (emailDomain) {
       // Candidates are fetched case-insensitively (pattern characters escaped); the DECISION is exact
       // equality below, so no pattern character can widen the match.
       const domainPattern = emailDomain.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
       const { data: domainCandidates, error: domainErr } = await supabase
         .from('companies')
-        .select('id, admin_email_domain')
+        .select('id, name, admin_email_domain')
         .ilike('admin_email_domain', domainPattern)
         .limit(10);
       if (domainErr) {
@@ -232,6 +234,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(409).json({ code: 'COMPANY_DOMAIN_AMBIGUOUS', error: 'Your company could not be resolved. Please contact support.' });
       }
       domainCompanyId = exact[0]?.id ?? null;
+      domainCompanyName = exact[0]?.name ?? null;
     }
 
     if (domainCompanyId) {
@@ -243,11 +246,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .in('status', ['active', 'invited'])
         .limit(1)
         .maybeSingle();
-      if (membershipErr || !priorMembership) {
+      if (membershipErr) {
+        console.error('[onboarding/complete] membership lookup failed:', membershipErr.message);
+        return res.status(500).json({ error: 'Could not resolve your company. Please try again.' });
+      }
+      if (!priorMembership) {
+        // JOIN REQUEST (owner ruling 2b, option C): no access is granted. The company's active admin
+        // is emailed that this verified person from their domain wants in (and the person is told who
+        // to ask); the admin lets them in through the normal invite flow, choosing the role there.
+        // Deduped per prospect email via signup_referrals; best-effort, never throws.
         // Decided BEFORE any write that binds the user to the company.
+        await notifyAdminAndProspectOfClaimedDomain(supabase, {
+          prospectUserId: userId,
+          prospectEmail:  authEmail.toLowerCase(),
+          emailDomain,
+          companyId:      domainCompanyId,
+          companyName:    domainCompanyName,
+          nowIso:         new Date().toISOString(),
+        });
         return res.status(403).json({
-          code:  'INVITE_REQUIRED',
-          error: 'Your company already uses Omnivyra. Ask your company admin to invite you.',
+          code:          'INVITE_REQUIRED',
+          joinRequested: true,
+          error:         "Your company already uses Omnivyra; we've asked your admin to let you in.",
         });
       }
       companyId = domainCompanyId;
