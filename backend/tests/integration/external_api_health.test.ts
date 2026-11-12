@@ -16,9 +16,12 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));
 
-const sources = [
+// A uuid company that owns the source: the source scope refuses non-uuid ids (e1 2026-11-12).
+const HEALTH_COMPANY = '44444444-4444-4444-8444-444444444444';
+const sources: any[] = [
   {
     id: 'api-1',
+    company_id: HEALTH_COMPANY,
     name: 'YouTube Trends',
     base_url: 'https://api-one.example.com',
     purpose: 'trends',
@@ -50,6 +53,11 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // .is(column, null): the platform-row read (company_id IS NULL) - recorded like eq.
+    is: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
     order: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
     upsert: jest.fn(async (payload: any) => {
@@ -60,7 +68,11 @@ const buildQuery = (table: string) => {
     }),
     then: (resolve: any, reject: any) => {
       if (table === 'external_api_sources') {
-        return Promise.resolve({ data: sources, error: null }).then(resolve, reject);
+        // Apply the company filter whenever present - including an explicit NULL (platform rows).
+        const scoped = Object.prototype.hasOwnProperty.call(state.filters, 'company_id')
+          ? sources.filter((row: any) => (row.company_id ?? null) === state.filters.company_id)
+          : sources;
+        return Promise.resolve({ data: scoped, error: null }).then(resolve, reject);
       }
       if (table === 'external_api_health') {
         if (state.inFilter?.field === 'api_source_id') {
@@ -105,8 +117,8 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    await fetchTrendsFromApis('company-1', 'US', 'marketing');
-    await fetchTrendsFromApis('company-1', 'US', 'marketing');
+    await fetchTrendsFromApis(HEALTH_COMPANY, 'US', 'marketing');
+    await fetchTrendsFromApis(HEALTH_COMPANY, 'US', 'marketing');
 
     const stats = getCacheStats();
     expect(stats.misses).toBeGreaterThan(0);
@@ -124,7 +136,7 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    await fetchTrendsFromApis('company-1');
+    await fetchTrendsFromApis(HEALTH_COMPANY);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     jest.useFakeTimers().setSystemTime(new Date('2026-01-01T00:00:00Z'));
   });
@@ -149,8 +161,8 @@ describe('External API health + cache + rate limit', () => {
     // never reached `isRateLimited`. Nothing marked the source, so
     // `rate_limited_sources` was legitimately empty — the setup contradicted the
     // assertion rather than production being wrong.
-    await fetchTrendsFromApis('company-1', 'US', 'marketing');
-    await fetchTrendsFromApis('company-1', 'GB', 'technology');
+    await fetchTrendsFromApis(HEALTH_COMPANY, 'US', 'marketing');
+    await fetchTrendsFromApis(HEALTH_COMPANY, 'GB', 'technology');
     sources[0].rate_limit_per_min = 60;
 
     const snapshot = await getExternalApiRuntimeSnapshot(['api-1']);
@@ -164,7 +176,7 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    await fetchTrendsFromApis('company-1');
+    await fetchTrendsFromApis(HEALTH_COMPANY);
     const record = healthStore.get('api-1');
     expect(record).toBeDefined();
     expect(record.success_count).toBe(1);
@@ -180,7 +192,7 @@ describe('External API health + cache + rate limit', () => {
     });
     (global as any).fetch = fetchMock;
 
-    const trends = await fetchTrendsFromApis('company-1');
+    const trends = await fetchTrendsFromApis(HEALTH_COMPANY);
     expect(trends).toHaveLength(1);
     expect(trends[0].signal_confidence).toBeDefined();
     expect(trends[0].signal_confidence).toBeGreaterThanOrEqual(0);

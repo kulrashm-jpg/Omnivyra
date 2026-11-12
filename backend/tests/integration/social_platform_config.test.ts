@@ -31,6 +31,8 @@ const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.
   '../../services/rbacService'
 );
 
+// Company ids are uuids: the source scope refuses anything else (e1 2026-11-12).
+const SOCIAL_COMPANY = '44444444-4444-4444-8444-444444444444';
 const sourcesStore = new Map<string, any>();
 const healthStore = new Map<string, any>();
 
@@ -116,7 +118,16 @@ const resolveQuery = (table: string, state: any) => {
       sourcesStore.delete(state.filters.id);
       return { data: null, error: null };
     }
-    if (state.filters.id) {
+    // Exact own / platform reads (company_id = X, company_id IS NULL) - with any other filters they carry.
+    if (!state.orFilter && Object.prototype.hasOwnProperty.call(state.filters, 'company_id')) {
+      let rows = Array.from(sourcesStore.values()).filter((row) => (row.company_id ?? null) === state.filters.company_id);
+      if (Array.isArray(state.filters.id)) rows = rows.filter((row) => state.filters.id.includes(row.id));
+      else if (state.filters.id) rows = rows.filter((row) => row.id === state.filters.id);
+      if (state.filters.is_active !== undefined) rows = rows.filter((row) => row.is_active === state.filters.is_active);
+      if (state.filters.category !== undefined) rows = rows.filter((row) => row.category === state.filters.category);
+      return { data: rows, error: null };
+    }
+    if (state.filters.id && !Array.isArray(state.filters.id)) {
       const row = sourcesStore.get(state.filters.id);
       if (!row) return { data: null, error: { code: 'PGRST116' } };
       return { data: row, error: null };
@@ -191,9 +202,9 @@ describe('Social platform config', () => {
   it('creates and fetches platform config', async () => {
     const req = createApiRequestMock({
       method: 'POST',
-      companyId: 'company-1',
+      companyId: SOCIAL_COMPANY,
       body: {
-        companyId: 'company-1',
+        companyId: SOCIAL_COMPANY,
         name: 'Facebook',
         base_url: 'page-123',
         purpose: 'posting',
@@ -214,7 +225,7 @@ describe('Social platform config', () => {
 
     const listReq = createApiRequestMock({
       method: 'GET',
-      companyId: 'company-1',
+      companyId: SOCIAL_COMPANY,
       headers: { authorization: 'Bearer test-token' },
     });
     const listRes = createMockRes();

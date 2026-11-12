@@ -36,6 +36,8 @@ const { getUserRole, hasPermission, isPlatformSuperAdmin, isSuperAdmin } = jest.
 );
 const { resolveUserContext } = jest.requireMock('../../services/userContextService');
 
+// A uuid company that owns the trend source: the source scope refuses non-uuid ids (e1 2026-11-12).
+const TREND_COMPANY = '33333333-3333-4333-8333-333333333333';
 const sourcesStore = new Map<string, any>();
 const healthStore = new Map<string, any>();
 
@@ -57,6 +59,11 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // .is(column, null): the platform-row read (company_id IS NULL) - recorded like eq.
+    is: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
@@ -111,7 +118,10 @@ const resolveQuery = (table: string, state: any) => {
       if (!row) return { data: null, error: { code: 'PGRST116' } };
       return { data: row, error: null };
     }
-    return { data: Array.from(sourcesStore.values()), error: null };
+    // Apply the company filter whenever present - including an explicit NULL (platform rows).
+    const rows = Array.from(sourcesStore.values());
+    if (!Object.prototype.hasOwnProperty.call(state.filters, 'company_id')) return { data: rows, error: null };
+    return { data: rows.filter((row) => (row.company_id ?? null) === state.filters.company_id), error: null };
   }
 
   if (table === 'external_api_health') {
@@ -190,10 +200,11 @@ describe('External API service', () => {
       is_active: true,
       auth_type: 'none',
       api_key_name: null,
+      company_id: TREND_COMPANY,
       created_at: new Date().toISOString(),
     });
 
-    const trends = await fetchTrendsFromApis('US', 'marketing');
+    const trends = await fetchTrendsFromApis(TREND_COMPANY, 'marketing');
     expect(trends).toHaveLength(1);
     expect(trends[0]).toEqual({
       topic: 'AI marketing',

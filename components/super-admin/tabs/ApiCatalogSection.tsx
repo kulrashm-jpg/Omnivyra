@@ -133,10 +133,36 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
     finally { setCheckingApiId(null); }
   };
 
+  /**
+   * e1 2026-11-12 (e9 ruling B): the catalog LIST never carries headers / query_params / oauth_* (has_* flags
+   * instead). Editing reads the FULL entry from the by-id route, which returns those fields only to a holder of the
+   * integration-secrets capability. A response WITHOUT them while has_headers / has_query_params is true means
+   * "you may not see them" - and therefore must not overwrite them.
+   */
+  const loadFullCatalogEntry = async (id: string): Promise<any | null> => {
+    const r = await fetchWithAuth(`/api/external-apis/${id}?scope=platform`);
+    if (!r.ok) return null;
+    const parsed = await parseJsonResponse<{ api?: any }>(r, `/api/external-apis/${id}?scope=platform`);
+    return parsed.ok === true ? parsed.data?.api ?? null : null;
+  };
+  const secretsHiddenIn = (entry: any) =>
+    !!entry && (!('headers' in entry) || !('query_params' in entry)) && (entry.has_headers || entry.has_query_params);
+
   const saveApiEnvConfig = async (catalogEntry: any, known?: any) => {
     setSavingApiEnv(true);
     setApiEnvSaveError(null);
     try {
+      // Merge onto the STORED headers / query_params - never onto the (stripped) list row.
+      const full = await loadFullCatalogEntry(catalogEntry.id);
+      if (!full) {
+        setApiEnvSaveError('Could not load the current API settings; nothing was saved.');
+        return;
+      }
+      if (secretsHiddenIn(full)) {
+        setApiEnvSaveError('Editing these settings requires the integration-secrets capability; nothing was saved.');
+        return;
+      }
+      catalogEntry = { ...catalogEntry, headers: full.headers ?? {}, query_params: full.query_params ?? {} };
       // Embed _config (model/temperature/etc.) into query_params JSONB
       const { _config: _existingConfig, ...restQP } = catalogEntry.query_params || {};
       const newConfig = apiEnvForm._config;
@@ -440,16 +466,29 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
                         if (isInCatalog) {
                           setExpandedApiId(isExpanded ? null : known.key);
                           if (!isExpanded) {
-                            const existingConfig = catalogEntry?.query_params?._config || {};
+                            // The list row carries no headers / query_params (ruling B): fill the form from the
+                            // FULL entry. Until it arrives (or when it is hidden), the env-name fields stay
+                            // undefined - and a save re-reads the full entry and refuses rather than blank them.
                             setApiEnvForm({
                               api_key_env_name:    configuredEnvVar || '',
                               is_active:           isEnabled,
                               base_url:            catalogEntry?.base_url || known.base_url,
                               daily_quota:         catalogEntry?.rate_limit_per_min ?? '',
-                              _client_id_env:      catalogEntry?.headers?._client_id_env || '',
-                              _client_secret_env:  catalogEntry?.headers?._client_secret_env || '',
-                              _config:             existingConfig,
+                              _client_id_env:      undefined,
+                              _client_secret_env:  undefined,
+                              _config:             {},
                             });
+                            if (catalogEntry?.id) {
+                              void loadFullCatalogEntry(catalogEntry.id).then((full) => {
+                                if (!full || secretsHiddenIn(full)) return;
+                                setApiEnvForm((prev) => ({
+                                  ...prev,
+                                  _client_id_env:     full.headers?._client_id_env || '',
+                                  _client_secret_env: full.headers?._client_secret_env || '',
+                                  _config:            full.query_params?._config || {},
+                                }));
+                              });
+                            }
                             if (catalogEntry?.id && accountsByApiId[catalogEntry.id] === undefined) {
                               loadAccounts(catalogEntry.id);
                             }

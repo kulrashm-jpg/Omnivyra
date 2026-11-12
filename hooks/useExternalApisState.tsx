@@ -44,6 +44,7 @@ export function useExternalApisState() {
   const [selectedPreset, setSelectedPreset] = useState<ExternalApiPreset | null>(null);
   const [selectedCatalogPreset, setSelectedCatalogPreset] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSecretsHidden, setEditSecretsHidden] = useState(false);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [queryMode, setQueryMode] = useState<'pairs' | 'json'>('pairs');
   const [headerMode, setHeaderMode] = useState<'pairs' | 'json'>('pairs');
@@ -468,14 +469,32 @@ export function useExternalApisState() {
     setEditingId(api.id);
     setEditingPresetId(null);
     setSelectedPreset(findPresetByName(api.name));
+    // e1 2026-11-12 (e9 ruling B): the LIST row carries no headers / query_params (has_* flags instead). Until the
+    // FULL row is loaded from the by-id route - and whenever it comes back without them (the caller may not see
+    // them) - a save OMITS headers / query_params, so the server keeps what is stored instead of overwriting it.
+    setEditSecretsHidden(true);
     setForm({
       ...emptyForm,
       ...api,
       api_key_env_name: api.api_key_env_name || api.api_key_name || '',
-      headers: api.headers || {},
-      query_params: api.query_params || {},
+      headers: {},
+      query_params: {},
       is_preset: api.is_preset ?? false,
     });
+    const byIdUrl = companyContextId
+      ? `/api/external-apis/${api.id}?companyId=${companyContextId}`
+      : `/api/external-apis/${api.id}?scope=platform`;
+    void fetchWithAuth(byIdUrl)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        const full = body?.api;
+        if (!full || !('headers' in full) || !('query_params' in full)) return;
+        setForm((prev) => (prev && (prev as ApiSource).id === api.id
+          ? { ...prev, headers: full.headers || {}, query_params: full.query_params || {} }
+          : prev));
+        setEditSecretsHidden(false);
+      })
+      .catch(() => undefined);
   };
 
   const resolveEditorPayload = (): { ok: boolean; headers?: Record<string, string>; queryParams?: Record<string, string>; message?: string } => {
@@ -523,12 +542,18 @@ export function useExternalApisState() {
         return;
       }
       setIsSaving(true);
-      const payload = {
+      const payload: Record<string, unknown> = {
         ...form,
         headers: resolved.headers,
         query_params: resolved.queryParams,
         is_preset: form.is_preset ?? false,
       };
+      // Never overwrite stored headers / query_params the editor could not load (ruling B).
+      if (editingId && editSecretsHidden) {
+        delete payload.headers;
+        delete payload.query_params;
+      }
+      for (const flag of ['has_headers', 'has_query_params', 'has_oauth_credentials']) delete payload[flag];
       if (!companyContextId && !isPlatformCatalogMode) {
         throw new Error('Select a company before saving an API.');
       }

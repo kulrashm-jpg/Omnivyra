@@ -1,6 +1,6 @@
 /** Part of the external-apis API (Agent-B split — backend module, not a route). */
 // Remediation: read-path redaction of any secret pasted into the env-var-name field.
-import { redactApiSourceRow, redactSourceSecretsForViewer } from '../../security/credentialSafety';
+import { redactApiSourceRow, stripSourceSecrets } from '../../security/credentialSafety';
 import { requireExternalApiAccess, requirePlatformAdmin, parseUsageUserId } from './indexShared';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../db/supabaseClient';
@@ -69,12 +69,9 @@ export async function handleExternalApisGet(req: NextApiRequest, res: NextApiRes
       // makes an already-poisoned row unservable: any value that is not a valid env-var name
       // is replaced with a marker before it leaves the server. Defence in depth — the UI is
       // not the security boundary, and this must hold even if a row is written out-of-band.
-      // e1 2026-11-12 (HIGH): headers / query_params / oauth_* are returned ONLY for sources the caller OWNS
-      // (its company's) or to a platform admin - a platform preset or any foreign row loses them entirely.
-      const redactedApis = redactSourceSecretsForViewer(
-        redactApiSourceRow(apis as Array<Record<string, unknown>>),
-        { companyId: companyId ?? null, isPlatformAdmin: access.role === 'SUPER_ADMIN' },
-      );
+      // e1 2026-11-12 (e9 ruling B, HIGH): a catalog view returns headers / query_params / oauth_* to NOBODY
+      // (has_* flags instead) - every branch, platform admins included. The by-id route is the only full view.
+      const redactedApis = stripSourceSecrets(redactApiSourceRow(apis as Array<Record<string, unknown>>));
       const since = new Date();
       since.setDate(since.getDate() - 13);
       const sinceDate = since.toISOString().slice(0, 10);

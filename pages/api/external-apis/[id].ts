@@ -4,6 +4,10 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { validatePlatformConfig, VALID_API_CATEGORIES } from '../../../backend/services/externalApiService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
+import { stripSourceSecrets } from '../../../backend/security/credentialSafety';
+import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
+import { hasCapability } from '../../../backend/security/AuthorizationService';
+import { INTEGRATION_SECRETS_READ } from '../../../shared/contracts/security';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
@@ -38,6 +42,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   let canManageExternalApis = false;
   let hasPlatformScope = false;
+  let companyAdminByRole = false;
+  /**
+   * e1 2026-11-12 (e9 ruling B): the by-id route is the ONLY view that may return a source's headers /
+   * query_params / oauth_* - and only to (a) an admin of the OWNING company (by company role), or (b) a holder of
+   * the integration-secrets CAPABILITY (the same one that gates WRITING them, indexMutations) - never by a platform
+   * role alone. Everyone else gets the row with the fields removed and has_* flags.
+   */
+  const mayReadSecrets = async (row: Record<string, any> | null): Promise<boolean> => {
+    if (!row) return false;
+    const ownsRow = companyAdminByRole && !!row.company_id && !!companyId
+      && String(row.company_id).toLowerCase() === String(companyId).toLowerCase();
+    if (ownsRow) return true;
+    // Fail CLOSED: a principal that cannot be resolved (or a lookup that throws) never reads secrets.
+    try {
+      const resolved = await resolvePrincipal(req);
+      return resolved.ok === true && hasCapability(resolved.principal, INTEGRATION_SECRETS_READ);
+    } catch {
+      return false;
+    }
+  };
+  const shapeForViewer = async (row: Record<string, any>) =>
+    (await mayReadSecrets(row)) ? row : stripSourceSecrets([row])[0];
   if (legacySession) {
     canManageExternalApis = true;
     hasPlatformScope = true;
@@ -70,6 +96,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
       canManageExternalApis = await hasPermission(role, 'MANAGE_EXTERNAL_APIS');
+      // An admin of THIS company by its company role - never inferred from a platform role.
+      companyAdminByRole = canManageExternalApis;
     }
   }
 
@@ -122,7 +150,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .select('*')
       .eq('api_source_id', id)
       .single();
-    return res.status(200).json({ api: { ...data, health: healthData || null } });
+    return res.status(200).json({ api: { ...(await shapeForViewer(data)), health: healthData || null } });
   }
 
   if (req.method === 'PUT') {
@@ -309,7 +337,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
     await invalidateCompanyConfigCacheForApiSource(id);
-    return res.status(200).json({ api: data, ...(whitelistReset ? { whitelist_reset: true } : {}) });
+    return res.status(200).json({ api: await shapeForViewer(data), ...(whitelistReset ? { whitelist_reset: true } : {}) });
   }
 
   if (req.method === 'DELETE') {

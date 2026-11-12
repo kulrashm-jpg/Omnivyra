@@ -39,8 +39,16 @@ function mockTable(table: string) {
     },
     upsert: (p: Row) => { op = 'upsert'; payload = p; return b; },
     insert: (p: Row) => { op = 'insert'; payload = p; return b; },
+    update: (p: Row) => { op = 'update'; payload = p; return b; },
     maybeSingle: () => { one = true; return b; }, single: () => { one = true; return b; },
     then: (ok: any, ko: any) => {
+      if (op === 'update') {
+        // PostgREST: UPDATE ... RETURNING the matched rows (with .select()), patch applied.
+        const hit = (mockDb[table] ?? []).filter((r) => tests.every((t) => t(r)));
+        hit.forEach((r) => Object.assign(r, payload));
+        mockWrites.push({ table, op, row: payload });
+        return Promise.resolve({ data: one ? hit[0] ?? null : hit, error: null }).then(ok, ko);
+      }
       if (op !== 'select') { mockWrites.push({ table, op, row: payload }); return Promise.resolve({ data: { ...payload }, error: null }).then(ok, ko); }
       if (table === 'external_api_sources' && companyScoped && mockFailCompanyScoped) {
         mockFailCompanyScoped = false;
@@ -56,6 +64,9 @@ const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 let mockEnabled: string[] = [];
 let mockRole = 'COMPANY_ADMIN';
+let mockCanManage = true;
+let mockIsPlatformSA = false;
+let mockHasSecretsCapability = false;
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => mockTable(t) }));
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => mockTable(t) } }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
@@ -67,13 +78,20 @@ jest.mock('../../services/supabaseAuthService', () => ({ getSupabaseUserFromRequ
 jest.mock('../../services/superAdminSession', () => ({ getLegacySuperAdminSession: () => null }));
 jest.mock('../../services/rbacService', () => ({
   getUserRole: async () => ({ role: mockRole, error: null }),
-  hasPermission: async () => true,
+  hasPermission: async () => mockCanManage,
   getCompanyRoleIncludingInvited: async () => mockRole,
-  isPlatformSuperAdmin: async () => false,
+  isPlatformSuperAdmin: async () => mockIsPlatformSA,
   isSuperAdmin: async () => false,
   Role: { ADMIN: 'ADMIN', COMPANY_ADMIN: 'COMPANY_ADMIN', SUPER_ADMIN: 'SUPER_ADMIN' },
 }));
-jest.mock('../../services/companyApiConfigCache', () => ({ invalidateCompanyConfigCache: () => undefined }));
+jest.mock('../../services/companyApiConfigCache', () => ({
+  invalidateCompanyConfigCache: () => undefined,
+  invalidateCompanyConfigCacheForApiSource: async () => undefined,
+}));
+jest.mock('../../security/IdentityResolver', () => ({ resolvePrincipal: async () => ({ ok: true, principal: { userId: 'u-admin-a' } }) }));
+jest.mock('../../security/AuthorizationService', () => ({ hasCapability: () => mockHasSecretsCapability }));
+jest.mock('../../services/userContextService', () => ({ resolveUserContext: async () => ({ defaultCompanyId: null }) }));
+jest.mock('../../auth/credentialEncryption', () => ({ encryptCredential: (v: string) => `enc(${v.length})` }));
 jest.mock('../../services/externalApiService', () => {
   const pc = jest.requireActual('../../services/externalApi/platformConfig');
   return {
@@ -83,6 +101,8 @@ jest.mock('../../services/externalApiService', () => {
     getEnabledApis: jest.fn(async () => []),
     getEnabledApiIdsFromCompanyConfig: jest.fn(async () => []),
     getUserApiAccess: jest.fn(async () => []),
+    validatePlatformConfig: () => ({ ok: true }),
+    VALID_API_CATEGORIES: [],
   };
 });
 
@@ -90,7 +110,8 @@ jest.mock('../../services/externalApiService', () => {
 const { getPlatformConfigs, getPlatformConfigByPlatform } = require('../../services/externalApi/platformConfig');
 const { getEnabledApis, getAvailableApis } = require('../../services/externalApi/userAccess');
 const { isSourceOwnOrPlatform } = require('../../services/externalApi/sourceScope');
-const { redactSourceSecretsForViewer } = require('../../security/credentialSafety');
+const { stripSourceSecrets } = require('../../security/credentialSafety');
+const byIdRoute = require('../../../pages/api/external-apis/[id]').default;
 const companyConfig = require('../../../pages/api/external-apis/company-config').default;
 const accessRoute = require('../../../pages/api/external-apis/access').default;
 const socialConfigs = require('../../../pages/api/social-platforms/configs').default;
@@ -99,6 +120,7 @@ const SECRET = { headers: { Authorization: 'Bearer live-token' }, query_params: 
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
   mockWrites.length = 0; mockFailCompanyScoped = false; mockEnabled = []; mockRole = 'COMPANY_ADMIN';
+  mockCanManage = true; mockIsPlatformSA = false; mockHasSecretsCapability = false;
   mockDb.external_api_sources = [
     { id: 'src-a', company_id: A, is_active: true, is_preset: false, created_at: '1', name: 'A private', platform_type: 'social', purpose: 'post', category: 'x', ...SECRET },
     { id: 'src-b', company_id: B, is_active: true, is_preset: false, created_at: '2', name: 'B private', platform_type: 'social', purpose: 'post', category: 'linkedin', ...SECRET },
@@ -160,24 +182,59 @@ describe('write path: a company stores only own or platform source ids', () => {
   });
 });
 
-describe('egress: secret-bearing fields only for the owner', () => {
-  it('redactSourceSecretsForViewer strips platform and foreign rows entirely; owner and platform admin keep them', () => {
-    const rows = mockDb.external_api_sources;
-    const out = redactSourceSecretsForViewer(rows, { companyId: A, isPlatformAdmin: false });
-    const by = (id: string) => out.find((r: Row) => r.id === id);
-    expect(by('src-a')).toMatchObject(SECRET);
-    for (const id of ['src-p', 'src-b']) {
-      for (const f of ['headers', 'query_params', 'oauth_client_id_encrypted', 'oauth_client_secret_encrypted']) expect([id, f in by(id)]).toEqual([id, false]);
+const SECRET_FIELDS = ['headers', 'query_params', 'oauth_client_id_encrypted', 'oauth_client_secret_encrypted'];
+const noSecrets = (row: Row) => SECRET_FIELDS.filter((f) => f in row);
+
+describe('egress (e9 ruling B): catalog/config views return the secret fields to NOBODY', () => {
+  it('stripSourceSecrets removes them from EVERY row (owner and platform alike) and adds has_* flags', () => {
+    const out = stripSourceSecrets(mockDb.external_api_sources);
+    for (const row of out) {
+      expect([row.id, noSecrets(row)]).toEqual([row.id, []]);
+      expect(row).toMatchObject({ has_headers: true, has_query_params: true, has_oauth_credentials: true });
     }
-    expect(redactSourceSecretsForViewer(rows, { companyId: null, isPlatformAdmin: true })).toEqual(rows);
+    expect(stripSourceSecrets([{ id: 'e', headers: {}, query_params: null }])[0])
+      .toMatchObject({ has_headers: false, has_query_params: false, has_oauth_credentials: false });
   });
-  it('a tenant reading social configs sees NO headers / query_params / oauth on a platform preset; its own source keeps them', async () => {
+  it('social configs: neither a platform preset NOR the caller’s own source carries secret fields', async () => {
     mockEnabled = ['src-p'];
     const r = await call(socialConfigs, 'GET', { companyId: A });
     expect(r.statusCode).toBe(200);
-    const by = (id: string) => r.body.apis.find((a: Row) => a.id === id);
-    expect(by('src-a')).toMatchObject({ headers: SECRET.headers, oauth_client_secret_encrypted: 'enc-secret' });
-    expect(by('src-p')).toBeTruthy();
-    expect(JSON.stringify(by('src-p'))).not.toMatch(/live-token|enc-secret|enc-id|api_key/);
+    for (const id of ['src-a', 'src-p']) {
+      const row = r.body.apis.find((a: Row) => a.id === id);
+      expect([id, noSecrets(row)]).toEqual([id, []]);
+      expect(row.has_headers).toBe(true);
+    }
+    expect(JSON.stringify(r.body)).not.toMatch(/live-token|enc-secret|enc-id|api_key/);
+  });
+});
+
+describe('by-id route: the ONLY full view - owning-company admin or the integration-secrets capability', () => {
+  it('a super admin WITHOUT the capability gets no secret fields (platform scope)', async () => {
+    mockIsPlatformSA = true; mockHasSecretsCapability = false;
+    const r = await call(byIdRoute, 'GET', { id: 'src-p', scope: 'platform' });
+    expect(r.statusCode).toBe(200);
+    expect(noSecrets(r.body.api)).toEqual([]);
+    expect(r.body.api.has_oauth_credentials).toBe(true);
+  });
+  it('a holder of the capability gets them - by-id only', async () => {
+    mockIsPlatformSA = true; mockHasSecretsCapability = true;
+    const r = await call(byIdRoute, 'GET', { id: 'src-p', scope: 'platform' });
+    expect(r.body.api).toMatchObject(SECRET);
+    // ...while the catalog views still strip them for the same viewer
+    const list = await call(socialConfigs, 'GET', { scope: 'platform' });
+    for (const row of list.body.apis ?? []) expect(noSecrets(row)).toEqual([]);
+  });
+  it("an admin of the OWNING company gets its own source's fields; a member who cannot manage does not", async () => {
+    mockCanManage = true;
+    expect((await call(byIdRoute, 'GET', { id: 'src-a', companyId: A })).body.api).toMatchObject(SECRET);
+    mockCanManage = false;
+    expect(noSecrets((await call(byIdRoute, 'GET', { id: 'src-a', companyId: A })).body.api)).toEqual([]);
+  });
+  it('the PUT response is shaped the same way (no secret fields without the gate)', async () => {
+    mockIsPlatformSA = true; mockHasSecretsCapability = false;
+    const r = await call(byIdRoute, 'PUT', { id: 'src-p', scope: 'platform' }, { name: 'Platform preset', base_url: 'https://x', purpose: 'post', platform_type: 'social' });
+    expect([r.statusCode, r.body?.error ?? null]).toEqual([200, null]);
+    expect(noSecrets(r.body.api)).toEqual([]);
+    expect(JSON.stringify(r.body)).not.toMatch(/live-token|enc-secret|enc-id/);
   });
 });

@@ -13,7 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSocialPostingConfigs } from '../../../backend/services/externalApiService';
-import { redactSourceSecretsForViewer } from '../../../backend/security/credentialSafety';
+import { stripSourceSecrets } from '../../../backend/security/credentialSafety';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
@@ -99,11 +99,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const apis = platformScopeRequested
       ? await getSocialPostingConfigs(null, { platformScope: true })
       : await getSocialPostingConfigs(companyId, { skipCache: req.query?.skipCache === '1' });
-    // e1 2026-11-12 (HIGH): secret-bearing fields only for the caller's OWN sources (or a platform admin).
-    const viewable = redactSourceSecretsForViewer(apis as unknown as Array<Record<string, unknown>>, {
-      companyId: companyId ?? null,
-      isPlatformAdmin: (access as { role?: string }).role === 'SUPER_ADMIN',
-    });
+    // e1 2026-11-12 (e9 ruling B, HIGH): a config view returns headers / query_params / oauth_* to NOBODY.
+    const viewable = stripSourceSecrets(apis as unknown as Array<Record<string, unknown>>);
     return res.status(200).json({ apis: viewable });
   } catch (err: any) {
     console.error('[social-platforms/configs]', err?.message);
