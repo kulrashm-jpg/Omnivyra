@@ -52,7 +52,7 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     id: 'company-name-availability',
     tables: ['company_profiles'],
     file: 'pages/api/onboarding/validate-company-name.ts',
-    reason: "PUBLIC signup check 'is this EXACT company name taken' - uniqueness is a property across ALL tenants, so the lookup cannot be tenant-scoped. It answers ONLY a boolean (never an id or another name): the input is escaped before .ilike (escapeLikePattern: % _ and \\ are literal, so a prefix like 'A%' matches only a company literally named 'A%'), and the endpoint is rate-limited per IP (NAME_CHECK_LIMIT 30/min). Pinned by backend/tests/unit/s2CompanyNameAvailability.test.ts 'a wildcard prefix never matches another company' and 'rate-limited per IP'. Reads nothing else cross-tenant; writes nothing.",
+    reason: "PUBLIC signup check 'is this EXACT company name taken' - uniqueness is a property across ALL tenants, so the lookup cannot be tenant-scoped. It answers ONLY a boolean (never an id or another name), and the boolean is decided by case-insensitive EQUALITY in code (isExactNameMatch) - so no pattern character in either layer (SQL LIKE % _ \\ or PostgREST's * -> %) can widen the answer beyond the exact name; the .ilike pattern (likeCandidatePattern) only narrows which candidate rows are fetched. Inherent and accepted: it reveals whether one EXACT name exists. The per-IP limit (NAME_CHECK_LIMIT 30/min, fails closed on limiter outage) is a speed bump, not the control. Pinned by backend/tests/unit/s2CompanyNameAvailability.test.ts 'a wildcard prefix never matches another company' and 'rate-limited per IP'. Reads nothing else cross-tenant; writes nothing.",
     owner: 'virality-e1',
   },
 ] as const;
