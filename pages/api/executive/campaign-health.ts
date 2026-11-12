@@ -11,6 +11,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantChildTable, tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { computeDistributionStability } from '../../../lib/intelligence/distributionStability';
 import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
@@ -109,6 +110,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!access) return;
 
     const cid = access.campaignId;
+    // S2: every read below is pinned to the company requireCampaignAccess resolved for this campaign.
+    const tenant = tenantContextFor(access, access.companyId);
 
     const now = new Date();
     const today = toDateString(now);
@@ -162,8 +165,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     try {
-      const { data: perfRows, error: perfErr } = await supabase
-        .from('campaign_performance')
+      const { data: perfRows, error: perfErr } = await tenantTable('campaign_performance', tenant)
         .select('performance_date, total_reach, total_engagement')
         .eq('campaign_id', cid)
         .gte('performance_date', prev7StartStr)
@@ -210,10 +212,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let total_comments_previous_7_days = 0;
 
     try {
-      const { data: postIds, error: postsErr } = await supabase
-        .from('scheduled_posts')
-        .select('id')
-        .eq('campaign_id', cid);
+      // scheduled_posts is a child of campaigns: the seam re-checks the campaign under the tenant.
+      const { data: postIds, error: postsErr } = await (await tenantChildTable('scheduled_posts', tenant, cid))
+        .select('id');
 
       if (!postsErr && Array.isArray(postIds) && postIds.length > 0) {
         const ids = postIds.map((p: any) => p.id).filter(Boolean);
@@ -317,8 +318,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let ai_spend_last_30_days = { total_tokens: 0, total_cost: 0, llm_calls: 0 };
     try {
       const since30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const { data: usageRows, error: usageErr } = await supabase
-        .from('usage_events')
+      const { data: usageRows, error: usageErr } = await tenantTable('usage_events', tenant)
         .select('total_tokens, total_cost')
         .eq('source_type', 'llm')
         .eq('campaign_id', cid)
@@ -348,8 +348,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       status: 'NOT_CONFIGURED',
     };
     try {
-      const { data: campaignRow, error: campaignErr } = await supabase
-        .from('campaigns')
+      const { data: campaignRow, error: campaignErr } = await tenantTable('campaigns', tenant)
         .select('ai_budget_monthly')
         .eq('id', cid)
         .maybeSingle();
