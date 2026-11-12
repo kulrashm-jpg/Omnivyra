@@ -45,7 +45,7 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     id: 'own-phone-identity-scoped',
     tables: ['free_credit_profiles'],
     file: 'pages/api/auth/get-stored-phone.ts',
-    reason: "IDENTITY-SCOPED, no tenant involved: the caller's OWN phone number, selected by .eq('user_id', user.id) where user comes from getSupabaseUserFromRequest (401 without a session). It reads one column (phone_number) of the caller's own row - never another user's - pinned by backend/tests/unit/s2OwnPhoneIdentityScoped.test.ts 'returns only the caller's own phone, never another user's'. Reads nothing else cross-tenant; writes nothing.",
+    reason: "TENANT TABLE (free_credit_profiles carries organization_id) read by an identity key NARROWER than the tenant key: free_credit_profiles_user_id_key UNIQUE (user_id) means .eq('user_id', user.id) selects exactly the caller's single row, so adding organization_id would exclude nothing. user.id is public.users.id (getSupabaseUserFromRequest wraps resolveAuthenticatedUser; 401 without a session), which is what free_credit_profiles.user_id references (FK to public.users(id)). The read uses supabaseAdmin (service role), so RLS is NOT a backstop - the user_id filter is the entire control. It reads one column (phone_number) of the caller's own row - never another user's - pinned by backend/tests/unit/s2OwnPhoneIdentityScoped.test.ts 'returns only the caller's own phone, never another user's'. Reads nothing else cross-tenant; writes nothing.",
     owner: 'virality-e1',
   },
   {
