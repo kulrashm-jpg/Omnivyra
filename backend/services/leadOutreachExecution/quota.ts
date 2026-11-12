@@ -289,6 +289,12 @@ export async function reconcileQuota(companyId: string, leadId: string, at: stri
   // and a SET would erase that reservation; an increment keeps it.
   const raise = async (key: string, current: number | null, durableCount: number): Promise<boolean> => {
     const shortfall = durableCount - (current ?? 0);
+    if (shortfall < 0) {
+      // NOT lowered (that is unsafe: a leak and a reservation made since the read look alike), but
+      // MEASURED (05): reconcile is the only place that compares the counter with the truth, so this
+      // is the one signal that a release was lost and a tenant is refused below its real limit.
+      console.warn('[ws3/quota] counter above the durable count (reservations in flight, or leaked)', { key, durable: durableCount, counter: current, excess: -shortfall });
+    }
     return shortfall > 0 ? redisIncrBy(key, shortfall) : redisUsableNow();
   };
   const wrote = await raise(tenantKey(companyId), before, durable.tenantCount);

@@ -103,6 +103,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       acquire = row.reply_lock_expires_at === null ? acquire.is('reply_lock_expires_at', null) : acquire.eq('reply_lock_expires_at', row.reply_lock_expires_at);
     }
     const { data: acquired, error: updateError } = await acquire.select('id');
+    if (body.force && lockActive && row.reply_lock_user_id !== me && !updateError) {
+      // The override is deliberate AND recorded (05): without this, a duplicate reply after a forced
+      // takeover is indistinguishable from a lock that was never held.
+      console.warn('[engagement/thread/reply-lock] reply_lock_forced', {
+        thread_id: threadId, organization_id: organizationId, forced_by: me, previous_holder: row.reply_lock_user_id, previous_expires_at: row.reply_lock_expires_at,
+      });
+    }
 
     if (updateError) {
       console.warn('[engagement/thread/reply-lock]', updateError.message);

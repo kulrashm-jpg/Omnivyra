@@ -459,7 +459,11 @@ describe('WS-3 M5A (5) — durable rate limiter', () => {
     await dispatchInternalOutreachTask('co-a', id, { now: NOW });
 
     fakeRedis.store.set('ws3:quota:tenant:co-a', 99); // above the truth: reservations in flight (or leaked)
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     const rec = await reconcileQuota('co-a', 'L1', NOW);
+    // Not lowered, but MEASURED (05): the one signal that a release was lost.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('counter above the durable count'), expect.objectContaining({ key: 'ws3:quota:tenant:co-a', durable: 1, counter: 99, excess: 98 }));
+    warn.mockRestore();
     expect(rec).toMatchObject({ reconciled: true, tenantCount: 1 });
     expect(rec.drift).toBe(98);
     expect(fakeRedis.store.get('ws3:quota:tenant:co-a')).toBe(99); // never lowered

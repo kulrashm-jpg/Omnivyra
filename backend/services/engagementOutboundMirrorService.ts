@@ -225,6 +225,10 @@ async function writeOutboundDmToThread(input: {
       // CLASS-2 C3 (e9 sweep): not a DM the extension holds under a lease - it is being sent now.
       // Superseding it could not stop that send; it only made the send's own result fail
       // LEASE_MISMATCH, so a DELIVERED DM was recorded as failed. A leased row settles itself.
+      // The skip is on lease PRESENCE, not expiry, BY DESIGN (05): an EXPIRED lease means the
+      // dispatcher died holding it - "may have sent" - which must never be auto-superseded; it goes to
+      // a person via listClaimedUnknownDispatches (engagementDispatchRecoveryService; the
+      // engagement-dispatch-recovery cron is scheduled in vercel.json).
       .is('dispatch_lease_id', null)
       .in('target_id', staleTargets);
     if (supersedeError) {

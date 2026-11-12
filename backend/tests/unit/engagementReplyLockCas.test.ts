@@ -80,4 +80,6 @@ it('an UNREADABLE thread is 500, not 404 "not found"', async () => {
 it('NEGATIVE CONTROL: force overrides a lock held by someone else (the client\'s deliberate choice)', async () => {
   seed({ reply_lock_user_id: 'u-b', reply_lock_expires_at: '2099-01-01T00:00:00.000Z' });
   expect((await call('u-a', { force: true })).body).toMatchObject({ locked: true, held_by: 'u-a' });
+  // ...and the override is RECORDED (05): who forced, whose lock it took.
+  expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('reply_lock_forced'), expect.objectContaining({ forced_by: 'u-a', previous_holder: 'u-b', thread_id: 't1' }));
 });
