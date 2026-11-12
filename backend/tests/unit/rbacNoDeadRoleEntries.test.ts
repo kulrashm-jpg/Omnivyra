@@ -26,12 +26,8 @@ const ROLE_KEY_TO_VALUE = Role as unknown as Record<string, string>;
 // dead Role.ADMIN. Opening it to COMPANY_ADMIN activates writers that can
 // remove / demote the LAST admin, so it lands with the atomic last-admin guard.
 // Each entry must STILL violate (a fixed file must leave this list).
-const HELD = new Set([
-  'pages/api/users/index.ts',
-  'pages/api/users/invite.ts',
-  'pages/api/users/[userId]/index.ts',
-  'pages/api/users/[userId]/role.ts',
-]);
+// GATE REWRITE (e9 2026-11-12): the users/* hold is LIFTED (last-admin guard 20270217000012).
+const HELD = new Set<string>([]);
 
 function files(dir: string, out: string[] = []): string[] {
   let es: fs.Dirent[] = [];
@@ -153,10 +149,7 @@ export function normalisedComparisons(src: string): Array<{ v: string; name: str
 
 // HELD comparisons (same reason as HELD lists: user administration waits for
 // the atomic last-admin guard). Each must STILL compare a rewritten name.
-const HELD_CMP = new Set([
-  'backend/services/userManagementService.ts', // requireUserAdminAccess: role !== Role.ADMIN
-  'pages/api/company/users/[userId]/role.ts', // requireCompanyAdmin: role !== Role.ADMIN
-]);
+const HELD_CMP = new Set<string>([]);
 
 describe('no comparison of a NORMALISED role against a rewritten name (shape 2)', () => {
   const all = ['pages', 'backend', 'lib'].flatMap((d) => files(path.join(ROOT, d)));

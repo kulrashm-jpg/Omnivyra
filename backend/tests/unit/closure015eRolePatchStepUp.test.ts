@@ -288,7 +288,16 @@ describe('POST /api/users/invite — RETIRED (Closure-015I, F-3); the 015E bypas
     expect(targetRow()).toMatchObject({ role: 'CONTENT_CREATOR', status: 'active' });
   });
 
-  it.each([['active COMPANY_ADMIN', CADMIN], ['VIEW_ONLY with a direct identity.admin.assign grant', GRANTEE], ['invited SUPER_ADMIN', INVITED_SA]])('%s → 403 (withRBAC still guards the retired route); no user created', async (_d, who) => {
+  // GATE REWRITE (e9 2026-11-12): an active COMPANY_ADMIN now passes withRBAC and reaches the
+  // RETIRED route's 410 (still nothing created).
+  it('active COMPANY_ADMIN → 410 ENDPOINT_RETIRED; no user created', async () => {
+    world();
+    const r = await invite(CADMIN, 'new@example.test', 'VIEW_ONLY');
+    expect(r.status).toBe(410);
+    expect(rows('users').some((u) => u.email === 'new@example.test')).toBe(false);
+  });
+
+  it.each([['VIEW_ONLY with a direct identity.admin.assign grant', GRANTEE], ['invited SUPER_ADMIN', INVITED_SA]])('%s → 403 (withRBAC still guards the retired route); no user created', async (_d, who) => {
     world();
     const r = await invite(who, 'new@example.test', 'VIEW_ONLY');
     expect(r.status).toBe(403);

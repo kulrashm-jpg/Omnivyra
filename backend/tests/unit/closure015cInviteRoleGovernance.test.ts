@@ -113,10 +113,20 @@ describe('Part 1 — inviteUser never grants, mints or rewrites a SUPER_ADMIN me
     expect(membership(TARGET)).toEqual([expect.objectContaining({ role: 'CONTENT_CREATOR', status: 'active' })]);
   });
 
-  it('unchanged authorization: an active COMPANY_ADMIN is still refused (route is effectively active-SA only)', async () => {
+  // GATE REWRITE (e9 2026-11-12): the gate compared a normalised role with the dead ADMIN
+  // alias and refused every company admin; an active COMPANY_ADMIN of THIS
+  // company is now allowed (the last admin is protected by 20270217000012).
+  it('an active COMPANY_ADMIN of the company may invite (the dead-ADMIN gate is rewritten)', async () => {
     world();
     const r = await inviteUser('new-person@example.test', CO_A, 'VIEW_ONLY', asRequester(USER_A));
-    expect(r).toMatchObject({ ok: false, status: 403 });
+    expect(r).toMatchObject({ ok: true, role: 'VIEW_ONLY' });
+  });
+
+  it('control: a company admin of A is refused on company B (still tenant-scoped)', async () => {
+    world();
+    const r = await inviteUser('new-person@example.test', CO_B, 'VIEW_ONLY', asRequester(USER_A));
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { status: number }).status).toBe(403);
   });
 
   it('unchanged authorization: an INVITED SUPER_ADMIN membership grants nothing here', async () => {

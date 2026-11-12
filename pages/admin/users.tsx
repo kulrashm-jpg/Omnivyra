@@ -36,7 +36,8 @@ export default function AdminUsersPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const canManageUsers = userRole === 'SUPER_ADMIN' || userRole === 'ADMIN';
+  // GATE REWRITE (e9 2026-11-12): the client role is normalised (ADMIN arrives as COMPANY_ADMIN).
+  const canManageUsers = userRole === 'SUPER_ADMIN' || userRole === 'COMPANY_ADMIN';
   const roleOptions = useMemo(() => {
     if (userRole === 'SUPER_ADMIN') {
       return [...ROLE_OPTIONS, 'COMPANY_ADMIN']; // R3: the ADMIN alias is refused by the server; offer the canonical name

@@ -97,7 +97,9 @@ describe('/admin/users invite → governed /api/admin/invite-user', () => {
   });
 
   it('a company-admin viewer is not offered COMPANY_ADMIN', async () => {
-    mockContext.userRole = 'ADMIN';
+    // GATE REWRITE (e9 2026-11-12): the client context normalises ADMIN to COMPANY_ADMIN, so a
+    // company admin arrives as COMPANY_ADMIN (the old mock used a value the context never produces).
+    mockContext.userRole = 'COMPANY_ADMIN';
     render(<AdminUsersPage />);
     const options = Array.from((screen.getByDisplayValue('CONTENT_CREATOR') as HTMLSelectElement).options).map((o) => o.value);
     expect(options).toEqual(['CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY', 'CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER']);

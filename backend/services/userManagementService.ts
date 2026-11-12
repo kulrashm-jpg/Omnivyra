@@ -25,7 +25,11 @@ const requireUserAdminAccess = async (
   if (!role) {
     return { ok: false, status: 403, error: 'ROLE_NOT_ASSIGNED' };
   }
-  if (role !== Role.ADMIN) {
+  // GATE REWRITE (e9 bucket 1, 2026-11-12): this gate compared a NORMALISED role with
+  // the dead ADMIN alias, so it was always true and refused every company admin.
+  // Company admins of THIS company now pass; the LAST active admin is protected
+  // atomically by the DB guard 20270217000012 (-> 409 LAST_COMPANY_ADMIN).
+  if (role !== Role.COMPANY_ADMIN) {
     return { ok: false, status: 403, error: 'NOT_AUTHORIZED' };
   }
   return { ok: true, scope: 'admin' };

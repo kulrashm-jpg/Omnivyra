@@ -21,4 +21,6 @@ async function handler(_req: NextApiRequest, res: NextApiResponse) {
   return res.status(410).json({ error: 'ENDPOINT_RETIRED', replacement: '/api/admin/invite-user' });
 }
 
-export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]), { route: '/api/users/invite' });
+// GATE REWRITE (e9 2026-11-12): canonical COMPANY_ADMIN (the dead ADMIN alias refused every company admin);
+// the last active admin is protected by the DB guard 20270217000012.
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.COMPANY_ADMIN]), { route: '/api/users/invite' });
