@@ -72,3 +72,17 @@ it('post-grant stamp failure is best-effort: granted, and logged', async () => {
   expect(r).toMatchObject({ granted: true });
   expect(mockWarn).toHaveBeenCalledWith('initial_free_credit_stamp_failed', expect.anything());
 });
+
+// MUTANT SURVIVOR (2026-11-12): the REPAIR-path stamp (ledger row exists,
+// company stamp missing) logs its own event; only the post-grant stamp had a case.
+it('bookkeeping repair: company stamp repair fails -> already_claimed, the repair failure is logged', async () => {
+  mockScript['free_credit_config:select'] = () => ({ data: { credits: 300, is_active: true }, error: null });
+  mockScript['credit_transactions:select'] = () => ({ data: { id: 't1', free_delta: 300, category: 'free' }, error: null });
+  mockScript['free_credit_claims:select'] = () => ({ data: { id: 'c1' }, error: null });
+  mockScript['companies:select'] = () => ({ data: { free_credit_granted_at: null }, error: null });
+  mockScript['companies:update'] = DOWN;
+  const r = await grantInitialFreeCredit(IN);
+  expect(r).toMatchObject({ granted: false, reason: 'already_claimed' });
+  expect(mockGrants).toEqual([]);
+  expect(mockWarn).toHaveBeenCalledWith('initial_free_credit_stamp_repair_failed', expect.anything());
+});

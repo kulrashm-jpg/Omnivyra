@@ -158,9 +158,13 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
     creditsSavedEstimate += predictionCost * 2;
   }
 
-  void ownedDbTable('credit_efficiency_scores')
+  // (2026-11-12) This was `void <builder>` - a supabase query builder is LAZY
+  // and only executes when awaited / then-ed, so credits_saved_total was NEVER
+  // written. Awaited now; best-effort (the report is returned either way), logged.
+  const { error: savedErr } = await ownedDbTable('credit_efficiency_scores')
     .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
     .eq('organization_id', companyId);
+  if (savedErr) console.error('[creditEfficiency] credits-saved persist failed:', companyId, savedErr.message);
 
   return {
     company_id: companyId,

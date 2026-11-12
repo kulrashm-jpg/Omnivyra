@@ -90,3 +90,17 @@ it('grant: record insert hits the UNIQUE (concurrent winner) -> already_granted,
   expect(r).toEqual({ granted: false, credits: 0, reason: 'already_granted' });
   expect(mockWrites).toEqual(['earn_credit_actions']);
 });
+
+// MUTANT SURVIVORS (2026-11-12): the two notification writes (nudge, granted)
+// log their OWN events; neither had a case.
+it('nudge: notification write error -> logged as a nudge failure', async () => {
+  mockScript['notifications:insert'] = DOWN;
+  await notifyEarnProgress({ orgId: 'o1', actionType: 'setup_complete', message: 'm' });
+  expect(errSpy.mock.calls.some((c) => String(c[0]).includes('nudge notification write failed'))).toBe(true);
+});
+it('grant: "you earned" notification write error -> still granted, logged as a granted-notice failure', async () => {
+  mockScript['notifications:insert'] = DOWN;
+  const r = await grantEarnCredit({ orgId: 'o1', userId: 'u1', actionType: 'setup_complete' });
+  expect(r.granted).toBe(true);
+  expect(errSpy.mock.calls.some((c) => String(c[0]).includes('granted notification write failed'))).toBe(true);
+});
