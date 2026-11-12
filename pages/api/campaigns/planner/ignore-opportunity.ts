@@ -7,8 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -22,30 +21,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { data: opp } = await supabase
-      .from('opportunity_radar')
-      .select('organization_id')
-      .eq('id', opportunityId)
-      .maybeSingle();
-
-    if (!opp?.organization_id) {
+    // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the opportunity (null for
+    // a missing, unreadable or company-less row: the same 404). It is the opportunity's OWN company that gets
+    // authorized; a body companyId naming any other company answers the same 404 (never authorized for this row).
+    const ownerCompanyId = await ownerCompanyOfRow('opportunity_radar', opportunityId, 'planner ignore opportunity');
+    if (!ownerCompanyId) return res.status(404).json({ error: 'Opportunity not found' });
+    if (companyId != null && String(companyId).toLowerCase() !== ownerCompanyId) {
       return res.status(404).json({ error: 'Opportunity not found' });
     }
-
-    const authorizedCompanyId = companyId ?? opp.organization_id;
     const access = await enforceCompanyAccess({
       req,
       res,
-      companyId: authorizedCompanyId,
+      companyId: ownerCompanyId,
     });
     if (!access) return;
 
-    // S2 tenant seam: the tenant is the company enforceCompanyAccess above authorized (the body companyId, else the
-    // opportunity's own organization_id). An opportunity of another company matches no row: nothing is written and
-    // the caller gets the same 404 as an unknown id.
+    // S2 tenant seam: the tenant is the opportunity's own company, which enforceCompanyAccess above authorized. The
+    // update is scoped to it, so a row that changed hands in between matches nothing and answers the same 404.
     let opportunities: ReturnType<typeof tenantTable>;
     try {
-      opportunities = tenantTable('opportunity_radar', tenantContextFor(access, String(authorizedCompanyId)));
+      opportunities = tenantTable('opportunity_radar', tenantContextFor(access, ownerCompanyId));
     } catch (err) {
       if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Opportunity not found' });
       throw err;

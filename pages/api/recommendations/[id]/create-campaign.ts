@@ -1,7 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { requireCompanyAccess } from '../../../../backend/middleware/authMiddleware';
 import {
   getUserRole,
   hasPermission,
@@ -71,13 +72,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { durationWeeks, blog_context, insight_context, topic_context, source_blog_id, source_blog_type } = req.body || {};
 
-    const { data: recommendation, error: recError } = await supabase
-      .from('recommendation_snapshots')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (recError || !recommendation) {
+    // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the recommendation (null
+    // for a missing, unreadable or company-less row: the same 404). The caller is authenticated, then authorized for
+    // exactly that company (membership, then the CREATE_CAMPAIGN role check) before the row itself is read, through
+    // the seam.
+    const companyId = await ownerCompanyOfRow('recommendation_snapshots', id, 'recommendation create campaign');
+    if (!companyId) {
       return res.status(404).json({ error: 'Recommendation not found' });
     }
 
@@ -86,12 +86,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
     const userId = auth.user.id;
-    // TENANT: the campaign is owned by the recommendation's company (authorized below); a
-    // company-less recommendation cannot create one (String(null) used to read as company "null").
-    if (!recommendation.company_id) {
-      return res.status(400).json({ code: 'COMPANY_REQUIRED', error: 'This recommendation has no company, so no campaign can be created from it.' });
-    }
-    const companyId = String(recommendation.company_id);
+    const member = await requireCompanyAccess(userId, companyId, res);
+    if (!member) return;
     const privileged =
       (await isPlatformSuperAdmin(userId)) ||
       (await isSuperAdmin(userId));
@@ -102,15 +98,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    // S2 tenant seam: the tenant is the recommendation's own company, which the role check above just authorized for
-    // this principal (getUserRole + CREATE_CAMPAIGN, or a platform super admin). Made before any write, so a refusal
-    // writes nothing and answers the same 404 as a missing recommendation.
+    // S2 tenant seam: the tenant is the recommendation's own company, which the checks above just authorized for this
+    // principal (membership + getUserRole/CREATE_CAMPAIGN, or a platform super admin). Made before any read or write,
+    // so a refusal writes nothing and answers the same 404 as a missing recommendation.
     let recommendationSnapshots: ReturnType<typeof tenantTable>;
     try {
       recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor({ userId }, companyId));
     } catch (err) {
       if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Recommendation not found' });
       throw err;
+    }
+
+    const { data: recommendation, error: recError } = await recommendationSnapshots
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (recError || !recommendation) {
+      return res.status(404).json({ error: 'Recommendation not found' });
     }
 
     const { data: decisionRow } = await supabase

@@ -17,7 +17,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
 import { getUserRole, isPlatformSuperAdmin, Role } from '@/backend/services/rbacService';
-import { tenantTable, tenantContextFor, type TenantContext } from '@/backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, type TenantContext } from '@/backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -31,23 +31,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
   const note: string | undefined = body.note;
 
-  // Load pending campaign
-  const { data: pending, error: loadError } = await supabase
-    .from('pending_campaigns')
-    .select('*')
-    .eq('id', pendingId)
-    .maybeSingle();
-
-  if (loadError || !pending) {
-    return res.status(404).json({ error: 'Pending campaign not found' });
-  }
-  if ((pending as any).status !== 'pending') {
-    return res.status(409).json({ error: `Campaign already ${(pending as any).status}` });
-  }
-
-  const companyId = (pending as any).company_id as string;
-
-  // Verify user has access to this company
+  // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the pending campaign
+  // (null for a missing, unreadable or company-less row: the same 404). The caller is authorized for exactly that
+  // company (membership, then the admin role check) before the row itself is read, through the seam.
+  const companyId = await ownerCompanyOfRow('pending_campaigns', pendingId, 'pending campaign approve/reject');
+  if (!companyId) return res.status(404).json({ error: 'Pending campaign not found' });
   const allowed = await requireCompanyAccess(auth.user.id, companyId, res);
   if (!allowed) return;
 
@@ -71,13 +59,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // S2 tenant seam: the tenant is the pending campaign's company, which requireCompanyAccess and the role check
-  // above authorized for auth.user; every pending_campaigns write below goes through it. A company that cannot
-  // form a context answers the route's existing not-found, before anything is written.
+  // above authorized for auth.user; the row is read and every pending_campaigns write below goes through it.
   let tenant: TenantContext;
   try {
     tenant = tenantContextFor({ userId: auth.user.id }, companyId);
   } catch {
     return res.status(404).json({ error: 'Pending campaign not found' });
+  }
+
+  const { data: pending, error: loadError } = await tenantTable('pending_campaigns', tenant)
+    .select('*')
+    .eq('id', pendingId)
+    .maybeSingle();
+
+  if (loadError || !pending) {
+    return res.status(404).json({ error: 'Pending campaign not found' });
+  }
+  if ((pending as any).status !== 'pending') {
+    return res.status(409).json({ error: `Campaign already ${(pending as any).status}` });
   }
 
   const reviewedAt = new Date().toISOString();

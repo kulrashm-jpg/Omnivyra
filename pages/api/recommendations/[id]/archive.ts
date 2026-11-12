@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -15,32 +15,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Recommendation ID is required' });
   }
 
-  const { data: snapshot, error: fetchError } = await supabase
-    .from('recommendation_snapshots')
-    .select('id, company_id')
-    .eq('id', id)
-    .single();
-
-  if (fetchError || !snapshot) {
-    return res.status(404).json({ error: 'Recommendation not found' });
-  }
-
+  // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the snapshot (null for a
+  // missing, unreadable or company-less row: the same 404). enforceCompanyAccess authorizes the caller for exactly
+  // that company before the snapshot itself is read, through the seam.
+  const ownerCompanyId = await ownerCompanyOfRow('recommendation_snapshots', id, 'recommendation archive');
+  if (!ownerCompanyId) return res.status(404).json({ error: 'Recommendation not found' });
   const access = await enforceCompanyAccess({
     req,
     res,
-    companyId: String(snapshot.company_id),
+    companyId: ownerCompanyId,
     requireCampaignId: false,
   });
   if (!access) return;
 
-  // S2 tenant seam: the tenant is the snapshot's own company (read above), which enforceCompanyAccess just
-  // authorized for this principal. A company that cannot form a context answers the same 404 as a missing row.
+  // S2 tenant seam: the tenant is the snapshot's own company, which enforceCompanyAccess just authorized for this
+  // principal. A company that cannot form a context answers the same 404 as a missing row.
   let recommendationSnapshots: ReturnType<typeof tenantTable>;
   try {
-    recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, String(snapshot.company_id)));
+    recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, ownerCompanyId));
   } catch (err) {
     if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Recommendation not found' });
     throw err;
+  }
+
+  const { data: snapshot, error: fetchError } = await recommendationSnapshots
+    .select('id, company_id')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (fetchError || !snapshot) {
+    return res.status(404).json({ error: 'Recommendation not found' });
   }
 
   const { error: updateError } = await recommendationSnapshots
@@ -54,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Persist to recommendation_user_state for unified state tracking
   const { error: userStateError } = await supabase.from('recommendation_user_state').upsert(
     {
-      organization_id: snapshot.company_id,
+      organization_id: ownerCompanyId,
       user_id: access.userId ?? null,
       recommendation_id: id,
       state: 'ARCHIVED',
@@ -70,7 +74,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     await supabase.from('audit_logs').insert({
       action: 'RECOMMENDATION_ARCHIVED',
       actor_user_id: access.userId ?? null,
-      company_id: snapshot.company_id,
+      company_id: ownerCompanyId,
       metadata: { recommendation_id: id },
       created_at: new Date().toISOString(),
     });

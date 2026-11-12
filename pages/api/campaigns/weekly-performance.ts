@@ -1,9 +1,9 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -149,8 +149,16 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
     if (authError || !user) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
-    const { data: record, error: recordError } = await supabase
-      .from('campaign_performance')
+    // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the record (null for a
+    // missing, unreadable or company-less row: the same 404). enforceCompanyAccess authorizes the caller for exactly
+    // that company before the record itself is read, through the seam; requireCampaignAccess below stays as the
+    // campaign binding and must resolve to the same company.
+    const ownerCompanyId = await ownerCompanyOfRow('campaign_performance', id as string, 'weekly performance update');
+    if (!ownerCompanyId) return res.status(404).json({ error: 'Performance record not found' });
+    const companyAccess = await enforceCompanyAccess({ req, res, companyId: ownerCompanyId });
+    if (!companyAccess) return;
+    const tenant = tenantContextFor({ userId: companyAccess.userId }, ownerCompanyId);
+    const { data: record, error: recordError } = await tenantTable('campaign_performance', tenant)
       .select('id, campaign_id')
       .eq('id', id)
       .maybeSingle();
@@ -163,6 +171,9 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
     }
     const access = await requireCampaignAccess(req, res, String(record.campaign_id));
     if (!access) return;
+    if (String(access.companyId).toLowerCase() !== ownerCompanyId) {
+      return res.status(404).json({ error: 'Performance record not found' });
+    }
 
     const updateData: any = {
       updated_at: new Date().toISOString()
@@ -176,8 +187,8 @@ async function updateWeeklyPerformance(req: NextApiRequest, res: NextApiResponse
     if (platform_breakdown !== undefined) updateData.platform_breakdown = platform_breakdown;
     if (content_type_breakdown !== undefined) updateData.content_type_breakdown = content_type_breakdown;
 
-    // S2 tenant seam: the tenant is the company requireCampaignAccess authorized for the record's campaign.
-    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    // S2 tenant seam: the tenant is the record's own company, authorized above (and equal to the company
+    // requireCampaignAccess resolved for the record's campaign).
     const { data, error } = await tenantTable('campaign_performance', tenant)
       .update(updateData)
       .eq('id', id)

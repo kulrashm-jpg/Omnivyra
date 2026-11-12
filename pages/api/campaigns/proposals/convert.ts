@@ -12,7 +12,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
-import { tenantTable, tenantContextFor, type TenantContext } from '../../../../backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, type TenantContext } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -25,8 +25,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'proposalId required' });
   }
 
-  const { data: proposal, error: fetchError } = await supabase
-    .from('campaign_proposals')
+  // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the proposal (null for a
+  // missing, unreadable or company-less row: the same 404). enforceCompanyAccess authorizes the caller for exactly
+  // that company before the proposal itself is read, through the seam.
+  const organizationId = await ownerCompanyOfRow('campaign_proposals', proposalId.trim(), 'proposal convert');
+  if (!organizationId) return res.status(404).json({ error: 'Proposal not found' });
+  const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
+  if (!access) return;
+
+  // S2 tenant seam: the tenant is the proposal's company, which enforceCompanyAccess just authorized for
+  // access.userId; never a request value. Made before any read or write; a company that cannot form a context
+  // answers the route's existing not-found and nothing is written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, organizationId);
+  } catch {
+    return res.status(404).json({ error: 'Proposal not found' });
+  }
+
+  const { data: proposal, error: fetchError } = await tenantTable('campaign_proposals', tenant)
     .select('*')
     .eq('id', proposalId.trim())
     .maybeSingle();
@@ -39,20 +56,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   if (proposal.status === 'rejected') {
     return res.status(400).json({ error: 'Proposal was rejected' });
-  }
-
-  const organizationId = proposal.organization_id as string;
-  const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
-  if (!access) return;
-
-  // S2 tenant seam: the tenant is the proposal's company, which enforceCompanyAccess just authorized for
-  // access.userId; never a request value. Made before any write; a company that cannot form a context answers
-  // the route's existing not-found and nothing is written.
-  let tenant: TenantContext;
-  try {
-    tenant = tenantContextFor(access, organizationId);
-  } catch {
-    return res.status(404).json({ error: 'Proposal not found' });
   }
 
   const pd = (proposal.proposal_data as Record<string, unknown>) || {};

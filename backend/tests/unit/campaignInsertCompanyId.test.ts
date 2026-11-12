@@ -35,8 +35,14 @@ function makeBuilder(table: string) {
   }
   b.maybeSingle = async () => settle();
   b.single = async () => settle();
+  // A multi-row read (no single/maybeSingle, e.g. the seam's bounded ownerCompanyOfRow read) resolves an ARRAY, as
+  // PostgREST does; a configured single row becomes a one-row array.
   b.then = (ok: (v: Result) => unknown, ko?: (e: unknown) => unknown) => {
-    try { return Promise.resolve(settle()).then(ok, ko); } catch (e) { return Promise.reject(e).then(ok, ko); }
+    try {
+      const r = settle();
+      const data = op === 'select' && r.data !== null && !Array.isArray(r.data) ? [r.data] : r.data;
+      return Promise.resolve({ ...r, data }).then(ok, ko);
+    } catch (e) { return Promise.reject(e).then(ok, ko); }
   };
   return b;
 }

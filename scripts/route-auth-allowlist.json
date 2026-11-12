@@ -300,8 +300,8 @@
     },
     "pages/api/campaigns/approve.ts": {
       "kind": "inline-binding",
-      "reason": "Role in companyId, then the campaign's campaign_versions row must belong to companyId before the update.",
-      "evidence": "getUserCompanyRole\\(req, companyId\\)[\\s\\S]*?from\\('campaign_versions'\\)"
+      "reason": "Role in companyId, then (S2 seam) a campaign_versions row of companyId must exist for the campaign, read through tenantTable so a foreign campaign is the uniform 404, before the seam-scoped update.",
+      "evidence": "getUserCompanyRole\\(req, companyId\\)[\\s\\S]*?tenantTable\\('campaign_versions', tenant\\)"
     },
     "pages/api/command-center/company-state.ts": {
       "kind": "inline-binding",

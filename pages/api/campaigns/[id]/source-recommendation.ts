@@ -8,21 +8,9 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { getStoredStrategicThemeTitle } from '../../../../lib/recommendationStrategicCard';
-import { tenantTable, tenantContextFor, type TenantContext } from '../../../../backend/db/tenantTable';
-
-async function getCompanyIdForCampaign(campaignId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('company_id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-  if (error || !data) return null;
-  return (data as { company_id?: string })?.company_id ?? null;
-}
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, type TenantContext } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
@@ -34,7 +22,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Campaign ID is required' });
   }
 
-  const companyId = await getCompanyIdForCampaign(campaignId);
+  // S2 derive-then-authorize (e9 ruling 2026-11-13): the owning company comes from the CAMPAIGN row
+  // (campaigns.company_id, NOT NULL since 20270217000025), no longer from "any campaign_versions row" (an
+  // unordered .limit(1) read). SOURCE-OF-TRUTH MOVE: versions -> campaigns; C36: 0 mismatches in prod. A campaign whose
+  // versions name ANOTHER company than campaigns.company_id is never re-attributed: a caller of the campaigns-row
+  // company passes enforceCompanyAccess, but the version read below is seam-scoped to that company, finds none, and
+  // answers 404 with nothing written; a caller of the versions' company is denied by enforceCompanyAccess.
+  // Missing / foreign / company-less campaign: the same 404.
+  const companyId = await ownerCompanyOfRow('campaigns', campaignId, 'source-recommendation: owner of the campaign');
   if (!companyId) {
     return res.status(404).json({ error: 'Campaign not found' });
   }
@@ -72,10 +67,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  const { data: latestVersion, error: fetchError } = await supabase
-    .from('campaign_versions')
+  const { data: latestVersion, error: fetchError } = await tenantTable('campaign_versions', tenant)
     .select('id, campaign_snapshot')
-    .eq('company_id', companyId)
     .eq('campaign_id', campaignId)
     .order('version', { ascending: false })
     .limit(1)

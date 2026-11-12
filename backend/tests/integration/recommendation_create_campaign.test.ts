@@ -29,6 +29,13 @@ jest.mock('../../services/rbacService', () => ({
   getUserRole: jest.fn().mockResolvedValue({ role: 'SUPER_ADMIN', error: null }),
 }));
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (handler: any) => handler }));
+/** S2: the route now runs requireCompanyAccess (middleware/authMiddleware: true, or a 403/404 sent and false) on the
+ *  recommendation's OWN company (derive-then-authorize). */
+const requireCompanyAccessMock = jest.fn(async (_userId: string, _companyId: string, _res: unknown): Promise<boolean> => true);
+jest.mock('../../middleware/authMiddleware', () => ({
+  ...jest.requireActual('../../middleware/authMiddleware'),
+  requireCompanyAccess: (userId: string, companyId: string, res: unknown) => requireCompanyAccessMock(userId, companyId, res),
+}));
 const { getSupabaseUserFromRequest } = jest.requireMock('../../services/supabaseAuthService');
 
 const createMockRes = () => {
@@ -79,14 +86,19 @@ describe('Recommendation create campaign API', () => {
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'recommendation_snapshots') {
-        return {
-          select: jest.fn().mockReturnValue({
-            eq: jest.fn().mockReturnValue({
-              single: jest.fn().mockResolvedValue({ data: recommendationRecord, error: null }),
-            }),
-          }),
-          update: updateMock,
-        };
+        // FAITHFUL: a row matches only when every eq filter matches (the seam adds .eq('company_id', tenant); the
+        // derive step, ownerCompanyOfRow, does a bounded multi-row read by id).
+        const filters: Array<[string, unknown]> = [];
+        const rows = () => [recommendationRecord].filter((r: any) => filters.every(([c, v]) => r[c] === v));
+        const q: any = {};
+        q.select = jest.fn(() => q);
+        q.eq = jest.fn((c: string, v: unknown) => { filters.push([c, v]); return q; });
+        q.limit = jest.fn(() => q);
+        q.single = jest.fn(async () => ({ data: rows()[0] ?? null, error: rows().length ? null : { code: 'PGRST116' } }));
+        q.maybeSingle = jest.fn(async () => ({ data: rows()[0] ?? null, error: null }));
+        q.then = (ok: any, ko: any) => Promise.resolve({ data: rows(), error: null }).then(ok, ko);
+        q.update = updateMock;
+        return q;
       }
       if (table === 'campaigns') {
         return {
@@ -138,9 +150,30 @@ describe('Recommendation create campaign API', () => {
     // TENANT (NULL company_id trace, e9 2026-11-12): the campaign row is owned by the recommendation's company.
     expect(campaignInsertMock).toHaveBeenCalledTimes(1);
     expect(campaignInsertMock.mock.calls[0][0]).toMatchObject({ company_id: COMPANY_ID });
+    // S2: access was checked on the recommendation's OWN company, before anything was written.
+    expect(requireCompanyAccessMock).toHaveBeenCalledWith('user-1', COMPANY_ID, expect.anything());
   });
 
-  it('TENANT: a company-less recommendation is refused (400) and no campaign is created', async () => {
+  it('S2: a caller denied by requireCompanyAccess for the recommendation company creates nothing', async () => {
+    requireCompanyAccessMock.mockImplementationOnce(async (_u: string, _c: string, res: any) => {
+      res.status(403).json({ error: 'Access denied — you are not a member of this company' });
+      return false;
+    });
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer test' },
+      query: { id: 'rec-1', companyId: COMPANY_ID },
+      body: { durationWeeks: 12, companyId: COMPANY_ID },
+    } as unknown as NextApiRequest;
+    const res = createMockRes();
+    await handler(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(campaignInsertMock).not.toHaveBeenCalled();
+  });
+
+  // CONTRACT CHANGE (S2 derive-then-authorize, deliberate): a company-less recommendation has no owner to authorize,
+  // so ownerCompanyOfRow answers null and the route gives the uniform 404 (it used to be 400 COMPANY_REQUIRED).
+  it('TENANT: a company-less recommendation is refused (uniform 404) and no campaign is created', async () => {
     recommendationCompanyId = null;
     const req = {
       method: 'POST',
@@ -150,8 +183,9 @@ describe('Recommendation create campaign API', () => {
     } as unknown as NextApiRequest;
     const res = createMockRes();
     await handler(req, res);
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ code: 'COMPANY_REQUIRED' });
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toEqual({ error: 'Recommendation not found' });
     expect(campaignInsertMock).not.toHaveBeenCalled();
+    expect(requireCompanyAccessMock).not.toHaveBeenCalled();
   });
 });
