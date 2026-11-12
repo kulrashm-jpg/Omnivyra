@@ -4,10 +4,11 @@ import { requireCompanyAccess } from '../../../../backend/middleware/authMiddlew
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { connectGoogleAnalytics, connectGoogleSearchConsole } from '../../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { isNonProduction } from '../../../../backend/services/config/productionFlags';
 
 function errorMessageForClient(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : '';
-  if (process.env.NODE_ENV !== 'production' && message) return message;
+  if (isNonProduction() && message) return message;
   if (/OAuth provider config/i.test(message) || /client ID|client secret|disabled/i.test(message)) {
     return 'Google OAuth is not configured. Ask a super admin to configure the Google data provider.';
   }
@@ -25,7 +26,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({
       status: 'error',
       message: 'Sign in again before connecting Google integrations.',
-      detail: process.env.NODE_ENV !== 'production' ? authError ?? 'No authenticated user found' : undefined,
+      detail: isNonProduction() ? authError ?? 'No authenticated user found' : undefined,
     });
   }
 

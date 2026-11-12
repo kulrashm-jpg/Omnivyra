@@ -3,10 +3,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
 import { getGoogleAnalyticsStatusPayload } from '../../../backend/services/googleAnalyticsExperienceService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isNonProduction } from '../../../backend/services/config/productionFlags';
 
 function statusErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : '';
-  return process.env.NODE_ENV !== 'production' && message ? message : fallback;
+  return isNonProduction() && message ? message : fallback;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -21,7 +22,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       connected: false,
       status: 'error',
       message: 'Sign in again to view Google integration status.',
-      detail: process.env.NODE_ENV !== 'production' ? authError ?? 'No authenticated user found' : undefined,
+      detail: isNonProduction() ? authError ?? 'No authenticated user found' : undefined,
       property: null,
       last_sync: null,
     });

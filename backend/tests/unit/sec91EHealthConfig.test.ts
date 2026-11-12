@@ -19,7 +19,14 @@ jest.mock('@/config', () => ({
 jest.mock('@/lib/redis/client', () => ({ getSharedRedisSyncOrNull: () => mockState.redis }));
 jest.mock('@/lib/redis/sanitizer', () => ({ maskRedisUrl: (u: string) => u.replace(/:[^:@/]+@/, ':***@') }));
 
-import handler from '../../../pages/api/health/config';
+// The route's gate reads the FROZEN productionFlags (isNonProduction, fail-closed), so each environment loads the
+// route in an isolated module registry AFTER setting NODE_ENV; the mocks above apply in every registry.
+let handler: (req: unknown, res: unknown) => Promise<unknown>;
+function loadUnder(env: string | undefined): void {
+  if (env === undefined) delete (process.env as any).NODE_ENV;
+  else (process.env as any).NODE_ENV = env;
+  jest.isolateModules(() => { handler = require('../../../pages/api/health/config').default; });
+}
 
 // Obvious placeholder (secret-pattern gate recognises 'fake'); the assertion is that NO
 // connection string of any value reaches the public response.
@@ -38,14 +45,16 @@ async function call(): Promise<{ status: number; body: any }> {
 }
 
 const priorEnv = process.env.NODE_ENV;
-const setEnv = (v: string) => { (process.env as any).NODE_ENV = v; };
-afterEach(() => setEnv(priorEnv as string));
+afterEach(() => {
+  if (priorEnv === undefined) delete (process.env as any).NODE_ENV;
+  else (process.env as any).NODE_ENV = priorEnv;
+});
 let errSpy: jest.SpyInstance;
 beforeEach(() => { errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
 afterEach(() => errSpy.mockRestore());
 
 describe('production: status only', () => {
-  beforeEach(() => setEnv('production'));
+  beforeEach(() => loadUnder('production'));
 
   it('invalid config: 500 + generic body, no error text', async () => {
     mockState.valid = false;
@@ -91,7 +100,7 @@ describe('production: status only', () => {
 });
 
 describe('non-production: full diagnostics (unchanged)', () => {
-  beforeEach(() => setEnv('development'));
+  beforeEach(() => loadUnder('development'));
   it('includes the config error and redis details', async () => {
     mockState.valid = false;
     mockState.error = new Error('DATABASE_URL invalid');
@@ -102,3 +111,33 @@ describe('non-production: full diagnostics (unchanged)', () => {
     expect(out.body.redis.host).toBe('localhost');
   });
 });
+
+// e9 ruling (2026-11-13): fail-CLOSED. Any NODE_ENV that is not provably non-production - unset included - gets
+// the status-only body. The old `=== 'production'` gate served the full diagnostics for all of these.
+describe.each([['Production'], ['prod'], ['staging'], ['UNSET']])('NODE_ENV=%s: status only (fail-closed)', (env) => {
+  beforeEach(() => loadUnder(env === 'UNSET' ? undefined : env));
+  it('no config error text and no redis host', async () => {
+    mockState.valid = false;
+    mockState.error = new Error(`DATABASE_URL invalid: ${SECRETISH}`);
+    mockState.redis = { status: 'ready', options: { host: 'redis.internal.test', port: 6379 } };
+    const out = await call();
+    expect(out.status).toBe(500);
+    expect(out.body.config).toEqual({ valid: false });
+    const text = JSON.stringify(out.body);
+    expect(text).not.toContain('DATABASE_URL');
+    expect(text).not.toContain('redis.internal.test');
+  });
+});
+
+describe('CONTROL NODE_ENV=test: full diagnostics', () => {
+  beforeEach(() => loadUnder('test'));
+  it('includes the config error', async () => {
+    mockState.valid = false;
+    mockState.error = new Error('DATABASE_URL invalid');
+    mockState.redis = { status: 'ready', options: { host: 'localhost', port: 6379 } };
+    expect((await call()).body.config.error).toBe('DATABASE_URL invalid');
+  });
+});
+
+// A module, not a global script: top-level helpers (call, loadUnder) must not collide with other suites in tsc.
+export {};

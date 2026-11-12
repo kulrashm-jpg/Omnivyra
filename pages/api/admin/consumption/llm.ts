@@ -26,6 +26,7 @@ import {
 } from '../../../../backend/services/consumptionAnalyticsService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { isNonProduction } from '@/backend/services/config/productionFlags';
 
 async function resolveTier(
   req: NextApiRequest,
@@ -93,7 +94,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json({ tier, scope: 'single_org', data });
   } catch (err: any) {
     console.error('[api/admin/consumption/llm]', err?.message, err?.stack);
-    const msg = process.env.NODE_ENV !== 'production' ? (err?.message ?? 'Unknown error') : 'Internal server error';
+    const msg = isNonProduction() ? (err?.message ?? 'Unknown error') : 'Internal server error';
     return res.status(500).json({ error: msg });
   }
 }

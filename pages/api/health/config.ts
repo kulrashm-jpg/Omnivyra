@@ -20,6 +20,7 @@ import { getConfigError, isConfigValid, getValidatedConfig } from '@/config';
 import { getSharedRedisSyncOrNull } from '@/lib/redis/client';
 import { maskRedisUrl } from '@/lib/redis/sanitizer';
 import { redactSecretsInText } from '@/lib/security/redactUrl';
+import { isNonProduction } from '@/backend/services/config/productionFlags';
 
 interface HealthResponse {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -124,7 +125,10 @@ async function handler(
   // values; details/Redis host+port map internal infrastructure. Status and
   // status code are unchanged, so monitors keep working; the detail goes to
   // the server log for operators. Non-production keeps the full body.
-  if (process.env.NODE_ENV === 'production') {
+  // SECURITY (2026-11-13, e9 ruling): the full body is served ONLY when NODE_ENV is provably non-production
+  // (isNonProduction(): exactly 'development' / 'test'). The old `=== 'production'` test failed OPEN - unset,
+  // 'staging' or 'Production' served the diagnostic body to anyone on this public endpoint.
+  if (!isNonProduction()) {
     if (configError || redisError) {
       console.error('[health/config] degraded', {
         status,

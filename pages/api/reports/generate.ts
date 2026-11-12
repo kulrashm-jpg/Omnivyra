@@ -27,6 +27,7 @@ import {
 } from '../../../backend/services/creditExecutionService';
 import { assertMonetizationBetaAccess } from '../../../backend/services/monetizationBetaAccessService';
 import { resolveCompanyId } from '../../../backend/services/reportsCompanyAccessService';
+import { isNonProduction } from '../../../backend/services/config/productionFlags';
 
 type GenerateReportRequest = {
   companyId?: string;
@@ -382,7 +383,7 @@ async function handler(
       stack: error instanceof Error ? error.stack : undefined,
     });
     return res.status(500).json(withTrace({
-      error: process.env.NODE_ENV !== 'production' ? message : 'Failed to generate report',
+      error: isNonProduction() ? message : 'Failed to generate report',
       code: 'SERVER_ERROR',
     }));
   }

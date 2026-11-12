@@ -9,7 +9,9 @@
  *
  * Dev bypass: setting DEV_EXTENSION_AUTH_BYPASS=1 skips both session-token
  * and HMAC checks — the request body's `organization_id` becomes the
- * tenant. Only honored when NODE_ENV !== 'production'. Used to unblock
+ * tenant. Only honored when NODE_ENV is provably non-production
+ * (isNonProduction(): exactly 'development' or 'test') AND the request is
+ * addressed to a loopback host. Used to unblock
  * local DOM-scraper testing without grinding through the SW HMAC chain.
  */
 
@@ -19,8 +21,32 @@ import {
   verifyExtensionRequestSignature,
 } from '@/backend/services/extensionSessionService';
 import { supabase } from '@/backend/db/supabaseClient';
+import { isNonProduction } from '@/backend/services/config/productionFlags';
 
 function take(h: string | string[] | undefined) { return (Array.isArray(h) ? h[0] : h) || ''; }
+
+/** Hostname of a Host-style header value, port stripped ('[::1]:3000' -> '::1', 'localhost:3000' -> 'localhost'). */
+function hostnameOf(raw: string): string {
+  const v = raw.split(',')[0].trim().toLowerCase();
+  if (v.startsWith('[')) return v.slice(1, v.indexOf(']') > 0 ? v.indexOf(']') : undefined);
+  return v.replace(/:\d+$/, '');
+}
+
+function isLoopbackHostname(h: string): boolean {
+  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+/**
+ * Second guard for the dev bypass: the request must be addressed to a loopback host. Host is required and must be
+ * loopback; X-Forwarded-Host, when a proxy set one, must be loopback too (a deployment behind a proxy forwards the
+ * public domain there). Absent or unparseable -> not loopback (fail-closed).
+ */
+function isLoopbackRequest(req: NextApiRequest): boolean {
+  const host = hostnameOf(take(req.headers.host));
+  if (!host || !isLoopbackHostname(host)) return false;
+  const fwd = take(req.headers['x-forwarded-host']);
+  return !fwd || isLoopbackHostname(hostnameOf(fwd));
+}
 
 async function inferDevBypassOrgId(req: NextApiRequest): Promise<string | null> {
   const path = (req.url || '').split('?')[0] || '';
@@ -58,10 +84,20 @@ export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResp
   // Dev bypass — short-circuit the entire HMAC/session chain when the
   // operator opts in via env. Refuses to run in production no matter what
   // the env says, so a stray flag in a deployed env can't disable auth.
+  //
+  // SECURITY (2026-11-13, e9 ruling): that promise used to rest on
+  // `process.env.NODE_ENV !== 'production'`, which fails OPEN for any value
+  // other than the exact string (unset, 'staging', 'Production'). Two guards,
+  // both fail-closed, now hold it:
+  //   1. isNonProduction(): NODE_ENV provably 'development' or 'test';
+  //   2. the request is addressed to a LOOPBACK host (Host and, when present,
+  //      X-Forwarded-Host) - the bypass exists only for local DOM-scraper
+  //      testing, so any deployed domain is refused without a list to maintain.
   const bypassEnabled =
-    process.env.NODE_ENV !== 'production'
+    isNonProduction()
     && (process.env.DEV_EXTENSION_AUTH_BYPASS === '1'
-        || process.env.DEV_EXTENSION_AUTH_BYPASS === 'true');
+        || process.env.DEV_EXTENSION_AUTH_BYPASS === 'true')
+    && isLoopbackRequest(req);
   if (bypassEnabled) {
     // Accept all three orgId casings — the codebase isn't consistent and
     // refusing one shape silently breaks the dev-bypass redeem chain
