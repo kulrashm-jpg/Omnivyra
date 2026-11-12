@@ -300,14 +300,17 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // now reports an ambiguous provider answer as uncertain, and dispatch fails such a task instead of
     // re-queuing it (a re-dispatch mints a new key). Neither touches authentication or tenancy - re-pinned.
     // A re-derived hash passes by construction: the CHECK is the diff review, so this records only what happened.
-    // Re-derived by its AUTHOR (virality-6f). Reviewed by virality-05 (2026-11-12): read the emailTransport/dispatch
-    // diff, found that a 409/502 with an unreadable body lost its ambiguity, and PASSED the fix
-    // (classifyFunctionError: the status decides, the body may only prove a 5xx definite). 05 then asked that a
-    // throw AFTER the request be uncertain too (the try covers all post-send code); that change is in this pin,
-    // and 05's review of it was PENDING when this was written. 05 confirmed the one companyId line passes the existing tenant-scoped id to the state transition.
+    // Re-derived by its AUTHOR (virality-6f). virality-05's review (2026-11-12), in 05's own scope statement:
+    //   - the emailTransport/dispatch diff: read; 05 found that a 409/502 with an unreadable body lost its ambiguity;
+    //   - the classifier fix (classifyFunctionError: the status decides, the body may only prove a 5xx definite),
+    //     including the IDEMPOTENCY_IN_FLIGHT reversal: PASS;
+    //   - the throw handling (the try covers ALL post-send code; describeThrown never throws): PASS;
+    //   - the one companyId line: passes the in-scope tenant id into a from->to CAS.
+    // After that PASS, at 05's request, one COMMENT was added beside the success return (a falsy error does not
+    // prove acceptance); it is the only change since, and it is why this hash moved.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('ffd111e20c707333');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('c4c49911ad0c94c7');
     expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('989fd50aa3a32041');
   });
 

@@ -178,6 +178,9 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
         }
         return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
       }
+      // The success return stays INSIDE the try on purpose: a throw while building it is uncertain, not accepted.
+      // A falsy `error` does not prove acceptance - postgrest-js rewrites a blank 404 to { status: 204,
+      // error: null }, so "no error" can mean "no answer". Do not "optimise" this to accepted:true (05 review).
       const data = (res.data ?? {}) as { messageId?: string; id?: string; duplicate?: boolean };
       return {
         accepted: true,
