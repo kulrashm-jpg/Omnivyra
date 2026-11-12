@@ -67,9 +67,14 @@ export interface WhatsAppAdapterDeps {
    * Compare-and-set; returns true when this call moved the row. The claim (`requested ->
    * submitting`) is D-2's atomic claim: the default makes it through orch_claim_engine_request
    * (per-person lock + frequency gap + claim, one transaction) and reports why nothing was
-   * claimed through `claim.verdict`.
+   * claimed through `claim.verdict`.   *
+   * `expectUpdatedAt` (CLASS-2 C3): the generic compare-and-set ALSO requires updated_at to equal
+   * this value - the RAW string PostgREST returned (microseconds; never round-tripped through a
+   * Date). The guard trigger sets updated_at := now() on every update, so it is the claim's
+   * fencing token. Refused on the claim path (the claim RPC cannot honour it, and a silent
+   * no-op there would read as a fence).
    */
-  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }, claim?: ClaimOptions): Promise<boolean>;
+  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }, claim?: ClaimOptions, expectUpdatedAt?: string): Promise<boolean>;
   findBroadcastByName(organizationId: string, name: string): Promise<string | null>;
   readPersonPhone(organizationId: string, personId: string): Promise<string | null | undefined>;
   findWhatsAppAccount(organizationId: string): Promise<{ id: string } | 'none' | 'ambiguous'>;
@@ -115,17 +120,19 @@ export const defaultWhatsAppDeps: WhatsAppAdapterDeps = {
     throw Object.assign(new Error('engine request could not be created'), { code: 'request_create_failed' });
   },
 
-  async transitionRequest(organizationId, executionTaskId, from, patch, claim) {
+  async transitionRequest(organizationId, executionTaskId, from, patch, claim, expectUpdatedAt) {
     if (from === 'requested' && patch.state === 'submitting') {
+      if (expectUpdatedAt !== undefined) throw new Error('transitionRequest: expectUpdatedAt is not supported on the claim path');
       const options = claim ?? {};
       options.externalRef = patch.external_ref ?? options.externalRef ?? null;
       return claimEngineRequest(organizationId, executionTaskId, options);
     }
-    const res = await ownedDbTable(ENGINE_REQUESTS_TABLE)
+    const cas = ownedDbTable(ENGINE_REQUESTS_TABLE)
       .update(patch)
       .eq('organization_id', organizationId)
       .eq('execution_task_id', executionTaskId)
-      .eq('state', from)
+      .eq('state', from);
+    const res = await (expectUpdatedAt === undefined ? cas : cas.eq('updated_at', expectUpdatedAt))
       .select('id');
     return !res.error && Array.isArray(res.data) && res.data.length === 1;
   },
@@ -285,7 +292,11 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           if (orphan !== null) {
             return settle(ctx, 'submitting', 'uncertain', result('submission_interrupted', 'needs_human', 'a submission was interrupted after the broadcast was created; review it before any resend', orphan));
           }
-          const released = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'requested', detail: 'stale claim released' });
+          // FENCE 2 (CLASS-2 C3): released only if it is still the stale claim that was READ. A
+          // claimant that woke, created its broadcast and refreshed its claim (fence 1) has a new
+          // updated_at, and must not be released from under it - or both would send.
+          if (row.updated_at === null) return result('submitting', 'wait', 'the stale claim cannot be fenced (no updated_at)', null);
+          const released = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'requested', detail: 'stale claim released' }, undefined, row.updated_at);
           if (!released) return result('submitting', 'wait', 'the stale claim moved concurrently', null);
           break;
         }
@@ -332,6 +343,19 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
           : result(refused.outcome, 'wait', refused.reason, null);
       }
 
+      // The claim's FENCING TOKEN (CLASS-2 C3): its updated_at, read right after the claim, kept as
+      // the raw string. If this read picks up a later claimant's value instead, both fence on the
+      // same value and exactly one wins. Unreadable / null: the claim cannot be fenced, so nothing
+      // is created or sent (a stale claim with no broadcast is released by a later sweep).
+      let claimToken: string | null = null;
+      try {
+        const mine = await deps.getOrCreateRequest(ctx.organizationId, ctx.executionTaskId);
+        claimToken = mine.state === 'submitting' && typeof mine.updated_at === 'string' && mine.updated_at !== '' ? mine.updated_at : null;
+      } catch {
+        claimToken = null;
+      }
+      if (claimToken === null) return result('claim_unfenced', 'wait', 'the claim could not be read back, so it cannot be fenced; nothing was created', null);
+
       const name = broadcastNameFor(ctx.executionTaskId);
       let broadcastId: string | null = null;
       try {
@@ -344,6 +368,20 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
         });
         // The canonical person rides with the recipient so the send path can apply person-level restrictions.
         await deps.expandPersonRecipients(broadcastId, [{ phone_e164: phone, person_id: ctx.personId }]);
+        // FENCE 1 (CLASS-2 C3): still MINE, immediately before the send act. A sweep that stalled
+        // past STALE_SUBMISSION_MS may have been released and the request claimed - and sent - by
+        // another; that sweep then created a SECOND wf:<task> broadcast and queued it. This CAS
+        // (state submitting AND the token read after the claim; the trigger bumps updated_at)
+        // moves exactly one row or this run does not enqueue. Its draft broadcast is left
+        // unqueued - it sends nothing unless an operator resumes it by hand - and the row is not
+        // settled: it is not this run's any more.
+        const stillMine = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'submitting' }, undefined, claimToken);
+        if (!stillMine) {
+          console.error('[orch-whatsapp] claim lost before enqueue; this run\'s draft broadcast is NOT queued (an orphan draft, never sent)', {
+            organization_id: ctx.organizationId, execution_task_id: ctx.executionTaskId, draft_broadcast_id: broadcastId,
+          });
+          return result('claim_lost', 'wait', 'another sweep holds this request now; nothing was queued by this run', null);
+        }
         // Validates the template and the account's rate limit, then queues the
         // send. Only after it succeeds is the request `submitted`.
         await deps.enqueueBroadcast(broadcastId, WHATSAPP_RATE_PLAN);

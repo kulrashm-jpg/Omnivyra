@@ -137,6 +137,7 @@ const SAFETY_SUITE_REGISTRY = [
   // RUL-C: a journey batch whose queue acceptance cannot be confirmed is `uncertain`,
   // never `failed`, and is never resubmitted on any path.
   'backend/tests/unit/whatsappAdapterEnqueueUncertain.test.ts',
+  'backend/tests/unit/orchestrationEngineClaimFence.test.ts',
   'backend/tests/unit/processScheduledPostsAuthorization.test.ts',
   'backend/tests/unit/publishToPlatformHonestRefusals.test.ts',
   'backend/tests/unit/networkActionCandidateService.test.ts',

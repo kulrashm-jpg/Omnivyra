@@ -492,7 +492,7 @@ export interface CommunityAdapterDeps {
    * is D-2's atomic claim (orch_claim_engine_request: per-person lock + frequency gap + claim);
    * why nothing was claimed is reported through `claim.verdict`.
    */
-  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }, claim?: ClaimOptions): Promise<boolean>;
+  transitionRequest(organizationId: string, executionTaskId: string, from: RequestState, patch: { state: RequestState; external_ref?: string; detail?: string | null }, claim?: ClaimOptions, expectUpdatedAt?: string): Promise<boolean>;
   binding: CommunityActionBinding;
   /** Tenant-filtered read. null = no such action FOR THIS TENANT; undefined = unreadable. */
   readAction(organizationId: string, actionId: string): Promise<CommunityActionRow | null | undefined>;
@@ -536,17 +536,19 @@ export const defaultCommunityDeps: CommunityAdapterDeps = {
     throw Object.assign(new Error('engine request could not be created'), { code: 'request_create_failed' });
   },
 
-  async transitionRequest(organizationId, executionTaskId, from, patch, claim) {
+  async transitionRequest(organizationId, executionTaskId, from, patch, claim, expectUpdatedAt) {
     if (from === 'requested' && patch.state === 'submitting') {
+      if (expectUpdatedAt !== undefined) throw new Error('transitionRequest: expectUpdatedAt is not supported on the claim path');
       const options = claim ?? {};
       options.externalRef = patch.external_ref ?? options.externalRef ?? null;
       return claimEngineRequest(organizationId, executionTaskId, options);
     }
-    const res = await ownedDbTable(ENGINE_REQUESTS_TABLE)
+    const cas = ownedDbTable(ENGINE_REQUESTS_TABLE)
       .update(patch)
       .eq('organization_id', organizationId)
       .eq('execution_task_id', executionTaskId)
-      .eq('state', from)
+      .eq('state', from);
+    const res = await (expectUpdatedAt === undefined ? cas : cas.eq('updated_at', expectUpdatedAt))
       .select('id');
     return !res.error && Array.isArray(res.data) && res.data.length === 1;
   },
@@ -734,8 +736,11 @@ export function createCommunityAdapter(deps: CommunityAdapterDeps = defaultCommu
             }
             return fromActionRow(ctx, 'submitting', row);
           }
-          // Still `approved` (or never bound): nothing was claimed, nothing sent.
-          const released = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'requested', detail: 'stale claim released' });
+          // Still `approved` (or never bound): nothing was claimed, nothing sent. Released only if
+          // it is still the stale claim that was READ (CLASS-2 C3, 55): the action-claim RPC is a
+          // backstop, not the only fence.
+          if (req.updated_at === null) return result('submitting', 'wait', 'the stale claim cannot be fenced (no updated_at)', req.external_ref);
+          const released = await deps.transitionRequest(ctx.organizationId, ctx.executionTaskId, 'submitting', { state: 'requested', detail: 'stale claim released' }, undefined, req.updated_at);
           if (!released) return result('submitting', 'wait', 'the stale claim moved concurrently', req.external_ref);
           break;
         }

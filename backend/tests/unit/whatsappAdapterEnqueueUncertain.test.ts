@@ -80,6 +80,13 @@ let ledger: Map<string, Req>;
 let clock: string;
 /** Every write the ledger accepted, in order. */
 let ledgerWrites: Array<{ from: State; to: State }>;
+/**
+ * The guard trigger sets updated_at := now() on EVERY update (CLASS-2 C3): each write gets a fresh,
+ * MICROSECOND-precision value (as PostgREST returns it) on the test clock, so a fence that compares
+ * updated_at can lose, exactly as on the real table.
+ */
+let writeSeq = 0;
+const touch = (): string => `${clock.slice(0, 23)}${String(++writeSeq % 1000).padStart(3, '0')}Z`;
 
 const ledgerDeps: Pick<WhatsAppAdapterDeps, 'getOrCreateRequest' | 'transitionRequest'> = {
   async getOrCreateRequest(org, task) {
@@ -91,13 +98,14 @@ const ledgerDeps: Pick<WhatsAppAdapterDeps, 'getOrCreateRequest' | 'transitionRe
     }
     return { ...r };
   },
-  async transitionRequest(org, task, from, patch) {
+  async transitionRequest(org, task, from, patch, _claim, expectUpdatedAt) {
     const r = ledger.get(`${org}|${task}`);
     if (!r || r.state !== from) return false;                                         // compare-and-set
+    if (expectUpdatedAt !== undefined && r.updated_at !== expectUpdatedAt) return false; // the claim fence
     if (SETTLED.includes(r.state) && patch.state !== r.state) return false;           // a settled request does not move
     if (r.external_ref !== null && patch.external_ref !== undefined && patch.external_ref !== r.external_ref) return false;
     if ((patch.state === 'submitted' || patch.state === 'completed') && (patch.external_ref ?? r.external_ref) === null) return false;
-    Object.assign(r, patch, { updated_at: clock });
+    Object.assign(r, patch, { updated_at: touch() });
     ledgerWrites.push({ from, to: patch.state });
     return true;
   },
@@ -206,7 +214,8 @@ describe('RUL-C: queue acceptance that cannot be confirmed is uncertain', () => 
     expect(req()).toMatchObject({ state: 'uncertain', external_ref: bc, detail: ENQUEUE_UNCERTAIN_DETAIL });
     expect(req().state).not.toBe('failed');
     expect(req().state).not.toBe('submitted');
-    expect(ledgerWrites).toEqual([{ from: 'requested', to: 'submitting' }, { from: 'submitting', to: 'uncertain' }]);
+    // requested -> submitting (the claim), submitting -> submitting (the C3 "still mine" fence before the enqueue), -> uncertain
+    expect(ledgerWrites).toEqual([{ from: 'requested', to: 'submitting' }, { from: 'submitting', to: 'submitting' }, { from: 'submitting', to: 'uncertain' }]);
 
     // The shared contract reads it as "may have acted", for a person; never FAILED.
     const n = normalizeEngineResult(r);
@@ -221,8 +230,8 @@ describe('RUL-C: queue acceptance that cannot be confirmed is uncertain', () => 
 
   it('C-1b: the uncertain settlement itself cannot be written → the stale-claim path still ends uncertain, never a second batch', async () => {
     mockEnqueue = lostAckStoredWithdrawalFails;
-    const dropUncertainWrite: WhatsAppAdapterDeps['transitionRequest'] = async (o, t, from, patch) =>
-      (patch.state === 'uncertain' ? false : ledgerDeps.transitionRequest(o, t, from, patch));
+    const dropUncertainWrite: WhatsAppAdapterDeps['transitionRequest'] = async (o, t, from, patch, claim, expectUpdatedAt) =>
+      (patch.state === 'uncertain' ? false : ledgerDeps.transitionRequest(o, t, from, patch, claim, expectUpdatedAt));
     const first = await run({ transitionRequest: dropUncertainWrite });
     expect(first).toMatchObject({ outcome: 'uncertain', disposition: 'needs_human' });
     expect(req().state).toBe('submitting');
@@ -289,7 +298,7 @@ describe('RUL-C: an uncertain batch is never sent twice, on any path', () => {
     expect(broadcasts()).toHaveLength(1);
     expect(recipients()).toHaveLength(1);
     expect(queueAdds).toHaveLength(1);                       // the original, lost-ack add only
-    expect(ledgerWrites).toHaveLength(2);                    // requested→submitting→uncertain, nothing after
+    expect(ledgerWrites).toHaveLength(3);                    // requested→submitting (claim), the C3 fence, →uncertain; nothing after
     // Nothing can put it back in play: a release to `requested` is refused by the guard.
     expect(await ledgerDeps.transitionRequest(ORG, TASK, 'uncertain', { state: 'requested' })).toBe(false);
   });
