@@ -146,6 +146,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // CAS pending -> approved, WITH the org id in the same write (onboarding only
   // honours approved rows whose organization_id is set, so no half state is
   // ever visible). The loser of a race deletes the company it just created.
+  // TRADE-OFF (05): the compensating delete is not atomic - if the process dies
+  // between a lost CAS and the delete, the company is ORPHANED (inert: no
+  // members, no data). The alternative that creates nothing on a lost race is a
+  // claim status (pending -> approving -> approved), which needs a new status
+  // value (a CHECK-constraint migration); this commit chose not to add one.
+  // Find orphans with:
+  //   SELECT c.id FROM companies c
+  //    WHERE NOT EXISTS (SELECT 1 FROM user_company_roles r WHERE r.company_id = c.id)
+  //      AND NOT EXISTS (SELECT 1 FROM access_requests a WHERE a.organization_id = c.id);
+  // The delete below is FK-safe ONLY while nothing references the new company
+  // before this CAS - in particular users.active_company_id (an ON DELETE
+  // NO ACTION reference) must never be written by this route before it.
   const { data: approved, error: updateErr } = await supabase
     .from('access_requests')
     .update({
