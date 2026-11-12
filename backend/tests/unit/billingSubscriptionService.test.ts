@@ -69,7 +69,12 @@ function dbStub(opts: { selectRows?: any[] }, captured: { upserts: any[]; update
         select: () => api,
         in: () => api,
         lt: () => api,
-        update: (row: any) => { captured.updates.push({ row }); return { in: () => Promise.resolve({ error: null }) }; },
+        update: (row: any) => {
+          captured.updates.push({ row });
+          // the sweep's update re-states the predicate and returns the updated ids
+          const u: any = { in: () => u, lt: () => u, select: () => Promise.resolve({ data: (opts.selectRows ?? []).map((r: any) => ({ id: r.id })), error: null }) };
+          return u;
+        },
         then: (resolve: any) => Promise.resolve({ data: opts.selectRows ?? [], error: null }).then(resolve),
       };
       return api;

@@ -216,7 +216,20 @@ export async function markExpiredSubscriptions(deps: BillingSubDeps, graceDays =
   const ids: string[] = (data as any[]).map((r) => r.id);
   if (ids.length === 0) return { expired: 0, ids: [] };
   const nowIso = new Date(nowMs).toISOString();
-  const { error: updErr } = await deps.db.from('billing_subscriptions').update({ status: 'expired', updated_at: nowIso }).in('id', ids);
+  // CLASS 2 (2026-11-12): the update RE-STATES the expiry predicate (status +
+  // period) instead of trusting the read. A Stripe renewal that advanced
+  // current_period_end (or a status change) between the read and this write
+  // used to be overwritten to 'expired' - and an expired subscription feeds the
+  // credit-expiry sweep (drains the paying org's allocation) and blocks the
+  // next allocation. Only rows STILL lapsed are expired, and the count is the
+  // rows actually updated.
+  const { data: updated, error: updErr } = await deps.db.from('billing_subscriptions')
+    .update({ status: 'expired', updated_at: nowIso })
+    .in('id', ids)
+    .in('status', ['active', 'trialing', 'past_due'])
+    .lt('current_period_end', cutoffIso)
+    .select('id');
   if (updErr) throw new Error(`[billingSubscription] expiry update failed for ${ids.length} subscription(s): ${updErr.message}`);
-  return { expired: ids.length, ids };
+  const expiredIds: string[] = ((updated ?? []) as Array<{ id: string }>).map((r) => r.id);
+  return { expired: expiredIds.length, ids: expiredIds };
 }
