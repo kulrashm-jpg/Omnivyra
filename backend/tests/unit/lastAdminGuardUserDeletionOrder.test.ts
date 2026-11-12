@@ -7,6 +7,11 @@
  * ONLY because Step C committed before Step D. If Step D ever ran before Step C,
  * it would raise LAST_COMPANY_ADMIN after the auth account is already gone (a
  * half-deleted user). This pins B < C < D in the handler's source.
+ * LOAD-BEARING COMMENT: the prohibition anchors on the handler comment
+ * '// Step A: look up the user row to get the auth identity'. Editing it fails
+ * this test (the safe direction) - restore the anchor, never loosen the test.
+ * The BEHAVIOURAL pin (the real order succeeds / reversed is refused on a sole
+ * admin) lives in backend/tests/realschema/user_company_roles_last_admin_guard.test.ts.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -43,13 +48,12 @@ it('PROHIBITION: no user_company_roles WRITE between Route 2 Step A and Step C',
   expect(a).toBeGreaterThan(-1);
   expect(c).toBeGreaterThan(a);
   const slice = SRC.slice(a, c);
-  const writes: string[] = [];
-  const re = /from\('user_company_roles'\)([\s\S]*?);/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(slice))) {
-    if (/\.(update|delete|upsert|insert)\(/.test(m[1])) writes.push(m[0].slice(0, 120));
-  }
-  expect(writes).toEqual([]);
+  expect(slice.length).toBeGreaterThan(500); // non-vacuous: the slice spans Steps A-B
+  // 05: STRICTLY STRONGER than a per-table scan - NO write verb at all in the slice,
+  // whatever the table or accessor (from() / ownedDbTable() / a split builder / an
+  // RPC wrapper). Nothing may mutate before the users soft-delete except the auth
+  // deletion (an auth.admin call, not a table write).
+  expect(slice.match(/\.(update|delete|upsert|insert)\(/g) ?? []).toEqual([]);
 });
 
 it('control: the prohibition scanner DOES flag a membership write placed in such a slice', () => {

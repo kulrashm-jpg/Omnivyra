@@ -60,9 +60,15 @@
 -- here while unable to sign in (the signal lives in Supabase Auth, which a trigger
 -- cannot see). The handler records SUPER_ADMIN_USER_DELETE_PARTIAL for exactly
 -- this sweep; a stricter predicate would not help.
--- BYPASS SURFACE: only ALTER TABLE ... DISABLE TRIGGER (table owner) or
--- session_replication_role = replica (superuser) skip it; neither is available
--- to service_role through the API (to be confirmed from the catalog by 83).
+-- BYPASS SURFACE - RECORDED (83, C27, 2026-11-12): user_company_roles is owned by
+-- postgres; service_role is NOT a superuser, NOT a member of postgres (no role
+-- memberships), and session_replication_role has context 'superuser'. So through
+-- the API surface (service_role) this trigger can be neither disabled (ALTER TABLE
+-- ... DISABLE TRIGGER needs ownership) nor skipped (session_replication_role is
+-- superuser-only). Only postgres / supabase_admin - i.e. migrations - can bypass it.
+-- (service_role's rolbypassrls bypasses RLS only; triggers still fire.)
+-- COMMITTED EVIDENCE: backend/tests/realschema/user_company_roles_last_admin_guard.test.ts
+-- (scenarios, the LIVE C26 lifecycle bodies under the guard, a two-session race).
 -- The error is P0001 'LAST_COMPANY_ADMIN' with a HINT naming the fix; routes map
 -- it to 409.
 --
