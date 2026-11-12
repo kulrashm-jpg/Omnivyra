@@ -197,13 +197,9 @@ describe('C — reinvitation of privileged users', () => {
   it.each([
     ['COMPANY_ADMIN', 'COMPANY_ADMIN'],
     ['ADMIN', 'COMPANY_ADMIN'],
-    ['CONTENT_MANAGER', 'CONTENT_CREATOR'],
-    ['CONTENT_PLANNER', 'CONTENT_CREATOR'],
     ['CONTENT_CREATOR', 'CONTENT_CREATOR'],
     ['CONTENT_REVIEWER', 'CONTENT_REVIEWER'],
     ['CONTENT_PUBLISHER', 'CONTENT_PUBLISHER'],
-    ['CONTENT_ENGAGER', 'VIEW_ONLY'],
-    ['VIEWER', 'VIEW_ONLY'],
     ['VIEW_ONLY', 'VIEW_ONLY'],
   ])('a former %s → invited membership keeps its role; the invitation carries %s (an invitations_role_check value)', async (held, expected) => {
     world({ role: held, status: 'inactive' });
@@ -212,6 +208,20 @@ describe('C — reinvitation of privileged users', () => {
     expect(membership(TARGET)).toEqual([expect.objectContaining({ role: held, status: 'invited' })]);
     expect(invitationFor()).toEqual([expect.objectContaining({ role: expected })]);
     expect(['COMPANY_ADMIN', 'CONTENT_CREATOR', 'CONTENT_REVIEWER', 'CONTENT_PUBLISHER', 'VIEW_ONLY']).toContain(expected);
+  });
+
+  // ROLES APPROACH A (e9 2026-11-12): the four content roles keep their identity,
+  // so they are no longer SILENTLY downgraded to CONTENT_CREATOR / VIEW_ONLY on
+  // the invitation. Until invitations_role_check admits them (the roles-step
+  // invite migration), reinviting one fails CLOSED - never a downgrade.
+  it.each(['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER'])('a former %s → 409 ROLE_NOT_REINVITABLE (no silent downgrade); nothing written', async (held) => {
+    world({ role: held, status: 'inactive' });
+    const r = await reinvite('A');
+    expect(r.status).toBe(409);
+    expect(r.body).toEqual({ error: 'ROLE_NOT_REINVITABLE' });
+    expect(membership(TARGET)).toEqual([expect.objectContaining({ role: held, status: 'inactive' })]);
+    expect(invitationFor()).toHaveLength(0);
+    expect(mockSentInvites).toHaveLength(0);
   });
 
   it('a brand-new person → CONTENT_CREATOR membership and a CONTENT_CREATOR invitation (unchanged default, now explicit)', async () => {
@@ -261,7 +271,7 @@ describe('C — acceptance activates exactly the invitation role; expiry and rev
     ['COMPANY_ADMIN', 'COMPANY_ADMIN'],
     ['ADMIN', 'COMPANY_ADMIN'],
     ['CONTENT_REVIEWER', 'CONTENT_REVIEWER'],
-    ['VIEWER', 'VIEW_ONLY'],
+    ['VIEW_ONLY', 'VIEW_ONLY'],
   ])('a re-invited former %s accepts → ACTIVE %s (no silent demotion to CONTENT_CREATOR)', async (held, expected) => {
     const token = await reinviteAndCaptureToken(held);
     const r = await accept(token);

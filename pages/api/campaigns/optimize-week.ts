@@ -168,5 +168,5 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // DEAD-ENTRY FIX (e9 2026-11-12): canonical names only - getUserRole rewrites ADMIN/CONTENT_MANAGER/CONTENT_PLANNER/CONTENT_ENGAGER/VIEWER, so those entries never matched.
-// CONTENT_PLANNER joins when the roles step stops rewriting it.
-export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.COMPANY_ADMIN]), { route: '/api/campaigns/optimize-week' });
+// Roles step (e9 2026-11-12): CONTENT_PLANNER = CREATOR + planning; planning routes name it.
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.COMPANY_ADMIN, Role.CONTENT_PLANNER]), { route: '/api/campaigns/optimize-week' });

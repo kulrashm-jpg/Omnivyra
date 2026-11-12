@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getUserRole, Role } from '../../../backend/services/rbacService';
+import { getUserRole, Role, roleSatisfies } from '../../../backend/services/rbacService';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
@@ -26,7 +26,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (roleError === 'COMPANY_ACCESS_DENIED') {
     return res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' });
   }
-  if (!role || !(allowedRoles as Set<string>).has(role)) {
+  if (!role || !roleSatisfies(role, [...allowedRoles]) /* Approach A: role or its base tier */) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 

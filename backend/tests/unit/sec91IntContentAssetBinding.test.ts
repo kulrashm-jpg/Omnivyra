@@ -81,17 +81,25 @@ describe('SEC91-W2G-N1 — content approve/reject bind the asset to the authoriz
   // DEAD-ENTRY FIX (e9, 2026-11-12): the list is now canonical [SUPER_ADMIN,
   // COMPANY_ADMIN]. Company admins (incl. a legacy 'ADMIN' row, which
   // normalises to COMPANY_ADMIN) now reach the handler, so N1's binding is LIVE
-  // for them - pinned below. CONTENT_MANAGER joins with the roles step; until
-  // then it normalises to CONTENT_CREATOR and stays refused.
-  it('role list: company admins (incl. legacy ADMIN) reach the handler; manager/creator/viewer are refused', async () => {
-    for (const who of ['LEGACY_MANAGER', 'CREATOR', 'VIEWER'] as W2GPrincipal[]) {
+  // for them - pinned below.
+  // ROLES STEP (e9 2026-11-12): CONTENT_REVIEWER approves (APPROVE_CONTENT) and
+  // CONTENT_MANAGER (= PUBLISHER u REVIEWER) keeps its identity and approves.
+  it('role list: admins, CONTENT_REVIEWER and CONTENT_MANAGER reach the handler; creator/publisher/viewer/engager are refused', async () => {
+    for (const who of ['CREATOR', 'PUBLISHER', 'VIEWER', 'ENGAGER'] as W2GPrincipal[]) {
       expect((await post(approve, who, { companyId: CO_A, assetId: ASSET_A })).status).toBe(403);
     }
     expect(mockApprove).not.toHaveBeenCalled();
-    for (const who of ['A', 'LEGACY_ADMIN', 'SUPER'] as W2GPrincipal[]) {
+    for (const who of ['A', 'LEGACY_ADMIN', 'SUPER', 'REVIEWER', 'LEGACY_MANAGER'] as W2GPrincipal[]) {
       expect((await post(approve, who, { companyId: CO_A, assetId: ASSET_A })).status).toBe(200);
     }
-    expect(mockApprove).toHaveBeenCalledTimes(3);
+    expect(mockApprove).toHaveBeenCalledTimes(5);
+  });
+
+  it('CRITICAL (roles step): a CONTENT_MANAGER / REVIEWER of A cannot approve B’s asset', async () => {
+    for (const who of ['REVIEWER', 'LEGACY_MANAGER'] as W2GPrincipal[]) {
+      expect((await post(approve, who, { companyId: CO_A, assetId: ASSET_B })).status).toBe(403);
+    }
+    expect(mockApprove).not.toHaveBeenCalled();
   });
 
   it.each([

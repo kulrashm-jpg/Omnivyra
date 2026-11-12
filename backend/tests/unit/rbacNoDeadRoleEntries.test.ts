@@ -80,7 +80,9 @@ describe('no role list names a role normalizeRole rewrites', () => {
   const dead = (lists: string[]) => lists.flatMap((l) => namesIn(l).filter((n) => REWRITTEN.has(n)));
 
   it('the rewritten set is computed from normalizeRole and includes the known rewrites', () => {
-    for (const r of ['ADMIN', 'CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER']) expect(REWRITTEN.has(r)).toBe(true);
+    expect(REWRITTEN.has('ADMIN')).toBe(true);
+    // Approach A (e9 2026-11-12): the four content roles keep their identity.
+    for (const r of ['CONTENT_MANAGER', 'CONTENT_PLANNER', 'CONTENT_ENGAGER', 'VIEWER']) expect(REWRITTEN.has(r)).toBe(false);
     expect(REWRITTEN.has('COMPANY_ADMIN')).toBe(false);
   });
 
@@ -94,11 +96,11 @@ describe('no role list names a role normalizeRole rewrites', () => {
   });
 
   it('controls: the scanner flags the pre-fix shapes (inline, named const, allowedRoles, requireCompanyRole, forbidden)', () => {
-    expect(dead(roleLists('withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.CONTENT_MANAGER])'))).toEqual(['ADMIN', 'CONTENT_MANAGER']);
-    expect(dead(roleLists('const ALLOWED_ROLES = [\n  Role.COMPANY_ADMIN,\n  Role.CONTENT_PLANNER,\n];\nexport default withRBAC(handler, ALLOWED_ROLES);'))).toEqual(['CONTENT_PLANNER']);
+    expect(dead(roleLists('withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.CONTENT_MANAGER])'))).toEqual(['ADMIN']);
+    expect(dead(roleLists('const ALLOWED_ROLES = [\n  Role.COMPANY_ADMIN,\n  Role.ADMIN,\n];\nexport default withRBAC(handler, ALLOWED_ROLES);'))).toEqual(['ADMIN']);
     expect(dead(roleLists('enforceRole({ allowedRoles: [Role.SUPER_ADMIN, Role.ADMIN] })'))).toEqual(['ADMIN']);
-    expect(dead(roleLists('await requireCompanyRole(req, res, companyId, [Role.VIEWER, Role.VIEW_ONLY])'))).toEqual(['VIEWER']);
-    expect(dead(roleLists("withRBAC(handler, undefined, ['VIEW_ONLY', 'VIEWER'])"))).toEqual(['VIEWER']);
+    expect(dead(roleLists('await requireCompanyRole(req, res, companyId, [Role.ADMIN, Role.VIEW_ONLY])'))).toEqual(['ADMIN']);
+    expect(dead(roleLists("withRBAC(handler, undefined, ['VIEW_ONLY', 'ADMIN'])"))).toEqual(['ADMIN']);
     expect(dead(roleLists('// withRBAC(handler, [Role.ADMIN])'))).toEqual([]); // comments ignored
   });
 
@@ -174,8 +176,8 @@ describe('no comparison of a NORMALISED role against a rewritten name (shape 2)'
     const dead = (src: string) => normalisedComparisons(src).filter((c) => REWRITTEN.has(c.name)).map((c) => c.name);
     expect(dead('const fallbackRole = await getCompanyRoleIncludingInvited(u, c);\nif (fallbackRole === Role.ADMIN) x();')).toEqual(['ADMIN']);
     expect(dead('const { role, error } = await getUserRole(u, c);\nif (role !== Role.ADMIN) deny();')).toEqual(['ADMIN']);
-    expect(dead('const { role: r } = await getUserRole(u, c);\nif (Role.VIEWER === r) x();')).toEqual(['VIEWER']);
-    expect(dead('const n = normalizeRole(raw);\nswitch (n) {\n  case Role.CONTENT_MANAGER: a();\n  case Role.COMPANY_ADMIN: b();\n}')).toEqual(['CONTENT_MANAGER']);
+    expect(dead('const { role: r } = await getUserRole(u, c);\nif (Role.ADMIN === r) x();')).toEqual(['ADMIN']);
+    expect(dead('const n = normalizeRole(raw);\nswitch (n) {\n  case Role.ADMIN: a();\n  case Role.COMPANY_ADMIN: b();\n}')).toEqual(['ADMIN']);
     expect(dead("const { data } = await db.from('user_company_roles').select('role');\nif (data.role === Role.ADMIN) x();")).toEqual([]); // raw value
     expect(dead('export const normalizePermissionRole = (role: string) => {\n  if (role === Role.ADMIN) return Role.COMPANY_ADMIN;\n};')).toEqual([]); // normaliser input
   });

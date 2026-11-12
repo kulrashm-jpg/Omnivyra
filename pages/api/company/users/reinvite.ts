@@ -156,12 +156,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (canonicalRole === Role.SUPER_ADMIN) {
       return res.status(403).json({ error: 'SUPER_ADMIN_NOT_REINVITABLE' });
     }
-    // The invitation must name the role acceptance will activate. The preserved
-    // role is mapped onto the invitation vocabulary (invitations_role_check:
-    // COMPANY_ADMIN, CONTENT_CREATOR, CONTENT_REVIEWER, CONTENT_PUBLISHER,
-    // VIEW_ONLY) by the existing normalizeRole aliases — ADMIN → COMPANY_ADMIN,
-    // CONTENT_MANAGER / CONTENT_PLANNER → CONTENT_CREATOR, CONTENT_ENGAGER /
-    // VIEWER → VIEW_ONLY. A role with no such mapping fails closed.
+    // The invitation must name the role acceptance will activate, in the
+    // invitation vocabulary (invitations_role_check: COMPANY_ADMIN,
+    // CONTENT_CREATOR, CONTENT_REVIEWER, CONTENT_PUBLISHER, VIEW_ONLY). Only the
+    // legacy ADMIN alias is mapped (to COMPANY_ADMIN). ROLES APPROACH A (e9
+    // 2026-11-12): CONTENT_MANAGER / PLANNER / ENGAGER / VIEWER keep their
+    // identity and are NOT silently downgraded; until the roles-step invite
+    // migration widens invitations_role_check they fail closed here.
     const INVITATION_ROLES: ReadonlyArray<string> = [
       Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.CONTENT_REVIEWER, Role.CONTENT_PUBLISHER, Role.VIEW_ONLY,
     ];

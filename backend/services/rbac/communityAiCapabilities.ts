@@ -1,4 +1,4 @@
-import { normalizePermissionRole, Role } from '../rbacService';
+import { normalizePermissionRole, Role, roleSatisfies } from '../rbacService';
 
 export const COMMUNITY_AI_CAPABILITIES = {
   VIEW_ACTIONS: [
@@ -10,7 +10,8 @@ export const COMMUNITY_AI_CAPABILITIES = {
     Role.SUPER_ADMIN,
   ],
   APPROVE_ACTIONS: [Role.CONTENT_REVIEWER, Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
-  EXECUTE_ACTIONS: [Role.CONTENT_PUBLISHER, Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
+  // CONTENT_ENGAGER = VIEW_ONLY + engagement (e9 2026-11-12): it EXECUTES actions.
+  EXECUTE_ACTIONS: [Role.CONTENT_PUBLISHER, Role.CONTENT_ENGAGER, Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   SCHEDULE_ACTIONS: [Role.CONTENT_REVIEWER, Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   MANAGE_PLAYBOOKS: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   MANAGE_CONNECTORS: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN, Role.CONTENT_PUBLISHER, Role.CONTENT_REVIEWER],
@@ -19,6 +20,7 @@ export const COMMUNITY_AI_CAPABILITIES = {
   // for publishing should not implicitly authorise listening enablement.
   MANAGE_LISTENING_CAPABILITIES: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   VIEW_DISCOVERED_USERS: [
+    Role.CONTENT_ENGAGER, // engagement (e9 2026-11-12)
     Role.CONTENT_CREATOR,
     Role.CONTENT_PUBLISHER,
     Role.CONTENT_REVIEWER,
@@ -34,6 +36,6 @@ export const hasCommunityAiCapability = (
 ): boolean => {
   if (!role) return false;
   const allowedRoles: Role[] = (COMMUNITY_AI_CAPABILITIES[capability] || []) as Role[];
-  const normalizedRole = normalizePermissionRole(role) as Role;
-  return allowedRoles.includes(normalizedRole);
+  // Approach A: the role OR one of its base tiers.
+  return roleSatisfies(normalizePermissionRole(role), allowedRoles);
 };

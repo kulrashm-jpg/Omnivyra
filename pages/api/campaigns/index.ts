@@ -33,6 +33,7 @@ import {
   hasPermission,
   isPlatformSuperAdmin,
   isSuperAdmin,
+  roleSatisfies,
 } from '../../../backend/services/rbacService';
 
 /**
@@ -118,7 +119,7 @@ const requireCompanyRole = async (
     res.status(403).json({ error: 'NOT_ALLOWED' });
     return null;
   }
-  if (!allowedRoles.includes(role)) {
+  if (!roleSatisfies(role, allowedRoles)) { // Approach A: role or its base tier
     res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }

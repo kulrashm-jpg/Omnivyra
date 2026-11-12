@@ -5,12 +5,15 @@ import {
   normalizePermissionRole,
   normalizeRole,
   Role,
+  roleSatisfies,
+  roleAndTiers,
+  ROLE_BASE_TIERS,
 } from './rbacPrimitives';
 import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 
-export { getCompanyRoleIncludingInvited, normalizePermissionRole, Role };
+export { getCompanyRoleIncludingInvited, normalizePermissionRole, Role, roleSatisfies, roleAndTiers, ROLE_BASE_TIERS };
 
 type RbacPermissions = Record<string, string[]>;
 type RbacConfig = {
@@ -25,6 +28,11 @@ export const ALL_ROLES: Role[] = [
   Role.CONTENT_PUBLISHER,
   Role.CONTENT_CREATOR,
   Role.VIEW_ONLY,
+  // Approach A (e9 2026-11-12): real roles, authorised through ROLE_BASE_TIERS.
+  Role.CONTENT_MANAGER,
+  Role.CONTENT_PLANNER,
+  Role.CONTENT_ENGAGER,
+  Role.VIEWER,
 ];
 
 export const PERMISSIONS: RbacPermissions = {
@@ -61,6 +69,9 @@ export const PERMISSIONS: RbacPermissions = {
     Role.CONTENT_CREATOR,
     Role.CONTENT_REVIEWER,
     Role.CONTENT_PUBLISHER,
+    // e9 ruling 2026-11-12: VIEWER and CONTENT_ENGAGER may view the campaigns
+    // list (read-only); VIEWER = VIEW_ONLY, so VIEW_ONLY is granted here.
+    Role.VIEW_ONLY,
     Role.SUPER_ADMIN,
   ],
   MANAGE_EXTERNAL_APIS: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
@@ -487,8 +498,8 @@ export const hasPermission = async (role: string | null, action: string): Promis
   const { permissions } = await getRbacConfig();
   const allowed = permissions[action] || [];
   if (allowed.includes('*')) return true;
-  const normalized = normalizePermissionRole(role);
-  return allowed.includes(normalized);
+  // Approach A: the role OR one of its base tiers.
+  return roleSatisfies(normalizePermissionRole(role), allowed);
 };
 
 export const getUserRole = async (
@@ -638,7 +649,8 @@ export const enforceRole = async (input: {
     input.res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }
-  if (!input.allowedRoles.includes(role)) {
+  // Approach A: the role OR one of its base tiers (ROLE_BASE_TIERS).
+  if (!roleSatisfies(role, input.allowedRoles)) {
     input.res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     return null;
   }
