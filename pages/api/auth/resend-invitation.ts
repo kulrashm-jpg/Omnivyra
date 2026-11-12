@@ -51,7 +51,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { systemTenantContext, tenantTable } from '../../../backend/db/tenantTable';
+import { ownerCompanyOfRow, systemTenantContext, tenantContextFor, tenantTable } from '../../../backend/db/tenantTable';
+import { withUniformDenial } from '../../../backend/security/withUniformDenial';
+import { UNIFORM_NOT_FOUND } from '../../../backend/services/userContextService';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
@@ -102,16 +104,28 @@ async function handleAdminResend(
     return;
   }
 
-  // Look up the invitation + its owning company so we can run the canonical
-  // tenant guard before mutating anything.
-  const { data: invitation } = await supabase
-    .from('invitations')
+  // DERIVE -> AUTHORIZE -> ACT (83 Case A; R8 shape c, 2026-11-12). The owning company is derived
+  // first (ownerCompanyOfRow returns ONLY the company id), the caller is authorized on it with a
+  // uniform denial, and only THEN is the invitation read and its status disclosed. Before, an
+  // unknown id answered 404 and another tenant's ACCEPTED invitation 409 before any access check -
+  // a cross-tenant existence and status oracle. Unknown and foreign are now the same 404.
+  const companyId = await ownerCompanyOfRow('invitations', invitationId, 'admin resend: authorize on the invitation company');
+  if (!companyId) {
+    res.status(404).json(UNIFORM_NOT_FOUND);
+    return;
+  }
+  const access = await withUniformDenial(res, (probeRes) => requireTenantAccess(req, probeRes, companyId, {
+    requireRoleIn: ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN'],
+  }));
+  if (!access) return;
+
+  const tenant = tenantContextFor(access, companyId);
+  const { data: invitation } = await tenantTable('invitations', tenant)
     .select('id, email, role, company_id, accepted_at, revoked_at, invited_by')
     .eq('id', invitationId)
     .maybeSingle();
-
   if (!invitation) {
-    res.status(404).json({ error: 'Invitation not found', code: 'NOT_FOUND' });
+    res.status(404).json(UNIFORM_NOT_FOUND);
     return;
   }
   if ((invitation as { accepted_at?: string | null }).accepted_at) {
@@ -119,16 +133,9 @@ async function handleAdminResend(
     return;
   }
 
-  const companyId = (invitation as { company_id: string }).company_id;
-  const access = await requireTenantAccess(req, res, companyId, {
-    requireRoleIn: ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN'],
-  });
-  if (!access) return;
-
   // Revoke the old invitation row, then issue a fresh one. The new
   // invitation gets a new token; the old token is no longer redeemable.
-  await supabase
-    .from('invitations')
+  await tenantTable('invitations', tenant)
     .update({ revoked_at: new Date().toISOString() })
     .eq('id', invitationId)
     .is('accepted_at', null)

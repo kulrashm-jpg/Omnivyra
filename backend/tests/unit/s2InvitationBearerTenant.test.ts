@@ -41,8 +41,15 @@ jest.mock('../../auth/requestClientIp', () => ({ authRequestIp: () => '1.2.3.4' 
 jest.mock('../../services/requestContext', () => ({ seedRequestContextFromRequest: () => undefined }));
 jest.mock('../../config/getCanonicalAppUrl', () => ({ getCanonicalAppUrl: () => 'https://app.test' }));
 jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
-jest.mock('../../security/IdentityResolver', () => ({ resolvePrincipal: async () => ({ ok: false }) }));
-jest.mock('../../security/TenantGuard', () => ({ requireTenantAccess: async () => null }));
+let mockAdminOf: string | null = null; // the company the admin principal administers
+jest.mock('../../security/IdentityResolver', () => ({
+  resolvePrincipal: async () => (mockAdminOf ? { ok: true, principal: { userId: 'admin-a', legacyCookieSuperAdmin: false } } : { ok: false }),
+}));
+jest.mock('../../security/TenantGuard', () => ({
+  // the real guard answers 403 for a company the caller does not administer
+  requireTenantAccess: async (_req: unknown, res: any, companyId: string) =>
+    (companyId === mockAdminOf ? { userId: 'admin-a', organizationId: companyId } : (res.status(403).json({ error: 'forbidden' }), null)),
+}));
 jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: async () => undefined }));
 jest.mock('../../services/invitationService', () => ({ createAndSendInvitation: async () => ({ id: 'inv-new' }) }));
 let mockExpired = false;
@@ -65,7 +72,7 @@ async function post(h: any, body: Row) {
 const TOKEN_B = 'token-for-company-b-0123456789';
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
-  mockWrites.length = 0; mockExpired = false; mockOtpError = null;
+  mockWrites.length = 0; mockExpired = false; mockOtpError = null; mockAdminOf = null;
   mockDb.invitations = [
     { id: 'inv-b', company_id: B, email: 'x@b.test', role: 'VIEW_ONLY', invited_by: null, token_hash: createHash('sha256').update(TOKEN_B).digest('hex'), expires_at: 'x', accepted_at: null, revoked_at: null, token_consumed_at: null },
     { id: 'inv-a', company_id: A, email: 'y@a.test', role: 'VIEW_ONLY', invited_by: null, token_hash: 'other', expires_at: 'x', accepted_at: null, revoked_at: null, token_consumed_at: null },
@@ -105,5 +112,30 @@ describe('resend-invitation self-serve (bearer: email, constant 200)', () => {
   it("the revoke of the old invitation carries its OWN tenant (B)", async () => {
     await post(resend, { email: 'x@b.test' });
     expect(inviteWrites()[0].filters).toMatchObject({ id: 'inv-b', company_id: B });
+  });
+});
+
+describe('resend-invitation ADMIN mode (83 Case A: derive -> authorize -> act)', () => {
+  it("another tenant's ACCEPTED invitation and an unknown id answer the SAME 404 (no status oracle); nothing written", async () => {
+    mockAdminOf = A;
+    mockDb.invitations.find((i) => i.id === 'inv-b')!.accepted_at = '2026-11-01';
+    const foreign = await post(resend, { invitationId: 'inv-b' });
+    const unknown = await post(resend, { invitationId: 'inv-nope' });
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(JSON.stringify(foreign.body)).toBe(JSON.stringify(unknown.body));
+    expect(inviteWrites()).toHaveLength(0);
+  });
+  it('own invitation: resent, and the revoke is pinned to the authorized company', async () => {
+    mockAdminOf = A;
+    const r = await post(resend, { invitationId: 'inv-a' });
+    expect(r.statusCode).toBe(200);
+    expect(inviteWrites()[0].filters).toMatchObject({ id: 'inv-a', company_id: A });
+  });
+  it("own ACCEPTED invitation: 409 is disclosed only AFTER authorization", async () => {
+    mockAdminOf = A;
+    mockDb.invitations.find((i) => i.id === 'inv-a')!.accepted_at = '2026-11-01';
+    const r = await post(resend, { invitationId: 'inv-a' });
+    expect(r.statusCode).toBe(409);
   });
 });
