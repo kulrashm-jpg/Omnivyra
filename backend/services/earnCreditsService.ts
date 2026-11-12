@@ -82,6 +82,14 @@ export async function grantEarnCredit(params: {
       credits_granted: action.credits,
       reference_id:    refId,
     });
+    // A UNIQUE violation is the AUTHORITATIVE answer (05, 2026-11-12): a
+    // concurrent grant of the same (org, action, reference) won the record
+    // (earn_credit_actions UNIQUE (organization_id, action_type, reference_id))
+    // and the ledger key absorbed this credit. Answer exactly like the
+    // sequential case - no second "you earned" notice, no credits reported.
+    if (recordErr && (recordErr as { code?: string }).code === '23505') {
+      return { granted: false, credits: 0, reason: 'already_granted' };
+    }
     if (recordErr) console.error('[earnCreditsService] earn action record write failed (credit granted):', actionType, recordErr.message);
 
     // Notify all active org members

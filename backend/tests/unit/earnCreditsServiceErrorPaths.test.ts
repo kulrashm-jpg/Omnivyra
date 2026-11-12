@@ -80,3 +80,13 @@ it('nudge: check read error -> NO nudge sent', async () => {
   await notifyEarnProgress({ orgId: 'o1', actionType: 'setup_complete', message: 'm' });
   expect(mockWrites).toEqual([]);
 });
+
+// 05 (2026-11-12): a concurrent grant of the same (org, action, reference) wins
+// the earn_credit_actions UNIQUE; the loser's record insert gets 23505. That is
+// the authoritative "already granted": no second notice, no credits reported.
+it('grant: record insert hits the UNIQUE (concurrent winner) -> already_granted, NO second notification', async () => {
+  mockScript['earn_credit_actions:insert'] = () => ({ data: null, error: { message: 'duplicate key value', code: '23505' } as any });
+  const r = await grantEarnCredit({ orgId: 'o1', userId: 'u1', actionType: 'setup_complete' });
+  expect(r).toEqual({ granted: false, credits: 0, reason: 'already_granted' });
+  expect(mockWrites).toEqual(['earn_credit_actions']);
+});
