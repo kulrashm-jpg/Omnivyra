@@ -79,7 +79,7 @@ export async function expireSubscriptionCreditsForOrg(orgId: string, deps: Expir
   // — precise per-grant separation would need ledger-FIFO tracking (documented limitation).
   const allocRes = await deps.db
     .from('credit_transactions')
-    .select('id, credits_delta, free_delta')
+    .select('id, created_at, credits_delta, free_delta')
     .eq('organization_id', orgId)
     .eq('reference_type', 'subscription_allocation')
     .order('created_at', { ascending: false })
@@ -103,6 +103,26 @@ export async function expireSubscriptionCreditsForOrg(orgId: string, deps: Expir
   const existing = await deps.db.from('credit_transactions').select('id').eq('idempotency_key', idempotencyKey).maybeSingle();
   if (existing?.error) return readFailed('idempotency', existing.error.message);
   if (existing?.data) return { expired: 0, state, reason: 'already_expired' };
+
+  // KEY-FORMAT CHANGE GUARD (2026-11-12): the key above is new. Expiries written
+  // under the OLD per-day key (`expire:subscription:<org>:<day>`) exist in prod
+  // (83/C16: 3 subscription_expiry rows on 2026-06-24) and the new key can never
+  // match them - without this check an allocation already expired under the old
+  // format would expire a SECOND time. Decide by BUSINESS IDENTITY, not key: any
+  // subscription_expiry for this org at or after this allocation means this
+  // allocation has been expired (whatever key format wrote it). A renewal
+  // allocation created after that expiry is correctly still expirable.
+  const allocAt = (lastAlloc as { created_at?: string } | undefined)?.created_at;
+  if (!allocAt) return readFailed('allocation_created_at', 'subscription allocation row has no created_at');
+  const prior = await deps.db
+    .from('credit_transactions')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('reference_type', 'subscription_expiry')
+    .gte('created_at', allocAt)
+    .limit(1);
+  if (prior?.error) return readFailed('prior_expiry', prior.error.message);
+  if ((prior?.data ?? []).length > 0) return { expired: 0, state, reason: 'already_expired' };
 
   const { error } = await deps.rpc({
     p_org_id: orgId,

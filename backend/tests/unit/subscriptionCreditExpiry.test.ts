@@ -7,12 +7,14 @@ import { expireSubscriptionCreditsForOrg, type ExpiryDeps } from '../../services
 const NOW = Date.parse('2026-06-25T00:00:00Z');
 const iso = (days: number) => new Date(NOW + days * 86_400_000).toISOString();
 
-function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolean; allocFree?: number }, captured: { rpc: any[] }): ExpiryDeps {
+function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolean; allocFree?: number; priorExpiry?: boolean; priorExpiryErr?: boolean }, captured: { rpc: any[] }): ExpiryDeps {
   const allocFree = opts.allocFree ?? 1_000_000; // default: cap >= free so full free expires
   const db = {
     from(table: string) {
+      const filters: Record<string, unknown> = {};
       const api: any = {
-        select: () => api, eq: () => api, order: () => api, limit: () => api,
+        select: () => api, order: () => api, limit: () => api, gte: (c: string, v: unknown) => { filters[`gte:${c}`] = v; return api; },
+        eq: (c: string, v: unknown) => { filters[c] = v; return api; },
         maybeSingle: () => {
           if (table === 'organization_credits') return Promise.resolve({ data: opts.free != null ? { free_balance: opts.free, paid_balance: 50, incentive_balance: 10 } : null });
           if (table === 'credit_transactions') return Promise.resolve({ data: opts.existingTxn ? { id: 't' } : null });
@@ -21,7 +23,12 @@ function stub(opts: { sub: any | null; free: number | null; existingTxn?: boolea
         then: (res: any) => {
           let data: any[] = [];
           if (table === 'billing_subscriptions') data = opts.sub ? [opts.sub] : [];
-          else if (table === 'credit_transactions') data = [{ id: 'alloc-1', free_delta: allocFree, credits_delta: allocFree }]; // subscription_allocation
+          else if (table === 'credit_transactions' && filters.reference_type === 'subscription_expiry') {
+            // prior expiry by business identity (any key format)
+            if (opts.priorExpiryErr) return Promise.resolve({ data: null, error: { message: 'down' } }).then(res);
+            data = opts.priorExpiry ? [{ id: 'old-day-key-expiry' }] : [];
+          }
+          else if (table === 'credit_transactions') data = [{ id: 'alloc-1', created_at: '2026-06-24T00:00:00Z', free_delta: allocFree, credits_delta: allocFree }]; // subscription_allocation
           return Promise.resolve({ data }).then(res);
         },
       };
@@ -132,5 +139,33 @@ describe('subscription expiry - read failures are explicit skips (nothing expire
     const r = await expireSubscriptionCreditsForOrg('org1', { ...d, rpc: async (a: any) => { calls.push(a); return { error: null }; } });
     expect(r.reason).toBe('read_failed:wallet');
     expect(calls).toHaveLength(0);
+  });
+});
+
+// KEY-FORMAT CHANGE (2026-11-12): prod holds subscription_expiry rows written
+// under the OLD per-day key (83/C16: 3 rows on 2026-06-24). The new per-allocation
+// key cannot match them; the business-identity check must.
+describe('subscription expiry - old-format expiries are honoured', () => {
+  let spy: jest.SpyInstance;
+  beforeEach(() => { spy = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
+  afterEach(() => spy.mockRestore());
+
+  it('an allocation expired under the OLD per-day key is NOT expired again', async () => {
+    const cap = { rpc: [] as any[] };
+    const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 500, allocFree: 200, priorExpiry: true }, cap));
+    expect(r.reason).toBe('already_expired');
+    expect(cap.rpc).toHaveLength(0);
+  });
+  it('prior-expiry read error -> read_failed:prior_expiry, nothing expired', async () => {
+    const cap = { rpc: [] as any[] };
+    const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 500, allocFree: 200, priorExpiryErr: true }, cap));
+    expect(r.reason).toBe('read_failed:prior_expiry');
+    expect(cap.rpc).toHaveLength(0);
+  });
+  it('control: no prior expiry -> the allocation expires once', async () => {
+    const cap = { rpc: [] as any[] };
+    const r = await expireSubscriptionCreditsForOrg('org1', stub({ sub: expiredSub, free: 500, allocFree: 200 }, cap));
+    expect(r.expired).toBe(200);
+    expect(cap.rpc).toHaveLength(1);
   });
 });
