@@ -134,14 +134,19 @@ export async function reapOrphanHolds(input?: {
     throw new Error(`orphan_hold_reaper_query_failed: ${error.message}`);
   }
 
-  // In a dry run the preflight settled nothing, so exclude the holds it WOULD
-  // confirm / release / quarantine - a real run would never reach them here.
+  // Exclude every hold the preflight DECIDED in this run - in a dry run (it
+  // settled nothing) and in a REAL run: a QUARANTINED hold is left as-is by the
+  // preflight, and the quarantine used to be honoured only through a metadata
+  // stamp on the hold row - an UPDATE the ledger's immutability trigger refuses
+  // in prod, so the reaper would have RELEASED a hold the preflight had just
+  // quarantined (2026-11-12). Confirmed / released holds have siblings anyway.
   const preflightDecided = new Set(
-    dryRun && preflight ? preflight.actions.filter((a) => a.decision !== 'skip').map((a) => a.holdId) : [],
+    preflight ? preflight.actions.filter((a) => a.decision !== 'skip').map((a) => a.holdId) : [],
   );
 
   const result: ReapResult = {
-    ...(dryRun ? { dryRun: true, preflight, skippedByPreflight: 0 } : { preflight }),
+    ...(dryRun ? { dryRun: true, preflight } : { preflight }),
+    skippedByPreflight: 0,
     scanned:           (holds ?? []).length,
     released:          0,
     skippedHasSibling: 0,

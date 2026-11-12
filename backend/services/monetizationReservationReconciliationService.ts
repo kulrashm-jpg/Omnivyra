@@ -256,19 +256,14 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
 }
 
 async function stampHold(row: HoldRow, fields: Record<string, unknown>): Promise<void> {
-  // best-effort: the stamp is bookkeeping on the hold row; the settlement itself
-  // is the confirm/release ledger row. NOTE: 20260663 puts an immutability
-  // trigger on credit_transactions UPDATE - if it is live in prod this write
-  // ALWAYS fails (prod fact pending with 83). Logged, never silent.
-  const { error } = await ownedDbTable('credit_transactions')
-    .update({
-      metadata: {
-        ...(row.metadata ?? {}),
-        ...fields,
-      },
-    })
-    .eq('id', row.id);
-  if (error) logger.error('reservation_reconciliation_stamp_failed', { holdId: row.id, message: error.message });
+  // NO LEDGER UPDATE (2026-11-12, e9 ruling; prod fact 83/C17):
+  // credit_transactions_immutable_update (raise_ledger_immutable) is ENABLED in
+  // prod, so the old UPDATE of the hold row's metadata failed EVERY time. Ledger
+  // rows are never updated. The decision is recorded instead by the
+  // monetization operational event each caller emits (reservation_quarantined /
+  // _reconciled_*), and the reaper excludes the holds THIS run's preflight
+  // decided (it no longer depends on a stamp that was never written).
+  logger.info('reservation_reconciliation_decision', { holdId: row.id, ...fields });
 }
 
 async function stampReportArtifact(row: HoldRow, reason: string, reconciledBy: string): Promise<void> {

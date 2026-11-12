@@ -117,8 +117,9 @@ describe('monetization reservation reconciler', () => {
     expect(r.actions.filter((a) => ['h1', 'h2', 'h3'].includes(a.holdId)).every((a) => /terminal_sibling_read_failed/.test(a.reason))).toBe(true);
     expect(r.failed).toBe(3);
     expect(mockSettlements).toEqual([]);
-    // h4 (legacy key: no sibling probe) is still quarantine-stamped; h1-h3 are not stamped
-    expect(mockWrites).toEqual(['credit_transactions:update']);
+    // NO ledger UPDATE at all (2026-11-12): the immutability trigger refuses it in
+    // prod; decisions are recorded as operational events instead.
+    expect(mockWrites).toEqual([]);
   });
 
   it('classification read error -> FAILED, never "artifact missing" quarantine-stamped', async () => {
@@ -126,8 +127,9 @@ describe('monetization reservation reconciler', () => {
     const r = await reconcileDurableMonetizationReservations();
     expect(r.actions.filter((a) => ['h1', 'h2', 'h3'].includes(a.holdId)).every((a) => /classify_report_read_failed/.test(a.reason))).toBe(true);
     expect(mockSettlements).toEqual([]);
-    // h4 (legacy key) is still quarantine-stamped; h1-h3 are not stamped at all
-    expect(mockWrites).toEqual(['credit_transactions:update']);
+    // NO ledger UPDATE at all (2026-11-12) - h4's quarantine is an ops event.
+    expect(mockWrites).toEqual([]);
+    expect(mockOps).toContain('monetization.reservation_quarantined');
   });
 });
 
@@ -145,26 +147,42 @@ describe('orphan hold reaper', () => {
     expect(r.preflight).toMatchObject({ dryRun: true, confirmed: 1, released: 1 });
   });
 
-  it('sibling read error in a REAL run -> counted failed, never released', async () => {
+  it('sibling read error in a REAL run -> never released (the read failure is counted)', async () => {
     const realHolds = HOLDS.splice(0, HOLDS.length, H('h9', 'orphan', 'x'));
     try {
-      // the reaper's own probe: .in('idempotency_key', [confirm, release]) with no phase filter
       mockFailWhen = (c) => c.table === 'credit_transactions' && c.inCol === 'idempotency_key' && !('parent_transaction_id' in c.filters);
       const r = await reapOrphanHolds();
       expect(mockRpc).toEqual([]);
       expect(r.released).toBe(0);
-      expect(r.failed).toBeGreaterThanOrEqual(1);
+      expect(r.failed + (r.preflight?.failed ?? 0)).toBeGreaterThanOrEqual(1);
     } finally {
       HOLDS.splice(0, HOLDS.length, ...realHolds);
     }
   });
 
-  it('control: with clean reads the real reaper DOES release an orphan hold', async () => {
+  // 2026-11-12: the quarantine used to be honoured only through a metadata stamp
+  // UPDATE that the prod ledger trigger refuses - so a REAL run released a hold
+  // the preflight had just QUARANTINED. The reaper now excludes it.
+  it('a hold the preflight QUARANTINED is NOT released by the reaper in a real run', async () => {
     const realHolds = HOLDS.splice(0, HOLDS.length, H('h9', 'orphan', 'x'));
     try {
       const r = await reapOrphanHolds();
-      expect(mockRpc).toEqual(['h9']);
-      expect(r.released).toBe(1);
+      expect(r.preflight?.actions.find((a) => a.holdId === 'h9')?.decision).toBe('quarantine');
+      expect(mockRpc).toEqual([]);
+      expect(r.released).toBe(0);
+      expect(r.skippedByPreflight).toBe(1);
+    } finally {
+      HOLDS.splice(0, HOLDS.length, ...realHolds);
+    }
+  });
+
+  it('control: an orphan the preflight RELEASES is released exactly once (by the preflight), never again by the reaper', async () => {
+    const realHolds = HOLDS.splice(0, HOLDS.length, H('h9', 'reports.snapshot', 'r-failed'));
+    try {
+      const r = await reapOrphanHolds();
+      expect(mockSettlements).toEqual(['release:h9']);
+      expect(mockRpc).toEqual([]);
+      expect(r.released).toBe(0);
     } finally {
       HOLDS.splice(0, HOLDS.length, ...realHolds);
     }

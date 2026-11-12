@@ -210,10 +210,12 @@ export async function listMonetizationBetaHealthSummary(input?: { lookbackHours?
       .eq('provider', 'razorpay')
       .gte('created_at', since)
       .limit(5000),
-    ownedDbTable('credit_transactions')
-      .select('id, metadata, created_at')
-      .eq('execution_phase', 'hold')
-      .contains('metadata', { reconciliation_status: 'quarantined' })
+    // Quarantines are recorded as operational events: the hold-row metadata
+    // stamp can never be written (ledger immutability trigger, 2026-11-12), so
+    // counting it always answered 0.
+    ownedDbTable('monetization_operational_events')
+      .select('reservation_id, created_at')
+      .eq('event_name', 'monetization.reservation_quarantined')
       .gte('created_at', since)
       .limit(1000),
     ownedDbTable('monetization_beta_support_cases')
@@ -222,6 +224,11 @@ export async function listMonetizationBetaHealthSummary(input?: { lookbackHours?
       .gte('created_at', since)
       .limit(1000),
   ]);
+  // A failed read is not "no events / no failures": the summary would answer
+  // economic_health 'healthy' during an outage. Throw - the caller shows the
+  // health as unavailable. (2026-11-12)
+  const healthReadErr = events.error ?? purchases.error ?? reservations.error ?? supportCases.error;
+  if (healthReadErr) throw new Error(`[monetizationBeta] health summary read failed: ${healthReadErr.message}`);
 
   const eventRows = events.data ?? [];
   const purchaseRows = purchases.data ?? [];
@@ -232,7 +239,7 @@ export async function listMonetizationBetaHealthSummary(input?: { lookbackHours?
     const ageMinutes = (Date.now() - new Date(row.created_at).getTime()) / 60000;
     return row.fulfillment_status !== 'completed' && ageMinutes >= Number(process.env.MONETIZATION_PENDING_PURCHASE_DELAY_MINUTES ?? 10);
   }).length;
-  const quarantinedReservations = (reservations.data ?? []).length;
+  const quarantinedReservations = new Set(((reservations.data ?? []) as Array<{ reservation_id: string | null }>).map((r) => r.reservation_id).filter(Boolean)).size;
   const supportCasesOpen = (supportCases.data ?? []).length;
 
   const criticalSignals = eventRows.filter((row: any) => row.escalation_priority === 'critical').length;
