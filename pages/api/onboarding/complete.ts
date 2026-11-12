@@ -37,6 +37,7 @@ import {
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
 import { getTrustedClientIp } from '../../../lib/security/clientIp';
 import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
+import { isFreeEmailDomain } from '../../../backend/services/companyMatchService';
 import {
   emitSignupEvent,
   ensureSignupCorrelationId,
@@ -226,7 +227,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     let domainCompanyId: string | null = null;
     let domainCompanyName: string | null = null;
-    if (emailDomain) {
+    // A public-provider domain (gmail.com, ...) is evidence of NOTHING: it never matches a company,
+    // even if some company row carries it as admin_email_domain (05 review) - and it is never stamped
+    // on a new company. (The PUBLIC_EMAIL eligibility gate above normally returns first; this does not
+    // rely on that separate classifier.)
+    const publicEmailDomain = !emailDomain || isFreeEmailDomain(emailDomain);
+    if (!publicEmailDomain) {
       // Candidates are fetched case-insensitively (pattern characters escaped); the DECISION is exact
       // equality below, so no pattern character can widen the match.
       const domainPattern = emailDomain.replace(/[\\%_]/g, (c) => `\\${c}`).replace(/\*/g, '_');
@@ -280,7 +286,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           nowIso:         new Date().toISOString(),
         });
         // Only claim a request was made when the admin notice actually went out (05 review).
-        const joinRequested = notice.adminNotice === 'sent';
+        // A request is genuinely in place only when the admin was notified, now or on an earlier attempt.
+        const joinRequested = notice?.adminNotice === 'sent' || notice?.adminNotice === 'already_sent';
         return res.status(403).json({
           code:  'INVITE_REQUIRED',
           joinRequested,
@@ -297,7 +304,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .insert({
           name:               finalCompanyName,
           website,
-          admin_email_domain: emailDomain || null,
+          admin_email_domain: publicEmailDomain ? null : emailDomain,
           industry:           industry || null,
           created_at:         new Date().toISOString(),
         })

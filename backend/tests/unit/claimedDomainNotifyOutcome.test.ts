@@ -66,3 +66,19 @@ it("a failed admin lookup is 'failed', never 'no_admin'", async () => {
     expect([t, await notifyAdminAndProspectOfClaimedDomain(db, input)]).toEqual([t, { adminNotice: 'failed' }]);
   }
 });
+
+it('a repeat attempt by the same prospect never re-notifies the admin: already_sent', async () => {
+  expect(await notifyAdminAndProspectOfClaimedDomain(db, input)).toEqual({ adminNotice: 'sent' });
+  expect(await notifyAdminAndProspectOfClaimedDomain(db, input)).toEqual({ adminNotice: 'already_sent' });
+  expect(await notifyAdminAndProspectOfClaimedDomain(db, input)).toEqual({ adminNotice: 'already_sent' });
+  expect(mockAdminSends).toEqual(['ada@acme.com']);
+});
+it('a failed first send is RETRIED next time; the marker is written only on success', async () => {
+  mockSendThrows = true;
+  expect(await notifyAdminAndProspectOfClaimedDomain(db, input)).toEqual({ adminNotice: 'failed' });
+  expect(mockDb.signup_referrals[0].admin_user_id).toBeNull();
+  mockSendThrows = false;
+  expect(await notifyAdminAndProspectOfClaimedDomain(db, input)).toEqual({ adminNotice: 'sent' });
+  expect(mockDb.signup_referrals[0].admin_user_id).toBe('u-admin');
+  expect(mockAdminSends).toEqual(['ada@acme.com']);
+});
