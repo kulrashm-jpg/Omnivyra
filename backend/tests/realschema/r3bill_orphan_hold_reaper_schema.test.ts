@@ -10,14 +10,17 @@
  *
  * These cases pin what the code does on each schema, so whoever decides where
  * quarantine state lives (side table vs column) does it with evidence:
- *   A. Production shape: the reaper throws every run and releases nothing; the
- *      invariant audit silently reports no stale holds. The failure is visible
- *      in logs only: monetization_operational_events lacks the 20260628 columns
+ *   A. Production shape: the preflight reconciler fails on the missing column,
+ *      so the reaper REFUSES (84fd00bb1, 05: 'preflight_unavailable') - nothing
+ *      scanned, nothing released - and raises an ERROR event; the invariant audit
+ *      silently reports no stale holds. The failure is visible in logs only:
+ *      monetization_operational_events lacks the 20260628 columns
  *      (escalation_priority, …), so every ops-event insert is refused too.
- *   B. Column-only apply of 20260625's ADD COLUMN: the quarantine stamp is
- *      refused (and the refusal swallowed), so the reaper then releases a hold
- *      the reconciler had just decided to quarantine. Re-runs stay idempotent and
- *      a hold with a terminal sibling stays untouched.
+ *   B. Column-only apply of 20260625's ADD COLUMN: the quarantine stamp is still
+ *      refused (immutable ledger), but the reaper now honours THIS run's
+ *      preflight decision, so a hold the reconciler quarantined is NOT released
+ *      (before 84fd00bb1 / fd87e7fef it was - "stamp silently lost"). Re-runs
+ *      stay no-ops and a hold with a terminal sibling stays untouched.
  *
  * Same harness as the other realschema suites: REAL services, DB transport
  * translated to SQL, throwaway DB, every case inside a rollback.
@@ -113,18 +116,20 @@ describe('R3 reaper — production-shaped schema (no credit_transactions.metadat
     expect(await hasMetadataColumn()).toBe(false);
   });
 
-  it('every run throws and releases nothing; the failure reaches the logs but not the ops-event table', async () => {
+  it('every run REFUSES (preflight unavailable) and releases nothing; the failure reaches the logs but not the ops-event table', async () => {
     await inRollback(async () => {
       await seedWallet();
       await hold('r3bill:a', 'unmapped_reference_r3');
       expect(await wallet()).toEqual({ free_balance: 90, reserved_free: 10 });
 
-      await expect(reap()).rejects.toThrow(/orphan_hold_reaper_query_failed: .*metadata/);
+      // 84fd00bb1 (05): no preflight result -> nothing can be classified -> refuse.
+      const r = await reap();
+      expect(r).toMatchObject({ refused: 'preflight_unavailable', preflight: null, scanned: 0, released: 0, releasedHoldIds: [], failed: 0 });
 
-      expect(logged('error', 'orphan_hold_reaper_query_failed')).toBe(1);
       expect(logged('error', 'orphan_hold_reaper_preflight_reconciliation_failed')).toBe(1);
-      expect(insertRefusedFor('monetization.orphan_hold_reaper_query_failed')).toBe(1);
-      expect(await storedEvents('monetization.orphan_hold_reaper_query_failed')).toBe(0);
+      expect(logged('error', 'orphan_hold_reaper_query_failed')).toBe(0); // the reaper never reached its own scan
+      expect(insertRefusedFor('monetization.orphan_hold_reaper_preflight_unavailable')).toBe(1);
+      expect(await storedEvents('monetization.orphan_hold_reaper_preflight_unavailable')).toBe(0);
       expect(await phases('r3bill:a')).toEqual(['hold']);
       expect(await wallet()).toEqual({ free_balance: 90, reserved_free: 10 });
     });
@@ -155,7 +160,7 @@ describe('R3 reaper — after a column-only apply of 20260625 (ADD COLUMN metada
     });
   });
 
-  it('a hold the reconciler QUARANTINES is then RELEASED by the reaper (stamp silently lost)', async () => {
+  it('a hold the reconciler QUARANTINES is NOT released: the reaper honours this run's preflight (the stamp is still lost)', async () => {
     await inRollback(async () => {
       await addColumn();
       await seedWallet();
@@ -165,25 +170,26 @@ describe('R3 reaper — after a column-only apply of 20260625 (ADD COLUMN metada
 
       // The preflight reconciler decided "quarantine" and said so (in the logs)…
       expect(logged('warn', 'monetization.reservation_quarantined')).toBe(1);
-      // …but the stamp never landed, so the reaper did not see it.
+      // …the stamp still never lands (immutable ledger)…
       expect((await q(`SELECT metadata FROM public.credit_transactions WHERE id=$1`, [id])).rows[0].metadata).toEqual({});
-      expect(r).toMatchObject({ scanned: 1, released: 1, skippedQuarantined: 0, failed: 0, releasedHoldIds: [id] });
-      expect(await phases('r3bill:d')).toEqual(['hold', 'release']);
-      expect(await wallet()).toEqual({ free_balance: 100, reserved_free: 0 });
+      // …but the reaper skips the hold on THIS run's preflight decision (84fd00bb1 / fd87e7fef).
+      expect(r).toMatchObject({ scanned: 1, released: 0, skippedQuarantined: 0, failed: 0, releasedHoldIds: [] });
+      expect(await phases('r3bill:d')).toEqual(['hold']);
+      expect(await wallet()).toEqual({ free_balance: 90, reserved_free: 10 });
     });
   });
 
-  it('a re-run is a no-op: the RELEASE sibling is found, nothing is released twice', async () => {
+  it('a re-run is a no-op: a quarantined hold stays held across runs, nothing is ever released', async () => {
     await inRollback(async () => {
       await addColumn();
       await seedWallet();
       await hold('r3bill:e', 'unmapped_reference_r3');
-      expect((await reap()).released).toBe(1);
+      expect((await reap()).released).toBe(0);
 
       const again = await reap();
-      expect(again).toMatchObject({ released: 0, skippedHasSibling: 1, failed: 0 });
-      expect(await phases('r3bill:e')).toEqual(['hold', 'release']);
-      expect(await wallet()).toEqual({ free_balance: 100, reserved_free: 0 });
+      expect(again).toMatchObject({ released: 0, failed: 0, releasedHoldIds: [] });
+      expect(await phases('r3bill:e')).toEqual(['hold']);
+      expect(await wallet()).toEqual({ free_balance: 90, reserved_free: 10 });
     });
   });
 
