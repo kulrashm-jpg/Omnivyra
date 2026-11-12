@@ -26,6 +26,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { AnalyticsReadError, rowsOf } from '../../../backend/services/blog/blogAnalyticsRead';
 
 // ── Public types (used by BlogAnalyticsPanel) ──────────────────────────────
 
@@ -167,19 +168,6 @@ function aggregateSlice(pageviews: any[], leaves: any[]) {
   })).sort((a, b) => b.views - a.views).slice(0, 10);
 
   return { totalViews, avgTime, avgScroll, pages };
-}
-
-class AnalyticsReadError extends Error {
-  constructor(readonly what: string, detail: string) {
-    super(`${what}: ${detail}`);
-    this.name = 'AnalyticsReadError';
-  }
-}
-
-/** The rows of a read, or a throw naming it - a failed read is never an empty result. */
-function rowsOf<T>(result: { data: T[] | null; error: { message?: string } | null }, what: string): T[] {
-  if (result.error) throw new AnalyticsReadError(what, result.error.message ?? 'unknown error');
-  return result.data ?? [];
 }
 
 function pctChange(cur: number, prev: number): number | null {
