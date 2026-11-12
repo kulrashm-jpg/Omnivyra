@@ -39,8 +39,14 @@ function loadRegistry() {
   const section = (name) => { const i = src.indexOf(`export const ${name}`); const j = src.indexOf('\n}', i); return i < 0 ? '' : src.slice(i, j); };
   const direct = new Map(), child = new Map(), global = new Set();
   for (const m of section('TENANT_TABLES').matchAll(/^\s{2}([a-z_][a-z0-9_]*): \{ column: '([a-z_]+)', tag: '([a-z]+)' \}/gm)) direct.set(m[1], { column: m[2], tag: m[3] });
-  for (const m of section('TENANT_CHILD_TABLES').matchAll(/^\s{2}([a-z_][a-z0-9_]*): \{ via: '([a-z_]+)', parent: '([a-z_]+)', tag: '([a-z]+)' \}/gm)) child.set(m[1], { via: m[2], parent: m[3], tag: m[4] });
+  for (const m of section('TENANT_CHILD_TABLES').matchAll(/^\s{2}([a-z_][a-z0-9_]*): \{ via: '([a-z0-9_]+)', parent: '([a-z0-9_]+)', (?:parentKey: '([a-z0-9_]+)', )?tag: '([a-z]+)' \}/gm)) child.set(m[1], { via: m[2], parent: m[3], parentKey: m[4] || 'id', tag: m[5] });
   for (const m of section('GLOBAL_TABLES').matchAll(/^\s{2}([a-z_][a-z0-9_]*): "/gm)) global.add(m[1]);
+  // A registry row the parsers above do not match would make its table invisible to every rule (lead_outreach_plans
+  // was, via the digit in lead_signals_v1). Every entry row must be parsed; otherwise the gate refuses to run.
+  const rowsIn = (name) => (section(name).match(/^\s{2}[a-z_][a-z0-9_]*: /gm) || []).length;
+  for (const [name, got] of [['TENANT_TABLES', direct.size], ['TENANT_CHILD_TABLES', child.size], ['GLOBAL_TABLES', global.size]]) {
+    if (rowsIn(name) !== got) throw new Error(`[tenant-seam] registry parse: ${name} has ${rowsIn(name)} rows but ${got} were parsed`);
+  }
   return { direct, child, global };
 }
 function loadAllowList() {
