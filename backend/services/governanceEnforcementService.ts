@@ -18,6 +18,7 @@
 
 import { ownedDbTable } from '../db/writeOwner';
 import { getActivePolicy } from './governancePolicyService';
+import { systemTenantContext } from '../db/tenantTable';
 import type {
   GovernanceEnforcementAction,
   GovernancePolicyKey,
@@ -203,7 +204,9 @@ function dispatchEvaluator(
 
 export async function evaluateGovernance(input: EvaluateInput): Promise<GovernanceDecision> {
   const policyKey = ACTION_KEY_PRIMARY[input.action];
-  const active = await getActivePolicy(input.organizationId, policyKey);
+  // S2: the policy read goes through the tenant seam. The organization is the caller's (EvaluateInput); this
+  // function does not resolve it, so the context is a system context naming that organization.
+  const active = await getActivePolicy(systemTenantContext(input.organizationId, `governance enforcement: active ${policyKey} policy`), policyKey);
   if (!active) {
     const decision: GovernanceDecision = {
       decision: 'allowed',

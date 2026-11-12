@@ -10,6 +10,7 @@
  */
 
 import { listCreatorAssets } from '../creatorAssetPersistenceService';
+import { systemTenantContext } from '../../db/tenantTable';
 
 export interface ServerAssetRef { assetId: string; version?: number; selectedVariant?: string | null }
 export interface ServerResolvedAsset {
@@ -46,7 +47,7 @@ export async function resolveCreatorAssetRefsServer(input: ServerResolveContext 
   if (!refs.length || !input.companyId || !input.userId) return [];
   let rows: Record<string, unknown>[] = [];
   try {
-    rows = await listCreatorAssets({ companyId: input.companyId, userId: input.userId, limit: 200 });
+    rows = await listCreatorAssets(systemTenantContext(input.companyId, 'creator asset server resolver: resolve refs'), { userId: input.userId, limit: 200 });
   } catch {
     return []; // persistence unavailable → caller falls back to legacy payload
   }

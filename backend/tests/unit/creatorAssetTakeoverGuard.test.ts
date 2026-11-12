@@ -108,18 +108,21 @@ function tableApi(table: string) {
 
 jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => tableApi(t) }));
 
-import {
-  CreatorAssetIdConflictError,
-  upsertCreatorAssetRecord,
-  libraryWriteAsset,
-  libraryReadAsset,
-  libraryListAssets,
-} from '../../services/creatorAssetPersistenceService';
+import * as persistence from '../../services/creatorAssetPersistenceService';
+const { CreatorAssetIdConflictError } = persistence;
+// S2: the service now takes the tenant context first. These adapters keep each case's call shape; the
+// context is built from the case's company (a uuid), and the company no longer travels in the input.
+import { systemTenantContext } from '../../db/tenantTable';
+const ctxOf = (companyId: string) => systemTenantContext(companyId, 'test: creator asset takeover guard');
+const upsertCreatorAssetRecord = ({ companyId, ...input }: any): ReturnType<typeof persistence.upsertCreatorAssetRecord> => persistence.upsertCreatorAssetRecord(ctxOf(companyId), input);
+const libraryWriteAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.libraryWriteAsset> => persistence.libraryWriteAsset(ctxOf(companyId), input);
+const libraryReadAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.libraryReadAsset> => persistence.libraryReadAsset(ctxOf(companyId), input);
+const libraryListAssets = ({ companyId, ...input }: any): ReturnType<typeof persistence.libraryListAssets> => persistence.libraryListAssets(ctxOf(companyId), input);
 import creatorAssetsRoute from '../../../pages/api/creator-assets/index';
 
-const A = 'co-A';
-const B = 'co-B';
-const B_INPUT = { companyId: B, userId: 'user-of-co-B', creatorType: 'image', title: 'Creator asset' };
+const A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+const B = 'bbbbbbbb-0000-4000-8000-00000000000b';
+const B_INPUT = { companyId: B, userId: `user-of-${B}`, creatorType: 'image', title: 'Creator asset' };
 const A_SECRET = { title: 'A-only confidential deck', url: 'https://cdn/a-private.png' };
 
 function reset() {
@@ -146,7 +149,7 @@ const plantedEnvelope = (id: string) => ({
 
 /** Company A plants a library row (archived, with its own envelope) under B's future id. */
 async function plantAsCompanyA(id: string): Promise<Row> {
-  await libraryWriteAsset({ companyId: A, userId: 'user-of-co-A', envelope: plantedEnvelope(id) });
+  await libraryWriteAsset({ companyId: A, userId: `user-of-${A}`, envelope: plantedEnvelope(id) });
   const row = db.creator_assets.find((r) => r.id === id)!;
   row.archived_at = '2026-02-02T00:00:00Z';
   return row;
@@ -180,7 +183,7 @@ describe('F3 — a deterministic write never adopts a row owned by another compa
 
   it("the same company's own library envelope survives its own re-render", async () => {
     const own = await upsertCreatorAssetRecord(B_INPUT);
-    await libraryWriteAsset({ companyId: B, userId: 'user-of-co-B', envelope: plantedEnvelope(String(own.id)) });
+    await libraryWriteAsset({ companyId: B, userId: `user-of-${B}`, envelope: plantedEnvelope(String(own.id)) });
     await upsertCreatorAssetRecord(B_INPUT);
     expect((db.creator_assets[0].library as { currentVersion: number }).currentVersion).toBe(1);
     expect(db.creator_assets[0].company_id).toBe(B);
@@ -254,7 +257,7 @@ describe('F3 — a deterministic write never adopts a row owned by another compa
     let planted: Row | null = null;
     beforeNextWrite = () => {
       db.creator_assets.push({
-        id, company_id: A, tenant_id: A, user_id: 'user-of-co-A', title: 'A row',
+        id, company_id: A, tenant_id: A, user_id: `user-of-${A}`, title: 'A row',
         library: plantedEnvelope(id), archived_at: null, deleted_at: null,
       });
       planted = snapshot(db.creator_assets[db.creator_assets.length - 1]);
@@ -271,7 +274,7 @@ describe('F3 — a deterministic write never adopts a row owned by another compa
   it('a concurrent create by the SAME company converges on that row', async () => {
     const id = await idCompanyBWillUse();
     beforeNextWrite = () => {
-      db.creator_assets.push({ id, company_id: B, tenant_id: B, user_id: 'user-of-co-B', title: 'race', archived_at: null, deleted_at: null });
+      db.creator_assets.push({ id, company_id: B, tenant_id: B, user_id: `user-of-${B}`, title: 'race', archived_at: null, deleted_at: null });
     };
     const row = await upsertCreatorAssetRecord({ ...B_INPUT, files: ['https://cdn/final.png'] });
     expect(row).toMatchObject({ id, company_id: B });

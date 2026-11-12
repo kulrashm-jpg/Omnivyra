@@ -11,7 +11,7 @@ import {
 } from '../../services/creator/creatorAssetServerResolver';
 
 const mockList = listCreatorAssets as jest.Mock;
-const ctx = { companyId: 'co1', userId: 'u1' };
+const ctx = { companyId: 'c0000001-0000-4000-8000-000000000001', userId: 'u1' };
 const row = (id: string, url: string, files: string[] = []) => ({ id, url, files, creator_type: 'image', metadata: { k: 1 } });
 beforeEach(() => mockList.mockReset());
 
@@ -22,7 +22,8 @@ describe('Server Creator Asset Resolver (reuses existing persistence)', () => {
     expect(resolved.map((r) => r.assetId)).toEqual(['a2', 'a1']); // resolved in ref order
     expect((await resolveCreatorAssetServer(ctx, { assetId: 'a1' }))!.previewUrl).toBe('a1.png');
     expect(await resolveCreatorAssetMediaUrlsServer({ ...ctx, refs: [{ assetId: 'a1' }] })).toEqual(['a1.png', 's1.png']);
-    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'co1', userId: 'u1' })); // existing persistence
+    // S2: listCreatorAssets(ctx, input) - the company travels in the tenant context, the user in the input
+    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'c0000001-0000-4000-8000-000000000001' }), expect.objectContaining({ userId: 'u1' })); // existing persistence
   });
 
   it('returns nothing when persistence is unavailable (caller falls back to legacy payload)', async () => {

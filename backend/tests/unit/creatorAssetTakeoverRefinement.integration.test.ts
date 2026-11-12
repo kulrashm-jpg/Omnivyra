@@ -79,12 +79,18 @@ jest.mock('../../services/creator/creatorOrchestrator', () => ({
   runCreatorOrchestration: (...a: unknown[]) => orchestrate(...a),
 }));
 
-import { upsertCreatorAssetRecord, libraryWriteAsset } from '../../services/creatorAssetPersistenceService';
+import * as persistence from '../../services/creatorAssetPersistenceService';
+// S2: the service now takes the tenant context first. These adapters keep each case's call shape; the
+// context is built from the case's company (a uuid), and the company no longer travels in the input.
+import { systemTenantContext } from '../../db/tenantTable';
+const ctxOf = (companyId: string) => systemTenantContext(companyId, 'test: creator asset takeover refinement');
+const upsertCreatorAssetRecord = ({ companyId, ...input }: any): ReturnType<typeof persistence.upsertCreatorAssetRecord> => persistence.upsertCreatorAssetRecord(ctxOf(companyId), input);
+const libraryWriteAsset = ({ companyId, ...input }: any): ReturnType<typeof persistence.libraryWriteAsset> => persistence.libraryWriteAsset(ctxOf(companyId), input);
 import { refineActivityCreative } from '../../services/creator/activityCreativeRefinementService';
 import { resolveActivityCreative } from '../../services/creator/activityCreativeService';
 
-const A = 'co-A';
-const B = 'co-B';
+const A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+const B = 'bbbbbbbb-0000-4000-8000-00000000000b';
 const B_INPUT = { companyId: B, userId: 'u-B', creatorType: 'image', title: 'Creator asset' };
 const A_SECRET = { title: 'A-only confidential deck', url: 'https://cdn/a-private.png' };
 

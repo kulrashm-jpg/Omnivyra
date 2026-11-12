@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantContextFor } from '@/backend/db/tenantTable';
 import {
   attachCreatorAsset,
   listCreatorAssetAttachments,
@@ -62,6 +63,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = String(req.query.company_id || req.body?.company_id || '').trim();
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // S2: the tenant context is built from the company the access check just authorized.
+  const tenant = tenantContextFor(access, companyId);
 
   if (req.method === 'GET') {
     const sourceType = asSourceType(req.query.source_type);
@@ -70,8 +73,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'source_type and source_id are required' });
     }
     try {
-      const rows = await listCreatorAssetAttachments({
-        companyId,
+      const rows = await listCreatorAssetAttachments(tenant, {
         userId: access.userId,
         sourceType,
         sourceId,
@@ -100,9 +102,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'source_type, source_id, and asset.creatorType are required' });
     }
     try {
-      const row = await attachCreatorAsset({
+      const row = await attachCreatorAsset(tenant, {
         tenantId: companyId,
-        companyId,
         userId: access.userId,
         sourceType,
         sourceId,

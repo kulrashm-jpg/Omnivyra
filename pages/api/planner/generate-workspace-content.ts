@@ -80,11 +80,11 @@ async function loadPlannerState(tenant: TenantContext, campaignId: string): Prom
  * as UNAVAILABLE, which the prompt states explicitly rather than inventing
  * media that may not exist.
  */
-async function loadCompanyAssetFacts(companyId: string): Promise<Map<string, GenerationAssetFacts>> {
+async function loadCompanyAssetFacts(tenant: TenantContext): Promise<Map<string, GenerationAssetFacts>> {
   const out = new Map<string, GenerationAssetFacts>();
   try {
     const { libraryListAssets } = await import('../../../backend/services/creatorAssetPersistenceService');
-    const records = await libraryListAssets({ companyId, limit: 500 });
+    const records = await libraryListAssets(tenant, { limit: 500 });
     for (const record of records ?? []) {
       const envelope = (record as { envelope?: Record<string, unknown> })?.envelope;
       if (!envelope || typeof envelope !== 'object') continue;
@@ -187,7 +187,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // named the slot. An assignment pointing at an asset outside this
       // company simply will not resolve, and is reported to the model as
       // UNAVAILABLE rather than described.
-      const assetLibrary = await loadCompanyAssetFacts(companyId.trim());
+      const assetLibrary = await loadCompanyAssetFacts(tenantContextFor(access, companyId.trim()));
       const resolved = resolveGenerationContext({
         campaignId: campaignIdIn,
         plannerState,

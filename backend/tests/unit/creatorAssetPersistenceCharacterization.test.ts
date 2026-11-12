@@ -65,10 +65,14 @@ jest.mock('../../db/writeOwner', () => ({
 jest.mock('../../services/telemetry/telemetryDispatcher', () => ({ trackEvent: jest.fn() }));
 
 import * as svc from '../../services/creatorAssetPersistenceService';
+import { systemTenantContext } from '../../db/tenantTable';
+
+// S2: the service takes the tenant context first; the company is a uuid and no longer an input field.
+const CO = 'c0000001-0000-4000-8000-000000000001';
+const ctx1 = systemTenantContext(CO, 'test: creator asset persistence characterization');
 
 const baseInput = {
-  tenantId: 'co-1',
-  companyId: 'co-1',
+  tenantId: CO,
   userId: 'user-1',
   sourceType: null as 'post' | 'thread' | null,
   sourceId: null as string | null,
@@ -89,8 +93,8 @@ beforeEach(() => {
 
 describe('stable-id upsert (the save/overwrite contract)', () => {
   it('same identity inputs produce the SAME row id (overwrite, not fork)', async () => {
-    const a = await svc.upsertCreatorAssetRecord({ ...baseInput });
-    const b = await svc.upsertCreatorAssetRecord({ ...baseInput });
+    const a = await svc.upsertCreatorAssetRecord(ctx1, { ...baseInput });
+    const b = await svc.upsertCreatorAssetRecord(ctx1, { ...baseInput });
     expect(a.id).toBe(b.id);
     expect(String(a.id)).toHaveLength(32);
     const writes = calls.filter((c) => c.table === 'creator_assets' && ['upsert', 'insert', 'update'].includes(c.op));
@@ -98,14 +102,14 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
     expect(writes.map((c) => c.op)).toEqual(['update', 'insert', 'update', 'insert']);
     const updateScopes = calls.filter((c) => c.table === 'creator_assets' && c.op === 'eq' && c.args[0] === 'company_id');
     expect(updateScopes).toHaveLength(2);
-    expect(updateScopes.every((c) => c.args[1] === 'co-1')).toBe(true);
+    expect(updateScopes.every((c) => c.args[1] === CO)).toBe(true);
     const inserted = writes.filter((c) => c.op === 'insert').map((c) => (c.args[0] as Record<string, unknown>).id);
     expect(inserted).toEqual([a.id, a.id]);
   });
 
   it('different render identity forks a different id', async () => {
-    const a = await svc.upsertCreatorAssetRecord({ ...baseInput });
-    const b = await svc.upsertCreatorAssetRecord({
+    const a = await svc.upsertCreatorAssetRecord(ctx1, { ...baseInput });
+    const b = await svc.upsertCreatorAssetRecord(ctx1, {
       ...baseInput,
       renderIdentityHash: 'hash-2',
       metadata: { ...baseInput.metadata, renderIdentityHash: 'hash-2' },
@@ -114,7 +118,7 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
   });
 
   it('persists the reconstruction metadata envelope (integrity/reconstruction/parity + recovery)', async () => {
-    await svc.upsertCreatorAssetRecord({ ...baseInput });
+    await svc.upsertCreatorAssetRecord(ctx1, { ...baseInput });
     const insert = calls.find((c) => c.table === 'creator_assets' && c.op === 'insert')!;
     const row = insert.args[0] as Record<string, unknown>;
     const md = row.metadata as Record<string, unknown>;
@@ -123,7 +127,7 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
     expect(md.reconstruction).toBeDefined();
     expect(md.parity).toBeDefined();
     expect((md.recovery as Record<string, unknown>).recoveryVersion).toBe('creator-asset-recovery-v1');
-    expect(row.company_id).toBe('co-1');
+    expect(row.company_id).toBe(CO);
     expect(row.creator_type).toBe('infographic');
   });
 
@@ -135,7 +139,7 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
     jest.doMock('../../services/telemetry/telemetryDispatcher', () => ({ trackEvent: jest.fn() }));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fresh = require('../../services/creatorAssetPersistenceService');
-    await expect(fresh.upsertCreatorAssetRecord({ ...baseInput })).rejects.toThrow(
+    await expect(fresh.upsertCreatorAssetRecord(ctx1, { ...baseInput })).rejects.toThrow(
       /^CREATOR_PERSISTENCE_UNAVAILABLE:/,
     );
   });
@@ -144,8 +148,7 @@ describe('stable-id upsert (the save/overwrite contract)', () => {
 describe('listCreatorAssets (reuse picker / workflow recent-8 contract)', () => {
   it('scopes to company, orders newest-first, applies limit + type filter', async () => {
     listRows = [{ id: 'a1' }];
-    const rows = await svc.listCreatorAssets({
-      companyId: 'co-1',
+    const rows = await svc.listCreatorAssets(ctx1, {
       userId: 'user-1',
       creatorTypes: ['infographic', 'infographic'],
       limit: 8,
@@ -154,7 +157,7 @@ describe('listCreatorAssets (reuse picker / workflow recent-8 contract)', () => 
     const seq = calls.filter((c) => c.table === 'creator_assets').map((c) => c.op);
     expect(seq).toEqual(expect.arrayContaining(['select', 'eq', 'order', 'limit', 'in']));
     const eq = calls.find((c) => c.table === 'creator_assets' && c.op === 'eq')!;
-    expect(eq.args).toEqual(['company_id', 'co-1']);
+    expect(eq.args).toEqual(['company_id', CO]);
     const inCall = calls.find((c) => c.op === 'in')!;
     expect(inCall.args[1]).toEqual(['infographic']); // deduped
     const limit = calls.find((c) => c.op === 'limit')!;
@@ -165,7 +168,7 @@ describe('listCreatorAssets (reuse picker / workflow recent-8 contract)', () => 
 describe('deleteCreatorAssetRecord (id+company scoped, attachment cascade)', () => {
   it('deletes attachments for the asset and the asset row, both company-scoped', async () => {
     deleteCount = 1;
-    const result = await svc.deleteCreatorAssetRecord({ assetId: 'row-9', companyId: 'co-1' });
+    const result = await svc.deleteCreatorAssetRecord(ctx1, { assetId: 'row-9' });
     expect(result.deletedAsset).toBe(true);
     const attachmentDelete = calls.filter((c) => c.table === 'creator_asset_attachments' && c.op === 'delete');
     const assetDelete = calls.filter((c) => c.table === 'creator_assets' && c.op === 'delete');
@@ -178,9 +181,8 @@ describe('deleteCreatorAssetRecord (id+company scoped, attachment cascade)', () 
 
 describe('attachCreatorAsset (writer attach lifecycle contract)', () => {
   it('writes the asset first, then upserts the attachment with the composite conflict key', async () => {
-    await svc.attachCreatorAsset({
-      tenantId: 'co-1',
-      companyId: 'co-1',
+    await svc.attachCreatorAsset(ctx1, {
+      tenantId: CO,
       userId: 'user-1',
       sourceType: 'post',
       sourceId: 'post-1',

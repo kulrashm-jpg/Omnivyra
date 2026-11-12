@@ -11,6 +11,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantContextFor } from '@/backend/db/tenantTable';
 import {
   archiveLibraryAsset,
   softDeleteLibraryAsset,
@@ -26,6 +27,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = String(req.body?.company_id || '').trim();
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // S2: the tenant context is built from the company the access check just authorized.
+  const tenant = tenantContextFor(access, companyId);
 
   const id = String(req.body?.id || '').trim();
   const action = String(req.body?.action || '').trim();
@@ -35,14 +38,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     if (action === 'archive' || action === 'unarchive') {
-      const ok = await archiveLibraryAsset({ companyId, assetId: id, archived: action === 'archive' });
+      const ok = await archiveLibraryAsset(tenant, { assetId: id, archived: action === 'archive' });
       return res.status(ok ? 200 : 404).json(ok ? { success: true } : { error: 'Asset not found' });
     }
     if (action === 'soft-delete') {
-      const ok = await softDeleteLibraryAsset({ companyId, assetId: id });
+      const ok = await softDeleteLibraryAsset(tenant, { assetId: id });
       return res.status(ok ? 200 : 404).json(ok ? { success: true } : { error: 'Asset not found' });
     }
-    await recordLibraryAssetUsage({ companyId, assetId: id });
+    await recordLibraryAssetUsage(tenant, { assetId: id });
     return res.status(200).json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Asset action failed';

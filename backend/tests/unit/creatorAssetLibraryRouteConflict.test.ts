@@ -76,8 +76,9 @@ jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => tableApi(
 
 import libraryRoute from '../../../pages/api/creator-assets/library';
 
-const A = 'co-A';
-const B = 'co-B';
+// S2: the route builds a tenant context from the authorized company, which must be a uuid.
+const A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+const B = 'bbbbbbbb-0000-4000-8000-00000000000b';
 const ID = 'casset_image_shared_id';
 const A_SECRET = { title: 'A-only confidential deck', url: 'https://cdn/a-private.png' };
 const envelope = (payload: Row) => ({
@@ -146,7 +147,7 @@ describe('SEC-1 — PUT /api/creator-assets/library never crosses a tenant', () 
     let planted: Row | null = null;
     beforeNextInsert = () => {
       db.creator_assets.push({
-        id: ID, company_id: A, tenant_id: A, user_id: 'user-of-co-A', title: A_SECRET.title,
+        id: ID, company_id: A, tenant_id: A, user_id: `user-of-${A}`, title: A_SECRET.title,
         library: envelope(A_SECRET), archived_at: null, deleted_at: null,
       });
       planted = snapshot(db.creator_assets[0]);

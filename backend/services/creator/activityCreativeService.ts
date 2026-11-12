@@ -169,7 +169,11 @@ export async function resolveActivityCreative(input: {
     if (!creatorAssetId) return null;
     try {
       const { libraryReadAsset } = await import('../creatorAssetPersistenceService');
-      const record = await libraryReadAsset({ companyId, assetId: creatorAssetId });
+      const { systemTenantContext } = await import('../../db/tenantTable');
+      const record = await libraryReadAsset(
+        systemTenantContext(companyId, 'activity creative: current refined version of the asset'),
+        { assetId: creatorAssetId },
+      );
       // libraryReadAsset returns { envelope, serverMeta } — read the envelope itself.
       const envelope = asObject(record?.envelope ?? null);
       const versions = Array.isArray(envelope.versions) ? envelope.versions as Record<string, unknown>[] : [];

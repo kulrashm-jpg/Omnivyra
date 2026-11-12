@@ -57,7 +57,8 @@ const mockRead = jest.fn(async () => {
 });
 
 /** The faithful default; reinstalled by seed() so per-test overrides can't leak. */
-const defaultWrite = async (input: { envelope: Record<string, unknown>; expectedCurrentVersion?: number }) => {
+// S2: libraryWriteAsset(ctx, input) - the tenant context comes first
+const defaultWrite = async (_ctx: unknown, input: { envelope: Record<string, unknown>; expectedCurrentVersion?: number }) => {
   const envelope = input.envelope;
   writeLog.push({
     expected: input.expectedCurrentVersion,
@@ -130,7 +131,7 @@ function armBarrier(n: number): void {
   barrier = new Promise<void>((resolve) => { releaseBarrier = resolve; });
 }
 
-const refine = () => refineActivityCreative({ companyId: 'co-1', userId: 'u-1', activityId: 'act-1' });
+const refine = () => refineActivityCreative({ companyId: 'c0000001-0000-4000-8000-000000000001', userId: 'u-1', activityId: 'act-1' });
 
 describe('A — concurrent refinement must not silently lose a version', () => {
   it('CRITICAL: two refinements from the same version do not overwrite each other', async () => {
@@ -241,7 +242,7 @@ describe('C — the guard does not weaken isolation or hide failure', () => {
     // The company must reach the persistence layer on every versioned write —
     // a concurrency guard must not become a way to touch another tenant's row.
     expect(mockWrite).toHaveBeenCalled();
-    expect((mockWrite.mock.calls[0][0] as any).companyId).toBe('co-1');
+    expect((mockWrite.mock.calls[0][0] as any).companyId).toBe('c0000001-0000-4000-8000-000000000001'); // S2: the tenant context (arg 0)
   }, 20000);
 
   it('CRITICAL: a persistence failure never reports success', async () => {
@@ -278,7 +279,7 @@ describe('C — the guard does not weaken isolation or hide failure', () => {
     const other = { id: 'asset-2', currentVersion: 1, versions: [{ version: 1, op: 'generate', payload: {}, createdAt: 'x' }] };
     await refine();
     // The write targets one asset id; nothing else is rewritten.
-    expect((mockWrite.mock.calls[0][0] as any).envelope.id).toBe('asset-1');
+    expect((mockWrite.mock.calls[0][1] as any).envelope.id).toBe('asset-1'); // S2: (ctx, input)
     expect(other.currentVersion).toBe(1);
   }, 20000);
 });

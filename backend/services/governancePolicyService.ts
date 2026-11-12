@@ -11,9 +11,13 @@
  *
  * No autonomous code path mutates policies. Phase 7 ships read + explicit
  * draft/activate/supersede operations only.
+ *
+ * Tenancy (S2): every function takes a TenantContext (built by the caller after its access check) and reaches
+ * intelligence_governance_policies only through tenantTable, so the organization_id predicate / stamp is the
+ * seam's, never a caller-supplied id.
  */
 
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import type {
   GovernancePolicyBody,
   GovernancePolicyKey,
@@ -23,30 +27,27 @@ import type {
 import { isGovernancePolicyKey } from '../types/governancePolicy';
 
 export type CreateDraftInput = {
-  organizationId: string;
   policyKey: GovernancePolicyKey;
   body: GovernancePolicyBody;
   rationale?: string | null;
   createdBy: string | null;
 };
 
-export async function createPolicyDraft(input: CreateDraftInput): Promise<GovernancePolicyRecord> {
+export async function createPolicyDraft(ctx: TenantContext, input: CreateDraftInput): Promise<GovernancePolicyRecord> {
   if (!isGovernancePolicyKey(input.policyKey)) {
     throw new Error(`unknown_policy_key:${input.policyKey}`);
   }
   // Next version = max(existing) + 1 for this (org, key).
-  const { data: highest } = await ownedDbTable('intelligence_governance_policies')
+  const { data: highest } = await tenantTable('intelligence_governance_policies', ctx)
     .select('version')
-    .eq('organization_id', input.organizationId)
     .eq('policy_key', input.policyKey)
     .order('version', { ascending: false })
     .limit(1)
     .maybeSingle();
   const nextVersion = ((highest as { version?: number } | null)?.version ?? 0) + 1;
 
-  const { data, error } = await ownedDbTable('intelligence_governance_policies')
+  const { data, error } = await tenantTable('intelligence_governance_policies', ctx)
     .insert({
-      organization_id: input.organizationId,
       policy_key: input.policyKey,
       version: nextVersion,
       status: 'draft' as GovernancePolicyStatus,
@@ -65,14 +66,12 @@ export async function createPolicyDraft(input: CreateDraftInput): Promise<Govern
  * draft as active. The partial UNIQUE on (org, policy_key) WHERE status='active'
  * enforces "at most one active version" at the DB level.
  */
-export async function activatePolicyDraft(args: {
-  organizationId: string;
+export async function activatePolicyDraft(ctx: TenantContext, args: {
   policyDraftId: string;
   actorUserId: string | null;
 }): Promise<GovernancePolicyRecord> {
-  const { data: draft } = await ownedDbTable('intelligence_governance_policies')
+  const { data: draft } = await tenantTable('intelligence_governance_policies', ctx)
     .select('*')
-    .eq('organization_id', args.organizationId)
     .eq('id', args.policyDraftId)
     .maybeSingle();
   const draftRow = draft as GovernancePolicyRecord | null;
@@ -82,14 +81,13 @@ export async function activatePolicyDraft(args: {
   }
 
   // Supersede the existing active version (if any).
-  const { data: prevActive } = await ownedDbTable('intelligence_governance_policies')
+  const { data: prevActive } = await tenantTable('intelligence_governance_policies', ctx)
     .select('id, version')
-    .eq('organization_id', args.organizationId)
     .eq('policy_key', draftRow.policy_key)
     .eq('status', 'active')
     .maybeSingle();
   if (prevActive && (prevActive as { id: string }).id !== draftRow.id) {
-    await ownedDbTable('intelligence_governance_policies')
+    await tenantTable('intelligence_governance_policies', ctx)
       .update({
         status: 'superseded' as GovernancePolicyStatus,
         superseded_at: new Date().toISOString(),
@@ -98,7 +96,7 @@ export async function activatePolicyDraft(args: {
       .eq('id', (prevActive as { id: string }).id);
   }
 
-  const { data, error } = await ownedDbTable('intelligence_governance_policies')
+  const { data, error } = await tenantTable('intelligence_governance_policies', ctx)
     .update({
       status: 'active' as GovernancePolicyStatus,
       activated_by: args.actorUserId,
@@ -113,13 +111,11 @@ export async function activatePolicyDraft(args: {
   return data as GovernancePolicyRecord;
 }
 
-export async function archivePolicy(args: {
-  organizationId: string;
+export async function archivePolicy(ctx: TenantContext, args: {
   policyId: string;
 }): Promise<GovernancePolicyRecord | null> {
-  const { data, error } = await ownedDbTable('intelligence_governance_policies')
+  const { data, error } = await tenantTable('intelligence_governance_policies', ctx)
     .update({ status: 'archived' as GovernancePolicyStatus })
-    .eq('organization_id', args.organizationId)
     .eq('id', args.policyId)
     .neq('status', 'active')
     .select('*')
@@ -129,12 +125,11 @@ export async function archivePolicy(args: {
 }
 
 export async function getActivePolicy(
-  organizationId: string,
+  ctx: TenantContext,
   policyKey: GovernancePolicyKey,
 ): Promise<GovernancePolicyRecord | null> {
-  const { data, error } = await ownedDbTable('intelligence_governance_policies')
+  const { data, error } = await tenantTable('intelligence_governance_policies', ctx)
     .select('*')
-    .eq('organization_id', organizationId)
     .eq('policy_key', policyKey)
     .eq('status', 'active')
     .maybeSingle();
@@ -143,12 +138,11 @@ export async function getActivePolicy(
 }
 
 export async function listPoliciesForOrg(
-  organizationId: string,
+  ctx: TenantContext,
   options?: { policyKey?: GovernancePolicyKey; status?: GovernancePolicyStatus; limit?: number },
 ): Promise<GovernancePolicyRecord[]> {
-  let q = ownedDbTable('intelligence_governance_policies')
+  let q = tenantTable('intelligence_governance_policies', ctx)
     .select('*')
-    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
     .limit(Math.min(500, Math.max(1, options?.limit ?? 100)));
   if (options?.policyKey) q = q.eq('policy_key', options.policyKey);
