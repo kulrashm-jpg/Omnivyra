@@ -659,7 +659,7 @@
     },
     "pages/api/onboarding/validate-company-name.ts": {
       "kind": "auth-flow",
-      "reason": "Signup-time company-name validation for a user who has no company yet; returns a validity verdict only."
+      "reason": "RETIRED 2026-11-12 (e1): answers 410 Gone for every method and reads nothing; kept public so a stale client gets a clean 410."
     },
     "pages/api/outreach/unsubscribe.ts": {
       "kind": "machine-token",
