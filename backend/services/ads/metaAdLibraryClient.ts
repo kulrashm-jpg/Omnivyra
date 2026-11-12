@@ -58,8 +58,14 @@ import {
   type AdvertiserSuggestion,
 } from './adsTransparencyObservation';
 
-/** Pinned Graph API version: an unpinned version silently changes the contract under us. */
-export const META_GRAPH_VERSION = 'v21.0';
+/**
+ * Pinned Graph API version: an unpinned version silently changes the contract under us. The SAME
+ * version as every other Graph caller (metaGraphApiVersionConsistency). v21.0 -> v22.0 (e9 ruling
+ * 2026-11-12, after A19): the v22.0 changelog names no ads_archive / ArchivedAd change, and every
+ * field in AD_FIELDS is listed, not deprecated, for all ad types on the ArchivedAd reference.
+ * v21.0 is removed 2027-01-21. Moving all Graph callers off v22.0 is the post-launch item (Q1 2027).
+ */
+export const META_GRAPH_VERSION = 'v22.0';
 
 /** Meta's documented cap on `search_terms`. */
 export const META_SEARCH_TERMS_MAX = 100;
