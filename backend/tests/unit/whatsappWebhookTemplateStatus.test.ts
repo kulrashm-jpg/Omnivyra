@@ -94,8 +94,11 @@ it('a SECOND failed retry keeps the FIRST-received body in original_payload (not
 // failed event kind (its failed[]); this branch narrows the retry to failed TEMPLATE changes. A merge
 // that keeps template-only narrowing silently DROPS failed delivery / inbound retries. This case fails
 // on this branch alone (a delivery failure is logged, not retried) and must pass after a correct
-// merge: UNSKIP it there. Keep event_at in the same criterion (the first test in this file).
-it.skip('MERGE GATE: a DELIVERY event fails while a template succeeds -> the job fails and the retry carries the delivery', async () => {
+// merge. It is it.failing, so it is SELF-ACTIVATING: green while it fails here; once a merge makes the
+// delivery retry work it PASSES, which jest reports as a failure - flip it to it() then. The sibling
+// below pins WHY it fails here (so it.failing cannot pass vacuously on, say, a TypeError), and it too
+// breaks on a correct merge - delete it then. Keep event_at in the same criterion (first test above).
+it.failing('MERGE GATE: a DELIVERY event fails while a template succeeds -> the job fails and the retry carries the delivery', async () => {
   mockDelivery.mockRejectedValueOnce(new Error('delivery write failed'));
   const j = job([
     { time: 1794477000, changes: [templateChange('PAUSED', 'meta-1'), { field: 'messages', value: { statuses: [{ id: 'wamid.1', status: 'delivered' }] } }] },
@@ -104,6 +107,16 @@ it.skip('MERGE GATE: a DELIVERY event fails while a template succeeds -> the job
   await expect(run(j)).resolves.toBeUndefined();
   expect(mockDelivery).toHaveBeenCalledTimes(2); // retried
   expect(mockHandle).toHaveBeenCalledTimes(1); // the template that succeeded is not re-applied
+});
+
+it('MERGE GATE (why it fails on THIS branch, pre-merge): a delivery failure is logged and the job SUCCEEDS - not retried', async () => {
+  mockDelivery.mockRejectedValueOnce(new Error('delivery write failed'));
+  const j = job([
+    { time: 1794477000, changes: [templateChange('PAUSED', 'meta-1'), { field: 'messages', value: { statuses: [{ id: 'wamid.1', status: 'delivered' }] } }] },
+  ]);
+  await expect(run(j)).resolves.toBeUndefined();
+  expect(console.error).toHaveBeenCalledWith('[wa-webhook-processor] status update failed', expect.any(Error));
+  expect(j.updateData).not.toHaveBeenCalled();
 });
 
 it('narrowing the retry FAILS: still thrown (a sendable stopped template is worse than a double count), logged by name', async () => {
