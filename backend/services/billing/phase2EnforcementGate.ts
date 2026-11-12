@@ -97,14 +97,14 @@ export async function resolveEnforcementMode(
 }
 
 /** Refusal reasons that are NOT a credit shortfall, with their own client code. */
-const NON_CREDIT_REFUSALS: Record<string, { code: string; message: string }> = {
+const NON_CREDIT_REFUSALS: ReadonlyMap<string, { code: string; message: string }> = new Map(Object.entries({
   // phase2RouteWiring: too many failed (released) attempts for one request in
   // one replay window. Telling the user "insufficient credits" would be false.
   attempt_limit: {
     code: 'RETRY_LIMIT_REACHED',
     message: 'Too many failed attempts for this request. Please wait a few minutes and try again.',
   },
-};
+}));
 
 export class PaymentRequiredError extends Error {
   readonly code: string;
@@ -113,7 +113,9 @@ export class PaymentRequiredError extends Error {
     public readonly surface: BillingSurface,
     public readonly detail?: string,
   ) {
-    const nonCredit = detail ? NON_CREDIT_REFUSALS[detail] : undefined;
+    // A Map, not a plain-object index: `detail` is an arbitrary reason string
+    // ('constructor' must not find Object.prototype). (05, 2026-11-12)
+    const nonCredit = detail ? NON_CREDIT_REFUSALS.get(detail) : undefined;
     super(nonCredit?.message ?? (detail || 'Insufficient credits for this action.'));
     this.code = nonCredit?.code ?? 'INSUFFICIENT_CREDITS';
     this.name = 'PaymentRequiredError';

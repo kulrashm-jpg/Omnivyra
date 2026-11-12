@@ -137,3 +137,10 @@ it('attempt_limit is NOT reported as a credit shortfall (own code + own counter)
   await expect(wirePhase2Route({ ...ARGS, run: ok() })).rejects.toThrow();
   expect(incrCounter).toHaveBeenCalledWith('phase2_route_attempt_limit');
 });
+
+it('a reason that names an Object.prototype key is still a plain credit refusal (no prototype lookup)', () => {
+  const { PaymentRequiredError } = jest.requireActual('../../services/billing/phase2EnforcementGate');
+  for (const d of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    expect(new PaymentRequiredError('s', d).code).toBe('INSUFFICIENT_CREDITS');
+  }
+});

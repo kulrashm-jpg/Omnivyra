@@ -145,6 +145,10 @@ async function expireOrgFreeCredits(
   // idempotency_key makes the second write a no-op (apply_credit_reservation
   // returns the existing row on a duplicate key). Rows written under the OLD
   // per-day key are still honoured by guard 1b (business identity, any key).
+  // Under a genuine race the WINNER is arbitrary: two profiles of one org may
+  // compute different amounts, and whichever writes first stands (the loser is
+  // a silent no-op). Do not read the surviving row as authoritative for a
+  // particular profile - accepted until expiry is rebuilt on lot accounting.
   const dayKey = expiredAt.slice(0, 10); // YYYY-MM-DD (note text only)
   const idempotencyKey = createHash('sha256')
     .update(`expire:free:org:${orgId}`)
