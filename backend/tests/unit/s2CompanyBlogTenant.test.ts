@@ -90,6 +90,11 @@ beforeEach(() => {
     // a B-owned row pointing at A's blog id: a blog-id-only read would count it
     { id: 'c-bx', company_id: B, blog_id: 'a1' },
   ];
+  mockDb.company_blog_performance_summary = [
+    { company_id: A, blog_id: 'a1', session_count: 3 },
+    // a B-tenant row naming A's blog id: an unfiltered view read would surface it
+    { company_id: B, blog_id: 'a1', session_count: 999 },
+  ];
   mockDb.company_blog_series = [
     { id: 's-a', company_id: A, title: 'A series' },
     { id: 's-b', company_id: B, title: 'B series' },
@@ -179,4 +184,9 @@ describe('blog series (series_posts is a child of company_blog_series, S1 f285c9
     const r = await call(intelligence, 'GET', { company_id: A });
     expect(r.body.series.map((x: Row) => x.id)).toEqual(['s-a']);
   });
+});
+
+it("intelligence: performance comes from A's rows of the tenant VIEW only (S1 a7b6a8f92)", async () => {
+  const r = await call(intelligence, 'GET', { company_id: A });
+  expect(JSON.stringify(r.body)).not.toContain('999');
 });

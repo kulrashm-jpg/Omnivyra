@@ -1,6 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { tenantChildTable, tenantContextFor, tenantTable } from '@/backend/db/tenantTable';
 
@@ -43,10 +42,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // ── 4. Performance summaries ──────────────────────────────────────────
     // company_blog_performance_summary view includes company_id — no IN filter needed
-    const { data: perfRows } = await supabase
-      .from('company_blog_performance_summary')
-      .select('blog_id, session_count, avg_time_seconds, avg_scroll_depth, completion_rate')
-      .eq('company_id', company_id);
+    // A tenant VIEW (S1 a7b6a8f92): filtered by the seam like a table.
+    const { data: perfRows } = await tenantTable('company_blog_performance_summary', tenant)
+      .select('blog_id, session_count, avg_time_seconds, avg_scroll_depth, completion_rate');
 
     const perfMap = new Map<string, {
       session_count:   number;
