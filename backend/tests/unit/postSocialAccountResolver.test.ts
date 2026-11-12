@@ -21,13 +21,18 @@ function makeQuery(table: string) {
   b.select = () => b;
   b.eq = (c: string, v: unknown) => { filters.push(['eq', c, v]); return b; };
   b.in = (c: string, v: unknown[]) => { filters.push(['in', c, v]); return b; };
+  b.not = (c: string, op: string, val: unknown) => {
+    if (op !== 'is' || val !== null) throw new Error(`hostile fake: unsupported .not(${c}, ${op})`);
+    filters.push(['notnull', c, null]); return b;
+  };
   b.order = (_c: string, o?: { ascending?: boolean }) => { orderDesc = o?.ascending === false; return b; };
   b.limit = () => b;
   const rows = () => {
     if (failTable === table) return { data: null, error: { message: 'boom' } };
     const src = table === 'campaigns' ? CAMPAIGNS : table === 'social_accounts' ? ACCOUNTS : null;
     if (!src) throw new Error(`hostile fake: unconfigured table ${table}`);
-    let out = src.filter((r) => filters.every(([op, c, v]) => (op === 'in' ? (v as unknown[]).includes(r[c]) : r[c] === v)));
+    let out = src.filter((r) => filters.every(([op, c, v]) =>
+      (op === 'in' ? (v as unknown[]).includes(r[c]) : op === 'notnull' ? r[c] !== null && r[c] !== undefined : r[c] === v)));
     if (orderDesc) out = [...out].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
     return { data: out, error: null };
   };
@@ -100,5 +105,24 @@ describe('standalone posts: only when the user\'s matching accounts are all in O
   });
   it('no matching account at all is NO_CONNECTED_ACCOUNT', async () => {
     await expect(resolve(SOLO, 'tiktok', null)).resolves.toMatchObject({ ok: false, code: 'NO_CONNECTED_ACCOUNT' });
+  });
+});
+
+/* ── 05 finding: a company-LESS account has unknown tenancy and is never chosen for a standalone post ── */
+describe('standalone posts: company-less accounts are never chosen', () => {
+  const NULLONLY = 'u-nullonly';
+  const MIXED = 'u-mixed';
+  beforeEach(() => {
+    ACCOUNTS.push(
+      { id: 'null-li', user_id: NULLONLY, company_id: null, platform: 'linkedin', is_active: true, created_at: '2026-03-01' },
+      { id: 'mixed-li-null', user_id: MIXED, company_id: null, platform: 'linkedin', is_active: true, created_at: '2026-03-01' },
+      { id: 'mixed-li-A', user_id: MIXED, company_id: CO_A, platform: 'linkedin', is_active: true, created_at: '2026-01-01' },
+    );
+  });
+  it('CRITICAL: a user whose only matching account has NO company gets NO_CONNECTED_ACCOUNT, not that account', async () => {
+    await expect(resolve(NULLONLY, 'linkedin', null)).resolves.toMatchObject({ ok: false, code: 'NO_CONNECTED_ACCOUNT', socialAccountId: null });
+  });
+  it('a company-less account beside a company-A account: the company-A one is used (even though the company-less one is newer)', async () => {
+    await expect(resolve(MIXED, 'linkedin', null)).resolves.toMatchObject({ ok: true, socialAccountId: 'mixed-li-A', companyId: CO_A });
   });
 });

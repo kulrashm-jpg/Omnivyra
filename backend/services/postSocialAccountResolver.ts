@@ -82,20 +82,23 @@ export async function resolvePostSocialAccount(input: {
     return found(String(row.id), companyId);
   }
 
-  // Standalone post: all of the user's matching accounts must belong to ONE company (or to none).
+  // Standalone post: all of the user's matching accounts must belong to ONE company. An account with no
+  // company (backfill-self-signals inserts such rows) has unknown tenancy, so it is never chosen (05 finding):
+  // a user whose only accounts are company-less gets NO_CONNECTED_ACCOUNT, never a guess.
   const { data, error } = await supabase
     .from('social_accounts')
     .select('id, company_id, created_at')
     .eq('user_id', input.userId)
     .eq('is_active', true)
+    .not('company_id', 'is', null)
     .in('platform', platforms)
     .order('created_at', { ascending: false });
   if (error) return fail('ACCOUNT_LOOKUP_FAILED', 'Could not check your connected accounts; try again.', true);
   const rows = (data ?? []) as AccountRow[];
   if (rows.length === 0) return fail('NO_CONNECTED_ACCOUNT', `No connected ${label} account found. Connect one in Settings → Social Accounts.`);
-  const companies = new Set(rows.map((r) => r.company_id ?? '<none>'));
+  const companies = new Set(rows.map((r) => String(r.company_id)));
   if (companies.size > 1) {
     return fail('ACCOUNT_AMBIGUOUS', `You have ${label} accounts in more than one company; choose the account to publish with.`);
   }
-  return found(String(rows[0].id), rows[0].company_id ?? null);
+  return found(String(rows[0].id), String(rows[0].company_id));
 }

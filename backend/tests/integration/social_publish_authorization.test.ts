@@ -65,7 +65,8 @@ jest.mock('../../db/supabaseClient', () => ({
       const builder: any = {};
       const filters: Array<[string, string, unknown]> = [];
       const matches = (r: Record<string, unknown>) =>
-        filters.every(([op, c, v]) => (op === 'in' ? (v as unknown[]).includes(r[c]) : r[c] === v));
+        filters.every(([op, c, v]) =>
+          (op === 'in' ? (v as unknown[]).includes(r[c]) : op === 'notnull' ? r[c] !== null && r[c] !== undefined : r[c] === v));
       builder.select = () => builder;
       builder.eq = (col: string, val: unknown) => {
         if (col === 'id') builder.__id = String(val);
@@ -73,6 +74,10 @@ jest.mock('../../db/supabaseClient', () => ({
         return builder;
       };
       builder.in = (col: string, vals: unknown[]) => { filters.push(['in', col, vals]); return builder; };
+      builder.not = (c: string, op: string, val: unknown) => {
+    if (op !== 'is' || val !== null) throw new Error(`hostile fake: unsupported .not(${c}, ${op})`);
+    filters.push(['notnull', c, null]); return builder;
+  };
       builder.limit = () => builder;
       builder.order = () => builder;
       builder.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => {

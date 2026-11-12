@@ -21,7 +21,8 @@ let scheduledPostsLimit: number | null = null;
 /** Connected social accounts (FAITHFUL: a row matches only when every eq / in filter matches). */
 let accounts: Row[] = [];
 const matches = (row: Row, filters: Array<[string, string, unknown]>) =>
-  filters.every(([op, c, v]) => (op === 'in' ? (v as unknown[]).includes(row[c]) : row[c] === v));
+  filters.every(([op, c, v]) =>
+    (op === 'in' ? (v as unknown[]).includes(row[c]) : op === 'notnull' ? row[c] !== null && row[c] !== undefined : row[c] === v));
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -42,6 +43,10 @@ jest.mock('../../db/supabaseClient', () => ({
       builder.update = (p: Row) => { updatePayload = p; return builder; };
       builder.eq = (c: string, v: unknown) => { filters.push(['eq', c, v]); return builder; };
       builder.in = (c: string, v: unknown[]) => { filters.push(['in', c, v]); return builder; };
+      builder.not = (c: string, op: string, val: unknown) => {
+    if (op !== 'is' || val !== null) throw new Error(`hostile fake: unsupported .not(${c}, ${op})`);
+    filters.push(['notnull', c, null]); return builder;
+  };
       for (const op of ['lte', 'order']) builder[op] = () => builder;
       builder.limit = (n: number) => { if (table === 'scheduled_posts') scheduledPostsLimit = n; return builder; };
       builder.maybeSingle = () => {

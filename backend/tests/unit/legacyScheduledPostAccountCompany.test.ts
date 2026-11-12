@@ -23,13 +23,18 @@ function makeQuery(table: string) {
   b.select = () => b;
   b.eq = (c: string, v: unknown) => { filters.push(['eq', c, v]); return b; };
   b.in = (c: string, v: unknown[]) => { filters.push(['in', c, v]); return b; };
+  b.not = (c: string, op: string, val: unknown) => {
+    if (op !== 'is' || val !== null) throw new Error(`hostile fake: unsupported .not(${c}, ${op})`);
+    filters.push(['notnull', c, null]); return b;
+  };
   b.order = (_c: string, o?: { ascending?: boolean }) => { orderDesc = o?.ascending === false; return b; };
   b.limit = () => b;
   b.insert = (p: Row) => { insertPayload = p; inserts.push(p); return b; };
   b.upsert = (p: Row) => { insertPayload = p; inserts.push(p); return b; };
   const rows = (): Row[] => {
     if (table !== 'social_accounts') return [];
-    let out = ACCOUNTS.filter((r) => filters.every(([op, c, v]) => (op === 'in' ? (v as unknown[]).includes(r[c]) : r[c] === v)));
+    let out = ACCOUNTS.filter((r) => filters.every(([op, c, v]) =>
+      (op === 'in' ? (v as unknown[]).includes(r[c]) : op === 'notnull' ? r[c] !== null && r[c] !== undefined : r[c] === v)));
     if (orderDesc) out = [...out].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
     return out;
   };
