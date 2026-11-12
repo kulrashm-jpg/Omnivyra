@@ -8,8 +8,9 @@ import { attempt, db, inRollback } from './setup';
 const U = '00000000-0000-4000-8000-0000000002a1';
 const U2 = '00000000-0000-4000-8000-0000000002a2';
 const ORG = '00000000-0000-4000-8000-0000000002c0';
-const ins = (u: string, status: string) =>
-  [`INSERT INTO public.feedback_submissions (user_id, organization_id, feedback_text, status) VALUES ($1, $2, 't', $3)`, [u, ORG, status]] as const;
+type Step = readonly [string, unknown[]];
+const ins = (u: string, status: string): Step =>
+  [`INSERT INTO public.feedback_submissions (user_id, organization_id, feedback_text, status) VALUES ($1, $2, 't', $3)`, [u, ORG, status]];
 
 beforeAll(async () => {
   const r = (await db.query(

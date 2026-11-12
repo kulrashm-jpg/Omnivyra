@@ -63,7 +63,9 @@ function makeSweepDeps(seed: Sess[]) {
     applySettlementTransition: async (i) => {
       transitions.push(i);
       const s = sessions.find((x) => x.idempotencyKey === i.idempotencyKey);
-      if (s) s.settlementStatus = i.settlementStatus;
+      if (!s) return { applied: false as const, reason: 'state_changed' as const };
+      s.settlementStatus = i.settlementStatus;
+      return { applied: true as const };
     },
   };
   return { deps, transitions, wasFindCalled: () => findCalled };
