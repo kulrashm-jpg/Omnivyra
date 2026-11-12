@@ -37,6 +37,11 @@ const AUTHORIZED: Array<[string, string]> = [
   // (456afd41) schedules through the same pipeline as Group A and adopted
   // replay protection by design; sanctioned here rather than stripped.
   ['pages/api/campaigns/[id]/release.ts', 'campaign-release'],
+  // OWNER DECISION 2026-11-12 (via e9): WhatsApp broadcast create double-send. A double-clicked or
+  // re-sent create with enqueue:true made two broadcasts and messaged every contact twice (CLASS-2
+  // A16). Its state-dependent refusals (404/409/503) are left uncached per route
+  // (stateDependentStatuses); the global UNCACHED_DENIAL_STATUSES is NOT widened (owner, same day).
+  ['pages/api/whatsapp/broadcasts/index.ts', 'whatsapp-broadcast-create'],
 ];
 
 /** Blocked by OR-08 (Group B dormant) and ED-01 (billing held pending telemetry). */
@@ -69,8 +74,8 @@ describe('adoption gate — authorized endpoints', () => {
     expect(new Set(scopes).size).toBe(scopes.length);
   });
 
-  it('the authorized list is exactly the seven Group A endpoints plus the release seam', () => {
-    expect(AUTHORIZED).toHaveLength(8);
+  it('the authorized list is exactly the seven Group A endpoints, the release seam and the WhatsApp broadcast create (owner 2026-11-12)', () => {
+    expect(AUTHORIZED).toHaveLength(9);
     AUTHORIZED.forEach(([rel]) => expect(exists(rel)).toBe(true));
   });
 });

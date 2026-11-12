@@ -220,9 +220,8 @@ export function createWhatsAppAdapter(deps: WhatsAppAdapterDeps = defaultWhatsAp
   const result = (outcome: string, disposition: EngineDisposition, reason: string | null, externalRef: string | null): EngineResult =>
     ({ engine: 'whatsapp', outcome, disposition, reason, externalRef });
 
-  /** Settle the request row (best effort; the step settlement is the authority) and report. */
   /**
-   * Settle the request. With `expectUpdatedAt` the settle is FENCED (CLASS-2 C3, 55): it lands only
+   * Settle the request row and report (best effort; the step settlement is the authority). With `expectUpdatedAt` the settle is FENCED (CLASS-2 C3, 55): it lands only
    * on the claim that value names, and if the claim moved this run settles nothing and waits - the
    * request belongs to whoever moved it. Without it (only for a run that has passed fence 1, so
    * held the claim at the fence; every later writer is pinned) the settle is state-only, as before.
