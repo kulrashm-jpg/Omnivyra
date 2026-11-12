@@ -26,7 +26,7 @@ describe('checkCertCannotSpend', () => {
     ['marker unset (resolves to production)', { ...CERT, BETA_AI_MODE: '1' }],
     ['DRISHIQ_ENV fallback is not beta', { ...CERT, BETA_AI_MODE: '1', DRISHIQ_ENV: 'staging' }],
   ])('refuses a cert run where beta mode would not take effect: %s', (_l, env) => {
-    expect(checkCertCannotSpend(env as NodeJS.ProcessEnv).ok).toBe(false);
+    expect(checkCertCannotSpend(env).ok).toBe(false);
   });
 
   it('resolves OMNIVYRA_ENV as validateEnv does (OMNIVYRA_ENV || DRISHIQ_ENV)', () => {
@@ -46,6 +46,6 @@ describe('checkCertCannotSpend', () => {
     [{ ENV_FILE: '.env.local' }, false],
     [{}, false],
   ])('isCertRun(%j) -> %s', (env, expected) => {
-    expect(isCertRun(env as NodeJS.ProcessEnv)).toBe(expected);
+    expect(isCertRun(env)).toBe(expected);
   });
 });

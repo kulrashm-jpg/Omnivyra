@@ -12,17 +12,21 @@
  */
 import { betaAiModeActive } from '../../config/betaAiMode';
 
+/** The env vars this guard reads (process.env satisfies it; a plain test literal does too, unlike NodeJS.ProcessEnv,
+ * which Next's types extend with a required NODE_ENV). */
+export type CertEnv = Readonly<Record<string, string | undefined>>;
+
 export type CertSpendCheck = { ok: true } | { ok: false; message: string };
 
 /** Is this process a certification run? (CERT_ENV=1, or .env.cert as the env file.) */
-export function isCertRun(env: NodeJS.ProcessEnv): boolean {
+export function isCertRun(env: CertEnv): boolean {
   return env.CERT_ENV === '1'
     || /(^|[\\/])\.env\.cert$/.test(String(env.DOTENV_CONFIG_PATH ?? ''))
     || /(^|[\\/])\.env\.cert$/.test(String(env.ENV_FILE ?? ''));
 }
 
 /** Pure: may this process run without spending money? Non-cert processes are not this guard's concern. */
-export function checkCertCannotSpend(env: NodeJS.ProcessEnv, script = 'scripts/cert/<script>.ts'): CertSpendCheck {
+export function checkCertCannotSpend(env: CertEnv, script = 'scripts/cert/<script>.ts'): CertSpendCheck {
   if (!isCertRun(env)) return { ok: true };
   const resolved = env.OMNIVYRA_ENV || env.DRISHIQ_ENV || 'production';
   if (betaAiModeActive(env.BETA_AI_MODE, resolved)) return { ok: true };
