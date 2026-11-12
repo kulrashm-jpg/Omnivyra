@@ -48,6 +48,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         select: 'id, campaign_id, message_date, parent_message_id, message_text, created_by, created_at',
         source: 'calendar',
         userId: access.userId,
+        companyId: access.companyId,
         applyFilters: (query) => query.eq('campaign_id', campaignId).eq('message_date', date),
       });
       return res.status(200).json(messages);

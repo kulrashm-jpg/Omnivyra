@@ -52,14 +52,20 @@ export async function processMentions(
   const resolved = await resolveMentionedUserIds(usernames, companyId);
   for (const [_, userId] of resolved) {
     if (userId === createdBy) continue;
-    await ownedDbTable('message_mentions').upsert(
+    const { error: mentionError } = await ownedDbTable('message_mentions').upsert(
       {
         message_id: messageId,
         message_source: messageSource,
         mentioned_user_id: userId,
+        // message_id is polymorphic (no FK to a company): the mention carries the company (20270217000035).
+        company_id: companyId,
       },
       { onConflict: 'message_id,message_source,mentioned_user_id' }
     );
+    if (mentionError) {
+      // Was unread: a failed mention write vanished. Still non-fatal (the alert below still goes out), but logged.
+      console.warn('[collaborationMention] mention write failed', { message_source: messageSource, message: mentionError.message });
+    }
     try {
       await ownedDbTable('intelligence_alerts').insert({
         company_id: companyId,

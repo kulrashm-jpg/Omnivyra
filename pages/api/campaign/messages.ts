@@ -35,6 +35,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         select: 'id, campaign_id, parent_message_id, message_text, created_by, created_at',
         source: 'campaign',
         userId: access.userId,
+        companyId: access.companyId,
         applyFilters: (query) => query.eq('campaign_id', campaignId),
       });
       return res.status(200).json(messages);

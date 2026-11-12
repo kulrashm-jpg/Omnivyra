@@ -18,6 +18,8 @@ type ListMessagesOptions = {
   select: string;
   source: MessageSource;
   userId?: string | null;
+  /** The company the route's campaign access check authorized: stamped on every read receipt (20270217000035). */
+  companyId: string;
   applyFilters?: (query: any) => any;
 };
 
@@ -50,7 +52,8 @@ function toResponse(row: BaseMessageRow): MessageResponse {
 export async function markMessagesRead(
   messageIds: string[],
   source: MessageSource,
-  userId?: string | null
+  userId: string | null | undefined,
+  companyId: string
 ): Promise<void> {
   if (!userId || messageIds.length === 0) {
     return;
@@ -61,6 +64,8 @@ export async function markMessagesRead(
     message_id: messageId,
     message_source: source,
     user_id: userId,
+    // message_id is polymorphic (no FK to a company): the receipt carries the company it was read in.
+    company_id: companyId,
     read_at: readAt,
   }));
 
@@ -89,7 +94,8 @@ export async function listMessages(options: ListMessagesOptions): Promise<Messag
   await markMessagesRead(
     rows.map((row) => row.id),
     options.source,
-    options.userId
+    options.userId,
+    options.companyId
   );
 
   return rows;
