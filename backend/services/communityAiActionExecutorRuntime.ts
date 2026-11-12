@@ -13,8 +13,7 @@ import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { getCommunityExecutionPolicy } from './communityAiPlatformPolicyService';
 import { recordCommunityExecutionRefusal } from './communityExecutionRefusal';
 import { evaluateCommunityApprovalEvidence, COMMUNITY_APPROVAL_EVIDENCE_COLUMNS } from './communityApprovalBinding';
-import { logUsageEvent } from './usageLedgerService';
-import { incrementUsageMeter } from './usageMeterService';
+import { recordCommunityExecutionUsage } from './communityExecutionUsage';
 import { checkUsageBeforeExecution, releaseUsageReservation, type UsageReservation } from './usageEnforcementService';
 import { ownedDbTable, ownedDbRpc } from '../db/writeOwner';
 import { recheckCommunityRecipient, isRecipientRecheckRefusal } from './communityRecipientRecheck';
@@ -45,32 +44,8 @@ const emitWebhook = async (
   }
 };
 
-const recordUsage = async (action: CommunityAiAction) => {
-  try {
-    await logUsageEvent({
-      organization_id: action.organization_id,
-      campaign_id: null,
-      user_id: null,
-      source_type: 'automation_execution',
-      provider_name: action.platform,
-      model_name: null,
-      model_version: null,
-      source_name: `${action.platform}:${action.action_type}`,
-      process_type: 'community_execution',
-      metadata: { action_id: action.id },
-    });
-  } catch (error: any) {
-    console.warn('COMMUNITY_AI_USAGE_LOG_FAILED', error?.message || error);
-  }
-  try {
-    await incrementUsageMeter({
-      organization_id: action.organization_id,
-      source_type: 'automation_execution',
-    });
-  } catch (error: any) {
-    console.warn('COMMUNITY_AI_USAGE_METER_FAILED', error?.message || error);
-  }
-};
+/** Metering of a synchronous send (moved to communityExecutionUsage, shared with the browser path). */
+const recordUsage = (action: CommunityAiAction) => recordCommunityExecutionUsage(action);
 
 /**
  * Central row-write for a finished execution. This is the ONLY code path

@@ -201,6 +201,33 @@ export async function checkUsageBeforeExecution(params: {
 }
 
 /**
+ * A20: release THE live reservation of an action whose send finished elsewhere (the browser path: the
+ * extension's action-result route knows the action, not the reservation id). Nothing live -> false.
+ * A failed read or release is logged by name and the reservation counts until its TTL. Never throws.
+ */
+export async function releaseUsageReservationForAction(organizationId: string, actionId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('usage_execution_reservations')
+      .select('id')
+      .eq('action_id', actionId)
+      .eq('organization_id', organizationId)
+      .is('released_at', null)
+      .maybeSingle();
+    if (error) {
+      console.error('USAGE_RESERVATION_RELEASE_FAILED', { action_id: actionId, organization_id: organizationId, error: error.message });
+      return false;
+    }
+    const id = (data as { id?: unknown } | null)?.id;
+    if (typeof id !== 'string') return false;
+    return await releaseUsageReservation({ id, organization_id: organizationId });
+  } catch (error: any) {
+    console.error('USAGE_RESERVATION_RELEASE_FAILED', { action_id: actionId, organization_id: organizationId, error: error?.message ?? String(error) });
+    return false;
+  }
+}
+
+/**
  * A20: release a reservation - the meter now counts the send, or the send did not happen. A failed
  * release is logged (USAGE_RESERVATION_RELEASE_FAILED) and the reservation counts until its TTL:
  * erring toward refusing, never toward a second grant. Never throws.

@@ -47,6 +47,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { recordOutcome } from '@/backend/services/extensionReliabilityService';
 import { persistExecutionResult, recordExecutionMetric } from '@/backend/services/communityAiActionExecutor';
 import { mirrorOutboundDmAction } from '@/backend/services/engagementOutboundMirrorService';
+import { settleBrowserDispatchUsage } from '@/backend/services/communityExecutionUsage';
 
 type NormalizedResult = {
   success: boolean;
@@ -414,6 +415,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         current_status: persistOutcome.current_status ?? null,
       });
     }
+
+    // Plan usage of the browser send (e9 2026-11-12): metered on THIS first terminal transition (an
+    // idempotent replay returned above), and its A20 reservation released - kept only for 'uncertain'.
+    await settleBrowserDispatchUsage({
+      actionId: commandId,
+      organizationId: session.orgId,
+      platform: existing.platform ?? null,
+      actionType: existing.action_type ?? null,
+      finalStatus,
+    });
 
     const targetId = String((existing as { target_id?: string | null }).target_id ?? '');
     const isSyncCommand = /^sync-(dm|comments)-inbox:/i.test(targetId);
