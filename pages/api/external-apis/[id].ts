@@ -5,6 +5,7 @@ import { validatePlatformConfig, VALID_API_CATEGORIES } from '../../../backend/s
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
 import { stripSourceSecrets } from '../../../backend/security/credentialSafety';
+import { logger } from '../../../backend/services/logger';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { hasCapability } from '../../../backend/security/AuthorizationService';
 import { INTEGRATION_SECRETS_READ } from '../../../shared/contracts/security';
@@ -58,7 +59,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       const resolved = await resolvePrincipal(req);
       return resolved.ok === true && hasCapability(resolved.principal, INTEGRATION_SECRETS_READ);
-    } catch {
+    } catch (err) {
+      // Fail closed - but LOUDLY (05): a systemic resolution failure would otherwise silently downgrade every
+      // capability holder to "no secrets", and read like a permissions problem.
+      logger.warn('external_api_secret_gate_resolution_failed', {
+        sourceId: row.id ?? null,
+        message: err instanceof Error ? err.message : String(err),
+      });
       return false;
     }
   };
@@ -256,6 +263,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const resolvedApiKeyName = api_key_name ?? existingRecord?.api_key_name ?? null;
     const resolvedApiKeyEnv = api_key_env_name ?? existingRecord?.api_key_env_name ?? null;
     const resolvedMethod = method ?? existingRecord?.method ?? 'GET';
+    // NOTE (05): `??` keeps the stored value only when the key is OMITTED - an explicit `{}` still overwrites (that is
+    // how an owning admin clears headers). The server does NOT protect stored headers / query_params from a blank
+    // value; the editors (ApiCatalogSection, useExternalApisState) avoid sending blanks they could not load.
     const resolvedHeaders = headers ?? existingRecord?.headers ?? {};
     const resolvedQueryParams = query_params ?? existingRecord?.query_params ?? {};
     const resolvedIsPreset = is_preset ?? existingRecord?.is_preset ?? false;
