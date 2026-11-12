@@ -1,5 +1,8 @@
 -- Rollback of 20270217000009_outreach_quota_atomic_consume.sql.
 -- Drops the WS-3 database limiter layer. Loses only live reservations (seconds old by design).
+-- SOUND TO DROP: the apply's preflight refuses unless the table and both functions were all absent, or
+-- all present exactly as it makes them (columns, types, FK, function bodies) - nothing that predated
+-- it is removed.
 -- ORDER: roll the CODE back first - the database layer of quota.ts calls outreach_quota_consume, and
 -- without it a limited tenant's dispatch is refused (fail closed) while Redis is unusable.
 BEGIN;

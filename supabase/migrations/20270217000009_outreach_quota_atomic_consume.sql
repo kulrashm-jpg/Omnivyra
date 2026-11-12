@@ -40,6 +40,25 @@ BEGIN
   IF to_regprocedure('auth.role()') IS NULL THEN
     RAISE EXCEPTION 'OQAC preflight: auth.role() is missing - the house service_role policy cannot be expressed';
   END IF;
+  -- ROLLBACK SOUNDNESS (05 / e1 rule, e9 2026-11-12): the rollback drops the table and both functions,
+  -- so this apply must PROVE none of them predates it: all absent (first apply) or all present EXACTLY
+  -- as this migration makes them (a re-apply) - the table's column names, TYPES and NOT NULL, its FK,
+  -- and each function's BODY (md5 of prosrc, LF or CRLF). to_reg* only: the casts raise on absence.
+  IF (to_regclass('public.outreach_quota_reservations') IS NOT NULL
+      OR to_regprocedure('public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)') IS NOT NULL
+      OR to_regprocedure('public.outreach_quota_release(uuid, text)') IS NOT NULL)
+     AND NOT (
+      (SELECT array_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+                        ORDER BY a.attname) FROM pg_attribute a
+        WHERE a.attrelid = to_regclass('public.outreach_quota_reservations') AND a.attnum > 0 AND NOT a.attisdropped)
+        = ARRAY['company_id text not null', 'id uuid not null', 'lead_id text not null', 'released_at timestamp with time zone',
+                'reserved_at timestamp with time zone not null', 'task_id uuid not null']
+      AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('public.outreach_quota_reservations')
+                   AND conname = 'outreach_quota_reservations_task_fk')
+      AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)') AND md5(p.prosrc) = ANY (ARRAY['bed8abcbdd7ca1b61d2a5ea53499bc97', '81ede0e1d63b0f71cb1f4b1173a0bfbf']))
+      AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.outreach_quota_release(uuid, text)') AND md5(p.prosrc) = ANY (ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4']))) THEN
+    RAISE EXCEPTION 'OQAC preflight: outreach_quota_reservations / outreach_quota_consume / outreach_quota_release partly exist or differ - they predate this migration; refusing (its rollback must never drop them)';
+  END IF;
 END
 $preflight$;
 
@@ -277,6 +296,11 @@ BEGIN
       RAISE EXCEPTION 'OQAC postcondition: % is missing', v_sig;
     END IF;
     SELECT p.prosecdef, p.proconfig INTO v_secdef, v_config FROM pg_proc p WHERE p.oid = v_fn;
+    -- The installed body matches the hashes this migration pins (both DERIVED from it, LF-normalised).
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN LATERAL (SELECT replace(p.prosrc, E'\r\n', E'\n') AS lf) n
+                  WHERE p.oid = v_fn AND md5(n.lf) = ((CASE v_sig WHEN 'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)' THEN ARRAY['bed8abcbdd7ca1b61d2a5ea53499bc97', '81ede0e1d63b0f71cb1f4b1173a0bfbf'] ELSE ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4'] END))[1] AND md5(replace(n.lf, E'\n', E'\r\n')) = ((CASE v_sig WHEN 'public.outreach_quota_consume(text, text, uuid, timestamptz, integer, integer, integer)' THEN ARRAY['bed8abcbdd7ca1b61d2a5ea53499bc97', '81ede0e1d63b0f71cb1f4b1173a0bfbf'] ELSE ARRAY['1948085f49c1e2f1327a7009ecd23080', '8f6f658007ed9244878bedc63212e6c4'] END))[2]) THEN
+      RAISE EXCEPTION 'OQAC postcondition: the installed body of % does not match the hashes in this migration - update them with the body', v_sig;
+    END IF;
     IF v_secdef THEN
       RAISE EXCEPTION 'OQAC postcondition: % must be SECURITY INVOKER', v_sig;
     END IF;

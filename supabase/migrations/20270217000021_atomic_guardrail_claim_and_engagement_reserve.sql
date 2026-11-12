@@ -99,9 +99,14 @@ BEGIN
       -- NARROW (05): the exact column set of the table and the exact BODY (md5 of prosrc, LF or CRLF)
       -- of each function this migration installs - a same-named table or same-signature function
       -- that is someone else's is never taken for a re-apply. The postcondition asserts the hashes.
-      AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+      -- names, TYPES and NOT NULL (05 gap 3): the table holds DATA - a same-named table of other types
+      -- must never pass as a re-apply (its rollback drop would be irreversible, and the functions would
+      -- run against incompatible columns). Ordered by name: physical order does not change the table.
+      AND (SELECT array_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+                            ORDER BY a.attname) FROM pg_attribute a
             WHERE a.attrelid = to_regclass('public.usage_execution_reservations') AND a.attnum > 0 AND NOT a.attisdropped)
-          = ARRAY['action_id', 'id', 'month', 'organization_id', 'released_at', 'reserved_at', 'year']
+          = ARRAY['action_id uuid not null', 'id uuid not null', 'month integer not null', 'organization_id uuid not null',
+                  'released_at timestamp with time zone', 'reserved_at timestamp with time zone not null', 'year integer not null']
       AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.community_ai_claim_within_limits(uuid, uuid, uuid, text, text, text, text)') AND md5(p.prosrc) = ANY (ARRAY['f34b1c37b8f424a06f6dc723dbfa5394', '4e08ee3d38f39996358cead6597c1af5']))
       AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.usage_execution_reserve(uuid, integer, integer, uuid, numeric, integer)') AND md5(p.prosrc) = ANY (ARRAY['6b248c44531b6d97d7137140e0d80ff2', 'f16e797f0f75345978d54ea1cf1e6c29']))
       AND EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.usage_execution_release(uuid, uuid)') AND md5(p.prosrc) = ANY (ARRAY['7757d352b546ccc7e6fac458b6b1577a', '621dcd59b9c30a76ad9e871efd8a34b8']))) THEN
@@ -440,10 +445,15 @@ BEGIN
     v_fn := to_regprocedure(v_sig);
     IF v_fn IS NULL THEN RAISE EXCEPTION 'AGCR postcondition: % is missing', v_sig; END IF;
     SELECT p.prosecdef, p.proconfig, p.provolatile INTO v_secdef, v_config, v_vol FROM pg_proc p WHERE p.oid = v_fn;
-    IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_fn AND md5(p.prosrc) = ANY (CASE v_sig
+    -- Both hashes DERIVE from the installed body (LF-normalised): the CRLF one is exercised too (05).
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN LATERAL (SELECT replace(p.prosrc, E'\r\n', E'\n') AS lf) n
+                  WHERE p.oid = v_fn AND md5(n.lf) = ((CASE v_sig
          WHEN 'public.community_ai_claim_within_limits(uuid, uuid, uuid, text, text, text, text)' THEN ARRAY['f34b1c37b8f424a06f6dc723dbfa5394', '4e08ee3d38f39996358cead6597c1af5']
          WHEN 'public.usage_execution_reserve(uuid, integer, integer, uuid, numeric, integer)' THEN ARRAY['6b248c44531b6d97d7137140e0d80ff2', 'f16e797f0f75345978d54ea1cf1e6c29']
-         ELSE ARRAY['7757d352b546ccc7e6fac458b6b1577a', '621dcd59b9c30a76ad9e871efd8a34b8'] END)) THEN
+         ELSE ARRAY['7757d352b546ccc7e6fac458b6b1577a', '621dcd59b9c30a76ad9e871efd8a34b8'] END))[1] AND md5(replace(n.lf, E'\n', E'\r\n')) = ((CASE v_sig
+         WHEN 'public.community_ai_claim_within_limits(uuid, uuid, uuid, text, text, text, text)' THEN ARRAY['f34b1c37b8f424a06f6dc723dbfa5394', '4e08ee3d38f39996358cead6597c1af5']
+         WHEN 'public.usage_execution_reserve(uuid, integer, integer, uuid, numeric, integer)' THEN ARRAY['6b248c44531b6d97d7137140e0d80ff2', 'f16e797f0f75345978d54ea1cf1e6c29']
+         ELSE ARRAY['7757d352b546ccc7e6fac458b6b1577a', '621dcd59b9c30a76ad9e871efd8a34b8'] END))[2]) THEN
       RAISE EXCEPTION 'AGCR postcondition: the installed body of % does not match the hashes in this migration - update them with the body', v_sig;
     END IF;
     IF v_secdef THEN RAISE EXCEPTION 'AGCR postcondition: % must be SECURITY INVOKER', v_sig; END IF;
