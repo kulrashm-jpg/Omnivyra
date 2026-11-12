@@ -1,4 +1,4 @@
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 
 type ViewType = 'executive' | 'operational' | 'compliance' | 'workforce' | 'funding';
 type LifecycleState = 'new' | 'acknowledged' | 'monitored' | 'escalating' | 'stabilized' | 'resolved' | 'muted';
@@ -39,14 +39,14 @@ function digestTypeFor(item: any): ViewType[] {
   return unique(out);
 }
 
-async function loadExperienceInputs(companyId: string) {
+async function loadExperienceInputs(ctx: TenantContext) {
   const [pressures, impacts, consequences, narratives, watchlists, lifecycle] = await Promise.all([
-    ownedDbTable('marketpulse_business_pressures').select('*').eq('company_id', companyId).order('severity', { ascending: false }).limit(20),
-    ownedDbTable('marketpulse_business_impacts').select('*').eq('company_id', companyId).order('severity', { ascending: false }).limit(20),
-    ownedDbTable('marketpulse_operational_consequences').select('*').eq('company_id', companyId).order('severity', { ascending: false }).limit(20),
-    ownedDbTable('marketpulse_narratives').select('*').eq('company_id', companyId).order('severity', { ascending: false }).limit(20),
-    ownedDbTable('marketpulse_watchlists').select('*').eq('company_id', companyId),
-    ownedDbTable('marketpulse_lifecycle_states').select('*').eq('company_id', companyId),
+    tenantTable('marketpulse_business_pressures', ctx).select('*').order('severity', { ascending: false }).limit(20),
+    tenantTable('marketpulse_business_impacts', ctx).select('*').order('severity', { ascending: false }).limit(20),
+    tenantTable('marketpulse_operational_consequences', ctx).select('*').order('severity', { ascending: false }).limit(20),
+    tenantTable('marketpulse_narratives', ctx).select('*').order('severity', { ascending: false }).limit(20),
+    tenantTable('marketpulse_watchlists', ctx).select('*'),
+    tenantTable('marketpulse_lifecycle_states', ctx).select('*'),
   ]);
   return {
     pressures: pressures.data ?? [],
@@ -94,10 +94,9 @@ function drilldownFor(item: any, kind: string) {
   };
 }
 
-async function upsertLifecycle(companyId: string, entityType: string, item: any) {
-  const existing = await ownedDbTable('marketpulse_lifecycle_states')
+async function upsertLifecycle(ctx: TenantContext, entityType: string, item: any) {
+  const existing = await tenantTable('marketpulse_lifecycle_states', ctx)
     .select('*')
-    .eq('company_id', companyId)
     .eq('entity_type', entityType)
     .eq('entity_id', item.id)
     .maybeSingle();
@@ -112,9 +111,8 @@ async function upsertLifecycle(companyId: string, entityType: string, item: any)
       : Number(item.severity ?? 0) < previousSeverity
         ? 'Severity decreased since prior synthesis.'
         : 'Severity is stable.';
-  const result = await ownedDbTable('marketpulse_lifecycle_states')
+  const result = await tenantTable('marketpulse_lifecycle_states', ctx)
     .upsert({
-      company_id: companyId,
       entity_type: entityType,
       entity_id: item.id,
       lifecycle_state: state,
@@ -132,13 +130,12 @@ async function upsertLifecycle(companyId: string, entityType: string, item: any)
   return result.data ?? { lifecycle_state: state, previous_severity: previousSeverity, last_transition_reason: reason };
 }
 
-async function createEscalationIfNeeded(companyId: string, entityType: string, item: any, lifecycle: any, routedDepartments: string[]) {
+async function createEscalationIfNeeded(ctx: TenantContext, entityType: string, item: any, lifecycle: any, routedDepartments: string[]) {
   const state = lifecycle.lifecycle_state as LifecycleState;
   const previousSeverity = lifecycle.previous_severity == null ? null : Number(lifecycle.previous_severity);
   const currentSeverity = Number(item.severity ?? 0);
-  const recent = await ownedDbTable('marketpulse_escalation_events')
+  const recent = await tenantTable('marketpulse_escalation_events', ctx)
     .select('id, created_at')
-    .eq('company_id', companyId)
     .eq('entity_type', entityType)
     .eq('entity_id', item.id)
     .order('created_at', { ascending: false })
@@ -154,13 +151,12 @@ async function createEscalationIfNeeded(companyId: string, entityType: string, i
             null;
   if (!escalationState) return null;
   const dedupeKey = `${entityType}:${item.id}:${escalationState}:${new Date().toISOString().slice(0, 10)}`;
-  const existing = await ownedDbTable('marketpulse_escalation_events')
+  const existing = await tenantTable('marketpulse_escalation_events', ctx)
     .select('*')
-    .eq('company_id', companyId)
     .eq('dedupe_key', dedupeKey)
     .maybeSingle();
   if (existing.data) {
-    const result = await ownedDbTable('marketpulse_escalation_events')
+    const result = await tenantTable('marketpulse_escalation_events', ctx)
       .update({
         previous_severity: previousSeverity,
         current_severity: currentSeverity,
@@ -181,8 +177,7 @@ async function createEscalationIfNeeded(companyId: string, entityType: string, i
       .single();
     return result.data ?? existing.data;
   }
-  const result = await ownedDbTable('marketpulse_escalation_events').insert({
-    company_id: companyId,
+  const result = await tenantTable('marketpulse_escalation_events', ctx).insert({
     entity_type: entityType,
     entity_id: item.id,
     escalation_state: escalationState,
@@ -200,10 +195,9 @@ async function createEscalationIfNeeded(companyId: string, entityType: string, i
   return result.data ?? null;
 }
 
-async function createWorkflowHook(companyId: string, entityType: string, item: any, routedDepartments: string[]) {
+async function createWorkflowHook(ctx: TenantContext, entityType: string, item: any, routedDepartments: string[]) {
   if (Number(item.severity ?? 0) < 65) return null;
-  const result = await ownedDbTable('marketpulse_workflow_hooks').insert({
-    company_id: companyId,
+  const result = await tenantTable('marketpulse_workflow_hooks', ctx).insert({
     source_entity_type: entityType,
     source_entity_id: item.id,
     hook_type: 'leadership_summary',
@@ -219,7 +213,7 @@ async function createWorkflowHook(companyId: string, entityType: string, item: a
   return result.data ?? null;
 }
 
-async function buildDigestItems(companyId: string, inputs: Awaited<ReturnType<typeof loadExperienceInputs>>) {
+async function buildDigestItems(ctx: TenantContext, inputs: Awaited<ReturnType<typeof loadExperienceInputs>>) {
   const sourceItems = [
     ...inputs.pressures.map((item: any) => ({ kind: 'pressure', item })),
     ...inputs.impacts.map((item: any) => ({ kind: 'impact', item })),
@@ -229,7 +223,7 @@ async function buildDigestItems(companyId: string, inputs: Awaited<ReturnType<ty
 
   const persisted: any[] = [];
   for (const { kind, item } of sourceItems) {
-    const lifecycle = await upsertLifecycle(companyId, kind, item);
+    const lifecycle = await upsertLifecycle(ctx, kind, item);
     const affectedAreas = unique([
       ...(item.affected_business_areas ?? []),
       ...(item.affected_business_units ?? []),
@@ -239,11 +233,10 @@ async function buildDigestItems(companyId: string, inputs: Awaited<ReturnType<ty
       item.consequence_type,
     ].filter(Boolean));
     const routedDepartments = unique(affectedAreas.map(areaToDepartment));
-    await createEscalationIfNeeded(companyId, kind, item, lifecycle, routedDepartments);
-    await createWorkflowHook(companyId, kind, item, routedDepartments);
+    await createEscalationIfNeeded(ctx, kind, item, lifecycle, routedDepartments);
+    await createWorkflowHook(ctx, kind, item, routedDepartments);
     for (const digestType of digestTypeFor(item)) {
-      const result = await ownedDbTable('marketpulse_digest_items').insert({
-        company_id: companyId,
+      const result = await tenantTable('marketpulse_digest_items', ctx).insert({
         digest_type: digestType,
         item_type: kind,
         source_pressure_id: kind === 'pressure' ? item.id : item.source_pressure_id ?? null,
@@ -272,7 +265,7 @@ async function buildDigestItems(companyId: string, inputs: Awaited<ReturnType<ty
   return persisted;
 }
 
-async function buildOverview(companyId: string, viewType: ViewType, inputs: Awaited<ReturnType<typeof loadExperienceInputs>>, digestItems: any[]) {
+async function buildOverview(ctx: TenantContext, viewType: ViewType, inputs: Awaited<ReturnType<typeof loadExperienceInputs>>, digestItems: any[]) {
   const relevantDigestItems = digestItems
     .filter((item) => item.digest_type === viewType)
     .sort((a, b) => Number(b.priority_rank ?? 0) - Number(a.priority_rank ?? 0))
@@ -283,7 +276,7 @@ async function buildOverview(companyId: string, viewType: ViewType, inputs: Awai
   const stabilizing = relevantDigestItems.filter((item) => ['stabilized', 'stable', 'stabilizing'].includes(String(item.evolution_status))).map((item) => item.id);
   const confidenceValues = relevantDigestItems.map((item) => Number(item.confidence ?? 0)).filter(Boolean);
   const overview = {
-    company_id: companyId,
+    company_id: ctx.companyId,
     view_type: viewType,
     overview_payload: {
       summary: relevantDigestItems.length
@@ -302,19 +295,19 @@ async function buildOverview(companyId: string, viewType: ViewType, inputs: Awai
     critical_narratives: inputs.narratives.filter((item: any) => Number(item.severity ?? 0) >= 75).map((item: any) => item.id).slice(0, 5),
     confidence: clamp(confidenceValues.length ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length : 0),
   };
-  const result = await ownedDbTable('marketpulse_executive_overviews').insert(overview).select('*').single();
+  const result = await tenantTable('marketpulse_executive_overviews', ctx).insert(overview).select('*').single();
   return result.data ?? overview;
 }
 
-export async function synthesizeMarketPulseExecutiveExperience(companyId: string) {
-  const inputs = await loadExperienceInputs(companyId);
-  const digestItems = await buildDigestItems(companyId, inputs);
+export async function synthesizeMarketPulseExecutiveExperience(ctx: TenantContext) {
+  const inputs = await loadExperienceInputs(ctx);
+  const digestItems = await buildDigestItems(ctx, inputs);
   const overviews = await Promise.all([
-    buildOverview(companyId, 'executive', inputs, digestItems),
-    buildOverview(companyId, 'operational', inputs, digestItems).catch(() => null),
-    buildOverview(companyId, 'compliance', inputs, digestItems).catch(() => null),
-    buildOverview(companyId, 'workforce', inputs, digestItems).catch(() => null),
-    buildOverview(companyId, 'funding', inputs, digestItems).catch(() => null),
+    buildOverview(ctx, 'executive', inputs, digestItems),
+    buildOverview(ctx, 'operational', inputs, digestItems).catch(() => null),
+    buildOverview(ctx, 'compliance', inputs, digestItems).catch(() => null),
+    buildOverview(ctx, 'workforce', inputs, digestItems).catch(() => null),
+    buildOverview(ctx, 'funding', inputs, digestItems).catch(() => null),
   ]);
   return {
     overviews: overviews.filter(Boolean),
@@ -322,14 +315,14 @@ export async function synthesizeMarketPulseExecutiveExperience(companyId: string
   };
 }
 
-export async function getMarketPulseExecutiveExperience(companyId: string, viewType: ViewType = 'executive') {
+export async function getMarketPulseExecutiveExperience(ctx: TenantContext, viewType: ViewType = 'executive') {
   const [overview, digestItems, lifecycle, escalations, hooks, watchlists] = await Promise.all([
-    ownedDbTable('marketpulse_executive_overviews').select('*').eq('company_id', companyId).eq('view_type', viewType).order('generated_at', { ascending: false }).limit(1).maybeSingle(),
-    ownedDbTable('marketpulse_digest_items').select('*').eq('company_id', companyId).eq('digest_type', viewType).order('priority_rank', { ascending: true }).limit(12),
-    ownedDbTable('marketpulse_lifecycle_states').select('*').eq('company_id', companyId).order('updated_at', { ascending: false }).limit(20),
-    ownedDbTable('marketpulse_escalation_events').select('*').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
-    ownedDbTable('marketpulse_workflow_hooks').select('*').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
-    ownedDbTable('marketpulse_watchlists').select('*').eq('company_id', companyId).order('updated_at', { ascending: false }),
+    tenantTable('marketpulse_executive_overviews', ctx).select('*').eq('view_type', viewType).order('generated_at', { ascending: false }).limit(1).maybeSingle(),
+    tenantTable('marketpulse_digest_items', ctx).select('*').eq('digest_type', viewType).order('priority_rank', { ascending: true }).limit(12),
+    tenantTable('marketpulse_lifecycle_states', ctx).select('*').order('updated_at', { ascending: false }).limit(20),
+    tenantTable('marketpulse_escalation_events', ctx).select('*').order('created_at', { ascending: false }).limit(12),
+    tenantTable('marketpulse_workflow_hooks', ctx).select('*').order('created_at', { ascending: false }).limit(12),
+    tenantTable('marketpulse_watchlists', ctx).select('*').order('updated_at', { ascending: false }),
   ]);
   return {
     overview: overview.data ?? null,
@@ -341,17 +334,15 @@ export async function getMarketPulseExecutiveExperience(companyId: string, viewT
   };
 }
 
-export async function saveMarketPulseWatchlistItem(params: {
-  companyId: string;
+export async function saveMarketPulseWatchlistItem(ctx: TenantContext, params: {
   watchlistType: string;
   watchlistValue: string;
   priorityLevel?: string;
   muted?: boolean;
   actorUserId?: string | null;
 }) {
-  const result = await ownedDbTable('marketpulse_watchlists')
+  const result = await tenantTable('marketpulse_watchlists', ctx)
     .upsert({
-      company_id: params.companyId,
       watchlist_type: params.watchlistType,
       watchlist_value: params.watchlistValue,
       priority_level: params.priorityLevel ?? 'normal',

@@ -13,6 +13,7 @@ import {
   type MarketPulseRunInput,
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 
 function shouldProcessMarketPulseInline(): boolean {
   if (!config.ENABLE_AUTO_WORKERS) return true;
@@ -40,6 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await resolveCompanyAccess(req, res, companyId);
     if (!access) return;
+    const tenant = tenantContextFor(access, companyId);
 
     const input: MarketPulseRunInput = {
       mode: body.mode === 'automated' ? 'automated' : 'one_time',
@@ -58,7 +60,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Credit acknowledgement is required for automated monitoring' });
     }
 
-    const { context, resolvedInput } = await resolveMarketPulseRunInput(companyId, input);
+    const { context, resolvedInput } = await resolveMarketPulseRunInput(tenant, input);
 
     const regionsNormalized =
       resolvedInput.custom_regions && resolvedInput.custom_regions.length > 0
@@ -100,12 +102,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: insertError?.message || 'Failed to create legacy Market Pulse job' });
     }
 
-    const run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
+    const run = await createMarketPulseRun(tenant, resolvedInput, legacyJob.id);
     const processInline = shouldProcessMarketPulseInline();
 
     if (processInline) {
       await processMarketPulseJobV1(legacyJob.id);
-      const syncedRun = await syncLegacyJobIntoRun(run.id, companyId);
+      const syncedRun = await syncLegacyJobIntoRun(run.id, tenant);
       return res.status(201).json({
         runId: run.id,
         status: syncedRun.run.status,

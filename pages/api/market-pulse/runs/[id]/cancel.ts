@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { supabase } from '../../../../../backend/db/supabaseClient';
 import { syncLegacyJobIntoRun } from '../../../../../backend/services/marketPulseV2Service';
+import { tenantContextFor } from '../../../../../backend/db/tenantTable';
 
 const CANCELLED_ERROR = 'Cancelled by user';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled']);
@@ -58,7 +59,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const legacyStatus = String(legacyJob?.status ?? '').toUpperCase();
       if (TERMINAL_LEGACY_STATUSES.has(legacyStatus)) {
-        const synced = await syncLegacyJobIntoRun(runId, companyId);
+        const synced = await syncLegacyJobIntoRun(runId, tenantContextFor(access, companyId));
         return res.status(200).json({
           cancelled: false,
           status: synced.run.status,

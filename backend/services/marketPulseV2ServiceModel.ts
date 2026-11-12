@@ -3,7 +3,7 @@ import { supabase } from '../db/supabaseClient';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
 import { adoptMarketPulseIdentity } from '@/backend/services/companyIntelligence';
 import { scoreFinding } from './marketPulse/scoringService';
@@ -167,16 +167,17 @@ export function slugify(value: string): string {
 type MarketPulseExecutiveViewType = 'executive' | 'operational' | 'compliance' | 'workforce' | 'funding';
 
 export async function getMarketPulseContext(
-  companyId: string,
+  ctx: TenantContext,
   executiveViewType: MarketPulseExecutiveViewType = 'executive',
   options?: { limit?: number; offset?: number }
 ) {
+  const companyId = ctx.companyId;
   const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
   const intelligenceContext = await getCompanyContextIntelligence(companyId).catch(() => null);
   const adaptiveFeed = await getAdaptiveMarketPulseFeed(companyId, 'executive').catch(() => []);
   const synthesis = await getMarketPulseSynthesis(companyId, 'executive').catch(() => null);
   const businessImpact = await getMarketPulseBusinessImpact(companyId).catch(() => null);
-  const executiveExperience = await getMarketPulseExecutiveExperience(companyId, executiveViewType).catch(() => null);
+  const executiveExperience = await getMarketPulseExecutiveExperience(ctx, executiveViewType).catch(() => null);
   const collaborationContext = await getMarketPulseCollaborationContext({ companyId }).catch(() => null);
   const productionHardening = await getMarketPulseProductionHardening(companyId, options).catch(() => null);
   const companyContext = buildCompanyContext(profile, { intelligence: intelligenceContext });
@@ -280,8 +281,8 @@ export function buildMarketPulseExecutorContext(
   return buildExecutorContext(settings, resolvedInput);
 }
 
-export async function resolveMarketPulseRunInput(companyId: string, input: MarketPulseRunInput) {
-  const context = await getMarketPulseContext(companyId);
+export async function resolveMarketPulseRunInput(ctx: TenantContext, input: MarketPulseRunInput) {
+  const context = await getMarketPulseContext(ctx);
   const profileSettings = context.marketPulseProfile;
   const excludedCategories = normalizeStringArray(profileSettings.exclusions);
   const baseCategories = input.categories.length > 0
@@ -329,18 +330,17 @@ export async function resolveMarketPulseRunInput(companyId: string, input: Marke
 }
 
 export async function createMarketPulseRun(
-  companyId: string,
+  ctx: TenantContext,
   input: MarketPulseRunInput,
   legacyJobId: string | null,
 ) {
-  const context = await getMarketPulseContext(companyId);
+  const context = await getMarketPulseContext(ctx);
   // Phase 1A: persist `rawSettings` alongside the snapshot so `syncLegacyJobIntoRun`
   // can rebuild the executor context for scoring without re-loading the
   // profile (and without race-conditions if the profile is edited mid-run).
   const rawSettings = (context as { rawSettings?: MarketPulseProfileSettings | null }).rawSettings ?? null;
-  const { data, error } = await ownedDbTable('market_pulse_runs')
+  const { data, error } = await tenantTable('market_pulse_runs', ctx)
     .insert({
-      company_id: companyId,
       mode: input.mode,
       objective: input.objective,
       categories: input.categories,
@@ -545,7 +545,7 @@ function buildMovementSummary(
 
 async function attachMovementSummaries(
   findings: MarketPulseFindingRow[],
-  companyId: string,
+  ctx: TenantContext,
   runId: string,
 ): Promise<MarketPulseFindingRow[]> {
   const keys = Array.from(new Set(
@@ -560,9 +560,8 @@ async function attachMovementSummaries(
     }));
   }
 
-  const { data: previousRows, error } = await ownedDbTable('market_pulse_findings')
+  const { data: previousRows, error } = await tenantTable('market_pulse_findings', ctx)
     .select('*')
-    .eq('company_id', companyId)
     .neq('run_id', runId)
     .in('canonical_event_key', keys)
     .order('created_at', { ascending: false });
@@ -611,7 +610,7 @@ function summarizeFindingForDelta(row: MarketPulseFindingRow): { id: string | nu
 async function buildMarketDeltaSummary(
   run: Record<string, unknown>,
   currentFindings: MarketPulseFindingRow[],
-  companyId: string,
+  ctx: TenantContext,
 ): Promise<{
   baseline: boolean;
   previous_run_id: string | null;
@@ -622,9 +621,8 @@ async function buildMarketDeltaSummary(
   retired_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category: string | null }>;
 }> {
   const currentCreatedAt = typeof run.created_at === 'string' ? run.created_at : new Date().toISOString();
-  const { data: previousRun } = await ownedDbTable('market_pulse_runs')
+  const { data: previousRun } = await tenantTable('market_pulse_runs', ctx)
     .select('id, created_at')
-    .eq('company_id', companyId)
     .in('status', ['completed', 'completed_with_warnings'])
     .lt('created_at', currentCreatedAt)
     .order('created_at', { ascending: false })
@@ -643,7 +641,7 @@ async function buildMarketDeltaSummary(
     };
   }
 
-  const { data: previousFindings } = await ownedDbTable('market_pulse_findings')
+  const { data: previousFindings } = await tenantTable('market_pulse_findings', ctx)
     .select('*')
     .eq('run_id', previousRun.id);
 
@@ -708,30 +706,29 @@ async function buildMarketDeltaSummary(
   };
 }
 
-export async function getMarketPulseRun(runId: string, companyId: string) {
-  const { data: run, error } = await ownedDbTable('market_pulse_runs')
+export async function getMarketPulseRun(runId: string, ctx: TenantContext) {
+  const { data: run, error } = await tenantTable('market_pulse_runs', ctx)
     .select('*')
     .eq('id', runId)
-    .eq('company_id', companyId)
     .single();
 
   if (error || !run) {
     throw new Error(error?.message || 'Market Pulse run not found');
   }
 
-  const { data: findings } = await ownedDbTable('market_pulse_findings')
+  const { data: findings } = await tenantTable('market_pulse_findings', ctx)
     .select('*')
     .eq('run_id', runId)
     .order('relevance_score', { ascending: false });
   const findingsWithMovement = await attachMovementSummaries(
     (findings ?? []) as MarketPulseFindingRow[],
-    companyId,
+    ctx,
     runId,
   );
   const marketDeltaSummary = await buildMarketDeltaSummary(
     run as Record<string, unknown>,
     findingsWithMovement,
-    companyId,
+    ctx,
   );
 
   const legacyJob = run?.context_snapshot?.legacy_job ?? null;
@@ -818,12 +815,12 @@ export function buildImpactType(riskLevel?: string): 'opportunity' | 'risk' | 'w
   return 'opportunity';
 }
 
-export async function insertMarketPulseFindingWithSchemaFallback(payload: Record<string, unknown>) {
+export async function insertMarketPulseFindingWithSchemaFallback(ctx: TenantContext, payload: Record<string, unknown>) {
   const retryPayload = { ...payload };
   const droppedColumns: string[] = [];
 
   for (let attempt = 0; attempt < 12; attempt++) {
-    const { data, error } = await ownedDbTable('market_pulse_findings')
+    const { data, error } = await tenantTable('market_pulse_findings', ctx)
       .insert(retryPayload)
       .select('id')
       .single();

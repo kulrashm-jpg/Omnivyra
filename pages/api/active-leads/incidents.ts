@@ -26,6 +26,7 @@ import {
   listIncidents,
   updateIncident,
 } from '../../../backend/services/intelligenceIncidentService';
+import { tenantContextFor } from '../../../backend/db/tenantTable';
 import {
   INCIDENT_CATEGORIES,
   INCIDENT_SEVERITIES,
@@ -47,16 +48,17 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  const tenant = tenantContextFor(ctx, companyId);
   try {
     if (req.query.incidentId) {
-      const r = await getIncident(companyId, String(req.query.incidentId));
+      const r = await getIncident(tenant, String(req.query.incidentId));
       if (!r.incident) return res.status(404).json({ error: 'incident_not_found' });
       return res.status(200).json(r);
     }
     const status = typeof req.query.status === 'string' && INCIDENT_STATUSES.includes(req.query.status as IncidentStatus) ? (req.query.status as IncidentStatus) : undefined;
     const severity = typeof req.query.severity === 'string' && INCIDENT_SEVERITIES.includes(req.query.severity as IncidentSeverity) ? (req.query.severity as IncidentSeverity) : undefined;
     const category = typeof req.query.category === 'string' && INCIDENT_CATEGORIES.includes(req.query.category as IncidentCategory) ? (req.query.category as IncidentCategory) : undefined;
-    const items = await listIncidents(companyId, { status, severity, category });
+    const items = await listIncidents(tenant, { status, severity, category });
     return res.status(200).json({ items, total: items.length });
   } catch (err: any) {
     console.error('[incidents GET] failed:', err?.message);
@@ -78,10 +80,10 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
+  const tenant = tenantContextFor(ctx, companyId);
   try {
     if (action === 'create') {
-      const incident = await createIncident({
-        organizationId: companyId,
+      const incident = await createIncident(tenant, {
         title: String(body.title ?? ''),
         description: typeof body.description === 'string' ? body.description : null,
         severity: typeof body.severity === 'string' && INCIDENT_SEVERITIES.includes(body.severity as IncidentSeverity) ? (body.severity as IncidentSeverity) : 'sev3',
@@ -95,8 +97,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       return res.status(200).json({ ok: true, incident });
     }
     if (action === 'update') {
-      const incident = await updateIncident({
-        organizationId: companyId,
+      const incident = await updateIncident(tenant, {
         incidentId: String(body.incidentId ?? ''),
         status: typeof body.status === 'string' && INCIDENT_STATUSES.includes(body.status as IncidentStatus) ? (body.status as IncidentStatus) : undefined,
         severity: typeof body.severity === 'string' && INCIDENT_SEVERITIES.includes(body.severity as IncidentSeverity) ? (body.severity as IncidentSeverity) : undefined,
@@ -108,14 +109,18 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       });
       return res.status(200).json({ ok: true, incident });
     }
-    const entry = await addIncidentNote({
-      organizationId: companyId,
+    const entry = await addIncidentNote(tenant, {
       incidentId: String(body.incidentId ?? ''),
       body: String(body.body ?? ''),
       actorUserId: ctx.userId,
     });
     return res.status(200).json({ ok: true, entry });
   } catch (err: any) {
+    // An incident that is not this tenant's (or does not exist) is the uniform 404 - never a 500 that reads
+    // differently for a foreign id (S2 review).
+    if (typeof err?.message === 'string' && err.message.startsWith('incident_not_found')) {
+      return res.status(404).json({ ok: false, error: 'incident_not_found' });
+    }
     console.error('[incidents POST] failed:', err?.message);
     return res.status(500).json({ ok: false, error: err?.message ?? 'incident_failed' });
   }

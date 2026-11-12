@@ -4,6 +4,7 @@ import { getCanonicalProfile as getProfile } from '@/backend/services/context/ca
 import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';
+import type { TenantContext } from '../db/tenantTable';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
 import { scoreFinding } from './marketPulse/scoringService';
 import { sendIntelligenceAlert } from './intelligenceAlertService';
@@ -114,8 +115,9 @@ async function upsertMemory(
     .eq('id', existing.id);
 }
 
-export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
-  const { run, findings } = await getMarketPulseRun(runId, companyId);
+export async function syncLegacyJobIntoRun(runId: string, ctx: TenantContext) {
+  const companyId = ctx.companyId;
+  const { run, findings } = await getMarketPulseRun(runId, ctx);
   if ((findings?.length ?? 0) > 0) return { run, findings };
 
   const legacyJobId = String(run.context_snapshot?.legacy_job_id ?? '').trim();
@@ -153,7 +155,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
     .eq('id', runId);
 
   if (!['completed', 'completed_with_warnings'].includes(nextStatus)) {
-    return getMarketPulseRun(runId, companyId);
+    return getMarketPulseRun(runId, ctx);
   }
 
   const consolidated = (legacyJob.consolidated_result ?? {}) as LegacyConsolidatedResult;
@@ -480,7 +482,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
     const mentionedRegulatory = (executorContext?.regulatory_policy_sensitivity ?? [])
       .filter((r) => `${p.title} ${p.summary}`.toLowerCase().includes(r.toLowerCase()));
 
-    const { data: insertedRow, error: insertError, droppedColumns } = await insertMarketPulseFindingWithSchemaFallback({
+    const { data: insertedRow, error: insertError, droppedColumns } = await insertMarketPulseFindingWithSchemaFallback(ctx, {
         run_id: runId,
         company_id: companyId,
         canonical_event_key: p.canonicalEventKey,
@@ -576,7 +578,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
       });
       await synthesizeMarketPulseIntelligence(companyId);
       await synthesizeMarketPulseBusinessImpact(companyId);
-      await synthesizeMarketPulseExecutiveExperience(companyId);
+      await synthesizeMarketPulseExecutiveExperience(ctx);
       await synthesizeMarketPulseProductionHardening(companyId);
     } catch (error) {
       console.warn('[marketpulse-intelligence] failed to persist signal relevance', (error as Error)?.message);
@@ -836,7 +838,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
     }
   }
 
-  return getMarketPulseRun(runId, companyId);
+  return getMarketPulseRun(runId, ctx);
 }
 
 export async function getAutomationSettings(companyId: string) {

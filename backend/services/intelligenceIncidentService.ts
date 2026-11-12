@@ -20,9 +20,11 @@
  *   • Linked escalation + linked replay set once (UPDATE allowed); the
  *     full history lives on the timeline.
  *   • Tenant-first reads; FK CASCADE on org delete.
+ *   • S2 tenant seam: every read/write goes through tenantTable(…, ctx); the
+ *     organization comes from the caller's TenantContext, never from input.
  */
 
-import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, type TenantContext } from '../db/tenantTable';
 import {
   type IncidentCategory,
   type IncidentSeverity,
@@ -34,17 +36,15 @@ import {
 import { publishRealtime } from './realtimePublisherService';
 import { publishIncidentCreated, publishIncidentUpdated } from '../events/listeningEvents';
 
-async function appendTimeline(args: {
-  organizationId: string;
+async function appendTimeline(ctx: TenantContext, args: {
   incidentId: string;
   entryKind: IncidentTimelineKind;
   body?: string | null;
   actorUserId?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<IncidentTimelineEntry | null> {
-  const { data } = await ownedDbTable('incident_timeline_entries')
+  const { data } = await tenantTable('incident_timeline_entries', ctx)
     .insert({
-      organization_id: args.organizationId,
       incident_id: args.incidentId,
       entry_kind: args.entryKind,
       body: args.body ?? null,
@@ -57,7 +57,6 @@ async function appendTimeline(args: {
 }
 
 export type CreateIncidentInput = {
-  organizationId: string;
   title: string;
   description?: string | null;
   severity?: IncidentSeverity;
@@ -69,12 +68,12 @@ export type CreateIncidentInput = {
   createdBy: string | null;
 };
 
-export async function createIncident(input: CreateIncidentInput): Promise<IntelligenceIncident> {
+export async function createIncident(ctx: TenantContext, input: CreateIncidentInput): Promise<IntelligenceIncident> {
+  const organizationId = ctx.companyId;
   const title = (input.title ?? '').trim().slice(0, 200);
   if (title.length === 0) throw new Error('incident_title_required');
-  const ins = await ownedDbTable('intelligence_incidents')
+  const ins = await tenantTable('intelligence_incidents', ctx)
     .insert({
-      organization_id: input.organizationId,
       title,
       description: input.description ?? null,
       severity: input.severity ?? 'sev3',
@@ -91,8 +90,7 @@ export async function createIncident(input: CreateIncidentInput): Promise<Intell
   if (ins.error || !ins.data) throw new Error(`incident_insert_failed:${ins.error?.message ?? 'unknown'}`);
   const incident = ins.data as IntelligenceIncident;
 
-  await appendTimeline({
-    organizationId: input.organizationId,
+  await appendTimeline(ctx, {
     incidentId: incident.id,
     entryKind: 'created',
     body: input.description ?? title,
@@ -102,14 +100,14 @@ export async function createIncident(input: CreateIncidentInput): Promise<Intell
 
   try {
     await publishIncidentCreated({
-      organizationId: input.organizationId,
+      organizationId,
       incidentId: incident.id,
       severity: incident.severity,
       category: incident.category,
       createdBy: input.createdBy,
     });
     void publishRealtime({
-      organizationId: input.organizationId,
+      organizationId,
       topic: 'incidents',
       eventName: 'incident.created',
       payload: { incident_id: incident.id, severity: incident.severity, category: incident.category },
@@ -120,7 +118,6 @@ export async function createIncident(input: CreateIncidentInput): Promise<Intell
 }
 
 export type UpdateIncidentInput = {
-  organizationId: string;
   incidentId: string;
   status?: IncidentStatus;
   severity?: IncidentSeverity;
@@ -131,17 +128,17 @@ export type UpdateIncidentInput = {
   actorUserId: string | null;
 };
 
-export async function updateIncident(input: UpdateIncidentInput): Promise<IntelligenceIncident> {
-  const { data: row } = await ownedDbTable('intelligence_incidents')
+export async function updateIncident(ctx: TenantContext, input: UpdateIncidentInput): Promise<IntelligenceIncident> {
+  const organizationId = ctx.companyId;
+  const { data: row } = await tenantTable('intelligence_incidents', ctx)
     .select('*')
-    .eq('organization_id', input.organizationId)
     .eq('id', input.incidentId)
     .maybeSingle();
   const current = row as IntelligenceIncident | null;
   if (!current) throw new Error(`incident_not_found:${input.incidentId}`);
 
   const patch: Record<string, unknown> = {};
-  const timelineEntries: Array<Omit<Parameters<typeof appendTimeline>[0], 'organizationId' | 'incidentId'>> = [];
+  const timelineEntries: Array<Omit<Parameters<typeof appendTimeline>[1], 'incidentId'>> = [];
 
   if (input.status && input.status !== current.status) {
     patch.status = input.status;
@@ -202,7 +199,7 @@ export async function updateIncident(input: UpdateIncidentInput): Promise<Intell
 
   let final: IntelligenceIncident = current;
   if (Object.keys(patch).length > 0) {
-    const upd = await ownedDbTable('intelligence_incidents')
+    const upd = await tenantTable('intelligence_incidents', ctx)
       .update(patch)
       .eq('id', current.id)
       .select('*')
@@ -212,20 +209,20 @@ export async function updateIncident(input: UpdateIncidentInput): Promise<Intell
   }
 
   for (const e of timelineEntries) {
-    await appendTimeline({ organizationId: input.organizationId, incidentId: current.id, ...e });
+    await appendTimeline(ctx, { incidentId: current.id, ...e });
   }
 
   try {
     if (timelineEntries.length > 0) {
       await publishIncidentUpdated({
-        organizationId: input.organizationId,
+        organizationId,
         incidentId: final.id,
         status: final.status,
         severity: final.severity,
         actorUserId: input.actorUserId,
       });
       void publishRealtime({
-        organizationId: input.organizationId,
+        organizationId,
         topic: 'incidents',
         eventName: 'incident.updated',
         payload: { incident_id: final.id, status: final.status, severity: final.severity },
@@ -236,14 +233,20 @@ export async function updateIncident(input: UpdateIncidentInput): Promise<Intell
   return final;
 }
 
-export async function addIncidentNote(args: {
-  organizationId: string;
+export async function addIncidentNote(ctx: TenantContext, args: {
   incidentId: string;
   body: string;
   actorUserId: string | null;
 }): Promise<IncidentTimelineEntry | null> {
-  return appendTimeline({
-    organizationId: args.organizationId,
+  // S2: a note may only hang off an incident of THIS tenant (the timeline row is tenant-stamped, but its
+  // incident_id is caller-supplied; without this read a tenant could attach rows to another tenant's incident id).
+  const { data: owned, error } = await tenantTable('intelligence_incidents', ctx)
+    .select('id')
+    .eq('id', args.incidentId)
+    .maybeSingle();
+  if (error) throw new Error(`incident_read_failed:${error.message ?? 'unknown'}`);
+  if (!owned) throw new Error(`incident_not_found:${args.incidentId}`);
+  return appendTimeline(ctx, {
     incidentId: args.incidentId,
     entryKind: 'note',
     body: args.body,
@@ -252,17 +255,15 @@ export async function addIncidentNote(args: {
 }
 
 export async function getIncident(
-  organizationId: string,
+  ctx: TenantContext,
   incidentId: string,
 ): Promise<{ incident: IntelligenceIncident | null; timeline: IncidentTimelineEntry[] }> {
-  const inc = await ownedDbTable('intelligence_incidents')
+  const inc = await tenantTable('intelligence_incidents', ctx)
     .select('*')
-    .eq('organization_id', organizationId)
     .eq('id', incidentId)
     .maybeSingle();
-  const tl = await ownedDbTable('incident_timeline_entries')
+  const tl = await tenantTable('incident_timeline_entries', ctx)
     .select('*')
-    .eq('organization_id', organizationId)
     .eq('incident_id', incidentId)
     .order('created_at', { ascending: true });
   return {
@@ -272,7 +273,7 @@ export async function getIncident(
 }
 
 export async function listIncidents(
-  organizationId: string,
+  ctx: TenantContext,
   options?: {
     status?: IncidentStatus;
     severity?: IncidentSeverity;
@@ -280,9 +281,8 @@ export async function listIncidents(
     limit?: number;
   },
 ): Promise<IntelligenceIncident[]> {
-  let q = ownedDbTable('intelligence_incidents')
+  let q = tenantTable('intelligence_incidents', ctx)
     .select('*')
-    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
     .limit(Math.min(200, Math.max(1, options?.limit ?? 50)));
   if (options?.status) q = q.eq('status', options.status);
