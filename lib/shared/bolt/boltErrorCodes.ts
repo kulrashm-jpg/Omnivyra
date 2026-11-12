@@ -67,6 +67,8 @@ export const BOLT_ERROR_CODES = {
   // ── Closure pass: generate-weekly-structure ──────────────────
   WEEK_STRUCTURE_GENERATION_FAILED: 'WEEK_STRUCTURE_GENERATION_FAILED',
   WEEK_STRUCTURE_PERSISTENCE_FAILED: 'WEEK_STRUCTURE_PERSISTENCE_FAILED',
+  /** A read the weekly structure depends on (plan version, other campaigns' scheduled days) failed. */
+  WEEK_STRUCTURE_CONTEXT_READ_FAILED: 'WEEK_STRUCTURE_CONTEXT_READ_FAILED',
   WEEK_STRUCTURE_VALIDATION_FAILED: 'WEEK_STRUCTURE_VALIDATION_FAILED',
   DAILY_PLAN_ROW_GENERATION_FAILED: 'DAILY_PLAN_ROW_GENERATION_FAILED',
   DAILY_PLAN_ROW_INVALID: 'DAILY_PLAN_ROW_INVALID',
@@ -147,6 +149,7 @@ export const BOLT_ERROR_CODE_CATEGORY: Record<BoltErrorCode, BoltFailureCategory
   [BOLT_ERROR_CODES.AI_PLAN_INVALID]: 'PLAN_PARSE_FAILURE',
   [BOLT_ERROR_CODES.WEEK_STRUCTURE_GENERATION_FAILED]: 'DAILY_PLAN_FAILURE',
   [BOLT_ERROR_CODES.WEEK_STRUCTURE_PERSISTENCE_FAILED]: 'SUPABASE_ERROR',
+  [BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED]: 'SUPABASE_ERROR',
   [BOLT_ERROR_CODES.WEEK_STRUCTURE_VALIDATION_FAILED]: 'DAILY_PLAN_FAILURE',
   [BOLT_ERROR_CODES.DAILY_PLAN_ROW_GENERATION_FAILED]: 'DAILY_PLAN_FAILURE',
   [BOLT_ERROR_CODES.DAILY_PLAN_ROW_INVALID]: 'DAILY_PLAN_FAILURE',
@@ -222,6 +225,7 @@ export const BOLT_ERROR_CODE_FRIENDLY_MESSAGES: Record<BoltErrorCode, string> = 
   [BOLT_ERROR_CODES.AI_PLAN_INVALID]: 'The AI returned an invalid campaign plan. Please try again.',
   [BOLT_ERROR_CODES.WEEK_STRUCTURE_GENERATION_FAILED]: 'We couldn\'t generate the weekly content structure. Please try again.',
   [BOLT_ERROR_CODES.WEEK_STRUCTURE_PERSISTENCE_FAILED]: 'We couldn\'t save the weekly content structure. Please try again.',
+  [BOLT_ERROR_CODES.WEEK_STRUCTURE_CONTEXT_READ_FAILED]: 'We couldn\'t load your existing schedule to plan around it, so no plan was generated. Please try again.',
   [BOLT_ERROR_CODES.WEEK_STRUCTURE_VALIDATION_FAILED]: 'The generated weekly content structure failed validation. Please try again.',
   [BOLT_ERROR_CODES.DAILY_PLAN_ROW_GENERATION_FAILED]: 'We couldn\'t generate one or more daily content rows. Please try again.',
   [BOLT_ERROR_CODES.DAILY_PLAN_ROW_INVALID]: 'A generated daily content row failed validation. Please try again.',
