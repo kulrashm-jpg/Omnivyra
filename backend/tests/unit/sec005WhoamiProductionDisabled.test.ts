@@ -68,3 +68,6 @@ it.each([['development'], ['test']])('CONTROL NODE_ENV=%s: the diagnostic still 
   expect(get.body).toEqual(expect.objectContaining({ resolved_user_id: 'u-1' }));
   expect(calls.resolve).toBe(1);
 });
+
+// A module, not a global script: top-level helpers (call, loadUnder) must not collide with other suites in tsc.
+export {};
