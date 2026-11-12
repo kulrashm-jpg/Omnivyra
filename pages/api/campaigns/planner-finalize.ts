@@ -528,10 +528,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       const start = existing.start_date;
       if (!start) {
-        await supabase
+        // Slots are scheduled against this start date below: an unsaved one must not look saved
+        // (unread-error pkg 2). Nothing has been written yet, so the request is safe to retry.
+        const { error: startDateError } = await supabase
           .from('campaigns')
           .update({ start_date: startDate, duration_weeks: durationWeeks, updated_at: new Date().toISOString() })
           .eq('id', campaignId);
+        if (startDateError) {
+          console.error('[planner-finalize] start_date write failed', { campaignId, message: startDateError.message });
+          return res.status(503).json({ error: 'Could not save the campaign start date. Nothing was scheduled. Please try again.', code: 'START_DATE_WRITE_FAILED' });
+        }
       }
 
       const { data: latestVersion } = await supabase
@@ -648,12 +654,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           startDate,
         });
 
-        // Duplicate slot protection (mirrors existing path)
-        const { data: existingAdapterSlots } = await supabase
+        // Duplicate slot protection (mirrors existing path). A failed read is NOT "no slots": it
+        // would insert a duplicate schedule. Answer it here; this try's catch would otherwise fall
+        // through to the existing flow (unread-error pkg 2).
+        const { data: existingAdapterSlots, error: existingAdapterSlotsError } = await supabase
           .from('daily_content_plans')
           .select('id')
           .eq('campaign_id', campaignId)
           .limit(1);
+        if (existingAdapterSlotsError) {
+          console.error('[planner-finalize] duplicate-slot guard unreadable (adapter path)', { campaignId, message: existingAdapterSlotsError.message });
+          return res.status(503).json({ error: 'Could not check for existing slots. Nothing was scheduled. Please try again.', code: 'SLOT_GUARD_UNREADABLE' });
+        }
         if (existingAdapterSlots?.length) {
           return res.status(400).json({ error: 'Slots already exist for this campaign.' });
         }
@@ -688,12 +700,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!adapterHandledSlots && useCalendarPlanPath && hasCalendarPlan) {
       const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string; creator_asset?: Record<string, unknown> | null; content_status?: string; draft_content?: { body?: string; source?: string; updated_at?: string } | null; content_planning_status?: string }> }).activities;
 
-      // FIX 3: Duplicate slot protection
-      const { data: existingSlots } = await supabase
+      // FIX 3: Duplicate slot protection. A failed read is NOT "no slots" (unread-error pkg 2).
+      const { data: existingSlots, error: existingSlotsError } = await supabase
         .from('daily_content_plans')
         .select('id')
         .eq('campaign_id', campaignId)
         .limit(1);
+      if (existingSlotsError) {
+        console.error('[planner-finalize] duplicate-slot guard unreadable', { campaignId, message: existingSlotsError.message });
+        return res.status(503).json({ error: 'Could not check for existing slots. Nothing was scheduled. Please try again.', code: 'SLOT_GUARD_UNREADABLE' });
+      }
       if (existingSlots?.length) {
         return res.status(400).json({ error: 'Slots already exist for this campaign.' });
       }
