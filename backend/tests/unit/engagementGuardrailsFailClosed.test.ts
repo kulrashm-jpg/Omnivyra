@@ -78,11 +78,12 @@ describe('A20 plan usage', () => {
       .toMatchObject({ allowed: false, reason: 'usage_unverifiable' });
   });
 
-  it('NEGATIVE CONTROL: the same failure for a caller that did not opt in (LLM gateway, external API) still allows', async () => {
+  it('NEGATIVE CONTROL: the same failure for a caller that did not opt in (LLM gateway, external API) still allows - and is LOGGED with the stable marker', async () => {
     seed();
     failNext('usage_meter_monthly', 'select');
     expect(await checkUsageBeforeExecution({ organization_id: 'co-a', resource_key: 'automation_executions', projected_increment: 1 }))
       .toEqual({ allowed: true });
+    expect(console.error).toHaveBeenCalledWith('USAGE_ENFORCEMENT_FAIL_OPEN', expect.objectContaining({ organization_id: 'co-a', why: expect.stringContaining('meter') }));
   });
 
   it('NEGATIVE CONTROL: readable and within the limit -> allowed, fail-closed or not', async () => {

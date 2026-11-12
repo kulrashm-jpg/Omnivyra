@@ -65,6 +65,14 @@ export async function checkUsageBeforeExecution(params: {
    */
   failClosed?: boolean;
 }): Promise<EnforcementResult> {
+  // ALLOW-ON-ERROR, MEASURED (owner ruling via e9, 2026-11-12): callers that did not opt into
+  // failClosed (the LLM gateway, the external API) are still allowed when usage cannot be read - but
+  // never silently. Every such allow logs at ERROR with ONE stable marker, so how often the accepted
+  // fail-open fires can be counted (05: "accepted" and "never seen" are different claims).
+  const allowedUnverified = (why: string): EnforcementResult => {
+    console.error('USAGE_ENFORCEMENT_FAIL_OPEN', { organization_id: params.organization_id, resource_key: params.resource_key, why });
+    return { allowed: true };
+  };
   const unverifiable = (why: string): EnforcementResult => {
     console.error('[usageEnforcement] usage unverifiable; refusing (fail closed)', { organization_id: params.organization_id, resource_key: params.resource_key, why });
     return { allowed: false, resource_key: params.resource_key, limit: 0, current_usage: 0, allowed_until: 0, grace_percent: 0, reason: 'usage_unverifiable' };
@@ -82,7 +90,7 @@ export async function checkUsageBeforeExecution(params: {
       .select('plan_id')
       .eq('organization_id', params.organization_id)
       .maybeSingle();
-    if (assignmentError && params.failClosed) return unverifiable(`plan assignment: ${assignmentError.message}`);
+    if (assignmentError) return params.failClosed ? unverifiable(`plan assignment: ${assignmentError.message}`) : allowedUnverified(`plan assignment: ${assignmentError.message}`);
 
     if (!assignment?.plan_id) return { allowed: true };
 
@@ -91,7 +99,7 @@ export async function checkUsageBeforeExecution(params: {
       .select('enforcement_enabled, allow_overage, grace_percent')
       .eq('id', assignment.plan_id)
       .maybeSingle();
-    if (planError && params.failClosed) return unverifiable(`plan: ${planError.message}`);
+    if (planError) return params.failClosed ? unverifiable(`plan: ${planError.message}`) : allowedUnverified(`plan: ${planError.message}`);
 
     const enforcementEnabled = planRow?.enforcement_enabled === true;
     const allowOverage = planRow?.allow_overage === true;
@@ -107,7 +115,7 @@ export async function checkUsageBeforeExecution(params: {
       .eq('year', year)
       .eq('month', month)
       .maybeSingle();
-    if (meterError && params.failClosed) return unverifiable(`meter: ${meterError.message}`);
+    if (meterError) return params.failClosed ? unverifiable(`meter: ${meterError.message}`) : allowedUnverified(`meter: ${meterError.message}`);
 
     const currentUsage = getMeterUsage(meterRow, params.resource_key);
     const projected = params.projected_increment ?? 0;
@@ -130,7 +138,6 @@ export async function checkUsageBeforeExecution(params: {
     };
   } catch (error: any) {
     if (params.failClosed) return unverifiable(error?.message ?? String(error));
-    console.error('[usageEnforcement] checkUsageBeforeExecution failed', error?.message ?? error);
-    return { allowed: true };
+    return allowedUnverified(error?.message ?? String(error));
   }
 }
