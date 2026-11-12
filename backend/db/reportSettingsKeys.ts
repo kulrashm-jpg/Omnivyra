@@ -11,7 +11,7 @@
  *      persisted the sanitized copy, erasing data another writer owned.
  *
  * Writes now go through the database function merge_report_settings_keys (migration
- * 20270116000000, placeholder version): one statement, only the named keys, and per key one of
+ * 20270217000000): one statement, only the named keys, and per key one of
  *   replace  — the key's value is replaced wholesale;
  *   nested   — merged ONE level deep (stored->k || patch->k): only the patched sub-fields change;
  *   ifAbsent — written only where the stored row lacks the key.

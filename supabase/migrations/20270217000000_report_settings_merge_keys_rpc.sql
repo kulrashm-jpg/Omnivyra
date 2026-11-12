@@ -1,5 +1,5 @@
 -- report_settings: a server-side, per-key merge for SYSTEM-owned keys (e9 ruling 2026-11-12,
--- BLOCKING data loss, unit 1). VERSION IS A PLACEHOLDER until 83 assigns one.
+-- BLOCKING data loss, unit 1). Version 20270217000000 assigned by the registry owner (83).
 --
 -- ─── THE DEFECT ───────────────────────────────────────────────────────────
 -- company_profiles.report_settings is ONE JSONB column shared by many independent writers
@@ -51,7 +51,7 @@
 --   DROP FUNCTION IF EXISTS public.merge_report_settings_keys(text, jsonb, timestamptz);
 --   DROP FUNCTION IF EXISTS public.merge_report_settings_keys(text, jsonb, timestamptz, text[]);
 --   (and the very first local draft, never committed: (uuid, jsonb, timestamptz))
--- Rollback: supabase/migrations/rollbacks/report_settings_key_merge_rpc_rollback.sql
+-- Rollback: supabase/migrations/rollbacks/report_settings_merge_keys_rpc_rollback.sql
 
 BEGIN;
 

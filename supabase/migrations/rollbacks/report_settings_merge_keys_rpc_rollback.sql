@@ -1,4 +1,4 @@
--- Rollback for the report_settings key-merge RPC migration (placeholder version 20270116000000).
+-- Rollback for the report_settings key-merge RPC migration (20270217000000_report_settings_merge_keys_rpc).
 --
 -- ORDER MATTERS: roll back the APPLICATION first. Once the backend calls
 -- merge_report_settings_keys, dropping the function makes every system writer of

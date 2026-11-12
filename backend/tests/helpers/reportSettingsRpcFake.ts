@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../../supabase/migrations');
-const SLUG = '_report_settings_key_merge_rpc.sql';
+const SLUG = '_report_settings_merge_keys_rpc.sql';
 /** Located by slug, not version: the version is assigned by the migration registry owner. */
 export const MIGRATION_FILE = (() => {
   const hits = fs.readdirSync(MIGRATIONS_DIR).filter((f) => /^\d{14}_/.test(f) && f.endsWith(SLUG));

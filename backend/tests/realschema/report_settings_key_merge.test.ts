@@ -1,6 +1,6 @@
 /**
  * report_settings unit 1 — REAL-POSTGRES proof of public.merge_report_settings_keys
- * (supabase/migrations/20270116000000_report_settings_key_merge_rpc.sql, placeholder version),
+ * (supabase/migrations/20270217000000_report_settings_merge_keys_rpc.sql),
  * on the replayed real schema (company_profiles.company_id is TEXT there).
  *
  *     npm run test:realschema -- report_settings_key_merge
@@ -53,7 +53,7 @@ async function seedProfile(company: string, rs: string) {
 
 beforeAll(async () => {
   const fn = (await db.query(`SELECT to_regprocedure($1) AS f`, [FN])).rows[0];
-  if (!fn?.f) throw new Error('merge_report_settings_keys (20270116000000) is not installed in this database');
+  if (!fn?.f) throw new Error('merge_report_settings_keys (20270217000000) is not installed in this database');
   // baseline.sql carries no privileges; model the hosted default for the table under test so the
   // FUNCTION's grants, not a missing table grant, decide the outcomes below.
   await db.query('GRANT SELECT, UPDATE ON public.company_profiles TO service_role');
