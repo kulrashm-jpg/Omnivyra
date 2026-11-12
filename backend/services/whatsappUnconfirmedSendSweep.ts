@@ -31,6 +31,7 @@
 import crypto from 'crypto';
 import { ownedDbRpc, ownedDbTable } from '../db/writeOwner';
 import {
+  WHATSAPP_EVENT_CLOCK_SKEW_MS,
   WHATSAPP_SEND_TIMEOUT_MS,
   foldDeliveryEvidence,
   recordInvalidContact,
@@ -151,9 +152,16 @@ export async function sweepUnconfirmedWhatsAppSends(opts: UnconfirmedSendSweepOp
   for (const c of candidates) {
     result.examined++;
     try {
+      // Evidence of THIS send only (CLASS-2): a retried recipient keeps its marker, so the ledger
+      // also holds the earlier, failed message's events. Those predate the current claim
+      // (stale_since = send_started_at) and are never attached to it.
+      const claimedAt = new Date(c.stale_since).getTime();
+      if (!Number.isFinite(claimedAt)) throw Object.assign(new Error('send time unknown'), { code: 'send_time_unknown' });
+      const sendNotBefore = new Date(claimedAt - WHATSAPP_EVENT_CLOCK_SKEW_MS).toISOString();
       const { data: evidence, error } = await ownedDbTable('whatsapp_provider_events')
         .select('id, wa_message_id, event_status, event_at, error_code, error_title')
         .eq('verified_recipient_id', c.recipient_id)
+        .gte('event_at', sendNotBefore)
         .order('event_at', { ascending: true });
       if (error) throw Object.assign(new Error('evidence unreadable'), { code: 'evidence_unreadable' });
       const events: LedgerEvent[] = (evidence ?? []).map((e: Record<string, unknown>) => ({

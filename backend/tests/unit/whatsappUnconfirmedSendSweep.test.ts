@@ -149,8 +149,11 @@ describe('the webhook job names the recipient in the ledger only when verified',
   });
 });
 
+const CLAIMED = '2026-11-09T09:59:30.000Z';
+
 describe('the sweep (scripted database functions)', () => {
-  type Cand = { recipient_id: string; broadcast_id: string; status: string };
+  // stale_since is the current claim's send_started_at (the RPC's COALESCE), before every event here.
+  type Cand = { recipient_id: string; broadcast_id: string; status: string; stale_since?: string };
   /** The four functions, scripted. `attach`/`mark`/`flag` answer as the SQL would. */
   function script(cands: Cand[], answers: Partial<Record<string, (args: Row) => unknown>> = {}) {
     mockRpc.mockImplementation(async (fn: string, args: Row) => {
@@ -167,7 +170,7 @@ describe('the sweep (scripted database functions)', () => {
 
   it('no evidence, send_uncertain: flagged only; never attached, never marked, never failed', async () => {
     resetFakeDb({ whatsapp_provider_events: [], whatsapp_broadcast_recipients: [{ id: R1, broadcast_id: 'b1', status: 'send_uncertain', wa_message_id: null }] });
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }]);
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }]);
     const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
     // The sweep writes recipient state only through the database functions: no direct update.
     expect(fakeDb.calls.filter((c) => c.startsWith('whatsapp_broadcast_recipients:') && c !== 'whatsapp_broadcast_recipients:select')).toEqual([]);
@@ -180,7 +183,7 @@ describe('the sweep (scripted database functions)', () => {
 
   it('no evidence, sending: marked uncertain with the same cutoff, then flagged', async () => {
     resetFakeDb({ whatsapp_provider_events: [] });
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'sending' }]);
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'sending', stale_since: CLAIMED }]);
     const now = new Date('2026-11-09T12:00:00.000Z');
     const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG, now });
     expect(out).toMatchObject({ markedUncertain: 1, flaggedForReview: 1 });
@@ -194,7 +197,7 @@ describe('the sweep (scripted database functions)', () => {
       { ...ev('delivered', '2026-11-09T10:01:00.000Z'), verified_recipient_id: R1 },
       { ...ev('read', '2026-11-09T10:02:00.000Z'), verified_recipient_id: R2 },
     ] });
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }]);
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }]);
     const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
     expect(out).toMatchObject({ attached: 1, flaggedForReview: 0 });
     const [a] = calls('whatsapp_attach_unconfirmed_send');
@@ -213,7 +216,7 @@ describe('the sweep (scripted database functions)', () => {
     });
     const order: string[] = [];
     mockRestrict.mockImplementation(async () => { order.push('restrict'); });
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }], {
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }], {
       whatsapp_attach_unconfirmed_send: () => { order.push('attach'); return new Error('connection reset'); },
     });
     const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
@@ -222,12 +225,41 @@ describe('the sweep (scripted database functions)', () => {
     expect(out).toMatchObject({ attached: 0, errors: [{ recipientId: R1, code: 'rpc_failed' }] });
   });
 
+  it('CLASS-2: evidence OLDER than the current claim (an earlier, retried message) is ignored - not attached, not a conflict', async () => {
+    resetFakeDb({ whatsapp_provider_events: [
+      { ...ev('failed', '2026-11-09T09:00:00.000Z', { wa_message_id: 'wamid.old' }), verified_recipient_id: R1 },
+    ] });
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'sending', stale_since: CLAIMED }]);
+    const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG, now: new Date('2026-11-09T12:00:00.000Z') });
+    expect(calls('whatsapp_attach_unconfirmed_send')).toEqual([]);
+    expect(out).toMatchObject({ attached: 0, conflicting: 0, markedUncertain: 1, flaggedForReview: 1 });
+  });
+
+  it('CLASS-2: old and current evidence together: only the current message is attached', async () => {
+    resetFakeDb({ whatsapp_provider_events: [
+      { ...ev('failed', '2026-11-09T09:00:00.000Z', { wa_message_id: 'wamid.old' }), verified_recipient_id: R1 },
+      { ...ev('sent', '2026-11-09T10:00:00.000Z'), verified_recipient_id: R1 },
+    ] });
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }]);
+    const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
+    expect(out).toMatchObject({ attached: 1, conflicting: 0 });
+    expect(calls('whatsapp_attach_unconfirmed_send')[0]).toMatchObject({ p_wa_message_id: 'wamid.1' });
+  });
+
+  it('a candidate whose send time is unknown is refused by name, never swept on all evidence', async () => {
+    resetFakeDb({ whatsapp_provider_events: [{ ...ev('sent', '2026-11-09T10:00:00.000Z'), verified_recipient_id: R1 }] });
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }]);
+    const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
+    expect(calls('whatsapp_attach_unconfirmed_send')).toEqual([]);
+    expect(out.errors).toEqual([expect.objectContaining({ recipientId: R1, code: 'send_time_unknown' })]);
+  });
+
   it('two message ids for one recipient: no attach; conflict and review flags', async () => {
     resetFakeDb({ whatsapp_provider_events: [
       { ...ev('sent', '2026-11-09T10:00:00.000Z'), verified_recipient_id: R1 },
       { ...ev('sent', '2026-11-09T10:00:05.000Z', { id: 'ev-x', wa_message_id: 'wamid.2' }), verified_recipient_id: R1 },
     ] });
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }]);
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }]);
     const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
     expect(out).toMatchObject({ attached: 0, conflicting: 1, flaggedForReview: 1 });
     expect(calls('whatsapp_attach_unconfirmed_send')).toEqual([]);
@@ -238,8 +270,8 @@ describe('the sweep (scripted database functions)', () => {
     resetFakeDb({ whatsapp_provider_events: [{ ...ev('sent', '2026-11-09T10:00:00.000Z'), verified_recipient_id: R2 }] });
     failNext('whatsapp_provider_events', 'select');
     script([
-      { recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' },
-      { recipient_id: R2, broadcast_id: 'b1', status: 'send_uncertain' },
+      { recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED },
+      { recipient_id: R2, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED },
     ], { whatsapp_attach_unconfirmed_send: () => false });
     const out = await sweepUnconfirmedWhatsAppSends({ companyId: ORG });
     expect(out).toMatchObject({ examined: 2, alreadyResolved: 1, errors: [{ recipientId: R1, code: 'evidence_unreadable' }] });
@@ -247,11 +279,11 @@ describe('the sweep (scripted database functions)', () => {
 
   it('only a literal true counts (a row-shaped answer, as the transport returns it, is unwrapped)', async () => {
     resetFakeDb({ whatsapp_provider_events: [] });
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }], {
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }], {
       whatsapp_flag_unconfirmed_send: () => [{ whatsapp_flag_unconfirmed_send: false }],
     });
     expect((await sweepUnconfirmedWhatsAppSends({ companyId: ORG })).flaggedForReview).toBe(0);
-    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain' }], { whatsapp_flag_unconfirmed_send: () => 'true' });
+    script([{ recipient_id: R1, broadcast_id: 'b1', status: 'send_uncertain', stale_since: CLAIMED }], { whatsapp_flag_unconfirmed_send: () => 'true' });
     expect((await sweepUnconfirmedWhatsAppSends({ companyId: ORG })).flaggedForReview).toBe(0);
   });
 });

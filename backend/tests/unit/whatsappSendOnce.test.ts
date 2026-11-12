@@ -97,9 +97,14 @@ const okWith = (wamid: string): Provider => async () => ({ ok: true, status: 200
 /** A queue whose job runs immediately (a free worker), like the production processor. */
 const runNow = async (data: any, opts: any) => { mockQueue.push({ jobId: opts.jobId, ids: data.recipient_ids }); await processBatch(data.broadcast_id, data.recipient_ids); return { id: opts.jobId }; };
 
+// Meta stamps a status AFTER the send it reports (unix seconds). A marker match requires the event
+// not to predate the recipient's current claim (CLASS-2), so the fixture's events are stamped
+// after every claim this suite makes: ten minutes past load time.
+const EVENT_TS = String(Math.floor(Date.now() / 1000) + 600);
+const EVENT_AT = new Date(Number(EVENT_TS) * 1000);
 /** A Meta status webhook job for one message. */
 const statusJob = (wamid: string, status: string, over: Row = {}) => ({
-  data: { payload: { entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: 'pn1' }, statuses: [{ id: wamid, status, timestamp: '1762600000', ...over }] } }] }] } },
+  data: { payload: { entry: [{ changes: [{ field: 'messages', value: { metadata: { phone_number_id: 'pn1' }, statuses: [{ id: wamid, status, timestamp: EVENT_TS, ...over }] } }] }] } },
 }) as any;
 
 beforeEach(() => {
@@ -307,7 +312,7 @@ describe('reconciliation through the existing status webhook and provider event 
   it('a failed status event reconciles to failed with the message id (a confirmed provider failure)', async () => {
     await uncertain();
     await updateRecipientDelivery({ wa_message_id: 'wamid.f', status: 'failed', error_code: 131049, error_message: 'not delivered',
-      callback_data: R1, recipient_wa_id: '15550100001' });
+      callback_data: R1, recipient_wa_id: '15550100001', event_at: EVENT_AT });
     expect(rec()).toMatchObject({ status: 'failed', wa_message_id: 'wamid.f', error_code: 131049 });
   });
 
@@ -318,14 +323,14 @@ describe('reconciliation through the existing status webhook and provider event 
     ['a marker that is not one of our ids', { callback_data: 'r1; drop table', recipient_wa_id: '15550100001' }],
   ])('a status event with %s changes nothing', async (_n, over) => {
     await uncertain();
-    await updateRecipientDelivery({ wa_message_id: 'wamid.x', status: 'sent', ...over } as any);
+    await updateRecipientDelivery({ wa_message_id: 'wamid.x', status: 'sent', event_at: EVENT_AT, ...over } as any);
     expect(rec()).toMatchObject({ status: 'send_uncertain', wa_message_id: null });
   });
 
   it('a recipient that already has its message id is never re-attached to another message', async () => {
     seed();
     await processBatch('b1', [R1]);
-    await updateRecipientDelivery({ wa_message_id: 'wamid.other', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001' });
+    await updateRecipientDelivery({ wa_message_id: 'wamid.other', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001', event_at: EVENT_AT });
     expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.ok.1' });
   });
 
@@ -338,7 +343,7 @@ describe('reconciliation through the existing status webhook and provider event 
       // After this event's read (1st access) and before its write (2nd): another event attached.
       if (accesses === 2) Object.assign(rec(), { status: 'sent', wa_message_id: 'wamid.first' });
     };
-    await updateRecipientDelivery({ wa_message_id: 'wamid.second', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001' });
+    await updateRecipientDelivery({ wa_message_id: 'wamid.second', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001', event_at: EVENT_AT });
     mockTableHook = null;
     expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.first' });
   });
@@ -350,7 +355,7 @@ describe('reconciliation through the existing status webhook and provider event 
     expect(rec()).toMatchObject({ status: 'sending', wa_message_id: null });
     await processBatch('b1', [R1]);
     expect(sends).toHaveLength(1);
-    await updateRecipientDelivery({ wa_message_id: 'wamid.ok.1', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001' });
+    await updateRecipientDelivery({ wa_message_id: 'wamid.ok.1', status: 'sent', callback_data: R1, recipient_wa_id: '15550100001', event_at: EVENT_AT });
     expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.ok.1' });
   });
 });
@@ -411,5 +416,89 @@ describe('leaving `sending` is conditional: a late worker never overwrites anoth
     expect(rec(R1)).toMatchObject({ status: 'sent', wa_message_id: 'wamid.ok' });
     expect(rec(R2)).toMatchObject({ status: 'failed', error_code: 131008 });
     expect(errorLog().filter(([m]) => /moved while|another path/.test(String(m)))).toHaveLength(0);
+  });
+});
+
+describe('CLASS-2: a Retry is a FRESH send, and nothing of the old message lands on it', () => {
+  const PHONE1_WA = '15550100001';
+  /** Meta failed the message by WEBHOOK: the row keeps its message id (and the count never moved). */
+  const webhookFailed = (over: Row = {}) => recipient(R1, PHONE1, {
+    status: 'failed', wa_message_id: 'wamid.old', sent_at: '2026-11-09T10:00:00.000Z', send_started_at: '2026-11-09T09:59:59.000Z',
+    error_code: 131026, error_message: 'undeliverable', retry_count: 0, ...over,
+  });
+  const OLD_TS = String(Math.floor(Date.parse('2026-11-09T10:00:05.000Z') / 1000));
+  const okNew = async () => ({ ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.new' }] }) });
+
+  it('a webhook-failed row: Retry sends ONCE and records the NEW message id (it used to stay `sending` for ever)', async () => {
+    seed([webhookFailed()]);
+    provider = okWith('wamid.new');
+    expect(await retryFailed('b1')).toMatchObject({ retried: 1 });
+    expect(sends).toHaveLength(1);
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.new', error_code: null, error_message: null });
+  });
+
+  it('a webhook-failed row counts toward the retry limit (it never did, so Retry was unbounded)', async () => {
+    seed([webhookFailed({ retry_count: 2 })]);
+    provider = okWith('wamid.new');
+    await retryFailed('b1');
+    expect(rec().retry_count).toBe(3);
+    seed([webhookFailed({ retry_count: 3 })]);
+    expect(await retryFailed('b1')).toMatchObject({ retried: 0 });
+    expect(sends).toHaveLength(1);
+  });
+
+  it('NEGATIVE CONTROL: a row processBatch failed itself (no message id, already counted) is retried without a second count', async () => {
+    seed([recipient(R1, PHONE1, { status: 'failed', retry_count: 1, error_message: 'x' })]);
+    provider = okWith('wamid.new');
+    await retryFailed('b1');
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.new', retry_count: 1 });
+  });
+
+  it('a late event of the OLD message (same marker) arriving while the retry is in flight is NOT attached to it', async () => {
+    seed([webhookFailed()]);
+    provider = async () => {
+      await processWhatsAppWebhookJob(statusJob('wamid.old', 'sent', { biz_opaque_callback_data: R1, recipient_id: PHONE1_WA, timestamp: OLD_TS }));
+      return okNew();
+    };
+    await retryFailed('b1');
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.new' });
+  });
+
+  it('NEGATIVE CONTROL: an event of the CURRENT send (stamped after its claim) IS attached by marker', async () => {
+    seed();
+    provider = async () => { throw new Error('socket hang up'); };
+    await processBatch('b1', [R1]);
+    await processWhatsAppWebhookJob(statusJob('wamid.cur', 'sent', { biz_opaque_callback_data: R1, recipient_id: PHONE1_WA }));
+    expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.cur' });
+  });
+
+  it('a marker event with no time cannot be placed: nothing is attached (the sweep decides later)', async () => {
+    seed();
+    provider = async () => { throw new Error('socket hang up'); };
+    await processBatch('b1', [R1]);
+    await updateRecipientDelivery({ wa_message_id: 'wamid.x', status: 'sent', callback_data: R1, recipient_wa_id: PHONE1_WA, event_at: null });
+    expect(rec()).toMatchObject({ status: 'send_uncertain', wa_message_id: null });
+  });
+
+  it('A3: a worker whose row was resolved, retried and re-claimed meanwhile does not write its stale failure over the new claim', async () => {
+    seed();
+    provider = async () => {
+      Object.assign(rec(), { status: 'sending', send_started_at: '2099-01-01T00:00:00.000Z' }); // another run's claim now
+      return { ok: false, status: 400, json: async () => ({ error: { code: 100, message: 'bad' } }) };
+    };
+    await processBatch('b1', [R1]);
+    expect(rec()).toMatchObject({ status: 'sending', send_started_at: '2099-01-01T00:00:00.000Z', retry_count: 0 });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('send outcome NOT recorded'), expect.objectContaining({ recipient_id: R1 }));
+  });
+
+  it('A3: the same with a provider id: the newer claim keeps its state, and the stale id is on record at ERROR', async () => {
+    seed();
+    provider = async () => {
+      Object.assign(rec(), { status: 'sending', send_started_at: '2099-01-01T00:00:00.000Z' });
+      return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.stale' }] }) };
+    };
+    await processBatch('b1', [R1]);
+    expect(rec()).toMatchObject({ status: 'sending', wa_message_id: null });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('already been resolved by another path'), expect.objectContaining({ worker_wa_message_id: 'wamid.stale' }));
   });
 });

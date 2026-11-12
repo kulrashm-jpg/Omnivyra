@@ -44,6 +44,22 @@ const META_GRAPH = 'https://graph.facebook.com/v22.0';
 /** L-4: a provider call still open after this is abandoned and recorded `send_uncertain`. */
 export const WHATSAPP_SEND_TIMEOUT_MS = 20_000;
 
+/**
+ * CLASS-2 (2026-11-12): a status event older than a recipient's CURRENT claim belongs to an
+ * earlier send of that recipient (a Retry re-sends a failed row under the same marker), so it
+ * must never be attached to the new send. Meta stamps events in whole SECONDS, and our clock and
+ * Meta's differ slightly: an event is "this send's" when it is no older than send_started_at less
+ * this margin. Too strict fails SAFE: the row stays unconfirmed and the sweep marks it uncertain
+ * for an operator; it is never resent.
+ */
+export const WHATSAPP_EVENT_CLOCK_SKEW_MS = 5_000;
+
+/** Meta's status `timestamp` (unix seconds) as a Date; null when absent or malformed. */
+export function metaEventTime(timestamp: unknown): Date | null {
+  const seconds = typeof timestamp === 'string' || typeof timestamp === 'number' ? Number(timestamp) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : null;
+}
+
 /** L-4: provider answers that do not say the message was refused: it may have been sent. */
 export const isAmbiguousProviderStatus = (status: number): boolean => status >= 500 || status === 408;
 
@@ -68,12 +84,17 @@ const UNCONFIRMED_SEND_STATES = ['sending', 'send_uncertain'] as const;
  */
 async function resolveClaimedSend(
   recipientId: string,
+  claimedAt:   string,
   patch:       Record<string, unknown>,
 ): Promise<{ moved: boolean; error: string | null }> {
+  // Pinned to THIS claim (its send_started_at), not only to `sending`: a row this worker held,
+  // that was then resolved, retried and claimed by another run, is `sending` again - and this
+  // worker's late outcome must not land on the newer send (CLASS-2, A3).
   const { data, error } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update(patch)
     .eq('id', recipientId)
     .eq('status', 'sending')
+    .eq('send_started_at', claimedAt)
     .select('id');
   if (error) return { moved: false, error: error.message };
   const moved = Array.isArray(data) && data.length > 0;
@@ -180,6 +201,8 @@ export interface RecipientDeliveryUpdate {
   callback_data?: string | null;
   /** L-4: the status event's recipient_id, the number's WhatsApp id (digits). */
   recipient_wa_id?: string | null;
+  /** CLASS-2: when Meta says the event happened (its `timestamp`). A marker match needs it. */
+  event_at?: Date | null;
 }
 
 // ── Phone privacy helpers ─────────────────────────────────────────────────────
@@ -1300,8 +1323,10 @@ export async function processBatch(
     // invocation that moves the row `pending → sending` may send it; every other
     // one skips, so a retry can never message a recipient twice.
     // send_started_at dates the claim, so the unconfirmed-send sweep measures age from it.
+    // The claim's timestamp is also its TOKEN: every outcome write below is pinned to it.
+    const claimedAt = new Date().toISOString();
     const { data: claimed, error: claimError } = await ownedDbTable('whatsapp_broadcast_recipients')
-      .update({ status: 'sending', send_started_at: new Date().toISOString() })
+      .update({ status: 'sending', send_started_at: claimedAt })
       .eq('id', recipient.id)
       .eq('status', 'pending')
       .select('id');
@@ -1337,7 +1362,7 @@ export async function processBatch(
       // connection, a lost response): the outcome is UNKNOWN, so it is recorded as
       // uncertain and is never re-queued by `retryFailed`, which would risk a duplicate
       // message. A status webhook carrying this recipient's marker reconciles it.
-      await resolveClaimedSend(recipient.id, {
+      await resolveClaimedSend(recipient.id, claimedAt, {
         status: 'send_uncertain',
         error_message: controller.signal.aborted ? `provider call timed out after ${WHATSAPP_SEND_TIMEOUT_MS} ms` : (err instanceof Error ? err.message : 'Exception'),
       });
@@ -1357,6 +1382,7 @@ export async function processBatch(
         .eq('id', recipient.id)
         .in('status', [...UNCONFIRMED_SEND_STATES])
         .is('wa_message_id', null)
+        .eq('send_started_at', claimedAt)
         .select('id');
       // Sent, but not recorded: the row stays `sending` (never re-sent) and the status
       // webhook's marker records the message id.
@@ -1383,11 +1409,11 @@ export async function processBatch(
     } else if (res.ok) {
       // Accepted without a message id: Meta may have sent it. Never retried
       // automatically (`retryFailed` only re-queues `failed`).
-      await resolveClaimedSend(recipient.id, { status: 'send_uncertain', error_message: 'provider accepted the request without a message id' });
+      await resolveClaimedSend(recipient.id, claimedAt, { status: 'send_uncertain', error_message: 'provider accepted the request without a message id' });
       failedCount++;
     } else if (isAmbiguousProviderStatus(res.status)) {
       // A 5xx or a 408 does not say the message was refused: it may have been sent.
-      await resolveClaimedSend(recipient.id, { status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` });
+      await resolveClaimedSend(recipient.id, claimedAt, { status: 'send_uncertain', error_code: res.status, error_message: result?.error?.message ?? `provider answered HTTP ${res.status}` });
       failedCount++;
     } else {
       const errCode    = result?.error?.code ?? res.status;
@@ -1396,8 +1422,9 @@ export async function processBatch(
       // the count and let a recipient be retried without end (unread-error census). The batch
       // value cannot be stale (05): the row is CLAIMED ('sending') from the CAS above until this
       // outcome write, and the only other retry_count writer, retryRun, filters on status
-      // 'failed' - no concurrent path can touch a claimed row's retry_count.
-      await resolveClaimedSend(recipient.id, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (Number(recipient.retry_count) || 0) + 1 });
+      // 'failed' - no concurrent path can touch a claimed row's retry_count. The write is pinned
+      // to this claim, so a row re-claimed since (A->B->A) never takes this stale count.
+      await resolveClaimedSend(recipient.id, claimedAt, { status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (Number(recipient.retry_count) || 0) + 1 });
       failedCount++;
     }
   }
@@ -1529,7 +1556,7 @@ async function retryRun(broadcastId: string): Promise<RetryResult> {
   if (live > 0) throw alreadyRunning(live, 'retrying');
 
   const { data: failed, error: failedError } = await ownedDbTable('whatsapp_broadcast_recipients')
-    .select('id')
+    .select('id, wa_message_id, retry_count')
     .eq('broadcast_id', broadcastId)
     .eq('status', 'failed')
     .lt('retry_count', 3);
@@ -1541,13 +1568,41 @@ async function retryRun(broadcastId: string): Promise<RetryResult> {
   // Reset to pending for re-enqueue: only rows that are STILL `failed` (compare-and-set).
   // A status webhook may have moved one to `delivered` since the read above; resetting it
   // would send that message a second time.
-  const { data: reset, error: resetError } = await ownedDbTable('whatsapp_broadcast_recipients')
-    .update({ status: 'pending', next_retry_at: null })
-    .in('id', failed.map((r) => r.id))
-    .eq('status', 'failed')
-    .select('id');
-  if (resetError) throw new Error(`retry reset failed: ${resetError.message}`);
-  const retryIds = (reset ?? []).map((r: { id: string }) => r.id);
+  //
+  // The reset makes a FRESH send (CLASS-2): the failed message's id and send time are cleared.
+  // A row Meta failed by webhook kept its message id, so the retry's `sent` write (which needs
+  // no id) matched nothing - the row stayed `sending` for ever after a real second send. Events
+  // of the old message cannot re-attach: the marker reconcile and the sweep both ignore evidence
+  // older than the new claim.
+  const freshSend = { status: 'pending', next_retry_at: null, wa_message_id: null, sent_at: null, send_started_at: null, error_code: null, error_message: null };
+  type FailedRow = { id: string; wa_message_id: string | null; retry_count: number | null };
+  const rows = failed as FailedRow[];
+  const retryIds: string[] = [];
+
+  // A send failed by Meta's WEBHOOK (it has a message id) was never counted - only processBatch's
+  // own failures increment retry_count - so Retry on it was unbounded. It is counted here, per
+  // row, pinned to the id and count that were read.
+  for (const row of rows.filter((r) => r.wa_message_id)) {
+    const { data: one, error: oneError } = await ownedDbTable('whatsapp_broadcast_recipients')
+      .update({ ...freshSend, retry_count: (Number(row.retry_count) || 0) + 1 })
+      .eq('id', row.id)
+      .eq('status', 'failed')
+      .eq('wa_message_id', row.wa_message_id)
+      .select('id');
+    if (oneError) throw new Error(`retry reset failed: ${oneError.message}`);
+    if (Array.isArray(one) && one.length === 1) retryIds.push(row.id);
+  }
+  const counted = rows.filter((r) => !r.wa_message_id).map((r) => r.id);
+  if (counted.length > 0) {
+    const { data: reset, error: resetError } = await ownedDbTable('whatsapp_broadcast_recipients')
+      .update(freshSend)
+      .in('id', counted)
+      .eq('status', 'failed')
+      .is('wa_message_id', null)
+      .select('id');
+    if (resetError) throw new Error(`retry reset failed: ${resetError.message}`);
+    retryIds.push(...(reset ?? []).map((r: { id: string }) => r.id));
+  }
   if (retryIds.length === 0) return { retried: 0 };
 
   // Re-enqueue as a single batch
@@ -1663,9 +1718,8 @@ export async function recordWhatsAppProviderEvent(event: {
   /** Follow-up A: the recipient its marker named, ONLY once verifyCallbackRecipient matched the number. */
   verified_recipient_id?: string | null;
 }): Promise<'recorded' | 'duplicate'> {
-  const seconds = typeof event.timestamp === 'string' || typeof event.timestamp === 'number' ? Number(event.timestamp) : NaN;
   // Meta always stamps a status; a missing stamp is recorded at receipt time.
-  const eventAt = Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : new Date();
+  const eventAt = metaEventTime(event.timestamp) ?? new Date();
   const { error } = await ownedDbTable('whatsapp_provider_events').insert({
     wa_message_id: event.wa_message_id,
     event_status:  event.status,
@@ -1771,14 +1825,21 @@ export async function verifyCallbackRecipient(callbackData: unknown, recipientWa
 }
 
 async function reconcileUnconfirmedSend(update: RecipientDeliveryUpdate): Promise<boolean> {
+  // CLASS-2: the marker is the recipient, not the send - a Retry re-sends under the same marker.
+  // An event with no time cannot be placed, so it attaches nothing (the sweep decides later).
+  if (!(update.event_at instanceof Date) || Number.isNaN(update.event_at.getTime())) return false;
   const recipientId = await verifyCallbackRecipient(update.callback_data, update.recipient_wa_id);
   if (!recipientId) return false;
 
+  // Only an event of the CURRENT send: one older than this claim (less the clock margin) is an
+  // earlier, failed message of the same recipient, and attaching its id would mark the retry.
+  const claimNoLaterThan = new Date(update.event_at.getTime() + WHATSAPP_EVENT_CLOCK_SKEW_MS).toISOString();
   const { data: attached, error: attachError } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update({ status: 'sent', wa_message_id: update.wa_message_id, sent_at: new Date().toISOString() })
     .eq('id', recipientId)
     .in('status', [...UNCONFIRMED_SEND_STATES])
     .is('wa_message_id', null)
+    .lte('send_started_at', claimNoLaterThan)
     .select('id');
   if (attachError) throw new Error(`[wa-delivery] unconfirmed recipient reconcile failed: ${attachError.message}`);
   return Array.isArray(attached) && attached.length > 0;

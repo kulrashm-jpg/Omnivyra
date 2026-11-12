@@ -14,7 +14,7 @@
  */
 
 import type { Job } from 'bullmq';
-import { recordWhatsAppProviderEvent, updateRecipientDelivery, verifyCallbackRecipient } from '../../services/whatsappBroadcastService';
+import { metaEventTime, recordWhatsAppProviderEvent, updateRecipientDelivery, verifyCallbackRecipient } from '../../services/whatsappBroadcastService';
 import { handleTemplateStatusWebhook } from '../../services/whatsappTemplateService';
 import { detectWhatsAppOptOut, recordWhatsAppOptOut } from '../../services/whatsappOptOut';
 import { supabase } from '../../db/supabaseClient';
@@ -69,6 +69,8 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
               // whose response was lost can be matched (updateRecipientDelivery).
               callback_data:   typeof status.biz_opaque_callback_data === 'string' ? status.biz_opaque_callback_data : null,
               recipient_wa_id: typeof status.recipient_id === 'string' ? status.recipient_id : null,
+              // CLASS-2: places the event against the recipient's current send (a Retry reuses the marker).
+              event_at:        metaEventTime(status.timestamp),
             });
           }
         } catch (err) {
