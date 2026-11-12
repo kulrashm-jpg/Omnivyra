@@ -214,8 +214,32 @@ export interface StripeWebhookDeps {
   /** Subscription lifecycle write-path — populates billing_subscriptions from sub events. Best-effort. */
   applySubscriptionEvent?: (eventType: string, obj: StripeEventObject, organizationId: string | null) => Promise<{ applied: boolean; reason?: string }>;
 
-  markEvent?: (eventId: string, status: 'processed' | 'duplicate' | 'failed' | 'ignored', error?: string) => Promise<void>;
+  /**
+   * 20270217000003: the state writer is advance_payment_provider_event_state_guarded
+   * (forward-only; processed/duplicate TERMINAL). There is NO 'ignored' status - an
+   * ignored event is recorded as 'processed' with error 'ignored:<reason>' (e9).
+   * Bookkeeping only: an implementation logs its own write failure and resolves.
+   */
+  markEvent?: (eventId: string, status: 'processed' | 'duplicate' | 'failed' | 'requeued', error?: string) => Promise<{ applied: boolean; current?: string | null } | void>;
+  /** The event's STATE (payment_provider_event_state; 'recorded' when it has no row). Throws on a read error. */
+  getEventState?: (eventId: string) => Promise<string>;
 }
+
+/**
+ * MONEY (e9 ruling 2026-11-12): the money action itself (crediting / fulfilment /
+ * failing the purchase) failed. The route answers NON-2xx so the provider
+ * REDELIVERS; the redelivery is reprocessed (the event's state is 'failed').
+ * A bookkeeping-only failure (a state / attribute write) never throws this.
+ */
+export class RetryableWebhookError extends Error {
+  constructor(public readonly reason: string, public readonly eventId: string | null) {
+    super(`webhook money action failed (${reason}); the provider must redeliver`);
+    this.name = 'RetryableWebhookError';
+  }
+}
+
+/** States in which a redelivered event is reprocessed (not yet a terminal outcome). */
+const REPROCESSABLE = new Set(['recorded', 'failed', 'requeued']);
 
 /**
  * Resolve a Stripe event to a (purchase, organization_id) pair without
@@ -267,7 +291,17 @@ export async function processStripeWebhookEvent(
     payload: evt as unknown as Record<string, unknown>,
   });
   if (recorded.duplicate) {
-    return { status: 'duplicate', eventId: evt.id, eventType: evt.type };
+    // MONEY (e9 2026-11-12): a redelivery of an event whose money action FAILED (or
+    // whose processing never finished - a crash leaves 'recorded') must be
+    // REPROCESSED, or the purchase is never credited. Only a terminal state
+    // (processed / duplicate) answers duplicate. The money actions are idempotent
+    // (completePurchase returns the existing completion; payment_transactions is
+    // UNIQUE), so a concurrent double delivery cannot double-credit.
+    const state = recorded.id && deps.getEventState ? await deps.getEventState(recorded.id) : 'processed';
+    if (!REPROCESSABLE.has(state)) {
+      return { status: 'duplicate', eventId: evt.id, eventType: evt.type };
+    }
+    if (state === 'failed' && recorded.id && deps.markEvent) await deps.markEvent(recorded.id, 'requeued');
   }
 
   // 2) Side-effect routing — every path returns deterministically.
@@ -303,7 +337,13 @@ export async function processStripeWebhookEvent(
 
   if (action === 'fail_purchase') {
     if (resolved.purchase) {
-      await deps.failPurchase(resolved.purchase.id, evt.id);
+      try {
+        await deps.failPurchase(resolved.purchase.id, evt.id);
+      } catch (err) {
+        // MONEY: the purchase was not marked failed - record it and make the provider redeliver.
+        await markFailed(deps, recorded.id, `fail_purchase_error:${err instanceof Error ? err.message : String(err)}`);
+        throw new RetryableWebhookError('fail_purchase_error', recorded.id);
+      }
       await markProcessed(deps, recorded.id);
       return {
         status: 'processed',
@@ -324,6 +364,14 @@ export async function processStripeWebhookEvent(
   if (resolved.purchase) {
     const result = await deps.completePurchase(resolved.purchase.id, evt.id);
     if (result.success) creditsGranted = result.creditsGranted;
+    else if (result.reason === 'error') {
+      // MONEY: the completion write or the credit grant FAILED (a transient error,
+      // unlike not_found / already_failed / already_completed, which a retry cannot
+      // change). Record 'failed' and answer non-2xx so the provider redelivers;
+      // the redelivery is reprocessed from the 'failed' state.
+      await markFailed(deps, recorded.id, 'complete_purchase_error');
+      throw new RetryableWebhookError('complete_purchase_error', recorded.id);
+    }
   }
 
   // Insert payment_transactions row ONLY when we have a confirmed org_id and
@@ -377,5 +425,9 @@ async function markProcessed(deps: StripeWebhookDeps, id: string | null): Promis
   if (deps.markEvent && id) await deps.markEvent(id, 'processed');
 }
 async function markIgnored(deps: StripeWebhookDeps, id: string | null, reason: string): Promise<void> {
-  if (deps.markEvent && id) await deps.markEvent(id, 'ignored', reason);
+  // No 'ignored' status (e9): a terminal 'processed' carrying the reason.
+  if (deps.markEvent && id) await deps.markEvent(id, 'processed', `ignored:${reason}`);
+}
+async function markFailed(deps: StripeWebhookDeps, id: string | null, reason: string): Promise<void> {
+  if (deps.markEvent && id) await deps.markEvent(id, 'failed', reason);
 }
