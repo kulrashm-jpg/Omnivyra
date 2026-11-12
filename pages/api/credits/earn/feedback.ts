@@ -92,6 +92,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // early answer. A 23505 NAMING that index is the concurrent loser -> 409.
     // Keyed on the constraint NAME (05): any other UNIQUE added to this table
     // later must not inherit the "already pending or accepted" message.
+    // CHOSEN trade-off: if the DB error text is ever sanitised, a real
+    // duplicate answers 500 instead of 409 - safe direction, never a wrong reason.
     if ((insertErr as { code?: string }).code === '23505'
         && /feedback_submissions_one_open_per_user/.test(`${insertErr.message ?? ''} ${(insertErr as { details?: string }).details ?? ''}`)) {
       return res.status(409).json({ error: 'You already have feedback pending review or accepted.' });
