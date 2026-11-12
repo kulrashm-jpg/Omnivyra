@@ -365,6 +365,29 @@ describe('send-transactional-email non-2xx -> provider `uncertain` unless DEFINI
     }
   });
 
+  it.each([
+    ['reading res.error throws', () => ({ get error(): never { throw new TypeError('shape changed'); } })],
+    ['classifying throws (context.status getter)', () => ({ error: { message: 'x', context: { get status(): never { throw new TypeError('status'); } } } })],
+    ['reading error.message throws on a definite 4xx', () => ({ error: { get message(): never { throw new TypeError('msg'); }, context: new Response('{}', { status: 400 }) } })],
+    ['reading res.data throws after a 2xx', () => ({ error: undefined, get data(): never { throw new TypeError('data'); } })],
+  ])('a throw AFTER the request (%s) -> uncertain, never a re-queueable provider error', async (_n, make) => {
+    functionResponse = make() as never;
+    const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
+    expect(res).toMatchObject({ accepted: false, uncertain: true, rejectionReason: 'provider_uncertain' });
+  });
+
+  it('an unprintable thrown value is described safely (bounded, never rethrown)', async () => {
+    invokeThrows = { toString() { throw new Error('no'); } } as unknown as Error;
+    try {
+      const res = await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST);
+      expect(res).toMatchObject({ uncertain: true, raw: { thrown: 'unprintable' } });
+      invokeThrows = new Error('x'.repeat(500));
+      expect(((await supabaseEdgeEmailProvider.send(PROVIDER_REQUEST)).raw as { thrown: string }).thrown).toHaveLength(200);
+    } finally {
+      invokeThrows = null;
+    }
+  });
+
   it('the body is read from a CLONE: the Response stays readable afterwards', async () => {
     const r = new Response(JSON.stringify({ ok: false, error: 'ses 400', retryable: true }), { status: 500 });
     functionResponse = { error: { message: 'x', context: r } } as never;

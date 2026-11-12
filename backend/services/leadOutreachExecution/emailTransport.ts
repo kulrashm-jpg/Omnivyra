@@ -138,6 +138,15 @@ export async function classifyFunctionError(error: unknown): Promise<'uncertain'
   return definite ? 'definite' : 'uncertain';
 }
 
+/** A bounded, never-throwing description of a thrown value (its own toString may throw). */
+function describeThrown(e: unknown): string {
+  try {
+    return String(e instanceof Error ? e.message : e).slice(0, 200);
+  } catch {
+    return 'unprintable';
+  }
+}
+
 export const supabaseEdgeEmailProvider: EmailProviderPort = {
   name: SES_EDGE_PROVIDER_NAME,
   async send(request: EmailProviderRequest): Promise<EmailProviderResponse> {
@@ -154,34 +163,34 @@ export const supabaseEdgeEmailProvider: EmailProviderPort = {
       idempotencyKey: request.idempotencyKey,
       companyId: request.companyId,
     };
-    // From here the request may be on its way. A THROW out of invoke (whatever the client library does today)
-    // is therefore UNCERTAIN, never a provider error that dispatch re-queues (05 review: correctness must not
-    // rest on a library's internals). Everything above this line is pre-send, and a throw there stays definite.
-    let res: Awaited<ReturnType<typeof supabase.functions.invoke>>;
+    // From here the request may be on its way. EVERY throw below - out of invoke (whatever the client library does
+    // today), or out of reading / classifying its answer - is therefore UNCERTAIN, never a provider error that
+    // dispatch re-queues with a NEW key (05 review: correctness must not rest on a library's internals, nor on "I
+    // cannot see how this throws"). The try covers ALL post-send code, like the function's providerCalled flag.
+    // Everything above this line is pre-send, and a throw there stays definite.
     try {
-      res = await supabase.functions.invoke('send-transactional-email', { body: payload });
+      const res = await supabase.functions.invoke('send-transactional-email', { body: payload });
+      if (res.error) {
+        // An UNCERTAIN answer is not a rejection: the provider may have the message (the function never resends
+        // it, and neither may we). See classifyFunctionError.
+        if ((await classifyFunctionError(res.error)) === 'uncertain') {
+          return { accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain', raw: { reason: 'provider_uncertain' } };
+        }
+        return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
+      }
+      const data = (res.data ?? {}) as { messageId?: string; id?: string; duplicate?: boolean };
+      return {
+        accepted: true,
+        messageId: data.messageId ?? data.id ?? null,
+        duplicate: data.duplicate === true,
+        raw: { messageId: data.messageId ?? data.id ?? null },
+      };
     } catch (e) {
       return {
         accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain',
-        raw: { reason: 'provider_uncertain', thrown: String(e instanceof Error ? e.message : e).slice(0, 200) },
+        raw: { reason: 'provider_uncertain', thrown: describeThrown(e) },
       };
     }
-
-    if (res.error) {
-      // An UNCERTAIN answer is not a rejection: the provider may have the message (the function never resends it,
-      // and neither may we - a re-dispatch mints a NEW key). See classifyFunctionError.
-      if ((await classifyFunctionError(res.error)) === 'uncertain') {
-        return { accepted: false, uncertain: true, messageId: null, rejectionReason: 'provider_uncertain', raw: { reason: 'provider_uncertain' } };
-      }
-      return { accepted: false, messageId: null, rejectionReason: String(res.error.message ?? 'provider rejected'), raw: { error: String(res.error.message ?? '') } };
-    }
-    const data = (res.data ?? {}) as { messageId?: string; id?: string; duplicate?: boolean };
-    return {
-      accepted: true,
-      messageId: data.messageId ?? data.id ?? null,
-      duplicate: data.duplicate === true,
-      raw: { messageId: data.messageId ?? data.id ?? null },
-    };
   },
 };
 

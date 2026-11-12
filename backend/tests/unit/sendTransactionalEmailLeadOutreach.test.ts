@@ -303,11 +303,11 @@ describe('041-A-O — authentication and tenancy are untouched', () => {
     // Re-derived by its AUTHOR (virality-6f). Reviewed by virality-05 (2026-11-12): read the emailTransport/dispatch
     // diff, found that a 409/502 with an unreadable body lost its ambiguity, and PASSED the fix
     // (classifyFunctionError: the status decides, the body may only prove a 5xx definite). 05 then asked that a
-    // throw out of invoke be uncertain too; that change is in this pin, and 05's review of it was PENDING when this
-    // was written. 05 confirmed the one companyId line passes the existing tenant-scoped id to the state transition.
+    // throw AFTER the request be uncertain too (the try covers all post-send code); that change is in this pin,
+    // and 05's review of it was PENDING when this was written. 05 confirmed the one companyId line passes the existing tenant-scoped id to the state transition.
     const sha = (rel: string): string => crypto.createHash('sha256')
       .update(fs.readFileSync(path.join(process.cwd(), rel))).digest('hex').slice(0, 16);
-    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('1a58ded3b6d9a27d');
+    expect(sha('backend/services/leadOutreachExecution/emailTransport.ts')).toBe('ffd111e20c707333');
     expect(sha('backend/services/leadOutreachExecution/dispatch.ts')).toBe('989fd50aa3a32041');
   });
 
