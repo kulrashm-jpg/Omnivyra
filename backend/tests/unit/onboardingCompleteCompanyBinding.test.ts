@@ -200,6 +200,16 @@ describe('decision 1+2: matching and binding', () => {
   });
 });
 
+describe('user lookup: no interpolated .or() filter (05 observation)', () => {
+  it('filter syntax inside the verified email never resolves to ANOTHER user row', async () => {
+    mockDb.users = [{ id: 'u-victim', supabase_uid: 'sb-victim', email: 'v@acme.com', is_deleted: false }];
+    mockEmail = 'a,supabase_uid.eq.sb-victim,email.eq.z@acme.com';
+    await post();
+    expect(mockDb.users.find((u) => u.id === 'u-victim')).toMatchObject({ supabase_uid: 'sb-victim' });
+    expect(mockWrites.filter((w) => w.table === 'users' && w.row.id === 'u-victim')).toEqual([]);
+  });
+});
+
 describe('decision 3: promotion', () => {
   it('an invited member with a second stale row is NEVER promoted (05: multi-row read error)', async () => {
     mockEmail = 'invitee@acme.com';
