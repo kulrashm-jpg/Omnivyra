@@ -5,9 +5,28 @@
  * is logged instead of being mis-marked. Real service on the fake database.
  */
 const mockFetch = { calls: 0 };
+const mockRpc = { fail: false };
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => require('../helpers/fakeWhatsappDb').fakeTable(t),
+  // whatsapp_apply_template_status (migration 20270217000006), as the SQL does it - one
+  // transaction: a failure changes NOTHING; an event older than the last applied is 'stale'; on
+  // APPROVED the other active versions are deprecated and this one activated. Never kinder.
+  ownedDbRpc: async (fn: string, a: Record<string, unknown>) => {
+    if (fn !== 'whatsapp_apply_template_status') return { data: null, error: { message: `no function ${fn}` } };
+    if (mockRpc.fail) return { data: null, error: { message: 'canceling statement due to statement timeout' } };
+    const rows = require('../helpers/fakeWhatsappDb').fakeDb.tables.whatsapp_templates as Array<Record<string, unknown>>;
+    const t = rows.find((r) => r.id === a.p_template_id);
+    if (!t) return { data: 'not_found', error: null };
+    if (t.status_event_at && String(a.p_event_at) < String(t.status_event_at)) return { data: 'stale', error: null };
+    if (a.p_event === 'APPROVED') {
+      for (const r of rows) if (r.id !== t.id && r.company_id === t.company_id && r.template_name === t.template_name && r.is_active) Object.assign(r, { is_active: false, status: 'DEPRECATED' });
+      Object.assign(t, { is_active: true, status: 'APPROVED', status_event_at: a.p_event_at });
+    } else {
+      Object.assign(t, { status: a.p_event, rejection_reason: a.p_reason ?? null, is_active: false, status_event_at: a.p_event_at });
+    }
+    return { data: 'applied', error: null };
+  },
 }));
 jest.mock('../../auth/metaAuthService', () => ({ getValidAccessToken: async () => 'test-token' }));
 
@@ -28,6 +47,7 @@ const input = { company_id: ORG, social_account_id: 'sa1', template_name: 'hello
 
 beforeEach(() => {
   mockFetch.calls = 0;
+  mockRpc.fail = false;
   (global as any).fetch = async () => { mockFetch.calls += 1; return { ok: true, status: 200, json: async () => ({ id: 'meta-new' }) }; };
   jest.spyOn(console, 'error').mockImplementation(() => undefined);
   jest.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -35,10 +55,19 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe('webhook: a PAUSED / DISABLED template must stop being sendable', () => {
-  it.each(['PAUSED', 'DISABLED', 'REJECTED'] as const)('%s whose status write FAILS: the job throws (retries); never silently left sendable', async (event) => {
+  it.each(['PAUSED', 'DISABLED', 'REJECTED'] as const)('%s whose status apply FAILS: the job throws (retries); never silently left sendable', async (event) => {
     seed([tpl({ id: 't1' })]);
-    failNext('whatsapp_templates', 'update');
-    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event })).rejects.toThrow('not recorded');
+    mockRpc.fail = true;
+    await expect(handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event })).rejects.toThrow('not applied');
+    expect(row('t1')).toMatchObject({ is_active: true }); // unchanged: the retry will apply it
+  });
+
+  it('CLASS-2 B9: a LATE older APPROVED after a PAUSED is ignored - the template stays paused', async () => {
+    seed([tpl({ id: 't1' })]);
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'PAUSED', event_at: new Date('2026-11-12T10:10:00Z') });
+    await handleTemplateStatusWebhook({ message_template_id: 'meta-1', message_template_name: 'hello', event: 'APPROVED', event_at: new Date('2026-11-12T10:07:00Z') });
+    expect(row('t1')).toMatchObject({ status: 'PAUSED', is_active: false });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('older status event arrived late'), expect.objectContaining({ template_id: 't1' }));
   });
 
   it('the LOOKUP fails: the job throws (retries) - not "not our template, ignore"', async () => {
@@ -58,22 +87,31 @@ describe('webhook: a PAUSED / DISABLED template must stop being sendable', () =>
 });
 
 describe('activation never leaves zero or two active versions silently', () => {
-  it('deprecating the old version FAILS: throws, and the new version is NOT activated beside the old', async () => {
+  // CLASS-2 B8: activation is ONE database function (one transaction) - a failure leaves NOTHING half
+  // done, which the two separate writes it replaced could not promise.
+  it('the activation FAILS: throws (the webhook retries), and nothing changed - the old version stays the active one', async () => {
     seed([tpl({ id: 'old', version: 1 }), tpl({ id: 'new', version: 2, status: 'PENDING', is_active: false, meta_template_id: 'meta-2' })]);
-    failNext('whatsapp_templates', 'update');
-    await expect(activateTemplate('new')).rejects.toThrow('not deprecated');
+    mockRpc.fail = true;
+    await expect(activateTemplate('new')).rejects.toThrow('not applied');
     expect(row('new')).toMatchObject({ is_active: false });
     expect(row('old')).toMatchObject({ is_active: true });
   });
 
-  it('activating the new version FAILS: throws (the webhook retries) rather than reporting done', async () => {
+  it('NEGATIVE CONTROL: activation succeeds -> exactly one active version, the new one', async () => {
     seed([tpl({ id: 'old', version: 1 }), tpl({ id: 'new', version: 2, status: 'PENDING', is_active: false, meta_template_id: 'meta-2' })]);
-    failNext('whatsapp_templates', 'update', 1);
-    await expect(activateTemplate('new')).rejects.toThrow('not activated');
+    await activateTemplate('new');
+    expect(fakeDb.tables.whatsapp_templates.filter((r) => r.is_active).map((r) => r.id)).toEqual(['new']);
   });
 });
 
 describe('submit', () => {
+  it('CLASS-2 B7: a concurrent submit of the same version is refused by the unique index BEFORE Meta is called', async () => {
+    seed([tpl({ id: 't1', version: 1 })]);
+    failNext('whatsapp_templates', 'insert', 0, '23505');
+    await expect(submitTemplate(input)).rejects.toThrow('already in progress');
+    expect(mockFetch.calls).toBe(0);
+  });
+
   it('a failed VERSION read is not "first version": refused, nothing inserted, Meta not called', async () => {
     seed([tpl({ id: 't1', version: 3 })]);
     failNext('whatsapp_templates', 'select');

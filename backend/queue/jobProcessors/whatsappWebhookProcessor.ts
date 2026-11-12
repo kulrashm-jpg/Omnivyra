@@ -24,6 +24,9 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
   if (!payload) throw new Error('[wa-webhook-processor] missing payload');
 
   const entries: any[] = payload?.entry ?? [];
+  // A template status event that failed to apply is RETRIED (the job throws after the loop), never
+  // dropped: a lost PAUSED / DISABLED left the template sendable (CLASS-2 B9).
+  let templateFailure: unknown = null;
 
   for (const entry of entries) {
     for (const change of entry?.changes ?? []) {
@@ -59,18 +62,23 @@ export async function processWhatsAppWebhookJob(job: Job<WaWebhookJob>): Promise
       // ── Template status events ──────────────────────────────────────────
       if (change?.field === 'message_template_status_update') {
         try {
+          const entryTime = Number(entry?.time);
           await handleTemplateStatusWebhook({
             message_template_id:   value.message_template_id ?? '',
             message_template_name: value.message_template_name ?? '',
             event:                 value.event,
             reason:                value.reason,
+            // Meta's entry `time` (unix seconds): status events apply in this order.
+            event_at:              Number.isFinite(entryTime) && entryTime > 0 ? new Date(entryTime * 1000) : null,
           });
         } catch (err) {
           console.error('[wa-webhook-processor] template status failed', err);
+          templateFailure = err;
         }
       }
     }
   }
+  if (templateFailure) throw templateFailure;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

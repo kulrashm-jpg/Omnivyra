@@ -15,7 +15,7 @@ export const fakeDb = {
   calls: [] as string[],
   rpcs: [] as Array<{ fn: string; args: Row }>,
   /** `table:op` keys that return an error: after how many more calls, and how many times. */
-  failures: new Map<string, { skip: number; times: number }>(),
+  failures: new Map<string, { skip: number; times: number; code?: string }>(),
   nextId: 1,
 };
 
@@ -28,8 +28,9 @@ export function resetFakeDb(tables: Record<string, Row[]> = {}): void {
 }
 
 /** The next call of `op` on `table`, after `skip` that succeed, returns a database error. */
-export function failNext(table: string, op: 'select' | 'update' | 'upsert' | 'insert', skip = 0): void {
-  fakeDb.failures.set(`${table}:${op}`, { skip, times: 1 });
+/** The next call of `op` on `table`, after `skip` that succeed, returns a database error (`code`: '08006' by default, e.g. '23505' for a unique violation). */
+export function failNext(table: string, op: 'select' | 'update' | 'upsert' | 'insert', skip = 0, code = '08006'): void {
+  fakeDb.failures.set(`${table}:${op}`, { skip, times: 1, code });
 }
 
 type Op = 'select' | 'update' | 'upsert' | 'insert';
@@ -61,7 +62,7 @@ export function fakeTable(table: string): Row {
       failure.skip -= 1;
     } else if (failure && failure.times > 0) {
       failure.times -= 1;
-      return { data: null, count: null, error: { code: '08006', message: `fake failure on ${key}` } };
+      return { data: null, count: null, error: { code: failure.code ?? '08006', message: `fake failure on ${key}` } };
     }
 
     let out: Row[];

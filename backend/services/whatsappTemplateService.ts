@@ -1,4 +1,4 @@
-import { ownedDbTable } from '../db/writeOwner';
+import { ownedDbRpc, ownedDbTable } from '../db/writeOwner';
 /**
  * WhatsApp Template Service
  *
@@ -92,6 +92,11 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
     .select('id')
     .single();
 
+  // CLASS-2 B7: whatsapp_templates_version_unique (migration 20270217000007) refuses a second row for
+  // the same version - a double-clicked submit - BEFORE its Meta call, so Meta is asked once.
+  if ((error as { code?: string } | null)?.code === '23505') {
+    throw new Error(`A submission of template "${input.template_name}" v${newVersion} is already in progress; it was not submitted again.`);
+  }
   if (error || !inserted) throw new Error(`Failed to insert template: ${error?.message}`);
 
   // 3. Submit to Meta
@@ -159,30 +164,41 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
 
 // ── Activate approved template (called by webhook handler) ───────────────────
 
-export async function activateTemplate(templateId: string): Promise<void> {
-  const { data: t, error } = await ownedDbTable('whatsapp_templates')
-    .select('company_id, template_name')
-    .eq('id', templateId)
-    .single();
+/**
+ * Apply one Meta template status event (CLASS-2 B8 + B9) through ONE database function
+ * (whatsapp_apply_template_status, migration 20270217000006): it locks the template's name group,
+ * IGNORES an event older than the last one applied (Meta does not order or deduplicate its webhooks:
+ * a late APPROVED used to re-activate a template Meta had since PAUSED / DISABLED), and on APPROVED
+ * deprecates the other active versions and activates this one in the same transaction - a partial
+ * unique index keeps it to ONE active version (two interleaved activations used to leave two, and
+ * every template broadcast then failed). Throws on any error, so the webhook job retries.
+ */
+async function applyTemplateStatus(
+  templateId: string,
+  event: 'APPROVED' | 'REJECTED' | 'PAUSED' | 'DISABLED',
+  eventAt: Date,
+  reason: string | null,
+): Promise<'applied' | 'stale' | 'not_found'> {
+  const { data, error } = await ownedDbRpc('whatsapp_apply_template_status', {
+    p_template_id: templateId,
+    p_event:       event,
+    p_event_at:    eventAt.toISOString(),
+    p_reason:      reason,
+  }) as unknown as { data: unknown; error: { message?: string } | null };
+  if (error) throw new Error(`Template ${event} not applied: ${error.message ?? 'unknown error'}`);
+  const outcome = (Array.isArray(data) ? data[0] : data) as unknown;
+  if (outcome !== 'applied' && outcome !== 'stale' && outcome !== 'not_found') {
+    throw new Error(`Template ${event}: unexpected answer ${JSON.stringify(outcome)}`);
+  }
+  if (outcome === 'stale') {
+    console.warn('[whatsappTemplate] an older status event arrived late; ignored (the later decision stands)', { template_id: templateId, event, event_at: eventAt.toISOString() });
+  }
+  return outcome;
+}
 
-  if (error || !t) throw new Error(`Template not found: ${templateId}`);
-
-  // Deprecate any currently active version for same name+company. A silent failure left TWO
-  // active versions (every send then fails to find "the" active one); it now throws, so the
-  // webhook job retries and the new version is not activated beside the old.
-  const { error: deprecateError } = await ownedDbTable('whatsapp_templates')
-    .update({ is_active: false, status: 'DEPRECATED', deprecated_at: new Date().toISOString() })
-    .eq('company_id', t.company_id)
-    .eq('template_name', t.template_name)
-    .eq('is_active', true)
-    .neq('id', templateId);
-  if (deprecateError) throw new Error(`Previous template version not deprecated: ${deprecateError.message}`);
-
-  // Activate new version. A silent failure left NO active version while the webhook reported done.
-  const { error: activateError } = await ownedDbTable('whatsapp_templates')
-    .update({ is_active: true, status: 'APPROVED', approved_at: new Date().toISOString() })
-    .eq('id', templateId);
-  if (activateError) throw new Error(`Template not activated: ${activateError.message}`);
+export async function activateTemplate(templateId: string, eventAt: Date = new Date()): Promise<void> {
+  const outcome = await applyTemplateStatus(templateId, 'APPROVED', eventAt, null);
+  if (outcome === 'not_found') throw new Error(`Template not found: ${templateId}`);
 }
 
 // ── Get active template for sending ──────────────────────────────────────────
@@ -230,6 +246,8 @@ export async function handleTemplateStatusWebhook(event: {
   message_template_name: string;
   event: 'APPROVED' | 'REJECTED' | 'PAUSED' | 'DISABLED';
   reason?: string;
+  /** When Meta says the event happened (the webhook entry's `time`); events apply in THIS order. */
+  event_at?: Date | null;
 }): Promise<void> {
   const { data, error: lookupError } = await ownedDbTable('whatsapp_templates')
     .select('id')
@@ -245,18 +263,10 @@ export async function handleTemplateStatusWebhook(event: {
 
   if (!data) return; // Template not in our system — ignore
 
-  if (event.event === 'APPROVED') {
-    await activateTemplate(data.id);
-  } else {
-    // A silent failure here left a template Meta has PAUSED / DISABLED / REJECTED still active
-    // and APPROVED for sending. Thrown, so the webhook job retries.
-    const { error: statusError } = await ownedDbTable('whatsapp_templates')
-      .update({
-        status:           event.event,
-        rejection_reason: event.reason ?? null,
-        is_active:        false,
-      })
-      .eq('id', data.id);
-    if (statusError) throw new Error(`Template ${event.event} not recorded: ${statusError.message}`);
+  const eventAt = event.event_at instanceof Date && !Number.isNaN(event.event_at.getTime()) ? event.event_at : null;
+  if (!eventAt) {
+    console.warn('[whatsappTemplate] status event without a time; applied at receipt time (its order cannot be checked)', { meta_template_id: event.message_template_id, event: event.event });
   }
+  // A PAUSED / DISABLED / REJECTED that failed to apply left the template sendable: thrown (retried).
+  await applyTemplateStatus(data.id, event.event, eventAt ?? new Date(), event.reason ?? null);
 }
