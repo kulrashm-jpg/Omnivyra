@@ -43,10 +43,20 @@
 -- status 'deleted' (or no longer exists). It applies to BOTH halves - the removed
 -- admin is exempt when gone, and a REMAINING admin counts only when NOT gone - so
 -- an active row whose user is deleted can never keep a company "administered".
--- RESIDUAL (stated, not closed here): deleting / soft-deleting the last admin's
--- USER row writes nothing to user_company_roles, so this trigger does not fire.
--- User deletion is a Super-Admin-governed path (step-up, IDENTITY_ADMIN_DELETE);
--- a companion trigger on users is a separate decision.
+-- USER DELETION IS SEEN (05, corrected): the only app path that makes a user
+-- "gone" is super-admin user deletion (apiHandlers/superAdmin/usersMutations.ts),
+-- and its Step D deactivates the user's memberships - a write to this table.
+-- ORDERING DEPENDENCY (load-bearing, pinned by a test): its Step C (soft-delete
+-- the users row) MUST precede Step D. They are separate transactions, so Step D's
+-- commit-time check sees is_deleted already committed and EXEMPTS - which is what
+-- lets a sole-admin user be deleted at all. Reorder them and Step D raises
+-- LAST_COMPANY_ADMIN AFTER Step B has irreversibly deleted the auth account (a
+-- half-deleted user, not a clean refusal).
+-- RESIDUAL (owned by reconciliation, NOT this trigger): if Step B (auth delete)
+-- succeeds and Step C fails, users.is_deleted stays FALSE - the user looks live
+-- here while unable to sign in (the signal lives in Supabase Auth, which a trigger
+-- cannot see). The handler records SUPER_ADMIN_USER_DELETE_PARTIAL for exactly
+-- this sweep; a stricter predicate would not help.
 -- BYPASS SURFACE: only ALTER TABLE ... DISABLE TRIGGER (table owner) or
 -- session_replication_role = replica (superuser) skip it; neither is available
 -- to service_role through the API (to be confirmed from the catalog by 83).

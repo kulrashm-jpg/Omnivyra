@@ -552,6 +552,11 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
       }
 
       // Step D: deactivate all company roles so the user loses access to every company
+      // LOAD-BEARING ORDER (last-admin guard 20270217000012, 05): Step C MUST commit
+      // before this step - the guard exempts a removed admin whose user is already
+      // deleted, which is what lets a SOLE admin be deleted. Reversing C and D would
+      // raise LAST_COMPANY_ADMIN here AFTER Step B removed the auth account. Pinned by
+      // lastAdminGuardUserDeletionOrder.test.ts.
       const { error: rolesError } = await supabase
         .from('user_company_roles')
         .update({ status: 'inactive', deactivated_at: now, updated_at: now })
