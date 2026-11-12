@@ -64,8 +64,9 @@ function mockTable(table: string) {
 let mockEmail = 'mallory@acme.io';
 const mockGrants: unknown[] = [];
 const mockNotified: Array<Record<string, unknown>> = [];
+let mockAdminNotice: 'sent' | 'no_admin' | 'failed' = 'sent';
 jest.mock('../../services/claimedDomainNotifyService', () => ({
-  notifyAdminAndProspectOfClaimedDomain: async (_db: unknown, input: Record<string, unknown>) => { mockNotified.push(input); },
+  notifyAdminAndProspectOfClaimedDomain: async (_db: unknown, input: Record<string, unknown>) => { mockNotified.push(input); return { adminNotice: mockAdminNotice }; },
 }));
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => mockTable(t) } }));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
@@ -100,7 +101,7 @@ const bindingWrites = () => mockWrites.filter((w) => w.table !== 'users' || w.ro
 const rolesIn = (companyId: string) => mockDb.user_company_roles.filter((r) => r.company_id === companyId);
 beforeEach(() => {
   for (const k of Object.keys(mockDb)) delete mockDb[k];
-  mockWrites.length = 0; mockGrants.length = 0; mockNotified.length = 0; mockSeq = 0;
+  mockWrites.length = 0; mockGrants.length = 0; mockNotified.length = 0; mockAdminNotice = 'sent'; mockSeq = 0;
   mockDb.users = [{ id: USER, supabase_uid: 'sb-user', email: 'x', is_deleted: false }];
   // acme.com's company: created by an admin flow, so it has NO initial free-credit claim
   mockDb.companies = [{ id: VICTIM, name: 'Acme', admin_email_domain: 'acme.com' }];
@@ -118,6 +119,17 @@ describe('decision 1+2: matching and binding', () => {
     expect(bindingWrites()).toEqual([]);
     expect(mockGrants).toEqual([]);
     expect(mockNotified).toEqual([expect.objectContaining({ companyId: VICTIM, companyName: 'Acme', prospectEmail: 'newbie@acme.com', emailDomain: 'acme.com', prospectUserId: USER })]);
+  });
+
+  it('same domain, admin notice NOT sent: never claims a join request was made', async () => {
+    for (const notice of ['failed', 'no_admin'] as const) {
+      mockAdminNotice = notice;
+      mockEmail = 'newbie@acme.com';
+      const r = await post();
+      expect([notice, r.statusCode, r.body.joinRequested]).toEqual([notice, 403, false]);
+      expect(r.body.error).not.toMatch(/asked your admin/);
+    }
+    expect(bindingWrites()).toEqual([]);
   });
 
   it('same domain, INACTIVE former member: refused the same way', async () => {

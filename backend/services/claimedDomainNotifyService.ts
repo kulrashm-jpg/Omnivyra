@@ -43,16 +43,27 @@ export interface ClaimedDomainNotifyInput {
 }
 
 /**
+ * What happened to the ADMIN notice - so a caller never tells the prospect "we've asked your admin"
+ * when nobody was asked (05 review, 2026-11-12):
+ *   'sent'     - the notice was handed to the email function (idempotent per company + prospect);
+ *   'no_admin' - the company has no active COMPANY_ADMIN with an email (a recovery case);
+ *   'failed'   - the send (or a lookup) failed.
+ */
+export type ClaimedDomainAdminNotice = 'sent' | 'no_admin' | 'failed';
+export interface ClaimedDomainNotifyOutcome { adminNotice: ClaimedDomainAdminNotice }
+
+/**
  * Best-effort. Never throws — failures are logged so the caller's response is
- * never broken by a transient email/DB issue.
+ * never broken by a transient email/DB issue. Returns what happened to the admin notice.
  */
 export async function notifyAdminAndProspectOfClaimedDomain(
   db: SupabaseClient,
   input: ClaimedDomainNotifyInput,
-): Promise<void> {
+): Promise<ClaimedDomainNotifyOutcome> {
+  let adminNotice: ClaimedDomainAdminNotice = 'failed';
   try {
     // Find an active COMPANY_ADMIN of the claimed company.
-    const { data: adminRoleRow } = await db
+    const { data: adminRoleRow, error: adminRoleErr } = await db
       .from('user_company_roles')
       .select('user_id, created_at')
       .eq('company_id', input.companyId)
@@ -63,11 +74,13 @@ export async function notifyAdminAndProspectOfClaimedDomain(
       .maybeSingle();
 
     const adminUserId = (adminRoleRow as { user_id?: string } | null)?.user_id ?? null;
-    const { data: adminUser } = adminUserId
+    const { data: adminUser, error: adminUserErr } = adminUserId
       ? await db.from('users').select('name, email').eq('id', adminUserId).maybeSingle()
-      : { data: null };
+      : { data: null, error: null };
     const adminEmail = (adminUser as { email?: string } | null)?.email ?? null;
     const adminName = (adminUser as { name?: string | null } | null)?.name ?? null;
+    // A failed admin lookup is 'failed', never 'no_admin' (a null error is not an answer).
+    if (!adminRoleErr && !adminUserErr && !adminEmail) adminNotice = 'no_admin';
 
     // Dedupe via signup_referrals — one row per (prospect email). Tracks
     // separately whether each of the two emails has already gone out.
@@ -153,9 +166,10 @@ export async function notifyAdminAndProspectOfClaimedDomain(
           },
           `inbound-signup-notice:${input.companyId}:${input.prospectEmail}`,
         );
+        adminNotice = 'sent';
       } catch (err) {
         logger.warn('claimed_domain_admin_notice_send_failed', {
-          adminEmail,
+          adminUserId,
           prospectEmail: input.prospectEmail,
           message: err instanceof Error ? err.message : String(err),
         });
@@ -168,5 +182,7 @@ export async function notifyAdminAndProspectOfClaimedDomain(
       email:   input.prospectEmail,
       message: err instanceof Error ? err.message : String(err),
     });
+    adminNotice = 'failed';
   }
+  return { adminNotice };
 }
