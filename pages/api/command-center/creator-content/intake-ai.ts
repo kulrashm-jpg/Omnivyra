@@ -21,7 +21,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const body = (req.body || {}) as Record<string, unknown>;
   const companyId = String((body.company_id ?? user.defaultCompanyId) || '').trim();
-  if (companyId) { const access = await enforceCompanyAccess({ req, res, companyId }); if (!access) return; }
+  // SECURITY (2026-11-13, 05 review): the access check used to run only `if (companyId)`, so a user with no
+  // default company who sent none reached an unattributed, company-less AI call. A company is now required and
+  // ALWAYS access-checked.
+  if (!companyId) return res.status(400).json({ error: 'company_id required' });
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
 
   const brief = (body.brief && typeof body.brief === 'object' ? body.brief : {}) as Record<string, unknown>;
   const description = typeof brief.description === 'string' ? brief.description.trim() : '';
