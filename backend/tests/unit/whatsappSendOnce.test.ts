@@ -472,6 +472,21 @@ describe('CLASS-2: a Retry is a FRESH send, and nothing of the old message lands
     expect(rec()).toMatchObject({ status: 'sent', wa_message_id: 'wamid.cur' });
   });
 
+  // The clock margin's VALUE, bracketed (05): Meta stamps whole seconds, so the current send's
+  // event can carry a time up to a second BEFORE its claim and must still attach; one well before
+  // the claim (an earlier message) must not.
+  it.each([
+    ['1 s before the claim (whole-second stamp): attached', -1_000, 'sent'],
+    ['6 s before the claim (an earlier message): not attached', -6_000, 'send_uncertain'],
+  ] as const)('a marker event stamped %s', async (_l, offsetMs, status) => {
+    seed();
+    provider = async () => { throw new Error('socket hang up'); };
+    await processBatch('b1', [R1]);
+    const claimedAt = Date.parse(String(rec().send_started_at));
+    await updateRecipientDelivery({ wa_message_id: 'wamid.cur', status: 'sent', callback_data: R1, recipient_wa_id: PHONE1_WA, event_at: new Date(claimedAt + offsetMs) });
+    expect(rec().status).toBe(status);
+  });
+
   it('a marker event with no time cannot be placed: nothing is attached (the sweep decides later)', async () => {
     seed();
     provider = async () => { throw new Error('socket hang up'); };

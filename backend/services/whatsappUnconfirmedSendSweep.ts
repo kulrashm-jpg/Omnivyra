@@ -23,8 +23,10 @@
  * collapses on (recipient, outcome). Meta's Cloud API offers no message-status read, so
  * webhook events are the only authoritative evidence; no other check exists to call.
  *
- * NOT scheduled anywhere. Nothing calls sweepUnconfirmedWhatsAppSends in production; a
- * scheduler or worker needs a separate owner decision. Counters are not touched here
+ * SCHEDULED: backend/scheduler/cron.ts runs it through backend/jobs/whatsappUnconfirmedSendSweepJob.ts,
+ * and 'whatsappUnconfirmedSendSweep' is in ALWAYS_RUN_JOBS (intentExecutionService), so it runs
+ * whatever the activity gate says. The CLASS-2 retry fix relies on that: a send whose events are
+ * refused as too old ends here as uncertain, for an operator. Counters are not touched here
  * (Follow-up B).
  */
 

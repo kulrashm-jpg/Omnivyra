@@ -53,6 +53,16 @@ export const WHATSAPP_SEND_TIMEOUT_MS = 20_000;
  * for an operator; it is never resent.
  */
 export const WHATSAPP_EVENT_CLOCK_SKEW_MS = 5_000;
+// THE MARGIN CUTS BOTH WAYS (05): it is needed for the current event (stamped up to a second
+// before send_started_at), and it ADMITS an old message's event stamped within 5 s before the
+// retry's claim. That case marks the row `sent` with the PREVIOUS message id, and the new
+// message's own events can then no longer attach - a wrong id, not a duplicate send. It needs a
+// late event of the old message stamped within 5 s of the new claim; the old message's events all
+// precede its failure, which an operator must see and Retry first. Accepted cost; the sweep and
+// the provider event ledger keep both ids on record.
+// DEPLOY GATE: send_started_at comes from migration 20270128000007. Every claim and outcome
+// write filters on it, so this code must never deploy where that migration is not applied -
+// the claim would fail on an unknown column and nothing would send.
 
 /** Meta's status `timestamp` (unix seconds) as a Date; null when absent or malformed. */
 export function metaEventTime(timestamp: unknown): Date | null {
@@ -1575,6 +1585,11 @@ async function retryRun(broadcastId: string): Promise<RetryResult> {
   // of the old message cannot re-attach: the marker reconcile and the sweep both ignore evidence
   // older than the new claim.
   const freshSend = { status: 'pending', next_retry_at: null, wa_message_id: null, sent_at: null, send_started_at: null, error_code: null, error_message: null };
+  // The pins below (the id read, IS NULL, retry_count + 1 from the value read) rest on ONE
+  // invariant (05): no writer touches a `failed` row's wa_message_id or retry_count - every one of
+  // them (the sent write, the marker reconcile, resolveClaimedSend) filters on sending /
+  // send_uncertain - and the live-batch check above serialises retryRun against itself. A change
+  // that lets a webhook land on a `failed` row breaks all three pins at once.
   type FailedRow = { id: string; wa_message_id: string | null; retry_count: number | null };
   const rows = failed as FailedRow[];
   const retryIds: string[] = [];
