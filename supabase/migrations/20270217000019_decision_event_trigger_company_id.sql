@@ -70,6 +70,16 @@ BEGIN
       (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = 'public.omnivyra_log_decision_event()'::regprocedure);
   END IF;
 
+  -- service_role's EXECUTE as FOUND, recorded for $verify$ (transaction-local; this file is one
+  -- transaction). Prod has an explicit grant; a baseline replay (CI) has none once 20270111000003 has
+  -- revoked PUBLIC. CREATE OR REPLACE keeps grants, so the postcondition is "unchanged", not "present"
+  -- (CI-86: asserting "present" refused every CI replay).
+  PERFORM set_config('dec_evt.service_role_exec_before',
+    CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')
+         THEN has_function_privilege('service_role', 'public.omnivyra_log_decision_event()'::regprocedure, 'EXECUTE')::text
+         ELSE 'no_role' END,
+    true);
+
   -- The trigger this function serves: AFTER INSERT OR UPDATE, FOR EACH ROW, enabled.
   IF NOT EXISTS (
     SELECT 1 FROM pg_trigger t
@@ -151,10 +161,17 @@ BEGIN
       RAISE EXCEPTION 'DEC-EVT postcondition: % has EXECUTE', v_role;
     END IF;
   END LOOP;
-  -- CREATE OR REPLACE keeps the existing grants; prod's service_role grant must survive.
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')
-     AND NOT has_function_privilege('service_role', r.oid, 'EXECUTE') THEN
-    RAISE EXCEPTION 'DEC-EVT postcondition: service_role lost EXECUTE';
+  -- CREATE OR REPLACE keeps the existing grants: service_role's EXECUTE must be exactly as the
+  -- preflight found it (prod: held; a baseline replay: not held), never lost and never gained.
+  IF current_setting('dec_evt.service_role_exec_before', true) IS NULL
+     OR current_setting('dec_evt.service_role_exec_before', true) = '' THEN
+    RAISE EXCEPTION 'DEC-EVT postcondition: the preflight did not record service_role EXECUTE (not one transaction?)';
+  END IF;
+  IF current_setting('dec_evt.service_role_exec_before', true) <> 'no_role'
+     AND has_function_privilege('service_role', r.oid, 'EXECUTE')::text
+         IS DISTINCT FROM current_setting('dec_evt.service_role_exec_before', true) THEN
+    RAISE EXCEPTION 'DEC-EVT postcondition: service_role EXECUTE changed (before %, after %)',
+      current_setting('dec_evt.service_role_exec_before', true), has_function_privilege('service_role', r.oid, 'EXECUTE');
   END IF;
   -- The body is exactly this migration's (the md5 the preflight accepts for a re-run).
   IF md5(r.prosrc) <> '91053ed21f92b1fab46db0cdc09d7ecb' THEN
