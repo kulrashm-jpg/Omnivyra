@@ -673,6 +673,11 @@ export const TENANT_CHILD_TABLES = {
 } as const satisfies Record<string, { via: string; parent: TenantTableName | string; parentKey?: string; tag: TenantTag }>;
 export type TenantChildTableName = keyof typeof TENANT_CHILD_TABLES;
 /** GLOBAL tables (no tenant): platform-wide rows; the reason is the review record. */
+export const NOT_TENANT_TABLES: Record<string, string> = {
+  user_company_roles: "membership: keyed by user across companies BY DESIGN (auth resolves which companies a user may act in)",
+  users: "identity: a user spans companies; users.company_id is legacy (C21: 105 NULL); access is the membership layer's",
+};
+/** GLOBAL: no tenant at all (platform-wide content or system state). */
 export const GLOBAL_TABLES: Record<string, string> = {
   blog_comments: "comments on the public platform blog",
   blog_performance_summary: "public platform blog metrics",
