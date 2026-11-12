@@ -198,6 +198,10 @@ async function loadLedger(organizationId: string): Promise<LedgerRow[] | null> {
       .from('credit_transactions')
       .select('execution_phase, free_delta, paid_delta, incentive_delta, idempotency_key')
       .eq('organization_id', organizationId)
+      // Deterministic paging (e1 2026-11-12, BLOCKING money): without an ORDER BY on a unique key Postgres may return
+      // rows in a different order per page, so OFFSET paging can SKIP or DUPLICATE ledger rows and the "absolute"
+      // rebuild sums wrong. id is the primary key.
+      .order('id', { ascending: true })
       .range(from, from + LEDGER_PAGE - 1);
     if (error) {
       diag('ledger_read_failed', { organizationId, message: error.message });
@@ -230,11 +234,18 @@ async function reconcileImpl(organizationId: string): Promise<ReconcileResult> {
   // to the caller. Re-read the row immediately before writing — if a healthy
   // row exists, the projection was never broken: skip the write entirely so
   // a live wallet is never clobbered by a rebuild.
-  const { data: existingRow } = await supabase
+  // A READ ERROR here is "unknown", never "absent" (e1 2026-11-12, BLOCKING money): the former code ignored the
+  // error, so a transient failure looked like a missing wallet and the guard let the rebuild overwrite a live one -
+  // the 2026-07-09 incident class inside the incident's own guard. Abort; write nothing.
+  const { data: existingRow, error: existingErr } = await supabase
     .from('organization_credits')
     .select('free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed')
     .eq('organization_id', organizationId)
     .maybeSingle();
+  if (existingErr) {
+    diag('reconcile_aborted_wallet_read_failed', { organizationId, message: existingErr.message });
+    return { outcome: 'failed', organizationId };
+  }
   if (existingRow && !projectionIsBroken(existingRow as Record<string, unknown>)) {
     diag('reconcile_skipped_row_healthy', { organizationId });
     return { outcome: 'skipped_healthy', organizationId };
