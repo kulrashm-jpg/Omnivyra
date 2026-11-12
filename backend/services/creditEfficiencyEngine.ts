@@ -105,7 +105,19 @@ function determineTier(avgCPO: number, totalOutcomes: number): { tier: string; d
   return { tier: 'standard', discount: TIER_DISCOUNTS.standard };
 }
 
-export async function optimizeCreditEfficiency(companyId: string): Promise<EfficiencyReport> {
+/**
+ * PRICING (e9, 2026-11-12):
+ *  - the tier is computed ONLY from campaigns with a real outcome (outcome_score
+ *    > 0); empty campaigns (cpo = credits_used, a small number) used to earn
+ *    ELITE (a 40% discount) after 3 of them. The 3-campaign floor applies to
+ *    SCORED campaigns.
+ *  - the price-bearing write (credit_efficiency_scores tier / discount) happens
+ *    ONLY when `persistTier` is true - the server-side cron. A member-triggered
+ *    run (POST /api/companies/:id/efficiency) computes a preview and writes
+ *    nothing price-bearing.
+ */
+export async function optimizeCreditEfficiency(companyId: string, opts?: { persistTier?: boolean }): Promise<EfficiencyReport> {
+  const persistTier = opts?.persistTier === true;
   const computedAt = new Date().toISOString();
   const actionsTaken: string[] = [];
   let creditsSavedEstimate = 0;
@@ -116,10 +128,10 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
   ]);
 
   const outcomeStats = await getCompanyOutcomeStats(companyId);
-  const { avg_credits_per_outcome: avgCPO, total_outcomes: totalOutcomes } = outcomeStats;
+  const { avg_scored_credits_per_outcome: avgCPO, scored_outcomes: totalOutcomes } = outcomeStats;
 
   const { tier, discount } = determineTier(avgCPO, totalOutcomes);
-  await upsertEfficiencyTier(companyId, tier, discount, avgCPO, totalOutcomes, 0);
+  if (persistTier) await upsertEfficiencyTier(companyId, tier, discount, avgCPO, totalOutcomes, 0);
 
   if (tier !== 'standard') {
     const savedPct = Math.round((1 - discount) * 100);
@@ -161,10 +173,12 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
   // (2026-11-12) This was `void <builder>` - a supabase query builder is LAZY
   // and only executes when awaited / then-ed, so credits_saved_total was NEVER
   // written. Awaited now; best-effort (the report is returned either way), logged.
-  const { error: savedErr } = await ownedDbTable('credit_efficiency_scores')
-    .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
-    .eq('organization_id', companyId);
-  if (savedErr) console.error('[creditEfficiency] credits-saved persist failed:', companyId, savedErr.message);
+  if (persistTier) {
+    const { error: savedErr } = await ownedDbTable('credit_efficiency_scores')
+      .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
+      .eq('organization_id', companyId);
+    if (savedErr) console.error('[creditEfficiency] credits-saved persist failed:', companyId, savedErr.message);
+  }
 
   return {
     company_id: companyId,

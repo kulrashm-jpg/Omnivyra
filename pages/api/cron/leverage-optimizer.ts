@@ -217,7 +217,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           },
         },
         async () => Promise.all([
-          optimizeCreditEfficiency(companyId),
+          optimizeCreditEfficiency(companyId, { persistTier: true }), // server-side: the only tier write
           checkCreditAlerts(companyId),
         ]),
       );

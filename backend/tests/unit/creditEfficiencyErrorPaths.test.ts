@@ -21,7 +21,7 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/creditDeductionService', () => ({ getCreditCost: async () => 1 }));
-jest.mock('../../services/outcomeTrackingService', () => ({ getCompanyOutcomeStats: async () => ({ avgCreditsPerOutcome: 5, totalOutcomes: 10 }) }));
+jest.mock('../../services/outcomeTrackingService', () => ({ getCompanyOutcomeStats: async () => ({ avg_scored_credits_per_outcome: 5, scored_outcomes: 10 }) }));
 jest.mock('../../services/patternAmplificationService', () => ({ amplifyWinningPatterns: async () => ({ amplified: [], context: '' }) }));
 import { getEfficiencyDiscount, getEfficiencyTier, optimizeCreditEfficiency } from '../../services/creditEfficiencyEngine';
 
@@ -48,7 +48,7 @@ it('score persist (upsert) error -> report still returned, the failure is logged
   try {
     mockScript['credit_efficiency_scores:upsert'] = DOWN;
     mockScript.content_type_efficiency = () => ({ data: [], error: null });
-    const r = await optimizeCreditEfficiency('c1');
+    const r = await optimizeCreditEfficiency('c1', { persistTier: true });
     expect(r.company_id).toBe('c1');
     expect(spy.mock.calls.some((c) => String(c[0]).includes('score persist failed'))).toBe(true);
   } finally { spy.mockRestore(); }
@@ -59,6 +59,6 @@ it('score persist (upsert) error -> report still returned, the failure is logged
 it('credits-saved update is actually EXECUTED (it was a never-run lazy builder)', async () => {
   mockUpdates.length = 0;
   mockScript.content_type_efficiency = () => ({ data: [], error: null });
-  await optimizeCreditEfficiency('c1');
+  await optimizeCreditEfficiency('c1', { persistTier: true });
   expect(mockUpdates).toContain('credit_efficiency_scores');
 });
