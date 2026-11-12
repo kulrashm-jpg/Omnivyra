@@ -258,7 +258,7 @@ function scan() {
         const use = rest.slice(1).search(/\b(?:tenantContextFor|tenantTable|tenantChildTable|tenantChildTableOf|ownedDbTable|supabase\s*\.\s*from)\s*\(/);
         if (access < 0) r10(`no access check takes ${v} in the same block (an access call must be named require*/enforce*/assert* and receive ${v})`);
         // 05 FP-1: the STRICT rule, stated as such - no seam or DB access of ANY table between deriving and authorizing.
-        else if (use >= 0 && use + 1 < access) r10(`a seam/DB call runs between deriving ${v} and its access check (nothing may be read or written before the owner is authorized)`);
+        else if (use >= 0 && use + 1 < access) r10(`a seam/DB call runs between deriving ${v} and its access check (nothing may be read or written before the owner is authorized; stricter than route-auth R6, which allows reads, because here the context itself is unproven)`);
       }
     }
     for (const m of code.matchAll(/tenantContextFor\s*\(([^;]*?)\)/g)) {

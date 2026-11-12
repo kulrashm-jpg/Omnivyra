@@ -188,6 +188,18 @@ describe('tenant-seam factories (S1): only the verbs a route CALLS are effects (
   return res.status(204).end();`, imports);
     expect(rules(src)).toContain('R6-ORDER');
   });
+  it('a write through a BOUND seam handle before tenant authorization is still R6-ORDER (05: no handle-variable blind spot)', () => {
+    const src = route(`const { user } = await getSupabaseUserFromRequest(req);
+  if (!user) return res.status(401).end();
+  const ctx = tenantContextFor({ userId: user.id }, req.body.companyId);
+  const h = await tenantChildTable('daily_content_plans', ctx, req.body.campaignId);
+  const { data } = await h.select('id');
+  await h.delete().eq('id', req.body.id);
+  const access = await enforceCompanyAccess({ req, res, companyId: req.body.companyId });
+  if (!access) return;
+  return res.status(204).json(data);`, imports);
+    expect(rules(src)).toContain('R6-ORDER');
+  });
 });
 
 describe('R6-ORDER — side effects after authentication but before tenant authorization', () => {
