@@ -34,16 +34,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!requestId || !reason) return res.status(400).json({ error: 'requestId and reason are required' });
 
-  const { data: request } = await supabase
+  const { data: request, error: readErr } = await supabase
     .from('access_requests')
     .select('id, status')
     .eq('id', requestId)
     .maybeSingle();
 
+  if (readErr) return res.status(503).json({ error: 'Could not read the access request', retryable: true });
   if (!request) return res.status(404).json({ error: 'Access request not found' });
   if (request.status !== 'pending') return res.status(409).json({ error: `Request is already ${request.status}` });
 
-  await supabase
+  // CLASS 2 (2026-11-12): CAS on 'pending' + row count. An unconditioned update
+  // could overwrite a concurrent APPROVAL (the user keeps a company, the record
+  // says rejected), and its error was never read (200 for a rejection that did
+  // not happen).
+  const { data: rejected, error: updErr } = await supabase
     .from('access_requests')
     .update({
       status: 'rejected',
@@ -51,7 +56,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reviewed_at: new Date().toISOString(),
       rejection_reason: reason,
     })
-    .eq('id', requestId);
+    .eq('id', requestId)
+    .eq('status', 'pending')
+    .select('id');
+  if (updErr) return res.status(500).json({ error: 'Failed to reject the request' });
+  if (!Array.isArray(rejected) || rejected.length !== 1) {
+    return res.status(409).json({ error: 'The request was changed by someone else; reload and try again', code: 'REQUEST_STATE_CHANGED' });
+  }
 
   return res.status(200).json({ success: true, requestId });
 }

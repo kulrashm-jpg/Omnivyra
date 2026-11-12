@@ -60,7 +60,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .eq('id', requestId)
     .maybeSingle();
 
-  if (fetchErr || !request) return res.status(404).json({ error: 'Access request not found' });
+  // A failed read is not "not found". (CLASS 1, 2026-11-12)
+  if (fetchErr) return res.status(503).json({ error: 'Could not read the access request', retryable: true });
+  if (!request) return res.status(404).json({ error: 'Access request not found' });
   if (request.status !== 'pending') {
     return res.status(409).json({ error: `Request is already ${request.status}` });
   }
@@ -72,7 +74,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Another request for this email may already have been approved (duplicate
   // submission, re-application after rejection, etc.). Reuse the existing org
   // rather than creating a second company for the same person.
-  const { data: priorApproval } = await supabase
+  // A failed read here would create a SECOND company for this person. Refuse.
+  const { data: priorApproval, error: priorErr } = await supabase
     .from('access_requests')
     .select('id, organization_id')
     .eq('email', request.email)
@@ -80,11 +83,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .not('organization_id', 'is', null)
     .limit(1)
     .maybeSingle();
+  if (priorErr) return res.status(503).json({ error: 'Could not check for an earlier approval', retryable: true });
 
+  // CLASS 2 (2026-11-12): every status write below is a CAS on 'pending' with a
+  // row-count check. The status read above is only an early answer: a
+  // concurrent reject / delete / second approve lands between it and the write,
+  // and an unconditioned update overwrote it (approve racing reject turned a
+  // REJECTED request into an approved one -> onboarding makes that user
+  // COMPANY_ADMIN; a double approve created two companies).
   if (priorApproval) {
     // Mark this duplicate request as approved and point it at the existing org —
     // do NOT create a second company.
-    await supabase
+    const { data: linked, error: linkErr } = await supabase
       .from('access_requests')
       .update({
         status:          'approved',
@@ -93,7 +103,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         reviewed_at:     now,
         admin_note:      adminNote ?? 'Duplicate — linked to existing organization',
       })
-      .eq('id', requestId);
+      .eq('id', requestId)
+      .eq('status', 'pending')
+      .select('id');
+    if (linkErr) return res.status(500).json({ error: 'Failed to update request status' });
+    if (!Array.isArray(linked) || linked.length !== 1) {
+      return res.status(409).json({ error: 'The request was changed by someone else; reload and try again', code: 'REQUEST_STATE_CHANGED' });
+    }
 
     return res.status(200).json({
       success:      true,
@@ -127,7 +143,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── 2. Update access_requests: status + link organization_id ──────────────
   // organization_id is stored so onboarding can find the pre-created company
   // by doing: SELECT * FROM access_requests WHERE email=$email AND status='approved'
-  const { error: updateErr } = await supabase
+  // CAS pending -> approved, WITH the org id in the same write (onboarding only
+  // honours approved rows whose organization_id is set, so no half state is
+  // ever visible). The loser of a race deletes the company it just created.
+  const { data: approved, error: updateErr } = await supabase
     .from('access_requests')
     .update({
       status:          'approved',
@@ -136,11 +155,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       reviewed_at:     now,
       admin_note:      adminNote ?? null,
     })
-    .eq('id', requestId);
+    .eq('id', requestId)
+    .eq('status', 'pending')
+    .select('id');
 
-  if (updateErr) {
-    console.error('[access-requests/approve] status update failed:', updateErr.message);
-    return res.status(500).json({ error: 'Failed to update request status' });
+  if (updateErr || !Array.isArray(approved) || approved.length !== 1) {
+    const { error: cleanupErr } = await supabase.from('companies').delete().eq('id', newCompany.id);
+    if (cleanupErr) {
+      console.error('[access-requests/approve] ORPHANED company after a failed/lost approval:', newCompany.id, cleanupErr.message);
+    }
+    if (updateErr) {
+      console.error('[access-requests/approve] status update failed:', updateErr.message);
+      return res.status(500).json({ error: 'Failed to update request status' });
+    }
+    return res.status(409).json({ error: 'The request was changed by someone else; reload and try again', code: 'REQUEST_STATE_CHANGED' });
   }
 
   return res.status(200).json({
