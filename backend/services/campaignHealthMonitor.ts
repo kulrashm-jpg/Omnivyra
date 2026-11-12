@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { notifyCompanyEvent } from './userNotificationService';
 /**
  * Campaign Health Monitor — runs every 6 hours via cron.
  *
@@ -99,20 +100,21 @@ async function triggerNotification(campaignId: string, reason: string): Promise<
   try {
     // Resolve company_id for the notification
     const { data: campaign } = await ownedDbTable('campaigns')
-      .select('company_id, name')
+      .select('company_id, name, user_id')
       .eq('id', campaignId)
       .maybeSingle();
 
     if (!campaign?.company_id) return;
 
-    await ownedDbTable('notifications').insert({
-      company_id: campaign.company_id,
+    // Was an insert of columns that do not exist (company_id / body / read), refused and swallowed: never
+    // delivered. Now: the campaign creator (if still an active member) + the company's active admins.
+    await notifyCompanyEvent({
+      companyId: campaign.company_id,
       type: 'campaign_auto_paused',
       title: 'Campaign auto-paused',
-      body: `"${campaign.name ?? campaignId}" was automatically paused: ${reason}`,
+      message: `"${campaign.name ?? campaignId}" was automatically paused: ${reason}`,
       metadata: { campaign_id: campaignId, reason },
-      created_at: new Date().toISOString(),
-      read: false,
+      campaignCreatorUserId: (campaign as { user_id?: string | null }).user_id ?? null,
     });
   } catch (_) { /* non-blocking */ }
 }

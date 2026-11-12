@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { notifyCompanyEvent } from './userNotificationService';
 /**
  * Credit Alert Service — Step 8
  *
@@ -50,12 +51,15 @@ export async function emitConsumptionAlert(orgId: string, threshold: number, con
   const type = CONSUMED_ALERT_BY_THRESHOLD[threshold];
   if (!type) return;
   await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: type, balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
-  try {
-    await ownedDbTable('notifications').insert({
-      organization_id: orgId, type: 'credit_alert', category: type,
-      message: `You have used ${threshold}% of this cycle's credits.`, read: false, created_at: new Date().toISOString(),
-    });
-  } catch { /* notifications table optional */ }
+  // Was an insert of columns that do not exist (organization_id / category / read), refused and swallowed: never
+  // delivered. Now: the company's active admins (the billing owners); the alert kind stays in metadata.
+  await notifyCompanyEvent({
+    companyId: orgId,
+    type: 'credit_alert',
+    title: 'Credit usage alert',
+    message: `You have used ${threshold}% of this cycle's credits.`,
+    metadata: { alert_type: type, threshold, consumed_pct: Math.round(consumedPct) },
+  });
 }
 
 /** Whether the low-credit forecast email already went out this cycle. */
@@ -205,19 +209,15 @@ async function recordAlert(orgId: string, alertType: AlertType, balance: number)
 
 /** Send an in-app notification for a credit alert. */
 async function sendAlert(orgId: string, alertType: AlertType, message: string): Promise<void> {
-  try {
-    await ownedDbTable('notifications').insert({
-      organization_id: orgId,
-      type:            'credit_alert',
-      category:        alertType,
-      message,
-      read:            false,
-      created_at:      new Date().toISOString(),
-    });
-  } catch {
-    // Non-fatal — notifications table may not exist yet
-    console.warn(`[creditAlert] Notification insert failed for org ${orgId} / ${alertType}`);
-  }
+  // Was an insert of columns that do not exist (organization_id / category / read), refused and swallowed (the
+  // catch never saw the returned error): never delivered. Now: the company's active admins; never throws, logged.
+  await notifyCompanyEvent({
+    companyId: orgId,
+    type: 'credit_alert',
+    title: 'Credit alert',
+    message,
+    metadata: { alert_type: alertType },
+  });
 }
 
 // ── Main API ──────────────────────────────────────────────────────────────────

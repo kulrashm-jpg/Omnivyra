@@ -16,6 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
+import { notifyCompanyEvent } from '@/backend/services/userNotificationService';
 import { getUserRole, isPlatformSuperAdmin, Role } from '@/backend/services/rbacService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -137,15 +138,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const campaignId = (newCampaign as { id: string }).id;
 
-  // Notify team (non-fatal)
-  await supabase.from('notifications').insert({
-    company_id: companyId,
-    type:       'campaign_approved',
-    title:      'Campaign approved and scheduled',
-    body:       `"${plan.name}" has been approved and is now scheduled.`,
-    metadata:   { campaign_id: campaignId, pending_id: pendingId },
-    created_at: reviewedAt,
-    read:       false,
+  // Notify the company's active admins (non-fatal; logged). Was an insert of columns that do not exist
+  // (company_id / body / read), refused and ignored: never delivered.
+  await notifyCompanyEvent({
+    companyId,
+    type:     'campaign_approved',
+    title:    'Campaign approved and scheduled',
+    message:  `"${plan.name}" has been approved and is now scheduled.`,
+    metadata: { campaign_id: campaignId, pending_id: pendingId },
   });
 
   await logDecision({

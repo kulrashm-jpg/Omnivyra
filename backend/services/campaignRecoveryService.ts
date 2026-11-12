@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { notifyCompanyEvent } from './userNotificationService';
 /**
  * Campaign Recovery Service — Step 8
  *
@@ -24,12 +25,12 @@ export type RecoveryResult = {
 };
 
 /** Get company_id and name for a campaign. */
-async function getCampaignMeta(campaignId: string): Promise<{ company_id: string; name: string } | null> {
+async function getCampaignMeta(campaignId: string): Promise<{ company_id: string; name: string; user_id?: string | null } | null> {
   const { data } = await ownedDbTable('campaigns')
-    .select('company_id, name')
+    .select('company_id, name, user_id')
     .eq('id', campaignId)
     .maybeSingle();
-  return data as { company_id: string; name: string } | null;
+  return data as { company_id: string; name: string; user_id?: string | null } | null;
 }
 
 /**
@@ -119,18 +120,19 @@ export async function generateRecoveryCampaign(
     result.recovery_pending_id = (data as { id: string }).id;
 
     // Notify user
-    await ownedDbTable('notifications').insert({
-      company_id: companyId,
-      type:       'campaign_recovery_generated',
-      title:      'Recovery campaign ready',
-      body:       `"${meta.name}" was paused. A recovery campaign has been generated and is ready for your review.`,
-      metadata:   {
+    // Was an insert of columns that do not exist (company_id / body / read), refused and ignored: never
+    // delivered. Now: the paused campaign's creator (if still an active member) + the company's active admins.
+    await notifyCompanyEvent({
+      companyId,
+      type:     'campaign_recovery_generated',
+      title:    'Recovery campaign ready',
+      message:  `"${meta.name}" was paused. A recovery campaign has been generated and is ready for your review.`,
+      metadata: {
         paused_campaign_id:   campaignId,
         pending_campaign_id:  result.recovery_pending_id,
         pause_reason:         pauseReason,
       },
-      created_at: new Date().toISOString(),
-      read:       false,
+      campaignCreatorUserId: meta.user_id ?? null,
     });
 
     await logDecision({

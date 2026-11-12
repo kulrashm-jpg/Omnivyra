@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { notifyCompanyEvent } from './userNotificationService';
 /**
  * Autonomous Scheduler — Step 3
  *
@@ -88,17 +89,15 @@ async function autoActivateCampaign(
 
 /** Notify user of pending campaign awaiting approval. */
 async function notifyPendingApproval(companyId: string, pendingId: string, planName: string): Promise<void> {
-  try {
-    await ownedDbTable('notifications').insert({
-      company_id: companyId,
-      type:       'campaign_pending_approval',
-      title:      'New campaign ready for approval',
-      body:       `"${planName}" was generated autonomously and is ready for your review.`,
-      metadata:   { pending_campaign_id: pendingId },
-      created_at: new Date().toISOString(),
-      read:       false,
-    });
-  } catch (_) { /* non-blocking */ }
+  // Was an insert of columns that do not exist (company_id / body / read), refused and swallowed: never delivered.
+  // An autonomous plan has no creator: the company's active admins. Never throws; failures are logged.
+  await notifyCompanyEvent({
+    companyId,
+    type:     'campaign_pending_approval',
+    title:    'New campaign ready for approval',
+    message:  `"${planName}" was generated autonomously and is ready for your review.`,
+    metadata: { pending_campaign_id: pendingId },
+  });
 }
 
 /** Expire pending campaigns past their expiry date. */

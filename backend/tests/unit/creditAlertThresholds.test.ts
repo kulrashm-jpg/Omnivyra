@@ -57,6 +57,15 @@ jest.mock('../../services/emailService', () => ({
   sendCreditAlert: jest.fn(async () => {}),
 }));
 
+// The in-app alert now goes through notifyCompanyEvent (one row per active admin, real columns, company_id;
+// unit-tested in notifyCompanyEvent + realschema/notifications_company_event_real). This suite used to capture a raw
+// ownedDbTable('notifications') insert - a fake that accepted ANY payload, which is how an insert of columns that do
+// not exist (organization_id / category / read) passed here for months while every real insert was refused.
+const companyEvents: Array<Record<string, any>> = [];
+jest.mock('../../services/userNotificationService', () => ({
+  notifyCompanyEvent: jest.fn(async (e: Record<string, unknown>) => { companyEvents.push(e); return { delivered: 1 }; }),
+}));
+
 import { checkCreditAlerts } from '../../services/creditAlertService';
 import { sendCreditAlert } from '../../services/emailService';
 
@@ -73,6 +82,7 @@ beforeEach(() => {
   recentAlertRows = {};
   weeklyConfirmRows = [];
   inserted.length = 0;
+  companyEvents.length = 0;
   (sendCreditAlert as jest.Mock).mockClear();
 });
 
@@ -89,8 +99,9 @@ describe('checkCreditAlerts — absolute 100/50/20 ladder', () => {
     setBalance(balance as number);
     const r = await checkCreditAlerts('org-1');
     expect(r.alerts_fired).toEqual([expectedType]);
-    const notification = inserted.find((i) => i.table === 'notifications');
-    expect(notification?.payload.message.toLowerCase()).toContain(messageFragment as string);
+    expect(companyEvents).toHaveLength(1);
+    expect(companyEvents[0]).toMatchObject({ companyId: 'org-1', type: 'credit_alert', metadata: { alert_type: expectedType } });
+    expect(String(companyEvents[0].message).toLowerCase()).toContain(messageFragment as string);
   });
 
   it.each([[100], [150], [200], [500]])(
