@@ -132,7 +132,8 @@ export default function BrandIntelligencePanel({ companyId }: BrandIntelligenceP
             )}
             {efficiency && efficiency.credits_saved_total > 0 && (
               <div className="text-xs text-violet-300 mt-1">
-                Total credits saved through AI efficiency: {efficiency.credits_saved_total.toLocaleString()}
+                {/* e9 2026-11-12: an estimate from recommendations nothing executes automatically, never a realised saving. */}
+                Estimated credits saved (if recommendations are followed): {efficiency.credits_saved_total.toLocaleString()}
               </div>
             )}
           </div>

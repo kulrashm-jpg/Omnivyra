@@ -4,7 +4,7 @@
  * Shows the user the business value delivered by the AI system:
  *   - Leads generated, cost per lead
  *   - Top performing content type
- *   - Credits saved by AI optimization
+ *   - Estimated credits saved (an assumed 20% of credits used; not measured)
  *   - Engagement quality score
  *   - North-star KPI: credits_per_outcome trend
  */
@@ -165,12 +165,13 @@ export default function OutcomeValueDashboard({ companyId, campaignId }: Outcome
         <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-3">
           <div className="flex items-center gap-1.5 mb-1">
             <Zap className="w-4 h-4 text-violet-400" />
-            <span className="text-xs text-slate-400">Credits saved</span>
+            <span className="text-xs text-slate-400">Estimated credits saved</span>
           </div>
           <div className="text-xl font-bold text-emerald-400">
             {loading ? '—' : (outcome?.credits_saved ?? 0).toLocaleString()}
           </div>
-          <div className="text-xs text-slate-500 mt-0.5">via AI optimization</div>
+          {/* e9 2026-11-12: credits_saved is an assumed 20% of credits used after 7 days (outcomeTrackingService), never a measured saving. */}
+          <div className="text-xs text-slate-500 mt-0.5">assumed, not measured</div>
         </div>
 
         <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-3">
@@ -200,11 +201,11 @@ export default function OutcomeValueDashboard({ companyId, campaignId }: Outcome
         </div>
       </div>
 
-      {/* ── "AI saved you Z credits" messaging ── */}
+      {/* ── Estimated-savings note: an assumption (20% of credits used after 7 days), never a realised saving (e9 2026-11-12) ── */}
       {outcome && outcome.credits_saved > 0 && (
         <div className="rounded-xl border border-violet-800/40 bg-violet-900/10 px-4 py-3 text-sm text-violet-300">
-          <span className="font-semibold">AI saved you {outcome.credits_saved} credits</span>
-          {' '}via Smart Mode deduplication and pattern reuse on this campaign.
+          <span className="font-semibold">Estimated credits saved: {outcome.credits_saved}</span>
+          {' '}(an assumed 20% of credits used on campaigns older than 7 days; not a measured saving).
         </div>
       )}
 
