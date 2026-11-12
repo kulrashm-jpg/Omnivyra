@@ -2,6 +2,8 @@
 -- ORDER: roll the CODE back first - it calls community_ai_claim_within_limits and
 -- usage_execution_reserve / usage_execution_release. Drops the three functions and the reservation
 -- table (live reservations are lost: plan usage is then counted from the meter alone, as before).
+-- SOUND TO DROP: the apply's preflight refuses unless none of the four existed before it (or all
+-- four exist - a re-apply, re-verified), so nothing that predated it is removed.
 BEGIN;
 DROP FUNCTION IF EXISTS public.community_ai_claim_within_limits(uuid, uuid, uuid, text, text, text, text);
 DROP FUNCTION IF EXISTS public.usage_execution_reserve(uuid, integer, integer, uuid, numeric, integer);

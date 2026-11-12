@@ -81,6 +81,23 @@ BEGIN
                       <> 'p_reservation_id uuid, p_org uuid'))) THEN
     RAISE EXCEPTION 'AGCR preflight: another signature of community_ai_claim_within_limits / usage_execution_reserve / usage_execution_release exists - refusing to overload it';
   END IF;
+  -- ROLLBACK SOUNDNESS (05 / e1 rule): the rollback drops the table and the three functions, so this
+  -- apply must PROVE none of them predates it. Allowed: none present (first apply) or ALL present
+  -- (a re-apply: the $verify$ below then re-asserts their exact shape). Anything in between refuses.
+  IF (to_regclass('public.usage_execution_reservations') IS NOT NULL
+      OR to_regprocedure('public.community_ai_claim_within_limits(uuid, uuid, uuid, text, text, text, text)') IS NOT NULL
+      OR to_regprocedure('public.usage_execution_reserve(uuid, integer, integer, uuid, numeric, integer)') IS NOT NULL
+      OR to_regprocedure('public.usage_execution_release(uuid, uuid)') IS NOT NULL)
+     AND NOT (to_regclass('public.usage_execution_reservations') IS NOT NULL
+      AND to_regprocedure('public.community_ai_claim_within_limits(uuid, uuid, uuid, text, text, text, text)') IS NOT NULL
+      AND to_regprocedure('public.usage_execution_reserve(uuid, integer, integer, uuid, numeric, integer)') IS NOT NULL
+      AND to_regprocedure('public.usage_execution_release(uuid, uuid)') IS NOT NULL
+      -- to_regclass, never ::regclass: SQL does not promise the AND short-circuits, and the cast
+      -- throws on a clean database where the table does not exist yet.
+      AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('public.usage_execution_reservations')
+                   AND conname = 'usage_execution_reservations_action_fk')) THEN
+    RAISE EXCEPTION 'AGCR preflight: usage_execution_reservations / the three functions partly exist - they predate this migration; refusing (its rollback must never drop them)';
+  END IF;
 END
 $preflight$;
 
