@@ -193,7 +193,17 @@ export interface ApplySettlementTransitionInput {
   providerRawStatus: string;
   /** ISO timestamp — set ONLY when the session reached `succeeded`. */
   settledAt: string | null;
+  /**
+   * CLASS 2 (2026-11-12): the settlement_status the caller DECIDED from (null =
+   * the column was null). The update is a CAS on it: the expiry sweeper and a
+   * `succeeded` webhook both passed canTransition from 'pending', and the last
+   * writer won - a terminal `succeeded` could be regressed to `expired`.
+   * Omitted (undefined) = legacy unconditioned write.
+   */
+  fromStatus?: string | null;
 }
+
+export type SettlementTransitionOutcome = { applied: true } | { applied: false; reason: 'state_changed' | 'write_failed' };
 
 /**
  * Apply a normalized settlement-state transition onto the persisted checkout
@@ -203,7 +213,7 @@ export interface ApplySettlementTransitionInput {
  */
 export async function applySettlementTransition(
   input: ApplySettlementTransitionInput,
-): Promise<void> {
+): Promise<SettlementTransitionOutcome> {
   try {
     const patch: Record<string, unknown> = {
       settlement_status: input.settlementStatus,
@@ -216,17 +226,30 @@ export async function applySettlementTransition(
       patch.provider_event_reference = input.providerEventReference;
     }
     if (input.settledAt) patch.settled_at = input.settledAt;
-    const { error } = await supabase
+    let q = supabase
       .from('billing_checkout_sessions')
       .update(patch)
       .eq('idempotency_key', input.idempotencyKey);
-    if (error && !String(error.message ?? '').toLowerCase().includes('does not exist')) {
-      logger.warn('settlement_transition_apply_failed', { message: error.message });
+    if (input.fromStatus !== undefined) {
+      q = input.fromStatus === null ? q.is('settlement_status', null) : q.eq('settlement_status', input.fromStatus);
     }
+    const { data, error } = await q.select('idempotency_key');
+    if (error) {
+      if (!String(error.message ?? '').toLowerCase().includes('does not exist')) {
+        logger.warn('settlement_transition_apply_failed', { message: error.message });
+      }
+      return { applied: false, reason: 'write_failed' };
+    }
+    if (input.fromStatus !== undefined && (!Array.isArray(data) || data.length === 0)) {
+      logger.warn('settlement_transition_state_changed', { from: input.fromStatus, to: input.settlementStatus });
+      return { applied: false, reason: 'state_changed' };
+    }
+    return { applied: true };
   } catch (err) {
     logger.warn('settlement_transition_apply_failed', {
       message: err instanceof Error ? err.message : String(err),
     });
+    return { applied: false, reason: 'write_failed' };
   }
 }
 

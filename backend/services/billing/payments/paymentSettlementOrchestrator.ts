@@ -319,13 +319,20 @@ export async function reconcileSettlementWebhook(
     return { ok: true, status: 'no_transition', replayed: false, settlement_state: from, previous_state: from };
   }
 
-  await deps.applySettlementTransition({
+  const applied = await deps.applySettlementTransition({
     idempotencyKey: session.idempotencyKey,
     settlementStatus: to,
     providerEventReference: ev.providerEventId,
     providerRawStatus: ev.providerRawStatus,
     settledAt: to === 'succeeded' ? new Date().toISOString() : null,
+    // CAS on the state this decision was made from (class 2, 2026-11-12).
+    fromStatus: (session?.settlementStatus as string | null | undefined) ?? null,
   });
+  if (applied && applied.applied === false && applied.reason === 'state_changed') {
+    // Another writer (e.g. the expiry sweeper) moved the session first; this
+    // event's transition was NOT applied. Report it as such, never "reconciled".
+    return { ok: true, status: 'no_transition', replayed: false, settlement_state: null, previous_state: from };
+  }
   logger.info('settlement_state_transition', {
     provider: args.provider, from, to, // normalized states only — no pricing
   });

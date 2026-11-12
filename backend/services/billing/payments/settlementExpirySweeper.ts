@@ -148,12 +148,16 @@ export async function sweepStaleSettlements(
 
     // Persist the expiry transition. providerEventReference is intentionally
     // omitted so an existing provider_event_reference is PRESERVED.
-    await deps.applySettlementTransition({
+    // CAS on the state the sweep decided from (class 2, 2026-11-12): a
+    // `succeeded` webhook landing in between must never be regressed to expired.
+    const applied = await deps.applySettlementTransition({
       idempotencyKey: c.idempotencyKey,
       settlementStatus: 'expired',
       providerRawStatus: 'sweeper_expiry',
       settledAt: null,
+      fromStatus: c.settlementStatus,
     });
+    if (applied && applied.applied === false) { skipped++; continue; }
     expiredKeys.push(c.idempotencyKey);
   }
 
