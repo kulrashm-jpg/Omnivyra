@@ -10,21 +10,9 @@ import type { NextRequest } from 'next/server';
  * cookies) and updating every call site is a separate migration.
  *
  * What this middleware DOES handle:
- *   • Content-Architect session: scoped to allowed API prefixes only
  *   • OAuth routes: always pass-through (browser navigates without auth headers)
  *   • Everything else: pass-through (routes self-protect)
  */
-
-const CONTENT_ARCHITECT_API_PREFIXES = [
-  '/api/company-profile',
-  '/api/campaigns',
-  '/api/recommendations/',
-  '/api/activity-workspace/',
-  '/api/content-architect/',
-  '/api/content/',
-  '/api/intelligence/',
-  '/api/executive/',
-];
 
 type CompatibilityBridgeObservation = {
   bridge: '/content-creation' | '/content-studio' | '/command-center/bolt-text-strategy';
@@ -56,13 +44,6 @@ const COMPATIBILITY_BRIDGE_OBSERVABILITY: CompatibilityBridgeObservation[] = [
 
 const COMPATIBILITY_ARRIVAL_COOKIE = 'compat_bridge_pending_arrival';
 
-function allowContentArchitectPath(pathname: string): boolean {
-  return CONTENT_ARCHITECT_API_PREFIXES.some((prefix) => {
-    const base = prefix.replace(/\/$/, '');
-    return pathname === base || pathname.startsWith(base + '/');
-  });
-}
-
 function findCompatibilityBridge(pathname: string): CompatibilityBridgeObservation | null {
   return COMPATIBILITY_BRIDGE_OBSERVABILITY.find((bridge) => {
     if (pathname === bridge.bridge) return true;
@@ -77,8 +58,7 @@ function observeCompatibilityBridge(request: NextRequest, bridge: CompatibilityB
   const hasCampaignContinuation = request.nextUrl.searchParams.has('campaignId');
   const hasOnboardingContinuation = request.nextUrl.searchParams.has('onboarding') || request.nextUrl.searchParams.has('source');
   const hasQueryContinuation = request.nextUrl.searchParams.size > 0;
-  const hasRuntimeRestoration = request.cookies.has('content_architect_session')
-    || request.cookies.has('bolt-text-strategy-state');
+  const hasRuntimeRestoration = request.cookies.has('bolt-text-strategy-state');
   const bridgeUsageCookie = `compat_bridge_hits_${bridge.key}`;
   const repeatedUsageCount = Number(request.cookies.get(bridgeUsageCookie)?.value || '0');
   const nextRepeatedUsageCount = Number.isFinite(repeatedUsageCount) ? repeatedUsageCount + 1 : 1;
@@ -198,19 +178,6 @@ export function proxy(request: NextRequest) {
 
   if (!pathname.startsWith('/api')) {
     return NextResponse.next();
-  }
-
-  // Content Architect session: restrict to scoped APIs only.
-  // This is the one case where middleware must actively block.
-  const contentArchitectSession = request.cookies.get('content_architect_session');
-  if (contentArchitectSession?.value === '1') {
-    if (allowContentArchitectPath(pathname)) return NextResponse.next();
-    if (pathname === '/api/super-admin/companies') return NextResponse.next();
-    if (pathname === '/api/super-admin/login' || pathname === '/api/super-admin/content-architect-login') {
-      return NextResponse.next();
-    }
-    // Block Content Architect from everything else
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   // All other requests pass through — API routes handle their own auth.

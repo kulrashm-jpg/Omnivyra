@@ -154,7 +154,6 @@ export interface PolicyPrincipalView {
   /** organizationId → role for the principal's memberships. */
   organizationRoles?: Readonly<Record<string, string>>;
   isPlatformSuperAdmin?: boolean;
-  isContentArchitect?: boolean;
   capabilities?: readonly string[];
 }
 
@@ -240,11 +239,9 @@ function evaluateMembership(
     return decision(policy, 'deny', 'missing_tenant_assertion');
   }
   if (!principal.authenticated) {
-    if (principal.isContentArchitect) return decision(policy, 'allow', 'content_architect', asserted);
     return decision(policy, 'deny', 'unauthenticated', asserted);
   }
   if (principal.isPlatformSuperAdmin) return decision(policy, 'allow', 'platform_super_admin', asserted);
-  if (principal.isContentArchitect) return decision(policy, 'allow', 'content_architect', asserted);
   if (principal.organizationRoles === undefined) {
     return decision(policy, 'abstain', 'membership_facts_unavailable', asserted);
   }

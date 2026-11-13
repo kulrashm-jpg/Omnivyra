@@ -548,9 +548,6 @@ export const getUserCompanyRole = async (
   if (!companyId) {
     return { role: null, userId: user.userId };
   }
-  if (user.userId === 'content_architect') {
-    return { role: Role.COMPANY_ADMIN, userId: user.userId };
-  }
   const superAdmin = await isSuperAdmin(user.userId);
   if (superAdmin) {
     return { role: Role.SUPER_ADMIN, userId: user.userId };
@@ -618,11 +615,6 @@ export const enforceRole = async (input: {
     input.res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  // Content Architect: platform role with access to all companies (like Super Admin)
-  if (user.userId === 'content_architect' && input.allowedRoles.includes(Role.COMPANY_ADMIN)) {
-    return { userId: 'content_architect', role: Role.COMPANY_ADMIN };
-  }
-
   // Run role checks in parallel to reduce latency
   const [superAdminResult, platformSuperAdminResult, userRoleResult] = await Promise.all([
     isSuperAdmin(user.userId),

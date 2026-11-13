@@ -3,10 +3,10 @@
  * known-open, so their tracking entries could be retired:
  *
  * SEC91-W2F-2a  pages/api/super-admin/login.ts           password compared with !==
- * SEC91-W2F-2b  pages/api/super-admin/content-architect-login.ts  password compared with !==
- * SEC91-W2F-2c  backend/services/contentArchitectSecurityService.ts  unsalted SHA-256 hex
- *               digests compared with !==
- *   → all three go through backend/security/constantTimeEqual, and both halves of
+ * SEC91-W2F-2b / 2c  (the content-architect login route and its session
+ *               service — both DELETED 2026-11-13 with the legacy Content
+ *               Architect path, so their tests went with them)
+ *   → the remaining file goes through backend/security/constantTimeEqual, and both halves of
  *     a username+password pair are always evaluated (no short-circuit revealing
  *     which half was wrong). Accept/deny behaviour is unchanged.
  *
@@ -109,75 +109,10 @@ describe('SEC91-W2F-2a — super-admin env-credential login', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────── W2F-2b ──
-describe('SEC91-W2F-2b — content-architect env-credential login', () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const handler = require('../../../pages/api/super-admin/content-architect-login').default;
-  beforeEach(() => {
-    process.env.CONTENT_ARCHITECT_USERNAME = 'fake-architect';
-    process.env.CONTENT_ARCHITECT_PASSWORD = 'fake-password-w2f2b';
-    delete process.env.CONTENT_ARCHITECT_PRIMARY_USER_ID;
-  });
-  const login = (username: unknown, password: unknown) => invoke(handler, { method: 'POST', body: { username, password } });
-
-  it.each([
-    ['wrong password', 'fake-architect', 'fake-password-w2f2X'],
-    ['password prefix', 'fake-architect', 'fake-password'],
-    ['wrong username', 'fake-architecT', 'fake-password-w2f2b'],
-    ['empty password', 'fake-architect', ''],
-  ])('%s → 403 and a failed-login audit row', async (_n, u, p) => {
-    const r = await login(u, p);
-    expect(r.status).toBe(403);
-    expect(r.headers['set-cookie']).toBeUndefined();
-    expect(mockInserts.map((i) => (i.row as { action: string }).action)).toEqual(['content_architect_failed_login']);
-  });
-
-  it('correct credentials still log in (behaviour unchanged)', async () => {
-    const r = await login('fake-architect', 'fake-password-w2f2b');
-    expect(r.status).toBe(200);
-    expect(mockInserts.map((i) => (i.row as { action: string }).action)).toEqual(['content_architect_login']);
-  });
-
-  it('both halves go through constantTimeEqual', async () => {
-    await login('wrong-user', 'wrong-pass');
-    expect(mockCte).toHaveBeenCalledWith('wrong-user', 'fake-architect');
-    expect(mockCte).toHaveBeenCalledWith('wrong-pass', 'fake-password-w2f2b');
-  });
-});
-
-// ─────────────────────────────────────────────────────────── W2F-2c ──
-describe('SEC91-W2F-2c — grantContentArchitectAccess password check', () => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { grantContentArchitectAccess } = require('../../services/contentArchitectSecurityService');
-  beforeEach(() => { mockConfig.CONTENT_ARCHITECT_PASSWORD = 'fake-password-w2f2c'; });
-
-  it.each([['wrong', 'fake-password-w2f2X'], ['prefix', 'fake-password'], ['empty', '']])(
-    '%s password → null, no session row, failure audited',
-    async (_n, pw) => {
-      expect(await grantContentArchitectAccess('user-1', pw, '203.0.113.9', 'ua')).toBeNull();
-      expect(mockInserts).toEqual([]);
-      expect(mockAudit).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorMessage: 'Invalid Content Architect password' }));
-    },
-  );
-
-  it('correct password still grants a session (behaviour unchanged)', async () => {
-    const token = await grantContentArchitectAccess('user-1', 'fake-password-w2f2c', '203.0.113.9', 'ua');
-    expect(typeof token).toBe('string');
-    expect(mockInserts.map((i) => i.table)).toEqual(['content_architect_sessions']);
-    expect(mockCte).toHaveBeenCalledWith('fake-password-w2f2c', 'fake-password-w2f2c');
-  });
-
-  it('unset password still denies before comparing', async () => {
-    mockConfig.CONTENT_ARCHITECT_PASSWORD = undefined;
-    expect(await grantContentArchitectAccess('user-1', 'anything', 'ip', 'ua')).toBeNull();
-    expect(mockCte).not.toHaveBeenCalled();
-  });
-});
-
 // ─────────────────────────────────────────────── W2F-2 gate evidence ──
 describe('SEC91-W2F-2 — the constant-time gate', () => {
-  it('none of the three files is flagged any more, and they import the helper', () => {
-    for (const rel of ['pages/api/super-admin/login.ts', 'pages/api/super-admin/content-architect-login.ts', 'backend/services/contentArchitectSecurityService.ts']) {
+  it('the super-admin login is not flagged, and it imports the helper', () => {
+    for (const rel of ['pages/api/super-admin/login.ts']) {
       const s = src(rel);
       expect(ctGate.scanSource(s)).toEqual([]);
       expect(s).toMatch(/import \{ constantTimeEqual \} from '[./]+(?:backend\/)?security\/constantTimeEqual';/);

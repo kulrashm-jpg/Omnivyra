@@ -73,7 +73,6 @@ export const CANONICAL_API_ROUTES: ReadonlyArray<RouteRegistryEntry> = [
   // ── Super-admin compatibility (env-credential mint) ───────────────────
   { key: 'api.super_admin.login',      path: '/api/super-admin/login',             domain: 'super_admin', lifecycle: 'compatibility', canonicalKey: 'api.auth.sync_supabase', notes: 'Env-credential bridge mint. Wave 3 deletes once canonical bootstrap exercised.' },
   { key: 'api.super_admin.logout',     path: '/api/super-admin/logout',            domain: 'super_admin', lifecycle: 'compatibility', canonicalKey: 'api.auth.logout',         notes: 'Bridge cookie clear + canonical session revoke.' },
-  { key: 'api.super_admin.content_architect_login', path: '/api/super-admin/content-architect-login', domain: 'super_admin', lifecycle: 'compatibility', canonicalKey: 'api.auth.sync_supabase', notes: 'Same compatibility status as super-admin/login.' },
 
   // ── Health / public ───────────────────────────────────────────────────
   { key: 'api.health',                 path: '/api/health',                        domain: 'public', lifecycle: 'canonical', description: 'Liveness + readiness probe.' },

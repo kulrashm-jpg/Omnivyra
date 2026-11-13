@@ -269,7 +269,7 @@ export const PROSPECT_ENRICH_EXECUTE = 'prospect.enrich.execute' as const;
  */
 export const PROSPECT_PERSON_ERASE = 'prospect.person.erase' as const;
 
-// ── Content Architect (Wave Phase 1 — replaces synthetic userId='content_architect') ──
+// ── Content Architect (Wave Phase 1 — replaces the former synthetic CA principal) ──
 /** Read campaign/company-profile data across companies. Content Architect role. */
 export const CONTENT_ARCHITECT_READ = 'content_architect.read' as const;
 /** Author campaign drafts / refine company profiles across companies. */

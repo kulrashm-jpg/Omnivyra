@@ -13,7 +13,6 @@ import { withApiObservability } from '../../../backend/observability';
 import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import {
   DEFAULT_BUILD_MODE_SCRATCH,
   BUILD_MODES,
@@ -81,9 +80,6 @@ const requireCompanyRole = async (
   if (!companyId) {
     res.status(400).json({ error: 'companyId required' });
     return null;
-  }
-  if (userId === 'content_architect') {
-    return { userId, role: Role.COMPANY_ADMIN };
   }
   const platformAdmin = await isPlatformSuperAdmin(userId);
   if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
@@ -331,31 +327,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'companyId required' });
     }
     let requester: { id: string; role: string } | null = null;
-    if (isContentArchitectSession(req)) {
-      requester = { id: 'content_architect', role: Role.COMPANY_ADMIN };
+    const auth = await getSupabaseUserFromRequest(req);
+    if (auth.error || !auth.user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED' });
+    }
+    // Single RBAC resolution — checks platform admin, legacy admin, then company role
+    const userId = auth.user.id;
+    if (await isPlatformSuperAdmin(userId)) {
+      requester = { id: userId, role: Role.SUPER_ADMIN };
+    } else if (await isSuperAdmin(userId)) {
+      requester = { id: userId, role: Role.SUPER_ADMIN };
     } else {
-      const auth = await getSupabaseUserFromRequest(req);
-      if (auth.error || !auth.user) {
-        return res.status(401).json({ error: 'UNAUTHORIZED' });
+      let { role } = await getUserRole(userId, companyId);
+      if (!role) {
+        role = await getCompanyRoleIncludingInvited(userId, companyId);
       }
-      // Single RBAC resolution — checks platform admin, legacy admin, then company role
-      const userId = auth.user.id;
-      if (await isPlatformSuperAdmin(userId)) {
-        requester = { id: userId, role: Role.SUPER_ADMIN };
-      } else if (await isSuperAdmin(userId)) {
-        requester = { id: userId, role: Role.SUPER_ADMIN };
-      } else {
-        let { role } = await getUserRole(userId, companyId);
-        if (!role) {
-          role = await getCompanyRoleIncludingInvited(userId, companyId);
-        }
-        if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-        const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
-        if (!(await hasPermission(role, action))) {
-          return res.status(403).json({ error: 'NOT_ALLOWED' });
-        }
-        requester = { id: userId, role };
+      if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      const action = req.method === 'POST' ? 'CREATE_CAMPAIGN' : 'VIEW_CAMPAIGNS';
+      if (!(await hasPermission(role, action))) {
+        return res.status(403).json({ error: 'NOT_ALLOWED' });
       }
+      requester = { id: userId, role };
     }
 
     const fetchCampaignIdsForCompany = async () => {

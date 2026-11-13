@@ -11,7 +11,7 @@ import { companyOperationalState } from '../services/companyOperationalState';
  *
  * It is always present when `req.rbac` is set: enforceRole answers 400
  * `companyId required` before any success path, including the super-admin and
- * content-architect bypasses, so a resolved context always carries one.
+ * platform bypass, so a resolved context always carries one.
  *
  * Handlers that operate on tenant data should bind to THIS value (or to an
  * approved resource-ownership primitive), never to a company they re-derive
@@ -71,11 +71,11 @@ export const withRBAC = (
      * read failure answers a retryable 503, never an allow. Platform principals
      * keep TenantGuard's bypass and never depend on the company read: the
      * active platform super admin (enforceRole's bypass, the only path that
-     * yields SUPER_ADMIN) and the content-architect principal. None of the
+     * yields SUPER_ADMIN). None of the
      * withRBAC routes is a billing / reactivation / export / recovery flow
      * (Closure-015E route inventory), so no tenant exception applies.
      */
-    if (result.role !== Role.SUPER_ADMIN && result.userId !== 'content_architect') {
+    if (result.role !== Role.SUPER_ADMIN) {
       const orgState = await companyOperationalState(companyId as string);
       if (orgState === 'lookup_error') {
         res.status(503).json({

@@ -3,8 +3,9 @@
  *
  * First dedicated coverage of the helper every guarded route relies on
  * (previously it appeared in tests only as a mock). Pins the 400/401/403
- * semantics and the allow paths: content-architect session, super-admin,
- * exact-company role, invited-role fallback.
+ * semantics and the allow paths: super-admin, exact-company role,
+ * invited-role fallback. The legacy content-architect cookie path was REMOVED
+ * (owner ruling 2026-11-13) and is pinned here as conferring nothing.
  */
 import { resolveCompanyAccess } from '../../services/contentArchitectService';
 import { createApiRequestMock, createMockRes } from '../utils';
@@ -112,10 +113,11 @@ function withArchitectCookie(
 }
 
 test(
-  'content-architect session: a SIGNED cookie is still honoured (deprecated bridge, pre-expiry)',
+  'content-architect session: even a SIGNED, pre-expiry cookie confers NOTHING (legacy path removed)',
   withArchitectCookie(false, (access, userWasCalled) => {
-    expect(access).toEqual({ userId: 'content_architect', role: 'CONTENT_ARCHITECT' });
-    expect(userWasCalled()).toBe(false);
+    // Falls through to real authentication, which the mock denies.
+    expect(access).toBeNull();
+    expect(userWasCalled()).toBe(true);
   }),
 );
 

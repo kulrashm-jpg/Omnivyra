@@ -33,10 +33,6 @@ jest.mock('@/backend/db/supabaseClient', () => ({ supabase: supabaseMock }));
 jest.mock('@/backend/services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'u1' })),
 }));
-jest.mock('@/backend/services/contentArchitectService', () => ({
-  isContentArchitectSession: () => false,
-  checkContentArchitectAccess: () => ({}),
-}));
 jest.mock('@/backend/services/orchestration', () => ({
   canonicalExecutionAdapter: {
     getExecutionItem: jest.fn(async () => getExecutionItemRef.value),

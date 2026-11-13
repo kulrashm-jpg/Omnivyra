@@ -1,12 +1,13 @@
 /**
  * SEC-001A — platform authorization hardening.
  *
- * Proves the forgeable `content_architect_session` path is closed everywhere it
- * granted authority, and that the legitimate paths still work:
- *   • forged / unsigned / tampered / stale cookies FAIL
- *   • a validly SIGNED cookie is accepted (backward compatibility for the
- *     deprecated bridge, until its hard expiry)
- *   • the hard expiry and the dry-run switch fail closed
+ * Proves the forgeable content-architect cookie path is closed everywhere it
+ * granted authority, and that the legitimate paths still work. (2026-11-13:
+ * the whole legacy Content Architect path — incl. the signed cookie that
+ * SEC-001A still honoured until its hard expiry — was REMOVED pre-launch, so
+ * the cookie-parser unit tests went with isContentArchitectSession; the
+ * authorization matrix below now pins that even a SIGNED cookie confers
+ * nothing.)
  *   • super-admin and company-admin authorization are unchanged
  *   • cross-tenant access and unauthenticated requests still fail
  */
@@ -30,10 +31,7 @@ jest.mock('../../services/rbacPrimitives', () => ({
 }));
 
 import { mintSignedBridgeCookieValue } from '../../security/bridgeCookie';
-import {
-  isContentArchitectSession,
-  resolveCompanyAccess,
-} from '../../services/contentArchitectService';
+import { resolveCompanyAccess } from '../../services/contentArchitectService';
 import { LEGACY_BRIDGE_HARD_EXPIRY_AT } from '../../security/legacyCookieSuperAdminBridge';
 
 const req = (cookies: Record<string, string> = {}) =>
@@ -69,64 +67,16 @@ afterEach(() => {
   }
 });
 
-describe('SEC-001A — forged cookies fail', () => {
-  test('the legacy unsigned `=1` cookie NO LONGER grants a content-architect session', () => {
-    expect(isContentArchitectSession(req({ content_architect_session: '1' }))).toBe(false);
-  });
-
-  test('arbitrary attacker-chosen values fail (forgery, tamper, malformed)', () => {
-    for (const forged of ['true', 'yes', 'admin', 'x.y', 'eyJhIjoxfQ.not-a-signature', '..', '1;1']) {
-      expect(isContentArchitectSession(req({ content_architect_session: forged }))).toBe(false);
-    }
-  });
-
-  test('a cookie signed with the WRONG secret fails (no secret sharing, no bypass)', () => {
-    const value = mintSignedBridgeCookieValue();
-    process.env.BRIDGE_COOKIE_SECRET = 'a-different-secret-value-thirty-two-chars';
-    expect(isContentArchitectSession(req({ content_architect_session: value }))).toBe(false);
-  });
-
-  test('a tampered payload on a valid signature fails', () => {
-    const value = mintSignedBridgeCookieValue();
-    const [payload, sig] = value.split('.');
-    const tampered = `${Buffer.from('9999999999:deadbeef', 'utf8').toString('base64url')}.${sig}`;
-    expect(tampered).not.toBe(value);
-    expect(payload.length).toBeGreaterThan(0);
-    expect(isContentArchitectSession(req({ content_architect_session: tampered }))).toBe(false);
-  });
-
-  test('absent cookie is simply not an architect session', () => {
-    expect(isContentArchitectSession(req())).toBe(false);
-    expect(isContentArchitectSession(req({ other: 'x' }))).toBe(false);
-  });
-});
-
-describe('SEC-001A — legitimate + expiry behaviour', () => {
-  test('BACKWARD COMPATIBLE: a validly signed cookie is still accepted before the hard expiry', () => {
-    expect(isContentArchitectSession(req({ content_architect_session: mintSignedBridgeCookieValue() }))).toBe(true);
-  });
-
-  test('HARD EXPIRY: after the removal date even a valid signature fails closed', () => {
-    const value = mintSignedBridgeCookieValue();
-    nowSpy!.mockReturnValue(LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime() + 1);
-    expect(isContentArchitectSession(req({ content_architect_session: value }))).toBe(false);
-  });
-
-  test('DRY RUN: LEGACY_BRIDGE_DRY_RUN=1 fails closed (Wave-3A removal simulation)', () => {
-    const value = mintSignedBridgeCookieValue();
-    process.env.LEGACY_BRIDGE_DRY_RUN = '1';
-    expect(isContentArchitectSession(req({ content_architect_session: value }))).toBe(false);
-  });
-
-  test('no signing secret configured ⇒ the deprecated path cannot be used at all', () => {
-    const value = mintSignedBridgeCookieValue();
-    delete process.env.BRIDGE_COOKIE_SECRET;
-    delete process.env.SESSION_COOKIE_SECRET;
-    expect(isContentArchitectSession(req({ content_architect_session: value }))).toBe(false);
-  });
-});
-
 describe('SEC-001A — authorization matrix through resolveCompanyAccess', () => {
+  test('UNAUTHENTICATED + validly SIGNED pre-expiry cookie ⇒ 401 (legacy path removed)', async () => {
+    getSupabaseUserFromRequest.mockResolvedValue({ user: null, error: 'no session' });
+    const res = mockRes();
+    const access = await resolveCompanyAccess(
+      req({ content_architect_session: mintSignedBridgeCookieValue() }), res, 'co-1');
+    expect(access).toBeNull();
+    expect((res as unknown as { statusCode: number }).statusCode).toBe(401);
+  });
+
   test('UNAUTHENTICATED + forged cookie ⇒ 401, no access', async () => {
     getSupabaseUserFromRequest.mockResolvedValue({ user: null, error: 'no session' });
     const res = mockRes();

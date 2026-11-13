@@ -21,7 +21,6 @@ const member: PolicyPrincipalView = {
   userId: 'user-1',
   organizationRoles: { 'company-1': 'COMPANY_ADMIN', 'company-2': 'MEMBER' },
   isPlatformSuperAdmin: false,
-  isContentArchitect: false,
   capabilities: ['company.analytics.view'],
 };
 const superAdmin: PolicyPrincipalView = { ...member, isPlatformSuperAdmin: true };
@@ -68,9 +67,6 @@ describe('evaluatePolicy — category semantics', () => {
   test('company-scoped: platform roles bypass membership', () => {
     const req = request({ companyId: 'any-company' });
     expect(evaluatePolicy(companyScoped, superAdmin, req)).toMatchObject({ outcome: 'allow', reason: 'platform_super_admin' });
-    expect(evaluatePolicy(companyScoped, { ...member, isContentArchitect: true }, req)).toMatchObject({
-      outcome: 'allow', reason: 'content_architect',
-    });
   });
 
   test('company-scoped with capability: enforced when facts present, abstains when absent', () => {

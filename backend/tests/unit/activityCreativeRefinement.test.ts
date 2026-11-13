@@ -247,7 +247,8 @@ describe('E — the endpoint enforces what the service assumes', () => {
 
   it('CRITICAL: it uses the workspace access gate, not the raw query company', () => {
     expect(route).toContain('enforceCompanyAccess');
-    expect(route).toContain('isContentArchitectSession');
+    // The legacy content-architect bypass was removed (owner ruling 2026-11-13).
+    expect(route).not.toContain('isContentArchitectSession');
   });
 
   it('CRITICAL: a foreign activity is 404, never 403', () => {

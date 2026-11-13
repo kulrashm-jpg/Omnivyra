@@ -124,7 +124,6 @@ const EDGE = '203.0.113.20';
 
 const ENV_KEYS = [
   'VERCEL', 'TRUSTED_PROXY_HOPS', 'RATE_LIMIT_SALT',
-  'CONTENT_ARCHITECT_USERNAME', 'CONTENT_ARCHITECT_PASSWORD',
   'SUPER_ADMIN_USERNAME', 'SUPER_ADMIN_PASSWORD',
 ];
 const savedEnv: Record<string, string | undefined> = {};
@@ -328,18 +327,6 @@ describe('admin/bootstrap-super-admin: the env-credential limiter keys on the tr
     expect(new Set(ips)).toEqual(new Set([PEER]));
     // Closure-014 (D): the new per-route admin limit keys on the same trusted peer, never the spoofed XFF.
     expect(new Set(mockBootstrapAdminLimitKeys)).toEqual(new Set([PEER]));
-  });
-});
-
-describe('super-admin/content-architect-login: audit ip_address is the trusted client IP', () => {
-  it('off-platform: a failed login records the socket peer, not the raw X-Forwarded-For', async () => {
-    process.env.CONTENT_ARCHITECT_USERNAME = 'fake-ca-user';
-    process.env.CONTENT_ARCHITECT_PASSWORD = 'fake-ca-password';
-    const r = await call('super-admin/content-architect-login', { headers: spoofed, body: { username: 'fake-ca-user', password: 'fake-wrong' } });
-    expect(r.status).toBe(403);
-    const rows = harness.writeCalls(['super_admin_audit_logs']);
-    expect(rows).toHaveLength(1);
-    expect((rows[0].payload as Record<string, unknown>).ip_address).toBe(PEER);
   });
 });
 

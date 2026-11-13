@@ -35,14 +35,10 @@ export const ROUTE_POLICY_GATE_FLAG = defineRolloutFlag({
 
 /** Resolve identity into the pure principal view. Heavy imports stay lazy. */
 async function buildPrincipalView(req: NextApiRequest): Promise<PolicyPrincipalView> {
-  const [identity, contentArchitect] = await Promise.all([
-    import('../../backend/security/IdentityResolver'),
-    import('../../backend/services/contentArchitectService'),
-  ]);
-  const isContentArchitect = contentArchitect.isContentArchitectSession(req);
+  const identity = await import('../../backend/security/IdentityResolver');
   const result = await identity.resolvePrincipal(req);
   if (!result.ok) {
-    return { authenticated: false, isContentArchitect };
+    return { authenticated: false };
   }
   const p = result.principal;
   const organizationRoles: Record<string, string> = {};
@@ -81,7 +77,6 @@ async function buildPrincipalView(req: NextApiRequest): Promise<PolicyPrincipalV
     userId: p.userId,
     organizationRoles,
     isPlatformSuperAdmin,
-    isContentArchitect,
     capabilities: p.capabilities,
   };
 }

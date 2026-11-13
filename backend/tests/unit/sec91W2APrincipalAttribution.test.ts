@@ -239,10 +239,12 @@ describe('safety properties', () => {
     });
   });
 
-  it('synthetic principals (content_architect) are never used as a rate-limit key', async () => {
+  it('synthetic principals (dev-user) are never used as a rate-limit key', async () => {
     process.env[MODE] = 'enforce';
     await inRequest(async () => {
-      expect(attributeAuthenticatedPrincipal({ userId: 'content_architect', source: 'enforceCompanyAccess' })).toBe('skipped');
+      // 2026-11-13: the legacy content-architect id is retired (nothing mints it);
+      // the synthetic set is pinned with the remaining dev-user principal.
+      expect(attributeAuthenticatedPrincipal({ userId: 'dev-user', source: 'enforceCompanyAccess' })).toBe('skipped');
       expect(getRequestContext().userId).toBeUndefined();
     });
   });
