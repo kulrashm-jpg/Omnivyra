@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import Link from 'next/link';
 import { useCompanyContext } from './CompanyContext';
 import { apiFetch } from '../lib/apiFetch';
 import LeadSourcesSection from './prospects/LeadSourcesSection';
@@ -130,8 +131,6 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     activeTab,
     addContentType,
     addCustomContentType,
-    apiRejectionReasons,
-    apiRequests,
     archiveCommunity,
     archivedCommunity,
     archivedCommunityList,
@@ -172,11 +171,8 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     hiddenTrendList,
     imageApis,
     imageHiders,
-    isLoadingApiRequests,
     isSelected,
-    isSubmittingApiRequest,
     isSuperAdmin,
-    loadApiRequests,
     loadCatalogApis,
     loadCompanyConfigs,
     loadContentPrefs,
@@ -192,7 +188,6 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     renderCatalogApiCard,
     renderCommunityCard,
     renderPlatformCard,
-    requestForm,
     restoreCommunity,
     router,
     saveContentPrefs,
@@ -202,8 +197,6 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     selectedImageApis,
     selectedTrendApis,
     setActiveTab,
-    setApiRejectionReasons,
-    setApiRequests,
     setArchivedCommunity,
     setCatalogApis,
     setChecking,
@@ -216,14 +209,11 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     setHiddenImage,
     setHiddenSocial,
     setHiddenTrend,
-    setIsLoadingApiRequests,
-    setIsSubmittingApiRequest,
     setLoading,
     setLoadingCatalogApis,
     setNotice,
     setPlatformContentPrefs,
     setPlatforms,
-    setRequestForm,
     setSavingContentPrefs,
     setShowHiddenCommunity,
     setShowHiddenCommunityApi,
@@ -239,13 +229,11 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     showHiddenTrend,
     socialHiders,
     socialPlatforms,
-    submitApiRequest,
     toggleApiSelection,
     toggleExpandContentTypes,
     togglingApiId,
     trendApis,
     trendHiders,
-    updateApiRequestStatus,
     userRole,
     visibleCommunityApis,
     visibleImageApis,
@@ -581,195 +569,24 @@ export default function SocialPlatformsView({ d }: { d: S }) {
                 </div>
               )}
 
-              {/* ── Request New API tab ── */}
-              {activeTab === 'request-new' && (
+              {/* UI step 7b (2026-11-13): "Request an API" and the approval queue have ONE home,
+                  /external-apis. The tab ids stay (pinned by tests); their bodies link through.
+                  The old approve/reject here sent PATCH /api/external-apis/requests, which
+                  that route answers with 405, so it never worked. */}
+              {(activeTab === 'request-new' || activeTab === 'queue') && (
                 <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-                  <h2 className="text-base font-semibold text-gray-900 mb-1">Request a New API</h2>
-                  <p className="text-sm text-gray-500 mb-5">
-                    Submit a request to add a new external API. Super Admin will review and approve or reject.
+                  <h2 className="text-base font-semibold text-gray-900 mb-1">
+                    {activeTab === 'request-new' ? 'Request a new API' : 'API requests'}
+                  </h2>
+                  <p className="text-sm text-gray-500 mb-4">
+                    API requests and approvals now live in one place, under API Integrations.
                   </p>
-                  <div className="space-y-4 max-w-2xl">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
-                      <input
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                        placeholder="e.g. Twitter Trends API"
-                        value={requestForm.name}
-                        onChange={(e) => setRequestForm((p) => ({ ...p, name: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Base URL *</label>
-                      <input
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                        placeholder="https://api.example.com/v1/trends"
-                        value={requestForm.base_url}
-                        onChange={(e) => setRequestForm((p) => ({ ...p, base_url: e.target.value }))}
-                      />
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Purpose</label>
-                        <select
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                          value={requestForm.purpose}
-                          onChange={(e) => setRequestForm((p) => ({ ...p, purpose: e.target.value }))}
-                        >
-                          <option value="trends">Trends</option>
-                          <option value="keywords">Keywords</option>
-                          <option value="hashtags">Hashtags</option>
-                          <option value="news">News</option>
-                          <option value="demographics">Demographics</option>
-                          <option value="social">Social</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                        <input
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                          placeholder="e.g. social, analytics"
-                          value={requestForm.category}
-                          onChange={(e) => setRequestForm((p) => ({ ...p, category: e.target.value }))}
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
-                        <select
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                          value={requestForm.method}
-                          onChange={(e) => setRequestForm((p) => ({ ...p, method: e.target.value as 'GET' | 'POST' }))}
-                        >
-                          <option value="GET">GET</option>
-                          <option value="POST">POST</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Auth type</label>
-                        <select
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                          value={requestForm.auth_type}
-                          onChange={(e) => setRequestForm((p) => ({ ...p, auth_type: e.target.value }))}
-                        >
-                          <option value="none">None</option>
-                          <option value="api_key">API Key</option>
-                          <option value="bearer">Bearer</option>
-                          <option value="query">Query param</option>
-                          <option value="header">Header</option>
-                        </select>
-                      </div>
-                    </div>
-                    {['api_key', 'bearer', 'query', 'header'].includes(requestForm.auth_type) && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">API key env var name *</label>
-                        <input
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                          placeholder="e.g. TWITTER_API_KEY"
-                          value={requestForm.api_key_env_name}
-                          onChange={(e) => setRequestForm((p) => ({ ...p, api_key_env_name: e.target.value }))}
-                        />
-                        <p className="text-xs text-gray-500 mt-1">Server-side env var; key value is not stored.</p>
-                      </div>
-                    )}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
-                      <textarea
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm min-h-[80px]"
-                        placeholder="Why your company needs this API, use case, etc."
-                        value={requestForm.description}
-                        onChange={(e) => setRequestForm((p) => ({ ...p, description: e.target.value }))}
-                      />
-                    </div>
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
-                      <button
-                        type="button"
-                        onClick={submitApiRequest}
-                        disabled={isSubmittingApiRequest || !requestForm.name.trim() || !requestForm.base_url.trim()}
-                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full sm:w-auto"
-                      >
-                        <Send className="h-3.5 w-3.5" />
-                        {isSubmittingApiRequest ? 'Submitting…' : 'Submit for approval'}
-                      </button>
-                      <span className="text-xs text-gray-400">Goes to API Queue for Super Admin review.</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ── API Queue tab ── */}
-              {activeTab === 'queue' && (
-                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                    <h2 className="text-base font-semibold text-gray-900">API Requests Queue</h2>
-                    <button
-                      onClick={loadApiRequests}
-                      className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 ${isLoadingApiRequests ? 'animate-spin' : ''}`} />
-                      Refresh
-                    </button>
-                  </div>
-                  {isLoadingApiRequests ? (
-                    <p className="text-sm text-gray-400">Loading requests…</p>
-                  ) : apiRequests.length === 0 ? (
-                    <div className="text-center py-10">
-                      <ClipboardList className="h-8 w-8 text-gray-300 mx-auto mb-2" />
-                      <p className="text-sm text-gray-400">No API requests yet.</p>
-                      <button
-                        onClick={() => setActiveTab('request-new')}
-                        className="mt-3 inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
-                      >
-                        <PlusCircle className="h-4 w-4" /> Submit a request
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {apiRequests.map((req) => (
-                        <div key={req.id} className="border border-gray-200 rounded-lg p-3 sm:p-4">
-                          <div className="flex flex-col gap-2">
-                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="font-medium text-gray-900 text-sm">{req.name}</div>
-                                <div className="text-xs text-gray-500 truncate">{req.base_url}</div>
-                                <div className="mt-1 flex items-center gap-2 flex-wrap">
-                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
-                                    req.status === 'approved' ? 'bg-green-100 text-green-700'
-                                    : req.status === 'rejected' ? 'bg-red-100 text-red-700'
-                                    : 'bg-amber-100 text-amber-700'
-                                  }`}>{req.status}</span>
-                                  {req.purpose && <span className="text-xs text-gray-400">Purpose: {req.purpose}</span>}
-                                  {req.category && <span className="text-xs text-gray-400">Category: {req.category}</span>}
-                                  <span className="text-xs text-gray-400">{new Date(req.created_at).toLocaleDateString()}</span>
-                                </div>
-                                {req.status === 'rejected' && req.rejection_reason && (
-                                  <div className="mt-1 text-xs text-red-600">Reason: {req.rejection_reason}</div>
-                                )}
-                              </div>
-                            </div>
-                            {req.status === 'pending' && isSuperAdmin && (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <input
-                                  className="border border-gray-200 rounded px-2 py-1 text-xs flex-1 min-w-0"
-                                  placeholder="Rejection reason"
-                                  value={apiRejectionReasons[req.id] || ''}
-                                  onChange={(e) => setApiRejectionReasons((prev) => ({ ...prev, [req.id]: e.target.value }))}
-                                />
-                                <button
-                                  onClick={() => updateApiRequestStatus(req.id, 'approved')}
-                                  className="text-xs text-green-700 hover:text-green-800 font-medium"
-                                >Approve</button>
-                                <button
-                                  onClick={() => updateApiRequestStatus(req.id, 'rejected')}
-                                  className="text-xs text-red-600 hover:text-red-700 font-medium"
-                                >Reject</button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <Link
+                    href="/external-apis"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                  >
+                    {activeTab === 'request-new' ? 'Request an API →' : 'View requests →'}
+                  </Link>
                 </div>
               )}
 

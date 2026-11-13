@@ -160,12 +160,7 @@ export function useSocialPlatforms() {
   const [savingContentPrefs, setSavingContentPrefs] = useState(false);
   const [expandedContentTypes, setExpandedContentTypes] = useState<Set<string>>(new Set());
   const [customTypeInputs, setCustomTypeInputs] = useState<Record<string, string>>({});
-  // API request state (Request New / Queue tabs)
-  const [apiRequests, setApiRequests] = useState<Array<{ id: string; name: string; base_url: string; status: string; created_at: string; purpose?: string | null; category?: string | null; auth_type?: string | null; api_key_env_name?: string | null; rejection_reason?: string | null }>>([]);
-  const [isLoadingApiRequests, setIsLoadingApiRequests] = useState(false);
-  const [apiRejectionReasons, setApiRejectionReasons] = useState<Record<string, string>>({});
-  const [requestForm, setRequestForm] = useState({ name: '', base_url: '', purpose: 'trends', category: '', method: 'GET' as 'GET' | 'POST', auth_type: 'none', api_key_env_name: '', description: '' });
-  const [isSubmittingApiRequest, setIsSubmittingApiRequest] = useState(false);
+  // API request / approval state moved to hooks/useApiRequestsQueue on /external-apis (UI step 7b).
 
   const isSuperAdmin = userRole === 'SUPER_ADMIN';
 
@@ -207,22 +202,17 @@ export function useSocialPlatforms() {
   // Company config, social-account status and token-refresh stay raw.
   const catalogKey = selectedCompanyId ? `/api/external-apis?companyId=${selectedCompanyId}&catalog=1` : null;
   const contentPrefsKey = selectedCompanyId ? `/api/social-platforms/content-type-prefs?companyId=${selectedCompanyId}` : null;
-  const apiRequestsKey = selectedCompanyId ? `/api/external-apis/requests?companyId=${selectedCompanyId}` : null;
 
   const { data: catalogData, isLoading: catalogIsLoading, mutate: mutateCatalog } =
     useSWR<{ apis?: any[] }>(catalogKey);
   const { data: contentPrefsData, mutate: mutateContentPrefs } =
     useSWR<{ prefs?: Record<string, string[]> }>(contentPrefsKey);
-  const { data: apiRequestsData, isLoading: apiRequestsIsLoading, mutate: mutateApiRequests } =
-    useSWR<{ requests?: any[] }>(apiRequestsKey);
 
   useEffect(() => { if (catalogData) setCatalogApis(catalogData.apis || []); }, [catalogData]);
   useEffect(() => { if (contentPrefsData) setPlatformContentPrefs(contentPrefsData.prefs || {}); }, [contentPrefsData]);
-  useEffect(() => { if (apiRequestsData) setApiRequests(apiRequestsData.requests || []); }, [apiRequestsData]);
   // Loading flags map to SWR isLoading (first uncached load / company change);
   // manual reloads and focus revalidations are silent background refreshes.
   useEffect(() => { setLoadingCatalogApis(catalogIsLoading); }, [catalogIsLoading]);
-  useEffect(() => { setIsLoadingApiRequests(apiRequestsIsLoading); }, [apiRequestsIsLoading]);
 
   const loadCatalogApis = useCallback(async () => {
     if (!selectedCompanyId) return;
@@ -311,62 +301,6 @@ export function useSocialPlatforms() {
   };
 
   // ── API Request / Queue ─────────────────────────────────────────────────────
-
-  const loadApiRequests = useCallback(async () => {
-    if (!selectedCompanyId) return;
-    await mutateApiRequests();
-  }, [selectedCompanyId, mutateApiRequests]);
-
-  const submitApiRequest = async () => {
-    if (!selectedCompanyId || !requestForm.name.trim() || !requestForm.base_url.trim()) return;
-    setIsSubmittingApiRequest(true);
-    try {
-      const r = await apiFetch(`/api/external-apis/requests?companyId=${selectedCompanyId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...requestForm }),
-      });
-      if (r.ok) {
-        setRequestForm({ name: '', base_url: '', purpose: 'trends', category: '', method: 'GET', auth_type: 'none', api_key_env_name: '', description: '' });
-        notify('success', 'API request submitted for review.');
-        await loadApiRequests();
-        setActiveTab('queue');
-      } else {
-        const e = await r.json().catch(() => ({}));
-        notify('error', e.error || 'Failed to submit request');
-      }
-    } catch { notify('error', 'Failed to submit request'); }
-    finally { setIsSubmittingApiRequest(false); }
-  };
-
-  const updateApiRequestStatus = async (id: string, status: 'approved' | 'rejected') => {
-    const rejection_reason = status === 'rejected' ? (apiRejectionReasons[id] || '') : undefined;
-    try {
-      const r = await apiFetch('/api/external-apis/requests', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, status, rejection_reason }),
-      });
-      if (r.ok) {
-        notify('success', `Request ${status}.`);
-        // Write the status change through the shared cache entry
-        // (revalidate:false — the server was just told).
-        await mutateApiRequests(
-          (current) => ({
-            requests: (current?.requests ?? apiRequests).map((req: any) =>
-              req.id === id
-                ? { ...req, status, ...(status === 'rejected' ? { rejection_reason } : {}) }
-                : req
-            ),
-          }),
-          { revalidate: false }
-        );
-      } else {
-        const e = await r.json().catch(() => ({}));
-        notify('error', e.error || 'Failed to update request');
-      }
-    } catch { notify('error', 'Failed to update request'); }
-  };
 
   const toggleApiSelection = async (api: any, enable: boolean) => {
     if (!selectedCompanyId) return;
@@ -1165,8 +1099,6 @@ export function useSocialPlatforms() {
     activeTab,
     addContentType,
     addCustomContentType,
-    apiRejectionReasons,
-    apiRequests,
     archiveCommunity,
     archivedCommunity,
     archivedCommunityList,
@@ -1207,11 +1139,8 @@ export function useSocialPlatforms() {
     hiddenTrendList,
     imageApis,
     imageHiders,
-    isLoadingApiRequests,
     isSelected,
-    isSubmittingApiRequest,
     isSuperAdmin,
-    loadApiRequests,
     loadCatalogApis,
     loadCompanyConfigs,
     loadContentPrefs,
@@ -1227,7 +1156,6 @@ export function useSocialPlatforms() {
     renderCatalogApiCard,
     renderCommunityCard,
     renderPlatformCard,
-    requestForm,
     restoreCommunity,
     router,
     saveContentPrefs,
@@ -1237,8 +1165,6 @@ export function useSocialPlatforms() {
     selectedImageApis,
     selectedTrendApis,
     setActiveTab,
-    setApiRejectionReasons,
-    setApiRequests,
     setArchivedCommunity,
     setCatalogApis,
     setChecking,
@@ -1251,14 +1177,11 @@ export function useSocialPlatforms() {
     setHiddenImage,
     setHiddenSocial,
     setHiddenTrend,
-    setIsLoadingApiRequests,
-    setIsSubmittingApiRequest,
     setLoading,
     setLoadingCatalogApis,
     setNotice,
     setPlatformContentPrefs,
     setPlatforms,
-    setRequestForm,
     setSavingContentPrefs,
     setShowHiddenCommunity,
     setShowHiddenCommunityApi,
@@ -1274,13 +1197,11 @@ export function useSocialPlatforms() {
     showHiddenTrend,
     socialHiders,
     socialPlatforms,
-    submitApiRequest,
     toggleApiSelection,
     toggleExpandContentTypes,
     togglingApiId,
     trendApis,
     trendHiders,
-    updateApiRequestStatus,
     userRole,
     visibleCommunityApis,
     visibleImageApis,

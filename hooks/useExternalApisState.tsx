@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import { getAuthToken } from '../utils/getAuthToken';
+import { useApiRequestsQueue } from './useApiRequestsQueue';
 import {
   type KeyValuePair,
   type ProviderAccount,
@@ -126,6 +127,12 @@ export function useExternalApisState() {
     canManageExternalApis ||
     (typeof window !== 'undefined' && window.location.href.includes('mode=platform'));
   const companyContextId = isPlatformCatalogMode ? (platformCompanyId || null) : selectedCompanyId;
+  // UI step 7b: in company mode, request/approval data comes from the ONE shared queue
+  // (SWR + write-through via the working PUT /requests/{id}). Platform catalog mode
+  // (?mode=platform, scope=platform) keeps its existing loader below, unchanged.
+  const companyRequestsQueue = useApiRequestsQueue(isPlatformCatalogMode ? null : companyContextId, {
+    onApproved: () => loadApis(),
+  });
 
 
   const loadPlatformCompanies = async () => {
@@ -358,7 +365,7 @@ export function useExternalApisState() {
     }
   };
 
-  const loadRequests = async () => {
+  const loadPlatformRequests = async () => {
     try {
       setIsLoadingRequests(true);
       if (!companyContextId && !isPlatformCatalogMode) return;
@@ -395,6 +402,11 @@ export function useExternalApisState() {
     }
   };
 
+  const loadRequests = async () => {
+    if (isPlatformCatalogMode) return loadPlatformRequests();
+    await companyRequestsQueue.reload();
+  };
+
   useEffect(() => {
     // Company mode: auto-select first company when none selected
     if (!isPlatformCatalogMode && isAuthenticated && companies.length > 0 && !selectedCompanyId) {
@@ -411,7 +423,8 @@ export function useExternalApisState() {
     }
     loadApis();
     loadPresets();
-    loadRequests();
+    // Company mode: the shared SWR queue loads requests itself.
+    if (isPlatformCatalogMode) loadPlatformRequests();
   }, [isAuthenticated, selectedCompanyId, platformCompanyId, isPlatformCatalogMode, isPlatformAdminView]);
 
   useEffect(() => {
@@ -816,6 +829,15 @@ export function useExternalApisState() {
   };
 
   const updateRequestStatus = async (id: string, status: 'approved' | 'rejected') => {
+    if (!isPlatformCatalogMode) {
+      // Company mode: the shared queue (PUT /requests/{id}, cache write-through; an
+      // approval refreshes the API list via onApproved). The server decides who may approve.
+      resetMessages();
+      const result = await companyRequestsQueue.updateStatus(id, status, rejectionReasons[id]);
+      if (result.ok) setSuccessMessage(`Request ${status}.`);
+      else setErrorMessage(('error' in result && result.error) || 'Failed to update request.');
+      return;
+    }
     try {
       resetMessages();
       const rejection_reason = status === 'rejected' ? rejectionReasons[id] : undefined;
@@ -1263,7 +1285,7 @@ export function useExternalApisState() {
     isLoading,
     isLoadingPlatformCompanies,
     isLoadingPresets,
-    isLoadingRequests,
+    isLoadingRequests: isPlatformCatalogMode ? isLoadingRequests : companyRequestsQueue.isLoading,
     isPlatformAdminView,
     isPlatformCatalogMode,
     isSaving,
@@ -1298,7 +1320,7 @@ export function useExternalApisState() {
     queryPairs,
     rejectionReasons,
     requestForm,
-    requests,
+    requests: isPlatformCatalogMode ? requests : companyRequestsQueue.requests,
     resetMessages,
     resolveEditorPayload,
     router,
