@@ -56,6 +56,9 @@ export type PrincipalUnresolvedReason =
   | 'NO_AUTH'
   | 'INVALID_AUTH'
   | 'ACCOUNT_DELETED'
+  // Refused BY INTENT (e9/05 2026-11-14): authResolver rejects users.status='suspended' before any principal is built;
+  // previously that reached callers only through the INVALID_AUTH catch-all.
+  | 'ACCOUNT_SUSPENDED'
   | 'USER_NOT_FOUND'
   | 'NO_EMAIL';
 
@@ -344,6 +347,7 @@ async function resolvePrincipalUncached(
 
   // 4. Map auth-failure codes to PrincipalUnresolvedReason.
   if (auth.error === 'ACCOUNT_DELETED') return { ok: false, reason: 'ACCOUNT_DELETED' };
+  if (auth.error === 'ACCOUNT_SUSPENDED') return { ok: false, reason: 'ACCOUNT_SUSPENDED' };
   if (auth.error === 'USER_NOT_FOUND') return { ok: false, reason: 'USER_NOT_FOUND' };
   if (auth.error === 'NO_EMAIL') return { ok: false, reason: 'NO_EMAIL' };
   if (auth.error === 'NO_TOKEN') return { ok: false, reason: 'NO_AUTH' };
