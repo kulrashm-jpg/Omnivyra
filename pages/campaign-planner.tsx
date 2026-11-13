@@ -12,6 +12,7 @@ import DesignSystemPanel from '../components/planner/DesignSystemPanel';
 import { familyForCreatorType, type TemplateAssetFamily } from '../lib/creator-templates';
 import type { RequestedFamilyFrequency } from '../lib/creator-templates/designSystemCoverage';
 import { useCompanyContext } from '../components/CompanyContext';
+import CampaignWriteGate from '../components/access/CampaignWriteGate';
 import {
   PlannerEntryRouter,
   CampaignContextBar,
@@ -917,7 +918,10 @@ export default function CampaignPlannerPage() {
       <Head>
         <title>Strategic Mix — Campaign Planner | Omnivyra</title>
       </Head>
-      <CampaignPlannerWithSession />
+      {/* F3: read-only roles get AccessRestricted; the planner never loads for them. */}
+      <CampaignWriteGate>
+        <CampaignPlannerWithSession />
+      </CampaignWriteGate>
     </>
   );
 }
