@@ -573,7 +573,7 @@ export default function ExternalApisSectionsA({ f }: { f: ReturnType<typeof useE
                         ? <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700">✓ Live · OK</span>
                         : <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-red-50 border border-red-200 text-red-700" title={`${testData.response?.status || ''} ${testData.response?.statusText || ''}`}>✗ Test failed</span>
                     )}
-                    {showRunTestAndActions && (
+                    {showRunTestAndActions && isPlatformCatalogMode && (
                       <button type="button" onClick={() => testConnectionApi(api.id)} disabled={isTestingThis} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
                         {isTestingThis ? '…' : '⚡'} {isTestingThis ? 'Testing…' : 'Test'}
                       </button>
@@ -607,10 +607,10 @@ export default function ExternalApisSectionsA({ f }: { f: ReturnType<typeof useE
                           return next;
                         });
                       }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors">
-                        {expanded ? 'Close' : 'Configure'}
+                        {expanded ? 'Close' : (isPlatformCatalogMode ? 'Configure' : 'Details')}
                       </button>
                     )}
-                    {canManageExternalApis && (
+                    {canManageExternalApis && isPlatformCatalogMode && (
                       <button type="button" onClick={() => { if (confirm(`Delete ${api.name}?`)) deleteApi(api.id); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-100 text-red-500 text-xs font-medium hover:bg-red-50 transition-colors">
                         Delete
                       </button>
@@ -626,6 +626,21 @@ export default function ExternalApisSectionsA({ f }: { f: ReturnType<typeof useE
                 )}
                 {expanded && (
                   <div className="mt-3 ml-9 pt-3 border-t border-gray-100 space-y-4">
+                    {/* UI step 7c: in company mode, Test and Delete live here (progressive disclosure). */}
+                    {!isPlatformCatalogMode && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {showRunTestAndActions && (
+                        <button type="button" onClick={() => testConnectionApi(api.id)} disabled={isTestingThis} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-50 transition-colors disabled:opacity-50">
+                          {isTestingThis ? '…' : '⚡'} {isTestingThis ? 'Testing…' : 'Test'}
+                        </button>
+                        )}
+                        {canManageExternalApis && (
+                        <button type="button" onClick={() => { if (confirm(`Delete ${api.name}?`)) deleteApi(api.id); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-100 text-red-500 text-xs font-medium hover:bg-red-50 transition-colors">
+                          Delete
+                        </button>
+                        )}
+                      </div>
+                    )}
                     {/* ── Accounts Section (SuperAdmin only) ──────────────────── */}
                     {isSuperAdmin && (
                       <div className="max-w-2xl">

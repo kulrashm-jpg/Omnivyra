@@ -20,6 +20,8 @@ import {
 
 export default function ExternalApisPage() {
   const d = useExternalApisState();
+  // UI step 7c: Request / Approval queue / Usage sit behind "More" in company mode.
+  const [showMoreTabs, setShowMoreTabs] = React.useState(false);
   const {
     API_CATEGORY_TABS,
     HealthBadgeLegend,
@@ -291,7 +293,9 @@ export default function ExternalApisPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-lg shadow p-2 flex gap-2 text-sm flex-wrap">
+        {/* UI step 7c: company mode shows the API categories; Request / Approval queue /
+            Usage sit behind one "More" toggle. Platform catalog mode is unchanged. */}
+        <div className="bg-white rounded-lg shadow p-2 flex gap-2 text-sm flex-wrap items-center">
           {[
             { id: 'trend',      label: 'Trend APIs',           group: 'api' },
             { id: 'social',     label: 'Social Platform APIs', group: 'api' },
@@ -300,7 +304,9 @@ export default function ExternalApisPage() {
             ...(!isPlatformAdminView ? [{ id: 'request-new', label: 'Request New', group: 'mgmt' }] : []),
             { id: 'queue',  label: 'Approval Queue',    group: 'mgmt' },
             { id: 'usage',  label: 'Usage Analytics',   group: 'mgmt' },
-          ].map((tab, idx, arr) => {
+          ]
+            .filter((tab) => isPlatformCatalogMode || tab.group === 'api' || showMoreTabs || activeTab === tab.id)
+            .map((tab, idx, arr) => {
             const prevGroup = idx > 0 ? arr[idx - 1].group : tab.group;
             const showDivider = idx > 0 && tab.group !== prevGroup;
             return (
@@ -319,6 +325,16 @@ export default function ExternalApisPage() {
               </React.Fragment>
             );
           })}
+          {!isPlatformCatalogMode && (
+            <button
+              type="button"
+              onClick={() => setShowMoreTabs((v) => !v)}
+              aria-expanded={showMoreTabs}
+              className="ml-auto px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-100"
+            >
+              {showMoreTabs ? 'Less' : 'More'}
+            </button>
+          )}
         </div>
 
         <ExternalApisTabContent d={d} />
