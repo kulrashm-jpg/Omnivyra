@@ -159,6 +159,8 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     children: [
       // D3 (owner rule 2): existing campaigns are reachable from the header in 2 clicks.
       { label: 'All campaigns', href: '/campaigns', description: 'Every campaign you have, with its status.' },
+      // D5 (owner rule 2): the calendar is 2 clicks from anywhere (it had no header entry).
+      { label: 'Calendar', href: '/dashboard?tab=calendar', description: 'Every scheduled post across your campaigns.' },
       { label: 'BOLT Text', href: '/command-center/bolt-text', description: 'Fast text-first campaign path.' },
       { label: 'BOLT Creator', href: '/command-center/bolt-creator-strategy', description: 'Creator-led strategy flow.' },
       {

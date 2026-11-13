@@ -131,6 +131,13 @@ const nextConfig = {
     { source: '/threads/template', destination: '/threads/intelligence', permanent: false },
     { source: '/threads/suggestions', destination: '/threads/intelligence', permanent: false },
     { source: '/command-center/bolt-text-strategy', destination: '/command-center/bolt-text', permanent: false },
+    // D5 (owner rule 2): ONE scheduler. The three standalone schedulers had no nav path
+    // (they only linked to each other) and carried dead buttons; the live calendar is the
+    // dashboard's Calendar tab. Redirects run before pages, so the files stay (their
+    // D4/D5/D6 honesty guards still read them) but customers can no longer land there.
+    { source: '/scheduler', destination: '/dashboard?tab=calendar', permanent: false },
+    { source: '/creative-scheduler', destination: '/dashboard?tab=calendar', permanent: false },
+    { source: '/scheduling-dashboard', destination: '/dashboard?tab=calendar', permanent: false },
     // Signup entry normalization — one canonical signup destination. Next.js
     // preserves query params (e.g. ?ref=, ?email=) across these redirects.
     { source: '/signup', destination: '/create-account', permanent: true },

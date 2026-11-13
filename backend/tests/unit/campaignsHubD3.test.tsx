@@ -71,7 +71,8 @@ describe('campaign modes hub (D3)', () => {
 describe('header Campaigns menu (D3)', () => {
   it('lists "All campaigns" (→ /campaigns) first, then the four modes', () => {
     const campaigns = HEADER_NAV_ITEMS.find((i: any) => i.label === 'Campaigns') as any;
-    expect(campaigns.children.map((c: any) => c.label)).toEqual(['All campaigns', 'BOLT Text', 'BOLT Creator', 'Intelligent Mix', 'Strategic Mix']);
+    expect(campaigns.children.map((c: any) => c.label)).toEqual(['All campaigns', 'Calendar', 'BOLT Text', 'BOLT Creator', 'Intelligent Mix', 'Strategic Mix']);
+    expect(campaigns.children[1].href).toBe('/dashboard?tab=calendar');
     expect(campaigns.children[0].href).toBe('/campaigns');
   });
 });
