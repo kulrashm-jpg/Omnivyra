@@ -88,3 +88,10 @@ it('profile_refine is a registered, chargeable action (engine registries): catal
     feature_key: 'intelligence.profile_refine', action_key: 'profile_refine', pricing_key: 'profile_refine',
   });
 });
+
+it('VOICE class max covers a full 5:00 clip at 14 credits/min (70) with headroom (e9 ruling: 75)', () => {
+  const v = resolveActivityEconomics('voice_per_minute');
+  expect(v.activityClass).toBe('VOICE');
+  expect(v.maximumCredits).toBe(75);
+  expect(v.maximumCredits).toBeGreaterThanOrEqual(Math.ceil((5 * 60 * 14) / 60));
+});
