@@ -293,3 +293,17 @@ describe('run view: region_issues (UI tab)', () => {
     expect(fn).toMatch(/region_issues: extractRegionIssues\(legacyJob\?\.region_results\)/);
   });
 });
+
+describe('402 body uses the shared billed-response shape (e9)', () => {
+  const { marketPulseShortfallHttpBody } = require('../../services/marketPulse/regionCharging');
+  it('INSUFFICIENT_CREDITS with required/balance/perRegion; other reasons have their own codes', () => {
+    expect(marketPulseShortfallHttpBody({ ok: false, reason: 'insufficient_credits', perRegionCredits: 8, requiredCredits: 16, availableCredits: 3 }))
+      .toEqual({ error: 'insufficient_credits: Market Pulse needs 16 credits (8 per region) but 3 are available', code: 'INSUFFICIENT_CREDITS', required: 16, balance: 3, perRegion: 8 });
+    expect(marketPulseShortfallHttpBody({ ok: false, reason: 'no_credit_account' })).toEqual(expect.objectContaining({ code: 'NO_CREDIT_ACCOUNT' }));
+    expect(marketPulseShortfallHttpBody({ ok: false, reason: 'pricing_unavailable', detail: 'x' })).toEqual(expect.objectContaining({ code: 'PRICING_UNAVAILABLE' }));
+  });
+  it('the run route answers its 402 with that body', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../..', 'pages/api/market-pulse/run.ts'), 'utf8');
+    expect(src).toMatch(/return res\.status\(402\)\.json\(marketPulseShortfallHttpBody\(shortfall\)\);/);
+  });
+});

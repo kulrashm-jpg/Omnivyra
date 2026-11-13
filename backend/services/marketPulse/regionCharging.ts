@@ -61,6 +61,18 @@ export function describeMarketPulseShortfall(check: MarketPulseScanShortfall): s
   return 'pricing_unavailable: Market Pulse pricing could not be resolved; the scan was not run and nothing was charged';
 }
 
+/**
+ * The 402 body for a refused scan, in the SHARED billed-response shape (e9 2026-11-13; the UI keys on status + code):
+ * { error, code: INSUFFICIENT_CREDITS | NO_CREDIT_ACCOUNT | PRICING_UNAVAILABLE, required?, balance?, perRegion? }.
+ */
+export function marketPulseShortfallHttpBody(check: MarketPulseScanShortfall): Record<string, unknown> {
+  const error = describeMarketPulseShortfall(check);
+  if (check.reason === 'insufficient_credits') {
+    return { error, code: 'INSUFFICIENT_CREDITS', required: check.requiredCredits, balance: check.availableCredits, perRegion: check.perRegionCredits };
+  }
+  return { error, code: check.reason === 'no_credit_account' ? 'NO_CREDIT_ACCOUNT' : 'PRICING_UNAVAILABLE' };
+}
+
 /** In-app notice to the company's admins (same notifications row shape as credit alerts). Never throws. */
 export async function notifyMarketPulseSkipped(companyId: string, message: string): Promise<void> {
   try {

@@ -13,7 +13,7 @@ import {
   type MarketPulseRunInput,
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
-import { describeMarketPulseShortfall, precheckMarketPulseScan, type MarketPulseScanShortfall } from '../../../backend/services/marketPulse/regionCharging';
+import { marketPulseShortfallHttpBody, precheckMarketPulseScan, type MarketPulseScanShortfall } from '../../../backend/services/marketPulse/regionCharging';
 
 function shouldProcessMarketPulseInline(): boolean {
   if (!config.ENABLE_AUTO_WORKERS) return true;
@@ -78,13 +78,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const precheck = await precheckMarketPulseScan(companyId, regionsNormalized.length);
       if (!precheck.ok) {
         const shortfall = precheck as MarketPulseScanShortfall;
-        return res.status(402).json({
-          error: shortfall.reason,
-          message: describeMarketPulseShortfall(shortfall),
-          ...(shortfall.reason === 'insufficient_credits'
-            ? { required: shortfall.requiredCredits, available: shortfall.availableCredits, perRegion: shortfall.perRegionCredits }
-            : {}),
-        });
+        return res.status(402).json(marketPulseShortfallHttpBody(shortfall));
       }
     }
 
