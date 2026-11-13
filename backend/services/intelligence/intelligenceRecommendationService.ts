@@ -1,6 +1,7 @@
 import { supabase } from '../../db/supabaseClient';
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../../db/tenantTable';
 import { trackEvent } from '../telemetry/telemetryDispatcher';
 
 /**
@@ -121,7 +122,14 @@ export async function recordRecommendationOutcome(input: {
       patch.execution_correlation_id = input.execution_correlation_id;
     }
 
-    const { error } = await ownedDbTable('intelligence_recommendations')
+    // S2 tenant seam: the row above was read under `.eq('organization_id', input.organization_id)`, so that
+    // company is the row's own tenant; the update is pinned to it. An unusable id throws into the catch below
+    // (reported as { updated: false, error }), exactly like any other failure here.
+    const recommendations = tenantTable(
+      'intelligence_recommendations',
+      systemTenantContext(input.organization_id, 'intelligence recommendation: record outcome on the shown row'),
+    );
+    const { error } = await recommendations
       .update(patch)
       .eq('id', (row as any).id);
     if (error) return { updated: false, error: error.message };

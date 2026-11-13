@@ -23,8 +23,19 @@
  */
 
 import { randomUUID } from 'crypto';
-import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, tenantTable } from '../db/tenantTable';
 import { supabase } from '../db/supabaseClient';
+
+/**
+ * S2 tenant seam: lock writes for ONE run, under the tenant that owns that run (bolt_execution_runs.company_id,
+ * read by the seam from the row itself; never caller input). null when the run is missing, its company is not a
+ * uuid, or the owner read failed - each caller maps that onto its existing failure answer (acquire: null,
+ * extend: false, release: non-fatal warn).
+ */
+async function runRowsOf(runId: string, reason: string) {
+  const ctx = await resolveTenantOfRow('bolt_execution_runs', runId, reason);
+  return ctx ? tenantTable('bolt_execution_runs', ctx) : null;
+}
 
 /**
  * Default lease length.
@@ -124,17 +135,26 @@ export async function acquireRunLock(
   // the filter. The two operations don't need to be atomic together;
   // we serialize them and the second is the actual atomic claim.
 
+  // S2 tenant seam: both lock writes go through the run's own tenant. An unresolvable run is refused here,
+  // before step 1, with the same answer as a failed claim (null); it is logged because null otherwise reads as
+  // "another worker holds the lock".
+  const runs = await runRowsOf(runId, 'bolt run lock: acquire');
+  if (!runs) {
+    console.error('[bolt/lock] acquire refused: run has no resolvable tenant', { runId });
+    return null;
+  }
+
   // Step 1: clear any stale lock (expired or NULL lock_expires_at with
   // non-NULL lock_owner — a defensive case where someone forgot to set
   // an expiry). This is a no-op when the lock is healthy and held.
-  await ownedDbTable('bolt_execution_runs')
+  await runs
     .update({ lock_owner: null, lock_expires_at: null, lock_acquired_at: null })
     .eq('id', runId)
     .lt('lock_expires_at', nowIso);
 
   // Step 2: atomic claim. lock_owner IS NULL is the only filter — works
   // because step 1 nulled out any stale lock.
-  const { data, error } = await ownedDbTable('bolt_execution_runs')
+  const { data, error } = await runs
     .update({
       lock_owner: token,
       lock_acquired_at: nowIso,
@@ -179,7 +199,13 @@ export async function extendRunLock(
   const nowIso = new Date().toISOString();
   const expiresAt = new Date(Date.now() + ttlMs).toISOString();
 
-  const { data, error } = await ownedDbTable('bolt_execution_runs')
+  // S2 tenant seam: an unresolvable run cannot be extended (same answer as a lost lock).
+  const runs = await runRowsOf(runId, 'bolt run lock: extend');
+  if (!runs) {
+    console.warn('[bolt/lock] extend refused: run has no resolvable tenant', { runId });
+    return false;
+  }
+  const { data, error } = await runs
     .update({
       lock_expires_at: expiresAt,
       heartbeat_at: nowIso,
@@ -210,7 +236,13 @@ export async function releaseRunLock(runId: string, token: string): Promise<void
   // shutdown that raced the DB write must not try to re-release it.
   if (_heldLocks.get(runId) === token) _heldLocks.delete(runId);
   const nowIso = new Date().toISOString();
-  const { error } = await ownedDbTable('bolt_execution_runs')
+  // S2 tenant seam: an unresolvable run is a non-fatal release failure (the lock then expires on its TTL).
+  const runs = await runRowsOf(runId, 'bolt run lock: release');
+  if (!runs) {
+    console.warn('[bolt/lock] release failed (non-fatal): run has no resolvable tenant', { runId });
+    return;
+  }
+  const { error } = await runs
     .update({
       lock_owner: null,
       lock_expires_at: null,

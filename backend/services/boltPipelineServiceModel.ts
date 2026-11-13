@@ -1,6 +1,7 @@
 /** BOLT pipeline — types, format bindings, plan prep — split from boltPipelineService.ts (barrel preserved; importers unchanged). */
 import { WORKER_PROVENANCE } from '../../observability/runtime/workerProvenance';
 import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, tenantTable } from '../db/tenantTable';
 import { trackEvent } from './telemetry/telemetryDispatcher';
 /**
  * BOLT Pipeline Service
@@ -258,7 +259,15 @@ export async function updateRun(
   // Sliding-window lock extension. 2 minutes from each write.
   sanitizedUpdates.lock_expires_at = new Date(heartbeatNow.getTime() + 2 * 60 * 1000).toISOString();
 
-  const { error } = await ownedDbTable('bolt_execution_runs')
+  // S2 tenant seam: the run is written under its OWN tenant (bolt_execution_runs.company_id, read by the seam from
+  // the row; never caller input). An unresolvable run fails exactly like a failed write (RUN_UPDATE_FAILED).
+  const runCtx = await resolveTenantOfRow('bolt_execution_runs', runId, 'bolt pipeline: updateRun');
+  if (!runCtx) throw new BoltError(
+    BOLT_ERROR_CODES.RUN_UPDATE_FAILED,
+    'Failed to update run: run has no resolvable tenant',
+    { details: { db_error: 'tenant_unresolved' } }
+  );
+  const { error } = await tenantTable('bolt_execution_runs', runCtx)
     .update(sanitizedUpdates)
     .eq('id', runId);
   if (error) throw new BoltError(
@@ -350,6 +359,18 @@ export async function runSourceRecommendation(
   if (generatedCampaignId) {
     campaignId = generatedCampaignId;
 
+    // S2 tenant seam: the version + campaign writes below run under the campaign's OWN tenant (campaigns.company_id,
+    // read by the seam), not the payload's companyId. A campaign with no resolvable tenant, or one the payload's
+    // company does not own, is refused here, before anything is written, with the existing not-found error.
+    const campaignCtx = await resolveTenantOfRow('campaigns', campaignId, 'bolt pipeline: source-recommendation campaign update');
+    if (!campaignCtx || campaignCtx.companyId !== String(companyId ?? '').toLowerCase()) {
+      throw new BoltError(
+        BOLT_ERROR_CODES.CAMPAIGN_VERSION_NOT_FOUND,
+        `Campaign version not found for source-recommendation (campaign_id=${campaignId}).`,
+        { details: { campaign_id: campaignId, company_id: companyId, tenant: campaignCtx ? 'mismatch' : 'unresolved' } }
+      );
+    }
+
     const { data: latestVersion, error: fetchError } = await ownedDbTable('campaign_versions')
       .select('id, campaign_snapshot')
       .eq('company_id', companyId)
@@ -379,7 +400,7 @@ export async function runSourceRecommendation(
     updatedSnapshot.execution_config = executionConfig;
     updatedSnapshot.mode = 'fast';
 
-    const { error: updateError } = await ownedDbTable('campaign_versions')
+    const { error: updateError } = await tenantTable('campaign_versions', campaignCtx)
       .update({ campaign_snapshot: updatedSnapshot })
       .eq('id', (latestVersion as { id: string }).id);
 
@@ -398,7 +419,7 @@ export async function runSourceRecommendation(
       updates.start_date = tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`;
     }
     if (Object.keys(updates).length > 0) {
-      await ownedDbTable('campaigns').update(updates).eq('id', campaignId);
+      await tenantTable('campaigns', campaignCtx).update(updates).eq('id', campaignId);
     }
   } else {
     const newCampaignId = crypto.randomUUID();

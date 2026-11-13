@@ -15,6 +15,8 @@
 type Row = Record<string, unknown>;
 const rows: Row[] = [];
 let claimSucceeds = true;
+// A run belongs to a company (bolt_execution_runs.company_id); the seam scopes every lock write to it.
+const CO = 'c0000000-0000-4000-8000-0000000000c0';
 
 function makeBuilder() {
   const eqs: Array<[string, unknown]> = [];
@@ -32,7 +34,18 @@ function makeBuilder() {
     lt: () => Promise.resolve({ data: null, error: null }),
     is: (c: string, v: unknown) => { if (v === null) isNullCol = c; return b; },
     or: () => b,
-    select: () => {
+    select: (cols?: string) => {
+      // S2 tenant seam: resolveTenantOfRow reads the run's own company by id before any lock write.
+      if (!patch && cols === 'company_id') {
+        const read: Record<string, (...a: any[]) => any> = {
+          eq: (c: string, v: unknown) => { eqs.push([c, v]); return read; },
+          maybeSingle: async () => {
+            const r = rows.find((x) => eqs.every(([c, v]) => x[c] === v));
+            return { data: r ? { company_id: r.company_id } : null, error: null };
+          },
+        };
+        return read;
+      }
       const targets = claimSucceeds ? rows.filter(matches) : [];
       if (patch) for (const r of targets) Object.assign(r, patch);
       const result = { data: targets.map((r) => ({ id: r.id, lock_owner: r.lock_owner, lock_expires_at: r.lock_expires_at })), error: null };
@@ -62,7 +75,7 @@ beforeEach(() => {
 
 describe('the process tracks the claims it holds', () => {
   test('a successful acquire is registered with its token', async () => {
-    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running' });
+    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
     const lock = await acquireRunLock('run-1');
     expect(lock).not.toBeNull();
     const held = getHeldRunLocks();
@@ -72,37 +85,37 @@ describe('the process tracks the claims it holds', () => {
   });
 
   test('a FAILED acquire registers nothing — we do not own what we did not claim', async () => {
-    rows.push({ id: 'run-1', lock_owner: 'someone-else', lock_expires_at: null, status: 'running' });
+    rows.push({ id: 'run-1', lock_owner: 'someone-else', lock_expires_at: null, status: 'running', company_id: CO });
     claimSucceeds = false;
     expect(await acquireRunLock('run-1')).toBeNull();
     expect(getHeldRunLocks()).toHaveLength(0);
   });
 
   test('releasing deregisters, so shutdown does not re-release a finished run', async () => {
-    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running' });
+    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
     const lock = await acquireRunLock('run-1');
     await releaseRunLock('run-1', lock!.token);
     expect(getHeldRunLocks()).toHaveLength(0);
   });
 
   test('releasing with a FOREIGN token leaves our registration intact', async () => {
-    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running' });
+    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
     await acquireRunLock('run-1');
     await releaseRunLock('run-1', 'not-our-token');
     expect(getHeldRunLocks()).toHaveLength(1);
   });
 
   test('multiple concurrent runs are all tracked for shutdown', async () => {
-    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running' });
-    rows.push({ id: 'run-2', lock_owner: null, lock_expires_at: null, status: 'running' });
+    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
+    rows.push({ id: 'run-2', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
     await acquireRunLock('run-1');
     await acquireRunLock('run-2');
     expect(getHeldRunLocks().map((h) => h.runId).sort()).toEqual(['run-1', 'run-2']);
   });
 
   test('tokens are distinct per run so one release cannot clear another', async () => {
-    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running' });
-    rows.push({ id: 'run-2', lock_owner: null, lock_expires_at: null, status: 'running' });
+    rows.push({ id: 'run-1', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
+    rows.push({ id: 'run-2', lock_owner: null, lock_expires_at: null, status: 'running', company_id: CO });
     const a = await acquireRunLock('run-1');
     const b = await acquireRunLock('run-2');
     expect(a!.token).not.toBe(b!.token);

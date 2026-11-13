@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../db/tenantTable';
 import { normalizeTaxonomyKey } from './companyContextTaxonomy';
 import {
   buildFieldStates,
@@ -796,6 +797,12 @@ export async function saveCompanyContextIntelligence(
   }));
   const validationWarnings = validateCompanyContextIntelligence(normalizedContext);
 
+  // S2 tenant seam: the workforce profile is written under `companyId`. Both callers pass the company their route
+  // just authorized for the principal (resolveCompanyAccess in pages/api/company-profile/intelligence-context.ts and,
+  // via reviewCompanyContextEnrichmentSuggestion, intelligence-enrichment.ts). Created before any write, so a company
+  // id that is not a uuid throws here (this function already throws on write failures) and nothing is written.
+  const workforceRows = tenantTable('company_workforce_profile', systemTenantContext(companyId, 'company context intelligence: save workforce profile'));
+
   await Promise.all([
     replaceRows('company_revenue_segments', companyId, normalizedContext.revenue_segments),
     replaceRows('company_geographic_exposures', companyId, normalizedContext.geographic_exposures),
@@ -805,10 +812,10 @@ export async function saveCompanyContextIntelligence(
   ]);
 
   if (normalizedContext.workforce_profile && workforceHasSignal(normalizedContext.workforce_profile as Record<string, unknown>)) {
-    const upsertResult = await ownedDbTable('company_workforce_profile').upsert(normalizedContext.workforce_profile, { onConflict: 'company_id' });
+    const upsertResult = await workforceRows.upsert(normalizedContext.workforce_profile as unknown as Record<string, unknown>, { onConflict: 'company_id' });
     if (upsertResult.error) throw new Error(`Failed to save workforce profile: ${upsertResult.error.message}`);
   } else {
-    const deleteResult = await ownedDbTable('company_workforce_profile').delete().eq('company_id', companyId);
+    const deleteResult = await workforceRows.delete();
     if (deleteResult.error) throw new Error(`Failed to clear workforce profile: ${deleteResult.error.message}`);
   }
 

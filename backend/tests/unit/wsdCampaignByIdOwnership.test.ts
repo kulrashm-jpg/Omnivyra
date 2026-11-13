@@ -22,7 +22,14 @@ import { faults, beforeWrite, resetFaults } from '../helpers/wsdFaultClient';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
 jest.mock('../../db/supabaseClient', () => jest.requireActual('../helpers/wsdFaultClient').supabaseModule());
-jest.mock('../../db/writeOwner', () => jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule());
+// S2: [id].ts writes `campaigns` through the tenant seam (tenantTable -> ownedDbTable), no longer supabase.from.
+// Route that table through the same fault-injecting client so the "campaigns delete fails" window still reaches
+// the statement; every other ownedDbTable table keeps the plain harness builder (same as wsdVersionWritersOwnership).
+jest.mock('../../db/writeOwner', () => {
+  const m = jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule();
+  const faulted = jest.requireActual('../helpers/wsdFaultClient').supabaseModule().supabase;
+  return { ...m, ownedDbTable: (t: string) => (t === 'campaigns' ? faulted.from(t) : m.ownedDbTable(t)) };
+});
 jest.mock('../../services/supabaseAuthService', () => jest.requireActual('../helpers/sec91W2AHarness').authModule());
 jest.mock('../../security/IdentityResolver', () => jest.requireActual('../helpers/sec91W2AHarness').identityModule());
 jest.mock('../../services/authResolver', () => jest.requireActual('../helpers/sec91W2AHarness').authResolverModule());

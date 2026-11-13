@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, systemTenantContext, tenantChildTable, tenantTable } from '../db/tenantTable';
 import { getCmsAdapter, isCmsProvider } from './cms/registry';
 import type { CmsProvider } from './cms/types';
 import { getIntegration } from './integrationService';
@@ -47,6 +48,16 @@ export interface CreatePublishingJobInput {
   scheduledFor?: string | null;
   createdBy?: string | null;
 }
+
+/**
+ * S2 tenant seam: writes of ONE publishing job run under that job's own tenant. `job` is always a publishing_jobs
+ * row this module READ (claim / select), so job.company_id is the row's own company (UUID NOT NULL, FK to
+ * companies), never caller input. A malformed id throws TenantSeamError (TENANT_CONTEXT_MISSING).
+ */
+function jobsOf(job: Pick<PublishingJob, 'company_id'>, reason: string) {
+  return tenantTable('publishing_jobs', systemTenantContext(job.company_id, reason));
+}
+type PublishingJobRows = ReturnType<typeof jobsOf>;
 
 export interface WorkerRunResult {
   claimed: number;
@@ -98,7 +109,15 @@ export async function claimDuePublishingJobs(input: {
   const claimed: PublishingJob[] = [];
   for (const row of data || []) {
     const lockExpiresAt = new Date(Date.now() + (input.lockMs ?? 120_000)).toISOString();
-    const claim = await ownedDbTable('publishing_jobs')
+    // S2: each claim is written under the claimed row's own tenant (company_id read from the row above). A row
+    // whose company cannot form a context is not claimed (same outcome as a lost claim race).
+    let jobs: PublishingJobRows;
+    try {
+      jobs = jobsOf(row as PublishingJob, 'publishing worker: claim due job');
+    } catch {
+      continue;
+    }
+    const claim = await jobs
       .update({
         status: 'processing',
         locked_by: input.workerId,
@@ -116,7 +135,11 @@ export async function claimDuePublishingJobs(input: {
 }
 
 export async function executePublishingJob(jobId: string, workerId = 'inline-worker'): Promise<{ success: boolean; message: string; external_id?: string; external_url?: string }> {
-  const claimed = await ownedDbTable('publishing_jobs')
+  // S2 tenant seam: the claim runs under the job's own tenant, read from the row by the seam. A job with no
+  // resolvable tenant fails exactly like a missing job.
+  const jobCtx = await resolveTenantOfRow('publishing_jobs', jobId, 'publishing job: inline execute claim');
+  if (!jobCtx) throw new Error('Publishing job not found or not claimable');
+  const claimed = await tenantTable('publishing_jobs', jobCtx)
     .update({
       status: 'processing',
       locked_by: workerId,
@@ -133,14 +156,21 @@ export async function executePublishingJob(jobId: string, workerId = 'inline-wor
 }
 
 export async function executeClaimedPublishingJob(job: PublishingJob, workerId: string): Promise<{ success: boolean; message: string; external_id?: string; external_url?: string }> {
+  // S2 tenant seam: every job write below goes through the job's own tenant (see jobsOf). Created before any
+  // write; a malformed company id throws here, before anything is written.
+  const jobs = jobsOf(job, 'publishing job: execute claimed job');
   if (!isCmsProvider(job.provider)) {
-    await markJobFailure(job, `Unsupported CMS provider: ${job.provider}`, 'validation');
+    await markJobFailure(jobs, job, `Unsupported CMS provider: ${job.provider}`, 'validation');
     return { success: false, message: `Unsupported CMS provider: ${job.provider}` };
   }
 
   const started = Date.now();
   const attemptNumber = job.attempt_count + 1;
-  const { data: attempt, error: attemptError } = await ownedDbTable('publishing_attempts')
+  // S2 tenant seam: publishing_attempts is a child of publishing_jobs (job_id). The handle verifies the job is in
+  // the job's tenant and pins every attempt write to this job; a refusal throws before the attempt insert, as an
+  // insert error would.
+  const attempts = await tenantChildTable('publishing_attempts', systemTenantContext(job.company_id, 'publishing job: attempt rows'), job.id);
+  const { data: attempt, error: attemptError } = await attempts
     .insert({
       job_id: job.id,
       attempt_number: attemptNumber,
@@ -152,7 +182,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
     .single();
   if (attemptError) throw new Error(attemptError.message);
 
-  await ownedDbTable('publishing_jobs')
+  await jobs
     .update({ attempt_count: attemptNumber, updated_at: new Date().toISOString() })
     .eq('id', job.id);
 
@@ -215,7 +245,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
 
     const duration = Date.now() - started;
     const category = result.success ? null : categorizeFailure(result.message);
-    await ownedDbTable('publishing_attempts')
+    await attempts
       .update({
         status: result.success ? 'succeeded' : 'failed',
         provider_response: result.providerResponse ?? {},
@@ -227,7 +257,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
       .eq('id', attempt.id);
 
     if (result.success) {
-      await markJobPublished(job, result, duration);
+      await markJobPublished(jobs, job, result, duration);
       if (job.job_type === 'delete_post') {
         await ownedDbTable('blogs')
           .update({
@@ -260,13 +290,13 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
       return { success: true, message: result.message, external_id: result.externalId, external_url: result.externalUrl };
     }
 
-    await markJobFailure(job, result.message, category, attemptNumber, result.providerResponse, duration);
+    await markJobFailure(jobs, job, result.message, category, attemptNumber, result.providerResponse, duration);
     return { success: false, message: result.message };
   } catch (err) {
     const duration = Date.now() - started;
     const message = err instanceof Error ? err.message : 'Publishing job failed';
     const category = categorizeFailure(message);
-    await ownedDbTable('publishing_attempts')
+    await attempts
       .update({
         status: 'failed',
         error_message: message,
@@ -275,7 +305,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
         finished_at: new Date().toISOString(),
       })
       .eq('id', attempt.id);
-    await markJobFailure(job, message, category, attemptNumber, undefined, duration);
+    await markJobFailure(jobs, job, message, category, attemptNumber, undefined, duration);
     return { success: false, message };
   }
 }
@@ -313,13 +343,21 @@ export async function runPublishingWorker(input: { workerId?: string; limit?: nu
 export async function recoverStalePublishingJobs(workerId = 'stale-recovery'): Promise<number> {
   const now = new Date().toISOString();
   const { data } = await ownedDbTable('publishing_jobs')
-    .select('id, attempt_count')
+    .select('id, company_id, attempt_count')
     .eq('status', 'processing')
     .lt('lock_expires_at', now)
     .limit(50);
   let recovered = 0;
   for (const job of data || []) {
-    await ownedDbTable('publishing_jobs')
+    // S2: the cross-tenant stale scan above stays a read; each recovery WRITE is one row under that row's own
+    // tenant (company_id read from the row). A row whose company cannot form a context is skipped, not counted.
+    let jobs: PublishingJobRows;
+    try {
+      jobs = jobsOf(job as Pick<PublishingJob, 'company_id'>, 'publishing worker: stale-job recovery');
+    } catch {
+      continue;
+    }
+    await jobs
       .update({
         status: 'retrying',
         locked_by: null,
@@ -357,9 +395,9 @@ async function loadPublishingIntegration(job: PublishingJob) {
   return integration;
 }
 
-async function markJobPublished(job: PublishingJob, result: { providerResponse?: unknown; externalId?: string; externalUrl?: string; message: string }, duration: number): Promise<void> {
+async function markJobPublished(jobs: PublishingJobRows, job: PublishingJob, result: { providerResponse?: unknown; externalId?: string; externalUrl?: string; message: string }, duration: number): Promise<void> {
   const response = (result.providerResponse ?? {}) as Record<string, unknown>;
-  await ownedDbTable('publishing_jobs')
+  await jobs
     .update({
       status: 'published',
       external_id: result.externalId ?? null,
@@ -385,6 +423,7 @@ async function markJobPublished(job: PublishingJob, result: { providerResponse?:
 }
 
 async function markJobFailure(
+  jobs: PublishingJobRows,
   job: PublishingJob,
   message: string,
   category: PublishingFailureCategory,
@@ -395,7 +434,7 @@ async function markJobFailure(
   const exhausted = attemptNumber >= job.max_attempts || category === 'validation' || category === 'auth';
   const status: PublishingJobStatus = exhausted ? 'dead_letter' : 'retrying';
   const nextRetryAt = exhausted ? null : new Date(Date.now() + backoffMs(attemptNumber)).toISOString();
-  await ownedDbTable('publishing_jobs')
+  await jobs
     .update({
       status,
       provider_response: providerResponse ?? {},

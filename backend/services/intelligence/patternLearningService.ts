@@ -6,6 +6,7 @@ import {
   type PatternType,
 } from './patternFeatures';
 import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../../db/tenantTable';
 
 /**
  * Pattern-learning worker. Periodic aggregation over the last 7 days
@@ -141,7 +142,7 @@ function siblingStats(
   };
 }
 
-async function upsertPatterns(tallies: Map<string, Tally>): Promise<number> {
+async function upsertPatterns(orgId: string, tallies: Map<string, Tally>): Promise<number> {
   if (tallies.size === 0) return 0;
   const rows: Record<string, unknown>[] = [];
   for (const row of tallies.values()) {
@@ -163,7 +164,11 @@ async function upsertPatterns(tallies: Map<string, Tally>): Promise<number> {
     });
   }
   try {
-    const { error } = await ownedDbTable('intelligence_patterns')
+    // S2 tenant seam: every tally row carries organization_id = orgId (tallyPatternsForOrg builds them for that
+    // org only), and orgId is read from community_ai_actions.organization_id (listActiveOrgs), a tenant row.
+    // The conflict key includes organization_id. A seam refusal lands in the catch below (warn + 0).
+    const patterns = tenantTable('intelligence_patterns', systemTenantContext(orgId, 'pattern learning: upsert per-org pattern tallies'));
+    const { error } = await patterns
       .upsert(rows, { onConflict: 'organization_id,platform,action_type,pattern_type' });
     if (error) {
       console.warn('[patternLearning] upsert failed:', error.message);
@@ -183,7 +188,7 @@ export async function learnPatternsForOrg(orgId: string): Promise<{
 }> {
   const tallies = await tallyPatternsForOrg(orgId);
   const scanned = Array.from(tallies.values()).reduce((n, t) => n + t.success + t.failure, 0);
-  const upserted = await upsertPatterns(tallies);
+  const upserted = await upsertPatterns(orgId, tallies);
   return { organization_id: orgId, scope_rows_scanned: scanned, patterns_upserted: upserted };
 }
 

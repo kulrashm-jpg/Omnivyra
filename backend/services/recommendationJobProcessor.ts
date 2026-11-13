@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../db/tenantTable';
 /**
  * Trend Campaign multi-region recommendation job processor (v2).
  * Loads recommendation_jobs_v2, runs per-region generation, then consolidation.
@@ -43,7 +44,17 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
     return;
   }
 
-  await ownedDbTable('recommendation_jobs_v2')
+  // S2 tenant seam: every job write below runs under the job's own tenant (company_id read from the job row
+  // itself above, never caller input). A company that cannot form a context is treated like an unreadable job
+  // (return, nothing written).
+  let jobs: ReturnType<typeof tenantTable>;
+  try {
+    jobs = tenantTable('recommendation_jobs_v2', systemTenantContext(row.company_id, 'recommendation job v2: progress + result writes'));
+  } catch {
+    return;
+  }
+
+  await jobs
     .update({ status: 'RUNNING', progress_stage: 'INITIALIZING', updated_at: now })
     .eq('id', jobId);
 
@@ -66,7 +77,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
     const regionResults: Record<string, TrendRegionRecommendation | { error: true; message: string }> = {};
 
     for (const region of regions) {
-      await ownedDbTable('recommendation_jobs_v2').update({ progress_stage: 'SCANNING', updated_at: new Date().toISOString() }).eq('id', jobId);
+      await jobs.update({ progress_stage: 'SCANNING', updated_at: new Date().toISOString() }).eq('id', jobId);
       const start = Date.now();
       try {
         const result = await generateTrendRecommendationForRegion(
@@ -89,7 +100,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
         regionResults[region] = { error: true, message };
       }
 
-      await ownedDbTable('recommendation_jobs_v2')
+      await jobs
         .update({
           region_results: regionResults,
           updated_at: new Date().toISOString(),
@@ -117,13 +128,13 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
       finalStatus = 'COMPLETED';
     }
 
-    await ownedDbTable('recommendation_jobs_v2').update({ progress_stage: 'CONSOLIDATING', updated_at: new Date().toISOString() }).eq('id', jobId);
+    await jobs.update({ progress_stage: 'CONSOLIDATING', updated_at: new Date().toISOString() }).eq('id', jobId);
     const consolidated =
       successCount > 0
         ? await consolidateRegionalResults(successfulResults, { organizationId: companyId })
         : { global_opportunities: [], region_specific_insights: {}, execution_priority_order: [], consolidated_risks: [], strategic_summary: '', confidence_index: 0 };
 
-    await ownedDbTable('recommendation_jobs_v2')
+    await jobs
       .update({
         progress_stage: 'FINISHED',
         status: finalStatus,
@@ -134,7 +145,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
       .eq('id', jobId);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Job failed';
-    await ownedDbTable('recommendation_jobs_v2')
+    await jobs
       .update({
         status: 'FAILED',
         error: message,

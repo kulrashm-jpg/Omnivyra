@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, tenantTable } from '../db/tenantTable';
 import { trackEvent } from './telemetry/telemetryDispatcher';
 /**
  * Auto Completion Trigger.
@@ -60,7 +61,12 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
       return;
     }
 
-    const { error: updateError } = await ownedDbTable('campaigns')
+    // S2 tenant seam: the transition is written under the campaign's own tenant (campaigns.company_id, read by the
+    // seam from the row). A campaign with no resolvable tenant is not completed (silent return, as for any other
+    // ineligible campaign; this function never throws).
+    const campaignCtx = await resolveTenantOfRow('campaigns', campaignId, 'campaign auto-completion: execution_status transition');
+    if (!campaignCtx) return;
+    const { error: updateError } = await tenantTable('campaigns', campaignCtx)
       .update({
         execution_status: 'COMPLETED',
         updated_at: nowIso,

@@ -22,6 +22,7 @@
  * without refactor) → reported `unsupported_source`, never faked.
  */
 import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../../db/tenantTable';
 import { recordComplianceAudit } from '../audit/complianceAuditService';
 import { recordLeadReplayReceipt } from './leadReplayReceiptService';
 
@@ -98,8 +99,12 @@ export async function executeRawReplay(args: {
         __original_dedupe_key: args.dedupeKey,
       },
     }));
+    // S2 tenant seam: args.companyId is the company pages/api/internal/replay-ingress.ts access-checked
+    // (enforceCompanyAccess + COMPANY_ADMIN/SUPER_ADMIN role gate) before ingestReplay, its only caller.
+    // A seam refusal lands in the catch below (audit 'failed' + outcome 'failed').
+    const trackingEvents = tenantTable('tracking_events', systemTenantContext(args.companyId, 'raw replay executor: re-inject captured tracker events'));
     // ON CONFLICT (website_id, dedupe_key) DO NOTHING → idempotent replay.
-    const { error } = await ownedDbTable('tracking_events').upsert(rows, {
+    const { error } = await trackingEvents.upsert(rows, {
       onConflict: 'website_id,dedupe_key',
       ignoreDuplicates: true,
     });
