@@ -8,7 +8,8 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { CONFIRM_PHASES, SETTLE_PHASES, NON_SETTLE_PHASES } from '../../services/billing/holdSettlementState';
+// e9: the pin guards the ONE shared vocabulary module (holdSettlementState only re-exports it).
+import { CONFIRM_PHASES, SETTLE_PHASES, NON_SETTLE_PHASES } from '../../../shared/billing/creditPhaseVocabulary';
 
 const DIR = path.join(process.cwd(), 'backend/tests/fixtures/live-credit-functions-20261113');
 const read = (f: string) => fs.readFileSync(path.join(DIR, f), 'utf8');

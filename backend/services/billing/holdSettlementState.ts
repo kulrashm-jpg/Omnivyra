@@ -11,6 +11,7 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { logger } from '../logger';
+import { CONFIRM_PHASES, SETTLE_PHASES } from '../../../shared/billing/creditPhaseVocabulary';
 
 export type HoldSettlementState =
   | { state: 'open' }
@@ -87,17 +88,12 @@ function creditsOf(r: Row): number | null {
 }
 
 /**
- * The execution_phase vocabulary PROD writes to credit_transactions (verified against the live bodies, C100 record
- * 2026-11-13, committed under backend/tests/fixtures/live-credit-functions-20261113/): apply_credit_reservation
- * (20260322 body) writes 'hold' / 'confirm' / 'release' (plus 'grant' / 'expire' / 'expire_incentive', which never
- * settle a hold); apply_credit_partial_confirm (hand-applied body, md5 ff208f60) writes ONE 'confirm_partial' row and
- * returns the unused remainder to the wallet inside the same UPDATE. liveCreditPhaseVocabulary.test.ts reads those
- * bodies and fails if they write a phase this module does not classify.
+ * The execution_phase vocabulary is defined ONCE, in shared/billing/creditPhaseVocabulary.ts (verified against the live
+ * prod bodies, C100; liveCreditPhaseVocabulary.test.ts parses those bodies and fails if they write a phase the
+ * vocabulary does not classify). Re-exported here for this module's existing importers - never redefined
+ * (creditPhaseVocabularyNoLocalCopies.test.ts fails on a local copy).
  */
-export const CONFIRM_PHASES: readonly string[] = ['confirm', 'confirm_partial'];
-export const SETTLE_PHASES: readonly string[] = [...CONFIRM_PHASES, 'release'];
-/** Phases the live bodies write that never settle a hold (classified as "not a settle row"). */
-export const NON_SETTLE_PHASES: readonly string[] = ['hold', 'grant', 'expire', 'expire_incentive'];
+export { CONFIRM_PHASES, SETTLE_PHASES, NON_SETTLE_PHASES } from '../../../shared/billing/creditPhaseVocabulary';
 
 /** The remainder-release key of a confirm, or null when the confirm has no key (never derive from ''). */
 function remainderKeyOf(confirmKey: string | null): string | null {
