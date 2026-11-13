@@ -148,21 +148,89 @@ async function compose(decisions: PersistedDecisionObject[]) {
 
 const serialize = (report: unknown) => JSON.stringify(report);
 
+/**
+ * A private value as a NUMBER, not a substring (6f, 2026-11-13; CI-265 flake). The report stamps the clock (e.g.
+ * `observed_at`), and an ISO timestamp like `...T08:31:12.456Z` CONTAINS "12.4" - so `not.toContain('12.4')` failed
+ * whenever a run's clock had seconds 12 and milliseconds 4xx. A leak prints the value as a NUMBER: no digit or '.'
+ * directly before it, no digit directly after. (An ISO timestamp always carries three millisecond digits, so its
+ * "12.4" is always followed by a digit and never matches; a JSON field "value":12.4 does - ':' is NOT excluded, or
+ * the most likely leak shape would be missed. The CONTROL case below pins both.)
+ *
+ * VALUE-INDEPENDENCE (05): "timestamps never match" was a property of today's values, not of the regex - an integer
+ * like 31 matches inside `08:31:12`, and a 3-decimal value equal to the milliseconds (12.456) matches before the `Z`.
+ * So every payload is matched through scrubTimestamps first, which removes the whole class, not one instance.
+ * RELIES ON the frozen clock below as well: the two are each partial and complete only together (see the freeze).
+ */
+const asNumber = (n: number): RegExp =>
+  new RegExp(String.raw`(?<![\d.])` + String(n).replace(/\./g, '\\.') + String.raw`(?!\d)`);
+/** Remove ISO-8601 instants before matching a private number (they carry arbitrary digits). */
+const scrubTimestamps = (payload: string): string => payload.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, '<ts>');
+/** A fixture keyword as a literal pattern - an unescaped '.', '+' or '(' would silently broaden the assertion. */
+const literal = (s: string, flags = ''): RegExp => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+const REAL_TIMERS = ['nextTick', 'setImmediate', 'setTimeout', 'setInterval', 'queueMicrotask',
+  'clearTimeout', 'clearInterval', 'clearImmediate'] as const;
+
 describe('D3 follow-up — private Search Console values cannot reach Report 1', () => {
+  // Deterministic: the report's clock-stamped fields are pinned to the fixture's NOW (only Date is faked).
+  // NOT redundant with the number matcher / scrubTimestamps (05): with the clock frozen, any collision the matcher
+  // does not anticipate fails ALWAYS or NEVER - caught at once - instead of returning as a rare, value-specific
+  // flake. Do not remove one on the grounds that the other "handles timestamps".
+  beforeAll(() => {
+    jest.useFakeTimers({ doNotFake: [...REAL_TIMERS] });
+    jest.setSystemTime(new Date(NOW));
+  });
+  afterAll(() => jest.useRealTimers());
+
   it('case 1: avg_position is never printed in Report 1 prose', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
     const payload = serialize(report);
 
     // The exact leak: "opportunity gap signal; crm software avg position 12.4".
     expect(payload).not.toMatch(/avg position/i);
-    expect(payload).not.toContain(String(GSC_AVG_POSITION));
+    expect(scrubTimestamps(payload)).not.toMatch(asNumber(GSC_AVG_POSITION));
+  });
+
+  it('REGRESSION (CI-265): at a clock instant whose timestamp contains "12.4", case 1 still holds', async () => {
+    jest.setSystemTime(new Date('2026-11-13T08:31:12.456Z'));
+    try {
+      const payload = serialize(await compose([gscDecision(), publicDecision()]));
+      // The hazard is really present at this instant (the old substring assertion would have failed here) ...
+      expect(payload).toContain(String(GSC_AVG_POSITION));
+      // ... and the number match is not fooled by it (with or without the scrub).
+      expect(payload).not.toMatch(asNumber(GSC_AVG_POSITION));
+      expect(scrubTimestamps(payload)).not.toMatch(asNumber(GSC_AVG_POSITION));
+      expect(payload).not.toMatch(/avg position/i);
+    } finally {
+      jest.setSystemTime(new Date(NOW));
+    }
+  });
+
+  it('CONTROL: the number matcher does catch the real leak shape, and ignores digits inside other numbers', () => {
+    expect('crm software avg position 12.4.').toMatch(asNumber(GSC_AVG_POSITION));
+    expect('"value":12.4}').toMatch(asNumber(GSC_AVG_POSITION));
+    expect('T08:31:12.456Z').not.toMatch(asNumber(GSC_AVG_POSITION));
+    expect('112.4').not.toMatch(asNumber(GSC_AVG_POSITION));
+    expect('"impressions":12000,').toMatch(asNumber(GSC_IMPRESSIONS));
+    expect('120000').not.toMatch(asNumber(GSC_IMPRESSIONS));
+    expect('ctr 0.025').toMatch(asNumber(GSC_CTR));
+    // VALUE-INDEPENDENCE (05): a small integer or a 3-decimal value WOULD match inside a raw timestamp ...
+    const stamped = '"observed_at":"2026-11-13T08:31:12.456Z"';
+    expect(stamped).toMatch(asNumber(31));
+    expect(stamped).toMatch(asNumber(12.456));
+    // ... and never after the scrub, while a real leak next to a timestamp still does.
+    expect(scrubTimestamps(stamped)).not.toMatch(asNumber(31));
+    expect(scrubTimestamps(stamped)).not.toMatch(asNumber(12.456));
+    expect(scrubTimestamps(`${stamped},"value":31`)).toMatch(asNumber(31));
+    // literal(): a regex metacharacter in a fixture keyword is matched literally.
+    expect('crm.software').toMatch(literal('crm.software'));
+    expect('crmXsoftware').not.toMatch(literal('crm.software'));
   });
 
   it('case 2: impressions cannot populate Report 1 traffic impact', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
     const payload = serialize(report);
 
-    expect(payload).not.toContain(String(GSC_IMPRESSIONS));
+    expect(scrubTimestamps(payload)).not.toMatch(asNumber(GSC_IMPRESSIONS));
     // The decision whose impact_traffic was computed FROM those impressions is absent.
     expect(payload).not.toContain('gsc-1');
     expect(report.pipeline_audit.final_decisions).toBe(1);
@@ -170,12 +238,12 @@ describe('D3 follow-up — private Search Console values cannot reach Report 1',
 
   it('case 3: clicks cannot populate Report 1 traffic impact', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
-    expect(serialize(report)).not.toContain(String(GSC_CLICKS));
+    expect(scrubTimestamps(serialize(report))).not.toMatch(asNumber(GSC_CLICKS));
   });
 
   it('case 4: CTR cannot become public evidence', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
-    expect(serialize(report)).not.toContain(String(GSC_CTR));
+    expect(scrubTimestamps(serialize(report))).not.toMatch(asNumber(GSC_CTR));
   });
 
   it('case 5: GSC-derived priority cannot lead the Report 1 recommendation ranking', async () => {
@@ -187,7 +255,7 @@ describe('D3 follow-up — private Search Console values cannot reach Report 1',
     expect(titles.length).toBeGreaterThan(0);
     for (const title of titles) {
       expect(title).not.toMatch(/impressions are not turning into clicks/i);
-      expect(title).not.toMatch(new RegExp(GSC_KEYWORD, 'i'));
+      expect(title).not.toMatch(literal(GSC_KEYWORD, 'i'));
     }
   });
 
