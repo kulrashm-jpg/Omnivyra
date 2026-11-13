@@ -120,3 +120,38 @@ describe('who may opt in (static pin): every autoRefine:true caller is reviewed'
     ]);
   });
 });
+
+describe('Report 2 refresh: refine only inside the priced report scope (e9 2026-11-13)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { runWithProfileRefineOptIn, isProfileRefineOptedIn } = require('../../services/profileRefineScope');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fsx = require('fs') as typeof import('fs');
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { execFileSync } = require('child_process') as typeof import('child_process');
+  const root = require('path').resolve(__dirname, '../../..') as string;
+  const src = (rel: string) => fsx.readFileSync(require('path').join(root, rel), 'utf8') as string;
+  const SCOPED_READERS = ['backend/services/competitiveDatasetBootstrapService.ts', 'backend/services/competitorDiscoveryEngineService.ts'];
+
+  it('PRICED side: a scoped reader refines a stale profile inside runWithProfileRefineOptIn', async () => {
+    mockRefine.mockResolvedValue({ ...STALE_PROFILE, name: 'Acme (refined)' });
+    const p = await runWithProfileRefineOptIn(() => getProfile('co-1', { autoRefine: isProfileRefineOptedIn() }));
+    expect(mockRefine).toHaveBeenCalledTimes(1);
+    expect(p).toMatchObject({ name: 'Acme (refined)' });
+  });
+  it('UNPRICED side: the same read outside the scope never refines', async () => {
+    await getProfile('co-1', { autoRefine: isProfileRefineOptedIn() });
+    expect(mockRefine).not.toHaveBeenCalled();
+  });
+  it.each(SCOPED_READERS)('%s reads the scope (and nothing else opts it in)', (rel) => {
+    const s = src(rel);
+    expect(s).toMatch(/getProfile\(params\.companyId, \{ autoRefine: isProfileRefineOptedIn\(\) \}\)/);
+    expect(s).not.toMatch(/runWithProfileRefineOptIn/);
+  });
+  it('only the priced report-card pipeline opens the scope, around the performance compose', () => {
+    const openers = execFileSync('git', ['grep', '-l', 'runWithProfileRefineOptIn(', '--', 'backend', 'pages', 'lib',
+      ':!backend/tests', ':!backend/services/profileRefineScope.ts'], { cwd: root, encoding: 'utf8' }).trim().split('\n');
+    expect(openers).toEqual(['backend/services/reportCardServiceAssembly.ts']);
+    expect(src('backend/services/reportCardServiceAssembly.ts'))
+      .toMatch(/runWithProfileRefineOptIn\(\(\) => composePerformanceIntelligenceReport\(/);
+  });
+});

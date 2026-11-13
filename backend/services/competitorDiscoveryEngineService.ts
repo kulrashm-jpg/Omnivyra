@@ -8,6 +8,7 @@ import {
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { upsertCompetitorDomain } from './externalCompetitiveIntelligenceService';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
+import { isProfileRefineOptedIn } from './profileRefineScope';
 
 export type DiscoveredCompetitorDomain = {
   domain: string;
@@ -63,7 +64,8 @@ export async function discoverAndPersistCompetitorDomains(params: {
   companyId: string;
   gsc: GscSeoIntelligence | null;
 }): Promise<CompetitorDiscoveryResult> {
-  const profile = await getProfile(params.companyId).catch(() => null);
+  // Refines only inside a priced Report 2 run (profileRefineScope); never on health / dashboard / growth reads.
+  const profile = await getProfile(params.companyId, { autoRefine: isProfileRefineOptedIn() }).catch(() => null);
   if (!profile) return { status: 'unavailable', discovered: [], suppressed: 0 };
 
   const context = extractCompetitiveContextFromProfile(profile);

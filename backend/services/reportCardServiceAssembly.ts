@@ -433,7 +433,10 @@ export async function generateReportPayload(
       composed_report = await composeGrowthReport(report.company_id, { resolvedInput }) as unknown as Record<string, unknown>;
     } else if (requestedCategory === 'performance') {
       const { composePerformanceIntelligenceReport } = await import('./performanceReportService');
-      composed_report = await composePerformanceIntelligenceReport(report.company_id, { resolvedInput }) as unknown as Record<string, unknown>;
+      // Report 2 refreshes a stale profile BY DESIGN, and this is its PRICED path (inside runWithUsageCollection,
+      // token-actual settlement) - so it alone opens the profile-refine opt-in (profileRefineScope, e9 2026-11-13).
+      const { runWithProfileRefineOptIn } = await import('./profileRefineScope');
+      composed_report = await runWithProfileRefineOptIn(() => composePerformanceIntelligenceReport(report.company_id, { resolvedInput })) as unknown as Record<string, unknown>;
     } else {
       // ─── REMEDIATION-006 — THE ADS READ SEAM ────────────────────────────────
       //

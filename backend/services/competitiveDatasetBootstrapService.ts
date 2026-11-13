@@ -10,6 +10,7 @@ import {
   type CompetitorDomainRecord,
 } from './externalCompetitiveIntelligenceService';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
+import { isProfileRefineOptedIn } from './profileRefineScope';
 
 export type CompetitorBootstrapCandidate = {
   domain: string;
@@ -83,7 +84,8 @@ export async function bootstrapCompetitorDataset(params: {
   companyId: string;
   gsc: GscSeoIntelligence | null;
 }): Promise<CompetitorBootstrapResult> {
-  const profile = await getProfile(params.companyId).catch(() => null);
+  // Refines only inside a priced Report 2 run (profileRefineScope); never on health / dashboard / growth reads.
+  const profile = await getProfile(params.companyId, { autoRefine: isProfileRefineOptedIn() }).catch(() => null);
   const suppressed: CompetitorBootstrapResult['suppressed'] = [];
   const errors: string[] = [];
   if (!profile) {
