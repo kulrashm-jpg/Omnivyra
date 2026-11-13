@@ -23,6 +23,7 @@ import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore
 import { runJob } from '../../../backend/services/jobRunner';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
+import { resolvePostSocialAccount } from '../../../backend/services/postSocialAccountResolver';
 
 const BATCH_SIZE = 20; // Max posts to process per invocation
 // A refused post stays 'scheduled' and due, so it comes back on every run. The
@@ -148,26 +149,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       let socialAccountId: string | null = post.social_account_id || null;
       let resolvedOrgId: string | null = joinedAccts[0]?.company_id ?? null;
 
+      // CROSS-TENANT FIX (BLOCKING): a post without an account used to get "the user's active account for
+      // the platform" in ANY company, so company A's post could be PUBLISHED through company B's account.
+      // The shared resolver takes the account from the post's CAMPAIGN company only (a standalone post: only
+      // when the user's matching accounts are all in one company). A read failure is retried next run.
+      let accountFailure: string | null = null;
       if (!socialAccountId) {
         const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
-        const { data: acct } = await supabase
-          .from('social_accounts')
-          .select('id, company_id')
-          .eq('user_id', post.user_id)
-          .eq('is_active', true)
-          .in('platform', [post.platform, platformNorm])
-          .limit(1)
-          .maybeSingle();
-        socialAccountId = acct?.id ?? null;
-        resolvedOrgId = (acct?.company_id as string | undefined) ?? null;
+        const resolved = await resolvePostSocialAccount({
+          userId: post.user_id,
+          platforms: [post.platform, platformNorm],
+          campaignId: post.campaign_id ?? null,
+        });
+        if (resolved.ok) {
+          socialAccountId = resolved.socialAccountId;
+          resolvedOrgId = resolved.companyId;
+        } else if (resolved.retryable) {
+          console.warn('[cron/process-scheduled-posts] account resolution unreadable; retrying next run', { post_id: post.id, code: resolved.code });
+          results.skipped++;
+          continue;
+        } else {
+          accountFailure = `${resolved.message} (${resolved.code})`;
+        }
       }
 
       if (!socialAccountId) {
-        // No connected account — terminal classification, do not retry.
+        // No usable account — terminal classification, do not retry.
         await updatePostPublishStatus({
           post_id: post.id,
           status: 'FAILED',
-          last_error: `No connected ${post.platform} account`,
+          last_error: accountFailure ?? `No connected ${post.platform} account`,
         });
         results.skipped++;
         continue;

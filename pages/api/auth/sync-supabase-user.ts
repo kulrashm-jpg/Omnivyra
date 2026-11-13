@@ -32,11 +32,6 @@ import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCod
 import { isAcceptableEmailAddress } from '../../../lib/auth/emailAddressPolicy';
 import { incrementAuthMetric } from '../../../backend/services/authMetrics';
 
-// The signup-intent company bootstrap is disabled (see
-// bootstrapCompanyFromSignupIntent). Its legacy canonical/eligibility result
-// types were removed during the domain-eligibility consolidation; the only
-// reachable return is { ok: true }.
-type BootstrapResult = { ok: true };
 
 const SUPPORT_EMAIL = 'support@omnivyra.com';
 
@@ -268,10 +263,9 @@ async function handler(
       filterValue:  supabaseUid,
       userId:       existingUserId,
     });
-    // Best-effort credit-bookkeeping reconciliation. grantInitialFreeCredit
-    // self-heals: if the wallet already has the grant but the claim or stamp
-    // is missing, it repairs them without re-granting. If the org already
-    // has a clean claim row, it returns 'already_claimed' as a no-op.
+    // Best-effort credit-bookkeeping reconciliation, REPAIR ONLY: if the ledger already has the org's grant but the
+    // claim or stamp is missing, it repairs them without re-granting. It NEVER creates a grant (e9 ruling,
+    // BLOCKING money: the initial credits come via onboarding, after its eligibility checks).
     void reconcileInitialFreeCreditForUser(existingUserId, normalizedEmail);
     const gate = await gateOnMfa(existingUserId);
     if (gate.required) {
@@ -508,8 +502,10 @@ export async function tryFlipInvitedToActive(input: {
 /**
  * Best-effort reconcile of the initial free-credit bookkeeping for an
  * existing user logging in. Resolves the user's active company from
- * user_company_roles (status='active') and re-invokes grantInitialFreeCredit,
- * which self-heals any drift between:
+ * user_company_roles (status='active') and re-invokes grantInitialFreeCredit
+ * with repairOnly: true - it repairs drift for a company that ALREADY has a
+ * ledger grant and never creates one (a login skips onboarding's eligibility
+ * checks). It self-heals any drift between:
  *   1. credit_transactions ledger row
  *   2. organization_credits wallet balances
  *   3. free_credit_claims audit row
@@ -541,6 +537,7 @@ async function reconcileInitialFreeCreditForUser(
       orgId:       companyId,
       userId,
       emailDomain,
+      repairOnly:  true,
     });
   } catch (err) {
     logger.warn('auth_sync_credit_reconcile_failed', {
@@ -549,29 +546,6 @@ async function reconcileInitialFreeCreditForUser(
       message: err instanceof Error ? err.message : String(err),
     });
   }
-}
-
-/**
- * Auto-creates a company + COMPANY_ADMIN role for a self-serve signup the
- * first time their email is verified. The company name comes from the
- * signup_intents row written by /api/auth/signup.
- *
- * Idempotent — if the user already has any active company role, or there
- * is no pending intent with a company name, this is a no-op. Errors are
- * logged but never thrown: failing to bootstrap must not break the
- * sync-supabase-user response, since the user can still complete onboarding
- * manually via /onboarding/company.
- */
-async function bootstrapCompanyFromSignupIntent(input: {
-  userId: string;
-  email: string;
-  clientIp?: string;
-}): Promise<BootstrapResult> {
-  logger.warn('auth_sync_signup_intent_company_bootstrap_disabled', {
-    userId: input.userId,
-    email: input.email,
-  });
-  return { ok: true };
 }
 
 /**
