@@ -191,13 +191,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── 8. Sync canonical user lifecycle state ────────────────────────────────
   // - Flip users.status invited → active (Phase 2.A lifecycle).
-  // - Populate active_company_id if not already set. Existing pointers are
-  //   preserved (the user may already belong to a different primary org).
-  const userPatch: Record<string, unknown> = { updated_at: now };
+  // - Point active_company_id at the company whose invitation was JUST accepted (e1 2026-11-13, BLOCKING): the
+  //   membership activated above is the user's newest ACTIVE one, so it is the right current company. The old
+  //   "only if empty" rule kept a stale pointer - e.g. to a company whose membership is inactive, the root cause
+  //   of 24 of 33 prod pointers referencing a company where the user is not active (55's sweep). A NULL pointer
+  //   (as D6b leaves the stale ones) is set the same way.
+  const previousActiveCompanyId: string | null = (userRow as any).active_company_id ?? null;
+  const userPatch: Record<string, unknown> = { updated_at: now, active_company_id: companyId };
   if (previousUserStatus === 'invited') userPatch.status = 'active';
-  if (!(userRow as any).active_company_id) userPatch.active_company_id = companyId;
-  if (Object.keys(userPatch).length > 1) {
-    await supabase.from('users').update(userPatch).eq('id', userId);
+  const { error: userPatchErr } = await supabase.from('users').update(userPatch).eq('id', userId);
+  if (userPatchErr) {
+    // The membership is already active; a failed pointer write leaves the old pointer - say so, never hide it.
+    console.error('[/api/team/accept-invite] active_company_id update failed:', userPatchErr.message);
   }
 
   // ── 9. Canonical audit row ────────────────────────────────────────────────
@@ -215,7 +220,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       previous_role_status: existingStatus,
       previous_role_value: existingRoleValue,
       role_existed: Boolean(existingRole),
-      active_company_id_set: !(userRow as any).active_company_id,
+      active_company_id_set: previousActiveCompanyId !== companyId,
+      previous_active_company_id: previousActiveCompanyId,
     },
   });
 

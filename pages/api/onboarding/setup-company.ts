@@ -307,10 +307,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       // Idempotent: only insert if not already a member
       const { data: existingRole } = await supabase
         .from('user_company_roles')
-        .select('id')
+        .select('id, status')
         .eq('user_id', user.id)
         .eq('company_id', orgId)
         .maybeSingle();
+
+      // e1 2026-11-13 (BLOCKING): an existing NON-active row (inactive / deactivated / invited) is not a membership.
+      // Re-activating it would be a grant this path does not decide, and re-pointing active_company_id at it would
+      // point the user at a company where they are not active. Fail closed and say why.
+      if (existingRole && (existingRole as { status?: string }).status !== 'active') {
+        return res.status(409).json({
+          error: 'Your previous membership in this company is not active. Ask the company admin or support to restore it.',
+          code: 'MEMBERSHIP_NOT_ACTIVE',
+        });
+      }
 
       if (!existingRole) {
         await supabase.from('user_company_roles').insert({
@@ -392,11 +402,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       // onboarding UI can prompt the user to request access from the admin.
 
       // Idempotent: if the user is already a member just let them through
+      // e1 2026-11-13 (BLOCKING): only an ACTIVE membership lets them through; a former (inactive) one is not.
       const { data: existingRole } = await supabase
         .from('user_company_roles')
         .select('id')
         .eq('user_id', user.id)
         .eq('company_id', matched.company_id)
+        .eq('status', 'active')
         .maybeSingle();
 
       if (existingRole) {
@@ -468,9 +480,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
           .eq('company_id', domainCompany.id)
           .maybeSingle();
 
-        if (existingRole) {
+        // e1 2026-11-13 (BLOCKING): only an ACTIVE membership - or an invitation accepted right here - makes this
+        // the user's company and re-points users.active_company_id. An inactive / deactivated (former) membership
+        // is NOT one: it used to re-point the pointer at a company where the user has no active role (the root
+        // cause 55's sweep found). Such a user is treated like a non-member below (re-invite via the admin).
+        const priorRole = existingRole as { id: string; status: string; role: string | null } | null;
+        if (priorRole && (priorRole.status === 'active' || priorRole.status === 'invited')) {
           // If the user was invited (by super admin or company admin), activate them now.
-          const role = existingRole as { id: string; status: string; role: string | null };
+          const role = priorRole;
           if (role.status === 'invited') {
             // Closure-015M (R-14): governed acceptance (see Path A), not a blind flip.
             const accepted = await acceptInvitationViaOnboarding({
@@ -482,10 +499,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
               return res.status(accepted.status).json({ error: accepted.error });
             }
           }
-          await supabase
+          const { error: pointerErr } = await supabase
             .from('users')
             .update({ active_company_id: domainCompany.id, updated_at: new Date().toISOString() })
             .eq('id', user.id);
+          if (pointerErr) {
+            console.error('[setup-company] active_company_id update failed:', pointerErr.message);
+          }
           return res.status(200).json({ companyId: domainCompany.id });
         }
 
@@ -581,6 +601,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
           .select('id')
           .eq('user_id', user.id)
           .eq('company_id', raceWinner.id)
+          .eq('status', 'active')   // e1 2026-11-13: a former (inactive) membership is not "already a member"
           .maybeSingle();
 
         if (existingRole) {

@@ -516,3 +516,77 @@ describe('D — bootstrap-super-admin adopts the governed assign_super_admin fun
     expect(mockRpc.fn).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// e1 2026-11-13 (BLOCKING, 55's active_company_id sweep): the ROOT-CAUSE writers of stale "current company"
+// pointers. A pointer may only ever be set to a company where the user holds an ACTIVE membership.
+describe('active_company_id writers point only at a company with an ACTIVE membership', () => {
+  const token = ['tok', 'ptr', 'fixture'].join('-');
+  const hash = createHash('sha256').update(token).digest('hex');
+  const accept = () => invoke(teamAcceptInviteRoute as never, { method: 'POST', body: { token }, headers: { 'x-test-user': U, 'x-test-email': EMAIL } });
+  const pointer = () => rows('users').find((u) => u.id === U)?.active_company_id ?? null;
+  const pointerWrites = () => calls().filter((c) => c.table === 'users' && c.op === 'update');
+
+  it('accept-invite: a STALE pointer (another company) is moved to the company just accepted', async () => {
+    world({}, [inv({ token_hash: hash })]);
+    rows('users')[0].supabase_uid = `sb-${U}`;
+    rows('users')[0].active_company_id = OTHER;
+    const r = await accept();
+    expect(r.status).toBe(200);
+    expect(row()).toMatchObject({ status: 'active' });
+    expect(pointer()).toBe(CO);
+  });
+
+  it('accept-invite: a NULL pointer (as D6b leaves the stale ones) is set to the company just accepted', async () => {
+    world({}, [inv({ token_hash: hash })]);
+    rows('users')[0].supabase_uid = `sb-${U}`;
+    rows('users')[0].active_company_id = null;
+    expect((await accept()).status).toBe(200);
+    expect(pointer()).toBe(CO);
+  });
+
+  it('setup-company domain branch: an INACTIVE former membership is not "already a member" - no re-point, no 200 companyId', async () => {
+    world({ company_id: CO_W, status: 'inactive' }, []);
+    rows('users')[0].active_company_id = OTHER;
+    const r = await setup({}, WORK);
+    expect(r.body).not.toEqual({ companyId: CO_W });
+    expect(r.body).toMatchObject({ companyExists: true, matchedCompanyId: CO_W });
+    expect(pointer()).toBe(OTHER);
+    expect(membershipWrites()).toEqual([]);
+  });
+
+  it('setup-company domain branch (CONTROL): an ACTIVE membership re-points to that company', async () => {
+    world({ company_id: CO_W, status: 'active' }, []);
+    rows('users')[0].active_company_id = OTHER;
+    const r = await setup({}, WORK);
+    expect([r.status, r.body]).toEqual([200, { companyId: CO_W }]);
+    expect(pointer()).toBe(CO_W);
+  });
+
+  it('setup-company approved-access path: an existing NON-active row → 409 MEMBERSHIP_NOT_ACTIVE; no pointer, no membership write', async () => {
+    world({ status: 'inactive' }, []);
+    seed({ ...Object.fromEntries(['companies', 'users', 'user_company_roles', 'invitations', 'stepup_sessions', 'trusted_devices', 'audit_logs', 'api_idempotency_keys'].map((t) => [t, rows(t)])),
+      access_requests: [{ id: 'ar-1', email: EMAIL, organization_id: CO, status: 'approved' }] });
+    const r = await setup();
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'MEMBERSHIP_NOT_ACTIVE' });
+    expect(pointer()).toBeNull();
+    expect(pointerWrites()).toEqual([]);
+    expect(membershipWrites()).toEqual([]);
+  });
+
+  it('setup-company matched-company path: a former (inactive) membership is not let through as a member', async () => {
+    world({ company_id: OTHER, status: 'inactive' }, []);
+    const { findMatchingCompany } = require('../../services/companyMatchService');
+    (findMatchingCompany as jest.Mock).mockResolvedValueOnce({ company_id: OTHER, company_name: 'Other' });
+    const r = await setup({}, WORK);
+    expect(r.body).not.toEqual({ companyId: OTHER });
+    expect(r.body).toMatchObject({ companyExists: true, matchedCompanyId: OTHER });
+  });
+
+  it('source pin: the race-winner path counts only an ACTIVE membership as "already a member"', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../../pages/api/onboarding/setup-company.ts'), 'utf8');
+    const race = src.slice(src.indexOf('if (raceWinner) {'), src.indexOf("'DOMAIN_UNIQUE_RACE_LOST'"));
+    expect(race).toMatch(/\.eq\('company_id', raceWinner\.id\)\s*\n\s*\.eq\('status', 'active'\)/);
+  });
+});
