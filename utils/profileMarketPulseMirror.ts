@@ -115,3 +115,42 @@ export function mergeMarketPulseForSave(
 ): Record<string, unknown> {
   return { ...(storedMarketPulse ?? {}), ...changes };
 }
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * Build report_settings.market_pulse for a profile save (UI step 6.4b; 05: re-read at save).
+ * - `stored`: market_pulse RE-READ from the server just before saving (fresh truth).
+ * - `loaded`: market_pulse as the form loaded it; `client`: as the form holds it now.
+ *   Only keys the user actually changed this session (client ≠ loaded) are overlaid, so
+ *   anything written since load (a refine, another tab) is never reverted.
+ * - core_offerings / growth_priorities are rebuilt as mirrors: the existing MP entries
+ *   (changed value if the user edited them, else the fresh stored value) FIRST, then the
+ *   profile items that pass the shape filter.
+ */
+export function prepareMarketPulseForSave(args: {
+  stored: Record<string, unknown> | null | undefined;
+  loaded: Record<string, unknown> | null | undefined;
+  client: Record<string, unknown> | null | undefined;
+  productsServicesList: readonly string[];
+  growthPrioritiesText: string | null | undefined;
+}): {
+  marketPulse: Record<string, unknown>;
+  heldBack: { coreOfferings: Array<{ item: string; reason: 'too_long' | 'paragraph' }>; growthPriorities: Array<{ item: string; reason: 'too_long' | 'paragraph' }> };
+} {
+  const client = args.client ?? {};
+  const loaded = args.loaded ?? {};
+  const stored = args.stored ?? {};
+  const changes: Record<string, unknown> = {};
+  for (const k of Object.keys(client)) {
+    if (!same(client[k], loaded[k])) changes[k] = client[k];
+  }
+  const base = mergeMarketPulseForSave(stored, changes);
+  const asList = (v: unknown) => (Array.isArray(v) ? (v as unknown[]).map((x) => String(x)) : []);
+  const core = buildMirror(asList(base.core_offerings), args.productsServicesList);
+  const growth = buildMirror(asList(base.growth_priorities), splitToList(args.growthPrioritiesText ?? ''));
+  return {
+    marketPulse: { ...base, core_offerings: core.mirror, growth_priorities: growth.mirror },
+    heldBack: { coreOfferings: core.heldBack, growthPriorities: growth.heldBack },
+  };
+}

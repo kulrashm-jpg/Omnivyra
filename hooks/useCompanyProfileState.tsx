@@ -26,6 +26,7 @@ import {
   TARGET_CUSTOMER_FIELDS,
   MARKETING_INTELLIGENCE_FIELDS,
 } from '../utils/mergeCampaignPurposeIntent';
+import { prepareMarketPulseForSave } from '../utils/profileMarketPulseMirror';
 
 const ONBOARDING_CHECKPOINT_PREFIX = 'company_profile_onboarding:';
 const ONBOARDING_REFINE_STALE_MS = 2 * 60 * 1000;
@@ -787,8 +788,32 @@ export function useCompanyProfileState() {
       // `override` lets a guided-capture flow persist the exact fields it just
       // staged without waiting for the activeProfile state to settle.
       const source = override ?? activeProfile;
+      // UI step 6.4b: report_settings.market_pulse is replaced WHOLE by the server, so
+      // RE-READ it now and overlay only what the user changed (05: never merge against a
+      // stale copy). Offerings / growth priorities are mirrored into it (55's rules).
+      // If the re-read fails, fall back to the loaded snapshot, never the form's copy.
+      const loadedMarketPulse = (profile?.report_settings?.market_pulse ?? null) as Record<string, unknown> | null;
+      let storedMarketPulse: Record<string, unknown> | null = loadedMarketPulse;
+      try {
+        const fresh = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`);
+        if (fresh.ok) {
+          const freshBody = await fresh.json().catch(() => null);
+          storedMarketPulse = (freshBody?.profile?.report_settings?.market_pulse ?? loadedMarketPulse) as Record<string, unknown> | null;
+        }
+      } catch {
+        storedMarketPulse = loadedMarketPulse;
+      }
+      const productsServicesListForSave = source.products_services_list ?? splitToList(source.products_services);
+      const { marketPulse: marketPulseForSave } = prepareMarketPulseForSave({
+        stored: storedMarketPulse,
+        loaded: loadedMarketPulse,
+        client: (source.report_settings?.market_pulse ?? null) as Record<string, unknown> | null,
+        productsServicesList: productsServicesListForSave,
+        growthPrioritiesText: source.growth_priorities,
+      });
       const payload = {
         ...source,
+        report_settings: { ...(source.report_settings ?? {}), market_pulse: marketPulseForSave } as CompanyProfile['report_settings'],
         companyId: companyId || source.company_id,
         company_id: companyId || source.company_id,
         industry_list: source.industry_list ?? splitToList(source.industry),
@@ -796,7 +821,7 @@ export function useCompanyProfileState() {
         geography_list: source.geography_list ?? splitToList(source.geography),
         competitors_list: source.competitors_list ?? splitToList(source.competitors),
         content_themes_list: source.content_themes_list ?? splitToList(source.content_themes),
-        products_services_list: source.products_services_list ?? splitToList(source.products_services),
+        products_services_list: productsServicesListForSave,
         target_audience_list: source.target_audience_list ?? splitToList(source.target_audience),
         goals_list: source.goals_list ?? splitToList(source.goals),
         brand_voice_list: source.brand_voice_list ?? splitToList(source.brand_voice),

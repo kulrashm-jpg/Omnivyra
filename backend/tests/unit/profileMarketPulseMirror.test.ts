@@ -81,3 +81,54 @@ describe('read-then-merge market_pulse (D6)', () => {
 it('dedupe keeps the first spelling and drops blanks', () => {
   expect(dedupe([' A ', 'a', '', 'B'])).toEqual(['A', 'B']);
 });
+
+import { prepareMarketPulseForSave } from '../../../utils/profileMarketPulseMirror';
+
+describe('prepareMarketPulseForSave (6.4b: re-read at save, overlay only user changes)', () => {
+  const loaded = { core_offerings: ['Audits'], growth_priorities: ['EU'], default_categories: ['a'], competitor_details: [{ name: 'X' }] };
+
+  it('a value written since load (stored ≠ loaded) is NOT reverted by the stale form copy', () => {
+    const stored = { ...loaded, default_categories: ['a', 'b-added-by-refine'], market_alternatives: [{ name: 'New' }] };
+    const client = { ...loaded }; // the user didn't touch market_pulse
+    const { marketPulse } = prepareMarketPulseForSave({ stored, loaded, client, productsServicesList: ['Audits'], growthPrioritiesText: 'EU' });
+    expect(marketPulse.default_categories).toEqual(['a', 'b-added-by-refine']);
+    expect(marketPulse.market_alternatives).toEqual([{ name: 'New' }]);
+    expect(marketPulse.competitor_details).toEqual([{ name: 'X' }]);
+  });
+
+  it("the user's own edits ARE applied", () => {
+    const client = { ...loaded, default_categories: ['user-set'] };
+    const { marketPulse } = prepareMarketPulseForSave({ stored: loaded, loaded, client, productsServicesList: [], growthPrioritiesText: '' });
+    expect(marketPulse.default_categories).toEqual(['user-set']);
+  });
+
+  it('mirrors: fresh stored MP entries first, then new profile items; paragraphs held back', () => {
+    const stored = { ...loaded, core_offerings: ['Audits', 'Training (added since load)'] };
+    const r = prepareMarketPulseForSave({
+      stored, loaded, client: loaded,
+      productsServicesList: ['Audits', 'CRM setup', 'We grow clinics. We hire fast. We win.'],
+      growthPrioritiesText: 'EU, Hiring',
+    });
+    expect(r.marketPulse.core_offerings).toEqual(['Audits', 'Training (added since load)', 'CRM setup']);
+    expect(r.heldBack.coreOfferings.map((h) => h.reason)).toEqual(['paragraph']);
+    expect(r.marketPulse.growth_priorities).toEqual(['EU', 'Hiring']);
+  });
+
+  it('works with nothing stored yet (first save)', () => {
+    const r = prepareMarketPulseForSave({ stored: null, loaded: null, client: null, productsServicesList: ['A'], growthPrioritiesText: 'G' });
+    expect(r.marketPulse).toEqual({ core_offerings: ['A'], growth_priorities: ['G'] });
+  });
+});
+
+describe('saveProfile wiring (6.4b)', () => {
+  const hook = require('fs').readFileSync(require('path').join(process.cwd(), 'hooks/useCompanyProfileState.tsx'), 'utf8') as string;
+  it('re-reads market_pulse from the server before building the payload', () => {
+    const save = hook.slice(hook.indexOf('const saveProfile = async'));
+    const reread = save.indexOf("fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)");
+    const post = save.indexOf("fetchWithAuth('/api/company-profile', {");
+    expect(reread).toBeGreaterThan(0);
+    expect(post).toBeGreaterThan(reread);
+    expect(save.slice(0, post)).toMatch(/prepareMarketPulseForSave\(\{/);
+    expect(save.slice(0, post)).toMatch(/report_settings: \{ \.\.\.\(source\.report_settings \?\? \{\}\), market_pulse: marketPulseForSave \}/);
+  });
+});
