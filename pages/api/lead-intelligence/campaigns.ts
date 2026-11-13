@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 import * as camp from '../../../backend/services/campaign/campaignService';
 import * as ops from '../../../backend/services/operations/operationalCoreService';
 
@@ -25,6 +26,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
   const actorId = user.userId;
+  // e9 BLOCKING (outreach write roles): enforceCompanyAccess proves MEMBERSHIP only. Every POST here writes campaign
+  // data or runs campaign AI (credits) - view-only means view only (owner ruling). Viewers keep GET.
+  if (!(await enforceCampaignWriteRole({ req, res, companyId, userId: actorId }))) return;
 
   try {
     if (req.method === 'GET') {
