@@ -144,7 +144,11 @@ describe('enqueueScheduledLeadDetection — batched throttle + bulk insert/enque
   });
 
   it('bulk failure → identical per-company fallback (insert + add per company)', async () => {
-    dbResponses['company_profiles:select'] = { data: [{ company_id: 'A' }, { company_id: 'B' }], error: null };
+    // Real company ids are uuids: the fallback now writes through tenantTable(systemTenantContext), which refuses a
+    // non-uuid tenant (S2, 2026-11-13). The bulk path above stays on the allow-listed cross-tenant insert.
+    const A = 'a0000000-0000-4000-8000-00000000000a';
+    const B = 'b0000000-0000-4000-8000-00000000000b';
+    dbResponses['company_profiles:select'] = { data: [{ company_id: A }, { company_id: B }], error: null };
     dbResponses['lead_jobs_v1:select'] = { data: [], error: null };
     let insertCalls = 0;
     dbResponses['lead_jobs_v1:insert'] = (calls: TableCall[]) => {
@@ -156,7 +160,10 @@ describe('enqueueScheduledLeadDetection — batched throttle + bulk insert/enque
     const res = await enqueueScheduledLeadDetection();
     expect(res.enqueued).toBe(2);
     expect(jobQueueAdd).toHaveBeenCalledTimes(2);
-    expect(jobQueueAdd.mock.calls[0][2]).toEqual({ jobId: 'lead-detection:lj-A' });
+    expect(jobQueueAdd.mock.calls[0][2]).toEqual({ jobId: `lead-detection:lj-${A}` });
+    // each fallback insert is stamped with ITS company by the seam
+    const stamped = dbCalls.filter((c) => c.table === 'lead_jobs_v1' && c.op === 'insert').slice(1).map((c) => (c.args[0] as { company_id: string }).company_id);
+    expect(stamped).toEqual([A, B]);
   });
 
   it('all companies throttled → zero inserts/enqueues', async () => {

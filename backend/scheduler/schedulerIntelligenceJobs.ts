@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { tenantTable, systemTenantContext } from '../db/tenantTable';
 import { safeEnqueue } from '../middleware/queueBackpressure';
 /**
  * Intelligence & engine scheduling jobs.
@@ -523,6 +524,9 @@ export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: numbe
   // original per-company loop for identical partial-failure semantics.
   let bulkDone = false;
   try {
+    // One bulk insert across the eligible companies (HARDEN-004); each row's company_id comes from rowFor(companyId)
+    // over the system enumeration above, never from input.
+    // cross-tenant: scheduled-lead-detection-fanout
     const { data: jobs, error: insertError } = await ownedDbTable('lead_jobs_v1')
       .insert(eligibleCompanyIds.map(rowFor))
       .select('id, company_id');
@@ -548,7 +552,7 @@ export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: numbe
   if (!bulkDone) {
     for (const companyId of eligibleCompanyIds) {
       try {
-        const { data: job, error: insertError } = await ownedDbTable('lead_jobs_v1')
+        const { data: job, error: insertError } = await tenantTable('lead_jobs_v1', systemTenantContext(companyId, 'scheduled lead detection fan-out'))
           .insert(rowFor(companyId))
           .select('id')
           .single();

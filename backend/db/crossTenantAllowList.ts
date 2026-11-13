@@ -27,6 +27,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     reason: 'platform search for a Content Architect session (isContentArchitectSession, route-auth platform level): finds any company, campaign or recommendation by id, name or URL so the architect can open it; spans tenants by design and returns ids and names only',
     owner: 'virality-55',
   },
+  {
+    id: 'scheduled-lead-detection-fanout',
+    tables: ['lead_jobs_v1'],
+    file: 'backend/scheduler/schedulerIntelligenceJobs.ts',
+    reason: "the scheduled lead-detection cron enumerates eligible companies and inserts ONE PENDING job row per company in a single bulk insert (HARDEN-004); each row's company_id is set from that system enumeration (rowFor(companyId)), never from input. The per-company fallback path uses tenantTable(systemTenantContext)",
+    owner: 'virality-55',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));
