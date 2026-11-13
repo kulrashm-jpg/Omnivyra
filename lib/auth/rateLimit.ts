@@ -423,3 +423,26 @@ export const INVITE_UID_LIMIT: RateLimitConfig = {
   limit: 10,
   windowSecs: 60 * 60,
 };
+
+// ── Global (all-callers) limiters for enumeration-sensitive lookups ───────────
+// P2-D: there is no CAPTCHA on login/signup, so a per-IP limit alone lets an
+// attacker with many addresses test accounts at leisure. These caps bound the
+// TOTAL lookup throughput of each route (identifier 'global'). They are
+// checked AFTER the per-IP limit, so a refused IP does not consume the shared
+// budget. Admin runtime overrides (keyed by keyPrefix) can retune them.
+
+/** 300 magic-link requests per hour across all callers */
+export const MAGIC_LINK_GLOBAL_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:auth:magic-link:global',
+  sensitive: true,
+  limit: 300,
+  windowSecs: 60 * 60,
+};
+
+/** 100 check-user requests per 15 minutes across all callers (the route has no in-app callers) */
+export const CHECK_USER_GLOBAL_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:auth:check-user:global',
+  sensitive: true,
+  limit: 100,
+  windowSecs: 15 * 60,
+};
