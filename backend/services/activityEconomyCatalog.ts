@@ -68,8 +68,9 @@ export const ACTIVITY_CLASS_ECONOMICS: Record<ActivityClass, ActivityClassEconom
   IMAGE_GENERATION:  { entryConsumptionCredits: 2,  minimumCredits: 2,  maximumCredits: 12,  abandonmentTimeoutSeconds: 900 },
   VIDEO_GENERATION:  { entryConsumptionCredits: 10, minimumCredits: 20, maximumCredits: 150, abandonmentTimeoutSeconds: 3600 },
   // VOICE max 60 -> 75 (e9 ruling 2026-11-13): the recorder allows 5-minute clips (ChatVoiceButton MAX_RECORDING_MS) and
-  // voice_per_minute is 14 credits (owner rule, 15x actual) -> 70 for a 5:00 clip, + 1 minute of rounding headroom. The
-  // server refuses audio over 5:00 before any hold (55, voice/transcribe). Reference copy: activity_class_economics.
+  // voice_per_minute is 14 credits (owner rule, 15x actual) -> 70 for a 5:00 clip, + 5 credits (~21 s) headroom. Billing
+  // rounds CREDITS up (ceil(seconds x 14 / 60)), so a 5:00.4 clip bills 71. The server refuses audio over 5:00 before any
+  // hold (55, voice/transcribe). Reference copy: activity_class_economics (20270217000049).
   VOICE:             { entryConsumptionCredits: 2,  minimumCredits: 5,  maximumCredits: 75,  abandonmentTimeoutSeconds: 1800 },
   SYSTEM:            { entryConsumptionCredits: 0,  minimumCredits: 0,  maximumCredits: 0,   abandonmentTimeoutSeconds: 60 },
 };
