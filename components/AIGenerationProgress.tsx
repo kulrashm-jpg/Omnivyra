@@ -1,9 +1,34 @@
 /**
  * Shows progress with real elapsed time and estimated time remaining for AI generation
  * when the backend does not stream progress (single long-running request).
+ *
+ * Optional `stages`: when passed (non-empty), the progress renders as the shared
+ * step-by-step StepTracker (components/progress/StepTracker.tsx, modelled on BOLT) so the
+ * user sees which step the AI is on. Without `stages` the rendering is unchanged.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import StepTracker, { type StepDef } from './progress/StepTracker';
+
+/** A step for the step-by-step view: a bare label, or a label with its own ETA in seconds. */
+export type AIGenerationStage = string | { label: string; etaSeconds?: number };
+
+/**
+ * Normalise `stages` into StepTracker stage definitions. Bare labels (or entries without
+ * a positive ETA) share whatever is left of `expectedSeconds` evenly, with a 1s floor so
+ * the timed tracker never stalls on a zero-length step.
+ */
+export function toStepDefs(stages: readonly AIGenerationStage[], expectedSeconds: number): StepDef[] {
+  const explicit = stages.map((s) => (typeof s === 'string' ? undefined : s.etaSeconds));
+  const explicitTotal = explicit.reduce<number>((sum, e) => sum + (e && e > 0 ? e : 0), 0);
+  const unsetCount = explicit.filter((e) => !(e && e > 0)).length;
+  const share = unsetCount > 0 ? Math.max(1, Math.round(Math.max(0, expectedSeconds - explicitTotal) / unsetCount)) : 0;
+  return stages.map((s, i) => {
+    const label = typeof s === 'string' ? s : s.label;
+    const eta = explicit[i];
+    return { key: `ai-stage-${i + 1}`, label, etaSeconds: eta && eta > 0 ? eta : share };
+  });
+}
 
 /** Format seconds as M:SS (e.g. 1:23) */
 function formatElapsed(seconds: number): string {
@@ -27,6 +52,12 @@ export type AIGenerationProgressProps = {
   rotatingMessages?: string[];
   /** Optional cancel callback; when set, a Cancel button is shown */
   onCancel?: () => void;
+  /**
+   * Optional named steps. When non-empty, renders the step-by-step StepTracker (titled with
+   * `message`) instead of the single-line bar; steps advance on a timer derived from
+   * `expectedSeconds` and the last step holds until `isActive` turns false.
+   */
+  stages?: readonly AIGenerationStage[];
 };
 
 function useElapsedAndETA(isActive: boolean, expectedSeconds: number) {
@@ -68,8 +99,12 @@ export default function AIGenerationProgress({
   className = '',
   rotatingMessages,
   onCancel,
+  stages,
 }: AIGenerationProgressProps) {
   const { elapsedSeconds, estimatedRemaining, progressPercent } = useElapsedAndETA(isActive, expectedSeconds);
+  // Start time for the step view; re-captured each time generation becomes active.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const startedAt = useMemo(() => Date.now(), [isActive]);
   const [rotatingIndex, setRotatingIndex] = useState(0);
   const messages = rotatingMessages && rotatingMessages.length > 0 ? rotatingMessages : [];
 
@@ -82,6 +117,33 @@ export default function AIGenerationProgress({
   }, [isActive, messages.length]);
 
   if (!isActive) return null;
+
+  if (stages && stages.length > 0) {
+    return (
+      <div className={className}>
+        <StepTracker
+          stages={toStepDefs(stages, expectedSeconds)}
+          startedAt={startedAt}
+          status="running"
+          accent="indigo"
+          title={message}
+          subLabel={messages[rotatingIndex]}
+          variant="card"
+        />
+        {onCancel && (
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 underline"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const elapsedLabel = `${formatElapsed(elapsedSeconds)} elapsed`;
   const timeLabel =
