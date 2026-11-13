@@ -14,6 +14,7 @@ import { PaymentRequiredError } from '@/backend/services/billing/phase2Enforceme
 import { evaluatePredictionAccuracy } from '@/backend/services/predictionAccuracyService';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { supabase as adminSupabase } from '@/backend/db/supabaseClient';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
@@ -36,6 +37,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const allowed = await requireCompanyAccess(auth.user.id, campaign.company_id, res);
   if (!allowed) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(campaign.company_id), userId: String(auth.user.id) }))) return;
 
   // ── POST .../accuracy ─────────────────────────────────────────────────────
   if (req.method === 'POST' && req.url?.includes('/accuracy')) {

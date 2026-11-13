@@ -22,6 +22,7 @@ import { InvalidExecutionTransitionError, normalizeExecutionState } from '../../
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 function isApprovalRequired(
   r: ApprovalRequiredResult | ExecutePreemptionResult
@@ -59,6 +60,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: true,
     });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
     // CROSS-TENANT FIX: the PREEMPTED campaign is written too - bind it to the same company (404 if it is another
     // company's). The service re-checks both (canonical owner must equal companyId).
     const targetAccess = await enforceCompanyAccess({

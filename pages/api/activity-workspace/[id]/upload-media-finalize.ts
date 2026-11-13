@@ -70,6 +70,7 @@ import {
   authorizedMimeForObjectPath,
 } from '@/backend/services/activityWorkspace/quarantinedMediaUpload';
 import { refuseIfCreatorMediaUploadsDisabled } from '@/backend/services/activityWorkspace/creatorMediaUploadGate';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 /** Delivery bucket (public). Only the server writes here, after validation. */
 const UPLOAD_BUCKET = DELIVERY_BUCKET;
@@ -253,6 +254,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   // The caller-named object must belong to THIS authorized activity.
   if (!isActivityObjectPath(storagePath, id, companyId)) {

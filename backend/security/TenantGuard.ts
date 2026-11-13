@@ -107,6 +107,11 @@ export interface TenantAccessOptions {
    * by an admin (e.g. an end-user's own data export).
    */
   noPlatformBypass?: boolean;
+  /**
+   * requireCampaignTenantAccess only: the owner's NAMED exception letting an Engager write campaign discussion
+   * messages / voice notes (2026-11-13). Every other campaign write by a view-only role is 403 ROLE_FORBIDDEN.
+   */
+  engagerCampaignWriteException?: 'campaign_messages' | 'voice_notes';
 }
 
 // ── Service-layer entry point ────────────────────────────────────────────────
@@ -625,7 +630,22 @@ export async function requireCampaignTenantAccess(
 ): Promise<TenantAccessGranted | null> {
   const ownership = await resolveCampaignOwnership(campaignId);
   if (ownership.status === 'OWNED') {
-    return requireTenantAccess(req, res, ownership.companyId, options);
+    const granted = await requireTenantAccess(req, res, ownership.companyId, options);
+    if (!granted) return null;
+    // Campaign WRITE role guard (2026-11-13): membership is not authority to mutate a campaign - view-only roles
+    // are refused on POST/PUT/PATCH/DELETE (decided on the membership role as stored; super admins bypass).
+    const { campaignWriteDecision, ROLE_FORBIDDEN_BODY } = await import('../services/campaignWriteRole');
+    const decision = campaignWriteDecision({
+      method: req.method,
+      rawRole: granted.role,
+      bypass: granted.bypass || granted.isPlatformSuperAdmin,
+      engagerException: options?.engagerCampaignWriteException ?? null,
+    });
+    if (decision === 'forbid') {
+      res.status(403).json(ROLE_FORBIDDEN_BODY);
+      return null;
+    }
+    return granted;
   }
   if (ownership.status === 'INVALID') {
     res.status(400).json({ error: 'campaignId required', code: 'NO_RESOURCE_ID' });

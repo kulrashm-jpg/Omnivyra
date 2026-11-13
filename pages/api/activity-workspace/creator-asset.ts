@@ -19,6 +19,7 @@ import { deriveCreatorAssetTypeFromIntent } from '@/backend/services/creatorTemp
 import { normalizeCreatorPlatform } from '@/backend/services/creatorCapabilityMap';
 import { validateAssetReadiness } from '@/backend/services/creatorAssetValidationService';
 import { normalizeVideoPlatform, isValidPlatformVideoFormat } from '@/lib/shared/videoFormatCapabilities';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 export type CreatorAssetInput = {
   type: 'video' | 'image' | 'carousel';
@@ -214,6 +215,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         requireCampaignId: true,
       });
       if (!access) return;
+      // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+      if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
     }
 
     const validWeek = Number.isFinite(weekNumber) && weekNumber > 0 ? weekNumber : 1;

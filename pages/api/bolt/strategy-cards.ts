@@ -18,6 +18,7 @@ import {
   refineStrategicCardTitle,
   refineGeneratedText,
 } from '../../../backend/services/editorialTextRefinementService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 export interface BoltStrategyCard {
   id: string;
@@ -96,6 +97,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: companyId.trim(), requireCampaignId: false });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId.trim()), userId: String(access.userId) }))) return;
 
     const weeks = Math.max(1, Math.min(12, Number(duration) || 4));
     const cleanTopic = topic.trim();

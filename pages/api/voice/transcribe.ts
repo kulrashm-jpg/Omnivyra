@@ -9,6 +9,7 @@ import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiReq
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { resolveTrustedClientIp } from '../../../backend/services/ai/trustedClientIp';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 // SEC91-D9: every transcription-provider request is time-bounded (they had no
 // timeout, so a stalled upstream held the function until the platform killed it).
@@ -33,6 +34,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (voiceOrgId) {
     const ctx = await enforceCompanyAccess({ req, res, companyId: voiceOrgId });
     if (!ctx) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(voiceOrgId), userId: String(ctx.userId), engagerException: 'voice_notes' }))) return;
     callerUserId = ctx.userId;
   } else {
     const { user, error: authError } = await getSupabaseUserFromRequest(req);

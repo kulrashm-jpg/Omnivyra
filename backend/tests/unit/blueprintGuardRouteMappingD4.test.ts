@@ -15,6 +15,12 @@
 import { idempotencyHeaders } from '../utils/idempotency';
 
 // schedule-structured-plan adopted the caller-scoped withIdempotency middleware.
+// Campaign WRITE role guard (2026-11-13): this suite's caller is an authorized WRITER; the role gate itself is
+// covered by campaignWriteRoles.test.ts. Only enforceCampaignWriteRole is stubbed; the pure decision stays real.
+jest.mock('../../services/campaignWriteRole', () => ({
+  ...jest.requireActual('../../services/campaignWriteRole'),
+  enforceCampaignWriteRole: async () => true,
+}));
 jest.mock('../../security/IdentityResolver', () =>
   require('../utils/idempotency').identityResolverMock());
 jest.mock('../../db/writeOwner', () => {

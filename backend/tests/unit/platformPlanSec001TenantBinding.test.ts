@@ -364,7 +364,6 @@ describe('PLATFORM-PLAN-SEC-001 — company A operating on A', () => {
   it.each([
     ['COMPANY_ADMIN', ADMIN_A],
     ['CONTENT_CREATOR', CREATOR_A],
-    ['VIEW_ONLY', VIEWER_A],
   ])('%s of A may build A\'s plan, and every sink receives A', async (_role, user) => {
     const res = await call(user, {
       body: { companyId: COMPANY_A, campaignId: CAMPAIGN_A, weekNumber: 1 },
@@ -378,6 +377,15 @@ describe('PLATFORM-PLAN-SEC-001 — company A operating on A', () => {
     ]);
     // Nothing anywhere received a company other than A.
     expect(allSinkCompanies().filter((c) => c !== COMPANY_A)).toEqual([]);
+  });
+
+  // CONTRACT CHANGE (2026-11-13, owner ruling via e9): a view-only member may VIEW campaigns but not mutate them;
+  // building the plan writes it (savePlatformExecutionPlan + the stage update), so VIEW_ONLY is now refused.
+  it('VIEW_ONLY of A is refused (403 ROLE_FORBIDDEN) and NOTHING is written', async () => {
+    const res = await call(VIEWER_A, { body: { companyId: COMPANY_A, campaignId: CAMPAIGN_A, weekNumber: 1 } });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({ error: 'Your role can view this campaign but not change it.', code: 'ROLE_FORBIDDEN' });
+    noWriteSink();
   });
 
   it('the legitimate stage UPDATE is scoped to BOTH the campaign and its company', async () => {

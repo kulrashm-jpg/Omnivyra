@@ -37,6 +37,7 @@ import {
   mintQuarantineObjectPath,
   normalizeMime,
 } from '@/backend/services/activityWorkspace/quarantinedMediaUpload';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 export const RESUMABLE_SIGNED_ENDPOINT = '/storage/v1/upload/resumable/sign';
 
@@ -85,6 +86,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   const expectedCategory = isAttachmentRequiredFormat(contentType) ? resolveExpectedCategory(contentType) : null;

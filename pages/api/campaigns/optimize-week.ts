@@ -167,4 +167,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.CONTENT_PLANNER]), { route: '/api/campaigns/optimize-week' });
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.COMPANY_ADMIN, Role.CONTENT_CREATOR] /* 2026-11-13: ADMIN / CONTENT_PLANNER never match a normalized role (they normalize to COMPANY_ADMIN / CONTENT_CREATOR) */), { route: '/api/campaigns/optimize-week' });

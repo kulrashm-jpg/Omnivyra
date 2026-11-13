@@ -35,6 +35,12 @@ let mockStoredInfo: { size: number; contentType: string } = { size: 1024, conten
 const ownedUpdates: Array<{ table: string; payload: Record<string, any> }> = [];
 let mockValidatorReturn: any = { valid: true, validated_at: 'now', details: {} };
 
+// Campaign WRITE role guard (2026-11-13): this suite's caller is an authorized WRITER; the role gate itself is
+// covered by campaignWriteRoles.test.ts. Only enforceCampaignWriteRole is stubbed; the pure decision stays real.
+jest.mock('../../services/campaignWriteRole', () => ({
+  ...jest.requireActual('../../services/campaignWriteRole'),
+  enforceCampaignWriteRole: async () => true,
+}));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: jest.fn((table: string) => {

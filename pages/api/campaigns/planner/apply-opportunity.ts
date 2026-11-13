@@ -13,6 +13,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { generateCampaignSuggestions } from '../../../../backend/services/plannerOpportunityAdvisor';
 import { getLatestDraftPlan, saveDraftBlueprint } from '../../../../backend/db/campaignPlanStore';
 import type { CampaignBlueprint } from '../../../../backend/types/CampaignBlueprint';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -34,6 +35,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: true,
     });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(req.body?.companyId as string), userId: String(access.userId) }))) return;
 
     const { data: opp, error: oppError } = await supabase
       .from('opportunity_radar')

@@ -35,6 +35,7 @@ import type {
 } from '@/backend/services/creator/media';
 // Phase 3B — drive URL-attached videos through the SAME lifecycle as uploads.
 import { finalizeCreatorRowMediaLifecycle } from '@/backend/services/creator/finalizeCreatorRowMedia';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'PATCH') {
@@ -70,6 +71,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Company unresolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   // Content core = card lineage; targets = the row's platform(s).
   let content: any = {};

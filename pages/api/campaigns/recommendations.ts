@@ -14,6 +14,7 @@ import {
 import { validateCapacityAndFrequency } from '../../../backend/services/capacityFrequencyValidationGateway';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -36,6 +37,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // the campaign to it when one is sent (404 for a foreign campaign).
     const ctx = await enforceCompanyAccess({ req, res, companyId, campaignId: campaignId || null });
     if (!ctx) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
     const result = await generateCampaignStrategy({
       companyId,
       objective: campaignObjective,

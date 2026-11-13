@@ -143,6 +143,7 @@ import {
   isLiveBoltRequestDuplicateViolation,
   BOLT_IDEMPOTENCY_PAYLOAD_KEY,
 } from '../../../backend/services/boltExecuteIdempotency';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 function normalizeOptionalUuid(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -184,6 +185,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       companyId,
     });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
     // Inline sweep BEFORE dispatch. Recovers HMR-orphaned / crashed-worker
     // runs that left status='started'+lock-held so the user doesn't see

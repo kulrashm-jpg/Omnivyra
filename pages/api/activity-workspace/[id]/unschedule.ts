@@ -46,6 +46,7 @@ import { cancelScheduledPostQueueEntry, tryAcquireScheduledPostQueueLock } from 
 import { emitCreatorEvent, CREATOR_EVENTS } from '@/backend/services/creatorOperationalTelemetryService';
 import { recordAuditEntry } from '@/backend/services/creatorAuditTrailService';
 import { authorizeLinkedPostMutation, pinErrorCode } from '@/backend/services/linkedScheduledPostGuard';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 type UnscheduleBody = {
   reason?: unknown;
@@ -115,6 +116,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {

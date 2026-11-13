@@ -70,6 +70,7 @@ import {
   refuseIfCreatorMediaUploadsDisabled,
   refuseUploadBucketNotProvisioned,
 } from '@/backend/services/activityWorkspace/creatorMediaUploadGate';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 // Disable Next.js body parser so formidable can stream the upload.
 export const config = {
@@ -244,6 +245,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {

@@ -16,6 +16,13 @@ import {
 import { resolveUserContext } from './userContextService';
 import { attributeAuthenticatedPrincipal } from './requestContextPrincipal';
 import { shadowCampaignOwnership } from './campaignOwnershipService';
+import { normalizeRole } from './rbacPrimitives';
+import {
+  campaignWriteDecision,
+  getActiveRawCompanyRole,
+  ROLE_FORBIDDEN_BODY,
+  type EngagerCampaignWriteException,
+} from './campaignWriteRole';
 
 export type CampaignAccessResult = {
   userId: string;
@@ -104,7 +111,13 @@ export async function resolveCampaignCompanyId(campaignId: string): Promise<stri
 export async function requireCampaignAccess(
   req: NextApiRequest,
   res: NextApiResponse,
-  campaignId: string
+  campaignId: string,
+  /**
+   * Campaign WRITE role guard (2026-11-13): POST/PUT/PATCH/DELETE are refused for view-only roles (403
+   * ROLE_FORBIDDEN). `engagerException` is the owner's NAMED exception letting an Engager write campaign
+   * discussion messages / voice notes - only the routes that ARE those features pass it.
+   */
+  options?: { engagerException?: EngagerCampaignWriteException },
 ): Promise<CampaignAccessResult | null> {
   if (!campaignId || typeof campaignId !== 'string') {
     res.status(400).json({ error: 'Campaign ID is required' });
@@ -138,6 +151,9 @@ export async function requireCampaignAccess(
   const hasEnvAccess = isContentArchitect || user.companyIds.includes(companyId);
 
   let role: (typeof Role)[keyof typeof Role] | null = null;
+  // The caller's membership role AS STORED (Viewer vs Engager differ only here) - decides writes below.
+  let rawRole: string | null = null;
+  let fastPath = false;
   if (hasEnvAccess) {
     // SEC-91 W2-A (STEP 3AH-91, W2A-5) — organization state. The fast path is
     // "active member of the owning company" (resolveUserContext.companyIds), but
@@ -163,7 +179,15 @@ export async function requireCampaignAccess(
         return null;
       }
     }
-    role = Role.COMPANY_ADMIN;
+    // 2026-11-13: the REAL role, never a COMPANY_ADMIN stamp for every member (that stamp labelled a Viewer as
+    // COMPANY_ADMIN). Unreadable -> VIEW_ONLY: reads keep working, writes fail closed.
+    if (isContentArchitect) {
+      role = Role.COMPANY_ADMIN;
+    } else {
+      rawRole = await getActiveRawCompanyRole(userId, companyId);
+      role = normalizeRole(rawRole) ?? Role.VIEW_ONLY;
+    }
+    fastPath = true;
   } else {
     // DB role lookup (normal authenticated path). getUserCompanyRole answers:
     // platform super admin (ACTIVE SUPER_ADMIN row), an ACTIVE membership role,
@@ -179,6 +203,7 @@ export async function requireCampaignAccess(
     // a member.
     const roleResult = await getUserCompanyRole(req, companyId);
     role = roleResult.role;
+    rawRole = role === Role.SUPER_ADMIN ? Role.SUPER_ADMIN : await getActiveRawCompanyRole(userId, companyId);
     if (!role) {
       // SEC-91A (A6) — 403 for "exists, not yours" vs 404 for "no owner" is
       // kept deliberately: it is the platform-wide TenantGuard vocabulary
@@ -216,7 +241,11 @@ export async function requireCampaignAccess(
   }
 
   let campaignAuth: CampaignAuthContext | undefined;
-  if (isCompanyOverrideRole(role)) {
+  if (fastPath && !isCompanyOverrideRole(role)) {
+    // An active member of the owning company, labelled with their REAL role. Read access is unchanged (the fast
+    // path never required a campaign-level role row); what this member may WRITE is decided below.
+    campaignAuth = { companyRole: role, campaignRole: null, effectiveRole: role, source: 'company' };
+  } else if (isCompanyOverrideRole(role)) {
     campaignAuth = { companyRole: role, campaignRole: null, effectiveRole: role, source: 'company' };
   } else {
     const campaignAuthResult = await resolveEffectiveCampaignRole(userId, campaignId, companyId);
@@ -232,6 +261,23 @@ export async function requireCampaignAccess(
           effectiveRole: campaignAuthResult.effectiveRole,
           source: campaignAuthResult.source,
         };
+  }
+
+  // Campaign WRITE role guard: view-only roles may not mutate campaign data (owner ruling); the Engager exception
+  // applies only when the route names it. Super admins / the content architect bypass.
+  {
+    const bypass = isContentArchitect || role === Role.SUPER_ADMIN;
+    let decision = campaignWriteDecision({
+      method: req.method,
+      rawRole: rawRole ?? role,
+      bypass,
+      engagerException: options?.engagerException ?? null,
+    });
+    if (decision === 'forbid' && (await isPlatformSuperAdmin(userId))) decision = 'allow';
+    if (decision === 'forbid') {
+      res.status(403).json(ROLE_FORBIDDEN_BODY);
+      return null;
+    }
   }
 
   // SEC-91 W2-A (W2A-4) — record the authorized principal (observe-only by

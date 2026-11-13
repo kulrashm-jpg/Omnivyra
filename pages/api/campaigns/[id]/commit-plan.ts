@@ -17,6 +17,7 @@ import { fromStructuredPlan } from '../../../../backend/services/campaignBluepri
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../../backend/services/campaignBlueprintService';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function getCompanyId(campaignId: string): Promise<string | null> {
   const { data } = await supabase
@@ -59,6 +60,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requireCampaignId: true,
   });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId ?? ''), userId: String(access.userId) }))) return;
 
   try {
     const { data: campaign, error: campError } = await supabase

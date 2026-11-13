@@ -12,6 +12,7 @@ import {
   updateWizardStateInSnapshot,
   getLatestCampaignVersionByCampaignId,
 } from '../../../../backend/db/campaignVersionStore';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function getCompanyIdForCampaign(campaignId: string): Promise<string | null> {
   const version = await getLatestCampaignVersionByCampaignId(campaignId);
@@ -41,6 +42,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requireCampaignId: true,
   });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const body = req.body || {};
   const step = typeof body.step === 'number' ? body.step : 0;

@@ -30,6 +30,7 @@ import {
 } from '../../../lib/adapters/plannerToExecutionAdapter';
 import { saveCampaignContextSnapshot } from '../../../backend/services/campaignContextService';
 import { isFinalizedStage, resolveCampaignStage, CampaignStatusFields } from '../../../lib/campaign/campaignStage';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -319,6 +320,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // with the project's existing vocabulary and audits the denial itself.
     const tenantAccess = await requireTenantAccess(req, res, companyId);
     if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(tenantAccess.userId) }))) return;
     // ROUTE-AUTH-001 (STEP 3AH-85) — a supplied campaignId selects an EXISTING
     // campaign that is then read, re-dated, re-snapshotted and has its plan and
     // slots rewritten. Membership in companyId says nothing about that

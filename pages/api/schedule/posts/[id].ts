@@ -16,6 +16,7 @@ import { enforceCompanyAccess } from '../../../../backend/services/userContextSe
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { resolvePublishMedia } from '@/backend/services/creator/creatorPublishResolution';
 import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/publishOutcome';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -82,6 +83,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           if (requestedCompanyId) {
             const companyAccess = await enforceCompanyAccess({ req, res, companyId: requestedCompanyId });
             if (!companyAccess) return;
+            // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+            if (!(await enforceCampaignWriteRole({ req, res, companyId: String(requestedCompanyId), userId: String(companyAccess.userId) }))) return;
           }
           const { mediaUrls } = await resolvePublishMedia({
             companyId: requestedCompanyId ?? userId,

@@ -7,6 +7,7 @@ import { fetchTrendsFromApis } from '../../../../backend/services/externalApiSer
 import { saveOptimizationHistory } from '../../../../backend/db/campaignVersionStore';
 import { sendLearningSnapshot } from '../../../../backend/services/omnivyraFeedbackService';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -31,6 +32,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // profile is read, trends are fetched, or LLM budget is spent.
     const ctx = await enforceCompanyAccess({ req, res, companyId });
     if (!ctx) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
 
     const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
     if (!profile) {

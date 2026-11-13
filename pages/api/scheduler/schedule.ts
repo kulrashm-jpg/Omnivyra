@@ -25,6 +25,7 @@ import {
   checkScheduleCharLimit,
   checkScheduleCharLimitForNodes,
 } from '@/backend/scheduler/schedulingCharLimitGuard';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -76,6 +77,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (companyId) {
       const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
       if (!access) return;
+      // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+      if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(userId) }))) return;
       authorizedCompanyId = String(companyId);
     }
 
@@ -115,6 +118,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           if (owner.userId !== userId) return accountNotFound();
           const tenantAccess = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
           if (!tenantAccess) return;
+          if (!(await enforceCampaignWriteRole({ req, res, companyId: owner.companyId, userId: String(userId) }))) return;
         }
       } else if (owner.userId !== userId) {
         return accountNotFound();

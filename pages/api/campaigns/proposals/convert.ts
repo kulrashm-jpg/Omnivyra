@@ -12,6 +12,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -43,6 +44,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const organizationId = proposal.organization_id as string;
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
   const pd = (proposal.proposal_data as Record<string, unknown>) || {};
   const weeksRaw = (pd.weekly_structure as Array<{ week?: number; phase?: string; focus?: string }>) || [];

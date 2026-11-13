@@ -26,6 +26,7 @@ import crypto from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { resolveCampaignStage, CampaignStatusFields } from '../../../lib/campaign/campaignStage';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 /** Thread-id marker identifying Strategic Mix planner drafts (resume key). */
 const PLANNER_DRAFT_THREAD_PREFIX = 'planner_draft_';
@@ -43,6 +44,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await requireTenantAccess(req, res, companyId);
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   try {
     // ── RESUME: newest open draft for (company, user) ──────────────────────

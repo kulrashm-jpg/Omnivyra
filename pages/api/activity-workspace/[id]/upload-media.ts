@@ -48,6 +48,7 @@ import {
 } from '@/lib/shared/creatorLifecycleStateMachine';
 import { validateMediaUpload } from '@/backend/services/mediaUploadValidationService';
 import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 type UploadMediaBody = {
   media_url?: unknown;
@@ -145,6 +146,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   // ── Validate the media URL ─────────────────────────────────────────────
   const validation = await validateMediaUpload({

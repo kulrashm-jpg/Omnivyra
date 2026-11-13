@@ -20,7 +20,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const { role } = await getUserCompanyRole(req, companyId);
-  if (!(await hasPermission(role, 'approve'))) {
+  // 2026-11-13: 'approve' is not a permission key (hasPermission denied EVERYONE); approving a campaign is
+  // APPROVE_CONTENT (content reviewer, company admin, super admin).
+  if (!(await hasPermission(role, 'APPROVE_CONTENT'))) {
     return res.status(403).json({ error: 'NOT_ALLOWED' });
   }
 

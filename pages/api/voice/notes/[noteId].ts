@@ -50,7 +50,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const probe = captureResponse();
-    const access = await requireCampaignAccess(req, probe.res, campaignId);
+    const access = await requireCampaignAccess(req, probe.res, campaignId, { engagerException: 'voice_notes' });
     if (!access) {
       if (probe.denial.status === 401 || probe.denial.status >= 500) {
         return res.status(probe.denial.status).json(probe.denial.body);

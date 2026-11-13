@@ -78,7 +78,7 @@ async function authorizeVoiceNoteDelete(
   }
 
   const probe = captureResponse();
-  const access = await requireCampaignAccess(req, probe.res, campaignId);
+  const access = await requireCampaignAccess(req, probe.res, campaignId, { engagerException: 'voice_notes' });
   if (!access) {
     if (probe.denial.status === 401 || probe.denial.status >= 500) {
       res.status(probe.denial.status).json(probe.denial.body);
@@ -99,7 +99,7 @@ async function getVoiceNotes(req: NextApiRequest, res: NextApiResponse) {
 
   // ROUTE-AUTH-001: a campaign is required — without one this listed every
   // tenant's notes for the context.
-  const access = await requireCampaignAccess(req, res, campaignIdOf(campaignId));
+  const access = await requireCampaignAccess(req, res, campaignIdOf(campaignId), { engagerException: 'voice_notes' });
   if (!access) return;
 
   try {
@@ -160,7 +160,7 @@ async function createVoiceNote(req: NextApiRequest, res: NextApiResponse) {
   }
 
   // ROUTE-AUTH-001: the note is written under a campaign the caller may access.
-  const access = await requireCampaignAccess(req, res, campaignIdOf(campaignId));
+  const access = await requireCampaignAccess(req, res, campaignIdOf(campaignId), { engagerException: 'voice_notes' });
   if (!access) return;
 
   try {

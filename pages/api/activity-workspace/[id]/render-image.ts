@@ -35,6 +35,7 @@ import {
   coerceGovernanceRow,
   GLOBAL_GOVERNANCE_SENTINEL,
 } from '@/backend/services/creator/rendering';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -67,6 +68,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Company unresolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const loaded = loadCreatorWorkspace(row as any, { now: new Date().toISOString() });
   if (!loaded.ok) {

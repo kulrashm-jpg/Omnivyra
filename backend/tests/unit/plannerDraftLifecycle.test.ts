@@ -30,6 +30,12 @@ let campaignsError: { message: string } | null = null;
 const inserted: Array<{ table: string; payload: Row }> = [];
 const filters: Array<{ table: string; col: string; val: unknown }> = [];
 
+// Campaign WRITE role guard (2026-11-13): this suite's caller is an authorized WRITER; the role gate itself is
+// covered by campaignWriteRoles.test.ts. Only enforceCampaignWriteRole is stubbed; the pure decision stays real.
+jest.mock('../../services/campaignWriteRole', () => ({
+  ...jest.requireActual('../../services/campaignWriteRole'),
+  enforceCampaignWriteRole: async () => true,
+}));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (table: string) => {

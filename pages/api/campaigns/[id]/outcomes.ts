@@ -11,6 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { measureOutcomeScore, getOutcomeSnapshot } from '../../../../backend/services/outcomeTrackingService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '../../../../backend/middleware/authMiddleware';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function getCompanyId(campaignId: string): Promise<string | null> {
   const { data } = await supabase
@@ -35,6 +36,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const allowed = await requireCompanyAccess(auth.user.id, companyId, res);
   if (!allowed) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(auth.user.id) }))) return;
 
   try {
     if (req.method === 'GET') {

@@ -25,7 +25,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'campaignId required' });
   }
 
-  const access = await requireCampaignAccess(req, res, campaignId);
+  const access = await requireCampaignAccess(req, res, campaignId, { engagerException: 'campaign_messages' });
   if (!access) return;
 
   if (req.method === 'GET') {

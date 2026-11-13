@@ -15,6 +15,12 @@ const writes: Array<{ table: string; op: string; row: any }> = [];
 let accessGranted = true;
 const builtInputs: any[] = [];
 
+// Campaign WRITE role guard (2026-11-13): this suite's caller is an authorized WRITER; the role gate itself is
+// covered by campaignWriteRoles.test.ts. Only enforceCampaignWriteRole is stubbed; the pure decision stays real.
+jest.mock('../../services/campaignWriteRole', () => ({
+  ...jest.requireActual('../../services/campaignWriteRole'),
+  enforceCampaignWriteRole: async () => true,
+}));
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../services/creator/intelligence/workspace', () => ({ isCreatorWorkspaceLifecycleEnabled: () => true }));
 jest.mock('../../services/userContextService', () => ({

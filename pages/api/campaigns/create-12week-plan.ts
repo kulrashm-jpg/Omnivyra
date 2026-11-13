@@ -8,6 +8,7 @@ import { requireCompanyContext } from '../../../backend/services/companyContextG
 import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -86,6 +87,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!ctx) return;
       authorizedCompanyId = ctx.companyId;
     }
+
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (authorizedCompanyId && !(await enforceCampaignWriteRole({ req, res, companyId: authorizedCompanyId, userId: String(user.id) }))) return;
 
     if (!campaign) {
       // TENANT: a new campaign is owned by an AUTHORIZED company, never created company-less. The

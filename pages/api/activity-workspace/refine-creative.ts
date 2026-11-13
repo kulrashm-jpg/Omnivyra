@@ -23,6 +23,7 @@ import {
 } from '@/backend/services/contentArchitectService';
 import { resolveUserContext } from '@/backend/services/userContextService';
 import { refineActivityCreative } from '@/backend/services/creator/activityCreativeRefinementService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -54,6 +55,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   } else {
     const access = await enforceCompanyAccess({ req, res, companyId, requireCampaignId: false });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
   }
 
   const user = await resolveUserContext(req);

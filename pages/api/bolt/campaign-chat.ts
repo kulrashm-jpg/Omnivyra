@@ -33,6 +33,7 @@ import { MAX_CAMPAIGN_DURATION_WEEKS } from '../../../lib/shared/campaignDuratio
 import { resolveIntelligenceContext, formatIntelligenceContextBlock } from '../../../lib/shared/intelligence/resolveIntelligenceContext';
 // Phase 6G-1 — canonical content↔platform assignment authority.
 import { getSupportedPlatformsForFormat } from '../../../lib/shared/bolt/contentPlatformAssignment';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -138,6 +139,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: companyId.trim(), requireCampaignId: false });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId.trim()), userId: String(access.userId) }))) return;
 
     const chatHistory: ChatMessage[] = Array.isArray(history) ? history : [];
 

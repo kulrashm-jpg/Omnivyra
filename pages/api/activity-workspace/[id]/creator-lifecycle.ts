@@ -44,6 +44,7 @@ import type {
   DailyContentPlanRow,
   CreatorProductionStatus,
 } from '@/backend/services/creator/intelligence/workspace';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 const PRODUCTION_STATUSES: CreatorProductionStatus[] = [
   'draft', 'awaiting_human_production', 'in_production', 'asset_uploaded',
@@ -102,6 +103,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const nowIso = new Date().toISOString();
 
