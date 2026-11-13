@@ -76,9 +76,10 @@
 --   prediction                       ceiling 0.0700  no observed calls; prior prescribed 10 credits at 0.007
 --   profile_enrichment               ceiling 0.1032  observed max 0.004586 x1 calls x15 x1.5 (66 calls)
 --   profile_extraction               ceiling 0.2441  observed max 0.010847 x1 calls x15 x1.5 (82 calls)
---   profile_refine                   ceiling 1.1826  NEW KEY (e9 2026-11-13: onboarding + manual refine ran unpriced). One refine
---                                    = 3 profileExtraction + 3 profileEnrichment (TRACED); the ceiling was set from a 4 + 2
---                                    estimate (0.010847 x4 + 0.004586 x2 = 0.05256) which exceeds the traced 3 + 3 (0.04630) - kept
+--   profile_refine                   ceiling 1.0417  NEW KEY (e9 2026-11-13: onboarding + manual refine ran unpriced). One refine
+--                                    = 3 profileExtraction (max 0.010847, 82 calls) + 3 profileEnrichment (0.004586, 66
+--                                    calls) - TRACED - x15 x1.5. (An earlier 4 + 2 estimate, 1.1826, was replaced: 05 -
+--                                    the 1.5 is the only margin; a basis must be true, not merely conservative.)
 --   quick_platform_adapt             ceiling 0.0210  no observed calls; prior prescribed 3 credits at 0.007
 --   recommendations_generate         ceiling 0.0560  no observed calls; prior prescribed 8 credits at 0.007
 --   recommendations_group_preview    ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
@@ -151,7 +152,7 @@ INSERT INTO m046_target (action_key, ceiling_usd) VALUES
   ('prediction', 0.0700),
   ('profile_enrichment', 0.1032),
   ('profile_extraction', 0.2441),
-  ('profile_refine', 1.1826),
+  ('profile_refine', 1.0417),
   ('quick_platform_adapt', 0.0210),
   ('recommendations_generate', 0.0560),
   ('recommendations_group_preview', 0.0070),
