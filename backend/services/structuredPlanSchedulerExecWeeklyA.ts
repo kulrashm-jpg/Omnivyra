@@ -27,6 +27,8 @@ import { logPipelineEvent } from '../../lib/shared/observability';
 import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 import { ownedDbTable } from '../db/writeOwner';
+import { logger } from './logger';
+import { generateCreatorRowBilled, CreatorRowBillingRefusedError, STASH_KEY as CREATOR_ROW_STASH_KEY, type CreatorRowStash } from './billing/creatorRowGenerationBilling';
 import {
   makeScheduledPostIdempotencyKey,
   isIdempotencyCollision,
@@ -404,6 +406,10 @@ export async function processCreatorStructuredSchedule(input: {
     }
 
     const parsed = tryParseExecutionContent(row.content);
+    // C75: a charged generation stashed on the row is held OUT of `parsed` - parsed feeds the prompt
+    // (enrichedIntent / existingContent) and must never carry a previous output back into the model.
+    let creatorRowStash: unknown = parsed[CREATOR_ROW_STASH_KEY];
+    delete parsed[CREATOR_ROW_STASH_KEY];
     // Calendar unification: an autonomous row may already have been
     // auto-scheduled at render completion (creatorContentProcessor →
     // scheduleRenderedAutonomousRowById, Schedule outcomes). Skip the heavy
@@ -485,7 +491,8 @@ export async function processCreatorStructuredSchedule(input: {
               { details: { plan_version: planVersion, current_plan_version: planVersionAtGenerate } }
             );
           }
-          const generated = await (engine as any).generateFromIntent({
+          // C75: the row's AI generation is ONE billed unit (dark unless enforced; see creatorRowGenerationBilling).
+          const generateRow = () => (engine as any).generateFromIntent({
             campaignId,
             companyId,
             userId,
@@ -507,6 +514,22 @@ export async function processCreatorStructuredSchedule(input: {
                   ? parsed.creator_asset as Record<string, unknown>
                   : null,
           });
+          const billedGeneration = await generateCreatorRowBilled({
+            companyId, userId, campaignId, rowId: String(row.id), planVersion,
+            stash: creatorRowStash, generate: generateRow,
+          });
+          const generated = billedGeneration.output;
+          if (billedGeneration.billed && !billedGeneration.reused) {
+            // Persist the charged output NOW (not at the end of the loop): a crash or failed schedule after this point
+            // must find it, or the next attempt would be a charged-no-output refusal.
+            creatorRowStash = billedGeneration.stash;
+            const { error: stashErr } = await ownedDbTable('daily_content_plans')
+              .update({ content: JSON.stringify({ ...parsed, [CREATOR_ROW_STASH_KEY]: billedGeneration.stash }), updated_at: new Date().toISOString() })
+              .eq('id', row.id);
+            if (stashErr) {
+              logger.error('creator_row_stash_write_failed', { campaignId, dailyPlanId: row.id, planVersion, message: stashErr.message });
+            }
+          }
 
           const generatedValidation = validateCreatorExecutionOutput(generated);
           if (!generatedValidation.ok) {
@@ -670,10 +693,15 @@ export async function processCreatorStructuredSchedule(input: {
           break;
         } catch (attemptError) {
           lastError = attemptError as Error;
+          // C75: a billing refusal is classified by its typed `retryable`, never by message text, and is never retried
+          // inside this run (a retry would meet the same refusal).
+          const billingRefusal = attemptError instanceof CreatorRowBillingRefusedError ? attemptError : null;
           const classifiedFailure =
             failureType === 'stale'
               ? 'permanent'
-              : classifyCreatorFailure(lastError);
+              : billingRefusal
+                ? (billingRefusal.retryable ? 'transient' : 'permanent')
+                : classifyCreatorFailure(lastError);
           failureType = failureType === 'stale' ? 'stale' : classifiedFailure;
           await logCreatorExecutionAudit({
             campaignId,
@@ -692,7 +720,7 @@ export async function processCreatorStructuredSchedule(input: {
               message: lastError.message,
             },
           });
-          if (classifiedFailure !== 'transient' || failureType === 'stale') {
+          if (billingRefusal || classifiedFailure !== 'transient' || failureType === 'stale') {
             break;
           }
           if (attempt + 1 < maxRetries) {
@@ -708,6 +736,8 @@ export async function processCreatorStructuredSchedule(input: {
 
       const persisted = {
         ...parsed,
+        // C75: keep a charged generation on the row until the row is scheduled (then it is spent).
+        ...(!finalScheduling && creatorRowStash ? { [CREATOR_ROW_STASH_KEY]: creatorRowStash as CreatorRowStash } : {}),
         ...(finalOutput || {}),
         intent_type: 'creator',
         asset_type: assetType,

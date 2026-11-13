@@ -31,7 +31,7 @@ export interface FinancialAuditEvent {
 
 export interface AnomalyEvent {
   organizationId?: string;
-  kind:            'double_deduct_prevented' | 'untracked_ai_call_blocked' | 'queue_replay_blocked' | 'reservation_orphan_reaped' | 'approval_self_signature_attempt' | 'underfunded_settlement';
+  kind:            'double_deduct_prevented' | 'untracked_ai_call_blocked' | 'queue_replay_blocked' | 'reservation_orphan_reaped' | 'approval_self_signature_attempt' | 'underfunded_settlement' | 'charged_no_output' | 'reclaim_cap_exhausted';
   severity:        'info' | 'warn' | 'critical';
   message:         string;
   correlationId?:  string;
