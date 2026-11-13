@@ -44,9 +44,11 @@
 --   blog_rewrite_hook                ceiling 0.0210  no observed calls; prior prescribed 3 credits at 0.007
 --   campaign_chat                    ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   campaign_creation                ceiling 0.2800  no observed calls; prior prescribed 40 credits at 0.007
---   campaign_generation              ceiling 0.3284  observed max 0.004864 x3 x15 x1.5 - NOTE (trace): the only CHARGED path
---                                    (autonomousCampaignAgent) makes NO LLM call and charges FIXED (credit_cost_config 50),
---                                    so this row is inert there; pricing of that path is an open question with e9
+--   campaign_generation              ceiling 0.3284  observed max 0.004864 x3 x15 x1.5 - prices the LLM operations mapped to
+--                                    this key (generateCampaignPlan / parsePlanToWeeks). OWNER RULING 2026-11-13 (via e9, Q1):
+--                                    autonomous campaign generation carries NO flat charge - its fixed 50-credit/day reservation
+--                                    (autonomousCampaignAgent, NO LLM call) is removed in code, and credit_cost_config
+--                                    campaign_generation is set 50 -> 0 below, so a run that triggers no AI costs 0.
 --   campaign_optimization            ceiling 0.2100  no observed calls; prior prescribed 30 credits at 0.007
 --   campaign_preplanning             ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   campaign_suggest_duration        ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
@@ -244,3 +246,16 @@ $apply$;
 
 DROP TABLE IF EXISTS pg_temp.m046_target;
 DROP TABLE IF EXISTS pg_temp.m046_untouched;
+
+-- Owner ruling 2026-11-13 (Q1): no flat charge for autonomous campaign generation. The code no longer reserves it; the
+-- fixed price is zeroed too, so no stray caller can charge it and the credit tiers display the truth. credits >= 0 is
+-- the column's CHECK, and getCreditCost returns a stored 0 as 0 (no fallback to the old hardcoded 50).
+DO $campaign_generation$
+BEGIN
+  UPDATE public.credit_cost_config SET credits = 0, updated_at = now()
+   WHERE action_type = 'campaign_generation' AND credits <> 0;
+  IF EXISTS (SELECT 1 FROM public.credit_cost_config WHERE action_type = 'campaign_generation' AND credits <> 0) THEN
+    RAISE EXCEPTION '046 postcondition: credit_cost_config campaign_generation is not 0';
+  END IF;
+END
+$campaign_generation$;

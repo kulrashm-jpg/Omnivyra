@@ -22,12 +22,6 @@ import { getTopLearnings, formatLearningsForPrompt } from './campaignLearningsSt
 import { logDecision } from './autonomousDecisionLogger';
 import { predictCampaignOutcome } from './campaignPredictionEngine';
 import { PaymentRequiredError } from './billing/phase2EnforcementGate';
-import {
-  confirmCreditReservation,
-  makeIdempotencyKey,
-  releaseCreditReservation,
-  reserveCreditsForWork,
-} from './creditExecutionService';
 
 export type AutonomousCampaignPlan = {
   company_id: string;
@@ -126,28 +120,12 @@ export async function getAutonomousSettings(companyId: string): Promise<{
  * Returns a structured plan ready for approval or auto-activation.
  */
 export async function generateNextCampaign(companyId: string): Promise<AutonomousCampaignPlan> {
-  // Credit gate — 50 credits required for autonomous campaign generation
-  const reservation = await reserveCreditsForWork({
-    userId: companyId,
-    orgId: companyId,
-    action: 'campaign_generation',
-    referenceType: 'autonomous_campaign_generation',
-    referenceId: companyId,
-    idempotencyKey: makeIdempotencyKey(companyId, 'campaign_generation', companyId, new Date().toISOString().slice(0, 10)),
-    note: 'Autonomous campaign generation',
-    validateMembership: false,
-  });
-  if (reservation.status === 'insufficient_credits') {
-    throw new Error(`Insufficient credits for campaign_generation: need ${reservation.required}, have ${reservation.available ?? 0}`);
-  }
-  if (reservation.status === 'no_credit_account') {
-    throw new Error('No credit account for autonomous campaign generation');
-  }
-  if (reservation.status !== 'reserved' && reservation.status !== 'already_reserved') {
-    throw new Error(`Campaign generation reservation failed: ${reservation.status}`);
-  }
-
-  try {
+  // Owner ruling 2026-11-13 (via e9, Q1): autonomous campaign generation carries NO flat charge. This function makes
+  // no LLM call (the signals are DB reads + arithmetic), so a run that triggers no AI costs 0. The AI work it can
+  // trigger bills itself at actual x15: predictCampaignOutcome under 'prediction' (wirePhase2Route; a
+  // PaymentRequiredError is rethrown below). The former fixed 50-credit/day reservation (credit_cost_config
+  // campaign_generation, set to 0 by 20270217000046) is removed. The action_pricing_config 'campaign_generation' row
+  // stays: it prices the LLM operations mapped to that key (generateCampaignPlan / parsePlanToWeeks).
   const [lastCampaign, company, settings] = await Promise.all([
     getLastCampaign(companyId),
     getCompanyProfile(companyId),
@@ -286,19 +264,7 @@ export async function generateNextCampaign(companyId: string): Promise<Autonomou
     },
   });
 
-  await confirmCreditReservation({
-    ...reservation,
-    note: `Auto campaign #${campaignNumber}`,
-  });
-
   return plan;
-  } catch (error) {
-    await releaseCreditReservation({
-      ...reservation,
-      note: error instanceof Error ? error.message : 'Autonomous campaign generation failed',
-    }).catch(() => undefined);
-    throw error;
-  }
 }
 
 async function getCampaignCount(companyId: string): Promise<number> {

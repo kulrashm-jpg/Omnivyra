@@ -16,7 +16,6 @@ import { supabase } from '../db/supabaseClient';
 import { generateNextCampaign, getAutonomousSettings } from './autonomousCampaignAgent';
 import { distilCampaignLearnings } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
-import { getCreditCost } from './creditDeductionService';
 
 export type SchedulerRunResult = {
   companies_evaluated: number;
@@ -136,7 +135,6 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
   };
 
   try {
-    const campaignGenerationCost = await getCreditCost('campaign_generation');
     // ── 1. Expire stale pending campaigns ─────────────────────────────────
     result.expired_pending = await expireOldPending();
 
@@ -164,25 +162,11 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
         const hasActive = await hasActiveCampaign(companyId);
         if (hasActive) continue; // campaign in flight — skip
 
-        // ── Credit gate — skip generation if balance is critically low ─────
-        const creditCheck = { balance: campaignGenerationCost * 10, required: campaignGenerationCost, sufficient: true };
-        if (!creditCheck.sufficient) {
-          result.errors.push(`[${companyId}] Insufficient credits (${creditCheck.balance ?? 0}/${creditCheck.required}) — skipping campaign generation`);
-          continue;
-        }
-        // Warn mode: <20% of a typical campaign budget signals to reduce extras
-        const LOW_CREDIT_THRESHOLD = campaignGenerationCost * 5;
-        const creditIsLow = (creditCheck.balance ?? 0) < LOW_CREDIT_THRESHOLD;
-
         // ── Generate next campaign ─────────────────────────────────────────
+        // No flat credit gate (owner ruling 2026-11-13, Q1): generation itself is free; the AI work it triggers is
+        // gated and billed by its own engine. The former "gate" here read a fabricated balance (cost x 10, always
+        // sufficient) and could never refuse or flag low credit.
         const plan = await generateNextCampaign(companyId);
-        // If credits are low, attach a flag to the plan's meta for downstream services
-        if (creditIsLow) {
-          plan.generation_meta.optimization_notes = [
-            ...(plan.generation_meta.optimization_notes ?? []),
-            'Credit balance low — reduced intelligence analysis mode active',
-          ];
-        }
         result.campaigns_generated++;
 
         if (approvalRequired) {

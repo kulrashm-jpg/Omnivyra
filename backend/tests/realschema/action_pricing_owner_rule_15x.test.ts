@@ -92,6 +92,16 @@ describe('20270217000046 action_pricing_owner_rule_15x', () => {
     });
   });
 
+  it('owner ruling Q1: credit_cost_config campaign_generation is 0 after 046; the rollback restores 50', async () => {
+    const cc = async () => (await db.query(
+      `SELECT credits FROM public.credit_cost_config WHERE action_type = 'campaign_generation'`)).rows;
+    expect(await cc()).toEqual([{ credits: 0 }]);
+    await inRollback(async () => {
+      await db.query(ROLLBACK);
+      expect(await cc()).toEqual([{ credits: 50 }]);
+    });
+  });
+
   it('client roles hold nothing on action_pricing_config (posture restated)', async () => {
     const { rows } = await db.query(
       `SELECT has_table_privilege('anon','public.action_pricing_config','SELECT') AS anon,

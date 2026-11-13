@@ -23,3 +23,7 @@ BEGIN
   END IF;
 END
 $rb$;
+
+-- 046 also zeroed credit_cost_config campaign_generation (owner ruling Q1, no flat charge); restore the prior 50.
+UPDATE public.credit_cost_config SET credits = 50, updated_at = now()
+ WHERE action_type = 'campaign_generation' AND credits = 0;
