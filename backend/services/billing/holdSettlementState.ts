@@ -192,8 +192,11 @@ export function settledAmountsFromPartialConfirm(
     return { consumed: total, released: Number.isFinite(rel) ? rel : Math.max(0, held - total), underfunded, amountEstimated: false };
   }
   const deltas = [d.free_delta, d.paid_delta, d.incentive_delta];
-  if (deltas.some((v) => v !== undefined && v !== null)) {
-    const consumed = deltas.reduce<number>((sum, v) => sum + Math.abs(Number(v ?? 0) || 0), 0);
+  const present = deltas.filter((v) => v !== undefined && v !== null);
+  // At least one delta present (all-NULL tells us nothing), and every present one numeric - an unreadable value is
+  // UNKNOWN (falls through to the flagged plan), never silently 0 (05).
+  if (present.length > 0 && present.every((v) => Number.isFinite(Number(v)))) {
+    const consumed = present.reduce<number>((sum, v) => sum + Math.abs(Number(v)), 0);
     return { consumed, released: Math.max(0, held - consumed), underfunded, amountEstimated: false };
   }
   return { consumed: planned.consumed, released: planned.released, underfunded, amountEstimated: true };

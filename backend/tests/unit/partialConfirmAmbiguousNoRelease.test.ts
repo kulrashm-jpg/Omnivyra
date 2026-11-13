@@ -189,6 +189,14 @@ describe('settledAmountsFromPartialConfirm (e9 follow-up: replay payloads)', () 
     expect(settledAmountsFromPartialConfirm({ id: 'x' }, 10, planned)).toEqual({ consumed: 4, released: 6, underfunded: false, amountEstimated: true });
     expect(settledAmountsFromPartialConfirm(null, 10, planned)).toMatchObject({ amountEstimated: true });
   });
+  it('05: all-NULL deltas, or a non-numeric delta, are UNKNOWN (flagged plan) - never a known 0', () => {
+    expect(settledAmountsFromPartialConfirm({ free_delta: null, paid_delta: null, incentive_delta: null }, 10, planned)).toMatchObject({ consumed: 4, amountEstimated: true });
+    expect(settledAmountsFromPartialConfirm({ free_delta: 'x', paid_delta: -2 }, 10, planned)).toMatchObject({ consumed: 4, amountEstimated: true });
+  });
+  it('a legitimate ZERO settle is a known amount, not estimated (fresh and row shapes)', () => {
+    expect(settledAmountsFromPartialConfirm({ total_consumed: 0, total_released: 10 }, 10, planned)).toEqual({ consumed: 0, released: 10, underfunded: false, amountEstimated: false });
+    expect(settledAmountsFromPartialConfirm({ free_delta: 0, paid_delta: 0, incentive_delta: 0 }, 10, planned)).toMatchObject({ consumed: 0, amountEstimated: false });
+  });
 });
 
 describe('executeWithCredits: a replayed partial_confirm reports the COMMITTED amount', () => {
