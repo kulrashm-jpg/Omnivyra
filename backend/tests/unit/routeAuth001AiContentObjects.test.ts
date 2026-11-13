@@ -33,6 +33,23 @@ jest.mock('../../services/ai/aiRequestGuard', () => ({
 const mockCaptureCost = jest.fn(async (..._a: any[]) => undefined);
 jest.mock('../../services/billing/blackHoleCostCapture', () => ({ captureFlatProviderCost: (...a: any[]) => mockCaptureCost(...a) }));
 
+// Billing seam for transcribe (dark by default: 'off' = the unbilled path every other case here uses).
+let mockEcMode: 'off' | 'enforce' = 'off';
+jest.mock('../../services/billing/creditEconomyActivation', () => ({ getCreditEconomyExecutionMode: async () => mockEcMode }));
+jest.mock('../../services/creditDeductionService', () => ({ ...jest.requireActual('../../services/creditDeductionService'), getCreditCost: async (a: string) => (a === 'voice_per_minute' ? 14 : 1) }));
+// A fake engine honouring the FIXED-path contract: run the executor, THEN read amountOverride; a throw = release.
+const mockEngine = { settled: [] as number[], released: 0 };
+jest.mock('../../services/creditExecutionService', () => ({
+  ...jest.requireActual('../../services/creditExecutionService'),
+  executeWithEntryConsumption: async (opts: any) => {
+    try {
+      const result = await opts.executor();
+      mockEngine.settled.push(opts.amountOverride);
+      return { status: 'executed', result, settlement: {} };
+    } catch (e) { mockEngine.released += 1; throw e; }
+  },
+}));
+
 type FakeJob = { id: string; data: any; progress: number; returnvalue: unknown; failedReason: string | null; timestamp: number; getState: () => Promise<string> };
 const mockJobs: Record<string, FakeJob> = {};
 const mockGetJob = jest.fn(async (queue: string, id: string) => (queue === 'content-post' ? mockJobs[id] ?? null : null));
@@ -108,6 +125,44 @@ describe('voice/transcribe', () => {
   });
   // e9 2026-11-13 (F1, BLOCKING privilege): the company-less shape skipped the membership AND role gates, so a Viewer
   // could dictate (spend). It is now refused; the client sends the active company (paired UI release).
+  describe('5-minute limit + per-minute billing (e9 2026-11-13)', () => {
+    const whisperSays = (duration: number) => mockFetch.mockImplementationOnce(async () => ({ ok: true, json: async () => ({ text: 'hi', duration, language: 'en' }), text: async () => '' }) as never);
+    beforeEach(() => { mockEcMode = 'enforce'; mockEngine.settled = []; mockEngine.released = 0; });
+    afterEach(() => { mockEcMode = 'off'; });
+    it('(a) 5:00 is accepted and charged ceil(5 x 14) = 70 credits', async () => {
+      whisperSays(300);
+      const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+      expect(r.status).toBe(200);
+      expect(mockEngine.settled).toEqual([70]);
+    });
+    it('a 30 s clip is charged by actual duration: ceil(0.5 x 14) = 7', async () => {
+      whisperSays(30);
+      await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+      expect(mockEngine.settled).toEqual([7]);
+    });
+    it('(b) 5:01 is refused 413 AUDIO_TOO_LONG, hold released, nothing charged, no transcript', async () => {
+      whisperSays(301.5);
+      const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+      expect(r).toMatchObject({ status: 413, body: { code: 'AUDIO_TOO_LONG' } });
+      expect(r.body.transcription).toBeUndefined();
+      expect(mockEngine.settled).toEqual([]);
+      expect(mockEngine.released).toBe(1);
+    });
+    it('(c) an oversize body is refused 413 before the guard, any hold and any provider call', async () => {
+      const big = 'data:audio/webm;base64,' + 'A'.repeat(Math.ceil((1_320_001 * 4) / 3) + 4);
+      const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, audioFile: big, companyId: CO_A } });
+      expect(r).toMatchObject({ status: 413, body: { code: 'AUDIO_TOO_LONG' } });
+      noSpend();
+      expect(mockEngine.settled).toEqual([]);
+      expect(mockEngine.released).toBe(0);
+    });
+    it('billing OFF (today): 5:01 is still refused 413 and the transcript discarded', async () => {
+      mockEcMode = 'off';
+      whisperSays(400);
+      const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+      expect(r).toMatchObject({ status: 413, body: { code: 'AUDIO_TOO_LONG' } });
+    });
+  });
   it('signed-in without a company → 400 COMPANY_REQUIRED, no spend (was 200 and ungated)', async () => {
     const r = await invoke(transcribe, { method: 'POST', as: 'A', body: audio });
     expect(r.status).toBe(400);

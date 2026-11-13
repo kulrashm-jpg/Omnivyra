@@ -10,6 +10,18 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { resolveTrustedClientIp } from '../../../backend/services/ai/trustedClientIp';
 import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
+import { createHash } from 'crypto';
+import { logger } from '../../../backend/services/logger';
+import { getCreditCost } from '../../../backend/services/creditDeductionService';
+import { executeWithEntryConsumption, makeIdempotencyKey, type ExecuteWithEntryConsumptionOptionsFixed } from '../../../backend/services/creditExecutionService';
+import { getCreditEconomyExecutionMode } from '../../../backend/services/billing/creditEconomyActivation';
+import {
+  AUDIO_TOO_LONG_BODY,
+  AudioTooLongError,
+  creditsForSeconds,
+  exceedsDurationLimit,
+  exceedsPreCallSizeBound,
+} from '../../../backend/services/voice/transcriptionLimits';
 
 // SEC91-D9: every transcription-provider request is time-bounded (they had no
 // timeout, so a stalled upstream held the function until the platform killed it).
@@ -52,6 +64,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!audioFile) {
       return res.status(400).json({ error: 'Audio file is required' });
     }
+    if (provider !== 'whisper' && provider !== 'assemblyai') {
+      return res.status(400).json({ error: 'Invalid provider. Use "whisper" or "assemblyai"' });
+    }
+    // Layer 1 (e9 2026-11-13): the pinned 32 kbps recorder cannot produce a <=5:00 file above this size.
+    // Refused BEFORE the AI guard, any credit hold and any provider call.
+    if (exceedsPreCallSizeBound(audioFile)) {
+      return res.status(413).json(AUDIO_TOO_LONG_BODY);
+    }
 
     // HARDEN-006: centralized AI protection (rate/burst; audio-size validated via
     // attachmentCount) before the transcription provider is invoked.
@@ -77,14 +97,79 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(503).json({ error: 'AI request protection unavailable. Please retry.', code: 'AI_GUARD_UNAVAILABLE' });
     }
 
+    // Provider call + Layer 2 (authoritative duration). Telemetry cost is captured even when the audio is refused:
+    // the provider was paid either way.
+    let measuredSeconds = 0;
+    const runTranscription = async () => {
+      const t = provider === 'whisper' ? await transcribeWithWhisper(audioFile) : await transcribeWithAssemblyAI(audioFile);
+      measuredSeconds = Number((t as any)?.duration) || 0;
+      if (exceedsDurationLimit(measuredSeconds)) throw new AudioTooLongError(measuredSeconds);
+      return t;
+    };
+
+    // Billing (e1 / e9, pricing hold): DARK until the credit-economy flip - 'off' keeps the unbilled path exactly.
+    // 'enforce': executeWithEntryConsumption FIXED path on 'voice_per_minute'; the hold is the VOICE class maximum;
+    // the settled amount is the ACTUAL duration, set as amountOverride after the call (the engine reads it after the
+    // executor returns). A refused-too-long run throws inside the executor: no consumable event fired, so the engine
+    // releases the hold and charges nothing.
     let transcription;
-    
-    if (provider === 'whisper') {
-      transcription = await transcribeWithWhisper(audioFile);
-    } else if (provider === 'assemblyai') {
-      transcription = await transcribeWithAssemblyAI(audioFile);
-    } else {
-      return res.status(400).json({ error: 'Invalid provider. Use "whisper" or "assemblyai"' });
+    try {
+      const ecMode = await getCreditEconomyExecutionMode({ organizationId: voiceOrgId, surface: 'voice.transcribe' });
+      if (ecMode === 'enforce') {
+        const perMinute = await getCreditCost('voice_per_minute');
+        const headerKey = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : '';
+        const referenceId = createHash('sha256')
+          .update([voiceOrgId, callerUserId, headerKey || String(audioFile)].join('|'))
+          .digest('hex').slice(0, 40);
+        const billingOpts: ExecuteWithEntryConsumptionOptionsFixed<Awaited<ReturnType<typeof runTranscription>>> = {
+          userId: callerUserId,
+          orgId: voiceOrgId,
+          action: 'voice_per_minute',
+          referenceType: 'voice_transcription',
+          referenceId,
+          idempotencyKey: makeIdempotencyKey(callerUserId, 'voice_per_minute', referenceId),
+          validateMembership: true,
+          executor: async () => {
+            const t = await runTranscription();
+            billingOpts.amountOverride = creditsForSeconds(measuredSeconds, perMinute);
+            return t;
+          },
+        };
+        const billed = await executeWithEntryConsumption(billingOpts);
+        switch (billed.status) {
+          case 'executed':
+            transcription = billed.result;
+            break;
+          case 'insufficient_credits':
+            return res.status(402).json({ error: 'Not enough credits to transcribe.', code: 'INSUFFICIENT_CREDITS', required: billed.required, balance: billed.available });
+          case 'already_settled':
+          case 'already_released':
+            return res.status(409).json({ error: 'This recording was already processed.', code: 'ALREADY_PROCESSED' });
+          case 'not_a_member':
+            return res.status(403).json({ error: 'FORBIDDEN' });
+          case 'no_credit_account':
+            return res.status(402).json({ error: 'No credit account for this company.', code: 'INSUFFICIENT_CREDITS', required: perMinute, balance: 0 });
+          case 'org_control_blocked':
+            return res.status(403).json({ error: billed.reason, code: billed.code });
+        }
+      } else {
+        transcription = await runTranscription();
+      }
+    } catch (err) {
+      if (err instanceof AudioTooLongError) {
+        logger.warn('voice_transcription_too_long', { companyId: voiceOrgId, userId: callerUserId, seconds: err.seconds, provider });
+        await captureFlatProviderCost({
+          organizationId: voiceOrgId,
+          processType:    'ai_reply',
+          provider:       provider === 'assemblyai' ? 'assemblyai' : 'openai',
+          model:          provider === 'assemblyai' ? 'assemblyai-transcript' : 'whisper-1',
+          totalCostUsd:   (err.seconds / 60) * (provider === 'assemblyai' ? 0.0062 : 0.006),
+          units:          { audio_seconds: err.seconds, voice_provider: provider, refused: 'audio_too_long' },
+          activity:       'voice_transcription',
+        }).catch(() => undefined);
+        return res.status(413).json(AUDIO_TOO_LONG_BODY); // transcript discarded, nothing charged
+      }
+      throw err;
     }
 
     // Phase 4.1 Task 3: best-effort provider-cost capture (telemetry only,
