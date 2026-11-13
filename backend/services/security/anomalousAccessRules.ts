@@ -9,6 +9,12 @@
  *     dataset stops being partial); (2) six weeks of post-launch traffic; (3) a rule fires 3 times in a week with no
  *     true positive (the heartbeat carries per-rule 7-day fire counts so (3) is observable).
  *   - IDENTITY rules (R4, R7): ONE event is the signal by definition. Their threshold is 1 and is never raised.
+ *
+ * RULE (05): when PL-12 lands (logAuditEvent rows start landing), RE-DERIVE EVERYTHING DERIVED FROM HISTORICAL AUDIT
+ * VOLUME - not a list to remember, a class. Today's instances: (a) the RATE thresholds below; (b) the worst-window
+ * negative control in anomalousAccessDetector.test.ts; (c) SOURCE_ROW_LIMIT in jobs/anomalousAccessScanJob.ts (sized
+ * against today's non-AI volume; if wrong it fails LOUDLY - every run reports the source truncated). Any new value
+ * derived from audit volume joins this class without an edit here.
  * A test fails any rate threshold whose basis lacks a date + re-measure trigger, and any identity threshold != 1.
  */
 
