@@ -23,6 +23,7 @@ import { interpretCompanyFactsLookup, type CompanyFactsLookupPayload } from './c
 
 import { type ProfileState, type BrandAssetField, type InlineQuestionFieldKey, normalizeQuestionFieldKey, questionMatchesInlineField, questionMatchesAnyInlineField, formatBusinessClassificationLabel, BRAND_ASSET_SPECS, BRAND_ASSET_ACCEPT, SOCIAL_ACCOUNT_FIELDS, formatFileSize, prepareTransparentBrandAsset, StatCard, SectionCard, GuidedChatPanel } from './companyProfileFormSupportA';
 import { StatusChip, SavedHint, IntelligenceContextSections } from './companyProfileFormSupportB';
+import type { WizardStepId } from './company/profileWizard/wizardSteps';
 
 export function useCompanyProfileFormController(d: ProfileState) {
   const {
@@ -230,6 +231,9 @@ export function useCompanyProfileFormController(d: ProfileState) {
     user,
     userRole,
   } = d;
+  // UI step 6.1: company-profile wizard: the current step (see profileWizard/wizardSteps).
+  const [wizardStep, setWizardStep] = React.useState<WizardStepId>('basics');
+  const isWizardStep = (id: WizardStepId) => wizardStep === id;
 
   // Editable "company understanding" draft — synced from the persisted value, editable by the user.
   const [understandingDraft, setUnderstandingDraft] = React.useState<string>(competitorUnderstanding || '');
@@ -724,6 +728,7 @@ export function useCompanyProfileFormController(d: ProfileState) {
   );
 
   return {
+    wizardStep, setWizardStep, isWizardStep,
     d, REFINE_STEPS, REFINE_STEP_DELAYS, actionableRefinementQuestions, activeProfile, addIdentityGuidance,
     addOtherSocial, approveStrategicField, brandAssetErrors, brandAssetUploading, businessClassification,
     calculateProblemTransformationCompletion, calculateProfileCompletion, campaignPurposeInput,

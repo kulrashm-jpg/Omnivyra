@@ -26,6 +26,7 @@ import { useCompanyProfileFormController } from './companyProfileFormController'
 import CompanyProfileFormSectionsA from './CompanyProfileFormSectionsA';
 import CompanyProfileFormSectionsB from './CompanyProfileFormSectionsB';
 import CompanyProfileFormSectionsC from './CompanyProfileFormSectionsC';
+import { WizardStepper, WizardStepNav } from './company/profileWizard/WizardStepper';
 
 export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const f = useCompanyProfileFormController(d);
@@ -101,6 +102,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
     userGuidance, userRole,
   } = f;
+  const { wizardStep, setWizardStep } = f;
   return (
     <>
       <div className="mx-auto mt-6 max-w-5xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
@@ -247,11 +249,14 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           <div className="text-sm text-gray-500">Loading profile...</div>
         ) : (
           <div className="space-y-6">
+            {/* UI step 6: the wizard step bar appears once the profile exists. */}
+            {showOnboardingContinuation && <WizardStepper current={wizardStep} onSelect={setWizardStep} />}
             <CompanyProfileFormSectionsA f={f} />
             {showOnboardingContinuation ? (
               <>
                 <CompanyProfileFormSectionsB f={f} />
                 <CompanyProfileFormSectionsC f={f} />
+                <WizardStepNav current={wizardStep} onSelect={setWizardStep} />
               </>
             ) : (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
