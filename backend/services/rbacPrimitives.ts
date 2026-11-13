@@ -23,13 +23,19 @@ import { supabase } from '../db/supabaseClient';
  *   - the content_architect platform principal (enforceRole / getUserCompanyRole / enforceCompanyAccess).
  */
 export type CompanyRoleGate = 'active' | 'inactive' | 'unavailable';
+/**
+ * The ONLY company columns the authorization gates read (status lookups, not business data). Exported so tests that
+ * assert "no business read before a refusal" can tell the gate's own lookup apart from a route's data read.
+ */
+export const COMPANY_GATE_SELECT = 'status, deleted_at';
+export const COMPANY_GATE_BATCH_SELECT = 'id, status, deleted_at';
 type TableFactory = (table: string) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
 export const companyRoleGate = async (
   companyId: string,
   from: TableFactory = (t) => supabase.from(t),
 ): Promise<CompanyRoleGate> => {
   const { data, error } = await from('companies')
-    .select('status, deleted_at')
+    .select(COMPANY_GATE_SELECT)
     .eq('id', companyId)
     .maybeSingle();
   if (error) return 'unavailable';
@@ -48,7 +54,7 @@ export const operationalCompanyIds = async (
 ): Promise<Set<string> | null> => {
   const ids = Array.from(new Set(companyIds.filter((id): id is string => typeof id === 'string' && id.length > 0)));
   if (ids.length === 0) return new Set();
-  const { data, error } = await from('companies').select('id, status, deleted_at').in('id', ids);
+  const { data, error } = await from('companies').select(COMPANY_GATE_BATCH_SELECT).in('id', ids);
   if (error) return null;
   return new Set(
     ((data ?? []) as Array<{ id: string; status?: string | null; deleted_at?: string | null }>)

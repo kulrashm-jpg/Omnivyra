@@ -18,13 +18,24 @@
 const mockTables: Record<string, Record<string, unknown>[]> = {};
 const mockWrites: { table: string; op: string; payload?: unknown }[] = [];
 const mockReads: string[] = [];
+// A read of `companies` with exactly the authorization gate's status columns (rbacPrimitives COMPANY_GATE_*) is the
+// inactive-company membership gate resolving the principal - an authorization lookup, NOT a business read.
 function mockBuilder(table: string) {
   mockReads.push(table);
+  const readIndex = mockReads.length - 1;
   let rows = [...(mockTables[table] ?? [])];
   const b: Record<string, unknown> = {};
   const chain = () => b;
   Object.assign(b, {
-    select: chain, order: chain, gt: chain, lt: chain, gte: chain, lte: chain, neq: chain, range: chain, not: chain, contains: chain,
+    select: (cols?: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const gate = require('../../services/rbacPrimitives');
+      if (table === 'companies' && (cols === gate.COMPANY_GATE_SELECT || cols === gate.COMPANY_GATE_BATCH_SELECT)) {
+        mockReads[readIndex] = 'companies#authz-status-gate';
+      }
+      return b;
+    },
+    order: chain, gt: chain, lt: chain, gte: chain, lte: chain, neq: chain, range: chain, not: chain, contains: chain,
     eq: (c: string, v: unknown) => { rows = rows.filter((r) => r[c] === v); return b; },
     is: (c: string, v: unknown) => { rows = rows.filter((r) => (r[c] ?? null) === v); return b; },
     in: (c: string, vs: unknown[]) => { rows = rows.filter((r) => vs.includes(r[c])); return b; },
@@ -407,6 +418,8 @@ describe('Closure-015: the two exposed GET routes are for platform operators onl
     expect(r.statusCode).toBe(403);
     expect(code(r)).toBe('PLATFORM_SUPER_ADMIN_REQUIRED');
     expect(mockReads.filter((t) => HEALTH_TABLES.includes(t))).toEqual([]);
+    // Positive control: the exclusion is not vacuous - the gate's status lookup DID run and is the only companies read.
+    expect(mockReads.filter((t) => t.startsWith('companies'))).toEqual(expect.arrayContaining(['companies#authz-status-gate']));
     expectAuditedRefusal(INTEGRATION_PLATFORM_OAUTH_MANAGE, GRANTEE);
   });
   it.each([
