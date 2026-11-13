@@ -115,7 +115,11 @@ export async function processInsertedSignalsForCompany(
   const { filterSignalsForCompany } = await import('./companySignalFilteringEngine');
   const { rankSignalsForCompany } = await import('./companySignalRankingEngine');
 
-  const signals = await fetchSignalsByIds(insertedSignalIds);
+  // Tenant ownership (e9 ruling 2026-11-13): intelligence_signals.company_id is set for signals fetched from ONE
+  // company's profile-driven queries (trendFetching insertFromTrendApiResults). Such a signal may be distributed only
+  // to that company; GLOBAL signals (company_id NULL) go to everyone. Distribution used to ignore the owner, so an
+  // operator run of activateCompanyIntelligence.ts pushed company B's headlines into company A's intelligence.
+  const signals = (await fetchSignalsByIds(insertedSignalIds)).filter((s) => s.company_id == null || s.company_id === companyId);
   if (signals.length === 0) return { inserted: 0, skipped: 0 };
 
   const filtered = await filterSignalsForCompany(companyId, signals);
@@ -137,16 +141,18 @@ export async function processInsertedSignalsForCompany(
  */
 export async function fetchSignalsByIds(
   signalIds: string[]
-): Promise<Array<{ id: string; topic: string | null; relevance_score: number | null; primary_category: string | null; tags: string[] | null; normalized_payload: Record<string, unknown> | null; detected_at: string | null }>> {
+): Promise<Array<{ id: string; company_id: string | null; topic: string | null; relevance_score: number | null; primary_category: string | null; tags: string[] | null; normalized_payload: Record<string, unknown> | null; detected_at: string | null }>> {
   if (signalIds.length === 0) return [];
 
   const { data, error } = await ownedDbTable('intelligence_signals')
-    .select('id, topic, relevance_score, primary_category, tags, normalized_payload, detected_at')
+    .select('id, company_id, topic, relevance_score, primary_category, tags, normalized_payload, detected_at')
     .in('id', signalIds);
 
   if (error) throw new Error(`Failed to fetch signals: ${error.message}`);
   return (data ?? []) as Array<{
     id: string;
+    /** Owner for company-scoped signals; NULL = global. */
+    company_id: string | null;
     topic: string | null;
     relevance_score: number | null;
     primary_category: string | null;
