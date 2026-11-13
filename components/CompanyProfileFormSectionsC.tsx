@@ -3,7 +3,6 @@
 import React from 'react';
 import Link from 'next/link';
 import ChatVoiceButton from '../components/ChatVoiceButton';
-import AIGenerationProgress from '../components/AIGenerationProgress';
 import CompanyStrategyProfileCard from '../components/company/CompanyStrategyProfileCard';
 import type { useCompanyProfileState } from '../hooks/useCompanyProfileState';
 import type {
@@ -25,6 +24,7 @@ import { useCompanyProfileFormController } from './companyProfileFormController'
 import { MirrorStatusList } from './company/profileWizard/MirrorStatusList';
 import { growthPrioritiesView } from '../utils/profileMarketPulseMirror';
 import { splitToList as splitGrowth } from '../pages/company-profile.types';
+import MarketingIntelligenceProgress from './company/MarketingIntelligenceProgress';
 
 export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeof useCompanyProfileFormController> }) {
   const {
@@ -495,11 +495,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
               </div>
               {marketingIntelligenceLoading && (
                 <div className="mb-4">
-                  <AIGenerationProgress
-                    isActive={true}
-                    message="Generating marketing intelligence…"
-                    expectedSeconds={50}
-                  />
+                  {/* UI step 6.6: real steps (StepTracker) instead of a timer bar. */}
+                  <MarketingIntelligenceProgress />
                 </div>
               )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
