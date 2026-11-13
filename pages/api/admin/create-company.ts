@@ -15,6 +15,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireSuperAdmin } from '../../../backend/middleware/authMiddleware';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
+import { logger } from '../../../backend/services/logger';
+import { reportCanonicalDomainViolation } from '../../../backend/services/companyDomainUniqueness';
 
 type SuccessResponse = { companyId: string };
 type ErrorResponse   = { error: string; code?: string; details?: string; conflicts?: string[] };
@@ -96,6 +98,7 @@ async function handler(
     .single();
 
   if (insertErr) {
+    reportCanonicalDomainViolation(insertErr, 'admin/create-company', logger);
     console.error('[admin/create-company] insert error:', insertErr.message);
     return res.status(500).json({ error: 'Failed to create company' });
   }

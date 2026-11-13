@@ -36,6 +36,8 @@ import {
 } from '../../../backend/services/initialFreeCreditService';
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
 import { getTrustedClientIp } from '../../../lib/security/clientIp';
+import { logger } from '../../../backend/services/logger';
+import { reportCanonicalDomainViolation } from '../../../backend/services/companyDomainUniqueness';
 import {
   emitSignupEvent,
   ensureSignupCorrelationId,
@@ -256,6 +258,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         .single();
 
       if (createError) {
+        reportCanonicalDomainViolation(createError, 'onboarding/complete', logger);
         console.error('[onboarding/complete] company creation failed:', createError.message);
         return res.status(500).json({ error: 'Could not create company' });
       }

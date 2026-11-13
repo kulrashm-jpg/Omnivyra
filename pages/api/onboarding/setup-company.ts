@@ -39,12 +39,13 @@ import {
 } from '../../../backend/services/validatedWebsiteService';
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
-import { classifyCompanyDomainConflict } from '../../../backend/services/companyDomainUniqueness';
+import { classifyCompanyDomainConflict, reportCanonicalDomainViolation } from '../../../backend/services/companyDomainUniqueness';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
 import { bootstrapCompanyProfile } from '../../../backend/services/companyBootstrapService';
 import { emitCrawlEvent } from '../../../backend/services/crawl/crawlEventService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import { logger } from '../../../backend/services/logger';
 import {
   emitSignupEvent,
   ensureSignupCorrelationId,
@@ -627,7 +628,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
       });
     }
 
-    if (companyErr) throw companyErr;
+    if (companyErr) {
+      reportCanonicalDomainViolation(companyErr, 'onboarding/setup-company', logger);
+      throw companyErr;
+    }
 
     // ── 4. Create user_company_roles row (company admin) ─────────────────────
     const { error: roleErr } = await supabase.from('user_company_roles').insert({

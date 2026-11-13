@@ -20,3 +20,25 @@ export function classifyCompanyDomainConflict(err: unknown): CompanyDomainConfli
   if (text.includes(ADMIN_EMAIL_DOMAIN_UNIQUE_INDEX)) return 'admin_email_domain';
   return null;
 }
+
+/** 050's canonical-form CHECKs: a stored domain must already equal lower(btrim(value)). */
+export const WEBSITE_DOMAIN_CANONICAL_CHECK = 'companies_website_domain_canonical';
+export const ADMIN_EMAIL_DOMAIN_CANONICAL_CHECK = 'companies_admin_email_domain_canonical';
+
+/**
+ * A 23514 naming a canonical-domain CHECK is a PROGRAMMING error (05): a writer stored a non-normalised domain. The
+ * CHECK is the positive control that a missed writer fails LOUDLY; this makes it legible - one distinct ERROR log
+ * naming the constraint and the writer, enough to find the writer from one alert. The caller keeps its generic 500.
+ * Returns true when it was such a violation (and logged it).
+ */
+export function reportCanonicalDomainViolation(err: unknown, writer: string, log: { error: (event: string, meta: Record<string, unknown>) => void }): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; message?: unknown; details?: unknown; constraint?: unknown };
+  if (e.code !== '23514') return false;
+  const text = `${String(e.message ?? '')} ${String(e.details ?? '')} ${String(e.constraint ?? '')}`;
+  const constraint = text.includes(WEBSITE_DOMAIN_CANONICAL_CHECK) ? WEBSITE_DOMAIN_CANONICAL_CHECK
+    : text.includes(ADMIN_EMAIL_DOMAIN_CANONICAL_CHECK) ? ADMIN_EMAIL_DOMAIN_CANONICAL_CHECK : null;
+  if (!constraint) return false;
+  log.error('company_domain_not_canonical_write', { writer, constraint, message: String(e.message ?? '') });
+  return true;
+}

@@ -22,6 +22,13 @@
 -- the exact .eq() lookups every app path uses and the index expression coincide BY CONSTRUCTION (a stored
 -- ' Example.COM ' would occupy example.com in the index while invisible to the gate - a dead end). Every writer already
 -- stores trimmed lowercase domains (companyIdentityWriter / normalizeCompanyDomain, create-company, onboarding/complete).
+-- The CHECK is also the POSITIVE CONTROL for that enumeration: a missed writer fails loudly (23514), and the app logs it
+-- as company_domain_not_canonical_write naming the constraint and the writer.
+-- PRE-COMMITTED RULE for 83's non-canonical count (05), so the answer selects a path rather than opening a question:
+--   0 rows                      -> keep this all-rows CHECK (simplest, strongest);
+--   only SOFT-DELETED rows      -> scope the CHECK to the index predicate (deleted_at IS NOT NULL OR value IS NULL OR
+--                                  value = lower(btrim(value))) - no historical rewrite; a restore re-evaluates it;
+--   any LIVE (non-deleted) rows -> normalise them first (owner-approved D-step): the gate cannot see them today.
 --
 -- LOCK. Plain CREATE UNIQUE INDEX (not CONCURRENTLY: the apply runner may wrap the file in one transaction, where
 -- CONCURRENTLY is not allowed). companies is tiny (C95: 9 rows with a domain); the ACCESS-EXCLUSIVE window is negligible.

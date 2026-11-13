@@ -77,7 +77,8 @@ describe('Phase 11C — source contract on setup-company.ts', () => {
     // 050 (e1 2026-11-13): the race is a 23505 classified BY INDEX NAME, not any 23505 (companies has other unique rules)
     expect(CODE).toContain('classifyCompanyDomainConflict(companyErr)');
     expect(CODE).toMatch(/companyExists:\s*true/);
-    expect(CODE).toContain('if (companyErr) throw companyErr;');
+    // any other insert error still propagates (after a distinct log if it is a canonical-domain CHECK violation)
+    expect(CODE).toMatch(/if \(companyErr\) \{\s*reportCanonicalDomainViolation\(companyErr, 'onboarding\/setup-company', logger\);\s*throw companyErr;/);
   });
 
   it('credit / referral / role logic preserved', () => {
