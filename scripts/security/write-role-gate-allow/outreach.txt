@@ -1,0 +1,5 @@
+# Reviewed 2026-11-13 (6f, fix/outreach-write-roles; e9 rulings): outreach routes the write-role scan flags that write NO
+# tenant data a view-only role could misuse. Every other outreach write route is role-gated (outreachWriteRolesAllRoutes).
+pages/api/engagement/sync.ts                          # GET/POST only echo a sync window; no DB write (ingestion is extension-driven)
+pages/api/active-leads/credit-estimate.ts             # POST computes an estimate + hash; writes no rows
+pages/api/active-leads/semantic-retrieval.ts          # a query; inserts an explanation row as a side effect - e9: leave, post-launch register row
