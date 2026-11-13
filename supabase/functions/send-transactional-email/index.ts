@@ -84,6 +84,14 @@ type Template =
       ctaUrl: string;
     }
   | {
+      // e1 2026-11-13 (owner ruling): internal operational alert to the configured ops recipient (OPS_ALERT_EMAIL).
+      // Plain, escaped text - never user data.
+      type: "ops_alert";
+      recipientEmail: string;
+      subject: string;
+      detail: string;
+    }
+  | {
       type: "credit_alert";
       recipientEmail: string;
       companyName: string | null;
@@ -271,6 +279,14 @@ function render(t: Template): Envelope {
           "Open Omnivyra",
           t.ctaUrl,
         ),
+      };
+    }
+    case "ops_alert": {
+      return {
+        to: t.recipientEmail,
+        subject: `[Omnivyra ops] ${t.subject}`,
+        html: escapeHtmlBlock(t.detail),
+        text: t.detail,
       };
     }
     case "credit_alert": {
@@ -496,6 +512,7 @@ Deno.serve(async (req) => {
     "domain_verification_reminder",
     "activation_outreach",
     "credit_alert",
+    "ops_alert",
     // PI-041-A-O — the pass-through outreach message. Added here AND to the
     // Template union above; the two must stay in sync or an unknown type reaches
     // `render()` and returns undefined.
