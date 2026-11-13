@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
 
 function slugify(text: string): string {
   return text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 80);
@@ -13,6 +14,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
+  // Write-role gate (e1 2026-11-13, 55's write-role scan): membership alone let a VIEW_ONLY member write here.
+  // Reads stay membership-only; every non-GET method needs a content authoring role.
+  if (req.method !== 'GET' && !(await enforceContentWriteRole({ req, res, companyId: company_id }))) return;
 
   // GET — list series with post counts
   if (req.method === 'GET') {

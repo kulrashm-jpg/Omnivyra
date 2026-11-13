@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
 import { resolveCompanyGroundingGuard } from '@/backend/services/context/canonicalContentContextResolver';
 import { getCanonicalProfile as getProfile, getCanonicalGroundingContext } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
@@ -74,6 +75,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Verify user authentication and company access
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
+  // Write-role gate (e1 2026-11-13, 55's write-role scan): membership alone let a VIEW_ONLY member write here.
+  // Reads stay membership-only; every non-GET method needs a content authoring role.
+  if (req.method !== 'GET' && !(await enforceContentWriteRole({ req, res, companyId: company_id }))) return;
 
   try {
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: false });

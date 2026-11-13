@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceContentWriteRole } from '@/backend/services/content/contentWriteAuthz';
 
 const VALID_TYPES = new Set(['related', 'prerequisite', 'continuation']);
 
@@ -11,6 +12,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
+  // Write-role gate (e1 2026-11-13, 55's write-role scan): membership alone let a VIEW_ONLY member write here.
+  // Reads stay membership-only; every non-GET method needs a content authoring role.
+  if (req.method !== 'GET' && !(await enforceContentWriteRole({ req, res, companyId: company_id }))) return;
 
   // POST — create relationship
   if (req.method === 'POST') {
