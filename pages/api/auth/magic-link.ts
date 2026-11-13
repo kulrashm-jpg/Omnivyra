@@ -29,7 +29,12 @@ import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../..
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { checkRateLimit, EMAIL_LINK_LIMIT, MAGIC_LINK_GLOBAL_LIMIT } from '../../../lib/auth/rateLimit';
+import { createHash } from 'crypto';
+import { checkRateLimit, EMAIL_LINK_LIMIT, MAGIC_LINK_GLOBAL_LIMIT, type RateLimitConfig } from '../../../lib/auth/rateLimit';
+import { incrementAuthMetric } from '../../../backend/services/authMetrics';
+
+/** Per-address magic-link limit (enforcing). */
+const MAGIC_LINK_PER_EMAIL_LIMIT: RateLimitConfig = { ...EMAIL_LINK_LIMIT, keyPrefix: 'rl:auth:magic-link:email', limit: 5, windowSecs: 3600 };
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 import { logger } from '../../../backend/services/logger';
@@ -85,9 +90,13 @@ async function decide(req: NextApiRequest): Promise<Outcome> {
   const ip = authRequestIp(req);
   const rl = await checkRateLimit(ip, { ...EMAIL_LINK_LIMIT, keyPrefix: 'rl:auth:magic-link', limit: 5, windowSecs: 3600 });
   if (!rl.allowed) return { status: 429, body: AUTH_RATE_LIMITED_BODY, retryAfter: retryAfterSeconds(rl.resetAt, Date.now()) };
-  // Checked after the per-IP limit so a refused IP never spends the shared budget.
+  // e9 ruling 2026-11-13: the GLOBAL ceiling is ALERT-ONLY - a distributed flood must never pause sign-in for everyone.
+  // The enforcing controls are per-IP (above) and per-email (below). Over the global budget we log + count only.
   const globalRl = await checkRateLimit('global', MAGIC_LINK_GLOBAL_LIMIT);
-  if (!globalRl.allowed) return { status: 429, body: AUTH_RATE_LIMITED_BODY, retryAfter: retryAfterSeconds(globalRl.resetAt, Date.now()) };
+  if (!globalRl.allowed) {
+    logger.warn('auth.enumeration_global_ceiling_exceeded', { route: 'magic-link' });
+    incrementAuthMetric('auth.enumeration.global_ceiling', { route: 'magic-link' });
+  }
 
   let body: unknown = req.body;
   if (typeof body === 'string') {
@@ -100,6 +109,10 @@ async function decide(req: NextApiRequest): Promise<Outcome> {
   if (!isAcceptableEmailAddress(email)) return { status: 400, body: { error: EMAIL_ADDRESS_POLICY_MESSAGE } };
 
   const normalizedEmail = email.trim().toLowerCase();
+  // Per-email limit (enforcing, e9 2026-11-13): keyed on a hash so no raw address reaches Redis; applied to EVERY
+  // address identically, so it reveals nothing about whether an account exists.
+  const emailRl = await checkRateLimit(createHash('sha256').update(normalizedEmail).digest('hex').slice(0, 32), MAGIC_LINK_PER_EMAIL_LIMIT);
+  if (!emailRl.allowed) return { status: 429, body: AUTH_RATE_LIMITED_BODY, retryAfter: retryAfterSeconds(emailRl.resetAt, Date.now()) };
   if (await accountCanReceiveLink(normalizedEmail)) {
     runDetachedFromResponse(sendLink(normalizedEmail));
   }

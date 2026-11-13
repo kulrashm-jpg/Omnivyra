@@ -37,6 +37,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, CHECK_USER_GLOBAL_LIMIT } from '../../../lib/auth/rateLimit';
+import { incrementAuthMetric } from '../../../backend/services/authMetrics';
+import { logger } from '../../../backend/services/logger';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import {
   AUTH_RATE_LIMITED_BODY,
@@ -53,9 +55,13 @@ async function decide(req: NextApiRequest): Promise<Outcome> {
   // strict per-instance budget (lib/auth/rateLimit), never the generous fallback cap.
   const rl = await checkRateLimit(ip, { keyPrefix: 'rl:auth:check-user', limit: 20, windowSecs: 15 * 60, sensitive: true });
   if (!rl.allowed) return { status: 429, body: AUTH_RATE_LIMITED_BODY, retryAfter: retryAfterSeconds(rl.resetAt, Date.now()) };
-  // Checked after the per-IP limit so a refused IP never spends the shared budget.
+  // e9 ruling 2026-11-13: the GLOBAL ceiling is ALERT-ONLY - a distributed flood must never pause sign-in for everyone.
+  // The enforcing controls are per-IP (above) and per-email (below). Over the global budget we log + count only.
   const globalRl = await checkRateLimit('global', CHECK_USER_GLOBAL_LIMIT);
-  if (!globalRl.allowed) return { status: 429, body: AUTH_RATE_LIMITED_BODY, retryAfter: retryAfterSeconds(globalRl.resetAt, Date.now()) };
+  if (!globalRl.allowed) {
+    logger.warn('auth.enumeration_global_ceiling_exceeded', { route: 'check-user' });
+    incrementAuthMetric('auth.enumeration.global_ceiling', { route: 'check-user' });
+  }
 
   const { email } = (req.body ?? {}) as { email?: string };
   if (typeof email !== 'string' || !email.trim()) return { status: 200, body: { exists: false } };
