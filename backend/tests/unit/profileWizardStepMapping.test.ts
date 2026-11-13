@@ -55,7 +55,7 @@ describe('company-profile blocks and fields → wizard steps', () => {
     [C, '>Problem & Transformation</h3>', 'problem'],
     [M, 'Latest Refinement Insights', 'review'],
     // "Messaging & Audience" fields (6.3)
-    [B, '>Products & Services<', 'offering'],
+    [B, '>What you offer<', 'offering'],
     [B, '>Unique Value<', 'offering'],
     [B, '>Target Audience<', 'audience'],
     [B, '>Competitors<', 'audience'],
@@ -71,6 +71,7 @@ describe('company-profile blocks and fields → wizard steps', () => {
     [C, '>Sales cycle<', 'audience'],
     [C, 'Campaign Purpose &', 'goals'],
     [C, '>Key metrics<', 'goals'],
+    [C, 'the one Growth priorities input', 'goals'],
   ])('%#: %s → %s', (src, marker, step) => {
     expect(wrapperOf(src as string, marker as string)).toBe(step);
   });

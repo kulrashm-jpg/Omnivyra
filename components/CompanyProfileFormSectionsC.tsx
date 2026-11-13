@@ -22,6 +22,9 @@ import { isValidCanonicalWebsite } from '../utils/companyProfileValidation';
 import { type ProfileState, type BrandAssetField, type InlineQuestionFieldKey, normalizeQuestionFieldKey, questionMatchesInlineField, questionMatchesAnyInlineField, formatBusinessClassificationLabel, BRAND_ASSET_SPECS, BRAND_ASSET_ACCEPT, SOCIAL_ACCOUNT_FIELDS, formatFileSize, prepareTransparentBrandAsset, StatCard, SectionCard, GuidedChatPanel } from './companyProfileFormSupportA';
 import { StatusChip, SavedHint, IntelligenceContextSections } from './companyProfileFormSupportB';
 import { useCompanyProfileFormController } from './companyProfileFormController';
+import { MirrorStatusList } from './company/profileWizard/MirrorStatusList';
+import { growthPrioritiesView } from '../utils/profileMarketPulseMirror';
+import { splitToList as splitGrowth } from '../pages/company-profile.types';
 
 export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeof useCompanyProfileFormController> }) {
   const {
@@ -97,6 +100,7 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
     userGuidance, userRole,
   } = f;
   const { showStep, showAnyStep, wizardStepTitle } = f;
+  const growthView = growthPrioritiesView(activeProfile.growth_priorities, marketPulseSettings.growth_priorities);
   return (
     <>
             {showStep('advanced') && (<>
@@ -263,6 +267,24 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   {!isEditing && <SavedHint value={activeProfile.key_metrics} />}
                 </div>
                 </>)}
+                {showStep('goals') && (<>
+                <div className="md:col-span-2">
+                  {/* 6.4c (S6): the one Growth priorities input. The text column stays canonical
+                      (a string); saving mirrors it into market_pulse.growth_priorities. */}
+                  <label className="text-sm font-medium text-gray-700">Growth priorities</label>
+                  <textarea
+                    value={activeProfile.growth_priorities || ''}
+                    onChange={(e) => handleChange('growth_priorities', e.target.value)}
+                    placeholder="e.g. EU expansion, partnerships, hiring"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                  {growthView.marketPulseOnly.length > 0 && (
+                    <p className="mt-1 text-xs text-gray-600">Also in Market Pulse: {growthView.marketPulseOnly.join(', ')}</p>
+                  )}
+                  <MirrorStatusList items={splitGrowth(activeProfile.growth_priorities || '')} existingMarketPulse={marketPulseSettings.growth_priorities} />
+                </div>
+                </>)}
               </div>
               {activeProfile.last_edited_by === 'user' && (
                 <p className="text-xs text-gray-500 mt-2">
@@ -361,23 +383,25 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Core offerings</label>
+                  {/* 6.4c (S3): mirrored from "What you offer"; edit it on the Offering step. */}
                   <textarea
                     value={joinList(marketPulseSettings.core_offerings)}
-                    onChange={(e) => handleMarketPulseSettingArrayChange('core_offerings', e.target.value)}
-                    placeholder="Comma-separated: recruitment services, visa support"
+                    readOnly
                     rows={2}
-                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    className="mt-1 w-full border border-gray-300 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
                   />
+                  <p className="mt-1 text-xs text-gray-500">Mirrored from "What you offer". Edit it on the Offering step.</p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Growth priorities</label>
+                  {/* 6.4c (S6): mirrored from Growth priorities; edit it on the Goals step. */}
                   <textarea
                     value={joinList(marketPulseSettings.growth_priorities)}
-                    onChange={(e) => handleMarketPulseSettingArrayChange('growth_priorities', e.target.value)}
-                    placeholder="Comma-separated: expansion, partnerships, demand growth"
+                    readOnly
                     rows={2}
-                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    className="mt-1 w-full border border-gray-300 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
                   />
+                  <p className="mt-1 text-xs text-gray-500">Mirrored from Growth priorities. Edit it on the Goals step.</p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Partnership priorities</label>
@@ -599,14 +623,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   ) : null}
                 </div>
                 <div className="md:col-span-2">
-                  <label className="text-sm font-medium text-gray-700">Growth priorities</label>
-                  <textarea
-                    value={activeProfile.growth_priorities || ''}
-                    onChange={(e) => handleChange('growth_priorities', e.target.value)}
-                    placeholder="Marketing/growth priorities"
-                    rows={2}
-                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  />
+                  {/* 6.4c (S6): Growth priorities is asked once, on the Goals step. */}
+                  <p className="text-xs text-gray-500">Growth priorities are set on the Goals step.</p>
                 </div>
               </div>
             </div>
