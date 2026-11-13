@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 
@@ -120,14 +121,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     tenant = tenantContextFor({ userId }, campaignAccess.organizationId);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     throw err;
   }
   const postsTable = await tenantChildTable('scheduled_posts', tenant, campaignId).catch((err: unknown) => {
-    if (err instanceof TenantSeamError) return null;
+    if (err instanceof TenantSeamError) return err;
     throw err;
   });
-  if (!postsTable) return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+  if (postsTable instanceof TenantSeamError) return seamDenial(res, postsTable, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
 
   // ── Step-16: automatic pre-enqueue shared-media finalization ──────────
   // Runs BEFORE any scheduled_posts persistence / enqueueScheduledPostAt,

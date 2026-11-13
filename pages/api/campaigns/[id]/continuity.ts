@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/campaigns/[id]/continuity
@@ -99,7 +100,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     tenant = tenantContextFor({ userId: access.userId }, companyId);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
     throw err;
   }
 

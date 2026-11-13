@@ -112,6 +112,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     // S2 (e9 2026-11-14): a row outside the caller's scope - e.g. a PLATFORM row (company_id NULL) read in ordinary
     // company scope - is "not found" (404), never a 500; and the DB error text never reaches the client.
+    // The 404 is DELIBERATE CONCEALMENT: it answers the same for a missing row and for a row outside the caller's scope,
+    // so it does not reveal whether the row exists. It is NOT read-error-as-absent: a failed read (error set) stays a
+    // 500 below and is never reported as "not found".
     const { data, error } = await query.maybeSingle();
     if (error) {
       return res.status(500).json({ error: 'Failed to load external API' });

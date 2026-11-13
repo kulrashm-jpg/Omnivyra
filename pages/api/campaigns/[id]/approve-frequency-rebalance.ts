@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -97,15 +98,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     seamTenant = tenantContextFor({ userId: user.id }, companyId);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
     throw err;
   }
   const strategiesTable = await tenantChildTable('platform_strategies', seamTenant, id).catch((err: unknown) => {
-    if (err instanceof TenantSeamError) return null;
+    if (err instanceof TenantSeamError) return err;
     throw err;
   });
-  if (!strategiesTable) {
-    return res.status(404).json({ error: 'Campaign not found' });
+  if (strategiesTable instanceof TenantSeamError) {
+    return seamDenial(res, strategiesTable, 404, { error: 'Campaign not found' });
   }
 
   const { failed: proposedFailed, row: proposedVersion } = await latestCompanyVersion(companyId, id, 'proposed_rebalance');

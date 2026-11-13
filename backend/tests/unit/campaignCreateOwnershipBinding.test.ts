@@ -19,7 +19,8 @@ import {
   seed, invoke, calls, writeCalls, rows, CO_A, CO_B, USER_A,
 } from '../helpers/routeAuthHarness';
 
-type Fault = { table: string; op: string; error: { code: string; message: string }; after?: () => boolean };
+type Fault = { table: string; op: string; error: { code: string; message: string }; after?: () => boolean; mayNotFire?: boolean };
+const mockFired = new WeakSet<Fault>();
 const mockFaults: Fault[] = [];
 const mockAfterInsert: Array<(table: string) => void> = [];
 const mockEvents: string[] = [];
@@ -34,7 +35,11 @@ jest.mock('../../db/supabaseClient', () => {
       const original = b[m];
       b[m] = (...args: unknown[]) => { op = m; original(...args); return b; };
     }
-    const fault = () => mockFaults.find((f) => f.table === table && f.op === op && (!f.after || f.after()));
+    const fault = () => {
+      const f = mockFaults.find((x) => x.table === table && x.op === op && (!x.after || x.after()));
+      if (f) mockFired.add(f);
+      return f;
+    };
     const settle = (r: unknown) => {
       if (op === 'insert') for (const hook of mockAfterInsert) hook(table);
       return r;
@@ -371,4 +376,10 @@ describe('concurrent and partial creates fail closed without leaking database de
 afterEach(() => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   require('../helpers/routeAuthHarness').assertNoHarnessConfigurationError();
+});
+
+/* 05 / e9 (2026-11-14): a configured fault that never fires FAILS the test (opt out per fault: mayNotFire: true). */
+afterEach(() => {
+  const unfired = mockFaults.filter((f) => !mockFired.has(f) && !f.mayNotFire);
+  if (unfired.length) throw new Error(`configured fault(s) never fired: ${unfired.map((f) => `${f.op}:${f.table}`).join(', ')}`);
 });

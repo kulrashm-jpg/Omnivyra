@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
@@ -150,7 +151,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
     console.error('[PLANNER][PERFORMANCE][ERROR] Unexpected error:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }

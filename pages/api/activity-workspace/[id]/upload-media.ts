@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/activity-workspace/[id]/upload-media
@@ -153,14 +154,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     seamTenant = tenantContextFor(access, companyId);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
     throw err;
   }
   const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
-    if (err instanceof TenantSeamError) return null;
+    if (err instanceof TenantSeamError) return err;
     throw err;
   });
-  if (!plansTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
 
   // ── Validate the media URL ─────────────────────────────────────────────
   const validation = await validateMediaUpload({

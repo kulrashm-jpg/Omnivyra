@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 // Handle GET/POST requests to /api/campaigns
@@ -910,7 +911,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   } catch (error) {
     // A seam refusal (companyId cannot form a tenant context) answers the route's existing company denial.
-    if (error instanceof TenantSeamError) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 403, { error: 'FORBIDDEN_ROLE' });
     console.error('Error in campaigns API:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;

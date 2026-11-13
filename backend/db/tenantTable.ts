@@ -29,7 +29,10 @@ export class TenantSeamError extends Error {
   constructor(readonly code: 'TENANT_CONTEXT_MISSING' | 'TENANT_MISMATCH' | 'TENANT_TABLE_UNKNOWN' | 'TENANT_PAYLOAD_INVALID' | 'TENANT_PARENT_FANOUT' | 'TENANT_PARENT_UNREADABLE', message: string) {
     super(`${code}: ${message}`);
     this.name = 'TenantSeamError';
+    // 05 (2026-11-14): callers map on THIS, not on a code list - only a failed parent READ is retryable.
+    this.retryable = code === 'TENANT_PARENT_UNREADABLE';
   }
+  readonly retryable: boolean;
 }
 
 const UUIDISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

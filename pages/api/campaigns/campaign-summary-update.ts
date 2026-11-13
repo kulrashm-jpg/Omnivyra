@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
@@ -41,7 +42,7 @@ async function getCampaignSummary(req: NextApiRequest, res: NextApiResponse) {
     res.status(200).json(campaign);
 
   } catch (error) {
-    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found' });
     console.error('Error in getCampaignSummary:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -106,7 +107,7 @@ async function updateCampaignSummary(req: NextApiRequest, res: NextApiResponse) 
     });
 
   } catch (error) {
-    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found' });
     console.error('Error in updateCampaignSummary:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

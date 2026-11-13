@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
@@ -34,7 +35,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, ownerCompanyId));
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Recommendation not found' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Recommendation not found' });
     throw err;
   }
 

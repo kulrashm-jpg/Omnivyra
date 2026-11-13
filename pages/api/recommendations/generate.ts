@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../../backend/services/recommendationEngineService';
@@ -86,7 +87,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, String(companyId)));
     } catch (err) {
-      if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Access denied to company' });
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Access denied to company' });
       throw err;
     }
     console.log('RECOMMENDATION_REQUEST', { companyId, campaignId: resolvedCampaignId });

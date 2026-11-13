@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -74,7 +75,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ history: planEntries });
   } catch (error: any) {
-    if (error instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found' });
     console.error('Error in AI history API:', error);
     return res.status(500).json({ error: 'Failed to load AI history' });
   }

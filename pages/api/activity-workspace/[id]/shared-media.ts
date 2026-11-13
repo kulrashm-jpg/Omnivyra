@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Shared Creator Media inheritance endpoint — additive, flag-gated.
@@ -75,16 +76,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // S2 tenant seam: the tenant is the campaign's company that enforceCompanyAccess just authorized for this
   // principal (never a request value). Child handles below are made before the writes they guard; a seam refusal
   // answers the route's existing company denial.
-  const seamDenied = () => res.status(403).json({ error: 'Company unresolved.' });
+  const seamDenied = (err: TenantSeamError) => seamDenial(res, err, 403, { error: 'Company unresolved.' });
   let seamTenant: TenantContext;
   try {
     seamTenant = tenantContextFor(access, companyId);
   } catch (err) {
-    if (err instanceof TenantSeamError) return seamDenied();
+    if (err instanceof TenantSeamError) return seamDenied(err);
     throw err;
   }
-  const seamRefused = (err: unknown) => {
-    if (err instanceof TenantSeamError) return null;
+  // The seam error itself (not null), so a RETRYABLE one answers 503 via seamDenial (05, 2026-11-14).
+  const seamRefused = (err: unknown): TenantSeamError => {
+    if (err instanceof TenantSeamError) return err;
     throw err;
   };
 
@@ -138,7 +140,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // S2: content_asset_attachment is a child of content_core_asset (by content_core_id); every core row of this
       // content core must be this tenant's before the attachment is touched.
       const attachmentTable = await tenantChildTable('content_asset_attachment', seamTenant, contentCoreId).catch(seamRefused);
-      if (!attachmentTable) return seamDenied();
+      if (attachmentTable instanceof TenantSeamError) return seamDenied(attachmentTable);
       await attachmentTable.update(patch).eq('id', att.id);
     } else if (action === 'override') {
       const att = await loadAttachment();
@@ -183,7 +185,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // verified AFTER that write (on a first attach no core row exists before it). A refusal here leaves only the
       // two tenant-stamped lineage rows above; it writes no attachment.
       const attachmentTable = await tenantChildTable('content_asset_attachment', seamTenant, contentCoreId).catch(seamRefused);
-      if (!attachmentTable) return seamDenied();
+      if (attachmentTable instanceof TenantSeamError) return seamDenied(attachmentTable);
       await attachmentTable.upsert(
         { ...built.attachment_row, updated_at: nowIso },
         { onConflict: 'content_core_id,asset_id,attachment_role', ignoreDuplicates: true });
@@ -192,7 +194,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!att) return res.status(409).json({ error: 'No attachment yet.', code: 'NO_ATTACHMENT' });
       // S2: sibling plan rows are written through a handle pinned to this row's campaign, made before any write.
       const plansTable = await tenantChildTable('daily_content_plans', seamTenant, (row as any).campaign_id).catch(seamRefused);
-      if (!plansTable) return seamDenied();
+      if (plansTable instanceof TenantSeamError) return seamDenied(plansTable);
       const { data: ovRowsV } = await supabase
         .from('content_asset_platform_override')
         .select('platform, override_kind, override_asset_id, override_asset_url, override_thumbnail_url')
@@ -266,7 +268,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!att) return res.status(409).json({ error: 'No attachment yet.', code: 'NO_ATTACHMENT' });
       // S2: sibling plan rows are written through a handle pinned to this row's campaign, made before any write.
       const plansTable = await tenantChildTable('daily_content_plans', seamTenant, (row as any).campaign_id).catch(seamRefused);
-      if (!plansTable) return seamDenied();
+      if (plansTable instanceof TenantSeamError) return seamDenied(plansTable);
       const { data: ovRowsF } = await supabase
         .from('content_asset_platform_override')
         .select('platform, override_kind, override_asset_id, override_asset_url')

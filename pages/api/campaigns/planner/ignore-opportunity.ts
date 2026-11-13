@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
@@ -42,7 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       opportunities = tenantTable('opportunity_radar', tenantContextFor(access, ownerCompanyId));
     } catch (err) {
-      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Opportunity not found' });
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Opportunity not found' });
       throw err;
     }
 

@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -100,7 +101,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     refinements = await tenantChildTable('weekly_content_refinements', tenantContextFor({ userId: user.id }, companyId), id);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
     throw err;
   }
 

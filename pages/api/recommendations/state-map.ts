@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -42,7 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     tenant = tenantContextFor({ userId: user.id }, companyId);
     auditLogsTable = tenantTable('audit_logs', tenant);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Not found', code: 'NOT_FOUND' });
     throw err;
   }
 

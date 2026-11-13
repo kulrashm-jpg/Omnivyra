@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 /**
@@ -125,16 +126,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     seamTenant = tenantContextFor(access, companyId);
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
     throw err;
   }
-  const seamRefused = (err: unknown) => {
-    if (err instanceof TenantSeamError) return null;
+  // The seam error itself (not null), so a RETRYABLE one answers 503 via seamDenial (05, 2026-11-14).
+  const seamRefused = (err: unknown): TenantSeamError => {
+    if (err instanceof TenantSeamError) return err;
     throw err;
   };
   const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch(seamRefused);
   const postsTable = await tenantChildTable('scheduled_posts', seamTenant, row.campaign_id).catch(seamRefused);
-  if (!plansTable || !postsTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+  if (postsTable instanceof TenantSeamError) return seamDenial(res, postsTable, 403, { error: 'Campaign company could not be resolved.' });
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {

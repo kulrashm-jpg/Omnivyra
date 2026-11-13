@@ -32,7 +32,7 @@ jest.mock('../../db/writeOwner', () => ({
     const exec = async (mode: 'many' | 'maybe' | 'single'): Promise<{ data: unknown; error: unknown }> => {
       await Promise.resolve(); // yield — lets concurrent callers interleave here
       db.filtersSeen.push({ table, op: st.op, filters: st.filters, payload: st.payload });
-      if (db.forceError) return { data: null, error: db.forceError };
+      if (db.forceError) { (db as { forceErrorFired?: boolean }).forceErrorFired = true; return { data: null, error: db.forceError }; }
 
       if (st.op === 'insert') {
         if (db.failInsertInto === table) return { data: null, error: { code: '08006', message: 'connection failure' } };
@@ -479,4 +479,16 @@ describe('WS-3 M3 (7) — tenant isolation and guards', () => {
       expect(source).toMatch(new RegExp(`'${state}'`));
     }
   });
+});
+
+/* 05 / e9 (2026-11-14): a configured fault that never fires FAILS the test - otherwise a "failure window" test
+ * silently passes on the success path (e.g. a write moved to a path that bypasses this fake). Opt out per test with
+ * db.mayNotFire = true, and say why. */
+afterEach(() => {
+  const configured = Object.getOwnPropertyDescriptor(db, 'forceError')?.value;
+  const fired = (db as { forceErrorFired?: boolean }).forceErrorFired === true;
+  const optOut = (db as { mayNotFire?: boolean }).mayNotFire === true;
+  (db as { forceErrorFired?: boolean }).forceErrorFired = false;
+  (db as { mayNotFire?: boolean }).mayNotFire = false;
+  if (configured && !fired && !optOut) throw new Error('configured fault never fired: db.forceError was set but no statement returned it');
 });

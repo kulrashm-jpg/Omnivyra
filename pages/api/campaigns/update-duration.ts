@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { CampaignStatusFields, resolveCampaignStage } from '../../../lib/campaign/campaignStage';
 import { campaignLifecycleSelect, isCampaignFinalized } from '../../../lib/campaign/executionStatusCompat';
@@ -61,7 +62,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       campaigns = tenantTable('campaigns', tenantContextFor(access, String(companyId)));
     } catch (err) {
-      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
       throw err;
     }
 
@@ -217,7 +218,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       message: 'Duration updated. Blueprint invalidated. Regeneration required before execution.',
     });
   } catch (err: any) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
     console.error('[update-duration]', err);
     return res.status(500).json({
       error: err?.message || 'Internal server error',

@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
@@ -43,7 +44,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       rulesTable = tenantTable('response_rules', tenant);
       templatesTable = tenantTable('response_templates', tenant);
     } catch (err) {
-      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Not found' });
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Not found' });
       throw err;
     }
 

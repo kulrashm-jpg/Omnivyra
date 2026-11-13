@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { campaignLifecycleSelect } from '../../../../lib/campaign/executionStatusCompat';
 /**
@@ -156,7 +157,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (err) {
-    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     console.error('[assignment-execution-events] derivation failed:', (err as Error)?.message ?? err);
     return res.status(500).json({ error: 'Failed to derive execution events' });
   }

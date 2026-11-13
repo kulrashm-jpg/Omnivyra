@@ -1,3 +1,4 @@
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 
@@ -46,7 +47,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       opportunities = tenantTable('engagement_opportunities', tenantContextFor(access, companyId));
     } catch (err) {
-      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Insight not found' });
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Insight not found' });
       throw err;
     }
     const { data: insight, error: oppError } = await opportunities
