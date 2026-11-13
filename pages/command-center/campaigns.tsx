@@ -116,7 +116,7 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
 
 export default function CampaignsSubPage() {
   const router = useRouter();
-  const { user, authChecked, isLoading, userRole } = useCompanyContext();
+  const { user, authChecked, isLoading, userRole, selectedCompanyId } = useCompanyContext();
   const sourceContentToken = typeof router.query.sourceContentToken === 'string' ? router.query.sourceContentToken : null;
   const sourcePayload = React.useMemo(() => readCampaignSourcePayload(sourceContentToken), [sourceContentToken]);
 
@@ -280,7 +280,8 @@ export default function CampaignsSubPage() {
             active experiments + top winner cards so operators can
             assess the current campaign's experiment results without
             switching to the dedicated Variant Experience page. */}
-        <CampaignVariantHubSection companyId={user?.defaultCompanyId ?? ''} />
+        {/* The SELECTED company, never the user's first one (55's active-company sweep). */}
+        <CampaignVariantHubSection companyId={selectedCompanyId} />
       </div>
     </div>
   );
