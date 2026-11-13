@@ -4,6 +4,7 @@ import { getCanonicalProfile as getProfile } from '@/backend/services/context/ca
 import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';
+import { sumRegionCreditsCharged } from './marketPulse/regionCharging';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
 import { scoreFinding } from './marketPulse/scoringService';
 import { sendIntelligenceAlert } from './intelligenceAlertService';
@@ -145,6 +146,8 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
       status: nextStatus,
       error: legacyJob.error ?? null,
       completed_at: legacyJob.completed_at ?? null,
+      // Owner ruling 2026-11-13: the credits actually charged per region (job.region_results[*].credits_charged).
+      credits_consumed: sumRegionCreditsCharged(legacyJob.region_results),
       context_snapshot: {
         ...(run.context_snapshot ?? {}),
         legacy_job: legacyJob,

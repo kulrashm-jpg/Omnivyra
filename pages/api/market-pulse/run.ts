@@ -13,6 +13,7 @@ import {
   type MarketPulseRunInput,
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
+import { describeMarketPulseShortfall, precheckMarketPulseScan, type MarketPulseScanShortfall } from '../../../backend/services/marketPulse/regionCharging';
 
 function shouldProcessMarketPulseInline(): boolean {
   if (!config.ENABLE_AUTO_WORKERS) return true;
@@ -71,7 +72,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // sensitivity, etc. — instead of dropping all of that on the floor.
     const executorContext = buildMarketPulseExecutorContext(context, resolvedInput);
 
+    // Owner ruling 2026-11-13: LLM-sourced scans are charged per region. Refuse up front when the scan cannot be
+    // afforded (the job processor re-checks, so queued and automated runs are covered too).
+    if (resolvedInput.source_strategy !== 'api') {
+      const precheck = await precheckMarketPulseScan(companyId, regionsNormalized.length);
+      if (!precheck.ok) {
+        const shortfall = precheck as MarketPulseScanShortfall;
+        return res.status(402).json({
+          error: shortfall.reason,
+          message: describeMarketPulseShortfall(shortfall),
+          ...(shortfall.reason === 'insufficient_credits'
+            ? { required: shortfall.requiredCredits, available: shortfall.availableCredits, perRegion: shortfall.perRegionCredits }
+            : {}),
+        });
+      }
+    }
+
     const contextPayload = {
+      triggered_by_user_id: access.userId,
       context_mode: 'FULL',
       additional_direction: resolvedInput.custom_direction ?? undefined,
       insight_source: resolvedInput.source_strategy ?? 'hybrid',

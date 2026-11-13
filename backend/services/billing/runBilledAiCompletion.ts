@@ -85,6 +85,26 @@ export interface RunBilledAiCompletionArgs {
     cache_version?: string | null;
   };
   validateMembership?: boolean;
+  /**
+   * Optional output check run INSIDE the billed executor. A throw here makes the executor fail, so the HOLD is
+   * released (nothing charged) instead of confirming a charge for an unusable answer (e.g. invalid JSON).
+   */
+  validateOutput?: (text: string) => void;
+}
+
+/**
+ * Thrown when the orchestrator did not execute (insufficient_credits, already_confirmed, not_a_member, ...).
+ * Same message as before; `status` lets callers branch without parsing the message.
+ */
+export class BilledAiNotExecutedError extends Error {
+  readonly status: string;
+  readonly detail: Record<string, unknown>;
+  constructor(status: string, detail: Record<string, unknown> = {}) {
+    super(`[runBilledAiCompletion] orchestrator did not execute: status=${status}`);
+    this.name = 'BilledAiNotExecutedError';
+    this.status = status;
+    this.detail = detail;
+  }
 }
 
 export interface BilledAiCompletionResult {
@@ -96,6 +116,8 @@ export interface BilledAiCompletionResult {
   completionTokens: number;
   provider:        string;
   model:           string;
+  /** Credits actually settled for this call (0 when the settlement report is absent). */
+  creditsCharged:  number;
 }
 
 export async function runBilledAiCompletion(
@@ -144,6 +166,7 @@ export async function runBilledAiCompletion(
       }));
 
       const text = typeof gatewayResp.output === 'string' ? gatewayResp.output : '';
+      if (args.validateOutput) args.validateOutput(text);
       const usage = gatewayResp.metadata?.token_usage ?? {};
 
       return {
@@ -160,9 +183,8 @@ export async function runBilledAiCompletion(
   });
 
   if (orchestratorResult.result.status !== 'executed') {
-    throw new Error(
-      `[runBilledAiCompletion] orchestrator did not execute: status=${orchestratorResult.result.status}`,
-    );
+    const { status, ...detail } = orchestratorResult.result as { status: string } & Record<string, unknown>;
+    throw new BilledAiNotExecutedError(status, detail);
   }
 
   const settlement = orchestratorResult.result.settlement as {
@@ -182,5 +204,6 @@ export async function runBilledAiCompletion(
     completionTokens: Number(actualUsage.outputTokens ?? 0),
     provider:         settlement?.provider ?? args.llmPricing.provider,
     model:            settlement?.model    ?? args.llmPricing.model,
+    creditsCharged:   Number(settlement?.creditsCharged ?? 0),
   };
 }

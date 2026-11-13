@@ -3,6 +3,9 @@ import { buildUnifiedContext } from './contextResolver';
 import type { FocusModule } from './contextResolver';
 import { runDiagnosticPrompt } from './llm/openaiAdapter';
 import { getStrategicThemesAsOpportunities } from './strategicThemeEngine';
+import { runBilledAiCompletion } from './billing/runBilledAiCompletion';
+import { fingerprintPayload } from './billing/billingCorrelationService';
+import { MARKET_PULSE_CREDIT_ACTION } from './marketPulse/regionCharging';
 import {
   hasExecutorContextSignal,
   renderExecutorContextForPrompt,
@@ -220,12 +223,36 @@ export type MarketPulseContextPayload = {
   executor_context?: MarketPulseExecutorContext | null;
 };
 
+/** Billing context for one Market Pulse region call (owner ruling 2026-11-13: one insight_generation per region). */
+export type MarketPulseRegionBilling = {
+  /** Billing actor: the triggering user, or the company id (system sentinel) for automated runs. */
+  userId: string;
+  /** market_pulse_jobs_v1.id - with the region it forms the idempotency key (no double charge on retry). */
+  jobId: string;
+};
+
+const MARKET_PULSE_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+function parseMarketPulseTopics(text: string): { topics: (MarketPulseTopic & { trend_velocity?: number })[] } {
+  const raw = (text ?? '').trim();
+  if (!raw) throw new Error('LLM returned empty response');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('LLM response is not valid JSON');
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error('LLM response is not a JSON object');
+  return parsed as { topics: (MarketPulseTopic & { trend_velocity?: number })[] };
+}
+
 export async function generateMarketPulseForRegion(
   companyId: string,
   region: string,
-  contextPayload?: MarketPulseContextPayload | null,
-  correlation?: import('../../lib/shared/observability/correlationRef').CorrelationRef
-): Promise<MarketPulseRegionResult> {
+  contextPayload: MarketPulseContextPayload | null | undefined,
+  correlation: import('../../lib/shared/observability/correlationRef').CorrelationRef | undefined,
+  billing: MarketPulseRegionBilling,
+): Promise<MarketPulseRegionResult & { creditsCharged: number }> {
   const mode = (contextPayload?.context_mode ?? 'FULL') as 'FULL' | 'FOCUSED' | 'NONE';
   const missionBlock = await buildUnifiedContext(companyId, {
     mode,
@@ -315,15 +342,50 @@ ${executorBlock ? `COMPANY-AWARE PRIORITIZATION (REQUIRED — do not skip):
     2
   );
 
-  try {
-    const { data } = await runDiagnosticPrompt<{ topics: (MarketPulseTopic & { trend_velocity?: number })[] }>(
-      systemPrompt,
-      userPrompt,
-      { organizationId: companyId, processType: 'generateMarketPulseForRegion',
-        referenceType: correlation?.referenceType ?? null,
-        referenceId: correlation?.referenceId ?? null,
-        parentActivityId: correlation?.parentActivityId ?? null }
-    );
+  // Billed: HOLD -> LLM -> confirm_partial. Insufficient credits => the LLM never runs (BilledAiNotExecutedError).
+  // An empty / non-JSON answer fails INSIDE the hold (validateOutput), so the hold is released and nothing is charged.
+  // Errors propagate: the job processor records the region as failed (no longer silently "0 topics").
+  const regionKey = `${billing.jobId}:${region}`;
+  const billed = await runBilledAiCompletion({
+    module:        'queue:marketPulse',
+    userId:        billing.userId,
+    orgId:         companyId,
+    action:        MARKET_PULSE_CREDIT_ACTION,
+    referenceType: 'market_pulse_region',
+    referenceId:   regionKey,
+    validateMembership: false,
+    note:          `Market Pulse region ${region}`,
+    metadata:      { region, job_id: billing.jobId, reference_type: correlation?.referenceType ?? null },
+    llmPricing: {
+      provider:        'openai',
+      model:           MARKET_PULSE_MODEL,
+      maxInputTokens:  6000,
+      maxOutputTokens: 2000,
+      actionKey:       MARKET_PULSE_CREDIT_ACTION,
+    },
+    idempotency: {
+      kind:               'queue',
+      queueName:          'market-pulse',
+      jobId:              regionKey,
+      organizationId:     companyId,
+      action:             MARKET_PULSE_CREDIT_ACTION,
+      payloadFingerprint: fingerprintPayload({ jobId: billing.jobId, region }),
+    },
+    validateOutput: (text) => { parseMarketPulseTopics(text); },
+    completion: {
+      model:           MARKET_PULSE_MODEL,
+      temperature:     0,
+      response_format: { type: 'json_object' },
+      operation:       'generateMarketPulseForRegion',
+      companyId,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    },
+  });
+  {
+    const data = parseMarketPulseTopics(billed.text);
     const topics = Array.isArray(data?.topics) ? data.topics : [];
     const sanitized = topics.slice(0, 8).map((t) => {
       const priorityScore = Math.max(0, Math.min(1, Number(t.priority_score) ?? 0.5));
@@ -345,9 +407,7 @@ ${executorBlock ? `COMPANY-AWARE PRIORITIZATION (REQUIRED — do not skip):
         narrative_phase: narrativePhase,
       };
     });
-    return { topics: sanitized };
-  } catch {
-    return { topics: [] };
+    return { topics: sanitized, creditsCharged: billed.creditsCharged };
   }
 }
 

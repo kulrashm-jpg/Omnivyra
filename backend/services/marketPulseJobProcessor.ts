@@ -9,13 +9,21 @@ import { generateMarketPulseForRegion, type MarketPulseContextPayload } from './
 import { consolidateMarketPulseResults } from './marketPulseConsolidator';
 import { aggregateMarketPulseFromDb, type AggregatedPulseSignal } from './marketPulseAggregationService';
 import type { ConsolidatedPulseOutput } from './marketPulseConsolidator';
+import { BilledAiNotExecutedError } from './billing/runBilledAiCompletion';
+import {
+  describeMarketPulseShortfall,
+  notifyMarketPulseSkipped,
+  precheckMarketPulseScan,
+  resolveMarketPulseBillingUser,
+  type MarketPulseScanShortfall,
+} from './marketPulse/regionCharging';
 
 type JobRow = {
   id: string;
   company_id: string;
   status: string;
   regions: string[];
-  context_payload?: (MarketPulseContextPayload & { insight_source?: 'api' | 'llm' | 'hybrid' }) | null;
+  context_payload?: (MarketPulseContextPayload & { insight_source?: 'api' | 'llm' | 'hybrid'; triggered_by_user_id?: string | null }) | null;
 };
 
 function computeConfidenceIndex(consolidated: {
@@ -124,14 +132,43 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
     return;
   }
 
-  const regionResults: Record<string, { topics: { topic: string; spike_reason: string; shelf_life_days: number; risk_level: string; priority_score: number; velocity_score?: number; momentum_score?: number; narrative_phase?: string }[] } | { error: true; message: string }> = {};
+  // Owner ruling 2026-11-13: every region LLM call is charged (one insight_generation each). Whole-scan pre-check
+  // first: if the company cannot cover every region at the floor price (or pricing cannot be resolved), the scan is
+  // skipped - no LLM call, nothing charged - and the company admins are notified.
+  const precheck = await precheckMarketPulseScan(companyId, regions.length);
+  if (!precheck.ok) {
+    const message = describeMarketPulseShortfall(precheck as MarketPulseScanShortfall);
+    await notifyMarketPulseSkipped(companyId, message);
+    await ownedDbTable('market_pulse_jobs_v1')
+      .update({ progress_stage: 'FINISHED', status: 'FAILED', error: message, completed_at: now })
+      .eq('id', jobId);
+    return;
+  }
+  const billingUserId = resolveMarketPulseBillingUser(
+    companyId,
+    (contextPayload as { triggered_by_user_id?: unknown }).triggered_by_user_id,
+  );
+
+  const regionResults: Record<string, { topics: { topic: string; spike_reason: string; shelf_life_days: number; risk_level: string; priority_score: number; velocity_score?: number; momentum_score?: number; narrative_phase?: string }[]; credits_charged?: number } | { error: true; message: string }> = {};
+  let creditStop: string | null = null;
 
   for (const region of regions) {
     if (await isCancelled()) return;
+    if (creditStop) {
+      // A region hold was refused: the remaining regions are not run (and not charged).
+      regionResults[region] = { error: true, message: creditStop };
+      continue;
+    }
     await ownedDbTable('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     try {
-      const result = await generateMarketPulseForRegion(companyId, region, contextPayload, { referenceType: 'opportunity_discovery', referenceId: jobId, parentActivityId: companyId });
-      regionResults[region] = { topics: result.topics };
+      const result = await generateMarketPulseForRegion(
+        companyId,
+        region,
+        contextPayload,
+        { referenceType: 'opportunity_discovery', referenceId: jobId, parentActivityId: companyId },
+        { userId: billingUserId, jobId },
+      );
+      regionResults[region] = { topics: result.topics, credits_charged: result.creditsCharged };
 
       for (const t of result.topics) {
         await ownedDbTable('market_pulse_items_v1').insert({
@@ -149,7 +186,14 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
         });
       }
     } catch (err) {
-      regionResults[region] = { error: true, message: err instanceof Error ? err.message : 'Region analysis failed' };
+      if (err instanceof BilledAiNotExecutedError && err.status !== 'already_confirmed' && err.status !== 'already_released') {
+        // insufficient_credits / no_credit_account / org_control_blocked: stop the scan and tell the admins.
+        creditStop = `${err.status}: Market Pulse stopped before region ${region}; remaining regions were not run or charged`;
+        await notifyMarketPulseSkipped(companyId, creditStop);
+        regionResults[region] = { error: true, message: creditStop };
+      } else {
+        regionResults[region] = { error: true, message: err instanceof Error ? err.message : 'Region analysis failed' };
+      }
     }
     await ownedDbTable('market_pulse_jobs_v1').update({ region_results: regionResults }).eq('id', jobId);
   }
