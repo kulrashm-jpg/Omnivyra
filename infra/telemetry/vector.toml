@@ -1,0 +1,59 @@
+# omnivyra-telemetry relay (Railway service). Vector config.
+# IN : Vercel log drain (HTTPS POST, NDJSON, HTTP Basic auth via drain custom header)
+#      worker /metrics over Railway private networking (Bearer OBSERVABILITY_EXPORT_TOKEN)
+# OUT: Grafana Cloud Loki (logs) and Prometheus remote write (metrics)
+# Every credential comes from the service's environment; none is in this file.
+
+[api]
+enabled = false
+
+[sources.vercel_drain]
+type = "http_server"
+address = "0.0.0.0:${PORT:-8080}"
+path = "/vercel"
+method = "POST"
+decoding.codec = "json"
+framing.method = "newline_delimited"
+auth.strategy = "basic"
+auth.username = "vercel"
+auth.password = "${DRAIN_INGEST_SECRET}"
+
+[transforms.vercel_shape]
+type = "remap"
+inputs = ["vercel_drain"]
+source = '''
+.service = "vercel"
+.source = string(.source) ?? "unknown"
+.level = string(.level) ?? "info"
+.environment = string(.environment) ?? "unknown"
+del(.proxy.clientIp)
+'''
+
+[sinks.grafana_loki]
+type = "loki"
+inputs = ["vercel_shape"]
+endpoint = "${GRAFANA_CLOUD_LOKI_URL}"
+auth.strategy = "basic"
+auth.user = "${GRAFANA_CLOUD_LOKI_USER}"
+auth.password = "${GRAFANA_CLOUD_TOKEN}"
+encoding.codec = "json"
+out_of_order_action = "accept"
+labels.service = "{{ service }}"
+labels.source = "{{ source }}"
+labels.level = "{{ level }}"
+labels.environment = "{{ environment }}"
+
+[sources.worker_metrics]
+type = "prometheus_scrape"
+endpoints = ["${WORKER_METRICS_URL:-http://omnivyra.railway.internal:8080/metrics}"]
+scrape_interval_secs = 30
+auth.strategy = "bearer"
+auth.token = "${OBSERVABILITY_EXPORT_TOKEN}"
+
+[sinks.grafana_prom]
+type = "prometheus_remote_write"
+inputs = ["worker_metrics"]
+endpoint = "${GRAFANA_CLOUD_PROM_URL}/push"
+auth.strategy = "basic"
+auth.user = "${GRAFANA_CLOUD_PROM_USER}"
+auth.password = "${GRAFANA_CLOUD_TOKEN}"
