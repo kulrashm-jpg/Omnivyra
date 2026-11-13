@@ -9,6 +9,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { spawnSync } from 'child_process';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production', REDIS_URL: 'redis://127.0.0.1:6379' } }));
 jest.mock('../../db/supabaseClient', () => require('../helpers/routeAuthHarness').supabaseModule());
@@ -196,6 +197,20 @@ describe('inventory: no campaign write route without a role gate', () => {
       return WRITES.test(src) && MEMBERSHIP_ONLY.test(src) && !ROLE_GATES.test(src);
     }).map((f) => path.relative(API, f).replace(/\\/g, '/')).filter((r) => !(r in READ_ONLY_POST) && !(r in OTHER_SURFACES));
     expect(offenders).toEqual([]);
+  });
+  // The reusable CLI other tracks point at their own folders (scripts/security/scan-write-role-gates.js) must agree
+  // with this inventory - if the two drift, one of them is wrong.
+  it('the reusable scan script agrees: 0 ungated campaign write routes, allow list = the reviewed sets above', () => {
+    const root = path.resolve(__dirname, '../../..');
+    const r = spawnSync(process.execPath, [
+      'scripts/security/scan-write-role-gates.js', '--allow', 'scripts/security/write-role-gate-allow/campaign.txt', '--json', '--fail',
+    ], { cwd: root, encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout) as { counts: { roleGated: number }; hits: string[]; allowedHits: string[] };
+    expect(out.hits).toEqual([]);
+    expect(out.counts.roleGated).toBeGreaterThanOrEqual(50); // positive control: it really saw the gated routes
+    const reviewed = new Set(Object.keys({ ...READ_ONLY_POST, ...OTHER_SURFACES }).map((rel) => `pages/api/${rel}`));
+    expect(out.allowedHits.filter((h) => !reviewed.has(h))).toEqual([]);
   });
   // Per-wiring pin (83): every route that calls enforceCampaignWriteRole does so AFTER its membership gate (a guard
   // placed before the gate would run without an authorized user/company; one never called would not be found by the

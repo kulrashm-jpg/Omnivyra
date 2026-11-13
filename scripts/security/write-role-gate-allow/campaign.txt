@@ -1,0 +1,15 @@
+# Reviewed 2026-11-13 (55, fix/campaign-write-roles): routes the campaign scan flags that are NOT campaign mutations by
+# the roles the write guard governs. Mirrors READ_ONLY_POST + OTHER_SURFACES in backend/tests/unit/campaignWriteRoles.test.ts.
+pages/api/campaigns/health.ts                         # computes a health view; writes nothing
+pages/api/campaigns/memory.ts                         # reads campaign memory
+pages/api/campaigns/[id]/suggest-themes.ts            # reads stored strategic themes
+pages/api/campaigns/validate-frequency.ts             # validates a content mix
+pages/api/campaigns/validate-uniqueness.ts            # reads memory, compares overlap
+pages/api/bolt/conflicts.ts                           # reads scheduling conflicts
+pages/api/engagement/content-opportunities/lifecycle.ts  # engagement surface
+pages/api/engagement/crm-export.ts                    # engagement surface
+pages/api/engagement/generate-response.ts             # engagement surface (reply drafting)
+pages/api/engagement/refine-suggestion.ts             # engagement surface
+pages/api/engagement/signal/status.ts                 # engagement surface
+pages/api/lead-intelligence/campaigns.ts              # OUTREACH - 6f owns (BLOCKING, raised 11-13)
+pages/api/lead-intelligence/execution.ts              # OUTREACH - 6f owns (BLOCKING, raised 11-13)
