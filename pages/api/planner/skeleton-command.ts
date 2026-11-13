@@ -16,7 +16,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -319,9 +319,7 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
     });
 
   } catch (err: unknown) {
-    if (err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: err.message, code: err.code });
-    }
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('[planner/skeleton-command]', err);
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed' });
   }

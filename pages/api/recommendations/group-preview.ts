@@ -7,7 +7,7 @@ import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware
 import { supabase } from '../../../backend/db/supabaseClient';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 
 const normalizeObject = (value: any) => {
   if (!value) return {};
@@ -283,9 +283,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json(completion.output || {});
   } catch (error) {
-    if (error instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: error.message, code: error.code });
-    }
+    { const billedErr = billedRouteHttpError(error); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('Group preview failed', error);
     return res.status(500).json({ error: 'Failed to generate grouping preview' });
   }

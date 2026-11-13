@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { assessVirality } from '../../../../../backend/services/viralityAdvisorService';
 import { buildCampaignSnapshotWithHash } from '../../../../../backend/services/viralitySnapshotBuilder';
 import { requireCampaignAccess } from '../../../../../backend/services/campaignAccessService';
+import { wirePhase2Route } from '../../../../../backend/services/billing/phase2RouteWiring';
+import { billedRouteHttpError } from '../../../../../backend/services/billing/billedRouteHttpError';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -21,13 +23,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const { snapshot, snapshot_hash } = await buildCampaignSnapshotWithHash(id);
-    const assessment = await assessVirality(id, {
-      snapshot,
-      snapshot_hash,
+    // e1 2026-11-13 (C75, BLOCKING money): a virality assessment is a PAID insight (featureRegistry: the 5
+    // viralityDiagnostic / Comparisons / OverallSummary operations map to insight_generation, requires_credit_hold).
+    // It ran uncharged. Now one billed unit per request: hold the prescribed maximum, settle the ACTUAL usage of all
+    // its AI calls, release the rest (wirePhase2Route, token-metered). Dark until enforcement is on.
+    const assessment = await wirePhase2Route({
+      surface:        'campaigns.virality.assess',
       organizationId: access.companyId,
+      userId:         access.userId,
+      action:         'insight_generation',
+      referenceType:  'virality_assessment',
+      referenceId:    `virality:${id}:${snapshot_hash}`,
+      run: () => assessVirality(id, {
+        snapshot,
+        snapshot_hash,
+        organizationId: access.companyId,
+      }),
     });
     return res.status(200).json(assessment);
   } catch (error: any) {
+    { const billedErr = billedRouteHttpError(error); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('Error in virality assess API:', error);
     return res.status(500).json({ error: 'Failed to assess virality' });
   }

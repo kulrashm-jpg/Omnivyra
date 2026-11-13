@@ -12,7 +12,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 import { buildPlannerStrategicCard, type PlannerStrategicSourceMode } from '../../../lib/plannerStrategicCard';
 
 interface ThemeEntry {
@@ -216,9 +216,7 @@ Return only JSON.`;
       }),
     });
   } catch (err: unknown) {
-    if (err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: err.message, code: err.code });
-    }
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('[planner/chat-themes]', err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Failed to process request',

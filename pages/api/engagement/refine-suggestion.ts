@@ -9,7 +9,7 @@ import { runCompletionWithOperation } from '../../../backend/services/aiGateway'
 import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 
 type RefineBody = {
   organization_id?: string;
@@ -130,9 +130,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ refined });
   } catch (err) {
-    if (err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: err.message, code: err.code });
-    }
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     const message = (err as Error)?.message ?? 'Failed to refine suggestion';
     console.error('[engagement/refine-suggestion]', message);
     return res.status(500).json({ error: message });

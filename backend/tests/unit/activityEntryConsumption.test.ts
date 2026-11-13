@@ -443,3 +443,21 @@ describe('executeWithEntryConsumption — admission control (Phase 8 TASK 2)', (
     expect(repo.callCreditReservation).not.toHaveBeenCalled();
   });
 });
+
+// e1 2026-11-13 (55 finding A, BLOCKING for the BILLING_REQUIRE_AI_HANDLE flip): the executor runs inside THIS
+// execution's credit handle, so the AI billing guard vouches for its gateway calls (same org only).
+describe('executeWithEntryConsumption runs the executor inside its credit handle', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { getActiveCreditHandle } = require('../../services/billing/aiGatewayBillingGuard');
+  it('inside the executor the active handle is this execution (org, action, key); outside there is none', async () => {
+    let seen: any = 'unset';
+    const r = await executeWithEntryConsumption<string>({
+      userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, amountOverride: 5,
+      executor: async () => { seen = getActiveCreditHandle(); return 'ok'; },
+    });
+    expect(r.status).toBe('executed');
+    expect(seen).toMatchObject({ orgId: ORG, action: ACTION, idempotencyKey: IDEM, source: 'orchestrator' });
+    expect(getActiveCreditHandle()).toBeUndefined();
+  });
+});

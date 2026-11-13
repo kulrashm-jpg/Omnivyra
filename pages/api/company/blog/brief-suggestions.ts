@@ -8,7 +8,7 @@ import { buildFormattedStyleInstructions } from '@/lib/content/writingStyleEngin
 import { toBriefGrounding } from '@/backend/services/context/canonicalContextAdapters';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 
 type SuggestionResponse = {
   uniqueness_directive_options: string[];
@@ -161,9 +161,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json(out);
   } catch (e) {
-    if (e instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: e.message, code: e.code });
-    }
+    { const billedErr = billedRouteHttpError(e); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     return res.status(200).json(EMPTY);
   }
 }

@@ -4,8 +4,11 @@
  * Wraps a route's existing AI work so it runs under the canary gate:
  *   OFF (default)  → run() verbatim — ZERO behavior change.
  *   SHADOW         → run() verbatim + precheck telemetry (would-block sizing).
- *   ENFORCE        → executeWithCredits(HOLD→EXECUTE→CONFIRM/RELEASE) with a
- *                    deterministic action_key + idempotency + ledger lineage.
+ *   ENFORCE        → executeWithEntryConsumption, TOKEN-METERED (HOLD the prescribed
+ *                    upper bound → EXECUTE → settle the ACTUAL collected usage →
+ *                    release the rest), keyed per request (inputs + the client's
+ *                    Idempotency-Key, else the request id). A charged replay is 409
+ *                    ALREADY_PROCESSED - never a free re-run (e1 2026-11-13).
  *
  * STRICT: enforcement is DARK by default (resolveEnforcementMode → 'off' until
  * the org canary flag / env says otherwise). No platform-wide activation. No
@@ -19,17 +22,97 @@
  * any time.
  */
 
+import { createHash } from 'crypto';
 import { runWithPhase2Enforcement, PaymentRequiredError, type BillingSurface } from './phase2EnforcementGate';
 import {
-  executeWithCredits,
   executeWithEntryConsumption,
   makeIdempotencyKey,
+  type ExecuteWithEntryConsumptionResult,
 } from '../creditExecutionService';
-import { getCreditEconomyExecutionMode } from './creditEconomyActivation';
+import { getRequestContext } from '../requestContext';
 import { hasEnoughCredits, type CreditAction } from '../creditDeductionService';
 import { incrCounter } from './billingMetrics';
 import { emitCreditEconomyShadowEvaluation } from './creditEconomyShadow';
 import { logger } from '../logger';
+
+/** A refusal for money reasons, carrying the STANDARD billed shape's detail (402). Still a PaymentRequiredError,
+ *  so any older catch keeps answering 402. */
+export class BilledRoutePaymentRequiredError extends PaymentRequiredError {
+  constructor(
+    surface: BillingSurface,
+    public readonly billedCode: 'INSUFFICIENT_CREDITS' | 'NO_CREDIT_ACCOUNT',
+    public readonly required?: number,
+    public readonly balance?: number,
+  ) {
+    super(surface, billedCode === 'NO_CREDIT_ACCOUNT'
+      ? 'No credit account for this organization.'
+      : 'Insufficient credits for this action.');
+    this.name = 'BilledRoutePaymentRequiredError';
+  }
+}
+
+/** The action has no active price (action_pricing_config / model pricing): a CONFIGURATION gap, not the customer's
+ *  balance - 503, never charged, never "top up". */
+export class BilledRoutePricingUnavailableError extends Error {
+  readonly code = 'PRICING_UNAVAILABLE';
+  readonly httpStatus = 503;
+  constructor(public readonly surface: BillingSurface, public readonly detail: string) {
+    super('Pricing for this action is temporarily unavailable. Please try again later.');
+    this.name = 'BilledRoutePricingUnavailableError';
+  }
+}
+
+const isPricingMissing = (err: unknown): boolean => {
+  const name = (err as { name?: string } | null)?.name;
+  const msg = String((err as { message?: string } | null)?.message ?? '');
+  return name === 'PricingMissingError' || /No active pricing|No credit catalog entry|action_pricing/i.test(msg);
+};
+
+/** Upper bound on reclaimed (failed, uncharged) attempts for one request identity. */
+export const MAX_ROUTE_RECLAIM_ATTEMPTS = 20;
+
+/** A billed route request that was ALREADY charged and answered (same Idempotency-Key): 409, never re-run free. */
+export class BilledRouteAlreadyProcessedError extends Error {
+  readonly code = 'ALREADY_PROCESSED';
+  readonly httpStatus = 409;
+  constructor(public readonly surface: BillingSurface) {
+    super('This request was already processed and charged. Refresh to see the result.');
+    this.name = 'BilledRouteAlreadyProcessedError';
+  }
+}
+
+/** Every reclaim slot for this request identity is a failed, released attempt: 409, start a new request. */
+export class BilledRouteAlreadyReleasedError extends Error {
+  readonly code = 'ALREADY_RELEASED';
+  readonly httpStatus = 409;
+  constructor(public readonly surface: BillingSurface) {
+    super('This request failed repeatedly and was not charged. Please start it again.');
+    this.name = 'BilledRouteAlreadyReleasedError';
+  }
+}
+
+/**
+ * The HOLD (prescribed upper bound) for a billed route's action - the owner rule: hold the maximum, settle the
+ * actual. maxTokens cover ONE billed unit: multi-call units scale by their calls (C83: a campaign plan ~2 calls,
+ * a virality assessment 5, the longest blog template 7). Settlement is ALWAYS the actual collected usage.
+ */
+const ROUTE_UNIT_CALLS: Partial<Record<string, number>> = {
+  insight_generation: 5,
+  blog_generation: 7,
+  campaign_preplanning: 3,
+  recommendations_generate: 3,
+  recommendations_opportunities: 3,
+};
+export function routeLlmPricingFor(action: CreditAction) {
+  const calls = ROUTE_UNIT_CALLS[String(action)] ?? 1;
+  return {
+    provider: 'openai',
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    actionKey: String(action),
+    maxInputTokens: 8000 * calls,
+    maxOutputTokens: 2000 * calls,
+  };
+}
 
 export interface WirePhase2RouteArgs<T> {
   surface: BillingSurface;
@@ -97,49 +180,80 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
       }
     },
     enforce: async () => {
-      const idempotencyKey = makeIdempotencyKey(
-        effectiveUserId,
-        args.action,
-        args.referenceId,
-      );
-      const baseArgs = {
-        userId: effectiveUserId,
-        orgId: args.organizationId,
-        action: args.action,
-        referenceType: args.referenceType,
-        referenceId: args.referenceId,
-        idempotencyKey,
-        validateMembership: hasActor, // system/admin context skips membership
-      };
-      const ecMode = await getCreditEconomyExecutionMode({ organizationId: args.organizationId, surface: args.surface });
-      const result = ecMode === 'enforce'
-        ? await executeWithEntryConsumption<T>({ ...baseArgs, executor: args.run })
-        : await executeWithCredits<T>({ ...baseArgs, executor: args.run });
-
-      switch (result.status) {
-        case 'executed':
-          incrCounter('billing_operations_confirmed');
-          return { ok: true, result: result.result };
-        case 'already_confirmed':   // executeWithCredits replay
-        case 'already_settled':     // entry-consumption replay
-        case 'already_released':
-          // Same idempotency key already settled (client retry). Do NOT
-          // re-charge; re-run the work so the caller still gets a response.
-          incrCounter('duplicate_prevention_hits_total');
-          logger.info('phase2_route_idempotent_replay', {
-            surface: args.surface,
-            org: args.organizationId,
-            status: result.status,
-          });
-          return { ok: true, result: await args.run() };
-        case 'insufficient_credits':
-          return { ok: false, reason: 'insufficient_credits' };
-        case 'no_credit_account':
-          return { ok: false, reason: 'no_credit_account' };
-        default:
-          // not_a_member / org_control_blocked / any future status.
-          return { ok: false, reason: (result as { status: string }).status };
+      // e1 2026-11-13 (owner pricing ruling; e9 BLOCKING-for-flip). Three changes to the enforce path:
+      //  1. TOKEN-ACTUAL: every billed route settles on ACTUAL provider usage x the action's multiplier
+      //     (executeWithEntryConsumption token-metered, collectViaCollector) - never a fixed price. The hold is the
+      //     action's prescribed upper bound (routeLlmPricingFor), released down to the actual on completion.
+      //  2. NEVER RE-RUN UNBILLED: a charged replay used to re-execute run() for free ("so the caller still gets a
+      //     response"); with a referenceId hashed from the INPUTS, every identical request after the first was a
+      //     free regeneration. A charged replay is now 409 ALREADY_PROCESSED; a released (failed, uncharged) attempt
+      //     is reclaimed under the next attempt slot so a retry runs and is charged once.
+      //  3. RETRY vs NEW REQUEST: the identity is the inputs PLUS the client's Idempotency-Key (minted once per user
+      //     action by the UI helper; a true retry dedups). Without the header every request is a new charge
+      //     (keyed by the per-request id) - logged + counted so a client path that misses the header is visible
+      //     before the flip.
+      const ctx = getRequestContext();
+      const clientKey = typeof ctx.idempotencyKey === 'string' && ctx.idempotencyKey.trim() ? ctx.idempotencyKey.trim() : null;
+      if (!clientKey) {
+        incrCounter('phase2_route_without_idempotency_key_total');
+        logger.warn('phase2_route_without_idempotency_key', { surface: args.surface, org: args.organizationId });
       }
+      const requestIdentity = clientKey
+        ? `k:${createHash('sha256').update(clientKey).digest('hex').slice(0, 24)}`
+        : `r:${ctx.requestId ?? createHash('sha256').update(`${Date.now()}:${Math.random()}`).digest('hex').slice(0, 24)}`;
+      const identity = `${args.referenceId}:${requestIdentity}`;
+
+      for (let attempt = 0; attempt < MAX_ROUTE_RECLAIM_ATTEMPTS; attempt++) {
+        const referenceId = attempt === 0 ? identity : `${identity}:r${attempt}`;
+        let result: ExecuteWithEntryConsumptionResult<T>;
+        try {
+          result = await executeWithEntryConsumption<T>({
+            userId: effectiveUserId,
+            orgId: args.organizationId,
+            action: args.action,
+            referenceType: args.referenceType,
+            referenceId,
+            idempotencyKey: makeIdempotencyKey(effectiveUserId, args.action, referenceId),
+            validateMembership: hasActor, // system/admin context skips membership
+            llmPricing: routeLlmPricingFor(args.action),
+            collectViaCollector: true,
+            executor: args.run,
+          });
+        } catch (err) {
+          if (isPricingMissing(err)) {
+            logger.error('phase2_route_pricing_unavailable', {
+              surface: args.surface, action: args.action, message: (err as Error)?.message,
+            });
+            throw new BilledRoutePricingUnavailableError(args.surface, String((err as Error)?.message ?? ''));
+          }
+          throw err;
+        }
+        switch (result.status) {
+          case 'executed':
+            incrCounter('billing_operations_confirmed');
+            return { ok: true, result: result.result };
+          case 'already_settled':
+            // This exact request was already charged and answered: never re-run it for free.
+            incrCounter('duplicate_prevention_hits_total');
+            logger.info('phase2_route_already_processed', { surface: args.surface, org: args.organizationId });
+            throw new BilledRouteAlreadyProcessedError(args.surface);
+          case 'already_released':
+            // That attempt failed and was NOT charged: reclaim the next slot so the retry runs (charged once).
+            continue;
+          case 'insufficient_credits': {
+            incrCounter('billing_operations_insufficient');
+            const r = result as { required?: number; available?: number };
+            throw new BilledRoutePaymentRequiredError(args.surface, 'INSUFFICIENT_CREDITS', r.required, r.available);
+          }
+          case 'no_credit_account':
+            incrCounter('billing_operations_insufficient');
+            throw new BilledRoutePaymentRequiredError(args.surface, 'NO_CREDIT_ACCOUNT');
+          default:
+            // not_a_member / org_control_blocked / any future status.
+            return { ok: false, reason: (result as { status: string }).status };
+        }
+      }
+      throw new BilledRouteAlreadyReleasedError(args.surface);
     },
   });
 }

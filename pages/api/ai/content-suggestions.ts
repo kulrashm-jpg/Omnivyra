@@ -11,7 +11,7 @@ import { resolveCompanyGroundingGuard } from '../../../backend/services/context/
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -112,9 +112,7 @@ Prioritize: hook strength, audience relevance, platform optimization, CTA clarit
 
     return res.status(200).json(parsed);
   } catch (error: any) {
-    if (error instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: error.message, code: error.code });
-    }
+    { const billedErr = billedRouteHttpError(error); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     // If AI is blocked (cost guard), return deterministic suggestions
     if (error?.code === 'COST_BLOCKED') {
       const { topic, contentType, platform, hook, keyPoints, cta, targetAudience } = req.body;

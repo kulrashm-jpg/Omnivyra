@@ -21,7 +21,7 @@ import { runCompletionWithOperation } from '../../../../backend/services/aiGatew
 import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 import { extractBlogContext } from '../../../../lib/blog/blockExtractor';
 import {
   buildRepurposeSystemPrompt,
@@ -169,9 +169,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const raw = result.output ? JSON.parse(result.output) : null;
     output = validateRepurposeOutput(raw);
   } catch (_err) {
-    if (_err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: _err.message, code: _err.code });
-    }
+    { const billedErr = billedRouteHttpError(_err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     // AI failure → deterministic fallback (no hallucination risk)
     output = null;
   }

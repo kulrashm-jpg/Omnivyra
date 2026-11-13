@@ -23,6 +23,7 @@
 
 import { createHash } from 'crypto';
 import { createUsageScope } from './aiUsageCollector';
+import { runWithCreditHandle, type CreditHandle } from './billing/aiGatewayBillingGuard';
 import {
   type CreditAction,
   type DeductOptions,
@@ -283,6 +284,19 @@ export async function executeWithEntryConsumption<T>(
   // completion / billable artifact fires the armed consumer, which charges the
   // non-refundable entry exactly once — never at launch, validation, or setup.
   const scope = createUsageScope();
+  // e1 2026-11-13 (55 finding A, BLOCKING for the BILLING_REQUIRE_AI_HANDLE flip): the executor runs INSIDE this
+  // billed execution's credit handle, so every gateway call it makes is vouched for by the AI billing guard (the
+  // guard only vouches for the SAME org). Without it, flipping BILLING_REQUIRE_AI_HANDLE=true would refuse every AI
+  // call of every entry-consumption adopter (the queue processors, activity-workspace, wirePhase2Route routes).
+  const creditHandle: CreditHandle = {
+    operationId:    exposureHandle?.holdTransactionId ?? opts.idempotencyKey,
+    idempotencyKey: opts.idempotencyKey,
+    orgId:          opts.orgId,
+    action:         String(action),
+    source:         'orchestrator',
+    amountReserved: exposureHandle?.creditsReserved,
+  };
+  const inCreditHandle = <R>(fn: () => R): R => runWithCreditHandle(creditHandle, fn);
   let entryPromise: Promise<number> | null = null;
   if (entry > 0) scope.armFirstConsumable(() => { entryPromise = consumeEntry(); });
 
@@ -293,7 +307,7 @@ export async function executeWithEntryConsumption<T>(
     if ('collectViaCollector' in opts && opts.collectViaCollector) {
       // Phase 10B/12E — token-metered: engine collects ACTUAL usage from its own
       // scope; the first provider completion fires the entry consumer.
-      executorResult = await scope.run(() => (opts.executor as () => Promise<T>)());
+      executorResult = await scope.run(() => inCreditHandle(() => (opts.executor as () => Promise<T>)()));
       const u = scope.usage;
       pricing = await resolveExecutionLlmCost({
         provider:     opts.llmPricing.provider,
@@ -307,7 +321,7 @@ export async function executeWithEntryConsumption<T>(
       // Phase 10E — token credits + non-token artifact credits (e.g. images).
       actualCredits = Math.max(0, pricing.credits) + Math.max(0, u.assetCredits);
     } else if (opts.llmPricing) {
-      const wrapped = await scope.run(() => (opts.executor as () => Promise<LlmExecutorResult<T>>)());
+      const wrapped = await scope.run(() => inCreditHandle(() => (opts.executor as () => Promise<LlmExecutorResult<T>>)()));
       executorResult = wrapped.result;
       pricing = await resolveExecutionLlmCost({
         provider:     opts.llmPricing.provider,
@@ -320,7 +334,7 @@ export async function executeWithEntryConsumption<T>(
       });
       actualCredits = Math.max(0, pricing.credits);
     } else {
-      executorResult = await scope.run(() => (opts.executor as () => Promise<T>)());
+      executorResult = await scope.run(() => inCreditHandle(() => (opts.executor as () => Promise<T>)()));
       actualCredits  = opts.amountOverride ?? await getCreditCost(action);
     }
   } catch (execErr: any) {

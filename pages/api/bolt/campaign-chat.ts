@@ -11,7 +11,7 @@ import { runCompletionWithOperation } from '../../../backend/services/aiGateway'
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 // Phase 6A — blueprint validation derives from the CANONICAL capability layer
 // (no second list): platform capability registry, creator governance, BOLT
 // text config, and connected-account eligibility.
@@ -589,9 +589,7 @@ Blueprint fields are OPTIONAL — omit any you can't choose confidently.` : '';
 
     return res.status(200).json(responsePayload);
   } catch (err: unknown) {
-    if (err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: err.message, code: err.code });
-    }
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('[bolt/campaign-chat]', err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Failed to process request',

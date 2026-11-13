@@ -41,7 +41,7 @@ import { buildContentContext } from '../../../../lib/content/buildContentContext
 import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 import { ThoughtLeadershipQualityGateError } from '../../../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -141,9 +141,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     return res.status(200).json(result);
   } catch (err) {
-    if (err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: err.message, code: err.code });
-    }
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     // Enterprise quality gate: failed blog drafts are blocked instead of
     // being returned as usable generation output.
     if (err instanceof ThoughtLeadershipQualityGateError) {
