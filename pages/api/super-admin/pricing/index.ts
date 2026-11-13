@@ -34,14 +34,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
     const by = guard.principal.userId;
     try {
+      // Item 8 (financial-writes contract; e9): the setters return the database result - supabase-js does NOT throw
+      // on a failed write. A pricing change that did not happen must never be reported as saved: this screen is
+      // where the owner enters live prices.
+      let written: { error?: { message?: string } | null } | null | undefined;
       if (body.action === 'fx') {
-        await setFxRate(String(body.currency) as Currency, Number(body.rate), by);
+        written = await setFxRate(String(body.currency) as Currency, Number(body.rate), by);
       } else if (body.action === 'override') {
-        await setPriceOverride(String(body.sku), String(body.currency) as Currency, body.amount == null ? null : Number(body.amount), by);
+        written = await setPriceOverride(String(body.sku), String(body.currency) as Currency, body.amount == null ? null : Number(body.amount), by);
       } else if (body.action === 'plan') {
-        await setPlanPricing(String(body.plan_key), Number(body.founder_usd), body.regular_usd == null ? null : Number(body.regular_usd), body.active !== false, by);
+        written = await setPlanPricing(String(body.plan_key), Number(body.founder_usd), body.regular_usd == null ? null : Number(body.regular_usd), body.active !== false, by);
       } else {
         return res.status(400).json({ error: 'unknown action' });
+      }
+      if (written?.error) {
+        return res.status(500).json({ ok: false, error: 'pricing_write_failed', detail: written.error.message ?? null });
       }
       const [fx, planPricing] = await Promise.all([getFxConfig(), getPlanPricing()]);
       return res.status(200).json({ ok: true, fx, planPricing });
