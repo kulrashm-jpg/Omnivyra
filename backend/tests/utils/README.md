@@ -6,7 +6,9 @@ Standardized mocks for deterministic, infrastructure-free tests.
 > to RUN, ran zero tests, or fewer suites ran than expected, and prints jest's `Test Suites:` / `Tests:` lines verbatim
 > (a load error adds 0 tests, so a `Tests:` count alone can look green). Before trusting a run in a junctioned
 > worktree, check `node scripts/testing/list-config-loading-suites.js`: those suites load the zod env config and
-> cannot run against a `node_modules` whose zod differs from the branch's.
+> cannot run against a `node_modules` whose zod differs from the branch's. Gate every heavy local run (jest suites, tsc,
+> replays) on free memory: `bash scripts/testing/ramgate.sh && <command>` - it refuses below 2 GB (`MIN_GB` to
+> change) and when memory cannot be measured; a printed free-RAM number is not a check.
 
 ## 1. Request Mock – `createApiRequestMock`
 
