@@ -76,10 +76,16 @@ export type QuickPickConfig = {
 
 export const CAMPAIGN_AI_PROVIDER_KEY = 'virality-campaign-ai-provider';
 
+/**
+ * The provider picker is retired (2026-11-13, e9 ruling): the server picks the model,
+ * and "Demo AI" presented canned replies as AI. A previously stored 'demo' must NOT
+ * keep a customer on canned replies, so it maps to the real assistant. 'gpt'/'claude'
+ * are kept as-is; both call the same server route.
+ */
 export function getStoredProvider(): AIProvider {
   if (typeof window === 'undefined') return 'claude';
   const s = localStorage.getItem(CAMPAIGN_AI_PROVIDER_KEY);
-  if (s === 'gpt' || s === 'claude' || s === 'demo') return s;
+  if (s === 'gpt' || s === 'claude') return s;
   return 'claude';
 }
 

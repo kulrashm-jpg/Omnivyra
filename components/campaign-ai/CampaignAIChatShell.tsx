@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Maximize2, Minimize2, Settings, X } from 'lucide-react';
+import { BookOpen, Maximize2, Minimize2, X } from 'lucide-react';
 import { CampaignAIInfoPanels } from './CampaignAIInfoPanels';
 import { CampaignAIInputFooter } from './CampaignAIInputFooter';
 import { CampaignAIMessageList } from './CampaignAIMessageList';
@@ -20,7 +20,6 @@ export function CampaignAIChatShell(props: any) {
     showLearning,
     setShowLearning,
     showSettings,
-    setShowSettings,
     setIsFullscreen,
     onMinimize,
     onClose,
@@ -80,12 +79,7 @@ export function CampaignAIChatShell(props: any) {
             >
               <BookOpen className="h-4 w-4" />
             </button>
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-            >
-              <Settings className="h-4 w-4" />
-            </button>
+            {/* The settings button only opened the AI-provider picker, retired 2026-11-13. */}
             <button
               onClick={() => setIsFullscreen(!isFullscreen)}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
