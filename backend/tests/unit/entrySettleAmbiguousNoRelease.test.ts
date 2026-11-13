@@ -129,10 +129,13 @@ describe('executeWithEntryConsumption: exposure settle error handling', () => {
 
   it('a settle that COMMITTED despite the error is adopted: executed, no exposure release', async () => {
     repo.callCreditPartialConfirm.mockResolvedValue({ error: { message: 'fetch failed' }, data: null });
-    settledState.value = { state: 'confirmed', transactionId: 'settle-committed' };
+    settledState.value = { state: 'confirmed', transactionId: 'settle-committed', creditsSettled: 5 };
     const res: any = await runEntry();
     expect(res.status).toBe('executed');
     expect(res.settlementPending).toBeUndefined();
+    // the committed row's amount, not the planned additional (7)
+    expect(res.settlement).toMatchObject({ additionalConsumed: 5, totalConsumed: 7 });
+    expect(res.settlement.amountsUnknown).toBeUndefined();
     expect(exposureReleases()).toBe(0);
   });
 
@@ -151,7 +154,7 @@ describe('executeWithEntryConsumption: exposure settle error handling', () => {
     settledState.value = state as Record<string, unknown>;
     const res: any = await runEntry();
     expect(res).toMatchObject({ status: 'executed', result: 'OUTPUT', settlementPending: { code: 'CREDIT_SETTLE_AMBIGUOUS', state: (state as any).state } });
-    expect(res.settlement).toMatchObject({ entryConsumed: 2, additionalConsumed: 0, exposureReleased: 0 });
+    expect(res.settlement).toMatchObject({ entryConsumed: 2, amountsUnknown: true });
     expect(exposureReleases()).toBe(0);
   });
 });

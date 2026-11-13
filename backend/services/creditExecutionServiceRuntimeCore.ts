@@ -428,6 +428,7 @@ export async function executeWithCredits<T>(
     // credits. Read the hold's settled state first; release ONLY when the hold is provably open AND the error was a
     // definitive database refusal. A committed confirm is adopted; anything else is left for the reconciler.
     let adoptedConfirmId: string | null = null;
+    let adoptedCredits: number | null = null;
     if (partialErr) {
       const msg = (partialErr as any).message ?? '';
       logger.error('credit_partial_confirm_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
@@ -435,6 +436,7 @@ export async function executeWithCredits<T>(
       if (settled.state === 'confirmed') {
         logger.warn('credit_partial_confirm_error_but_committed', { orgId, action, idempotencyKey: baseKey, confirmId: settled.transactionId, message: msg });
         adoptedConfirmId = settled.transactionId;
+        adoptedCredits = settled.creditsSettled;
       } else if (settled.state !== 'open' || !isDefinitiveDbRefusal(partialErr)) {
         // The work is done: return it (never throw - a re-click would be a new key, a new hold, a second charge). The
         // hold stays reserved; credit_settle_pending carries everything a resolver needs.
@@ -464,14 +466,22 @@ export async function executeWithCredits<T>(
 
     confirmId = adoptedConfirmId ?? (partialData as any)?.id ?? null;
     const underfunded = !!(partialData as any)?.is_underfunded;
-    const consumedTotal = Number((partialData as any)?.total_consumed ?? actualCredits);
-    const releasedTotal = Number((partialData as any)?.total_released ?? Math.max(0, credits - actualCredits));
+    // An adopted settle uses the amount the COMMITTED row records (05: for a partial settle actual != planned by
+    // definition); the planned figure is used only when that row carried none, and is then flagged as estimated.
+    const amountEstimated = !!adoptedConfirmId && adoptedCredits === null;
+    const consumedTotal = adoptedConfirmId
+      ? (adoptedCredits ?? actualCredits)
+      : Number((partialData as any)?.total_consumed ?? actualCredits);
+    const releasedTotal = adoptedConfirmId
+      ? Math.max(0, credits - consumedTotal)
+      : Number((partialData as any)?.total_released ?? Math.max(0, credits - actualCredits));
 
     settlement = {
       creditsCharged:  consumedTotal,
       creditsReleased: releasedTotal,
       underfunded,
       pricing:         resolvedFinalPricing,
+      ...(amountEstimated ? { amountEstimated: true } : {}),
     };
 
     logger.info('credit_partial_confirmed', {

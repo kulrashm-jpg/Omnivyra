@@ -147,6 +147,11 @@ export interface SettlementReport {
    * just logged — no negative balance carried).
    */
   underfunded:     boolean;
+  /**
+   * True when a settle was ADOPTED after an ambiguous error and the committed row carried no readable amount, so the
+   * charged figure is the PLANNED one (05). Reconcile against the ledger before relying on it.
+   */
+  amountEstimated?: boolean;
   /** USD cost breakdown from resolveLlmCost when llmPricing was provided. */
   pricing?:        ResolvedLlmCost;
 }

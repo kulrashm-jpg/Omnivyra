@@ -89,7 +89,15 @@ beforeEach(() => {
 });
 
 describe('isDefinitiveDbRefusal', () => {
-  it.each([['P0001', true], ['23505', true], ['PGRST202', true], ['', false], [undefined, false], ['ECONNRESET', false]])('%p -> %p', (code, want) => {
+  // 05: the negatives MUST include five-character ambiguous codes - a shape test (any 5 chars) passes the old
+  // '', undefined and 10-char ECONNRESET for the wrong reason. These are the may-have-committed cases.
+  it.each([
+    ['P0001', true], ['23505', true], ['22P02', true], ['25P02', true], ['42501', true], ['54000', true], ['55P03', true],
+    ['40001', true], ['40P01', true], ['PGRST202', true], ['PGRST116', true], ['PGRST301', true], ['PGRST000', true],
+    ['08007', false], ['08006', false], ['08000', false], ['08003', false], ['57P01', false], ['57P02', false],
+    ['57P03', false], ['53100', false], ['53200', false], ['58030', false], ['XX000', false], ['EPIPE', false],
+    ['EBADF', false], ['PGRST001', false], ['PGRST500', false], ['ECONNRESET', false], ['', false], [undefined, false],
+  ])('%p -> %p', (code, want) => {
     expect(isDefinitiveDbRefusal(code === undefined ? { message: 'x' } : { code, message: 'x' })).toBe(want);
   });
 });
@@ -101,11 +109,33 @@ describe('readHoldSettlementState', () => {
   });
   it('confirmed via the parent link', async () => {
     db.byParent = { data: [{ id: 'c1', execution_phase: 'confirm' }], error: null };
-    expect(await readHoldSettlementState(input)).toEqual({ state: 'confirmed', transactionId: 'c1' });
+    expect(await readHoldSettlementState(input)).toEqual({ state: 'confirmed', transactionId: 'c1', creditsSettled: null });
   });
   it('released via the settle key', async () => {
     db.byKey = { data: [{ id: 'r1', execution_phase: 'release' }], error: null };
-    expect(await readHoldSettlementState(input)).toEqual({ state: 'released', transactionId: 'r1' });
+    expect(await readHoldSettlementState(input)).toEqual({ state: 'released', transactionId: 'r1', creditsSettled: null });
+  });
+  it('a partial settle confirm + its own release-remainder is ONE settle (confirmed, amount from the confirm row)', async () => {
+    db.byParent = { data: [
+      { id: 'c1', execution_phase: 'confirm', idempotency_key: 'k:confirm', free_delta: 0, paid_delta: -4, incentive_delta: 0 },
+      { id: 'r1', execution_phase: 'release', idempotency_key: 'k:confirm:release-remainder', free_delta: 0, paid_delta: 6, incentive_delta: 0 },
+    ] as any, error: null };
+    expect(await readHoldSettlementState(input)).toEqual({ state: 'confirmed', transactionId: 'c1', creditsSettled: 4 });
+  });
+  it('a confirm plus a NON-remainder release is a double settle that already happened (own state)', async () => {
+    db.byParent = { data: [{ id: 'c1', execution_phase: 'confirm', idempotency_key: 'k:confirm' }] as any, error: null };
+    db.byKey = { data: [{ id: 'r9', execution_phase: 'release', idempotency_key: 'k:release' }] as any, error: null };
+    expect(await readHoldSettlementState(input)).toEqual({ state: 'double_settled', transactionIds: ['c1', 'r9'] });
+  });
+  it('two confirms are a double settle', async () => {
+    db.byParent = { data: [{ id: 'c1', execution_phase: 'confirm' }, { id: 'c2', execution_phase: 'confirm' }] as any, error: null };
+    expect(await readHoldSettlementState(input)).toMatchObject({ state: 'double_settled' });
+  });
+  it('the same row found by parent AND by key counts once', async () => {
+    const row = { id: 'c1', execution_phase: 'confirm', idempotency_key: 'k:confirm' };
+    db.byParent = { data: [row] as any, error: null };
+    db.byKey = { data: [row] as any, error: null };
+    expect(await readHoldSettlementState(input)).toMatchObject({ state: 'confirmed', transactionId: 'c1' });
   });
   it('a read error on either lookup is unreadable - never "open"', async () => {
     db.byParent = { data: null, error: { message: 'boom' } };
@@ -117,12 +147,36 @@ describe('readHoldSettlementState', () => {
 });
 
 describe('executeWithCredits: partial_confirm error handling', () => {
-  it('a confirm that COMMITTED despite the error is adopted: no release, no marker', async () => {
+  it('a confirm that COMMITTED despite the error is adopted: no release, no marker; amount unreadable -> flagged estimated', async () => {
     partialConfirm.mockResolvedValue({ error: { message: 'fetch failed' }, data: null });
-    db.byParent = { data: [{ id: 'conf-1', execution_phase: 'confirm' }], error: null };
+    db.byParent = { data: [{ id: 'conf-1', execution_phase: 'confirm' }] as any, error: null };
     const r = await run('pc-adopt');
     expect(r.status).toBe('executed');
     expect(r.settlementPending).toBeUndefined();
+    expect(r.settlement).toMatchObject({ creditsCharged: 4, amountEstimated: true });
+    expect(releases()).toBe(0);
+  });
+
+  it('an adopted confirm reports the amount its COMMITTED row records (not the planned one)', async () => {
+    partialConfirm.mockResolvedValue({ error: { code: '08007', message: 'transaction_resolution_unknown' }, data: null });
+    db.byParent = { data: [{ id: 'conf-2', execution_phase: 'confirm', idempotency_key: 'x', free_delta: 0, paid_delta: -3, incentive_delta: 0 }] as any, error: null };
+    const r = await run('pc-adopt-amount');
+    expect(r.settlement).toMatchObject({ creditsCharged: 3, creditsReleased: 7 });
+    expect(r.settlement.amountEstimated).toBeUndefined();
+  });
+
+  it.each(['08007', '57P01', 'EPIPE'])('open hold + ambiguous five-char code %s: NOT released, result returned pending', async (code) => {
+    partialConfirm.mockResolvedValue({ error: { code, message: 'x' }, data: null });
+    const r = await run(`pc-${code}`);
+    expect(r).toMatchObject({ status: 'executed', settlementPending: { state: 'open' } });
+    expect(releases()).toBe(0);
+  });
+
+  it('a hold already double-settled is reported as its own state, never released again', async () => {
+    partialConfirm.mockResolvedValue({ error: { code: 'P0001', message: 'refused' }, data: null });
+    db.byParent = { data: [{ id: 'c1', execution_phase: 'confirm' }, { id: 'r1', execution_phase: 'release' }] as any, error: null };
+    const r = await run('pc-double');
+    expect(r).toMatchObject({ status: 'executed', settlementPending: { state: 'double_settled' } });
     expect(releases()).toBe(0);
   });
 

@@ -296,10 +296,22 @@ export async function closeBillingOperation(
   }
 }
 
-async function reconcileBillingOperationToResult<T>(
+/** Exported for unit tests (settle-pending consumer, 05/e9). */
+export async function reconcileBillingOperationToResult<T>(
   operationId: string,
   result: ExecuteResult<T>,
 ): Promise<void> {
+  // In-process consumer of the settle-ambiguity marker (05/e9): the work completed but its settle outcome is unknown,
+  // so the operation is NOT 'confirmed' and no charged amount is recorded. 'executed' is the table's own state for
+  // "work completed" (20260663 CHECK); the reason names the settled state for the resolver.
+  if (result.status === 'executed' && result.settlementPending) {
+    incrCounter('billing_operations_settle_pending');
+    await closeBillingOperation(operationId, {
+      status: 'executed',
+      failureReason: `settle_pending:${result.settlementPending.state}`,
+    });
+    return;
+  }
   if (result.status === 'executed' || result.status === 'already_confirmed') {
     incrCounter('billing_operations_confirmed');
     const charged =

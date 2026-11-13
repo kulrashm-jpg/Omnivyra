@@ -75,6 +75,13 @@ export interface EntryConsumptionSettlement {
   /** True if actual exceeded entry + exposure (i.e. > catalog max). */
   underfunded: boolean;
   pricing?: ResolvedLlmCost;
+  /**
+   * True when the settle outcome is UNKNOWN (the result also carries settlementPending): additionalConsumed /
+   * exposureReleased / totalConsumed / underfunded are then NOT facts - only entryConsumed is (05/e9).
+   */
+  amountsUnknown?: boolean;
+  /** True when a settle was ADOPTED after an error and its committed row carried no readable amount (planned used). */
+  amountEstimated?: boolean;
 }
 
 export type ExecuteWithEntryConsumptionResult<T> =
@@ -357,6 +364,7 @@ export async function executeWithEntryConsumption<T>(
   // ── STAGE 4 — SETTLEMENT (TASK 4): consume actual−entry from exposure ────────
   const plan = planEntryConsumptionSettlement({ entry: entryConsumed, reservation, actualCredits });
   let additionalConsumed = 0;
+  let adoptedAmountEstimated = false;
   let exposureReleased   = reservation;
 
   if (exposureHandle) {
@@ -372,6 +380,7 @@ export async function executeWithEntryConsumption<T>(
       performedBy:    exposureHandle.userId,
     });
     let adoptedConfirmId: string | null = null;
+    let adoptedCredits: number | null = null;
     if (settleErr) {
       const msg = (settleErr as any).message ?? '';
       logger.error('entry_consumption_settle_failed', { orgId: opts.orgId, action, message: msg });
@@ -384,6 +393,7 @@ export async function executeWithEntryConsumption<T>(
       if (settled.state === 'confirmed') {
         logger.warn('entry_consumption_settle_error_but_committed', { orgId: opts.orgId, action, confirmId: settled.transactionId, message: msg });
         adoptedConfirmId = settled.transactionId;
+        adoptedCredits = settled.creditsSettled;
       } else if (settled.state === 'open' && isDefinitiveDbRefusal(settleErr)) {
         await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — settle failed` });
         throw new Error(`[entryConsumption] exposure settle failed: ${msg}`);
@@ -395,15 +405,22 @@ export async function executeWithEntryConsumption<T>(
           result: executorResult,
           settlement: {
             entryConsumed, exposureReserved: reservation, additionalConsumed: 0, exposureReleased: 0,
-            totalConsumed: entryConsumed, underfunded: false, pricing,
+            totalConsumed: entryConsumed, underfunded: false, pricing, amountsUnknown: true,
           },
           settlementPending: pendingSettlement(exposureHandle.holdTransactionId, settled, msg),
         };
       }
     }
     // A settle adopted after an error has no RPC payload: the planned amounts below are what was sent.
-    additionalConsumed = Number((settleData as any)?.total_consumed ?? plan.additionalConsumption);
-    exposureReleased   = Number((settleData as any)?.total_released ?? plan.exposureReleased);
+    // An adopted settle uses the amount its COMMITTED row records; planned only when that row carried none (flagged).
+    if (adoptedConfirmId) {
+      additionalConsumed = adoptedCredits ?? plan.additionalConsumption;
+      exposureReleased   = Math.max(0, reservation - additionalConsumed);
+      if (adoptedCredits === null) adoptedAmountEstimated = true;
+    } else {
+      additionalConsumed = Number((settleData as any)?.total_consumed ?? plan.additionalConsumption);
+      exposureReleased   = Number((settleData as any)?.total_released ?? plan.exposureReleased);
+    }
 
     const settleConfirmId = adoptedConfirmId ?? (settleData as any)?.id ?? null;
     if (settleConfirmId) {
@@ -475,6 +492,7 @@ export async function executeWithEntryConsumption<T>(
       totalConsumed: entryConsumed + additionalConsumed,
       underfunded: plan.underfunded,
       pricing,
+      ...(adoptedAmountEstimated ? { amountEstimated: true } : {}),
     },
   };
 }
