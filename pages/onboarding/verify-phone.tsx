@@ -78,7 +78,8 @@ export default function VerifyPhonePage() {
     setErrorMsg(null);
     try {
       const supabase = getSupabaseBrowser();
-      const { error } = await supabase.auth.signInWithOtp({ phone });
+      // P2 (e1 2026-11-13): never CREATE an identity from the browser - a phone OTP may only sign in an existing one.
+      const { error } = await supabase.auth.signInWithOtp({ phone, options: { shouldCreateUser: false } });
       if (error) throw error;
       setStep('otp');
     } catch (err: any) {

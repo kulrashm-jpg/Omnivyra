@@ -316,6 +316,30 @@ export async function checkRateLimit(
   }
 }
 
+/**
+ * Read the current count in a sliding window WITHOUT recording an attempt (e1 2026-11-13, P2). For SUCCESS-ONLY
+ * ceilings: peek before the work, then record the success with checkRateLimit() only after it happened - so refused
+ * attempts (e.g. junk signups from rotating IPs) never consume the budget and cannot lock legitimate users out.
+ * `allowed` = count < limit. Redis unavailable -> the config's degraded mode decides, exactly like checkRateLimit
+ * (a 'closed' config refuses; otherwise allowed, flagged bypassed).
+ */
+export async function peekRateLimit(identifier: string, config: RateLimitConfig): Promise<RateLimitResult & { count: number }> {
+  const effectiveConfig = await resolveEffectiveRateLimitConfig(config);
+  const key = `${effectiveConfig.keyPrefix}:${identifier}`;
+  const now = Date.now();
+  const resetAt = Math.ceil((now + effectiveConfig.windowSecs * 1_000) / 1_000);
+  try {
+    const redis = getRlRedis();
+    await redis.zremrangebyscore(key, '-inf', now - effectiveConfig.windowSecs * 1_000);
+    const count = Number(await redis.zcard(key)) || 0;
+    return { allowed: count < effectiveConfig.limit, remaining: Math.max(0, effectiveConfig.limit - count), resetAt, bypassed: false, count };
+  } catch (err: any) {
+    logBypass(identifier, config.keyPrefix, err?.message ?? 'redis_error');
+    const closed = resolveRedisFailureMode(effectiveConfig) === 'closed';
+    return { allowed: !closed, remaining: 0, resetAt, bypassed: true, degradedMode: resolveRedisFailureMode(effectiveConfig), count: 0 };
+  }
+}
+
 function logBypass(identifier: string, prefix: string, reason: string) {
   logger.warn('RATE_LIMIT_REDIS_DOWN', {
     prefix,
