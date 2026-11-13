@@ -2,8 +2,12 @@
  * Default-OFF gate for every path that RELEASES credit holds in bulk: the orphan-hold reaper and the durable
  * reservation reconciler (e9 ruling 2026-11-13). Until 20270217000053 (settle guards on the live bodies) and an
  * in-flight-aware resolver ship, a bulk release can race a job that is still running: the live apply_credit_reservation
- * has no already-settled guard, so the later confirm double-settles. The gate sits in the SERVICES, so it covers every
- * caller - the cron routes, the super-admin operations route and any future one - and the routes answer a plain 409.
+ * has no already-settled guard, so the later confirm double-settles.
+ * SCOPE: this gates BULK release of holds the caller does NOT own. It sits in the two sweeper SERVICES, so every caller
+ * of them is covered (the cron routes and the super-admin operations route, which answer a plain 409), and a new
+ * sweeper MUST route through these services rather than release holds itself. In-flight releases of the caller's OWN
+ * hold (the executor-failure / definitive-refusal paths in creditExecutionServiceRuntimeCore and
+ * creditExecutionServiceRuntimeEntry, and the pre-ruling autonomous release) are deliberately outside this gate.
  * Remove it only together with 053 + the resolver.
  */
 export const HOLD_RELEASE_ENV = 'CREDIT_HOLD_REAP_ENABLED';
