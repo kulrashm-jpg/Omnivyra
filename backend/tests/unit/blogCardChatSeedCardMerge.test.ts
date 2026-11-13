@@ -37,6 +37,11 @@ jest.mock('../../chatGovernance', () => ({ validateAndModerateUserMessage: async
 
 const mockRunCompletion = jest.fn(async (..._a: any[]) => ({ output: '{}' }));
 jest.mock('../../services/aiGateway', () => ({ runCompletion: (...a: any[]) => mockRunCompletion(...a) }));
+// C75: the route now bills the call through runBilledAiCompletion; forward its completion request to the same
+// model stand-in so these assertions on the prompt / companyId are unchanged (billing itself: c75ContentRewriteBilling).
+jest.mock('../../services/billing/runBilledAiCompletion', () => ({
+  runBilledAiCompletion: async (args: any) => ({ text: String((await mockRunCompletion(args.completion))?.output ?? '') }),
+}));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const blogCardChat = require('../../../pages/api/ai/blog-card-chat').default;

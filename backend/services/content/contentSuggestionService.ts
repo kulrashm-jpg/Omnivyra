@@ -50,7 +50,7 @@
  * and no new `unknown_action_key` anomaly class.
  */
 
-import { runCompletionWithOperation } from '../aiGateway';
+import { BilledAiNotExecutedError } from '../billing/runBilledAiCompletion';
 import { resolveCompanyGroundingGuard } from '../context/canonicalContentContextResolver';
 import { getCanonicalProfile } from '../context/canonicalProfileAdapter';
 import { generateContentOpportunities, type ContentOpportunity } from '../contentOpportunityService';
@@ -348,8 +348,27 @@ const RESPONSE_SHAPE = `{
   "platform_guidance": "one line of platform context, or empty string"
 }`;
 
+/**
+ * The model call, injected by the route (C75, BLOCKING money): the route binds it to runBilledAiCompletion
+ * (content_rewrite, featureRegistry creatorFieldAssist), so this service has NO unbilled path. Returns the raw text.
+ */
+export type ContentSuggestionLlm = (request: {
+  operation: 'creatorFieldAssist';
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  messages: Array<{ role: 'system' | 'user'; content: string }>;
+}) => Promise<string>;
+
+/** Refusals the caller must see (402/403) instead of a silent free fallback. */
+function isBillingRefusal(err: unknown): boolean {
+  return err instanceof BilledAiNotExecutedError
+    && err.status !== 'already_confirmed' && err.status !== 'already_released';
+}
+
 export async function generateContentSuggestion(
   input: ContentSuggestionInput,
+  deps: { complete: ContentSuggestionLlm },
 ): Promise<ContentSuggestion> {
   const companyId = text(input.companyId);
   if (!companyId) {
@@ -373,13 +392,11 @@ export async function generateContentSuggestion(
     buildDeterministicSuggestion(input, { profileLines, opportunities, brand, coverage });
 
   try {
-    const response = await runCompletionWithOperation({
+    const output = await deps.complete({
       operation: 'creatorFieldAssist',
-      companyId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.7,
       max_tokens: 700,
-      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
@@ -402,7 +419,7 @@ export async function generateContentSuggestion(
       ],
     });
 
-    const raw = text(response?.output);
+    const raw = text(output);
     if (!raw) return deterministic();
 
     let parsed: Record<string, unknown>;
@@ -441,8 +458,11 @@ export async function generateContentSuggestion(
         ? { revision: { instruction: input.revisionInstruction, revision_index: input.revisionIndex ?? 1 } }
         : {}),
     };
-  } catch {
-    // AI unavailable — the feature still returns something usable.
+  } catch (err) {
+    // Insufficient credits / no account / scope: surface it (the route answers 402/403); never a free LLM run.
+    if (isBillingRefusal(err)) throw err;
+    // AI unavailable, an invalid answer (its hold was released, nothing charged), or a repeat of an already-charged
+    // identical request — the feature still returns something usable, without another model call.
     return deterministic();
   }
 }

@@ -211,12 +211,30 @@ ${tone}
   return finalizeDayContent(parsed, input, tone);
 }
 
+/**
+ * Injected model call for a customer-triggered regenerate (C75, BLOCKING money): /api/content/regenerate binds it
+ * to runBilledAiCompletion (content_rewrite). `scope` identifies what is being regenerated (asset + version) for
+ * billing idempotency. Returns the raw model text.
+ */
+export type RegenerateContentLlm = (request: {
+  operation: 'regenerateContent';
+  model: string;
+  temperature: number;
+  messages: Array<{ role: 'system' | 'user'; content: string }>;
+}) => Promise<string>;
+
 export async function regenerateContent(input: {
   existingContent: any;
   instruction: string;
   platform: string;
   companyId?: string | null;
   campaignId?: string | null;
+  /**
+   * The billed model call. Every customer-triggered regenerate MUST pass it. Absent only for the internal overlap
+   * retry inside generateContentForDay, whose own entry (/api/content/generate-day) is itself unbilled today
+   * (C75 inventory, e1) - that path is gated by the BILLING_REQUIRE_AI_HANDLE flip, not here.
+   */
+  complete?: RegenerateContentLlm;
 }): Promise<DayContent> {
   const systemPrompt =
     'You are a content regeneration engine. Return JSON only. No prose.';
@@ -232,20 +250,24 @@ Existing Content:
 ${JSON.stringify(input.existingContent, null, 2)}
 `;
 
-  const result = await runCompletionWithOperation({
-    companyId: input.companyId ?? null,
-    campaignId: input.campaignId ?? null,
-    model: config.OPENAI_RESPONSES_MODEL || 'gpt-4o-mini',
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    operation: 'regenerateContent',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-  });
+  const model = config.OPENAI_RESPONSES_MODEL || 'gpt-4o-mini';
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+  const output = input.complete
+    ? await input.complete({ operation: 'regenerateContent', model, temperature: 0, messages })
+    : (await runCompletionWithOperation({
+        companyId: input.companyId ?? null,
+        campaignId: input.campaignId ?? null,
+        model,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        operation: 'regenerateContent',
+        messages,
+      })).output;
 
-  const raw = result.output?.trim() ?? '{}';
+  const raw = (typeof output === 'string' ? output : '').trim() || '{}';
   let parsed = contentSchema.parse(parseModelOutputOr<any>(raw, {}, { surface: 'contentGenerationService' }));
   const keysToRefine = ['headline', 'caption', 'hook', 'callToAction', 'reasoning', 'script', 'blogDraft'] as const;
   const toRefine = keysToRefine.filter((k) => parsed[k]?.trim());

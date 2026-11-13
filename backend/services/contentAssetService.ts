@@ -8,7 +8,7 @@ import {
   listContentVersions,
   updateContentAssetStatus,
 } from '../db/contentAssetStore';
-import { regenerateContent } from './contentGenerationService';
+import { regenerateContent, type RegenerateContentLlm } from './contentGenerationService';
 
 export async function createContentAsset(input: {
   campaignId: string;
@@ -79,6 +79,13 @@ export async function updateContentAssetVersion(input: {
 export async function regenerateContentAsset(input: {
   assetId: string;
   instruction: string;
+  /** Owning company (the route's ownership-checked id) - attributes the model call. */
+  companyId: string;
+  /**
+   * Billed model call factory (C75). Receives the asset+version scope so a retried request is one charge while a
+   * new regenerate of the NEXT version is a new one.
+   */
+  completeFor: (scope: string) => RegenerateContentLlm;
 }): Promise<any> {
   const asset = await getContentAssetById(input.assetId);
   if (!asset) {
@@ -90,6 +97,9 @@ export async function regenerateContentAsset(input: {
     existingContent: latest?.content_json ?? {},
     instruction: input.instruction,
     platform: asset.platform,
+    companyId: input.companyId,
+    campaignId: asset.campaign_id ?? null,
+    complete: input.completeFor(`${asset.asset_id}:v${versions.length}`),
   });
   console.log('CONTENT REGENERATED', { asset_id: asset.asset_id });
   return updateContentAssetVersion({

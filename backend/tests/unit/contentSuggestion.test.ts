@@ -40,7 +40,7 @@ import { readCompanyTopicCoverage } from '../../services/content/knowledgeGraph/
 import { resolveCompanyGroundingGuard } from '../../services/context/canonicalContentContextResolver';
 import { getCanonicalProfile } from '../../services/context/canonicalProfileAdapter';
 import { generateContentOpportunities } from '../../services/contentOpportunityService';
-import { generateContentSuggestion } from '../../services/content/contentSuggestionService';
+import { generateContentSuggestion as generateWithDeps } from '../../services/content/contentSuggestionService';
 import {
   isActionableSuggestion,
   toGenerationInput,
@@ -48,6 +48,12 @@ import {
 } from '../../../lib/content/contentSuggestionContract';
 
 const mockAi = runCompletionWithOperation as jest.MockedFunction<typeof runCompletionWithOperation>;
+// C75: the service now takes its model call as an injected dependency (the route binds it to runBilledAiCompletion).
+// Forward it to the same gateway mock so these behavioural assertions are unchanged.
+const generateContentSuggestion = (input: Parameters<typeof generateWithDeps>[0]) =>
+  generateWithDeps(input, {
+    complete: async (request) => String((await mockAi({ ...request, companyId: input.companyId, response_format: { type: 'json_object' } } as never))?.output ?? ''),
+  });
 const mockGrounding = resolveCompanyGroundingGuard as jest.MockedFunction<typeof resolveCompanyGroundingGuard>;
 const mockProfile = getCanonicalProfile as jest.MockedFunction<typeof getCanonicalProfile>;
 const mockOpportunities = generateContentOpportunities as jest.MockedFunction<typeof generateContentOpportunities>;

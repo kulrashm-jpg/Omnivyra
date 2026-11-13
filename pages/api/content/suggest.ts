@@ -4,7 +4,10 @@ import { enforceCompanyAccess, resolveUserContext } from '../../../backend/servi
 import {
   generateContentSuggestion,
   type ContentSuggestion,
+  type ContentSuggestionLlm,
 } from '../../../backend/services/content/contentSuggestionService';
+import { runBilledAiCompletion } from '../../../backend/services/billing/runBilledAiCompletion';
+import { billedAiHttpError } from '../../../backend/services/billing/billedAiHttpError';
 
 /**
  * POST /api/content/suggest
@@ -51,6 +54,50 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       ? Math.max(1, Math.floor(body.revision_index))
       : 1;
 
+  // C75 (BLOCKING money): the model call is billed as content_rewrite (featureRegistry creatorFieldAssist), the same
+  // wrapper and fields as its charged twin /api/creator-templates/field-assist. Insufficient credits => no model call
+  // (402). A non-JSON answer fails inside the hold (released, not charged). The same request body from the same user
+  // is one charge; a repeat falls back to the free deterministic suggestion.
+  const userId = String(user.userId);
+  const complete: ContentSuggestionLlm = async (request) => {
+    const billed = await runBilledAiCompletion({
+      module:        'http:content_suggest',
+      userId,
+      orgId:         companyId,
+      action:        'content_rewrite',
+      referenceType: 'content_suggestion',
+      referenceId:   `content-suggest:${companyId}:${contentType}`,
+      llmPricing: {
+        provider:        'openai',
+        model:           request.model,
+        maxInputTokens:  4000,
+        maxOutputTokens: request.max_tokens,
+        actionKey:       'content_rewrite',
+      },
+      idempotency: {
+        kind:        'http',
+        actorUserId: userId,
+        action:      'content_rewrite',
+        referenceId: `content-suggest:${companyId}:${contentType}`,
+        requestBody: body,
+        requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string'
+          ? (req.headers['idempotency-key'] as string)
+          : undefined,
+      },
+      validateOutput: (text) => { JSON.parse((text ?? '').trim()); },
+      completion: {
+        companyId,
+        operation:       request.operation,
+        model:           request.model,
+        temperature:     request.temperature,
+        max_tokens:      request.max_tokens,
+        response_format: { type: 'json_object' },
+        messages:        request.messages,
+      },
+    });
+    return billed.text;
+  };
+
   try {
     const suggestion = await generateContentSuggestion({
       companyId,
@@ -64,10 +111,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       revisionInstruction: str(body.revision_instruction),
       previousSuggestion: previous,
       revisionIndex,
-    });
+    }, { complete });
 
     return res.status(200).json({ suggestion });
   } catch (error) {
+    const refusal = billedAiHttpError(error);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
     const message = error instanceof Error ? error.message : 'Failed to generate suggestion';
     return res.status(500).json({ error: message });
   }

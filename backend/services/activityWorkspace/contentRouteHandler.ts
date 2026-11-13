@@ -1,5 +1,6 @@
 /** Part 2/2 of content.ts — verbatim split (barrel preserved; importers unchanged). */
 import { NextApiRequest, NextApiResponse } from 'next';
+import { billedAiHttpError } from '@/backend/services/billing/billedAiHttpError';
 import {
   buildPlatformVariantsFromMaster,
   generateMasterContentFromIntent,
@@ -1010,6 +1011,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (error instanceof MonetizedWorkflowError) {
       return res.status(error.statusCode).json(error.payload);
     }
+    // runBilledAiCompletion refusals (refine_variant): the same 402/403/409 shapes as MonetizedWorkflowError,
+    // never a generic 500 for insufficient credits (C75).
+    const billedRefusal = billedAiHttpError(error);
+    if (billedRefusal) return res.status(billedRefusal.status).json(billedRefusal.body);
     if ((error as Error & { code?: string })?.code === 'VARIANT_GENERATION_FAILED') {
       return res.status(500).json({
         error: 'VARIANT_GENERATION_FAILED',

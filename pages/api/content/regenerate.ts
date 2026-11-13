@@ -7,6 +7,8 @@ import { Role } from '../../../backend/services/rbacService';
 import { withRBAC, type RbacContext } from '../../../backend/middleware/withRBAC';
 import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
+import { runBilledAiCompletion } from '../../../backend/services/billing/runBilledAiCompletion';
+import { billedAiHttpError } from '../../../backend/services/billing/billedAiHttpError';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -53,7 +55,54 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (ownership.status !== 'OWNED' || claimedCompanies.some((claim) => claim !== ownership.companyId)) {
       return res.status(403).json({ error: 'Access denied to asset' });
     }
-    const updated = await regenerateContentAsset({ assetId, instruction });
+    // C75 (BLOCKING money): billed as content_rewrite through runBilledAiCompletion, mirroring the activity-workspace
+    // twin (contentRouteHandler refine_variant). Insufficient credits => no model call (402). A non-JSON answer fails
+    // inside the hold (released, not charged; nothing saved). Idempotency: user + asset + current version + body, so a
+    // retried request is one charge and regenerating the next version is a new one.
+    const actorUserId = String(access.userId);
+    const companyId = ownership.companyId;
+    const updated = await regenerateContentAsset({
+      assetId,
+      instruction,
+      companyId,
+      completeFor: (scope) => async (request) => {
+        const billed = await runBilledAiCompletion({
+          module:        'http:content_regenerate',
+          userId:        actorUserId,
+          orgId:         companyId,
+          action:        'content_rewrite',
+          referenceType: 'content_asset_regenerate',
+          referenceId:   `content-regenerate:${scope}`,
+          llmPricing: {
+            provider:        'openai',
+            model:           request.model,
+            maxInputTokens:  4000,
+            maxOutputTokens: 1500,
+            actionKey:       'content_rewrite',
+          },
+          idempotency: {
+            kind:        'http',
+            actorUserId,
+            action:      'content_rewrite',
+            referenceId: `content-regenerate:${scope}`,
+            requestBody: { assetId: String(assetId), instruction: String(instruction) },
+            requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string'
+              ? (req.headers['idempotency-key'] as string)
+              : undefined,
+          },
+          validateOutput: (text) => { JSON.parse((text ?? '').trim()); },
+          completion: {
+            companyId,
+            operation:       request.operation,
+            model:           request.model,
+            temperature:     request.temperature,
+            response_format: { type: 'json_object' },
+            messages:        request.messages,
+          },
+        });
+        return billed.text;
+      },
+    });
     // Canonical telemetry (append-only, fail-soft): an AI asset was regenerated.
     // Not deduped — each regenerate is a distinct action.
     trackEvent({
@@ -65,7 +114,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       dedupKey: null,
     });
     return res.status(200).json(updated);
-  } catch {
+  } catch (error) {
+    const refusal = billedAiHttpError(error);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
     return res.status(500).json({ error: 'Failed to regenerate content' });
   }
 }

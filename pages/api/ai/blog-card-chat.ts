@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { runCompletion } from '../../../backend/services/aiGateway';
+import { runBilledAiCompletion } from '../../../backend/services/billing/runBilledAiCompletion';
+import { billedAiHttpError } from '../../../backend/services/billing/billedAiHttpError';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
@@ -455,20 +456,49 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       { role: 'user', content: String(message) },
     ];
 
-    // Routed through the canonical aiGateway — cost accounting, usage
-    // enforcement, governor, retry/fallback and telemetry are inherited (the
-    // former direct call + separate captureTokenProviderCost are gone).
-    const completion = await runCompletion({
-      companyId: String(companyId),
+    // C75 (BLOCKING money): billed as content_rewrite through runBilledAiCompletion (HOLD -> LLM ->
+    // confirm_partial; featureRegistry maps blogCardChat -> creator_content.rewrite / content_rewrite).
+    // Insufficient credits => the model never runs (402). A non-JSON answer fails INSIDE the hold
+    // (validateOutput) so the hold is released and nothing is charged. Idempotency: the same request body from
+    // the same user is one charge (a retried request never double-charges).
+    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    const chatRequest = { message: String(message), conversation, contentType: contentType ?? null, metadata };
+    const completion = await runBilledAiCompletion({
+      module:        'http:blog_card_chat',
+      userId:        user.id,
+      orgId:         String(companyId),
+      action:        'content_rewrite',
       referenceType: 'blog_card_chat',
-      operation: 'blogCardChat',
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      temperature: 0.7,
-      response_format: { type: 'json_object' },
-      messages,
+      referenceId:   `blog-card-chat:${String(companyId)}`,
+      llmPricing: {
+        provider:        'openai',
+        model,
+        maxInputTokens:  6000,
+        maxOutputTokens: 1000,
+        actionKey:       'content_rewrite',
+      },
+      idempotency: {
+        kind:        'http',
+        actorUserId: user.id,
+        action:      'content_rewrite',
+        referenceId: `blog-card-chat:${String(companyId)}`,
+        requestBody: chatRequest,
+        requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string'
+          ? (req.headers['idempotency-key'] as string)
+          : undefined,
+      },
+      validateOutput: (text) => { JSON.parse((text ?? '').trim() || '{}'); },
+      completion: {
+        companyId:       String(companyId),
+        operation:       'blogCardChat',
+        model,
+        temperature:     0.7,
+        response_format: { type: 'json_object' },
+        messages,
+      },
     });
 
-    const raw = (completion.output ?? '').trim() || '{}';
+    const raw = (completion.text ?? '').trim() || '{}';
 
     let parsed: {
       done?: boolean;
@@ -517,6 +547,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ),
     });
   } catch (err: unknown) {
+    const refusal = billedAiHttpError(err);
+    if (refusal) return res.status(refusal.status).json(refusal.body);
     console.error('Blog card chat failed:', err);
     return res.status(500).json({
       error: 'Failed to process blog card chat',
