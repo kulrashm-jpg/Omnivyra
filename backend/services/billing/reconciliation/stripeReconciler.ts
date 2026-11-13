@@ -54,7 +54,41 @@ export interface IngestStripeArgs {
 
 export type IngestOutcome =
   | { status: 'duplicate'; provider_invoice_id: string }
-  | { status: 'ingested'; run_id: string; adjustments_written: number; totals: StripeMatchResult['totals']; summary: StripeMatchResult['summary']; warnings: string[] };
+  | { status: 'ingested'; run_id: string; adjustments_written: number; totals: StripeMatchResult['totals']; summary: StripeMatchResult['summary']; warnings: string[]; resumed?: boolean };
+
+/**
+ * A Stripe reconcile refusal / failure, typed (e1 2026-11-13, the owed "23505 by constraint" fix). `retryable`: running
+ * the same import again can succeed (a transient read/write failure) or cannot (the data conflicts - an operator must
+ * look). Never a silent 'duplicate'.
+ */
+export class StripeReconcileError extends Error {
+  constructor(
+    public readonly code:
+      | 'IMPORT_FAILED' | 'IMPORT_READ_FAILED' | 'IMPORT_CONFLICT_NOT_STORED' | 'INVOICE_PERIOD_MISMATCH'
+      | 'INVOICE_PAYLOAD_MISMATCH' | 'RUN_CONFLICT' | 'RUN_READ_FAILED' | 'RUN_UPSERT_FAILED'
+      | 'ADJUSTMENTS_READ_FAILED' | 'ADJUSTMENTS_INSERT_FAILED' | 'RUN_COMPLETE_FAILED',
+    public readonly retryable: boolean,
+    message: string,
+  ) {
+    super(`stripe reconcile: ${message}`);
+    this.name = 'StripeReconcileError';
+  }
+}
+
+const UNIQUE_VIOLATION = '23505';
+/** The ONLY unique rule Stripe imports can hit: 20260711 UNIQUE (provider, provider_invoice_id) (Postgres' default
+ *  name). 20270217000040's one-per-period index excludes provider = 'stripe'. */
+const INVOICE_UNIQUE_CONSTRAINT = 'provider_invoice_imports_provider_provider_invoice_id_key';
+const sameInstant = (x: unknown, y: unknown): boolean => {
+  const a = Date.parse(String(x)), b = Date.parse(String(y));
+  return Number.isFinite(a) && a === b;
+};
+const roundCents = (n: number): number => Math.round(n * 100) / 100;
+
+function refuse(code: StripeReconcileError['code'], retryable: boolean, message: string, extra: Record<string, unknown> = {}): never {
+  logger.error('stripe_reconcile_refused', { code, retryable, message, ...extra });
+  throw new StripeReconcileError(code, retryable, message);
+}
 
 async function readInternalRecords(periodStart: string, periodEnd: string): Promise<{
   creditPurchases: InternalCreditPurchase[];
@@ -150,7 +184,25 @@ export async function ingestStripeInvoice(args: IngestStripeArgs): Promise<Inges
   }
   const total_actual_usd = norm.events.reduce((s, e) => s + (Number.isFinite(e.net_amount_usd) ? e.net_amount_usd : 0), 0);
 
-  // 1) Idempotent invoice import.
+  // 0) The period's run, if any, must be THIS invoice's (a run without provider_invoice_id is a legacy / other run).
+  const { data: prevRow, error: prevErr } = await supabase
+    .from('cost_reconciliation_runs')
+    .select('id, status, metadata')
+    .eq('provider', 'stripe')
+    .eq('period_start', args.periodStart)
+    .eq('period_end', args.periodEnd)
+    .maybeSingle();
+  if (prevErr) refuse('RUN_READ_FAILED', true, `run read failed: ${prevErr.message}`);
+  const prev = prevRow as { id: string; status: string; metadata: Record<string, unknown> | null } | null;
+  if (prev && prev.metadata?.provider_invoice_id !== args.providerInvoiceId) {
+    refuse('RUN_CONFLICT', false, `period ${args.periodStart}..${args.periodEnd} already has a run for invoice ${String(prev.metadata?.provider_invoice_id ?? 'unknown (legacy run)')}`);
+  }
+
+  // 1) Idempotent invoice import. A 23505 is classified by SQLSTATE (never by message text) and RESUMES only when the
+  //    stored row is THIS invoice, in THIS period, with THIS total - a half-written run (import landed, run/adjustments
+  //    did not) is completed, never silently reported as 'duplicate'.
+  let events = norm.events;
+  let resumed = false;
   const { error: insertErr } = await supabase.from('provider_invoice_imports').insert({
     provider: 'stripe',
     provider_invoice_id: args.providerInvoiceId,
@@ -163,17 +215,60 @@ export async function ingestStripeInvoice(args: IngestStripeArgs): Promise<Inges
     adapter_version: args.kind === 'webhook' ? STRIPE_ADAPTER_VERSION_WEBHOOK : STRIPE_ADAPTER_VERSION_BALANCE,
   } as Record<string, unknown>);
   if (insertErr) {
-    if (String(insertErr.message ?? '').toLowerCase().includes('duplicate')) {
-      return { status: 'duplicate', provider_invoice_id: args.providerInvoiceId };
+    if ((insertErr as { code?: string }).code !== UNIQUE_VIOLATION) {
+      refuse('IMPORT_FAILED', true, `invoice import failed: ${insertErr.message}`);
     }
-    logger.warn('stripe_invoice_import_failed', { message: insertErr.message });
-    throw new Error(`stripe invoice import failed: ${insertErr.message}`);
+    const errText = `${insertErr.message ?? ''} ${(insertErr as { details?: string }).details ?? ''}`;
+    const { data: stored, error: readErr } = await supabase
+      .from('provider_invoice_imports')
+      .select('line_items, total_actual_usd, period_start, period_end')
+      .eq('provider', 'stripe')
+      .eq('provider_invoice_id', args.providerInvoiceId)
+      .maybeSingle();
+    if (readErr) refuse('IMPORT_READ_FAILED', true, `stored import read failed: ${readErr.message}`);
+    // A 23505 with no row of ours is NOT this invoice's unique rule - some other constraint refused the import.
+    if (!stored) {
+      refuse('IMPORT_CONFLICT_NOT_STORED', false, `import refused (23505) and invoice ${args.providerInvoiceId} is not stored`, {
+        constraint_named: errText.includes(INVOICE_UNIQUE_CONSTRAINT),
+      });
+    }
+    const st = stored as { line_items: unknown; total_actual_usd: number | string; period_start: string; period_end: string };
+    if (!sameInstant(st.period_start, args.periodStart) || !sameInstant(st.period_end, args.periodEnd)) {
+      refuse('INVOICE_PERIOD_MISMATCH', false, `invoice ${args.providerInvoiceId} was imported for ${st.period_start}..${st.period_end}, not ${args.periodStart}..${args.periodEnd}`);
+    }
+    if (roundCents(Number(st.total_actual_usd)) !== roundCents(total_actual_usd)) {
+      refuse('INVOICE_PAYLOAD_MISMATCH', false, `invoice ${args.providerInvoiceId} was imported with total ${st.total_actual_usd}; this payload totals ${total_actual_usd}`);
+    }
+    events = (Array.isArray(st.line_items) ? st.line_items : []) as typeof norm.events; // the stored import is the truth
+    resumed = true;
+  }
+
+  // From here on, `prev` (if any) is THIS invoice's run.
+  if (prev && prev.status === 'completed') {
+    return { status: 'duplicate', provider_invoice_id: args.providerInvoiceId };
+  }
+  if (prev) {
+    const { count, error: cntErr } = await supabase
+      .from('cost_reconciliation_adjustments')
+      .select('id', { count: 'exact', head: true })
+      .eq('run_id', prev.id);
+    if (cntErr) refuse('ADJUSTMENTS_READ_FAILED', true, `adjustments count failed: ${cntErr.message}`);
+    if ((count ?? 0) > 0) {
+      // A crash AFTER the adjustments insert: they and the run row describe the first match - only complete it.
+      logger.warn('stripe_reconcile_resumed', { provider_invoice_id: args.providerInvoiceId, run_id: prev.id, adjustments_already: count });
+      await completeStripeRun(prev.id);
+      const m = (prev.metadata ?? {}) as { totals?: StripeMatchResult['totals']; summary?: StripeMatchResult['summary'] };
+      return { status: 'ingested', run_id: prev.id, adjustments_written: 0, totals: m.totals as StripeMatchResult['totals'], summary: m.summary as StripeMatchResult['summary'], warnings: norm.warnings, resumed: true };
+    }
+  }
+  if (resumed || prev) {
+    logger.warn('stripe_reconcile_resumed', { provider_invoice_id: args.providerInvoiceId, run_id: prev?.id ?? null, adjustments_already: 0 });
   }
 
   // 2) Read internal records for the period and reconcile.
   const internal = await readInternalRecords(args.periodStart, args.periodEnd);
   const match = reconcileStripe({
-    events: norm.events,
+    events,
     creditPurchases:     internal.creditPurchases,
     paymentTransactions: internal.paymentTransactions,
     subscriptions:       internal.subscriptions,
@@ -188,10 +283,12 @@ export async function ingestStripeInvoice(args: IngestStripeArgs): Promise<Inges
         period_end:   args.periodEnd,
         estimated_usd_sum: match.totals.internal_gross_sum,
         actual_usd_sum:    match.totals.stripe_gross_sum,
-        status: 'completed',
+        // 'running' until the adjustments are in (a crash in between is resumed, never reported as done)
+        status: 'running',
         started_at:  new Date().toISOString(),
-        finished_at: new Date().toISOString(),
+        finished_at: null,
         metadata: {
+          provider_invoice_id: args.providerInvoiceId,
           adapter_version: norm.adapter_version,
           warnings: norm.warnings,
           totals:  match.totals,
@@ -202,10 +299,7 @@ export async function ingestStripeInvoice(args: IngestStripeArgs): Promise<Inges
     )
     .select('id')
     .single();
-  if (runErr || !runRow) {
-    logger.warn('stripe_reconcile_run_upsert_failed', { message: runErr?.message });
-    throw new Error(`stripe reconcile run upsert failed: ${runErr?.message ?? 'no row'}`);
-  }
+  if (runErr || !runRow) refuse('RUN_UPSERT_FAILED', true, `run upsert failed: ${runErr?.message ?? 'no row'}`);
   const run_id = String((runRow as { id: string }).id);
 
   // 3) Append-only adjustments.
@@ -223,12 +317,21 @@ export async function ingestStripeInvoice(args: IngestStripeArgs): Promise<Inges
   let adjustments_written = 0;
   if (rows.length > 0) {
     const { error: adjErr } = await supabase.from('cost_reconciliation_adjustments').insert(rows);
-    if (adjErr) {
-      logger.warn('stripe_reconcile_adjustments_insert_failed', { message: adjErr.message });
-      throw new Error(`stripe reconcile adjustments insert failed: ${adjErr.message}`);
-    }
+    if (adjErr) refuse('ADJUSTMENTS_INSERT_FAILED', true, `adjustments insert failed: ${adjErr.message}`);
     adjustments_written = rows.length;
   }
+  await completeStripeRun(run_id);
 
-  return { status: 'ingested', run_id, adjustments_written, totals: match.totals, summary: match.summary, warnings: norm.warnings };
+  return { status: 'ingested', run_id, adjustments_written, totals: match.totals, summary: match.summary, warnings: norm.warnings, resumed };
+}
+
+async function completeStripeRun(runId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('cost_reconciliation_runs')
+    .update({ status: 'completed', finished_at: new Date().toISOString() })
+    .eq('id', runId)
+    .select('id');
+  if (error || !Array.isArray(data) || data.length !== 1) {
+    refuse('RUN_COMPLETE_FAILED', true, `run ${runId} not marked completed: ${error?.message ?? `matched ${Array.isArray(data) ? data.length : 'no'} rows`}`);
+  }
 }
