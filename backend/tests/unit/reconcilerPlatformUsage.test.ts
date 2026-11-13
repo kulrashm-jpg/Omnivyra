@@ -427,10 +427,10 @@ describe('persist step: resumable, one invoice per period', () => {
     await expect(ingestWin('inv-0', '2026-11-09T00:00:00Z', '2026-11-10T00:00:00Z')).resolves.toMatchObject({ status: 'ingested' });
   });
 
-  it('23505 for an invoice that is NOT stored (another invoice won the period) is refused, not resumed', async () => {
+  it('23505 for an invoice that is NOT stored is refused as unexplained, not resumed (a lost period race is 23P01 since 040)', async () => {
     fixture();
     mockDb.fail['provider_invoice_imports:insert'] = { message: 'duplicate key value violates unique constraint', code: '23505' };
-    await expect(ingest()).rejects.toThrow(/period belongs to another invoice/);
+    await expect(ingest()).rejects.toThrow(/import refused \(23505\) and invoice .* is not stored/);
     expect(runs()).toHaveLength(0);
   });
 
@@ -504,7 +504,7 @@ describe('the fake is not kinder than PostgREST', () => {
   });
 });
 
-describe('05: a 23505 is ambiguous with two unique rules - never resume onto another invoice or period', () => {
+describe('040 rules by SQLSTATE + constraint NAME - never resume onto another invoice or period', () => {
   const M = 'gpt-4o-mini';
   const seed = () => {
     mockLines = [line(M, 4.0)];
@@ -514,19 +514,41 @@ describe('05: a 23505 is ambiguous with two unique rules - never resume onto ano
   const ingestWin = (id: string, periodStart: string, periodEnd: string) =>
     ingestOpenAiInvoice({ providerInvoiceId: id, periodStart, periodEnd, payload: {}, rates: {} as any });
 
-  it('a 23505 that NAMES the period index is refused, even when a row with this invoice id is stored', async () => {
+  // PostgREST's shape for an exclusion violation: code 23P01, the constraint name in message, the keys in details.
+  const EXCL = { message: 'conflicting key value violates exclusion constraint "provider_invoice_imports_no_overlap"', code: '23P01', details: "Key (provider, tstzrange(period_start, period_end, '[)'::text))=(openai, ...) conflicts with existing key (...)." };
+
+  it('a 23P01 that NAMES the exclusion constraint is refused, even when a row with this invoice id is stored', async () => {
     seed();
     mockDb.tables.provider_invoice_imports = [{ id: 'pi-1', provider: 'openai', provider_invoice_id: 'inv-1', period_start: WINDOW.periodStart, period_end: WINDOW.periodEnd, total_actual_usd: 4, line_items: mockLines }];
-    mockDb.fail['provider_invoice_imports:insert'] = { message: 'duplicate key value violates unique constraint "provider_invoice_imports_one_per_period_uidx"', code: '23505' };
-    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow(/refused by provider_invoice_imports_one_per_period_uidx/);
+    mockDb.fail['provider_invoice_imports:insert'] = { ...EXCL } as any;
+    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow(/refused by provider_invoice_imports_no_overlap/);
     expect(mockDb.tables.cost_reconciliation_runs ?? []).toHaveLength(0);
   });
 
-  it('e9: a DIFFERENT invoice id colliding on an already-imported period (the period index fires) is REFUSED, never resumed', async () => {
+  it('a 23514 naming the period CHECK (empty / inverted period) is refused with its own event', async () => {
+    seed();
+    mockDb.fail['provider_invoice_imports:insert'] = { message: 'new row for relation "provider_invoice_imports" violates check constraint "provider_invoice_imports_period_nonempty"', code: '23514' } as any;
+    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow(/refused by provider_invoice_imports_period_nonempty: .* empty or inverted/);
+    expect(mockDb.tables.cost_reconciliation_runs ?? []).toHaveLength(0);
+  });
+
+  it('a 23P01 from ANOTHER constraint is not ours: a plain import failure, never a resume', async () => {
+    seed();
+    mockDb.fail['provider_invoice_imports:insert'] = { message: 'conflicting key value violates exclusion constraint "some_other_rule"', code: '23P01' } as any;
+    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow(/invoice import failed \(23P01\)/);
+  });
+
+  it('a 23505 with no stored row of this invoice is refused (unexplained), never guessed', async () => {
+    seed();
+    mockDb.fail['provider_invoice_imports:insert'] = { message: 'duplicate key value violates unique constraint "provider_invoice_imports_provider_provider_invoice_id_key"', code: '23505' } as any;
+    await expect(ingestWin('inv-9', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow(/import refused \(23505\) and invoice inv-9 is not stored/);
+  });
+
+  it('e9: a DIFFERENT invoice id colliding on an already-imported period (the exclusion constraint fires) is REFUSED, never resumed', async () => {
     seed();
     mockDb.tables.provider_invoice_imports = [{ id: 'pi-1', provider: 'openai', provider_invoice_id: 'inv-1', period_start: '2026-11-10T00:00:00+00:00', period_end: '2026-11-11T00:00:00+00:00', total_actual_usd: 4, line_items: [line('other-model', 4.0)] }];
-    // the app guard compares instants, so seed the race: the guard sees nothing (simulate by a far window), the DB index fires
-    mockDb.fail['provider_invoice_imports:insert'] = { message: 'duplicate key value violates unique constraint "provider_invoice_imports_one_per_period_uidx"', code: '23505', details: 'Key (provider, period_start, period_end)=(openai, ...) already exists.' } as any;
+    // seed the race: the app guard sees nothing (a far window), the DB exclusion constraint fires (concurrent writer)
+    mockDb.fail['provider_invoice_imports:insert'] = { ...EXCL } as any;
     await expect(ingestWin('inv-2', '2026-12-10T00:00:00Z', '2026-12-11T00:00:00Z')).rejects.toThrow(/already belongs to another invoice/);
     expect(mockDb.tables.cost_reconciliation_runs ?? []).toHaveLength(0);
     expect(mockDb.tables.cost_reconciliation_adjustments ?? []).toHaveLength(0);

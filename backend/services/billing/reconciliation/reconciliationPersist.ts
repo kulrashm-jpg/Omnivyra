@@ -18,19 +18,20 @@
  *      would each be matched against it and double-count the variance (and the
  *      run, unique per period, would have its totals overwritten). A split
  *      invoice or credit note is merged into one manifest by the operator.
- *      (A DB unique index on (provider, period_start, period_end) follows in its
- *      own migration; this code does not depend on it.)
+ *      The DB holds the same rule ATOMICALLY: 20270217000040's exclusion constraint
+ *      provider_invoice_imports_no_overlap (btree_gist; e9 ruling) - this check
+ *      only refuses early with a clear message, before anything is stored.
  *      A run for the period that belongs to another invoice (or a legacy run
  *      with no provider_invoice_id) is refused here too - BEFORE the import, so
  *      a refused invoice is never stored.
- *   2. Import. 23505 (by code) means this invoice was imported before -> RESUME.
+ *   2. Import. 23505 means THIS invoice (provider, provider_invoice_id) was imported before -> RESUME;
+ *      23P01 naming provider_invoice_imports_no_overlap means ANOTHER invoice holds an overlapping period -> refuse;
+ *      23514 (provider_invoice_imports_period_nonempty) means an empty / inverted period -> refuse.
  *   3. Run upserted as 'running', carrying provider_invoice_id and a snapshot of
  *      the estimates it was matched against (sum, count, sha256).
- *   NOT ATOMIC (05): the overlap check (1) is app-level - check, then insert. Two concurrent runs with
- *      overlapping-but-not-identical periods could both pass it, and the DB index (identical bounds only) would
- *      not stop them. Safe ONLY while the reconcilers run as one-at-a-time localhost CLIs (assertLocalhostOnly +
- *      RECONCILE_LOCAL_RUNNER). A scheduled caller needs an exclusion constraint (btree_gist; a separate,
- *      owner-level extension decision - see the register) or an advisory lock first.
+ *   ATOMIC in the DB (e9 ruling, 040 rework): two concurrent runs with overlapping periods can both pass the app
+ *      check (1), but only one insert survives the exclusion constraint; the other gets 23P01 and is refused in (2).
+ *      (05's question: the earlier absence of this constraint was not deliberate - btree_gist was not installed.)
  *   4. Adjustments: ONE insert statement (atomic). On resume, a run that already
  *      has adjustments is ONLY completed: its totals, buckets and estimates
  *      still describe those adjustments, so they are not rewritten.
@@ -67,15 +68,18 @@ export type PersistOutcome =
   | { status: 'ingested'; run_id: string; adjustments_written: number; totals: MatchResult['totals']; warnings: string[]; resumed: boolean };
 
 const UNIQUE_VIOLATION = '23505';
+const EXCLUSION_VIOLATION = '23P01';
+const CHECK_VIOLATION = '23514';
 /**
- * provider_invoice_imports has TWO unique rules, so a 23505 alone is ambiguous (05):
- *   - UNIQUE (provider, provider_invoice_id): the SAME invoice imported before -> resume;
- *   - provider_invoice_imports_one_per_period_uidx (20270217000040): ANOTHER invoice holds this period -> refuse.
- * SQLSTATE classifies the class; the constraint name (PostgREST puts it in message / details) identifies the
- * rule. As a second line of defence the resume path also requires the stored row to be THIS invoice in THIS
- * period, so a name the client cannot see still never resumes onto another invoice's or another period's data.
+ * provider_invoice_imports' rules (20270217000040, rework): UNIQUE (provider, provider_invoice_id) -> 23505 = the SAME
+ * invoice imported before -> resume; the EXCLUSION constraint provider_invoice_imports_no_overlap -> 23P01 = ANOTHER
+ * invoice holds an overlapping period -> refuse; the CHECK provider_invoice_imports_period_nonempty -> 23514.
+ * SQLSTATE classifies the class; the constraint NAME (PostgREST puts it in message / details) identifies the rule -
+ * a 23P01 / 23514 from any OTHER constraint is not ours and fails as an import error. As a second line of defence the
+ * resume path still requires the stored row to be THIS invoice in THIS period.
  */
-const PERIOD_UNIQUE_INDEX = 'provider_invoice_imports_one_per_period_uidx';
+const PERIOD_EXCLUSION = 'provider_invoice_imports_no_overlap';
+const PERIOD_CHECK = 'provider_invoice_imports_period_nonempty';
 const sameInstant = (x: unknown, y: unknown): boolean => {
   const a = Date.parse(String(x)), b = Date.parse(String(y));
   return Number.isFinite(a) && a === b;
@@ -107,8 +111,8 @@ export function estimateSnapshot(aggregates: UsageAggregate[]): { estimated_usd_
  * Refuses when ANY other invoice of this provider covers a period that OVERLAPS this one (e1): identical bounds,
  * a split window inside it, or bounds shifted by a timezone offset all double-count the overlap. Half-open
  * [start, end), as the estimate reader uses (gte / lt): periods that merely TOUCH (one ends where the next starts)
- * do not overlap and are allowed. The DB enforces identical bounds only (20270217000040's unique index; btree_gist
- * is not installed, so no EXCLUDE constraint) - the overlap rule lives here.
+ * do not overlap and are allowed. The DB enforces the same rule atomically (20270217000040's exclusion constraint,
+ * half-open too); this read only refuses EARLY, with the other invoice's id, before anything is stored.
  */
 async function refuseOtherInvoiceForPeriod(a: PersistArgs): Promise<void> {
   const { data, error } = await supabase
@@ -193,13 +197,18 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
     adapter_version: a.adapterVersion,
   } as Record<string, unknown>);
   if (insertErr) {
-    if ((insertErr as { code?: string }).code !== UNIQUE_VIOLATION) {
-      fail(a.provider, 'reconcile_invoice_import_failed', `invoice import failed: ${insertErr.message}`);
-    }
+    const code = (insertErr as { code?: string }).code;
     const errText = `${insertErr.message ?? ''} ${(insertErr as { details?: string }).details ?? ''}`;
-    if (errText.includes(PERIOD_UNIQUE_INDEX)) {
+    if (code === EXCLUSION_VIOLATION && errText.includes(PERIOD_EXCLUSION)) {
       fail(a.provider, 'reconcile_period_has_other_invoice',
-        `import refused by ${PERIOD_UNIQUE_INDEX}: the period ${a.periodStart}..${a.periodEnd} already belongs to another invoice`);
+        `import refused by ${PERIOD_EXCLUSION}: the period ${a.periodStart}..${a.periodEnd} overlaps a period that already belongs to another invoice`);
+    }
+    if (code === CHECK_VIOLATION && errText.includes(PERIOD_CHECK)) {
+      fail(a.provider, 'reconcile_invoice_period_invalid',
+        `import refused by ${PERIOD_CHECK}: the period ${a.periodStart}..${a.periodEnd} is empty or inverted`);
+    }
+    if (code !== UNIQUE_VIOLATION) {
+      fail(a.provider, 'reconcile_invoice_import_failed', `invoice import failed (${code ?? 'no code'}): ${insertErr.message}`);
     }
     const { data: stored, error: readErr } = await supabase
       .from('provider_invoice_imports')
@@ -208,8 +217,8 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
       .eq('provider_invoice_id', a.providerInvoiceId)
       .maybeSingle();
     if (readErr) fail(a.provider, 'reconcile_import_read_failed', `stored import read failed: ${readErr.message}`);
-    // 23505 without our own row: another invoice holds this period (the unique index won a race).
-    if (!stored) fail(a.provider, 'reconcile_period_has_other_invoice', `import refused (23505) and invoice ${a.providerInvoiceId} is not stored: the period belongs to another invoice`);
+    // 23505 without our own row cannot come from UNIQUE (provider, provider_invoice_id) - refuse rather than guess.
+    if (!stored) fail(a.provider, 'reconcile_import_conflict_unexplained', `import refused (23505) and invoice ${a.providerInvoiceId} is not stored`);
     const s = stored as { line_items: NormalizedInvoiceLine[]; total_actual_usd: number | string; period_start: string; period_end: string };
     // The same invoice id stored for ANOTHER period must never be resumed into this one.
     if (!sameInstant(s.period_start, a.periodStart) || !sameInstant(s.period_end, a.periodEnd)) {
@@ -279,9 +288,10 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
   const run_id = String((runRow as { id: string }).id);
 
   // 4) Adjustments: one INSERT statement (all or nothing); the run has none yet (counted above).
-  //    ASSUMES ONE WRITER per (provider, period) - the single-operator localhost CLI. Two concurrent
-  //    resumes could both count 0 and double-insert; a scheduled caller needs
-  //    pg_advisory_xact_lock(hashtext(provider || period)) or a unique (run_id, bucket key) first (e1).
+  //    Single writer for a RESUME of the same invoice: see RECONCILE_SINGLE_WRITER_ASSUMPTION
+  //    (backend/services/billing/reconciliation/runnerDispatch.ts, e1) - recorded ONCE for this path and the Stripe
+  //    path. (040's exclusion constraint makes the period rule atomic; concurrent resumes of ONE invoice are still
+  //    governed by that assumption.)
   const rows = match.adjustments.map((adj) => ({
     run_id,
     organization_id: adj.organization_id,
