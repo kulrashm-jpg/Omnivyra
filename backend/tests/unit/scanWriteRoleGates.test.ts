@@ -25,6 +25,9 @@ const FIXTURES: Record<string, string> = {
       if (req.method === 'DELETE') await requireTenantAccess(req, res, id, { requireRoleIn: [Role.COMPANY_ADMIN] }); }`,
   'role-in-view.ts': `async function handler(req) {
       if (req.method === 'DELETE') await requireTenantAccess(req, res, id, { requireRoleIn: ['VIEWER', 'COMPANY_ADMIN'] }); }`,
+  'with-org-access-roles.ts': `const BILLING_WRITE_ROLES = [Role.COMPANY_ADMIN];
+    async function handler(req) { if (req.method === 'POST') { /* write */ } }
+    export default withOrgAccess(handler, undefined, { requireRoleIn: BILLING_WRITE_ROLES });`,
   'bare-tenant.ts': `async function handler(req) { if (req.method === 'PUT') await requireTenantAccess(req, res, id); }`,
 };
 
@@ -43,8 +46,8 @@ function scan(extra: string[] = []) {
 describe('scan-write-role-gates structural rules', () => {
   it('reports exactly the ungated / view-admitting fixtures', () => {
     const { out } = scan();
-    expect(out.counts.scanned).toBe(7);
-    expect(out.counts.membershipOnlyCandidates).toBe(7); // withOrgAccess counted as a membership gate
+    expect(out.counts.scanned).toBe(8);
+    expect(out.counts.membershipOnlyCandidates).toBe(8); // withOrgAccess counted as a membership gate
     expect([...out.hits].sort()).toEqual([
       'bare-tenant.ts',
       'named-const-view.ts  (role list admits a view-only role)',

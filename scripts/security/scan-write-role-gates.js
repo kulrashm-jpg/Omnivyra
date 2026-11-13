@@ -85,7 +85,9 @@ function structuralRoleGate(s) {
       if (def) lists.push(def[1]);
     }
   }
-  for (const m of s.matchAll(/requireTenantAccess\([^;]*?requireRoleIn\s*:\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/g)) {
+  // requireTenantAccess(req, res, id, { requireRoleIn }) and withOrgAccess(handler, _, { requireRoleIn }) (e1: its third
+  // argument is passed through to requireTenantAccess); assertOrgAccess likewise.
+  for (const m of s.matchAll(/(?:requireTenantAccess|withOrgAccess|assertOrgAccess)\([^;]*?requireRoleIn\s*:\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/g)) {
     if (m[1].startsWith('[')) lists.push(m[1]);
     else {
       const def = s.match(new RegExp(`^(?:export\\s+)?const\\s+${m[1]}\\b[^=]*=\\s*(\\[[^\\]]*\\])`, 'm'));

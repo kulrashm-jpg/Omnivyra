@@ -23,6 +23,11 @@ jest.mock('../../services/CampaignPreemptionService', () => ({
   PreemptionValidationError: class PreemptionValidationError extends Error {},
   PreemptionOwnershipError: class PreemptionOwnershipError extends Error {},
 }));
+const mockGuardAiRequest = jest.fn(async () => undefined);
+jest.mock('../../services/ai/aiRequestGuard', () => ({
+  ...jest.requireActual('../../services/ai/aiRequestGuard'),
+  guardAiRequest: (...a: unknown[]) => mockGuardAiRequest(...(a as [])),
+}));
 jest.mock('../../services/CampaignPrePlanningService', () => ({ runPrePlanning: async () => ({ ok: true }) }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
@@ -104,6 +109,26 @@ describe('requireCampaignAccess: real role, read kept, write refused for view-on
   });
   it('CONTROL: an admin writes', async () => {
     expect((await call('POST')).access).not.toBeNull();
+  });
+});
+
+describe('voice/transcribe (e9 2026-11-13): Viewer 403, Engager + Creator allowed', () => {
+  // The AI guard is stubbed to stop at a sentinel: reaching it proves the caller passed the role gate, and no
+  // provider is ever called.
+  beforeEach(() => {
+    const { AiGuardError } = jest.requireActual('../../services/ai/aiRequestGuard');
+    mockGuardAiRequest.mockImplementation(async () => { throw new AiGuardError('GUARD_SENTINEL', 'sentinel', 429); });
+  });
+  afterEach(() => mockGuardAiRequest.mockImplementation(async () => undefined));
+  const transcribe = () => invoke(route('voice/transcribe'), { method: 'POST', as: 'A', body: { companyId: CO_A, audioFile: 'data:audio/webm;base64,AAAA', provider: 'whisper' } });
+  it('a Viewer gets 403 ROLE_FORBIDDEN (no spend)', async () => {
+    setRole('VIEWER');
+    expect(await transcribe()).toMatchObject({ status: 403, body: { code: 'ROLE_FORBIDDEN' } });
+    expect(mockGuardAiRequest).not.toHaveBeenCalled();
+  });
+  it.each(['CONTENT_ENGAGER', 'CONTENT_CREATOR', 'COMPANY_ADMIN'])('%s passes the role gate (reaches the AI guard)', async (role) => {
+    setRole(role);
+    expect(await transcribe()).toMatchObject({ status: 429, body: { code: 'GUARD_SENTINEL' } });
   });
 });
 
