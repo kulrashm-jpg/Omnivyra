@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCompanyContext } from './CompanyContext';
+import { canWriteCampaign } from '../lib/access/campaignWriteAccess';
 import { useRouter } from 'next/router';
 import { useCampaignResume } from '../hooks/useCampaignResume';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
@@ -214,6 +216,8 @@ import type { useCampaignCalendar } from '../hooks/useCampaignCalendar';
 import { ActivityCardAIAsset } from './orchestration/assets/card';
 type S = ReturnType<typeof useCampaignCalendar>;
 export default function CampaignCalendarView({ d }: { d: S }) {
+  // F3: read-only roles can't reschedule.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
   const {
     _ef1,
     activities,
@@ -643,6 +647,7 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                           </a>
                                         )}
                                         {scheduledExecIds.has(String(activity.execution_id)) && (
+                                          canWriteThisCampaign && (
                                           <button
                                             type="button"
                                             onClick={() => openReschedule(activity)}
@@ -651,6 +656,7 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                             <Calendar className="h-3 w-3" />
                                             Move to Date
                                           </button>
+                                          )
                                         )}
                                       </div>
                                     )}

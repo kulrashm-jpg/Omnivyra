@@ -209,7 +209,8 @@ export interface CampaignDailyPlanSingleWeekViewProps {
   onWeekSelect: (weekIndex: number) => void;
   onDaySelect: (dayIndex: number) => void;
   onActivityClick: (activity: GridActivity) => void;
-  onRegenerateWeek: (weekNumber: number) => void;
+  /** Omitted for read-only roles (F3): the Regenerate button is not shown. */
+  onRegenerateWeek?: (weekNumber: number) => void;
   regeneratingWeek: number | null;
   /** When provided, shows "Generate from AI" when no activities (Source B fallback) */
   onGenerateFromAI?: (weekNumber: number) => void;
@@ -411,9 +412,10 @@ export function CampaignDailyPlanSingleWeekView({
             </button>
           );
         })}
+        {onRegenerateWeek && (
         <button
           type="button"
-          onClick={() => onRegenerateWeek(weekNumber)}
+          onClick={() => onRegenerateWeek?.(weekNumber)}
           disabled={isRegenerating}
           title="Rebuild day assignments from the campaign blueprint — use this when you've changed distribution settings or want to reset manual drags. Drag activities between days for individual adjustments instead."
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ml-2 transition-all active:scale-95 ${
@@ -425,6 +427,7 @@ export function CampaignDailyPlanSingleWeekView({
           <RefreshCw className={`w-4 h-4 shrink-0 ${isRegenerating ? 'animate-spin' : ''}`} />
           {isRegenerating ? 'Regenerating…' : 'Regenerate'}
         </button>
+        )}
         {onGenerateFromAI && (
           <button
             type="button"
