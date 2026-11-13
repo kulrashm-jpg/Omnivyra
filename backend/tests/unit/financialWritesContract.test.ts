@@ -163,12 +163,8 @@ export const ALLOWLIST: Record<string, string> = {
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L711 @9cecd075f]',
   'backend/services/pricingService.ts:recordCostAnomaly|cost_anomalies|insert|#1':
     'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L661 @9cecd075f]',
-  'backend/services/purchaseService.ts:completePurchase|credit_purchases|update|#2':
-    'B6 BLOCKING: purchase status update unread (6f fixes) [L178 @9cecd075f]',
   'backend/services/purchaseService.ts:reopenSystemClosedPurchase|credit_purchases|update|#1':
     'FP: { data } read; null -> not-updated branch is safe (verified 6f) [L255 @9cecd075f]',
-  'backend/services/purchaseService.ts:failPurchase|credit_purchases|update|#1':
-    'B6 BLOCKING: purchase status update unread (6f fixes) [L297 @9cecd075f]',
   'backend/services/usageLedgerService.ts:logUsageEvent|usage_events|insert|#1':
     'N: usage telemetry insert unread - 6f fixes (logger.error + counter, never throws) [L434 @9cecd075f]',
   'pages/api/stripe/webhook.ts:markEvent|payment_provider_events|update|#1':

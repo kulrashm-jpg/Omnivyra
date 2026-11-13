@@ -15,6 +15,24 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 import { getRequestContext } from './requestContext';
+import { logger } from './logger';
+
+/**
+ * A purchase state write that did not happen (B6, financial-writes contract; e1's typed-error rule). supabase-js
+ * returns write errors instead of throwing, so the result is read; this error carries whether a retry can succeed.
+ * Webhook callers let it propagate (500 -> the provider retries; failPurchase is idempotent through its pending
+ * guard). The super-admin route maps it to a retryable 503.
+ */
+export class PurchaseStateWriteError extends Error {
+  constructor(
+    public readonly code: 'PURCHASE_FAIL_UNRECORDED',
+    public readonly retryable: boolean,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'PurchaseStateWriteError';
+  }
+}
 
 export type PurchaseResult =
   | { success: true; purchaseId: string; creditsGranted: number }
@@ -175,13 +193,18 @@ export async function completePurchase(
     });
   } catch (creditErr: any) {
     console.error('[purchaseService] createCredit failed:', creditErr.message);
-    await ownedDbTable('credit_purchases')
+    const { error: markErr } = await ownedDbTable('credit_purchases')
       .update({
         fulfillment_status: 'failed',
         fulfillment_error: creditErr.message,
         updated_at: new Date().toISOString(),
       })
       .eq('id', purchaseId);
+    if (markErr) {
+      // B6: the grant failed AND the failure was not recorded - the purchase would look fine with no credits and no
+      // retry would know to look at it. Never silent.
+      logger.error('purchase_fulfillment_failure_unrecorded', { purchaseId, creditError: creditErr.message, message: markErr.message });
+    }
     return { success: false, reason: 'error', detail: creditErr.message };
   }
 
@@ -294,5 +317,10 @@ export async function failPurchase(
     updated_at: new Date().toISOString(),
   };
   if (referenceId) fields.reference_id = referenceId;
-  await ownedDbTable('credit_purchases').update(fields).eq('id', purchaseId).eq('status', 'pending');
+  // B6: read the result. 0 rows is fine - the purchase was no longer pending (the existing guard). An ERROR throws a
+  // typed, retryable error instead of silently leaving a failed payment's purchase 'pending'.
+  const { error } = await ownedDbTable('credit_purchases').update(fields).eq('id', purchaseId).eq('status', 'pending').select('id');
+  if (error) {
+    throw new PurchaseStateWriteError('PURCHASE_FAIL_UNRECORDED', true, `failPurchase(${purchaseId}) was not recorded: ${error.message}`);
+  }
 }

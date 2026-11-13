@@ -22,7 +22,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { completePurchase, failPurchase, recordPaymentProviderEvent } from '../../../../backend/services/purchaseService';
+import { completePurchase, failPurchase, recordPaymentProviderEvent, PurchaseStateWriteError } from '../../../../backend/services/purchaseService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { BILLING_PLATFORM_MANAGE } from '../../../../shared/contracts/security';
@@ -110,7 +110,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── action = 'fail': mark purchase failed ─────────────────────────────────
   if (action === 'fail') {
     if (!purchase_id) return res.status(400).json({ error: 'purchase_id is required' });
-    await failPurchase(purchase_id, reference_id);
+    try {
+      await failPurchase(purchase_id, reference_id);
+    } catch (e) {
+      // B6: a purchase state write that did not happen is RETRYABLE - not a 500.
+      if (e instanceof PurchaseStateWriteError) {
+        return res.status(503).json({ error: e.code, retryable: e.retryable, purchase_id });
+      }
+      throw e;
+    }
     return res.status(200).json({ success: true, purchase_id, status: 'failed' });
   }
 
