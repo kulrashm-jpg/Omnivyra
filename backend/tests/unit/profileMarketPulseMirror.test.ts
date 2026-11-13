@@ -12,6 +12,8 @@ import {
   mirrorStatusFor,
   growthPrioritiesView,
   mergeMarketPulseForSave,
+  planMarketPulseSave,
+  marketPulseReadFromBody,
 } from '../../../utils/profileMarketPulseMirror';
 
 describe('shape filter (55 condition 1, 05 point 2)', () => {
@@ -120,15 +122,64 @@ describe('prepareMarketPulseForSave (6.4b: re-read at save, overlay only user ch
   });
 });
 
-describe('saveProfile wiring (6.4b)', () => {
+describe('planMarketPulseSave (05 review of 6.4b: absent, empty and unknown are different)', () => {
+  const loaded = { core_offerings: ['Visa support'], region: 'EU', growth_priorities: [] };
+  const base = { loaded, productsServicesList: ['Visa support'], growthPrioritiesText: '' };
+
+  it('re-read OK: merges on the FRESH stored value (another writer’s change survives)', () => {
+    const plan = planMarketPulseSave({ ...base, client: loaded, read: { ok: true, value: { ...loaded, region: 'APAC' } } });
+    expect(plan).toEqual({ include: true, marketPulse: expect.objectContaining({ region: 'APAC' }) });
+  });
+  it('re-read OK but the server has NO market_pulse: the loaded copy is NOT resurrected', () => {
+    const plan = planMarketPulseSave({ ...base, client: loaded, read: { ok: true, value: null } });
+    expect(plan.include).toBe(true);
+    if (plan.include) expect(plan.marketPulse.region).toBeUndefined();
+  });
+  it('re-read FAILED, user changed nothing: omit market_pulse, nothing reported as lost', () => {
+    expect(planMarketPulseSave({ ...base, client: loaded, read: { ok: false } })).toEqual({ include: false, userChangesDropped: false });
+  });
+  it('re-read FAILED, user changed a key: omit, and report the dropped change', () => {
+    expect(planMarketPulseSave({ ...base, client: { ...loaded, region: 'US' }, read: { ok: false } })).toEqual({ include: false, userChangesDropped: true });
+  });
+  it('re-read FAILED, user added an offering (mirror change): omit, and report it', () => {
+    const plan = planMarketPulseSave({ ...base, client: loaded, productsServicesList: ['Visa support', 'Recruitment'], read: { ok: false } });
+    expect(plan).toEqual({ include: false, userChangesDropped: true });
+  });
+});
+
+describe('marketPulseReadFromBody', () => {
+  it('profile present without market_pulse → known empty', () => {
+    expect(marketPulseReadFromBody({ profile: { report_settings: {} } })).toEqual({ ok: true, value: null });
+    expect(marketPulseReadFromBody({ profile: {} })).toEqual({ ok: true, value: null });
+  });
+  it('profile present with market_pulse → its value', () => {
+    expect(marketPulseReadFromBody({ profile: { report_settings: { market_pulse: { a: 1 } } } })).toEqual({ ok: true, value: { a: 1 } });
+  });
+  it('no body / no profile → unknown', () => {
+    expect(marketPulseReadFromBody(null)).toEqual({ ok: false });
+    expect(marketPulseReadFromBody({ error: 'x' })).toEqual({ ok: false });
+  });
+});
+
+describe('saveProfile wiring (6.4b + 05 review)', () => {
   const hook = require('fs').readFileSync(require('path').join(process.cwd(), 'hooks/useCompanyProfileState.tsx'), 'utf8') as string;
+  const save = hook.slice(hook.indexOf('const saveProfile = async'));
+  const post = save.indexOf("fetchWithAuth('/api/company-profile', {");
   it('re-reads market_pulse from the server before building the payload', () => {
-    const save = hook.slice(hook.indexOf('const saveProfile = async'));
     const reread = save.indexOf("fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)");
-    const post = save.indexOf("fetchWithAuth('/api/company-profile', {");
     expect(reread).toBeGreaterThan(0);
     expect(post).toBeGreaterThan(reread);
-    expect(save.slice(0, post)).toMatch(/prepareMarketPulseForSave\(\{/);
-    expect(save.slice(0, post)).toMatch(/report_settings: \{ \.\.\.\(source\.report_settings \?\? \{\}\), market_pulse: marketPulseForSave \}/);
+    expect(save.slice(0, post)).toMatch(/marketPulseReadFromBody\(/);
+    expect(save.slice(0, post)).toMatch(/planMarketPulseSave\(\{/);
+  });
+  it("never posts the form's market_pulse: it is stripped, and only the plan's value is added", () => {
+    const pre = save.slice(0, post);
+    expect(pre).toMatch(/const \{ market_pulse: _formMarketPulse, \.\.\.reportSettingsWithoutMarketPulse \}/);
+    expect(pre).toMatch(/marketPulsePlan\.include\s*\? \{ \.\.\.reportSettingsWithoutMarketPulse, market_pulse: marketPulsePlan\.marketPulse \}\s*: reportSettingsWithoutMarketPulse/);
+    expect(pre).toMatch(/report_settings: reportSettingsForSave as/);
+    expect(pre).not.toMatch(/\?\? loadedMarketPulse/);
+  });
+  it('tells the user when their Market Pulse changes did not land', () => {
+    expect(save).toMatch(/'userChangesDropped' in marketPulsePlan && marketPulsePlan\.userChangesDropped/);
   });
 });

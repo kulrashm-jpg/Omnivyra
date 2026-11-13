@@ -154,3 +154,51 @@ export function prepareMarketPulseForSave(args: {
     heldBack: { coreOfferings: core.heldBack, growthPriorities: growth.heldBack },
   };
 }
+
+/**
+ * The market_pulse re-read at save time (05): "the server has none" (ok, value null) and
+ * "I could not find out" (not ok) are different states and must never be conflated.
+ */
+export type MarketPulseRead = { ok: true; value: Record<string, unknown> | null } | { ok: false };
+
+/** Parse a GET /api/company-profile body into a MarketPulseRead (no profile → unknown). */
+export function marketPulseReadFromBody(body: unknown): MarketPulseRead {
+  const profile = (body as { profile?: { report_settings?: { market_pulse?: unknown } | null } } | null)?.profile;
+  if (!profile || typeof profile !== 'object') return { ok: false };
+  const mp = profile.report_settings?.market_pulse;
+  return { ok: true, value: mp && typeof mp === 'object' && !Array.isArray(mp) ? (mp as Record<string, unknown>) : null };
+}
+
+const emptyToNull = (v: unknown) => (Array.isArray(v) && v.length === 0 ? null : v ?? null);
+
+/**
+ * Decide what a profile save sends as report_settings.market_pulse (05's review of 6.4b).
+ * - Re-read succeeded: send the full three-way merge built on the FRESH stored value
+ *   (null when the server has none: never resurrect the loaded copy).
+ * - Re-read failed: OMIT market_pulse. The server merges report_settings one level deep,
+ *   so an absent key keeps the stored object untouched; nobody's work is reverted.
+ *   `userChangesDropped` says whether the user had Market Pulse changes (direct, or via
+ *   the offerings / growth-priorities mirror) that this save therefore did not apply.
+ */
+export function planMarketPulseSave(args: {
+  read: MarketPulseRead;
+  loaded: Record<string, unknown> | null | undefined;
+  client: Record<string, unknown> | null | undefined;
+  productsServicesList: readonly string[];
+  growthPrioritiesText: string | null | undefined;
+}): { include: true; marketPulse: Record<string, unknown> } | { include: false; userChangesDropped: boolean } {
+  const common = {
+    loaded: args.loaded,
+    client: args.client,
+    productsServicesList: args.productsServicesList,
+    growthPrioritiesText: args.growthPrioritiesText,
+  };
+  if (args.read.ok) {
+    return { include: true, marketPulse: prepareMarketPulseForSave({ ...common, stored: args.read.value }).marketPulse };
+  }
+  const loaded = args.loaded ?? {};
+  const wouldSend = prepareMarketPulseForSave({ ...common, stored: args.loaded }).marketPulse;
+  const keys = new Set([...Object.keys(loaded), ...Object.keys(wouldSend)]);
+  const userChangesDropped = [...keys].some((k) => !same(emptyToNull(wouldSend[k]), emptyToNull(loaded[k])));
+  return { include: false, userChangesDropped };
+}

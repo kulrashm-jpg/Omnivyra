@@ -26,7 +26,7 @@ import {
   TARGET_CUSTOMER_FIELDS,
   MARKETING_INTELLIGENCE_FIELDS,
 } from '../utils/mergeCampaignPurposeIntent';
-import { prepareMarketPulseForSave } from '../utils/profileMarketPulseMirror';
+import { planMarketPulseSave, marketPulseReadFromBody, type MarketPulseRead } from '../utils/profileMarketPulseMirror';
 
 const ONBOARDING_CHECKPOINT_PREFIX = 'company_profile_onboarding:';
 const ONBOARDING_REFINE_STALE_MS = 2 * 60 * 1000;
@@ -791,29 +791,31 @@ export function useCompanyProfileState() {
       // UI step 6.4b: report_settings.market_pulse is replaced WHOLE by the server, so
       // RE-READ it now and overlay only what the user changed (05: never merge against a
       // stale copy). Offerings / growth priorities are mirrored into it (55's rules).
-      // If the re-read fails, fall back to the loaded snapshot, never the form's copy.
+      // If the re-read fails, market_pulse is OMITTED (the server keeps the stored object)
+      // and the user is told if their Market Pulse changes did not land (05's review).
       const loadedMarketPulse = (profile?.report_settings?.market_pulse ?? null) as Record<string, unknown> | null;
-      let storedMarketPulse: Record<string, unknown> | null = loadedMarketPulse;
+      let marketPulseRead: MarketPulseRead = { ok: false };
       try {
         const fresh = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`);
-        if (fresh.ok) {
-          const freshBody = await fresh.json().catch(() => null);
-          storedMarketPulse = (freshBody?.profile?.report_settings?.market_pulse ?? loadedMarketPulse) as Record<string, unknown> | null;
-        }
+        if (fresh.ok) marketPulseRead = marketPulseReadFromBody(await fresh.json().catch(() => null));
       } catch {
-        storedMarketPulse = loadedMarketPulse;
+        marketPulseRead = { ok: false };
       }
       const productsServicesListForSave = source.products_services_list ?? splitToList(source.products_services);
-      const { marketPulse: marketPulseForSave } = prepareMarketPulseForSave({
-        stored: storedMarketPulse,
+      const marketPulsePlan = planMarketPulseSave({
+        read: marketPulseRead,
         loaded: loadedMarketPulse,
         client: (source.report_settings?.market_pulse ?? null) as Record<string, unknown> | null,
         productsServicesList: productsServicesListForSave,
         growthPrioritiesText: source.growth_priorities,
       });
+      const { market_pulse: _formMarketPulse, ...reportSettingsWithoutMarketPulse } = (source.report_settings ?? {}) as Record<string, unknown>;
+      const reportSettingsForSave = marketPulsePlan.include
+        ? { ...reportSettingsWithoutMarketPulse, market_pulse: marketPulsePlan.marketPulse }
+        : reportSettingsWithoutMarketPulse;
       const payload = {
         ...source,
-        report_settings: { ...(source.report_settings ?? {}), market_pulse: marketPulseForSave } as CompanyProfile['report_settings'],
+        report_settings: reportSettingsForSave as CompanyProfile['report_settings'],
         companyId: companyId || source.company_id,
         company_id: companyId || source.company_id,
         industry_list: source.industry_list ?? splitToList(source.industry),
@@ -865,7 +867,11 @@ export function useCompanyProfileState() {
       }
       setNotFound(false);
       setIsEditing(false);
-      setSuccessMessage('Profile saved.');
+      setSuccessMessage(
+        'userChangesDropped' in marketPulsePlan && marketPulsePlan.userChangesDropped
+          ? 'Profile saved, but your Market Pulse changes were not saved (we could not read the latest Market Pulse settings). Save again to update Market Pulse.'
+          : 'Profile saved.',
+      );
       notifyCompanyProfileUpdated(data.profile?.company_id || companyId);
       return true;
     } catch (error) {
