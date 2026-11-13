@@ -71,6 +71,10 @@ const counters: Record<string, number> = {
   // Phase 8E — credit-economy shadow adoption (telemetry only; dark by default).
   credit_economy_shadow_would_allow:    0,
   credit_economy_shadow_would_block:    0,
+  // e1 2026-11-13 - billed-route identity + reclaim telemetry (phase2RouteWiring). Registered here so the names
+  // type-check against BillingCounter AND appear in snapshotBillingMetrics (the exported metrics).
+  phase2_route_without_idempotency_key_total: 0,
+  phase2_route_reclaim_cap_exhausted_total:   0,
 };
 
 export type BillingCounter = keyof typeof counters;
