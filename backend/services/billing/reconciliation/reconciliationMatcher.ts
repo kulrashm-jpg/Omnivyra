@@ -91,7 +91,7 @@ export function compareOrganizationId(a: string | null, b: string | null): numbe
   return a.localeCompare(b);
 }
 
-function roundCents(n: number): number {
+export function roundCents(n: number): number {
   // Numeric stability for jsonb / numeric storage.
   return Math.round(n * 1e10) / 1e10;
 }
