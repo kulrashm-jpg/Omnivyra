@@ -54,6 +54,8 @@ jest.mock('@/backend/db/supabaseClient', () => ({
 }), { virtual: true });
 jest.mock('@/backend/services/userContextService', () => ({ enforceCompanyAccess: async () => ({ userId: 'u-a' }) }), { virtual: true });
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
+// The write-ROLE gate (blogWriteRoles.test.ts pins it) is not what this suite tests: tenant scope is. Allowed here.
+jest.mock('@/backend/services/content/contentWriteAuthz', () => ({ enforceContentWriteRole: async () => true }), { virtual: true });
 
 import handler from '../../../pages/api/company/blog/series/[id]';
 
