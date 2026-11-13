@@ -30,6 +30,7 @@ import WeeklyRefinementInterface from '../components/WeeklyRefinementInterface';
 
 import { useCampaignPlanningState } from '../hooks/useCampaignPlanningState';
 import CampaignPlanningContent from '../components/CampaignPlanningContent';
+import CampaignWriteGate from '../components/access/CampaignWriteGate';
 import StepTracker, { type StepDef } from '../components/progress/StepTracker';
 
 const PLAN_GEN_STAGES: StepDef[] = [
@@ -39,7 +40,17 @@ const PLAN_GEN_STAGES: StepDef[] = [
   { key: 'save',       label: 'Saving plan',               etaSeconds: 3 },
 ];
 
+// F3g: the legacy per-campaign planner is an editing tool; read-only roles get AccessRestricted
+// and its hooks never run for them.
 export default function CampaignPlanning() {
+  return (
+    <CampaignWriteGate area="campaign planning">
+      <CampaignPlanningInner />
+    </CampaignWriteGate>
+  );
+}
+
+function CampaignPlanningInner() {
   const d = useCampaignPlanningState();
   const {
     accuracyPct,

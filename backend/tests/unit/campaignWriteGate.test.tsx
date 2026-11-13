@@ -47,8 +47,10 @@ describe('every campaign creation page is wrapped in the gate', () => {
     'pages/command-center/bolt-creator-strategy.tsx',
     'pages/command-center/bolt-combined-strategy.tsx',
     'pages/campaign-planner.tsx',
+    'pages/campaign-planning.tsx',
+    'pages/campaign-planning/hierarchical.tsx',
   ])('%s', (p) => {
-    expect(read(p)).toMatch(/<CampaignWriteGate>\s*<\w+ \/>\s*<\/CampaignWriteGate>/);
+    expect(read(p)).toMatch(/<CampaignWriteGate(?: area="[^"]+")?>\s*<\w+ \/>\s*<\/CampaignWriteGate>/);
   });
   it('Intelligent Mix renders the gated combined page', () => {
     expect(read('pages/command-center/intelligent-mix-strategy.tsx')).toMatch(/return <BoltCombinedStrategyPage \/>;/);
