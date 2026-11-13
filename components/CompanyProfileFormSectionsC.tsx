@@ -96,8 +96,10 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
     userGuidance, userRole,
   } = f;
+  const { showStep } = f;
   return (
     <>
+            {showStep('advanced') && (<>
             <CompanyStrategyProfileCard
               companyId={companyId || activeProfile.company_id}
               profile={activeProfile}
@@ -108,7 +110,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
               onSuccess={setSuccessMessage}
               onError={setErrorMessage}
             />
+            </>)}
 
+            {showStep('goals') && (<>
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Commercial Strategy</h3>
               <p className="text-sm text-gray-600 mb-4">
@@ -248,7 +252,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                 </p>
               )}
             </div>
+            </>)}
 
+            {showStep('advanced') && (<>
             {(canViewStrategicSections || isCompanyAdmin) && (
               <IntelligenceContextSections
                 context={intelligenceContext}
@@ -268,7 +274,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                 onRequestEdit={() => setIsEditing(true)}
               />
             )}
+            </>)}
 
+            {showStep('advanced') && (<>
             {canViewStrategicSections && (
             <SectionCard
               title="Market Pulse Defaults"
@@ -416,7 +424,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
               </div>
             </SectionCard>
             )}
+            </>)}
 
+            {showStep('voice') && (<>
             {canViewStrategicSections && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Marketing Intelligence</h3>
@@ -583,7 +593,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
               </div>
             </div>
             )}
+            </>)}
 
+            {showStep('goals') && (<>
             {canViewStrategicSections && (
             <SectionCard
               title="Intelligence Operating Target"
@@ -660,7 +672,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
               </div>
             </SectionCard>
             )}
+            </>)}
 
+            {showStep('problem') && (<>
             {canViewStrategicSections && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Problem & Transformation</h3>
@@ -787,6 +801,7 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
               </div>
             </div>
             )}
+            </>)}
     </>
   );
 }

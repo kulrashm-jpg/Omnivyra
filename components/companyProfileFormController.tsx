@@ -344,6 +344,9 @@ export function useCompanyProfileFormController(d: ProfileState) {
     : onboardingContinuationVisible;
   const showStandardProfileActions = !isOnboardingMode || onboardingContinuationVisible;
   const isOnboardingPreRefine = isOnboardingMode && !showOnboardingContinuation;
+  // UI step 6.2: a block shows only on its wizard step once the profile exists; before
+  // that (onboarding pre-refine) every block renders as before.
+  const showStep = (id: WizardStepId) => !showOnboardingContinuation || wizardStep === id;
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
   const userGuidance = activeProfile.report_settings?.user_guidance ?? null;
   const industryReview = activeProfile.report_settings?.industry_review ?? null;
@@ -728,7 +731,7 @@ export function useCompanyProfileFormController(d: ProfileState) {
   );
 
   return {
-    wizardStep, setWizardStep, isWizardStep,
+    wizardStep, setWizardStep, isWizardStep, showStep,
     d, REFINE_STEPS, REFINE_STEP_DELAYS, actionableRefinementQuestions, activeProfile, addIdentityGuidance,
     addOtherSocial, approveStrategicField, brandAssetErrors, brandAssetUploading, businessClassification,
     calculateProblemTransformationCompletion, calculateProfileCompletion, campaignPurposeInput,

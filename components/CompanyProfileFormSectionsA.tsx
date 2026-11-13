@@ -96,8 +96,10 @@ export default function CompanyProfileFormSectionsA({ f }: { f: ReturnType<typeo
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
     userGuidance, userRole,
   } = f;
+  const { showStep } = f;
   return (
     <>
+            {showStep('sources') && (<>
             <SectionCard
               title="Please Provide This Information"
               description="Provide the company website and public URLs AI should use. The generated company profile sections appear below after refinement."
@@ -227,7 +229,9 @@ export default function CompanyProfileFormSectionsA({ f }: { f: ReturnType<typeo
 
               </div>
             </SectionCard>
+            </>)}
 
+            {showStep('voice') && (<>
             <SectionCard
               title="Brand Assets"
               description="Upload official logo and favicon assets after source intake so downstream content has the right brand marks."
@@ -316,9 +320,13 @@ export default function CompanyProfileFormSectionsA({ f }: { f: ReturnType<typeo
                 })}
               </div>
             </SectionCard>
+            </>)}
 
+            {showStep('sources') && (<>
             {renderOnboardingRefineAction()}
+            </>)}
 
+            {showStep('sources') && (<>
             {showOnboardingContinuation && (
               <SectionCard
                 title="Guided Capture"
@@ -350,7 +358,9 @@ export default function CompanyProfileFormSectionsA({ f }: { f: ReturnType<typeo
                 </div>
               </SectionCard>
             )}
+            </>)}
 
+            {showStep('basics') && (<>
             <SectionCard
               title="AI-Populated Company Profile"
               description={
@@ -538,6 +548,7 @@ export default function CompanyProfileFormSectionsA({ f }: { f: ReturnType<typeo
               )}
             </div>
             </SectionCard>
+            </>)}
     </>
   );
 }

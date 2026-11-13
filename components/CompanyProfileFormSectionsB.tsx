@@ -121,8 +121,10 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
     userGuidance, userRole,
   } = f;
+  const { showStep } = f;
   return (
     <>
+            {showStep('basics') && (<>
             <SectionCard
               title="Company Facts"
               description="These confirmed business facts support competitor analysis, market positioning, and downstream recommendation quality."
@@ -190,7 +192,9 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               </div>
             </div>
             </SectionCard>
+            </>)}
 
+            {showStep('audience') && (<>
             <SectionCard
               title="Messaging & Audience"
               description="These are the main inputs Content Architect will keep revisiting when building messaging, themes, and competitor-aware campaign directions."
@@ -580,6 +584,7 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
             </div>
             </div>
             </SectionCard>
+            </>)}
     </>
   );
 }
