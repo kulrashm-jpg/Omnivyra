@@ -509,7 +509,7 @@ export const getUserRole = async (
   if (data && data.length > 0) {
     // e1 2026-11-12 (BLOCKING safety): an ACTIVE membership in an inactive / suspended / deleted company confers
     // no role, and an unreadable company status fails closed. See companyRoleGate (rbacPrimitives) for the status
-    // table and the exemptions (platform super admin, content_architect - resolved by callers before this).
+    // table and the exemption (platform super admin - resolved by callers before this).
     const gate = await companyRoleGate(companyId, (t) => ownedDbTable(t));
     if (gate !== 'active') {
       return { role: null, error: gate === 'inactive' ? 'COMPANY_INACTIVE' : 'COMPANY_STATUS_UNAVAILABLE', membershipType: undefined };

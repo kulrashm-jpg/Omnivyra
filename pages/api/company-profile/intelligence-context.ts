@@ -43,7 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'POST') {
     try {
       const normalizedRole = String(access.role ?? '').toUpperCase();
-      if (!['SUPER_ADMIN', 'CONTENT_ARCHITECT', 'CAMPAIGN_ARCHITECT', 'COMPANY_ADMIN', 'ADMIN'].includes(normalizedRole)) {
+      if (!['SUPER_ADMIN', 'CAMPAIGN_ARCHITECT', 'COMPANY_ADMIN', 'ADMIN'].includes(normalizedRole)) {
         return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
       }
 

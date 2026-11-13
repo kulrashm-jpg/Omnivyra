@@ -32,8 +32,8 @@ function visibilityAllowed(row: any, viewerUserId?: string | null, viewerRole?: 
   if (row.visibility === 'company') return true;
   if (row.visibility === 'private') return row.created_by && row.created_by === actorId(viewerUserId);
   const role = String(viewerRole ?? '').toUpperCase();
-  if (row.visibility === 'leadership') return ['SUPER_ADMIN', 'CONTENT_ARCHITECT', 'COMPANY_ADMIN', 'ADMIN'].includes(role);
-  if (row.visibility === 'department') return ['SUPER_ADMIN', 'CONTENT_ARCHITECT', 'COMPANY_ADMIN', 'ADMIN', 'MEMBER'].includes(role);
+  if (row.visibility === 'leadership') return ['SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN'].includes(role);
+  if (row.visibility === 'department') return ['SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'MEMBER'].includes(role);
   return false;
 }
 

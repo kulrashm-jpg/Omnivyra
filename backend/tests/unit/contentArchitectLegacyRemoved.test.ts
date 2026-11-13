@@ -111,6 +111,16 @@ describe('legacy Content Architect path — static guard over production code', 
     expect(m![1]).toContain("'SUPER_ADMIN'");
     expect(m![1]).not.toContain('CONTENT_ARCHITECT');
   });
+
+  // e9 ruling 2026-11-13: the new Content Architect is a PLATFORM role gated by an open help request, never a
+  // company membership - so no SERVER-side role allowlist may name it. The capability registry's role union is kept
+  // on purpose; client-side view-mode labels are cosmetic (no authority) and out of this scan.
+  it("no server-side role allowlist names 'CONTENT_ARCHITECT'", () => {
+    const server = files.filter((f) => f.startsWith('pages/api/') || f.startsWith('backend/'));
+    expect(server.length).toBeGreaterThan(200); // positive control: the scope is not empty
+    const hits = scan(server, /(['"])CONTENT_ARCHITECT\1/).filter((h) => h.file !== 'backend/security/capabilityRegistry.ts');
+    expect(hits).toEqual([]);
+  });
 });
 
 /* ── Behaviour ───────────────────────────────────────────────────────────── */
