@@ -71,7 +71,11 @@ beforeEach(() => {
   );
 });
 
-it('the screens and the integrity check share ONE list of spellings', () => {
+it('the screens and the integrity check share ONE list of spellings - pinned to EXACTLY these two', () => {
+  // FROZEN (e9/05, 2026-11-13): adding any other value - in particular 'release_validation' - would make 22 unreviewed
+  // memberships look "self-joined" to the governance check and the admin screens, laundering grants that the owner's
+  // access review has not yet decided. Until that review lands, this constant is the single lever that could undo the
+  // freeze silently, so its CONTENTS are pinned, not just its use.
   expect([...SELF_JOINED_JOIN_SOURCE_SPELLINGS]).toEqual(['self_joined', 'self_registered']);
   for (const s of SELF_JOINED_JOIN_SOURCE_SPELLINGS) expect(isSelfRegisteredJoinSource(s)).toBe(true);
   expect(isSelfRegisteredJoinSource('invited')).toBe(false);
