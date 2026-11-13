@@ -16,8 +16,8 @@ export type HoldSettlementState =
   | { state: 'open' }
   /** creditsSettled: the absolute credit movement on the terminal row, as recorded (null when the row carries none). */
   | { state: 'confirmed' | 'released'; transactionId: string; creditsSettled: number | null }
-  /** Two confirms, or a confirm plus a release that is not its own remainder: a double settle that already happened. */
-  | { state: 'double_settled'; transactionIds: string[] }
+  /** More than one terminal row (two confirms, or a confirm and a release): a double settle that already happened. */
+  | { state: 'double_settled'; transactionIds: string[]; rows: Array<{ id: string; phase: string | null; key: string | null }> }
   | { state: 'unreadable'; message: string };
 
 /**
@@ -48,9 +48,12 @@ export function pendingSettlement(holdId: string | null, settled: HoldSettlement
  * default: every unrecognised code - and no code at all - is NOT definitive, so the hold is never released on it.
  *
  *   PostgREST: PGRST1xx request errors, PGRST2xx schema-cache errors (e.g. PGRST202 function not found), PGRST3xx
- *     JWT errors - all raised BEFORE the statement runs - and PGRST000 / PGRST002 / PGRST003 (no connection, schema
- *     cache load, pool timeout: the request never reached a transaction). NOT PGRST001 (database client error, which
- *     can be a connection lost mid-call) and not PGRST5xx.
+ *     JWT errors - raised BEFORE the statement runs, EXCEPT PGRST116 (singular-response mismatch), which is raised
+ *     AFTER execution and is safe only because PostgREST rolls the transaction back on it. It cannot arise on the
+ *     settle calls today: creditExecutionRepository's rpc() calls request no .single()/.maybeSingle() - pinned by
+ *     settleRpcNoSingular.test.ts. Also PGRST000 / PGRST002 / PGRST003 (no connection, schema cache load, pool
+ *     timeout: the request never reached a transaction). NOT PGRST001 (database client error, which can be a
+ *     connection lost mid-call) and not PGRST5xx.
  *   SQLSTATE: P0001 (RAISE EXCEPTION), classes 22 data exception, 23 integrity constraint violation, 25 invalid
  *     transaction state, 42 syntax error / access rule violation, 54 program limit exceeded, 55 object not in
  *     prerequisite state, and 40001 / 40P01 (serialization failure / deadlock - rolled back).
@@ -84,18 +87,40 @@ function creditsOf(r: Row): number | null {
 }
 
 /**
- * Classify the settle rows of ONE hold. apply_credit_partial_confirm legitimately writes a 'confirm' row plus a
- * 'release' row keyed '<confirm key>:release-remainder' (the unused remainder returned) - that pair is ONE settle, not
- * two (20260625 body; the live body is to be confirmed by C100). Anything beyond that is a double settle.
+ * The execution_phase vocabulary PROD writes to credit_transactions (verified against the live bodies, C100 record
+ * 2026-11-13, committed under backend/tests/fixtures/live-credit-functions-20261113/): apply_credit_reservation
+ * (20260322 body) writes 'hold' / 'confirm' / 'release' (plus 'grant' / 'expire' / 'expire_incentive', which never
+ * settle a hold); apply_credit_partial_confirm (hand-applied body, md5 ff208f60) writes ONE 'confirm_partial' row and
+ * returns the unused remainder to the wallet inside the same UPDATE. liveCreditPhaseVocabulary.test.ts reads those
+ * bodies and fails if they write a phase this module does not classify.
+ */
+export const CONFIRM_PHASES: readonly string[] = ['confirm', 'confirm_partial'];
+export const SETTLE_PHASES: readonly string[] = [...CONFIRM_PHASES, 'release'];
+/** Phases the live bodies write that never settle a hold (classified as "not a settle row"). */
+export const NON_SETTLE_PHASES: readonly string[] = ['hold', 'grant', 'expire', 'expire_incentive'];
+
+/** The remainder-release key of a confirm, or null when the confirm has no key (never derive from ''). */
+function remainderKeyOf(confirmKey: string | null): string | null {
+  return confirmKey ? `${confirmKey}:release-remainder` : null;
+}
+
+/**
+ * Classify the settle rows of ONE hold. More than one terminal row is a double settle that already happened - with ONE
+ * exception: the 20260625 convention (NOT live today; may go live with 20270217000053) settles a partial confirm as a
+ * 'confirm' row plus a 'release' row keyed '<confirm key>:release-remainder'. That pair is ONE settle. Today's live
+ * partial confirm writes a single 'confirm_partial' row and no remainder row.
  */
 function classify(rows: Row[]): HoldSettlementState | null {
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const all = [...byId.values()];
-  const confirms = all.filter((r) => r.execution_phase === 'confirm');
-  const remainderKeys = new Set(confirms.map((c) => `${c.idempotency_key ?? ''}:release-remainder`));
-  const releases = all.filter((r) => r.execution_phase === 'release' && !remainderKeys.has(r.idempotency_key ?? ''));
-  if (confirms.length > 1 || (confirms.length >= 1 && releases.length >= 1) || releases.length > 1) {
-    return { state: 'double_settled', transactionIds: [...confirms, ...releases].map((r) => r.id) };
+  const all = [...new Map(rows.map((r) => [r.id, r])).values()];
+  const confirms = all.filter((r) => CONFIRM_PHASES.includes(r.execution_phase ?? ''));
+  const remainderKeys = new Set(confirms.map((c) => remainderKeyOf(c.idempotency_key)).filter((k): k is string => k !== null));
+  const releases = all.filter((r) => r.execution_phase === 'release' && !(r.idempotency_key && remainderKeys.has(r.idempotency_key)));
+  if (confirms.length + releases.length > 1) {
+    return {
+      state: 'double_settled',
+      transactionIds: [...confirms, ...releases].map((r) => r.id),
+      rows: [...confirms, ...releases].map((r) => ({ id: r.id, phase: r.execution_phase, key: r.idempotency_key })),
+    };
   }
   if (confirms.length === 1) return { state: 'confirmed', transactionId: confirms[0].id, creditsSettled: creditsOf(confirms[0]) };
   if (releases.length === 1) return { state: 'released', transactionId: releases[0].id, creditsSettled: creditsOf(releases[0]) };
@@ -118,7 +143,7 @@ export async function readHoldSettlementState(input: {
       .from('credit_transactions')
       .select(SELECT)
       .eq('parent_transaction_id', input.holdId)
-      .in('execution_phase', ['confirm', 'release'])
+      .in('execution_phase', [...SETTLE_PHASES])
       .limit(10);
     if (byParent.error) return { state: 'unreadable', message: byParent.error.message };
     rows.push(...((byParent.data as Row[] | null) ?? []));
@@ -134,7 +159,12 @@ export async function readHoldSettlementState(input: {
   // Alerts (05): a double settle that ALREADY happened, and a hold released by someone else while its work completed
   // (free work) - both must be visible as patterns, not just per-call outcomes.
   if (state.state === 'double_settled') {
-    logger.error('credit_hold_double_settled', { holdId: input.holdId, confirmKey: input.confirmKey, transactionIds: state.transactionIds });
+    // e9: name every terminal row's phase and key, plus the keys this caller expected, so an unrecognised convention
+    // is distinguishable from unrelated terminal rows.
+    logger.error('credit_hold_double_settled', {
+      holdId: input.holdId, expectedConfirmKey: input.confirmKey, expectedReleaseKey: input.releaseKey,
+      expectedRemainderKey: remainderKeyOf(input.confirmKey), rows: state.rows,
+    });
   } else if (state.state === 'released') {
     logger.error('credit_settle_released_before_confirm', { holdId: input.holdId, confirmKey: input.confirmKey, releaseId: state.transactionId });
   }

@@ -115,17 +115,46 @@ describe('readHoldSettlementState', () => {
     db.byKey = { data: [{ id: 'r1', execution_phase: 'release' }], error: null };
     expect(await readHoldSettlementState(input)).toEqual({ state: 'released', transactionId: 'r1', creditsSettled: null });
   });
-  it('a partial settle confirm + its own release-remainder is ONE settle (confirmed, amount from the confirm row)', async () => {
+  // LIVE shape (C100, prod md5 ff208f60): apply_credit_partial_confirm writes ONE row, execution_phase
+  // 'confirm_partial', parent = the hold, key = the confirm key, deltas = -(consumed); the remainder goes back to the
+  // wallet in the same UPDATE (no release row).
+  const LIVE_CONFIRM_PARTIAL = {
+    id: 'cp1', execution_phase: 'confirm_partial', idempotency_key: 'k:confirm', parent_transaction_id: 'h',
+    transaction_type: 'deduction', free_delta: -1, paid_delta: -3, incentive_delta: 0,
+  };
+  it('LIVE: a committed confirm_partial row (found by parent) is CONFIRMED, amount = its committed consumption', async () => {
+    db.byParent = { data: [LIVE_CONFIRM_PARTIAL] as any, error: null };
+    expect(await readHoldSettlementState(input)).toEqual({ state: 'confirmed', transactionId: 'cp1', creditsSettled: 4 });
+  });
+  it('LIVE: a committed confirm_partial row found only by KEY is CONFIRMED too', async () => {
+    db.byKey = { data: [LIVE_CONFIRM_PARTIAL] as any, error: null };
+    expect(await readHoldSettlementState(input)).toMatchObject({ state: 'confirmed', transactionId: 'cp1', creditsSettled: 4 });
+  });
+  it('20260625 convention (not live; may go live with 053): confirm + its own release-remainder = ONE settle', async () => {
     db.byParent = { data: [
       { id: 'c1', execution_phase: 'confirm', idempotency_key: 'k:confirm', free_delta: 0, paid_delta: -4, incentive_delta: 0 },
       { id: 'r1', execution_phase: 'release', idempotency_key: 'k:confirm:release-remainder', free_delta: 0, paid_delta: 6, incentive_delta: 0 },
     ] as any, error: null };
     expect(await readHoldSettlementState(input)).toEqual({ state: 'confirmed', transactionId: 'c1', creditsSettled: 4 });
   });
-  it('a confirm plus a NON-remainder release is a double settle that already happened (own state)', async () => {
+  it('a confirm with a NULL key never derives a remainder key: a ":release-remainder" release beside it is a double settle', async () => {
+    db.byParent = { data: [
+      { id: 'c1', execution_phase: 'confirm', idempotency_key: null },
+      { id: 'r1', execution_phase: 'release', idempotency_key: ':release-remainder' },
+    ] as any, error: null };
+    expect(await readHoldSettlementState(input)).toMatchObject({ state: 'double_settled' });
+  });
+  it('a confirm plus a release is a double settle that already happened (own state, rows named)', async () => {
     db.byParent = { data: [{ id: 'c1', execution_phase: 'confirm', idempotency_key: 'k:confirm' }] as any, error: null };
     db.byKey = { data: [{ id: 'r9', execution_phase: 'release', idempotency_key: 'k:release' }] as any, error: null };
-    expect(await readHoldSettlementState(input)).toEqual({ state: 'double_settled', transactionIds: ['c1', 'r9'] });
+    expect(await readHoldSettlementState(input)).toMatchObject({
+      state: 'double_settled', transactionIds: ['c1', 'r9'],
+      rows: [{ id: 'c1', phase: 'confirm', key: 'k:confirm' }, { id: 'r9', phase: 'release', key: 'k:release' }],
+    });
+  });
+  it('a confirm_partial plus a release is a double settle', async () => {
+    db.byParent = { data: [LIVE_CONFIRM_PARTIAL, { id: 'r1', execution_phase: 'release', idempotency_key: 'k:release' }] as any, error: null };
+    expect(await readHoldSettlementState(input)).toMatchObject({ state: 'double_settled' });
   });
   it('two confirms are a double settle', async () => {
     db.byParent = { data: [{ id: 'c1', execution_phase: 'confirm' }, { id: 'c2', execution_phase: 'confirm' }] as any, error: null };
@@ -154,6 +183,24 @@ describe('executeWithCredits: partial_confirm error handling', () => {
     expect(r.status).toBe('executed');
     expect(r.settlementPending).toBeUndefined();
     expect(r.settlement).toMatchObject({ creditsCharged: 4, amountEstimated: true });
+    expect(releases()).toBe(0);
+  });
+
+  it('LIVE: partial_confirm errors ambiguously but its confirm_partial row COMMITTED -> adopted, NO release, committed amount', async () => {
+    partialConfirm.mockResolvedValue({ error: { code: '08007', message: 'transaction_resolution_unknown' }, data: null });
+    db.byKey = { data: [{ id: 'cp9', execution_phase: 'confirm_partial', idempotency_key: 'x', free_delta: 0, paid_delta: -2, incentive_delta: 0 }] as any, error: null };
+    const r = await run('pc-live-adopt');
+    expect(r).toMatchObject({ status: 'executed' });
+    expect(r.settlementPending).toBeUndefined();
+    expect(r.settlement).toMatchObject({ creditsCharged: 2, creditsReleased: 8 });
+    expect(releases()).toBe(0);
+  });
+
+  it('LIVE: even a DEFINITIVE refusal never releases a hold whose confirm_partial row exists (key-mismatch case)', async () => {
+    partialConfirm.mockResolvedValue({ error: { code: 'P0001', message: 'refused' }, data: null });
+    db.byParent = { data: [{ id: 'cp8', execution_phase: 'confirm_partial', idempotency_key: 'other-key', free_delta: 0, paid_delta: -3, incentive_delta: 0 }] as any, error: null };
+    const r = await run('pc-live-definitive');
+    expect(r.status).toBe('executed');
     expect(releases()).toBe(0);
   });
 
