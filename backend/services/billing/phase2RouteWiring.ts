@@ -100,11 +100,13 @@ export class BilledRouteReclaimExhaustedError extends Error {
 /**
  * The HOLD (prescribed upper bound) for a billed route's action - the owner rule: hold the maximum, settle the
  * actual. maxTokens cover ONE billed unit: multi-call units scale by their calls (C83: a campaign plan ~2 calls,
- * a virality assessment 5, the longest blog template 7). Settlement is ALWAYS the actual collected usage.
+ * a virality assessment 5; blog_generation 32 - CODE-TRACED 2026-11-13: planner 3 + 8 sections + 5 failed-section
+ * repairs + 8 scored repairs + 3 duplicate repairs + 5 for the compatibility core, the basis 046's ceiling uses; e9
+ * approved replacing the earlier estimate of 7). Settlement is ALWAYS the actual collected usage.
  */
 const ROUTE_UNIT_CALLS: Partial<Record<string, number>> = {
   insight_generation: 5,
-  blog_generation: 7,
+  blog_generation: 32,
   campaign_preplanning: 3,
   recommendations_generate: 3,
   recommendations_opportunities: 3,

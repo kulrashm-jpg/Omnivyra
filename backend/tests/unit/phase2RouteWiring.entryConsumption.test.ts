@@ -97,10 +97,10 @@ describe('wirePhase2Route ENFORCE - token-actual, per-request identity, never a 
     expect(call.llmPricing.actionKey).toBe('content_basic');
   });
 
-  it('a multi-call unit holds proportionally more (virality = 5 calls, blog = 7)', () => {
+  it('a multi-call unit holds proportionally more (virality = 5 calls, blog = 32)', () => {
     const one = routeLlmPricingFor('content_basic' as any);
     expect(routeLlmPricingFor('insight_generation' as any).maxOutputTokens).toBe(one.maxOutputTokens * 5);
-    expect(routeLlmPricingFor('blog_generation' as any).maxInputTokens).toBe(one.maxInputTokens * 7);
+    expect(routeLlmPricingFor('blog_generation' as any).maxInputTokens).toBe(one.maxInputTokens * 32); // code-traced calls per blog unit (e9: 7 -> 32)
   });
 
   it('the SAME Idempotency-Key twice: the 2nd is 409 ALREADY_PROCESSED - no AI call, no second charge', async () => {
