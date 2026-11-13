@@ -42,6 +42,8 @@ export type FragmentType = 'hook' | 'cta' | 'structure';
 
 interface HookFragment {
   type: 'hook';
+  /** BLOCKING tenancy (e9 2026-11-13): the company whose content produced this fragment. Never served to another. */
+  companyId: string;
   value: string;
   topicTokens: string[];
   contentType: string;
@@ -53,6 +55,7 @@ interface HookFragment {
 
 interface CtaFragment {
   type: 'cta';
+  companyId: string;
   value: string;
   ctaType:  string;
   industry: string;
@@ -61,6 +64,7 @@ interface CtaFragment {
 
 interface StructureFragment {
   type: 'structure';
+  companyId: string;
   keyPoints: string[];
   contentType: string;
   audienceTokens: string[];
@@ -141,6 +145,8 @@ function toneKey(tone?: string): string {
 export function storeFragments(
   blueprint: ContentBlueprint,
   meta: {
+    /** REQUIRED: the owning company. Fragments are company-private (they carry that company's brief content). */
+    companyId:   string;
     topic:       string;
     contentType: string;
     ctaType?:    string;
@@ -150,6 +156,9 @@ export function storeFragments(
     tone?:       string;
   },
 ): void {
+  // Fail closed: a fragment without an owner could be served to anyone, so it is not stored at all.
+  const companyId = typeof meta.companyId === 'string' ? meta.companyId.trim() : '';
+  if (!companyId) return;
   if (_store.size >= MAX_FRAGMENTS) evictLRU();
 
   _accessCounter++;
@@ -160,10 +169,11 @@ export function storeFragments(
 
   // Hook fragment — scoped by industry + platform + tone (edge case #5)
   if (blueprint.hook) {
-    const key = `hook:${tokenize(meta.topic).slice(0, 5).join('_')}:${meta.contentType}:${industry}:${platform}`;
+    const key = `${companyId}|hook:${tokenize(meta.topic).slice(0, 5).join('_')}:${meta.contentType}:${industry}:${platform}`;
     _store.set(key, {
       fragment: {
         type: 'hook',
+        companyId,
         value: blueprint.hook,
         topicTokens: tokenize(meta.topic),
         contentType: meta.contentType,
@@ -180,10 +190,11 @@ export function storeFragments(
 
   // CTA fragment — scoped by industry + platform (edge case #5)
   if (blueprint.cta && meta.ctaType) {
-    const key = `cta:${meta.ctaType.toLowerCase().replace(/\s+/g, '_')}:${industry}:${platform}`;
+    const key = `${companyId}|cta:${meta.ctaType.toLowerCase().replace(/\s+/g, '_')}:${industry}:${platform}`;
     _store.set(key, {
       fragment: {
         type: 'cta',
+        companyId,
         value: blueprint.cta,
         ctaType:  meta.ctaType,
         industry,
@@ -199,10 +210,11 @@ export function storeFragments(
   // Structure fragment — scoped by industry + tone (edge case #5)
   if (Array.isArray(blueprint.key_points) && blueprint.key_points.length >= 2) {
     const audTokens = tokenize(meta.audience ?? '');
-    const key = `structure:${meta.contentType}:${audTokens.slice(0, 4).join('_')}:${industry}`;
+    const key = `${companyId}|structure:${meta.contentType}:${audTokens.slice(0, 4).join('_')}:${industry}`;
     _store.set(key, {
       fragment: {
         type: 'structure',
+        companyId,
         keyPoints: blueprint.key_points,
         contentType: meta.contentType,
         audienceTokens: audTokens,
@@ -220,6 +232,7 @@ export function storeFragments(
 // ── Retrieve fragments ─────────────────────────────────────────────────────────
 
 function findBestHook(
+  companyId:   string,
   topic:       string,
   contentType: string,
   industry:    string,
@@ -233,6 +246,7 @@ function findBestHook(
     if (isStale(entry)) { _store.delete(key); continue; }
     const f = entry.fragment;
     if (f.type !== 'hook') continue;
+    if (f.companyId !== companyId) continue; // tenant isolation
     if (f.contentType !== contentType) continue;
     // Edge case #5: scope guardrails — skip cross-industry/platform/tone leakage
     if (f.industry !== industry) continue;
@@ -251,11 +265,11 @@ function findBestHook(
   return null;
 }
 
-function findBestCta(ctaType: string, industry: string, platform: string): string | null {
+function findBestCta(companyId: string, ctaType: string, industry: string, platform: string): string | null {
   const slug = ctaType.toLowerCase().replace(/\s+/g, '_');
 
   // Exact match: ctaType + industry + platform
-  const exactKey = `cta:${slug}:${industry}:${platform}`;
+  const exactKey = `${companyId}|cta:${slug}:${industry}:${platform}`;
   const exact = _store.get(exactKey);
   if (exact && !isStale(exact)) {
     touch(exactKey, exact);
@@ -263,7 +277,7 @@ function findBestCta(ctaType: string, industry: string, platform: string): strin
   }
 
   // Relax platform — same industry, any platform
-  const industryKey = `cta:${slug}:${industry}:any`;
+  const industryKey = `${companyId}|cta:${slug}:${industry}:any`;
   const industryMatch = _store.get(industryKey);
   if (industryMatch && !isStale(industryMatch)) {
     touch(industryKey, industryMatch);
@@ -271,7 +285,7 @@ function findBestCta(ctaType: string, industry: string, platform: string): strin
   }
 
   // Relax both — generic CTA (edge case #5: only fall back if generic, never cross-industry)
-  const genericKey = `cta:${slug}:generic:any`;
+  const genericKey = `${companyId}|cta:${slug}:generic:any`;
   const generic = _store.get(genericKey);
   if (generic && !isStale(generic)) {
     touch(genericKey, generic);
@@ -282,6 +296,7 @@ function findBestCta(ctaType: string, industry: string, platform: string): strin
 }
 
 function findBestStructure(
+  companyId:   string,
   contentType: string,
   audience:    string,
   industry:    string,
@@ -294,6 +309,7 @@ function findBestStructure(
     if (isStale(entry)) { _store.delete(key); continue; }
     const f = entry.fragment;
     if (f.type !== 'structure') continue;
+    if (f.companyId !== companyId) continue; // tenant isolation
     if (f.contentType !== contentType) continue;
     // Edge case #5: scope guardrails
     if (f.industry !== industry) continue;
@@ -326,6 +342,8 @@ function findBestStructure(
  * @param tone        - Tone guidelines (first 3 words used as scope key)
  */
 export function assembleFromFragments(
+  /** REQUIRED: only this company's own fragments are ever assembled. Missing -> null (no reuse). */
+  companyId:   string,
   topic:       string,
   contentType: string,
   ctaType:     string,
@@ -334,13 +352,15 @@ export function assembleFromFragments(
   platform?:   string,
   tone?:       string,
 ): ContentBlueprint | null {
+  const cid = typeof companyId === 'string' ? companyId.trim() : '';
+  if (!cid) return null;
   const ind = (industry || 'generic').toLowerCase().slice(0, 30);
   const plt = (platform  || 'any').toLowerCase();
   const tk  = toneKey(tone);
 
-  const hook      = findBestHook(topic, contentType, ind, plt, tk);
-  const cta       = findBestCta(ctaType, ind, plt);
-  const keyPoints = findBestStructure(contentType, audience, ind, tk);
+  const hook      = findBestHook(cid, topic, contentType, ind, plt, tk);
+  const cta       = findBestCta(cid, ctaType, ind, plt);
+  const keyPoints = findBestStructure(cid, contentType, audience, ind, tk);
 
   if (!hook || !cta || !keyPoints) return null;
 

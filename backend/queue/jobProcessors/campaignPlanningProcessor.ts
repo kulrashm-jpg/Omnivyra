@@ -139,6 +139,7 @@ async function maybeRefine(
   plan: Awaited<ReturnType<typeof expandCampaign>>,
   planTier: string,
   industry: string,
+  companyId: string,
 ): Promise<Awaited<ReturnType<typeof expandCampaign>>> {
   const confidence = assessExpansionConfidence(plan);
 
@@ -164,6 +165,7 @@ async function maybeRefine(
     BLUEPRINT_FANOUT_CONCURRENCY,
     slot =>
       batchedGenerateBlueprint({
+        company_id:   companyId, // tenant-isolated batch + caches (job company, bound by assertJobCampaignBinding)
         topic:        slot.topic,
         content_type: slot.content_type,
         // Explicitly target mini via operation name (aiModelRouter routes hooks to mini)
@@ -448,7 +450,7 @@ async function processCampaignPlanningJobInner(job: Job<CampaignPlanningJobPaylo
       })),
     };
 
-    let plan = expandCampaign(campaignId, strategy, mappedWithStrategyThemes);
+    let plan = expandCampaign(campaignId, strategy, mappedWithStrategyThemes, String(companyId));
 
     // Publish partial result for progressive delivery (Upgrade C)
     await setJobStatus(jobId, campaignId, 'layer3', {
@@ -460,7 +462,7 @@ async function processCampaignPlanningJobInner(job: Job<CampaignPlanningJobPaylo
     // ── Layer 4: Optional refinement ───────────────────────────────────────
     await setJobStatus(jobId, campaignId, 'layer4');
 
-    plan = await maybeRefine(plan, planTier, industry);
+    plan = await maybeRefine(plan, planTier, industry, String(companyId));
     if (plan.gpt_used) gptCallCount++;
 
     // ── Persist ────────────────────────────────────────────────────────────

@@ -146,6 +146,7 @@ function spreadToDays(slotCount: number, weeklyFrequency: number): number[] {
 // ── Per-slot blueprint generation (template-first, no GPT) ───────────────────
 
 function generateSlotBlueprint(
+  companyId: string,
   topic: string,
   angle: string,
   contentType: string,
@@ -161,7 +162,7 @@ function generateSlotBlueprint(
   }
 
   // 2. Fragment reuse
-  const fragment = assembleFromFragments(topic, contentType, 'Soft CTA', audience);
+  const fragment = assembleFromFragments(companyId, topic, contentType, 'Soft CTA', audience);
   if (fragment) {
     return { blueprint: { ...fragment, cta }, source: 'fragment' };
   }
@@ -180,6 +181,7 @@ function generateSlotBlueprint(
 
   // Store the rule-based result as a fragment for future reuse
   storeFragments(blueprint, {
+    companyId,
     topic,
     contentType,
     ctaType: 'Soft CTA',
@@ -197,6 +199,7 @@ function expandWeek(
   executionItems: DeterministicExecutionItem[],
   strategy: CampaignStrategy,
   globalSlotCounter: { n: number },
+  companyId: string,
 ): ExpandedWeekPlan {
   const slots: ExpandedContentSlot[] = [];
 
@@ -217,6 +220,7 @@ function expandWeek(
         || expandTopicFromAngle(weekStrategy.theme, angle, strategy.audience, weekStrategy.week);
 
       const { blueprint, source } = generateSlotBlueprint(
+        companyId,
         rawTopic,
         angle,
         item.content_type,
@@ -266,6 +270,8 @@ export function expandCampaign(
   campaignId: string,
   strategy: CampaignStrategy,
   mapped: MappedWeeklySkeleton,
+  /** The campaign's owning company: fragment reuse is company-private (BLOCKING tenancy, e9 2026-11-13). */
+  companyId: string,
 ): ExpandedCampaignPlan {
   const globalSlotCounter = { n: 0 };
   const weeks: ExpandedWeekPlan[] = [];
@@ -277,6 +283,7 @@ export function expandCampaign(
       mapped.skeleton.execution_items,
       strategy,
       globalSlotCounter,
+      companyId,
     );
     weeks.push(expanded);
   }

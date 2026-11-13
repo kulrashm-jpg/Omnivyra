@@ -89,6 +89,7 @@ function updateThemes(plan: ExpandedCampaignPlan, newGoal: string): ExpandedCamp
 async function refreshAudienceHooks(
   plan: ExpandedCampaignPlan,
   newAudience: string,
+  companyId: string,
 ): Promise<ExpandedCampaignPlan> {
   // Identify slots that have rule-based hooks (template/fragment hooks are already generic enough)
   const ruleBasedSlots = plan.weeks
@@ -105,6 +106,7 @@ async function refreshAudienceHooks(
   const refreshed = await Promise.allSettled(
     ruleBasedSlots.map(slot =>
       batchedGenerateBlueprint({
+        company_id:   companyId,
         topic:        slot.topic,
         content_type: slot.content_type,
         intent: {
@@ -164,6 +166,8 @@ export async function applyPartialEdits(
   plan: ExpandedCampaignPlan,
   strategy: CampaignStrategy,
   edits: PartialEdit[],
+  /** The campaign's owning company (blueprint batching + caches are company-private). */
+  companyId: string,
 ): Promise<ExpandedCampaignPlan> {
   let current = { ...plan, strategy };
 
@@ -179,7 +183,7 @@ export async function applyPartialEdits(
         break;
       }
       case 'target_audience': {
-        current = await refreshAudienceHooks(current, String(edit.newValue ?? ''));
+        current = await refreshAudienceHooks(current, String(edit.newValue ?? ''), companyId);
         break;
       }
       case 'campaign_goal': {
