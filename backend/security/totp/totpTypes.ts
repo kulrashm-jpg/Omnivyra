@@ -52,7 +52,11 @@ export type TotpVerifyFailure =
   | 'FACTOR_REVOKED'
   | 'FACTOR_NOT_VERIFIED'
   | 'INVALID_TOKEN'
-  | 'SECRET_UNAVAILABLE';
+  | 'SECRET_UNAVAILABLE'
+  /** M3: a valid code whose time step was already used (or is older than the last used step) - a replay. */
+  | 'TOKEN_REPLAYED'
+  /** M3: the one-time-use record could not be written - refused, never accepted unrecorded (retryable). */
+  | 'VERIFICATION_UNAVAILABLE';
 
 // ── Recovery codes ───────────────────────────────────────────────────────────
 

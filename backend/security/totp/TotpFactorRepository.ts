@@ -105,16 +105,39 @@ export async function insertPending(input: InsertPendingFactorInput): Promise<St
   return rowToStored(data as FactorRow);
 }
 
-export async function markVerified(factorId: string): Promise<StoredTotpFactor | null> {
+export async function markVerified(factorId: string, usedStep?: number): Promise<StoredTotpFactor | null> {
   const now = new Date().toISOString();
+  // M3: the enrollment code's step is recorded as USED, so the same code cannot be replayed into a step-up / MFA
+  // verification within its window right after enrollment.
   const { data } = await ownedDbTable('totp_factors')
-    .update({ verified_at: now, last_used_at: now })
+    .update({ verified_at: now, last_used_at: now, ...(Number.isSafeInteger(usedStep) ? { last_used_step: usedStep } : {}) })
     .eq('id', factorId)
     .is('verified_at', null)
     .select('*')
     .maybeSingle();
   if (!data) return null;
   return rowToStored(data as FactorRow);
+}
+
+/**
+ * M3 (TOTP replay protection; owner-assigned to e1, spec 05): CONSUME a time step atomically. One conditional UPDATE -
+ * it succeeds only when the factor has no recorded step or a strictly OLDER one - so the same code (same step), or a
+ * code from an earlier step after a later one succeeded, can never verify twice; two concurrent submissions of one code
+ * race on the same row and exactly one UPDATE matches. Persisted in the database (survives restarts), never in memory.
+ * `step` is an integer computed by our own code (never request text), so it is safe in the filter.
+ */
+export async function consumeTotpStep(
+  factorId: string,
+  step: number,
+): Promise<'consumed' | 'replayed' | 'unavailable'> {
+  if (!Number.isSafeInteger(step) || step < 0) return 'unavailable';
+  const { data, error } = await ownedDbTable('totp_factors')
+    .update({ last_used_step: step, last_used_at: new Date().toISOString() })
+    .eq('id', factorId)
+    .or(`last_used_step.is.null,last_used_step.lt.${step}`)
+    .select('id');
+  if (error) return 'unavailable';
+  return Array.isArray(data) && data.length === 1 ? 'consumed' : 'replayed';
 }
 
 export async function touchLastUsed(factorId: string): Promise<void> {

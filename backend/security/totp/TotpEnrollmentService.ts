@@ -20,6 +20,7 @@
  */
 
 import { authenticator } from 'otplib';
+import { matchedTotpStep } from './TotpVerificationService';
 import { HashAlgorithms } from '@otplib/core';
 
 import { logger } from '../../services/logger';
@@ -166,10 +167,11 @@ export async function verifyEnrollment(
   const secret = await readVaultSecret(factor.vaultSecretId);
   if (!secret) return await failAndAudit(input, 'SECRET_UNAVAILABLE');
 
-  const valid = authenticator.verify({ token: input.token.trim(), secret });
-  if (!valid) return await failAndAudit(input, 'INVALID_TOKEN');
+  // M3: the matched step (null = invalid); it is recorded as used when the factor is activated.
+  const step = matchedTotpStep(input.token.trim(), secret);
+  if (step === null) return await failAndAudit(input, 'INVALID_TOKEN');
 
-  const activated = await markVerified(factor.id);
+  const activated = await markVerified(factor.id, step);
   if (!activated) {
     // Race: someone activated/revoked between findFactorOwned and markVerified.
     return await failAndAudit(input, 'ALREADY_VERIFIED');
