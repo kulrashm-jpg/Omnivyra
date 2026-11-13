@@ -18,7 +18,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute } from '../../../lib/platform/routeFactory';
-import { decideMetricsExportToken } from '../../../backend/security/metricsExportToken';
+import { decideMetricsExportToken, previousTokenGaugeText } from '../../../backend/security/metricsExportToken';
 import {
   renderPrometheusText,
   PROMETHEUS_CONTENT_TYPE,
@@ -53,7 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   res.setHeader('Content-Type', PROMETHEUS_CONTENT_TYPE);
   res.setHeader('Cache-Control', 'no-store');
-  return res.status(200).send(renderPrometheusText());
+  return res.status(200).send(renderPrometheusText() + previousTokenGaugeText());
 }
 
 export default createApiRoute(handler, { route: '/api/observability/metrics' });

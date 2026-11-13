@@ -55,7 +55,7 @@ describe('decideMetricsExportToken', () => {
 
 // ── the two scrape targets, one matrix ────────────────────────────────────────
 
-type Hit = { status: number; body: unknown; cacheControl?: string };
+type Hit = { status: number; body: unknown; cacheControl?: string; text?: string };
 
 let server: http.Server;
 let port: number;
@@ -71,7 +71,7 @@ async function hitWorker(headers: Record<string, string>): Promise<Hit> {
   const text = await r.text();
   let body: unknown = text;
   try { body = JSON.parse(text); } catch { /* prometheus text */ }
-  return { status: r.status, body: r.status === 200 ? 'metrics' : body, cacheControl: r.headers.get('cache-control') ?? undefined };
+  return { status: r.status, body: r.status === 200 ? 'metrics' : body, cacheControl: r.headers.get('cache-control') ?? undefined, text };
 }
 async function hitApi(headers: Record<string, string>): Promise<Hit> {
   const hdrs: Record<string, string> = {};
@@ -79,12 +79,12 @@ async function hitApi(headers: Record<string, string>): Promise<Hit> {
     statusCode: 0, body: undefined,
     status(n: number) { res.statusCode = n; return res; },
     json(b: unknown) { res.body = b; return res; },
-    send() { res.body = 'metrics'; return res; },
+    send(b: unknown) { res.body = 'metrics'; res.text = String(b); return res; },
     end() { return res; },
     setHeader(k: string, v: string) { hdrs[k.toLowerCase()] = v; return res; },
   };
   await apiHandler({ method: 'GET', headers }, res);
-  return { status: res.statusCode, body: res.statusCode === 200 ? 'metrics' : res.body, cacheControl: hdrs['cache-control'] };
+  return { status: res.statusCode, body: res.statusCode === 200 ? 'metrics' : res.body, cacheControl: hdrs['cache-control'], text: res.text };
 }
 
 describe.each([
@@ -122,6 +122,20 @@ describe.each([
     setEnv(CUR, '');
     expect((await hit({ authorization: `Bearer ${CUR}` })).status).toBe(200);
     expect((await hit({ authorization: `Bearer ${PREV}` })).status).toBe(401);
+  });
+  it('05: a configured PREVIOUS is VISIBLE on the token-protected body (gauge 1), and 0 once removed', async () => {
+    const on = await hit({ authorization: `Bearer ${CUR}` });
+    expect(on.text).toMatch(/^observability_export_token_previous_configured 1$/m);
+    setEnv(CUR, undefined);
+    const off = await hit({ authorization: `Bearer ${CUR}` });
+    expect(off.text).toMatch(/^observability_export_token_previous_configured 0$/m);
+    setEnv(CUR, '');
+    expect((await hit({ authorization: `Bearer ${CUR}` })).text).toMatch(/^observability_export_token_previous_configured 0$/m);
+  });
+  it('05: the 401 answer carries no rotation hint', async () => {
+    const r = await hit({ authorization: 'Bearer nope' });
+    expect(JSON.stringify(r.body)).not.toContain('previous');
+    expect(r.text ?? '').not.toContain('previous_configured');
   });
   it('PREVIOUS unset: only CURRENT is accepted', async () => {
     setEnv(CUR, undefined);

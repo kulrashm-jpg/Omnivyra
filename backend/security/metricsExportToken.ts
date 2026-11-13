@@ -22,14 +22,30 @@ import { constantTimeEqual } from './constantTimeEqual';
 
 export type MetricsExportTokenDecision = 'dark' | 'accepted' | 'rejected';
 
+function configuredPrevious(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.OBSERVABILITY_EXPORT_TOKEN_PREVIOUS;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw : undefined;
+}
+
+/**
+ * 05 (PL-09(b) review): a PREVIOUS token left configured after a rotation keeps the rotated-away secret valid
+ * indefinitely. Make that VISIBLE in monitoring rather than discoverable in a record: a gauge appended to the
+ * /metrics body - which only a token holder can read (never on the unauthenticated /health, where "a rotation is in
+ * progress" would be a free hint). Alert when it stays 1 for more than 24 h.
+ */
+export function previousTokenGaugeText(env: NodeJS.ProcessEnv = process.env): string {
+  const on = configuredPrevious(env) !== undefined ? 1 : 0;
+  return '# TYPE observability_export_token_previous_configured gauge\n'
+    + `observability_export_token_previous_configured ${on}\n`;
+}
+
 export function decideMetricsExportToken(
   presented: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): MetricsExportTokenDecision {
   const current = env.OBSERVABILITY_EXPORT_TOKEN;
   if (!current) return 'dark';
-  const rawPrevious = env.OBSERVABILITY_EXPORT_TOKEN_PREVIOUS;
-  const previous = typeof rawPrevious === 'string' && rawPrevious.trim() !== '' ? rawPrevious : undefined;
+  const previous = configuredPrevious(env);
 
   const matchesCurrent = constantTimeEqual(presented, current);
   const matchesPreviousSlot = constantTimeEqual(presented, previous ?? current);

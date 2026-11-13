@@ -9,6 +9,11 @@
  *   3. Behaviour is unchanged for the endpoints exercised end-to-end (right
  *      secret → allowed, wrong/absent → refused, unset → refused/dark), AND
  *      the decision is made by the constant-time helper (spied).
+ *
+ * RULE (05, PL-09(b)): when a check is satisfied by DELEGATION, the check must FOLLOW the delegation. An endpoint
+ * that hands its secret comparison to another module passes the import check only because that module is itself in
+ * this scan's scope under the same no-raw-comparison rule - importing is not calling, and a raw === reintroduced in
+ * the delegate must fail here. (backend/security/metricsExportToken.ts is such a delegate.)
  */
 import fs from 'fs';
 import path from 'path';
@@ -62,6 +67,9 @@ const SCOPE_FILES = [
   'pages/api/platform/history/run.ts',
   'pages/api/opportunities/refresh-slots.ts',
   'backend/workers/healthServer.ts',
+  // PL-09(b): the metrics scrape targets DELEGATE their decision to this module, so the module is policed under the
+  // same rule as the endpoints (05: when a check is satisfied by delegation, the check must follow the delegation).
+  'backend/security/metricsExportToken.ts',
 ];
 
 function listScope(): string[] {
@@ -79,7 +87,8 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
-const SECRET_IDENT = '(?:secret|cronSecret|expected|METRICS_SECRET|process\\.env\\.[A-Z0-9_]*(?:SECRET|TOKEN)|config\\.[A-Z0-9_]*(?:SECRET|TOKEN))';
+// `current` / `previous` are metricsExportToken's secret identifiers (PL-09(b)); in scope nothing else compares them.
+const SECRET_IDENT = '(?:secret|cronSecret|expected|current|previous|METRICS_SECRET|process\\.env\\.[A-Z0-9_]*(?:SECRET|TOKEN)|config\\.[A-Z0-9_]*(?:SECRET|TOKEN))';
 const TIMING_UNSAFE = [
   new RegExp(`(?:===|!==)\\s*\`Bearer \\$\\{`),
   new RegExp(`(?:===|!==)\\s*bearerAuthorization\\(`),
@@ -103,6 +112,13 @@ const HELPER_EXEMPT = new Set([
 describe('no in-scope endpoint compares a machine secret with === / !==', () => {
   const files = listScope();
 
+  it('POSITIVE CONTROL: a raw comparison inside the metricsExportToken delegate would be flagged', () => {
+    const flagged = (line: string) => TIMING_UNSAFE.some((re) => re.test(line));
+    expect(flagged('  return presented === current ? "accepted" : "rejected";')).toBe(true);
+    expect(flagged('  if (previous !== presented) return false;')).toBe(true);
+    expect(flagged('  const matchesPrevious = previous !== undefined && slot;')).toBe(false);
+  });
+
   it('the scope is non-trivial (guards against a silently empty scan)', () => {
     expect(files.length).toBeGreaterThanOrEqual(35);
   });
@@ -116,9 +132,12 @@ describe('no in-scope endpoint compares a machine secret with === / !==', () => 
     if (!HELPER_EXEMPT.has(rel)) {
       // Every endpoint that authenticates with a shared header secret must
       // make that decision through the constant-time helper.
-      // (PL-09(b): the metrics scrape targets decide through security/metricsExportToken, which is itself
-      // built on the constant-time helper; metricsExportTokenDualAccept.test.ts pins its behaviour.)
-      expect(code).toMatch(/security\/(?:constantTimeEqual|metricsExportToken)['"]/);
+      // PL-09(b): the metrics scrape targets may delegate to security/metricsExportToken - which is itself IN this
+      // scan's scope (no raw comparison of `current` / `previous`) and imports the helper relatively.
+      const viaHelper = rel.startsWith('backend/security/')
+        ? /from '\.\/constantTimeEqual'/
+        : /security\/(?:constantTimeEqual|metricsExportToken)['"]/;
+      expect(code).toMatch(viaHelper);
     }
   });
 });

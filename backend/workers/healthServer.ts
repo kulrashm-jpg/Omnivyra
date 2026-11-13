@@ -7,7 +7,7 @@
 import http from 'http';
 import { renderPrometheusText, PROMETHEUS_CONTENT_TYPE } from '../observability';
 import { constantTimeEqual } from '../security/constantTimeEqual';
-import { decideMetricsExportToken } from '../security/metricsExportToken';
+import { decideMetricsExportToken, previousTokenGaugeText } from '../security/metricsExportToken';
 
 let _startedAt = Date.now();
 
@@ -76,7 +76,7 @@ export function startHealthServer(port = 8080): http.Server {
         return;
       }
       try {
-        const body = renderPrometheusText();
+        const body = renderPrometheusText() + previousTokenGaugeText();
         res.writeHead(200, { 'Content-Type': PROMETHEUS_CONTENT_TYPE, 'Cache-Control': 'no-store' });
         res.end(body);
       } catch (err) {
