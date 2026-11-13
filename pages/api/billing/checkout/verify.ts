@@ -35,7 +35,7 @@ import { logger } from '../../../../backend/services/logger';
 import { supabase } from '@/backend/db/supabaseClient';
 import { verifyPayment } from '@/backend/services/payments/orchestrator';
 import type { PaymentProviderId } from '@/backend/services/payments/orchestrator';
-import { generateTopupInvoice } from '@/backend/services/billing/topupInvoiceService';
+import { generateTopupInvoice, reportTopupInvoiceFailure } from '@/backend/services/billing/topupInvoiceService';
 import {
   closePurchaseFromClient,
   fulfillProviderConfirmedPurchase,
@@ -117,7 +117,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // UNIQUE), so this call returns the existing one rather than a second invoice.
   let invoiceNumber: string | null = null;
   try { invoiceNumber = (await generateTopupInvoice(purchaseId))?.invoiceNumber ?? null; }
-  catch (e: any) { logger.warn('checkout_invoice_failed', { purchaseId, message: e?.message }); }
+  catch (e) { reportTopupInvoiceFailure(purchaseId, e, 'checkout_verify'); }
 
   return res.status(200).json({
     ok: true,

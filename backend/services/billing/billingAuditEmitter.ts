@@ -33,7 +33,9 @@ export interface AnomalyEvent {
   organizationId?: string;
   kind:            'double_deduct_prevented' | 'untracked_ai_call_blocked' | 'queue_replay_blocked' | 'reservation_orphan_reaped' | 'approval_self_signature_attempt' | 'underfunded_settlement'
                  // B3 (financial-writes contract): a render billing HOLD / CONFIRM / RELEASE write that did not happen.
-                   | 'render_billing_write_failed';
+                   | 'render_billing_write_failed'
+                 // B4 (e1): an existing invoice number belongs to ANOTHER purchase - a money-integrity event.
+                   | 'topup_invoice_ownership_mismatch';
   severity:        'info' | 'warn' | 'critical';
   message:         string;
   correlationId?:  string;

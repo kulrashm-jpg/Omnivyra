@@ -67,6 +67,7 @@ jest.mock('../../services/creditExecutionService', () => ({
 }));
 const invoices: string[] = [];
 jest.mock('../../services/billing/topupInvoiceService', () => ({
+  reportTopupInvoiceFailure: jest.fn(), // B4: callers report invoice failures through it
   generateTopupInvoice: jest.fn(async (id: string) => {
     if (!invoices.includes(id)) invoices.push(id);
     return { invoiceNumber: `INV-${id}` };

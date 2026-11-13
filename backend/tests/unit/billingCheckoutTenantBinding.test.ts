@@ -191,6 +191,7 @@ jest.mock('../../services/billing/purchaseClosureService', () => ({
   }),
 }));
 jest.mock('../../services/billing/topupInvoiceService', () => ({
+  reportTopupInvoiceFailure: jest.fn(), // B4: callers report invoice failures through it
   generateTopupInvoice: jest.fn(async (purchaseId: string) => {
     sinkCalls.push({ fn: 'generateTopupInvoice', args: { purchaseId } });
     return { invoiceNumber: 'INV-1' };

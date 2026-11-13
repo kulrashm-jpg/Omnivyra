@@ -108,6 +108,7 @@ jest.mock('../../services/creditExecutionService', () => ({
 const invoices: string[] = [];
 let invoiceFails = false;
 jest.mock('../../services/billing/topupInvoiceService', () => ({
+  reportTopupInvoiceFailure: jest.fn(), // B4: callers report invoice failures through it
   generateTopupInvoice: jest.fn(async (id: string) => {
     if (invoiceFails) { invoiceFails = false; throw new Error('simulated invoice failure'); }
     if (!invoices.includes(id)) invoices.push(id);              // deterministic + UNIQUE

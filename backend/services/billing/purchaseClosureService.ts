@@ -34,7 +34,7 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { supabase } from '../../db/supabaseClient';
 import { logger } from '../logger';
 import { completePurchase, reopenSystemClosedPurchase } from '../purchaseService';
-import { generateTopupInvoice } from './topupInvoiceService';
+import { generateTopupInvoice, reportTopupInvoiceFailure } from './topupInvoiceService';
 import { resolveProviderOrderOutcome } from '../payments/orchestrator';
 import type { PaymentProviderId, ProviderFinancials } from '../payments/orchestrator';
 import { validateProviderFinancials } from './paymentFinancialValidator';
@@ -174,7 +174,7 @@ export async function fulfillProviderConfirmedPurchase(
   }
 
   try { await generateTopupInvoice(purchaseId); }
-  catch (e) { logger.warn('payment_invoice_deferred', { purchaseId, message: e instanceof Error ? e.message : String(e) }); }
+  catch (e) { reportTopupInvoiceFailure(purchaseId, e, 'purchase_closure'); }
 
   logger.info('payment_fulfillment_completed', {
     purchaseId, creditsGranted: result.creditsGranted, source: 'provider_confirmed',

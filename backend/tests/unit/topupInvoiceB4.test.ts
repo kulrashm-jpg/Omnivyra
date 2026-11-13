@@ -57,7 +57,11 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 
-import { generateTopupInvoice, TopupInvoiceError } from '../../services/billing/topupInvoiceService';
+jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
+import * as fs from 'fs';
+import * as path from 'path';
+import { generateTopupInvoice, TopupInvoiceError, reportTopupInvoiceFailure } from '../../services/billing/topupInvoiceService';
+import { logger } from '../../services/logger';
 
 const PURCHASE = { id: 'aaaaaaaa-1111-4111-8111-111111111111', organization_id: 'org-1', credits: 100, amount_paid: 500, currency: 'INR', provider: 'razorpay', reference_id: 'pay_1', status: 'completed', created_at: '2026-11-10T10:00:00Z' };
 const NUMBER = 'INV-202611-AAAAAAAA';
@@ -112,4 +116,31 @@ it.each([
   expect(err).toMatchObject({ code: 'TOPUP_INVOICE_OWNERSHIP_MISMATCH', retryable: false });
   expect(mockDb.writes).toEqual([]);
   expect(mockDb.lines).toEqual([]);
+});
+
+describe('e1: how callers report a top-up invoice failure', () => {
+  beforeEach(() => { (logger.error as jest.Mock).mockClear(); (logger.warn as jest.Mock).mockClear(); });
+  const anomalies = () => (logger.error as jest.Mock).mock.calls.filter((c: any[]) => c[0] === 'billing_anomaly');
+
+  it('an OWNERSHIP_MISMATCH is an ERROR plus a CRITICAL anomaly - not routine noise', () => {
+    reportTopupInvoiceFailure('pur-1', new TopupInvoiceError('TOPUP_INVOICE_OWNERSHIP_MISMATCH', false, 'x'), 'checkout_verify');
+    expect((logger.error as jest.Mock).mock.calls.some((c: any[]) => c[0] === 'topup_invoice_ownership_mismatch')).toBe(true);
+    expect(anomalies()).toEqual([[ 'billing_anomaly', expect.objectContaining({ kind: 'topup_invoice_ownership_mismatch', severity: 'critical', purchase_id: 'pur-1' }) ]]);
+  });
+
+  it('CONTROL: a retryable failure is a WARN only (the next pass resumes the draft)', () => {
+    reportTopupInvoiceFailure('pur-1', new TopupInvoiceError('TOPUP_INVOICE_LINE_FAILED', true, 'x'), 'purchase_closure');
+    expect(logger.warn).toHaveBeenCalledWith('topup_invoice_deferred', expect.objectContaining({ code: 'TOPUP_INVOICE_LINE_FAILED' }));
+    expect(anomalies()).toEqual([]);
+  });
+
+  it('both callers report through it (and the check fails a caller that does not)', () => {
+    const ROOT = path.resolve(__dirname, '../../..');
+    const usesReporter = (src: string) => /catch\s*\((\w+)[^)]*\)\s*\{\s*reportTopupInvoiceFailure\(\s*purchaseId\s*,\s*\1\s*,/.test(src);
+    for (const rel of ['backend/services/billing/purchaseClosureService.ts', 'pages/api/billing/checkout/verify.ts']) {
+      expect([rel, usesReporter(fs.readFileSync(path.join(ROOT, rel), 'utf8'))]).toEqual([rel, true]);
+    }
+    // POSITIVE CONTROL: the old warn-only catch does not pass
+    expect(usesReporter("catch (e) { logger.warn('payment_invoice_deferred', { purchaseId }); }")).toBe(false);
+  });
 });

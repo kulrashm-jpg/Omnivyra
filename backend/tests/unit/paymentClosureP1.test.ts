@@ -111,6 +111,7 @@ jest.mock('../../services/creditExecutionService', () => ({
 
 const invoices: string[] = [];
 jest.mock('../../services/billing/topupInvoiceService', () => ({
+  reportTopupInvoiceFailure: jest.fn(), // B4: callers report invoice failures through it
   generateTopupInvoice: jest.fn(async (purchaseId: string) => {
     // Deterministic invoice number + UNIQUE — a retry returns the existing one.
     if (!invoices.includes(purchaseId)) invoices.push(purchaseId);

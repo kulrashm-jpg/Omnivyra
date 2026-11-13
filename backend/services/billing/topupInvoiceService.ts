@@ -8,6 +8,8 @@
  * Records only — no wallet/ledger writes.
  */
 import { supabase } from '../../db/supabaseClient';
+import { logger } from '../logger';
+import { emitAnomaly } from './billingAuditEmitter';
 
 /**
  * A top-up invoice write that did not happen (B4). `retryable` says whether running generateTopupInvoice again can
@@ -186,4 +188,27 @@ async function ensureLineAndMarkPaid(invoiceId: string, p: PurchaseRow, amount: 
     throw new TopupInvoiceError('TOPUP_INVOICE_MARK_PAID_FAILED', true,
       `mark-paid failed for invoice ${invoiceId}: ${paidErr?.message ?? `matched ${Array.isArray(paid) ? paid.length : 'no'} rows`}`);
   }
+}
+
+/**
+ * How a caller reports a top-up invoice failure (B4, e1). A retryable failure is a WARN - the next closure /
+ * reconcile pass resumes the draft. An OWNERSHIP_MISMATCH is a money-integrity event someone must look at: ERROR plus
+ * a CRITICAL anomaly, never routine noise. Never throws.
+ */
+export function reportTopupInvoiceFailure(purchaseId: string, err: unknown, source: string): void {
+  try {
+    const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof TopupInvoiceError && !err.retryable) {
+      logger.error('topup_invoice_ownership_mismatch', { purchaseId, source, code: err.code, message });
+      emitAnomaly({
+        kind: 'topup_invoice_ownership_mismatch', severity: 'critical',
+        message: 'a top-up invoice number belongs to another purchase - nothing was written',
+        metadata: { purchase_id: purchaseId, source, code: err.code, detail: message },
+      });
+      return;
+    }
+    logger.warn('topup_invoice_deferred', {
+      purchaseId, source, code: err instanceof TopupInvoiceError ? err.code : null, message,
+    });
+  } catch { /* reporting never throws */ }
 }
