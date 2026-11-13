@@ -4,6 +4,7 @@ import { getCanonicalProfile as getProfile } from '@/backend/services/context/ca
 import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';
+import { extractRegionIssues } from './marketPulse/regionCharging';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
 import { adoptMarketPulseIdentity } from '@/backend/services/companyIntelligence';
 import { scoreFinding } from './marketPulse/scoringService';
@@ -753,6 +754,8 @@ export async function getMarketPulseRun(runId: string, companyId: string) {
       confidence_index: typeof legacyJob?.confidence_index === 'number' ? legacyJob.confidence_index : null,
       legacy_status: legacyJob?.status ?? null,
       legacy_error: legacyJob?.error ?? null,
+      // Per-region failures (credit stops, charged-without-output, released) for the run view; [] when none.
+      region_issues: extractRegionIssues(legacyJob?.region_results),
       // Phase 1A: surface previously-dropped consolidator outputs so the UI
       // can render the executive summary, regional intelligence, and risk
       // alerts that the legacy pipeline already produced.

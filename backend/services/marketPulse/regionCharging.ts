@@ -77,6 +77,36 @@ export async function notifyMarketPulseSkipped(companyId: string, message: strin
   }
 }
 
+export type MarketPulseRegionIssueCode = 'INSUFFICIENT_CREDITS' | 'CHARGED_NO_OUTPUT' | 'ALREADY_RELEASED';
+export type MarketPulseRegionIssue = {
+  region: string;
+  code: MarketPulseRegionIssueCode | null;
+  charged: boolean;
+  message: string | null;
+};
+
+const ISSUE_CODES: ReadonlySet<string> = new Set(['INSUFFICIENT_CREDITS', 'CHARGED_NO_OUTPUT', 'ALREADY_RELEASED']);
+
+/**
+ * The failed regions of a job's region_results, for the run view (UI tab, 2026-11-13): only error entries, with the
+ * same codes the processor writes (null for an uncoded failure such as an LLM error). Successful regions are omitted.
+ */
+export function extractRegionIssues(regionResults: unknown): MarketPulseRegionIssue[] {
+  if (!regionResults || typeof regionResults !== 'object') return [];
+  const issues: MarketPulseRegionIssue[] = [];
+  for (const [region, entry] of Object.entries(regionResults as Record<string, unknown>)) {
+    const e = entry as { error?: unknown; code?: unknown; charged?: unknown; message?: unknown } | null;
+    if (!e || e.error !== true) continue;
+    issues.push({
+      region,
+      code: typeof e.code === 'string' && ISSUE_CODES.has(e.code) ? (e.code as MarketPulseRegionIssueCode) : null,
+      charged: e.charged === true,
+      message: typeof e.message === 'string' ? e.message : null,
+    });
+  }
+  return issues;
+}
+
 /** Sum of credits charged across a job's region_results (entries without credits_charged count 0). */
 export function sumRegionCreditsCharged(regionResults: unknown): number {
   if (!regionResults || typeof regionResults !== 'object') return 0;

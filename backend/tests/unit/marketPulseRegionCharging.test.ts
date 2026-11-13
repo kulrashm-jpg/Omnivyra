@@ -269,3 +269,27 @@ describe('settlement + route wiring', () => {
     expect(src).toMatch(/triggered_by_user_id: access\.userId/);
   });
 });
+
+describe('run view: region_issues (UI tab)', () => {
+  const { extractRegionIssues } = require('../../services/marketPulse/regionCharging');
+  it('lists only failed regions with their codes; successes omitted; uncoded failure -> code null', () => {
+    expect(extractRegionIssues({
+      US: { topics: [], credits_charged: 8 },
+      IN: { error: true, code: 'INSUFFICIENT_CREDITS', charged: false, message: 'm1' },
+      UK: { error: true, code: 'CHARGED_NO_OUTPUT', charged: true, message: 'm2' },
+      DE: { error: true, message: 'LLM response is not valid JSON' },
+      FR: { error: true, code: 'SOMETHING_ELSE', message: 'm3' },
+    })).toEqual([
+      { region: 'IN', code: 'INSUFFICIENT_CREDITS', charged: false, message: 'm1' },
+      { region: 'UK', code: 'CHARGED_NO_OUTPUT', charged: true, message: 'm2' },
+      { region: 'DE', code: null, charged: false, message: 'LLM response is not valid JSON' },
+      { region: 'FR', code: null, charged: false, message: 'm3' }, // only the known codes are surfaced
+    ]);
+    expect(extractRegionIssues(null)).toEqual([]);
+  });
+  it('getMarketPulseRun exposes run.region_issues from the snapshotted legacy job', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../..', 'backend/services/marketPulseV2ServiceModel.ts'), 'utf8');
+    const fn = src.slice(src.indexOf('export async function getMarketPulseRun'));
+    expect(fn).toMatch(/region_issues: extractRegionIssues\(legacyJob\?\.region_results\)/);
+  });
+});
