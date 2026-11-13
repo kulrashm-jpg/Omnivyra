@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
+import AccessRestricted from '../components/access/AccessRestricted';
 
 /**
  * Enterprise Control Center — READ-ONLY console.
@@ -31,8 +32,12 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 export default function OpsCenterPage() {
-  const { selectedCompanyId } = useCompanyContext();
+  // UI guard mirroring the server: every endpoint below enforces COMPANY_ADMIN /
+  // SUPER_ADMIN (enforceRole), which is exactly context `isAdmin`. Without this a
+  // non-admin saw an empty 13-tab console full of 403 errors.
+  const { selectedCompanyId, isAdmin, authChecked, isLoading } = useCompanyContext();
   const companyId = selectedCompanyId || '';
+  const roleResolved = authChecked && !isLoading;
   const [tab, setTab] = useState<Tab>('operations');
   const [data, setData] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
@@ -64,7 +69,7 @@ export default function OpsCenterPage() {
   };
 
   const load = useCallback(async (t: Tab) => {
-    if (!companyId) return;
+    if (!companyId || !roleResolved || !isAdmin) return;
     setLoading(true);
     setError('');
     try {
@@ -84,11 +89,22 @@ export default function OpsCenterPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId]);
+  }, [companyId, roleResolved, isAdmin]);
 
-  useEffect(() => { void load(tab); /* eslint-disable-next-line */ }, [tab, companyId]);
+  useEffect(() => { void load(tab); /* eslint-disable-next-line */ }, [tab, companyId, roleResolved, isAdmin]);
 
   const cur = data[tab];
+
+  if (!roleResolved) {
+    return (
+      <main className="min-h-screen bg-gray-50 px-4 py-6 sm:py-8">
+        <p className="mx-auto max-w-5xl text-sm text-gray-500">Loading…</p>
+      </main>
+    );
+  }
+  if (!isAdmin) {
+    return <AccessRestricted area="the Operations Center" />;
+  }
 
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-6 sm:py-8">
