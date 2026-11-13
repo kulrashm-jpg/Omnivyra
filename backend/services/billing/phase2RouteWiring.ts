@@ -82,13 +82,18 @@ export class BilledRouteAlreadyProcessedError extends Error {
   }
 }
 
-/** Every reclaim slot for this request identity is a failed, released attempt: 409, start a new request. */
-export class BilledRouteAlreadyReleasedError extends Error {
-  readonly code = 'ALREADY_RELEASED';
-  readonly httpStatus = 409;
+/**
+ * Every reclaim slot for this request identity is a failed, released attempt. The cause is OURS (the route failed
+ * on every attempt), so this is a 5xx with its own code - never the benign 409 a client may retry into (05 d,
+ * 2026-11-13). retryable=false: the SAME Idempotency-Key cannot succeed; nothing was charged.
+ */
+export class BilledRouteReclaimExhaustedError extends Error {
+  readonly code = 'RECLAIM_CAP_EXHAUSTED';
+  readonly httpStatus = 500;
+  readonly retryable = false;
   constructor(public readonly surface: BillingSurface) {
     super('This request failed repeatedly and was not charged. Please start it again.');
-    this.name = 'BilledRouteAlreadyReleasedError';
+    this.name = 'BilledRouteReclaimExhaustedError';
   }
 }
 
@@ -265,7 +270,7 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
         message: 'billed_route_reclaim_cap_exhausted',
         metadata: { surface: String(args.surface), action: String(args.action), attempts: MAX_ROUTE_RECLAIM_ATTEMPTS },
       });
-      throw new BilledRouteAlreadyReleasedError(args.surface);
+      throw new BilledRouteReclaimExhaustedError(args.surface);
     },
   });
 }
