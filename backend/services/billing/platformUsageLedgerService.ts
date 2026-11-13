@@ -26,6 +26,11 @@
  * This module writes exactly one table: platform_usage_events. It never touches
  * usage_events, unified_transactions, credits, invoices or quotas, and the row
  * it writes carries no organization_id to join them by. Isolation is structural.
+ *
+ * METADATA IS NOT A TENANT LINK (e1, 039). metadata may carry trace ids for audit - call_id, provider response
+ * id, reference_type / reference_id, campaign_id, user_id, and for rows moved by D-039b the original
+ * moved_from_usage_event_id / original_organization_id. They exist to explain a row, never to attribute it: no
+ * customer reader joins on them, and the table stays service-role only (RLS on, zero policies).
  */
 
 import { createHash } from 'crypto';
