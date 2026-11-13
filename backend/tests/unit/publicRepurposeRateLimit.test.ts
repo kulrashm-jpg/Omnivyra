@@ -59,7 +59,7 @@ jest.mock('../../services/billing/phase2RouteWiring', () => ({
   },
 }));
 
-import handler, { PUBLIC_REPURPOSE_IP_LIMIT, PUBLIC_REPURPOSE_GLOBAL_LIMIT } from '../../../pages/api/blogs/[id]/repurpose';
+import handler, { PUBLIC_REPURPOSE_IP_LIMIT, PUBLIC_REPURPOSE_GLOBAL_LIMIT, PUBLIC_REPURPOSE_COMPANY_LIMIT } from '../../../pages/api/blogs/[id]/repurpose';
 import { resolveRedisFailureMode } from '../../../lib/auth/rateLimit';
 
 function mockRes() {
@@ -136,29 +136,41 @@ describe('public repurpose: login required, charged to the CALLER', () => {
   });
 });
 
-describe('public repurpose: defence-in-depth limiter (fail-closed)', () => {
-  it('per IP: over the limit -> 429 before any blog read / model call / charge', async () => {
-    for (let i = 0; i < PUBLIC_REPURPOSE_IP_LIMIT.limit; i++) expect((await post()).statusCode).toBe(200);
-    const reads = blogReads.length; const calls = modelCalls.length; const charges = billed.length;
-    const over = await post();
+describe('public repurpose limits: per COMPANY (real), global (backstop), per IP (loose backstop)', () => {
+  it('per company: the cap-th request is served, the next is 429 before any blog read / model call / charge; another company is unaffected', async () => {
+    auth.memberships = new Set([CALLER_CO, OTHER_CO]);
+    for (let i = 0; i < PUBLIC_REPURPOSE_COMPANY_LIMIT.limit; i++) expect((await post({ companyId: CALLER_CO })).statusCode).toBe(200);
+    const before = [blogReads.length, modelCalls.length, billed.length];
+    const over = await post({ companyId: CALLER_CO });
     expect(over.statusCode).toBe(429);
     expect(over.body).toEqual({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
-    expect([blogReads.length, modelCalls.length, billed.length]).toEqual([reads, calls, charges]);
-    expect((await post({ ip: '203.0.113.8' })).statusCode).toBe(200);
+    expect([blogReads.length, modelCalls.length, billed.length]).toEqual(before);
+    expect((await post({ companyId: OTHER_CO })).statusCode).toBe(200);
   });
-  it('global: across many IPs the global cap holds', async () => {
-    const cap = PUBLIC_REPURPOSE_GLOBAL_LIMIT.limit;
+  it('10 users of 10 companies behind ONE office IP, 5 repurposes each: none throttled (colocation is not abuse)', async () => {
     let served = 0;
-    for (let i = 0; i < cap + 5; i++) if ((await post({ ip: `198.51.${Math.floor(i / 250)}.${i % 250}` })).statusCode === 200) served += 1;
-    expect(served).toBe(cap);
+    for (let u = 0; u < 10; u++) {
+      auth.userId = `u${u}`; auth.memberships = new Set([`co-${u}`]);
+      for (let k = 0; k < 5; k++) if ((await post({ ip: '203.0.113.50' })).statusCode === 200) served += 1;
+    }
+    expect(served).toBe(50);
   });
-  it('no trusted client IP -> fail closed (429)', async () => {
-    expect((await post({ ip: null })).statusCode).toBe(429);
-    expect(modelCalls).toHaveLength(0);
+  it('global backstop: across many companies the global cap holds', async () => {
+    let served = 0;
+    for (let i = 0; i < PUBLIC_REPURPOSE_GLOBAL_LIMIT.limit + 5; i++) {
+      auth.memberships = new Set([`co-g${i}`]);
+      if ((await post({ ip: `198.51.${Math.floor(i / 250)}.${i % 250}` })).statusCode === 200) served += 1;
+    }
+    expect(served).toBe(PUBLIC_REPURPOSE_GLOBAL_LIMIT.limit);
   });
-  it('both limits FAIL CLOSED when Redis is unavailable', () => {
-    expect(resolveRedisFailureMode(PUBLIC_REPURPOSE_IP_LIMIT)).toBe('closed');
-    expect(resolveRedisFailureMode(PUBLIC_REPURPOSE_GLOBAL_LIMIT)).toBe('closed');
+  it('per IP is only a loose burst backstop (well above the per-company cap)', () => {
+    expect(PUBLIC_REPURPOSE_IP_LIMIT.limit).toBeGreaterThan(PUBLIC_REPURPOSE_COMPANY_LIMIT.limit);
+  });
+  it('no trusted client IP: an authenticated, billed request is NOT refused for it', async () => {
+    expect((await post({ ip: null })).statusCode).toBe(200);
+  });
+  it("all limits are 'strict' on a Redis failure (real cap in-process; never closed, never unlimited)", () => {
+    for (const cfg of [PUBLIC_REPURPOSE_COMPANY_LIMIT, PUBLIC_REPURPOSE_GLOBAL_LIMIT, PUBLIC_REPURPOSE_IP_LIMIT]) expect(resolveRedisFailureMode(cfg)).toBe('strict');
   });
   it('CONTROL: company-source requests are not touched by the public limiter', async () => {
     const res = mockRes();

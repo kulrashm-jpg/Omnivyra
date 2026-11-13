@@ -29,15 +29,24 @@ import { authRequestIpOrNull } from '../../../../backend/auth/requestClientIp';
  * BLOCKING (money), 2026-11-13. source=public WAS an anonymous, unbilled model call (the gateway's AI guard saw no
  * user and no IP for it, so only platform-wide fail-open caps applied). OWNER RULING (via e9): repurpose REQUIRES
  * LOGIN and is CHARGED to the caller's company, like every AI feature - no anonymous free AI. A public blog is now
- * just a SOURCE; the company billed is the CALLER's (explicit company_id, else their first ACTIVE membership; never
- * the blog's, never the users.active_company_id pointer). Defence in depth: public-source requests are still
- * limited per trusted client IP and globally, FAIL-CLOSED, before the blog read and the model call.
+ * just a SOURCE; the company billed is the CALLER's (explicit company_id, else their only ACTIVE membership; never
+ * the blog's, never the users.active_company_id pointer).
+ *
+ * Limits (e9 ruling after 05 review): the request is authenticated AND billed, so the charge is the economic
+ * defence and the limits key on the PRINCIPAL, not on colocation: per COMPANY 30/h is the real limit, global 300/h
+ * the platform backstop, per trusted IP 120/h only a loose single-host burst backstop (applied only when an IP is
+ * known - a paying user behind a header-stripping proxy is not refused). On a Redis failure all are 'strict': the
+ * real configured cap in an in-process bucket - never a paid-feature outage, never unlimited. (Anonymous anti-bot
+ * paths such as signup stay fail-CLOSED; that ruling is unchanged.)
  */
-export const PUBLIC_REPURPOSE_IP_LIMIT: RateLimitConfig = {
-  keyPrefix: 'rl:public:blog-repurpose:ip', limit: 10, windowSecs: 3600, onRedisFailure: 'closed',
+export const PUBLIC_REPURPOSE_COMPANY_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:public:blog-repurpose:company', limit: 30, windowSecs: 3600, onRedisFailure: 'strict',
 };
 export const PUBLIC_REPURPOSE_GLOBAL_LIMIT: RateLimitConfig = {
-  keyPrefix: 'rl:public:blog-repurpose:global', limit: 300, windowSecs: 3600, onRedisFailure: 'closed',
+  keyPrefix: 'rl:public:blog-repurpose:global', limit: 300, windowSecs: 3600, onRedisFailure: 'strict',
+};
+export const PUBLIC_REPURPOSE_IP_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:public:blog-repurpose:ip', limit: 120, windowSecs: 3600, onRedisFailure: 'strict',
 };
 import { extractBlogContext } from '../../../../lib/blog/blockExtractor';
 import {
@@ -132,19 +141,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     companyId = callerCompanyId;
   }
 
-  // ── Public source: per-IP and global limits, fail-closed (defence in depth) ───
+  // ── Public source: per-company (real limit), global (backstop), per-IP (loose burst backstop) ───
   if (source === 'public') {
-    const ip = authRequestIpOrNull(req);
-    if (!ip) {
-      return res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
-    }
-    const perIp = await checkRateLimit(ip, PUBLIC_REPURPOSE_IP_LIMIT);
-    if (!perIp.allowed) {
-      return res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
-    }
+    const tooMany = () => res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
+    const perCompany = await checkRateLimit(companyId, PUBLIC_REPURPOSE_COMPANY_LIMIT);
+    if (!perCompany.allowed) return tooMany();
     const global = await checkRateLimit('all', PUBLIC_REPURPOSE_GLOBAL_LIMIT);
-    if (!global.allowed) {
-      return res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
+    if (!global.allowed) return tooMany();
+    const ip = authRequestIpOrNull(req);
+    if (ip) {
+      const perIp = await checkRateLimit(ip, PUBLIC_REPURPOSE_IP_LIMIT);
+      if (!perIp.allowed) return tooMany();
     }
   }
 
