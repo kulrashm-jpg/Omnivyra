@@ -11,6 +11,62 @@ function serializeRecommendationContext(
   return JSON.stringify(withRecommendationContextDefaults(context));
 }
 
+/**
+ * D2 (e1 2026-11-13): profile lists used to be UNION-merged on every save, so a user could never delete an item.
+ * A USER save may now name lists to REPLACE (`replace_lists: ['goals_list', ...]`, with the new list in the same
+ * body). AI refine / enrich (source 'ai_refined', or any caller that does not name a list) keeps the union.
+ * The route refuses a bulk removal without explicit confirmation (assessListReplace).
+ */
+export const REPLACEABLE_LISTS = {
+  industry_list: 'industry',
+  category_list: 'category',
+  geography_list: 'geography',
+  content_themes_list: 'content_themes',
+  products_services_list: 'products_services',
+  target_audience_list: 'target_audience',
+  goals_list: 'goals',
+  brand_voice_list: 'brand_voice',
+} as const;
+export type ReplaceableList = keyof typeof REPLACEABLE_LISTS;
+
+/** The requested replacements: known list names whose new list is present as an array. */
+export function readReplaceLists(input: Record<string, unknown>): { valid: ReplaceableList[]; invalid: string[] } {
+  const raw = input.replace_lists;
+  const names = Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw];
+  const valid: ReplaceableList[] = [];
+  const invalid: string[] = [];
+  for (const n of names) {
+    const name = String(n);
+    if (Object.prototype.hasOwnProperty.call(REPLACEABLE_LISTS, name) && Array.isArray(input[name])) valid.push(name as ReplaceableList);
+    else invalid.push(name);
+  }
+  return { valid, invalid };
+}
+
+/** The stored list exactly as the union merge reads it (the list column, else the split text column). */
+export function storedList(existing: Partial<CompanyProfile> | null | undefined, field: ReplaceableList): string[] {
+  const e = (existing ?? {}) as Record<string, unknown>;
+  const list = e[field];
+  return mergeStringArrays([], Array.isArray(list) ? (list as string[]) : splitToList(e[REPLACEABLE_LISTS[field]] as string | null));
+}
+
+/** Bulk-removal guard (05): more than 5 items, or more than half of the list (and more than one item). */
+export const BULK_REMOVAL_ABSOLUTE = 5;
+export function isBulkRemoval(stored: number, removed: number): boolean {
+  return removed > BULK_REMOVAL_ABSOLUTE || (removed > 1 && removed * 2 > stored);
+}
+export function assessListReplace(
+  existing: Partial<CompanyProfile> | null | undefined,
+  input: Record<string, unknown>,
+): Array<{ field: ReplaceableList; stored: number; removed: string[]; bulk: boolean }> {
+  return readReplaceLists(input).valid.map((field) => {
+    const before = storedList(existing, field);
+    const after = new Set(mergeStringArrays([], input[field] as string[]).map((x) => x.toLowerCase()));
+    const removed = before.filter((x) => !after.has(x.toLowerCase()));
+    return { field, stored: before.length, removed, bulk: isBulkRemoval(before.length, removed.length) };
+  });
+}
+
 export function buildSavePayload(
   input: Partial<CompanyProfile>,
   existing: CompanyProfile | null,
@@ -22,6 +78,18 @@ export function buildSavePayload(
 ) {
   const logoUrl =
     input.logo_url !== undefined ? String(input.logo_url || '').trim() || null : existing?.logo_url ?? null;
+  // D2: a USER save that names a list REPLACES it; everything else is the union (never shrinks).
+  const replacing = source === 'user' ? new Set(readReplaceLists(input as Record<string, unknown>).valid) : new Set<ReplaceableList>();
+  const listFor = (field: ReplaceableList): string[] => {
+    const textKey = REPLACEABLE_LISTS[field];
+    const inputList = (input as Record<string, unknown>)[field] as string[] | null | undefined;
+    if (replacing.has(field)) return mergeStringArrays([], inputList ?? []);
+    const existingList = (existing as Record<string, unknown> | null)?.[field] as string[] | null | undefined;
+    return mergeStringArrays(
+      existingList ?? splitToList((existing as Record<string, unknown> | null)?.[textKey] as string | null | undefined),
+      inputList ?? splitToList((input as Record<string, unknown>)[textKey] as string | null | undefined),
+    );
+  };
   const faviconUrl =
     input.favicon_url !== undefined
       ? String(input.favicon_url || '').trim() || null
@@ -36,15 +104,15 @@ export function buildSavePayload(
     website_url: input.website_url ?? existing?.website_url ?? null,
     logo_url: logoUrl,
     favicon_url: faviconUrl,
-    industry_list: mergeStringArrays(existing?.industry_list ?? splitToList(existing?.industry), input.industry_list ?? splitToList(input.industry)),
-    category_list: mergeStringArrays(existing?.category_list ?? splitToList(existing?.category), input.category_list ?? splitToList(input.category)),
-    geography_list: mergeStringArrays(existing?.geography_list ?? splitToList(existing?.geography), input.geography_list ?? splitToList(input.geography)),
+    industry_list: listFor('industry_list'),
+    category_list: listFor('category_list'),
+    geography_list: listFor('geography_list'),
     competitors_list: [],
-    content_themes_list: mergeStringArrays(existing?.content_themes_list ?? splitToList(existing?.content_themes), input.content_themes_list ?? splitToList(input.content_themes)),
-    products_services_list: mergeStringArrays(existing?.products_services_list ?? splitToList(existing?.products_services), input.products_services_list ?? splitToList(input.products_services)),
-    target_audience_list: mergeStringArrays(existing?.target_audience_list ?? splitToList(existing?.target_audience), input.target_audience_list ?? splitToList(input.target_audience)),
-    goals_list: mergeStringArrays(existing?.goals_list ?? splitToList(existing?.goals), input.goals_list ?? splitToList(input.goals)),
-    brand_voice_list: mergeStringArrays(existing?.brand_voice_list ?? splitToList(existing?.brand_voice), input.brand_voice_list ?? splitToList(input.brand_voice)),
+    content_themes_list: listFor('content_themes_list'),
+    products_services_list: listFor('products_services_list'),
+    target_audience_list: listFor('target_audience_list'),
+    goals_list: listFor('goals_list'),
+    brand_voice_list: listFor('brand_voice_list'),
     social_profiles: input.social_profiles ?? existing?.social_profiles ?? null,
     field_confidence: input.field_confidence ?? existing?.field_confidence ?? null,
     overall_confidence: input.overall_confidence ?? existing?.overall_confidence ?? 0,

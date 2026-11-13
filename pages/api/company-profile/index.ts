@@ -36,6 +36,7 @@ import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rol
 import { adoptCompanyProfileIdentity } from '../../../backend/services/companyIntelligence';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
+import { assessListReplace, readReplaceLists } from '../../../backend/services/companyProfile/savePayload';
 
 const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
 
@@ -505,8 +506,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }
         }
       }
+      // D2 (e1 2026-11-13): a user save may REPLACE named lists (so an item can be deleted). Every name must be a
+      // replaceable list sent as an array; a bulk removal (BULK_REMOVAL rule) needs `confirm_bulk_removal: true`.
+      if (body.replace_lists !== undefined) {
+        const { invalid } = readReplaceLists(body);
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            error: `replace_lists may only name replaceable profile lists sent as arrays: ${invalid.join(', ')}`,
+            code: 'INVALID_REPLACE_LISTS', invalid, retryable: false,
+          });
+        }
+        const bulk = assessListReplace(existingProfile, body).filter((r) => r.bulk);
+        if (bulk.length > 0 && body.confirm_bulk_removal !== true) {
+          return res.status(409).json({
+            error: 'This save removes many items from a list. Confirm the removal to continue.',
+            code: 'BULK_LIST_REMOVAL_UNCONFIRMED',
+            lists: bulk.map((r) => ({ field: r.field, stored: r.stored, removed: r.removed })),
+            retryable: false,
+          });
+        }
+      }
+      const { confirm_bulk_removal: _confirmBulk, ...bodyForSave } = body;
       const payload = {
-        ...body,
+        ...bodyForSave,
         company_id: resolvedCompanyId,
         report_settings: upsertCompanyProfileGovernanceSettings({
           existingReportSettings: existingProfile?.report_settings,
