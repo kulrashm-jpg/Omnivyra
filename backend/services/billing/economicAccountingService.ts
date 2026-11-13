@@ -329,10 +329,10 @@ export async function getProfitabilityReport(w: Window): Promise<ProfitabilityRe
 }
 
 /**
- * Platform-global (null-org) system rows from usage_events. These are
- * non-customer provider costs (e.g. AI-visibility probes — Phase 8G-B) that
- * carry no organization and therefore never reach unified_transactions
- * (organization_id NOT NULL). Disjoint from the org-attributed system rows in
+ * Platform-scope (null-org) rows from usage_events - ANY source_type (since 038: AI-visibility probes, and the
+ * platform AI / cache / external-API spend that used to sit under the fake all-zero org; a NULL org is only
+ * allowed with metadata.billing_scope 'platform'). These are non-customer provider costs that never reach
+ * unified_transactions (platform rows are written to usage_events only, P1). Disjoint from the org-attributed rows in
  * unified_transactions, so combining the two never double-counts. activity =
  * reference_type (falls back to process_type); margin = −cost (pure platform
  * spend, no credit value). Excluded when an org filter is set (these belong to
@@ -342,8 +342,10 @@ async function fetchPlatformGlobalUsageRows(w: Window): Promise<UnifiedTxnRow[]>
   if (w.organizationId) return [];
   let q = supabase
     .from('usage_events')
-    .select('process_type, reference_type, provider_name, provider, model_name, model, total_tokens, total_cost_usd')
-    .eq('source_type', 'system')
+    // 038 (e9 / e1): EVERY platform-scope row - organization_id NULL is only allowed with billing_scope 'platform'
+    // (CHECK usage_events_org_or_platform_scope). Was `.eq('source_type','system')`, which would have missed the
+    // platform AI spend (llm / cache / external_api) once it stops sitting under the fake all-zero org.
+    .select('process_type, reference_type, provider_name, provider, model_name, model, total_tokens, total_cost_usd, source_type')
     .is('organization_id', null)
     .gte('created_at', w.since)
     .limit(MAX_ROWS);
@@ -355,7 +357,7 @@ async function fetchPlatformGlobalUsageRows(w: Window): Promise<UnifiedTxnRow[]>
     return {
       organization_id: null,
       action_key: r.reference_type ?? r.process_type ?? null,
-      source_type: 'system',
+      source_type: r.source_type ?? 'system',
       provider_name: r.provider_name ?? r.provider ?? null,
       model_name: r.model_name ?? r.model ?? null,
       total_tokens: num(r.total_tokens),

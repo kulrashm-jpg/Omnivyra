@@ -21,6 +21,19 @@ import {
 import { recordUnifiedTransaction } from './unifiedTransactionService';
 import { logger } from './logger';
 import { ledgerLinkColumnEnabled } from './billing/ledgerLinkColumnFlag';
+
+/**
+ * The all-zero "UNKNOWN_ORG" sentinel (aiGatewayCore.UNKNOWN_ORG, externalApi/execution, llm/openaiAdapter - equality
+ * pinned by a test). It is NOT a tenant: since migration 20270217000038 such usage is written as an explicit
+ * PLATFORM-scope row - organization_id NULL + metadata.billing_scope 'platform' - in usage_events only.
+ */
+export const PLATFORM_SENTINEL_ORG = '00000000-0000-0000-0000-000000000000';
+
+/** The ledger scope of a usage row: a real company, or platform (null org, or the named sentinel). */
+export function ledgerScopeOf(org: string | null | undefined): { organization_id: string | null; platform: boolean } {
+  if (org == null || org === PLATFORM_SENTINEL_ORG) return { organization_id: null, platform: true };
+  return { organization_id: org, platform: false };
+}
 import {
   getProcessTypeToActionKeyMap,
   isKnownPricingKey,
@@ -431,8 +444,11 @@ export async function logUsageEvent(params: {
     // kept flowing via its own first-class columns. We now write ONLY columns
     // that exist; provider/model values fall back into provider_name/model_name,
     // and feature_area is preserved inside `metadata`. No billing/behavior change.
-    await ownedDbTable('usage_events').insert({
-      organization_id: params.organization_id,
+    // 038: the sentinel (or a null org) is a PLATFORM-scope row, never a fake tenant. REQUIRES migration
+    // 20270217000038 (usage_events.organization_id nullable + CHECK) - deploy order: migration -> this app.
+    const scope = ledgerScopeOf(params.organization_id);
+    const { error: usageInsertError } = await ownedDbTable('usage_events').insert({
+      organization_id: scope.organization_id,
       campaign_id: params.campaign_id ?? null,
       user_id: params.user_id ?? null,
       source_type: params.source_type,
@@ -465,8 +481,22 @@ export async function logUsageEvent(params: {
         ? { ledger_hold_transaction_id: params.ledger_hold_transaction_id }
         : {}),
       // feature_area preserved here (its dedicated column doesn't exist in prod).
-      metadata: { ...(mergedMetadata ?? {}), feature_area: params.feature_area ?? null },
+      metadata: {
+        ...(mergedMetadata ?? {}),
+        feature_area: params.feature_area ?? null,
+        ...(scope.platform ? { billing_scope: 'platform' } : {}),
+      },
     });
+    if (usageInsertError) {
+      // Was unread: a failed insert vanished (this is how the documented platform path never wrote for months).
+      logger.error('usage_event_insert_failed', {
+        reason: 'insert_failed',
+        platform: scope.platform,
+        process_type: params.process_type,
+        source_type: params.source_type,
+        message: String(usageInsertError.message ?? '').slice(0, 200),
+      });
+    }
 
     // ── Phase 5: dual-write to unified_transactions ───────────────────────
     // Analytics and reporting read only from this table going forward.
@@ -474,8 +504,10 @@ export async function logUsageEvent(params: {
     // cost_anomalies rows so we don't break the caller's flow.
     // Org-scoped only: platform-global (null-org) rows live in usage_events
     // alone (unified_transactions.organization_id is NOT NULL) — Phase 8G-B.
-    if (params.organization_id != null) void recordUnifiedTransaction({
-      organization_id:  params.organization_id,
+    // Org-scoped only (P1, e9 / e1): PLATFORM rows (null org OR the sentinel) live in usage_events alone, so
+    // economicAccounting's platform read (usage_events, null org) and its unified read never double-count.
+    if (!scope.platform && scope.organization_id) void recordUnifiedTransaction({
+      organization_id:  scope.organization_id,
       user_id:          params.user_id ?? null,
       action_key:       actionKey,
       source_type:      params.source_type,
