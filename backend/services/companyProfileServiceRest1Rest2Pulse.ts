@@ -74,6 +74,7 @@ export { generateMarketingIntelligenceDraft } from './companyProfile/marketingIn
 // ─── Private imports used by this module ─────────────────────────────────────
 import type { StrategyProfile, RecommendationContext, CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './companyProfile/types';
 import { COMMERCIAL_FIELD_NAMES, MARKETING_INTELLIGENCE_FIELD_NAMES, PROBLEM_TRANSFORMATION_FIELD_NAMES } from './companyProfile/fieldConstants';
+import { computeEditStamps, shouldLockMarketPulseDomains, MARKET_PULSE_SOLUTION_DOMAINS_LOCK } from './companyProfile/fieldProvenance';
 import {
   normalizeCompanyId,
   mergeStringArrays,
@@ -553,19 +554,32 @@ export async function saveProfile(
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);
   let didLock = false;
+  // Provenance (e9 ruling 2026-11-13): WHEN the user last changed each locked field, so approved guidance that is
+  // NEWER than the edit can still apply and OLDER guidance cannot overwrite it. Stamped only on a real CONTENT change
+  // (re-saving an unchanged value does not re-stamp).
+  const lockedThisSave: string[] = [];
   if (!options?.suppressUserLocks) {
     for (const key of COMMERCIAL_FIELD_NAMES) {
       const val = input[key];
-      if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; }
+      if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
     }
     for (const key of MARKETING_INTELLIGENCE_FIELD_NAMES) {
       const val = input[key];
-      if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; }
+      if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
     }
     for (const key of PROBLEM_TRANSFORMATION_FIELD_NAMES) {
       const val = input[key as keyof CompanyProfile];
       const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
-      if (hasVal) { lockedSet.add(key); didLock = true; }
+      if (hasVal) { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
+    }
+    // Nested lock: a user's own Market Pulse solution domains (refine otherwise rewrites them from the AI
+    // classification). Locked only when a USER save actually changes them.
+    const nextDomains = (input.report_settings as { market_pulse?: { solution_domains?: unknown } } | null | undefined)?.market_pulse?.solution_domains;
+    const prevDomains = (existing?.report_settings as { market_pulse?: { solution_domains?: unknown } } | null | undefined)?.market_pulse?.solution_domains;
+    if (shouldLockMarketPulseDomains(source, nextDomains, prevDomains)) {
+      lockedSet.add(MARKET_PULSE_SOLUTION_DOMAINS_LOCK);
+      didLock = true;
+      lockedThisSave.push(MARKET_PULSE_SOLUTION_DOMAINS_LOCK);
     }
     // Lock competitors when the user explicitly saves them, so subsequent
     // refinement preserves their picks (fed as trusted 'manual', no network
@@ -578,6 +592,21 @@ export async function saveProfile(
   if (didLock) {
     payload.user_locked_fields = Array.from(lockedSet);
     payload.last_edited_by = 'user';
+  }
+  const stamps = computeEditStamps({
+    lockedKeysThisSave: lockedThisSave,
+    next: (key) => (key === MARKET_PULSE_SOLUTION_DOMAINS_LOCK
+      ? (input.report_settings as { market_pulse?: { solution_domains?: unknown } } | null | undefined)?.market_pulse?.solution_domains
+      : (input as Record<string, unknown>)[key]),
+    prev: (key) => (key === MARKET_PULSE_SOLUTION_DOMAINS_LOCK
+      ? (existing?.report_settings as { market_pulse?: { solution_domains?: unknown } } | null | undefined)?.market_pulse?.solution_domains
+      : (existing as Record<string, unknown> | null | undefined)?.[key]),
+    prevEditedAt: (existing?.report_settings as { field_edited_at?: Record<string, string> } | null | undefined)?.field_edited_at,
+    nowIso,
+  });
+  if (stamps.changed) {
+    const baseSettings = ((payload as { report_settings?: Record<string, unknown> | null }).report_settings ?? existing?.report_settings ?? {}) as Record<string, unknown>;
+    (payload as { report_settings?: Record<string, unknown> }).report_settings = { ...baseSettings, field_edited_at: stamps.editedAt };
   }
 
   const { data, error, omittedSchemaFields } = await upsertCompanyProfilePayload(

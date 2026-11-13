@@ -80,6 +80,7 @@ export { generateMarketingIntelligenceDraft } from './companyProfile/marketingIn
 // ─── Private imports used by this module ─────────────────────────────────────
 import type { StrategyProfile, RecommendationContext, CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './companyProfile/types';
 import { COMMERCIAL_FIELD_NAMES, MARKETING_INTELLIGENCE_FIELD_NAMES, PROBLEM_TRANSFORMATION_FIELD_NAMES } from './companyProfile/fieldConstants';
+import { resolveRefinedSolutionDomains } from './companyProfile/fieldProvenance';
 import {
   normalizeCompanyId,
   mergeStringArrays,
@@ -716,7 +717,13 @@ async function buildRefinedPayload(
         ...(marketPulseSettings ?? {}),
         business_model: businessClassification.business_classification.level_1,
         provider_type: businessClassification.business_classification.level_2,
-        solution_domains: businessClassification.business_classification.level_3,
+        // A user-edited (locked) value is kept; only empty / AI-sourced domains are refreshed (e9 ruling 2026-11-13).
+        solution_domains: resolveRefinedSolutionDomains(
+          locked,
+          (marketPulseSettings as { solution_domains?: string[] } | null | undefined)?.solution_domains
+            ?? workingProfile.report_settings?.market_pulse?.solution_domains,
+          businessClassification.business_classification.level_3,
+        ),
         competitor_details: competitorDetails,
         competitor_quality: competitorQuality,
         market_alternatives: marketAlternatives,

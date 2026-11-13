@@ -4,6 +4,7 @@ import type {
   UserGuidanceStrategicSection,
   UserGuidedIntelligence,
 } from './types';
+import { guidanceMayOverwrite } from './fieldProvenance';
 
 const GUIDANCE_VERSION = 1;
 const MAX_COMPETITOR_GUIDANCE = 40;
@@ -195,6 +196,14 @@ export function applyApprovedStrategicGuidance(profile: CompanyProfile): Company
     const value = approved?.edited_value ?? approved?.approved_value;
     if (!value || (approved.status !== 'edited' && approved.status !== 'approved')) continue;
     const field = STRATEGIC_FIELD_MAP[section];
+    // A manual edit is never overwritten by OLDER approved guidance; guidance approved AFTER the edit still applies
+    // (e9 ruling 2026-11-13). A locked field with no edit time recorded (legacy lock) keeps the user's value.
+    if (!guidanceMayOverwrite(
+      String(field),
+      (approved as { updated_at?: string | null }).updated_at ?? null,
+      profile.user_locked_fields ?? null,
+      (profile.report_settings as { field_edited_at?: Record<string, string> } | null | undefined)?.field_edited_at ?? null,
+    )) continue;
     (next as Record<string, unknown>)[field] = value;
   }
   return next;
