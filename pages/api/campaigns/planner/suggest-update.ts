@@ -8,7 +8,7 @@ import { resolveCompanyGroundingGuard } from '../../../../backend/services/conte
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
@@ -21,14 +21,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const { campaignId, insight_id } = req.body as { campaignId?: string; insight_id?: string };
-  if (!campaignId || !insight_id) {
-    return res.status(400).json({ error: 'Both campaignId and insight_id are required' });
+  // S2 (two-id sweep UNBOUND-READ, 2026-11-13): companyId is REQUIRED. It used to fall back to campaignId (a campaign
+  // id used as a company id), which only failed closed by accident. No client calls this route today.
+  const companyId = typeof req.body?.companyId === 'string' ? (req.body.companyId as string) : '';
+  if (!campaignId || !insight_id || !companyId) {
+    return res.status(400).json({ error: 'campaignId, insight_id and companyId are required' });
   }
 
-  const companyId = (req.body?.companyId as string) || campaignId;
-
   try {
-    const grounding = await resolveCompanyGroundingGuard(companyId);
     const access = await enforceCompanyAccess({
       req,
       res,
@@ -38,8 +38,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const { data: insight, error: oppError } = await supabase
-      .from('engagement_opportunities')
+    // S2 tenant seam: the insight was read by id ALONE, so a caller authorized for company A could feed company B's
+    // engagement_opportunities text into the LLM prompt and receive the derived suggestion (charged to A). The table
+    // is scoped by organization_id = the company enforceCompanyAccess just authorized; another company's insight
+    // reads exactly like an unknown one (uniform 404) and never reaches the prompt.
+    let opportunities: ReturnType<typeof tenantTable>;
+    try {
+      opportunities = tenantTable('engagement_opportunities', tenantContextFor(access, companyId));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Insight not found' });
+      throw err;
+    }
+    const { data: insight, error: oppError } = await opportunities
       .select('id, opportunity_type, opportunity_text, platform, confidence_score, detected_at')
       .eq('id', insight_id)
       .maybeSingle();
@@ -47,6 +57,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (oppError || !insight) {
       return res.status(404).json({ error: 'Insight not found' });
     }
+
+    // Company grounding is read only AFTER the caller is authorized for that company (it used to run first).
+    const grounding = await resolveCompanyGroundingGuard(companyId);
 
     const insightText = (insight as { opportunity_text?: string }).opportunity_text || 'Engagement insight';
     const insightType = (insight as { opportunity_type?: string }).opportunity_type || 'general';
