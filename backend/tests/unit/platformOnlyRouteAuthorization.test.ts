@@ -166,6 +166,8 @@ import allocateRoute from '../../../pages/api/admin/billing/allocate';
 import billingReconcileRoute from '../../../pages/api/admin/billing/reconcile';
 import verifyStagingRoute from '../../../pages/api/super-admin/razorpay/verify-staging-payment';
 import monetizationRoute from '../../../pages/api/super-admin/monetization/operations';
+// The hold-release gate (holdReleaseGate, e9 2026-11-13) is default-OFF; this suite exercises the release path itself.
+process.env.CREDIT_HOLD_REAP_ENABLED = 'true';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 const A = '11111111-1111-4111-8111-111111111111';

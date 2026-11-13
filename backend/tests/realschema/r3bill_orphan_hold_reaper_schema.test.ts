@@ -44,6 +44,8 @@ const { auditMonetizationInvariants } = require('../../services/monetizationRese
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const DB_URL = process.env.W6_DB_URL ?? '';
+// The hold-release gate (holdReleaseGate, e9 2026-11-13) is default-OFF; this suite exercises the release path itself.
+process.env.CREDIT_HOLD_REAP_ENABLED = 'true';
 if (!/@(127\.0\.0\.1|localhost|\[::1\]):\d+\//.test(DB_URL)) {
   throw new Error('r3bill_orphan_hold_reaper_schema refuses a non-loopback W6_DB_URL');
 }

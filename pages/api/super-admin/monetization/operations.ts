@@ -32,6 +32,7 @@ import {
   listMonetizationBetaDrillSummary,
   recordMonetizationBetaDrill,
 } from '@/backend/services/monetizationIncidentOpsService';
+import { isHoldReleaseEnabled, HOLD_RELEASE_DISABLED_REASON } from '../../../../backend/services/billing/holdReleaseGate';
 
 function numberFromQuery(v: unknown, fallback: number): number {
   if (typeof v !== 'string') return fallback;
@@ -140,6 +141,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (action === 'reconcile') {
       assertMonetizationOperationAllowed('admin_mutation');
+      if (!isHoldReleaseEnabled()) {
+        return res.status(409).json({ ok: false, code: 'HOLD_RELEASE_DISABLED', reason: HOLD_RELEASE_DISABLED_REASON });
+      }
       const result = await reconcileDurableMonetizationReservations({
         minAgeSeconds: Number(body?.minAgeSeconds ?? 600),
         batchLimit: Number(body?.batchLimit ?? 100),

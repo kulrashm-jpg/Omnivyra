@@ -22,6 +22,7 @@ import { reapOrphanHolds } from '../../../backend/services/creditOrphanHoldReape
 import { runJob } from '../../../backend/services/jobRunner';
 import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { isHoldReleaseEnabled, HOLD_RELEASE_DISABLED_REASON } from '../../../backend/services/billing/holdReleaseGate';
 
 async function isAuthorized(req: NextApiRequest): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
@@ -38,6 +39,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   if (!(await isAuthorized(req))) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
+  // e9 2026-11-13: default-OFF for EVERY caller (cron secret, legacy session, super admin) until 053 + resolver.
+  if (!isHoldReleaseEnabled()) {
+    return res.status(409).json({ ok: false, code: 'HOLD_RELEASE_DISABLED', reason: HOLD_RELEASE_DISABLED_REASON });
+  }
 
   // Optional knobs via query string for ops triage. Defaults match the service.
   const minAgeSeconds = numberFromQuery(req.query.minAgeSeconds);

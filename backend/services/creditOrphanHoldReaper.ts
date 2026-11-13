@@ -37,6 +37,7 @@ import { logSecurityEvent } from '../security/audit/SecurityAuditService';
 import { callCreditReservation } from '../repositories/creditExecutionRepository';
 import type { CategorySplit } from './creditPriorityService';
 import { reconcileDurableMonetizationReservations } from './monetizationReservationReconciliationService';
+import { assertHoldReleaseEnabled } from './billing/holdReleaseGate';
 import { recordMonetizationOperationalEvent } from './monetizationOpsService';
 
 interface HoldRow {
@@ -77,6 +78,8 @@ export async function reapOrphanHolds(input?: {
   /** When set, restrict to this org. Useful for ops triage. */
   orgId?: string;
 }): Promise<ReapResult> {
+  // e9 2026-11-13: default-OFF until 053 + an in-flight-aware resolver (holdReleaseGate). Every caller is refused.
+  assertHoldReleaseEnabled('credit-orphan-hold-reap');
   const minAge = input?.minAgeSeconds ?? DEFAULT_MIN_AGE_SECONDS;
   const maxAge = input?.maxAgeSeconds ?? DEFAULT_MAX_AGE_SECONDS;
   const limit  = input?.batchLimit    ?? DEFAULT_BATCH_LIMIT;

@@ -1,12 +1,12 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { config } from '@/config';
 import {
   auditMonetizationInvariants,
   reconcileDurableMonetizationReservations,
 } from '@/backend/services/monetizationReservationReconciliationService';
 import { runJob } from '@/backend/services/jobRunner';
 import { bearerTokenMatches, constantTimeEqual } from '../../../backend/security/constantTimeEqual';
+import { isHoldReleaseEnabled, HOLD_RELEASE_DISABLED_REASON } from '../../../backend/services/billing/holdReleaseGate';
 
 function numberFromQuery(value: unknown): number | undefined {
   if (typeof value !== 'string') return undefined;
@@ -14,8 +14,10 @@ function numberFromQuery(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+// e9 2026-11-13: CRON_SECRET ONLY. INTERNAL_METRICS_SECRET is a READ credential and must not release holds; and with
+// `INTERNAL_METRICS_SECRET || CRON_SECRET` a set metrics secret made the Vercel cron's own Bearer CRON_SECRET a 401.
 function isAuthorized(req: NextApiRequest): boolean {
-  const secret = config.INTERNAL_METRICS_SECRET || process.env.CRON_SECRET;
+  const secret = process.env.CRON_SECRET;
   if (!secret) return false;
   const presented = req.headers['x-cron-secret'];
   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -31,6 +33,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   if (!isAuthorized(req)) return res.status(401).json({ error: 'Unauthorised' });
+  if (!isHoldReleaseEnabled()) {
+    return res.status(409).json({ ok: false, code: 'HOLD_RELEASE_DISABLED', reason: HOLD_RELEASE_DISABLED_REASON });
+  }
 
   const minAgeSeconds = numberFromQuery(req.query.minAgeSeconds);
   const batchLimit = numberFromQuery(req.query.batchLimit);
@@ -44,7 +49,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       jobName: 'cron:monetization-reservation-reconcile',
       triggerSource: triggeredByCronSecret ? 'cron' : 'admin',
       tenantId: orgId ?? null,
-      principalKind: triggeredByCronSecret ? 'cron-secret' : 'metrics-secret',
+      principalKind: 'cron-secret',
       idempotencyKey: orgId
         ? `cron:monetization-reservation-reconcile:${orgId}:${Math.floor(Date.now() / 900_000)}`
         : `cron:monetization-reservation-reconcile:${Math.floor(Date.now() / 900_000)}`,

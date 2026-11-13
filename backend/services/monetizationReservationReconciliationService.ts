@@ -1,6 +1,7 @@
 import { ownedDbTable } from '../db/writeOwner';
 import { logger } from './logger';
 import { recordMonetizationOperationalEvent } from './monetizationOpsService';
+import { assertHoldReleaseEnabled } from './billing/holdReleaseGate';
 import {
   confirmCreditReservation,
   releaseCreditReservation,
@@ -267,6 +268,8 @@ export async function reconcileDurableMonetizationReservations(input?: {
   orgId?: string;
   reconciledBy?: string;
 }): Promise<ReservationReconciliationResult> {
+  // e9 2026-11-13: default-OFF until 053 + an in-flight-aware resolver (holdReleaseGate). Every caller is refused.
+  assertHoldReleaseEnabled('monetization-reservation-reconcile');
   const minAgeSeconds = input?.minAgeSeconds ?? DEFAULT_MIN_AGE_SECONDS;
   const cutoff = new Date(Date.now() - minAgeSeconds * 1000).toISOString();
   const reconciledBy = input?.reconciledBy ?? 'system:monetization-reservation-reconciler';
