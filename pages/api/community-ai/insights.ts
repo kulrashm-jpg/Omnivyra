@@ -66,12 +66,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   previousStart.setDate(previousStart.getDate() - 14);
   const previousEnd = new Date(currentStart);
 
+  // BLOCKING tenancy fix (2026-11-13): this used to embed scheduled_posts(..., users(active_company_id)) and filter
+  // .eq('scheduled_posts.users.active_company_id', org). A filter on an EMBEDDED resource without !inner filters only
+  // the embedded rows (they come back null); it never filters the top-level rows, so EVERY company's content_analytics
+  // rows were returned (service-role client, no RLS) and aggregated into this company's answer. Attribution was also
+  // by the poster's CURRENT company. Now both embeds are !inner and the filter is the post's OWN company through its
+  // social account (the link migration 028 backfills from), so the top-level rows are filtered; a post with no
+  // account or an account with a NULL company is EXCLUDED, never attributed.
   let query = supabase
     .from('content_analytics')
     .select(
-      'scheduled_post_id, platform, content_type, likes, comments, shares, views, engagement_rate, date, scheduled_posts(content, engagement_goals, users(active_company_id))'
+      'scheduled_post_id, platform, content_type, likes, comments, shares, views, engagement_rate, date, scheduled_posts!inner(content, engagement_goals, social_accounts!inner(company_id))'
     )
-    .eq('scheduled_posts.users.active_company_id', scope.organizationId)
+    .eq('scheduled_posts.social_accounts.company_id', scope.organizationId)
     .gte('date', toDateString(previousStart));
 
   if (platform) {
