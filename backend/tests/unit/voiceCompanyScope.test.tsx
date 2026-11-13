@@ -80,3 +80,26 @@ describe('the mic follows the role', () => {
     expect(screen.getByRole('button')).toBeInTheDocument();
   });
 });
+
+describe('recording limits (e9: bitrate pinned for the server size bound; 5-minute cap)', () => {
+  const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  it('both recorders use the ONE shared 32 kbit/s constant', () => {
+    expect(read('components/ChatVoiceButton.tsx')).toMatch(/export const AUDIO_BITS_PER_SECOND = 32_000;/);
+    expect(read('components/VoiceNotesComponent.tsx')).toMatch(/audioBitsPerSecond: AUDIO_BITS_PER_SECOND,/);
+    for (const rel of ['components/ChatVoiceButton.tsx', 'components/VoiceNotesComponent.tsx']) {
+      expect(read(rel)).not.toMatch(/audioBitsPerSecond:\s*\d/);
+    }
+  });
+  it('VoiceNotes auto-stops at the shared 5-minute cap and says so', () => {
+    const v = read('components/VoiceNotesComponent.tsx');
+    expect(v).toMatch(/capTimerRef\.current = setTimeout\(\(\) => \{\s*if \(recorder\.state !== 'inactive'\) recorder\.stop\(\);[\s\S]{0,200}\}, MAX_RECORDING_MS\);/);
+    expect(v).toContain('Recordings are limited to 5 minutes');
+  });
+  it('a 413 (incl. AUDIO_TOO_LONG) becomes a plain sentence, never a code', async () => {
+    const { transcriptionErrorMessage, MAX_RECORDING_MS } = await import('../../../components/ChatVoiceButton');
+    expect(MAX_RECORDING_MS).toBe(5 * 60 * 1000);
+    const msg = transcriptionErrorMessage(413, 'AUDIO_TOO_LONG');
+    expect(msg).toBe('That recording was too long to send. Keep voice notes under 5 minutes, or split them.');
+    expect(msg).not.toMatch(/AUDIO_TOO_LONG|413/);
+  });
+});
