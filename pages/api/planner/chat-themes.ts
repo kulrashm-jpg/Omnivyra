@@ -37,7 +37,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const {
-      companyId,
+      companyId: rawCompanyId,
       message,
       current_themes,
       history,
@@ -47,7 +47,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       strategic_card,
     } = req.body || {};
 
-    if (!companyId || typeof companyId !== 'string') {
+    // ONE normalized id for access, grounding AND billing (trim mismatch: access was checked on the trimmed id while
+    // grounding + the billed organizationId used the raw, possibly padded one).
+    const companyId = typeof rawCompanyId === 'string' ? rawCompanyId.trim() : '';
+    if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
     if (!message || typeof message !== 'string') {
@@ -57,7 +60,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await enforceCompanyAccess({
       req,
       res,
-      companyId: companyId.trim(),
+      companyId,
       requireCampaignId: false,
     });
     if (!access) return;
