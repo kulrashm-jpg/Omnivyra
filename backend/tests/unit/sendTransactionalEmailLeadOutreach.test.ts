@@ -228,13 +228,13 @@ describe('041-A-O — every pre-existing template is unchanged', () => {
     expect(branchHash('lead_outreach')).toBe('9fa6318d56363852');
   });
 
-  it('EXACTLY EIGHT TEMPLATES EXIST — one was added, none replaced', () => {
+  it('EXACTLY NINE TEMPLATES EXIST — added, none replaced (P2, e1 2026-11-13: ops_alert)', () => {
     const cases = [...renderSrc.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]);
     // In the order the switch declares them, so a reordering is also caught.
     expect(cases).toEqual([
       'team_invite', 'company_referral', 'inbound_signup_notice',
       'team_invite_credentials', 'domain_verification_reminder', 'activation_outreach',
-      'credit_alert', 'lead_outreach',
+      'ops_alert', 'credit_alert', 'lead_outreach',
     ]);
   });
 
@@ -245,7 +245,9 @@ describe('041-A-O — every pre-existing template is unchanged', () => {
     // caught on its own.
     const helpers = indexSrc.slice(0, indexSrc.indexOf('function render(t: Template)'));
     expect(crypto.createHash('sha256').update(helpers).digest('hex').slice(0, 16))
-      .toBe('2ddc9b5d7373092b');
+      // Re-pinned by P2 (e1 2026-11-13): the region gained ONLY the ops_alert variant of the Template union; the three
+      // helpers are still pinned one by one below and are unchanged.
+      .toBe('7c594fee48945e16');
   });
 
   it.each([
