@@ -198,8 +198,11 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
       if (err instanceof BilledAiNotExecutedError && err.status === 'already_confirmed') {
         // This (job, region) was already CHARGED by an earlier attempt. Keep its stored output; if none was stored
         // the customer paid for nothing - record it explicitly and raise an ops-visible anomaly for refund / re-run.
+        // REACHABLE, do not delete as dead code: the job only runs from PENDING, so this needs two workers racing on
+        // the same PENDING job, or a requeue that resets the status after a charge was confirmed (e1 review).
         if (prior && Array.isArray(prior.topics)) {
           regionResults[region] = prior as (typeof regionResults)[string];
+          chargedRegions.push(region); // it was charged (earlier attempt) - a later credit-stop notice lists it
         } else {
           regionResults[region] = {
             error: true,

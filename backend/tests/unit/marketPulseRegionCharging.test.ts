@@ -204,6 +204,14 @@ describe('Market Pulse region charging', () => {
     expect(emitAnomaly).not.toHaveBeenCalled();
     expect(job('j8').status).toBe('COMPLETED');
   });
+  it('a region KEPT from an earlier attempt counts as charged in a later credit-stop notice', async () => {
+    await charge('j11', 'US');
+    seedJob('j11', ['US', 'IN'], 'llm', { US: { topics: [], credits_charged: PER_REGION } });
+    getTotalAvailable.mockResolvedValueOnce(1000); // pre-check passes; the wallet itself is then empty
+    wallet.balance = 0;
+    await processMarketPulseJobV1('j11');
+    expect(job('j11').region_results.IN).toEqual(expect.objectContaining({ code: 'INSUFFICIENT_CREDITS', message: expect.stringContaining('(completed and charged: US)') }));
+  });
   it('retry, already_confirmed with NO stored result -> CHARGED_NO_OUTPUT (charged:true) + a critical ops anomaly', async () => {
     await charge('j9', 'US');
     seedJob('j9', ['US']);
