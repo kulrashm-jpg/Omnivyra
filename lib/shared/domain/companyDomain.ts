@@ -13,8 +13,21 @@
  *   acme.com, www.acme.com, https://www.acme.com, john@acme.com  → "acme.com"
  *   john@mail.acme.com                                            → "acme.com"
  *   acme.in / acme.net / acme.org                                 → distinct keys
+ *   john@acme.com.sg / shop.acme.co.uk                            → "acme.com.sg" / "acme.co.uk"
+ *
+ * The registrable domain is computed from a VENDORED, DATED Public Suffix List
+ * snapshot (publicSuffixList.dat + publicSuffixList.meta.json, compiled into
+ * publicSuffixRules.generated.ts) — see ./publicSuffix.ts.
  */
 
+import { publicSuffixLabelCount } from './publicSuffix';
+
+/**
+ * LEGACY: the hand-maintained multi-part suffix list that `registrableRoot`
+ * used before the Public Suffix List. No longer consulted here; kept exported
+ * because backend/services/prospectIdentity/accountSeeding.ts still imports it
+ * for its bare-suffix guard. Prefer `isPublicSuffix` from ./publicSuffix.
+ */
 export const KNOWN_MULTI_PART_TLDS = new Set([
   'co.uk', 'org.uk', 'ac.uk', 'gov.uk',
   'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
@@ -35,16 +48,26 @@ export function normalizeDomain(raw: string): string {
   return s;
 }
 
-/** Collapse a host to its registrable root, honouring known multi-part TLDs. */
+/**
+ * Collapse a host to its registrable root: the public suffix (per the vendored
+ * Public Suffix List, ICANN + PRIVATE sections) plus one more label.
+ *
+ * Edge cases are unchanged from the pre-PSL implementation:
+ *   - '' → ''
+ *   - a host of one or two labels is returned exactly as given
+ *     ('localhost', 'acme.com', 'com.sg', 'co.uk' — a bare suffix stays itself)
+ *   - a longer host that is ITSELF a public suffix (no label left of it) is
+ *     returned as its labels re-joined, never collapsed onto a shorter suffix
+ *   - no rule matches → default rule `*` (last label), so IP literals behave as
+ *     before ('192.168.1.10' → '1.10').
+ */
 export function registrableRoot(host: string): string {
   if (!host) return '';
   const parts = host.split('.').filter(Boolean);
   if (parts.length <= 2) return host;
-  const lastTwo = parts.slice(-2).join('.');
-  if (KNOWN_MULTI_PART_TLDS.has(lastTwo) && parts.length >= 3) {
-    return parts.slice(-3).join('.');
-  }
-  return lastTwo;
+  const suffixLabels = publicSuffixLabelCount(parts.map((p) => p.toLowerCase()));
+  if (suffixLabels >= parts.length) return parts.join('.');
+  return parts.slice(-(suffixLabels + 1)).join('.');
 }
 
 /**

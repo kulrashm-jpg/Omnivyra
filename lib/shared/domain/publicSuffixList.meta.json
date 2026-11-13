@@ -1,0 +1,10 @@
+{
+  "source": "https://publicsuffix.org/list/public_suffix_list.dat",
+  "retrievedAt": "2026-11-13",
+  "upstreamVersion": "2026-11-11_17-18-20_UTC",
+  "upstreamCommit": "529030148729033bc6c30dbb05753b805a7d2155",
+  "bytes": 339561,
+  "sha256": "c0c17430faf1d0edb352e165dd3e5e6dfe890b1305cf548e20a572e8c46ff399",
+  "license": "MPL-2.0 (header retained unmodified in publicSuffixList.dat)",
+  "refresh": "Replace publicSuffixList.dat with a fresh download, update every field above, then run: node scripts/generate-public-suffix-rules.js"
+}
