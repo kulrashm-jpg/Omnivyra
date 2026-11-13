@@ -35,6 +35,7 @@ import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 import { recordAdminAudit } from '@/backend/services/adminAuditService';
 import { logger } from '@/backend/services/logger';
 import { withIdempotency } from '@/backend/middleware/withIdempotency';
+import { reportNotificationInsertFailure } from '../../../../backend/services/userNotificationService';
 
 // ── Valid categories for admin-driven grants ───────────────────────────────────
 
@@ -78,7 +79,7 @@ async function notifyOrgAdmin(
   const role = adminRole as any;
   if (!role?.user_id) return;
 
-  await (sb as any).from('notifications').insert({
+  const { error: notificationError } = await (sb as any).from('notifications').insert({
     user_id:  role.user_id,
     type:     'credit_granted',
     title:    'Credits added to your account',
@@ -86,6 +87,7 @@ async function notifyOrgAdmin(
     metadata: { grant_id: grantId, credits_added: credits, reason },
     is_read:  false,
   });
+  reportNotificationInsertFailure('credit_granted', notificationError, 'pages/api/super-admin/credits/grant.ts:81');
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────

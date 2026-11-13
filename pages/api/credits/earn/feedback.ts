@@ -13,6 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { reportNotificationInsertFailure } from '../../../../backend/services/userNotificationService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -87,7 +88,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   );
 
   if (superAdminIds.length > 0) {
-    await supabase.from('notifications').insert(
+    const { error: notificationError } = await supabase.from('notifications').insert(
       superAdminIds.map((id: string) => ({
         user_id:  id,
         type:     'feedback_submitted',
@@ -97,6 +98,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         is_read:  false,
       })),
     );
+    reportNotificationInsertFailure('feedback_submitted', notificationError, 'pages/api/credits/earn/feedback.ts:90');
   }
 
   return res.status(200).json({ success: true, feedbackId: (inserted as any).id });

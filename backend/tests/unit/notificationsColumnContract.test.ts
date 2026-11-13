@@ -85,3 +85,31 @@ it('CONTROL: the scanner flags the old broken payload shapes', () => {
   expect(keys.filter((k) => !COLUMNS.has(k))).toEqual(['body', 'read']);
   expect(keys).not.toContain('user_id');
 });
+
+// 05: the column contract prevents the CAUSE; this prevents the INVISIBILITY. Every notifications insert must READ its
+// result - a destructured `{ error ... } = await ...insert(...)` or a `.then(({ error }) => ...)` - because an insert
+// can still fail on RLS, a constraint, an FK or a dropped connection, and an unread failure is silent.
+const READS = files(path.join(ROOT, 'backend')).concat(files(path.join(ROOT, 'pages'))).flatMap((file) => {
+  const src = fs.readFileSync(file, 'utf8');
+  const out: Array<{ where: string; reads: boolean }> = [];
+  const re = /(?:from|Table)\(\s*'notifications'\s*\)\s*\.insert\(/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    const stmtStart = Math.max(src.lastIndexOf(';', m.index), src.lastIndexOf('{\n', m.index), src.lastIndexOf('}\n', m.index));
+    const before = src.slice(stmtStart, m.index);
+    let depth = 0;
+    let j = m.index + m[0].length - 1;
+    for (; j < src.length; j += 1) {
+      if (src[j] === '(') depth += 1;
+      else if (src[j] === ')') { depth -= 1; if (depth === 0) break; }
+    }
+    const after = src.slice(j + 1, j + 40);
+    const reads = /const\s*\{\s*error\b[^}]*\}\s*=\s*await\b/.test(before) || /^\s*\.then\(/.test(after);
+    out.push({ where: `${path.relative(ROOT, file).replace(/\\/g, '/')}:${src.slice(0, m.index).split('\n').length}`, reads });
+  }
+  return out;
+});
+
+it('every notifications insert READS its result (no unread failure)', () => {
+  expect(READS.length).toBeGreaterThanOrEqual(13);
+  expect(READS.filter((r) => !r.reads).map((r) => r.where)).toEqual([]);
+});

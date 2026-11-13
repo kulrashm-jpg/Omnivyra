@@ -9,6 +9,11 @@ jest.mock('../../db/supabaseClient', () => {
   return { supabase: { from }, default: { from } };
 });
 
+const counters: Array<[string, number, Record<string, string>]> = [];
+jest.mock('../../observability', () => ({
+  recordRawCounter: (name: string, value: number, labels: Record<string, string>) => { counters.push([name, value, labels]); },
+}));
+
 import { fakeDb, resetFakeDb, failNext } from '../helpers/fakeWhatsappDb';
 import { notifyCompanyEvent } from '../../services/userNotificationService';
 
@@ -40,12 +45,13 @@ const event = (extra: Record<string, unknown> = {}) => ({
 });
 const delivered = () => (fakeDb.tables.notifications ?? []).map((r) => r.user_id).sort();
 let err: jest.SpyInstance;
-beforeEach(() => { world(); err = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
+beforeEach(() => { world(); counters.length = 0; err = jest.spyOn(console, 'error').mockImplementation(() => undefined); });
 afterEach(() => err.mockRestore());
 
 it('active admins (any casing) + the active creator, one row each, deduplicated; rows carry company_id and only real columns', async () => {
   const r = await notifyCompanyEvent(event({ campaignCreatorUserId: CREATOR }));
   expect(r).toEqual({ delivered: 3 });
+  expect(counters).toEqual([]); // delivered: nothing counted as undeliverable
   expect(delivered()).toEqual([ADMIN1, ADMIN2, CREATOR].sort());
   for (const row of fakeDb.tables.notifications) {
     expect(row).toMatchObject({ company_id: CO, type: 'campaign_auto_paused', title: 'Campaign auto-paused', message: '"X" was paused', is_read: false });
@@ -79,6 +85,13 @@ it('no active recipient: nothing written, logged undeliverable (never silent)', 
   expect(r).toEqual({ delivered: 0, undeliverable: 'no_active_recipient' });
   expect(fakeDb.tables.notifications).toEqual([]);
   expect(err).toHaveBeenCalledWith('NOTIFICATION_UNDELIVERABLE', expect.stringContaining('no_active_recipient'));
+  // COUNTED, not just logged (05 / e9) - alerted by monitoring/notifications-alerts.yml; no company id in the labels.
+  expect(counters).toEqual([['notification_undeliverable', 1, { reason: 'no_active_recipient', type: 'campaign_auto_paused' }]]);
+});
+
+it('a credit alert to a company with no active admin is counted with type credit_alert (the paging rule)', async () => {
+  await notifyCompanyEvent(event({ companyId: OTHER.replace('2222', '3333'), type: 'credit_alert' }));
+  expect(counters).toEqual([['notification_undeliverable', 1, { reason: 'no_active_recipient', type: 'credit_alert' }]]);
 });
 
 it('an unreadable membership list: nothing written, logged; an insert error: logged - neither throws', async () => {
@@ -88,6 +101,7 @@ it('an unreadable membership list: nothing written, logged; an insert error: log
   failNext('notifications', 'insert');
   await expect(notifyCompanyEvent(event())).resolves.toEqual({ delivered: 0, undeliverable: 'insert_failed' });
   expect(err).toHaveBeenCalledWith('NOTIFICATION_UNDELIVERABLE', expect.stringContaining('insert_failed'));
+  expect(counters.map((c) => c[2].reason)).toEqual(['membership_unreadable', 'insert_failed']);
 });
 
 it('no company: refused as invalid input, nothing read', async () => {

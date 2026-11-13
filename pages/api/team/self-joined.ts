@@ -19,6 +19,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
+import { reportNotificationInsertFailure } from '../../../backend/services/userNotificationService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { companyId, userId } = req.query as { companyId?: string; userId?: string };
@@ -84,7 +85,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (error) return res.status(500).json({ error: error.message });
 
     // Notify the user they've been formally added
-    await supabaseAdmin.from('notifications').insert({
+    const { error: notificationError } = await supabaseAdmin.from('notifications').insert({
       user_id: userId,
       type: 'role_updated',
       title: 'Your company membership was confirmed',
@@ -92,6 +93,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       metadata: { company_id: companyId, role, confirmed_by: user.userId },
       is_read: false,
     });
+    reportNotificationInsertFailure('role_updated', notificationError, 'pages/api/team/self-joined.ts:87');
 
     return res.status(200).json({ success: true });
   }
@@ -110,7 +112,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (error) return res.status(500).json({ error: error.message });
 
     // Notify the removed user
-    await supabaseAdmin.from('notifications').insert({
+    const { error: notificationError1 } = await supabaseAdmin.from('notifications').insert({
       user_id: userId,
       type: 'membership_removed',
       title: 'Company membership removed',
@@ -118,6 +120,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       metadata: { company_id: companyId, removed_by: user.userId },
       is_read: false,
     });
+    reportNotificationInsertFailure('membership_removed', notificationError1, 'pages/api/team/self-joined.ts:114');
 
     return res.status(200).json({ success: true });
   }

@@ -13,6 +13,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { normalizeRole } from './rbacPrimitives';
+import { recordRawCounter } from '../observability';
 
 export type UserNotificationType =
   | 'post_published'
@@ -60,11 +61,24 @@ export async function createUserNotification(input: {
  * (user_id, type, title, message, metadata, is_read).
  *
  * Never throws (a failed notification must not break the originating job) - but never silent either: an unreadable
- * membership list, an insert error, or a company with no active admin is LOGGED with a greppable tag.
+ * membership list, an insert error, or a company with no active admin is LOGGED (NOTIFICATION_UNDELIVERABLE) AND
+ * COUNTED: metric notification_undeliverable{reason,type}, alerted by monitoring/notifications-alerts.yml (05: logs
+ * are not read; a company with zero active admins is otherwise silently unreachable).
  */
 export type CompanyEventDelivery =
   | { delivered: number }
   | { delivered: 0; undeliverable: 'no_active_recipient' | 'membership_unreadable' | 'insert_failed' | 'invalid_input' };
+
+function undeliverable(
+  reason: 'no_active_recipient' | 'membership_unreadable' | 'insert_failed' | 'invalid_input',
+  type: unknown,
+  detail: Record<string, unknown>,
+): CompanyEventDelivery {
+  console.error('NOTIFICATION_UNDELIVERABLE', JSON.stringify({ reason, type: type ?? null, ...detail }));
+  // Bounded labels only (reason: 4 values; type: the event kinds) - never the company id (cardinality).
+  try { recordRawCounter('notification_undeliverable', 1, { reason, type: String(type ?? 'unknown').slice(0, 60) }); } catch { /* metrics never break delivery */ }
+  return { delivered: 0, undeliverable: reason };
+}
 
 export async function notifyCompanyEvent(input: {
   companyId: string;
@@ -76,8 +90,7 @@ export async function notifyCompanyEvent(input: {
 }): Promise<CompanyEventDelivery> {
   const companyId = typeof input.companyId === 'string' ? input.companyId.trim() : '';
   if (!companyId || !input.type || !input.title) {
-    console.error('NOTIFICATION_UNDELIVERABLE', JSON.stringify({ reason: 'invalid_input', type: input.type ?? null }));
-    return { delivered: 0, undeliverable: 'invalid_input' };
+    return undeliverable('invalid_input', input.type, {});
   }
   try {
     const { data: members, error: memberError } = await supabase
@@ -86,16 +99,14 @@ export async function notifyCompanyEvent(input: {
       .eq('company_id', companyId)
       .eq('status', 'active');
     if (memberError) {
-      console.error('NOTIFICATION_UNDELIVERABLE', JSON.stringify({ reason: 'membership_unreadable', company_id: companyId, type: input.type, message: memberError.message }));
-      return { delivered: 0, undeliverable: 'membership_unreadable' };
+      return undeliverable('membership_unreadable', input.type, { company_id: companyId, message: memberError.message });
     }
     const active = ((members ?? []) as Array<{ user_id: string | null; role: string | null }>).filter((m) => typeof m.user_id === 'string' && m.user_id);
     const recipients = new Set<string>(active.filter((m) => normalizeRole(m.role) === 'COMPANY_ADMIN').map((m) => String(m.user_id)));
     const creator = typeof input.campaignCreatorUserId === 'string' ? input.campaignCreatorUserId : null;
     if (creator && active.some((m) => m.user_id === creator)) recipients.add(creator);
     if (recipients.size === 0) {
-      console.error('NOTIFICATION_UNDELIVERABLE', JSON.stringify({ reason: 'no_active_recipient', company_id: companyId, type: input.type }));
-      return { delivered: 0, undeliverable: 'no_active_recipient' };
+      return undeliverable('no_active_recipient', input.type, { company_id: companyId });
     }
     const now = new Date().toISOString();
     const rows = [...recipients].map((userId) => ({
@@ -110,12 +121,22 @@ export async function notifyCompanyEvent(input: {
     }));
     const { error: insertError } = await supabase.from('notifications').insert(rows);
     if (insertError) {
-      console.error('NOTIFICATION_UNDELIVERABLE', JSON.stringify({ reason: 'insert_failed', company_id: companyId, type: input.type, message: insertError.message }));
-      return { delivered: 0, undeliverable: 'insert_failed' };
+      return undeliverable('insert_failed', input.type, { company_id: companyId, message: insertError.message });
     }
     return { delivered: rows.length };
   } catch (err) {
-    console.error('NOTIFICATION_UNDELIVERABLE', JSON.stringify({ reason: 'insert_failed', company_id: companyId, type: input.type, message: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) }));
-    return { delivered: 0, undeliverable: 'insert_failed' };
+    return undeliverable('insert_failed', input.type, { company_id: companyId, message: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) });
   }
+}
+
+/**
+ * For per-user writers that insert notifications directly (05: their columns are valid today, but an insert can
+ * still fail on RLS, a constraint, an FK or a dropped connection - and an unread failure is exactly as silent as the
+ * one that hid six undelivered alerts). Logs NOTIFICATION_INSERT_FAILED and counts it on the same metric
+ * (notification_undeliverable{reason="insert_failed"}), so monitoring/notifications-alerts.yml covers every writer.
+ */
+export function reportNotificationInsertFailure(type: string, error: { message?: string } | null | undefined, where: string): void {
+  if (!error) return;
+  console.error('NOTIFICATION_INSERT_FAILED', JSON.stringify({ type, where, message: String(error.message ?? '').slice(0, 200) }));
+  try { recordRawCounter('notification_undeliverable', 1, { reason: 'insert_failed', type: String(type).slice(0, 60) }); } catch { /* never break the caller */ }
 }

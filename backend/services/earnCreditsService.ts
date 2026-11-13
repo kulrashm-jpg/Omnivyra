@@ -15,6 +15,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
+import { reportNotificationInsertFailure } from './userNotificationService';
 
 // ── Action catalogue ──────────────────────────────────────────────────────────
 
@@ -102,7 +103,7 @@ export async function notifyEarnProgress(params: {
   const userIds = await getOrgAdminUserIds(orgId);
   if (!userIds.length) return;
 
-  await ownedDbTable('notifications').insert(
+  const { error: notificationError } = await ownedDbTable('notifications').insert(
     userIds.map(uid => ({
       user_id:  uid,
       type:     'earn_credits_nudge',
@@ -112,6 +113,7 @@ export async function notifyEarnProgress(params: {
       is_read:  false,
     })),
   );
+  reportNotificationInsertFailure('earn_credits_nudge', notificationError, 'backend/services/earnCreditsService.ts:105');
 }
 
 // ── Get earn progress for an org ─────────────────────────────────────────────
@@ -215,7 +217,7 @@ async function notifyEarnCreditsGranted(
   const userIds = await getOrgAdminUserIds(orgId);
   if (!userIds.length) return;
 
-  await ownedDbTable('notifications').insert(
+  const { error: notificationError1 } = await ownedDbTable('notifications').insert(
     userIds.map(uid => ({
       user_id:  uid,
       type:     'earn_credits_granted',
@@ -225,4 +227,5 @@ async function notifyEarnCreditsGranted(
       is_read:  false,
     })),
   );
+  reportNotificationInsertFailure('earn_credits_granted', notificationError1, 'backend/services/earnCreditsService.ts:219');
 }

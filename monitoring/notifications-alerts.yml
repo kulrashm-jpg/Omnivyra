@@ -1,0 +1,50 @@
+# Notification delivery - Prometheus Alert Rules (6f, 2026-11-13; 05 / e9: a log line is not an alert).
+# Operational IaC. Does NOT change application runtime. Metric names are the EXACT Prometheus-exported names
+# (registry dots -> underscores).
+#
+# Load into Prometheus:
+#   Copy to: /etc/prometheus/rules/notifications-alerts.yml
+#   Then in prometheus.yml:
+#     rule_files:
+#       - "rules/notifications-alerts.yml"
+#
+# Metric provenance (backend/services/userNotificationService.ts, notifyCompanyEvent):
+#   notification_undeliverable{reason,type}   counter
+#     reason: no_active_recipient | membership_unreadable | insert_failed | invalid_input
+#     type:   the notification type (campaign_auto_paused, campaign_recovery_generated, campaign_pending_approval,
+#             campaign_approved, credit_alert, ...)
+# The LOG event NOTIFICATION_UNDELIVERABLE carries the company id for diagnosis; the metric deliberately does not
+# (label cardinality).
+---
+groups:
+  - name: notification_delivery
+    interval: 60s
+    rules:
+      # A credit alert that reached NOBODY: the company has no active COMPANY_ADMIN (or its memberships could not be
+      # read). Money-adjacent silence - credit exhaustion would go unannounced. Page.
+      - alert: CreditAlertUndeliverable
+        expr: increase(notification_undeliverable{type="credit_alert"}[15m]) > 0
+        for: 0m
+        labels: { severity: critical, component: notifications, category: money, page: sre }
+        annotations:
+          summary: "A credit alert was not delivered to anyone ({{ $labels.reason }})"
+          description: "notifyCompanyEvent could not deliver a credit_alert (reason={{ $labels.reason }}). Find the company in the NOTIFICATION_UNDELIVERABLE log line; a company with zero active COMPANY_ADMINs is unreachable for every company-level alert."
+
+      # Any company event delivered to nobody.
+      - alert: NotificationUndeliverable
+        expr: increase(notification_undeliverable{type!="credit_alert"}[30m]) > 0
+        for: 0m
+        labels: { severity: warning, component: notifications, category: correctness }
+        annotations:
+          summary: "A company notification was not delivered ({{ $labels.type }}, {{ $labels.reason }})"
+          description: "notifyCompanyEvent dropped a {{ $labels.type }} event (reason={{ $labels.reason }}). See the NOTIFICATION_UNDELIVERABLE log line for the company."
+
+      # Insert failures in bulk point at a schema / privilege regression (the original defect class: columns that do
+      # not exist), not at one company.
+      - alert: NotificationInsertFailing
+        expr: sum(increase(notification_undeliverable{reason="insert_failed"}[15m])) > 5
+        for: 5m
+        labels: { severity: critical, component: notifications, category: correctness, page: sre }
+        annotations:
+          summary: "Notification inserts are failing ({{ $value }} in 15m)"
+          description: "Repeated insert_failed: check the notifications columns / grants (20270217000035) and recent deploys."

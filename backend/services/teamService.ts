@@ -10,6 +10,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { logActivity } from './activityLogger';
+import { reportNotificationInsertFailure } from './userNotificationService';
 
 export interface WeekAssignment {
   week_number: number;
@@ -45,7 +46,7 @@ export async function assignWeek(
   }
 
   // Create notification for assignee
-  await ownedDbTable('notifications')
+  const { error: notificationError } = await ownedDbTable('notifications')
     .insert({
       user_id: assignedToUserId,
       type: 'assignment',
@@ -58,6 +59,7 @@ export async function assignWeek(
       },
       is_read: false,
     });
+  reportNotificationInsertFailure('assignment', notificationError, 'backend/services/teamService.ts:48');
 
   // Log activity
   await logActivity(assignedByUserId, 'week_assigned', 'week', `${campaignId}-${weekNumber}`, {

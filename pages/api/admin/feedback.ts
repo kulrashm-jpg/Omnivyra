@@ -14,6 +14,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { reportNotificationInsertFailure } from '../../../backend/services/userNotificationService';
 
 async function requireSuperAdmin(req: NextApiRequest): Promise<string | null> {
   const { user } = await getSupabaseUserFromRequest(req);
@@ -89,7 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       creditsGranted = result.credits;
     } else {
       // Notify submitter that feedback wasn't accepted so they can try again
-      await supabase.from('notifications').insert({
+      const { error: notificationError } = await supabase.from('notifications').insert({
         user_id:  (fb as any).user_id,
         type:     'feedback_rejected',
         title:    'Feedback not accepted this time',
@@ -97,6 +98,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         metadata: { feedback_id: id },
         is_read:  false,
       });
+      reportNotificationInsertFailure('feedback_rejected', notificationError, 'pages/api/admin/feedback.ts:92');
     }
 
     return res.status(200).json({ success: true, action, creditsGranted });

@@ -4,6 +4,7 @@ import type { ReportCategory } from './reportCardService';
 import type { ReportRequestPayload } from './reportInputResolver';
 import { evaluateResolvedReportReadiness } from './reportReadinessService';
 import { ownedDbTable } from '../db/writeOwner';
+import { reportNotificationInsertFailure } from './userNotificationService';
 
 export type AutomationFrequency = 'weekly' | 'biweekly' | 'monthly';
 export type AutomationEventType = 'scheduled' | 'content_change' | 'traffic_change';
@@ -275,7 +276,7 @@ async function createNotification(params: {
         ? 'Snapshot Decline Alert'
         : 'Snapshot Opportunity';
 
-  await ownedDbTable('notifications')
+  const { error: notificationError } = await ownedDbTable('notifications')
     .insert({
       user_id: params.userId,
       type: `report_${params.type}`,
@@ -288,8 +289,10 @@ async function createNotification(params: {
       },
       is_read: false,
     });
+  reportNotificationInsertFailure(`report_${params.type}`, notificationError, 'backend/services/reportAutomationService.ts:278');
 
-  return true;
+  // Was `return true` even when the insert failed: report what happened.
+  return !notificationError;
 }
 
 async function triggerSnapshotReport(params: {
