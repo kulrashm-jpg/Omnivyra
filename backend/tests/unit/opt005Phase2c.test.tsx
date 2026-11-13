@@ -128,25 +128,26 @@ function SocialProbe() {
   return (
     <div>
       <span data-testid="sp-prefs">{JSON.stringify(sp.platformContentPrefs)}</span>
-      <span data-testid="sp-reqs">{sp.apiRequests.map((r) => `${r.id}:${r.status}`).join(',')}</span>
       <span data-testid="sp-catalog">{sp.catalogApis.length}</span>
       <button data-testid="sp-save" onClick={() => void sp.saveContentPrefs({ linkedin: ['post'] })}>s</button>
-      <button data-testid="sp-approve" onClick={() => void sp.updateApiRequestStatus('r1', 'approved')}>a</button>
     </div>
   );
 }
 
 describe('Social Platform Settings (Phase 2C)', () => {
+  // request/approval moved to /external-apis (UI step 7b); its pins live in
+  // backend/tests/unit/apiRequestsQueue.test.tsx (+ apiRequestsRouteGuard.test.ts).
   const prefsGets = () => countCalls((u, i) => u.startsWith('/api/social-platforms/content-type-prefs') && isGet(i));
-  const requestGets = () => countCalls((u, i) => u.startsWith('/api/external-apis/requests') && isGet(i));
+  const anyRequestCalls = () => countCalls((u) => u.startsWith('/api/external-apis/requests'));
 
-  test('shared cache: two subscribers share prefs/catalog/requests entries; raw status stays per-instance', async () => {
+  test('shared cache: two subscribers share prefs/catalog entries, make no requests calls; raw status stays per-instance', async () => {
     mockApiFetch.mockImplementation(async (url: string, init?: { method?: string }) => socialRoutes(url, init));
     render(harness(<><SocialProbe /><SocialProbe /></>));
     await waitFor(() => expect(screen.getAllByTestId('sp-catalog')[0].textContent).toBe('1'));
     expect(prefsGets()).toBe(1);
-    expect(requestGets()).toBe(1);
     expect(countCalls((u, i) => u.startsWith('/api/external-apis?') && isGet(i))).toBe(1);
+    // The move is proven, not a silent drop: /social-platforms makes ZERO requests calls.
+    expect(anyRequestCalls()).toBe(0);
     // Negative control: social-account status was NOT migrated — one per instance.
     expect(countCalls((u, i) => u.startsWith('/api/social-accounts/status') && isGet(i))).toBe(2);
   });
@@ -160,17 +161,6 @@ describe('Social Platform Settings (Phase 2C)', () => {
     await waitFor(() => expect(screen.getByTestId('sp-prefs').textContent).toBe('{"linkedin":["post"]}'));
     expect(countCalls((u, i) => u.startsWith('/api/social-platforms/content-type-prefs') && i?.method === 'PUT')).toBe(1);
     expect(prefsGets()).toBe(getsBefore); // revalidate:false — server was just told
-  });
-
-  test('api-request PATCH writes through the cache with NO GET refetch', async () => {
-    mockApiFetch.mockImplementation(async (url: string, init?: { method?: string }) => socialRoutes(url, init));
-    render(harness(<SocialProbe />));
-    await waitFor(() => expect(screen.getByTestId('sp-reqs').textContent).toBe('r1:pending'));
-    const getsBefore = requestGets();
-    await act(async () => { fireEvent.click(screen.getByTestId('sp-approve')); });
-    await waitFor(() => expect(screen.getByTestId('sp-reqs').textContent).toBe('r1:approved'));
-    expect(countCalls((u, i) => u.startsWith('/api/external-apis/requests') && i?.method === 'PATCH')).toBe(1);
-    expect(requestGets()).toBe(getsBefore);
   });
 });
 
