@@ -9,6 +9,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { recordEngagementEvent } from '../../../backend/services/engagementTelemetryService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 type TelemetryBody = {
   event_name: string;
@@ -37,6 +38,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organization_id });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organization_id), userId: String(access.userId) }))) return;
 
     void recordEngagementEvent(event_name, {
       organization_id,

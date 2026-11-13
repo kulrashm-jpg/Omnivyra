@@ -57,6 +57,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 import {
   ingestFeedback,
   isUnsubscribeScope,
@@ -143,6 +144,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // request continuing into ingestion.
   const tenant = await requireTenantAccess(req, res, companyId);
   if (!tenant) return;
+  // e9 BLOCKING (outreach write roles): tenant membership is not a write role - view-only means view only.
+  if (!(await enforceCampaignWriteRole({ req, res, companyId, userId: String(tenant.userId) }))) return;
 
   const supplied = SERVER_OWNED_FIELDS.filter((f) => body[f] !== undefined);
   if (supplied.length > 0) {

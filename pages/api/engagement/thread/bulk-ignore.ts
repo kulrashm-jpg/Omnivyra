@@ -10,6 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { recordThreadEvents } from '../../../../backend/services/engagementThreadEventService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 const MAX_BATCH = 20;
 
@@ -39,6 +40,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
     const threadIds = rawThreadIds.slice(0, MAX_BATCH);
 

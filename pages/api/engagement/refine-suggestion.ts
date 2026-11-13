@@ -10,6 +10,7 @@ import { resolveCompanyGroundingGuard } from '../../../backend/services/context/
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 type RefineBody = {
   organization_id?: string;
@@ -48,6 +49,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
     // Resource-ownership authorization: enforceCompanyAccess only proves the
     // caller owns `organizationId`. `thread_id` is a separate client-supplied

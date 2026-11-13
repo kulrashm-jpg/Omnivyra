@@ -21,6 +21,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 type Body = {
   organization_id?: string;
@@ -42,6 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
   // Only cancel rows that are still queued and unclaimed. Anything claimed
   // by the extension is in-flight; cancelling mid-flight risks the message

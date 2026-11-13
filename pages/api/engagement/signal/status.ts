@@ -10,6 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { resolveCampaignOwnership } from '../../../../backend/services/campaignOwnershipService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 const ALLOWED_STATUSES = ['new', 'reviewed', 'actioned', 'ignored'];
 
@@ -40,6 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: false,
     });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
     const { data: signal } = await supabase
       .from('campaign_activity_engagement_signals')

@@ -15,6 +15,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { createClaimCode } from '@/backend/services/extensionClaimCodeService';
 import { isSigningSecretUnavailable } from '@/backend/auth/signingSecrets';
+import { enforceRole } from '@/backend/services/rbacService';
+import { COMMUNITY_AI_CAPABILITIES } from '@/backend/services/rbac/communityAiCapabilities';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -31,6 +33,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId, requireCampaignId: false });
     if (!access) return;
+    // e9 BLOCKING (b): the claim code becomes an extension session token that EXECUTES engagement actions - minting
+    // one needs EXECUTE_ACTIONS (Publisher / Admin), the same roles that may send replies and likes. Every extension
+    // token request then re-checks that its user STILL holds it (extensionAuthMiddleware), so a downgrade revokes it.
+    const roleGate = await enforceRole({ req, res, companyId: organizationId, allowedRoles: [...COMMUNITY_AI_CAPABILITIES.EXECUTE_ACTIONS] });
+    if (!roleGate) return;
 
     const claim = createClaimCode(access.userId, organizationId);
     return res.status(200).json({

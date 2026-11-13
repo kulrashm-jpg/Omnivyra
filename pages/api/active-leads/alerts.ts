@@ -20,6 +20,7 @@ import {
 } from '../../../backend/services/alertRoutingService';
 import type { AlertSeverity, AlertType } from '../../../backend/types/alert';
 import { ALERT_SEVERITIES, ALERT_TYPES } from '../../../backend/types/alert';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -34,6 +35,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (req.query.rules === '1' || req.query.rules === 'true') {
       const rules = await listAlertRules(companyId);
@@ -56,6 +58,7 @@ async function handleAck(req: NextApiRequest, res: NextApiResponse) {
   if (body.action !== 'acknowledge') return res.status(400).json({ error: 'action must be acknowledge' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     const alert = await acknowledgeAlert(companyId, alertId, ctx.userId);
     return res.status(200).json({ ok: true, alert });
@@ -89,6 +92,7 @@ async function handleUpsertRule(req: NextApiRequest, res: NextApiResponse) {
   }
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   const { role, error: roleError } = await getUserRole(ctx.userId, companyId);
   if (roleError || !role) return res.status(403).json({ error: roleError ?? 'FORBIDDEN_ROLE' });
   if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {

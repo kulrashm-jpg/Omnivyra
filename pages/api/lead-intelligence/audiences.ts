@@ -3,6 +3,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import * as aud from '../../../backend/services/audience/audienceService';
 import * as ops from '../../../backend/services/operations/operationalCoreService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
+
+/** e9 BLOCKING (outreach write roles): the POST actions that change state; preview / evaluate / explain / intelligence are reads. */
+export const AUDIENCE_WRITE_ACTIONS: ReadonlySet<string> = new Set(['create', 'update', 'delete', 'bulk_members']);
 
 /**
  * /api/lead-intelligence/audiences — THE canonical Audience API (LC-301 / W3).
@@ -45,6 +49,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (req.method === 'POST') {
       const b = req.body || {};
+      if (AUDIENCE_WRITE_ACTIONS.has(str(b.action) ?? '') && !(await enforceCampaignWriteRole({ req, res, companyId, userId: actorId }))) return;
       switch (str(b.action)) {
         case 'create':       return res.status(201).json(await aud.createAudience(companyId, actorId, { name: String(b.name), description: str(b.description), kind: b.kind, rules: b.rules, metadata: b.metadata }));
         case 'update':       { await aud.updateAudience(companyId, String(b.audience_id), { name: str(b.name), description: str(b.description), kind: b.kind, rules: b.rules, metadata: b.metadata }); return res.status(200).json({ ok: true }); }

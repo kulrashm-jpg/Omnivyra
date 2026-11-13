@@ -22,6 +22,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateEngagementResponse } from '../../../backend/adapters/engagement/responseAdapter';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 /**
  * Resolve a campaign engagement signal id to engagement_threads.id.
@@ -67,6 +68,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: company_id });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(company_id), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
     const {
       message,

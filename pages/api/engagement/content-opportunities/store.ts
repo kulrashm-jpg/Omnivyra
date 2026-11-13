@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { storeContentOpportunity } from '../../../../backend/services/contentOpportunityStorageService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 type StoreBody = {
   organization_id?: string;
@@ -46,6 +47,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
     const stored = await storeContentOpportunity(organizationId, {
       topic: opportunity.topic,

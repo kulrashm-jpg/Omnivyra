@@ -23,6 +23,7 @@ import {
   COPILOT_INTENTS,
   type CopilotIntent,
 } from '../../../backend/types/copilot';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -36,6 +37,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (req.query.responseId) {
       const response = await getCopilotResponse(companyId, String(req.query.responseId));
@@ -60,6 +62,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId || !intent) return res.status(400).json({ error: 'companyId and valid copilotIntent required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     const response = await generateCopilotResponse({
       organizationId: companyId,

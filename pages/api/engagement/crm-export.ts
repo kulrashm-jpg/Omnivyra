@@ -15,6 +15,7 @@ import { resolveUserContext, enforceCompanyAccess } from '../../../backend/servi
 import { supabase } from '../../../backend/db/supabaseClient';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 import { resolveCampaignOwnership } from '../../../backend/services/campaignOwnershipService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 type CrmExportBody = {
   organization_id?: string;
@@ -46,6 +47,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
     // Tenant-scoped existence check: the signal must belong to a campaign
     // whose company is the caller's authorized organization.

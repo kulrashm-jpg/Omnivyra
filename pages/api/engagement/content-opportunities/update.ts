@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { updateContentOpportunityStatus } from '../../../../backend/services/contentOpportunityStorageService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 const VALID_STATUSES = [
   'new',
@@ -52,6 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
     const ok = await updateContentOpportunityStatus(id, status as import('../../../../backend/services/contentOpportunityStorageService').ContentOpportunityStatus, organizationId);
 

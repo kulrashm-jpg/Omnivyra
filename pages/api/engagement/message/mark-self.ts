@@ -27,6 +27,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 type Body = {
   organization_id?: string;
@@ -48,6 +49,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
   // Org-scope check: load the message + its thread, refuse if the thread
   // doesn't belong to the caller's org.

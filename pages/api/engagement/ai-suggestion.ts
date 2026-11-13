@@ -25,6 +25,7 @@ import {
   recordSuggestionRejected,
   getSuggestionOrganizationId,
 } from '../../../backend/services/aiSuggestionTrackingService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 // NOTE: ai_message_drafts row creation moved to /api/engagement/generate-response
 // (the generation endpoint, where the text is produced). This endpoint is now
@@ -75,6 +76,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
       if (!access) return;
+      if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
       const record = await recordSuggestionShown({
         organization_id: organizationId,
@@ -133,6 +135,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const access = await enforceCompanyAccess({ req, res, companyId: owningOrganizationId });
       if (!access) return;
+      if (!(await enforceCampaignWriteRole({ req, res, companyId: String(owningOrganizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
       const ok = body.event === 'accepted'
         ? await recordSuggestionAccepted({
