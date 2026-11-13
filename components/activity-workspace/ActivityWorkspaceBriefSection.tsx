@@ -5,6 +5,8 @@ import CreatorContentPanel from '@/components/activity-workspace/CreatorContentP
 import AISuggestionPanel from '@/components/activity-workspace/AISuggestionPanel';
 import type { useActivityWorkspace } from '../../hooks/useActivityWorkspace';
 import WorkspaceContentPanels from '../WorkspaceContentPanels';
+import { useCompanyContext } from '../CompanyContext';
+import { canWriteCampaign, ROLE_FORBIDDEN_MESSAGE } from '../../lib/access/campaignWriteAccess';
 // Phase 3A — reuse the existing attachment upload handlers (single source of
 // truth) to wire the video upload journey into the live workspace.
 import {
@@ -21,6 +23,11 @@ import {
 type S = ReturnType<typeof useActivityWorkspace>;
 
 export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
+  // F3f: Viewers / view-only / Engagers see the activity but cannot edit, generate or
+  // schedule it. Native <fieldset disabled> greys out every control inside the content and
+  // creator panels without editing them (several are on the billed-migration list); the
+  // server refuses their writes with 403 ROLE_FORBIDDEN regardless.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
   const {
     contentType,
     creatorAsset,
@@ -173,6 +180,7 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
           ? detectResumableUploadHandle(attachmentRowState.dailyPlanId)
           : null;
         return (
+          <fieldset disabled={!canWriteThisCampaign} data-testid="workspace-creator-panel" className="m-0 min-w-0 border-0 p-0">
           <CreatorContentPanel
             theme={topicText || String(payload?.title ?? '')}
             productionBrief={String(writerBrief?.writingIntent ?? payload?.description ?? '')}
@@ -209,6 +217,7 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
             onResumeUpload={attachmentRowState ? (handle) => resumePersistedUpload({ dailyPlanId: attachmentRowState.dailyPlanId, handle, expectedRevision: attachmentRowState.revision }) : undefined}
             onDiscardResumableUpload={attachmentRowState ? (handle) => discardPersistedUploadSession({ dailyPlanId: attachmentRowState.dailyPlanId, handle }) : undefined}
           />
+          </fieldset>
         );
       })()}
 
@@ -285,6 +294,7 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
       )}
 
       {/* AI Improvement Suggestions — shown before platform content cards */}
+      {canWriteThisCampaign && (
       <AISuggestionPanel
         companyId={payload?.companyId as string}
         topic={topicText || String(payload?.topic ?? payload?.title ?? '')}
@@ -302,8 +312,17 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
           notify('success', `Applied AI suggestion: ${field}`);
         }}
       />
+      )}
 
-      <WorkspaceContentPanels d={d} />
+      {!canWriteThisCampaign && (
+        <p data-testid="workspace-read-only-notice" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          View only: {ROLE_FORBIDDEN_MESSAGE}
+        </p>
+      )}
+      <fieldset disabled={!canWriteThisCampaign} data-testid="workspace-content-panels" className="m-0 min-w-0 border-0 p-0">
+        {/* Read-only users can't press "expand" inside a disabled fieldset, so show the master content open. */}
+        <WorkspaceContentPanels d={canWriteThisCampaign ? d : { ...d, masterContentExpanded: true }} />
+      </fieldset>
       {false && <span className="hidden">{variantStatusDot.pending}{variantStatusLabel.pending}{String(selectedScheduleId)}{JSON.stringify(confidenceByPlatform)}</span>}
     </>
   );
