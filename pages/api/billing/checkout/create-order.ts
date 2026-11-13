@@ -10,6 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withOrgAccess } from '../../../../backend/middleware/withOrgAccess';
+import { BILLING_WRITE_ROLES } from '../../../../backend/security/billingWriteRoles';
 import { logger } from '../../../../backend/services/logger';
 import { supabase } from '@/backend/db/supabaseClient';
 import { resolvePrincipal } from '@/backend/security/IdentityResolver';
@@ -133,4 +134,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default __createApiRoute(withOrgAccess(handler), { route: '/api/billing/checkout/create-order' });
+// Owner ruling 2026-11-13: buying credits / starting a subscription is company admins only. verify and close stay
+// membership-level (a payment already made must always complete) - see BILLING_WRITE_ROLES.
+export default __createApiRoute(withOrgAccess(handler, undefined, { requireRoleIn: BILLING_WRITE_ROLES }), { route: '/api/billing/checkout/create-order' });

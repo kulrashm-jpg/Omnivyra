@@ -15,6 +15,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
+import { BILLING_WRITE_ROLES } from '../../../backend/security/billingWriteRoles';
 import {
   normalizeBillingGeographyInput,
   captureBillingProfileGeography,
@@ -54,7 +55,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
    * service applies no tenant check of its own, and on a first capture it
    * stamps the CALLER's session email as the organization's billing_email.
    */
-  const tenant = await requireTenantAccess(req, res, organizationId);
+  // Owner ruling 2026-11-13: billing writes are company admins only (BILLING_WRITE_ROLES).
+  const tenant = await requireTenantAccess(req, res, organizationId, { requireRoleIn: BILLING_WRITE_ROLES });
   if (!tenant) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});

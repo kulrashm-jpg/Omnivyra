@@ -24,6 +24,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
+import { BILLING_WRITE_ROLES } from '../../../backend/security/billingWriteRoles';
 import { resolveOrgBillingContext } from '../../../backend/services/billing/payments/orgBillingContextResolver';
 import {
   normalizeBillingGeographyInput,
@@ -54,7 +55,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
    * billing geography and PUT upserts company_billing_profiles, so both paths
    * need it, and a guard inside one branch would leave the other open.
    */
-  const tenant = await requireTenantAccess(req, res, organizationId);
+  // Owner ruling 2026-11-13: the PUT (a billing-context WRITE) is company admins only; the GET stays membership-level.
+  const tenant = await requireTenantAccess(req, res, organizationId, req.method === 'PUT' ? { requireRoleIn: BILLING_WRITE_ROLES } : undefined);
   if (!tenant) return;
 
   // ── GET — resolved geography (read path UNCHANGED) ────────────────────────

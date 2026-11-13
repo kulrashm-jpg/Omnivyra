@@ -1,5 +1,6 @@
 import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
 import { assertOrgAccess } from '../services/requestAccessService';
+import type { TenantAccessOptions } from '../security/TenantGuard';
 import { getOrCreateRequestId, runWithRequestContext } from '../services/requestContext';
 
 type OrgResolver = (req: NextApiRequest) => string | null;
@@ -45,6 +46,8 @@ function defaultResolver(req: NextApiRequest): string | null {
 export function withOrgAccess(
   handler: NextApiHandler,
   resolveOrgId: OrgResolver = defaultResolver,
+  /** e.g. { requireRoleIn } for a role-gated route; omitted = membership-level (unchanged). */
+  accessOptions?: TenantAccessOptions,
 ): NextApiHandler {
   return async (req: NextApiRequest, res: NextApiResponse) => {
     const requestId = getOrCreateRequestId(req);
@@ -55,7 +58,7 @@ export function withOrgAccess(
         return res.status(400).json({ error: 'org_id required' });
       }
 
-      const access = await assertOrgAccess(req, res, orgId);
+      const access = await assertOrgAccess(req, res, orgId, accessOptions);
       if (!access) return;
 
       const orgAccess: OrgAccessContext = {

@@ -8,6 +8,7 @@ import { seedRequestContextFromRequest } from './requestContext';
 import {
   assertTenantAccess,
   requireTenantAccess,
+  type TenantAccessOptions,
 } from '../security/TenantGuard';
 
 export async function requireAdminRateLimit(
@@ -135,8 +136,9 @@ export async function assertOrgAccess(
   req: NextApiRequest,
   res: NextApiResponse,
   organizationId: string,
+  options?: TenantAccessOptions,
 ): Promise<{ userId: string; superAdmin: boolean } | null> {
-  const access = await requireTenantAccess(req, res, organizationId);
+  const access = await requireTenantAccess(req, res, organizationId, options);
   if (!access) return null;
   // requireTenantAccess already seeded the request context with userId + orgId.
   return { userId: access.userId, superAdmin: access.isPlatformSuperAdmin };
