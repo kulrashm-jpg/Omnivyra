@@ -162,19 +162,27 @@ describe('migration governance — retired hidden billing stays frozen (e9 C97 1
   const frozen = (facts: MigrationFacts) =>
     evaluateSettlementMigrationReadiness(facts).checks.find((c) => c.name === 'retired_hidden_billing_frozen')!;
 
-  test('retired tables absent → passes (not required)', () => {
-    const c = frozen(completeFacts());
-    expect(c.ok).toBe(true);
-    expect(c.detail).toBe('retired hidden-billing tables absent');
-  });
-
-  test('retired tables present WITH both audit triggers → passes, presence reported', () => {
+  // The decision table is TOTAL (05): 2 tables x audit-trigger completeness, every row asserted.
+  const ALL = RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.map((t) => t.trigger);
+  test.each([
+    // catalog, audit, triggers present,                ok,    detail fragment
+    [false, false, [] as string[],                     true,  'absent (both)'],
+    [false, false, ALL,                                true,  'absent (both)'],
+    [true,  false, [] as string[],                     false, 'partial application'],
+    [true,  false, ALL,                                false, 'partial application'],
+    [true,  true,  ALL,                                true,  'present (both) and the audit trail is frozen'],
+    [true,  true,  [] as string[],                     false, 'unfrozen'],
+    [false, true,  ALL,                                true,  'present and frozen (catalog absent)'],
+    [false, true,  [] as string[],                     false, 'unfrozen'],
+  ] as const)('catalog=%p audit=%p triggers=%j → ok=%p (%s)', (catalog, audit, triggers, ok, fragment) => {
     const facts = completeFacts();
-    facts.tables.push(...RETIRED_HIDDEN_BILLING_TABLES);
-    facts.triggers.push(...RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.map((t) => ({ ...t })));
+    if (catalog) facts.tables.push('hidden_billing_catalog');
+    if (audit) facts.tables.push('hidden_billing_catalog_audit');
+    facts.triggers.push(...triggers.map((trigger) => ({ table: 'hidden_billing_catalog_audit', trigger })));
     const c = frozen(facts);
-    expect(c.ok).toBe(true);
-    expect(c.detail).toContain('present and frozen');
+    expect(c.ok).toBe(ok);
+    expect(c.detail).toContain(fragment);
+    expect(evaluateSettlementMigrationReadiness(facts).failures).toEqual(ok ? [] : ['retired_hidden_billing_frozen']);
   });
 
   test.each(RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.map((t) => t.trigger))(

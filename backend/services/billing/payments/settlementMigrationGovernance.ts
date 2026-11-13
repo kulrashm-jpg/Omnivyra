@@ -195,20 +195,34 @@ export function evaluateSettlementMigrationReadiness(facts: MigrationFacts): Gov
       : `pricing leakage: ${facts.pricingColumns.map((c) => `${c.table}.${c.column}`).join(', ')}`,
   });
 
-  // 7. Retired hidden billing stays FROZEN: absent is fine; a present audit table keeps both append-only triggers.
-  const presentRetired = RETIRED_HIDDEN_BILLING_TABLES.filter((t) => tableSet.has(t));
-  const unfrozen = tableSet.has('hidden_billing_catalog_audit')
+  // 7. Retired hidden billing stays FROZEN. Total over the four table states (05): every combination is decided
+  //    explicitly, none falls to a default.
+  //      catalog absent,  audit absent  -> ok   (never applied / fully gone)
+  //      catalog present, audit absent  -> FAIL (partial application: an UNAUDITED pricing table - the collided
+  //                                              20260718 pair is the likely cause)
+  //      either state with audit present -> ok only if BOTH append-only hbca triggers exist; otherwise FAIL
+  const catalogPresent = tableSet.has('hidden_billing_catalog');
+  const auditPresent = tableSet.has('hidden_billing_catalog_audit');
+  const unfrozen = auditPresent
     ? RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.filter((t) => !triggerSet.has(`${t.table}.${t.trigger}`))
     : [];
-  checks.push({
-    name: 'retired_hidden_billing_frozen',
-    ok: unfrozen.length === 0,
-    detail: unfrozen.length > 0
-      ? `retired audit trail unfrozen - missing: ${unfrozen.map((t) => `${t.table}.${t.trigger}`).join(', ')}`
-      : presentRetired.length === 0
-        ? 'retired hidden-billing tables absent'
-        : `retired hidden-billing tables present and frozen: ${presentRetired.join(', ')}`,
-  });
+  let frozenOk: boolean;
+  let frozenDetail: string;
+  if (!catalogPresent && !auditPresent) {
+    frozenOk = true; frozenDetail = 'retired hidden-billing tables absent (both)';
+  } else if (catalogPresent && !auditPresent) {
+    frozenOk = false;
+    frozenDetail = 'partial application - hidden_billing_catalog present WITHOUT hidden_billing_catalog_audit (unaudited retired pricing table)';
+  } else if (unfrozen.length > 0) {
+    frozenOk = false;
+    frozenDetail = `retired audit trail unfrozen - missing: ${unfrozen.map((t) => `${t.table}.${t.trigger}`).join(', ')}`;
+  } else {
+    frozenOk = true;
+    frozenDetail = catalogPresent
+      ? 'retired hidden-billing tables present (both) and the audit trail is frozen'
+      : 'retired audit trail present and frozen (catalog absent)';
+  }
+  checks.push({ name: 'retired_hidden_billing_frozen', ok: frozenOk, detail: frozenDetail });
 
   const failures = checks.filter((c) => !c.ok).map((c) => c.name);
   return { ok: failures.length === 0, checks, failures };
