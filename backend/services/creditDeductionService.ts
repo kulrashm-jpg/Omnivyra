@@ -64,6 +64,7 @@ export type CreditAction =
   | 'creator_content'
   | 'chat_theme_refine'
   | 'engagement_refine'
+  | 'profile_refine'     // company-profile AI refine unit (token-actual; 046)
   | 'campaign_chat'
   | 'campaign_suggest_update'
   | 'campaign_suggest_duration'
@@ -118,6 +119,7 @@ export const CREDIT_ACTIONS: CreditAction[] = [
   'content_suggestions',
   'quick_platform_adapt',
   'creator_content',
+  'profile_refine',
   'chat_theme_refine',
   'engagement_refine',
   'campaign_chat',

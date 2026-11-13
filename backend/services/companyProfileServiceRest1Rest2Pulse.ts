@@ -730,7 +730,16 @@ export async function getProfile(
   let result: CompanyProfile | null = profile;
   const autoRefineDefault = cacheOn ? false : true; // W4-5: opt-in under the flag
   if ((options?.autoRefine ?? autoRefineDefault) && shouldRefineProfile(profile.last_refined_at)) {
-    result = await refineProfileWithAI(profile, { force: true });
+    // e9 2026-11-13: the auto refine is ONE billed unit ('profile_refine'), dark unless enforced. If billing skips it
+    // (cannot pay / already charged this staleness window), this read returns the UNREFINED profile - a read never
+    // fails because of billing.
+    const { runAutoRefineBilled } = await import('./billing/profileRefineBilling');
+    const refined = await runAutoRefineBilled({
+      companyId: String(profile.company_id ?? resolvedCompanyId),
+      lastRefinedAt: profile.last_refined_at ?? null,
+      refine: () => refineProfileWithAI(profile, { force: true }),
+    });
+    if (refined) result = refined;
   }
   if ((options?.languageRefine ?? false) && result) {
     result = await refineProfileForPrompts(result);

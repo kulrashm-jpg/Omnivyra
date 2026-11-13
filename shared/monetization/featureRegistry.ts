@@ -595,6 +595,28 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
     },
   },
   {
+    // e9 2026-11-13 (BLOCKING at the flip): the company-profile AI refine (onboarding eager refine + the manual
+    // /api/company-profile/refine) ran unpriced. One refine = one billed unit, token-actual (046 'profile_refine').
+    feature_key: 'intelligence.profile_refine',
+    category: 'intelligence',
+    display_name: 'Company Profile Refine',
+    display_group: 'Insights & Trends',
+    display_color: 'bg-blue-400',
+    charge_mode: 'token_priced',
+    pricing_strategy: 'action_pricing_config',
+    usage_metering_enabled: true,
+    requires_credit_hold: true,
+    plan_eligible: true,
+    enforcement_eligible: true,
+    visible_to_customer: true,
+    internal_only: false,
+    pricing_keys: {
+      action_key: 'profile_refine',
+      action_pricing_config: 'profile_refine',
+      usage_action_key: 'profile_refine',
+    },
+  },
+  {
     feature_key: 'internal.profile_enrichment',
     category: 'internal',
     display_name: 'Profile Enrichment',

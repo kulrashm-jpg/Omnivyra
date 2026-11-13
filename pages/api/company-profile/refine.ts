@@ -9,6 +9,8 @@ import {
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { normalizeCanonicalWebsite } from '../../../utils/companyProfileValidation';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 function stripCompetitorInputs(value: unknown): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
@@ -112,13 +114,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     // CKRE-002 §3 — this is the explicit user-triggered refresh; manualRefresh
     // bypasses the change gate so a manual refine always runs the full AI chain.
-    const refined = await refineProfileWithAIWithDetails(profile, { force: true, manualRefresh: true });
+    // e9 2026-11-13 (BLOCKING at the flip): the manual refine ran unpriced. One click = one 'profile_refine' unit,
+    // through the shared billed-route wrapper (dark until enforcement; the per-click identity comes from it).
+    const refined = await wirePhase2Route({
+      surface:        'company-profile.refine',
+      organizationId: resolvedCompanyId,
+      userId:         access.userId ?? null,
+      action:         'profile_refine',
+      referenceType:  'profile_refine',
+      referenceId:    `profile_refine:manual:${resolvedCompanyId}`,
+      run:            () => refineProfileWithAIWithDetails(profile, { force: true, manualRefresh: true }),
+    });
     const responseProfile =
       access.role === 'COMPANY_ADMIN'
         ? toLimitedCompanyProfile(refined.profile) ?? refined.profile
         : refined.profile;
     return res.status(200).json({ profile: responseProfile, refinement: refined.details });
   } catch (error: any) {
+    if (error instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: error.message, code: 'INSUFFICIENT_CREDITS' });
+    }
     console.error('Error refining company profile:', error?.message, error?.stack);
     return res.status(500).json({
       error: error?.message || 'Failed to refine company profile',

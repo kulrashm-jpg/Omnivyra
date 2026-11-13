@@ -103,6 +103,7 @@ export const ACTIVITY_CLASS_MAP: Record<CreditAction, ActivityClass> = {
   content_basic:                   'SHORT_GENERATION',
   blog_rewrite_hook:               'SHORT_GENERATION',
   content_repurpose:               'SHORT_GENERATION',
+  profile_refine:                  'LONG_GENERATION',
   quick_platform_adapt:            'SHORT_GENERATION',
   creator_content:                 'SHORT_GENERATION',
   skeleton_command:                'SHORT_GENERATION',
