@@ -4,6 +4,7 @@ import Head from 'next/head';
 import { useCompanyContext } from './CompanyContext';
 import { apiFetch } from '../lib/apiFetch';
 import LeadSourcesSection from './prospects/LeadSourcesSection';
+import IntegrationHubNav from './integrations/IntegrationHubNav';
 import {
   CheckCircle2,
   AlertCircle,
@@ -254,14 +255,17 @@ export default function SocialPlatformsView({ d }: { d: S }) {
 
     return (
     <>
-      <Head><title>API Connections</title></Head>
+      <Head><title>Social Platforms</title></Head>
       <div className="min-h-screen bg-gray-50">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+        {/* UI step 7a: widened from max-w-3xl to the API page width so the shared hub bar
+            fits on one row, and the title matches its hub tab ("Social Platforms"). */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+          <IntegrationHubNav active="social" />
 
           <div className="mb-6">
             <div className="flex items-center gap-3 mb-2">
               <ShieldCheck className="h-6 w-6 text-indigo-600 shrink-0" />
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">API Connections</h1>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Social Platforms</h1>
             </div>
             <p className="text-gray-500 text-sm">
               Connect social platforms and manage trend, community &amp; image APIs in one place.
