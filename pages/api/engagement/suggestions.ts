@@ -16,6 +16,12 @@ import {
   isThreadNotActionableError,
 } from '../../../backend/services/engagementAiAssistantService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
+
+/** The model produced no usable reply: thrown INSIDE the billed unit so it is released (never charge for canned
+ *  fallbacks), caught below and answered with the fallbacks exactly as before. */
+class NoAiSuggestionsError extends Error {}
 
 const FALLBACK_SUGGESTIONS = [
   { text: 'Thanks for sharing this. Send me the key details and I will take a proper look.', tone: 'accept' },
@@ -70,10 +76,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'AI suggestions are disabled for this organization' });
     }
 
-    const result = await generateReplySuggestions(messageId, organizationId);
-    const replies = (result.suggested_replies ?? []).filter((reply) =>
-      (reply.text ?? '').toString().trim().length > 0
-    );
+    // e9 2026-11-13 (BLOCKING for the flip): this AI ran UNBILLED. One reply-suggestion call = one billed unit,
+    // token-actual through the shared billed-route path.
+    const nonEmpty = (r: Awaited<ReturnType<typeof generateReplySuggestions>>) =>
+      (r?.suggested_replies ?? []).filter((reply) => (reply.text ?? '').toString().trim().length > 0);
+    let replies: Array<{ text: string; tone?: string }> = [];
+    try {
+      replies = await wirePhase2Route({
+        surface:        'engagement.suggestions',
+        organizationId,
+        action:         'reply_generation',
+        referenceType:  'engagement_reply_suggestions',
+        referenceId:    `${organizationId}:${messageId}`,
+        run: async () => {
+          const got = nonEmpty(await generateReplySuggestions(messageId, organizationId));
+          if (got.length === 0) throw new NoAiSuggestionsError('no AI reply suggestions');
+          return got;
+        },
+      });
+    } catch (billedErr) {
+      if (!(billedErr instanceof NoAiSuggestionsError)) throw billedErr;
+    }
     const padded: Array<{ text: string; tone?: string }> = [...replies];
     while (padded.length < 3) {
       padded.push(FALLBACK_SUGGESTIONS[padded.length % FALLBACK_SUGGESTIONS.length]);
@@ -87,6 +110,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ suggestions });
   } catch (err) {
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     // F5: "this thread is already answered" is a deterministic refusal, not a
     // server fault. It must NOT fall through to the generic 500 path, and it
     // must NOT be padded with FALLBACK_SUGGESTIONS — returning canned replies

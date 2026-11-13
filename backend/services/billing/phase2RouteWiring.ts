@@ -109,14 +109,26 @@ const ROUTE_UNIT_CALLS: Partial<Record<string, number>> = {
   recommendations_generate: 3,
   recommendations_opportunities: 3,
 };
-export function routeLlmPricingFor(action: CreditAction) {
-  const calls = ROUTE_UNIT_CALLS[String(action)] ?? 1;
+/**
+ * Per-CALL token bounds where the route's AI call is known to be small (default 8000 in / 2000 out). The output bound
+ * is the call's own max_tokens, so the hold covers the worst case without over-holding a small wallet:
+ *   reply_generation - engagementAiAssistantService max_tokens 700; observed avg 760 in / 100 out (C82, 6 calls).
+ */
+const ROUTE_CALL_TOKENS: Partial<Record<string, { input: number; output: number }>> = {
+  reply_generation: { input: 3000, output: 700 },
+};
+/** A per-request call count (e.g. a bulk batch) is capped so a hostile input cannot inflate a hold. */
+export const MAX_ROUTE_UNIT_CALLS = 50;
+export function routeLlmPricingFor(action: CreditAction, unitCalls?: number) {
+  const requested = Number.isInteger(unitCalls) && (unitCalls as number) >= 1 ? Math.min(unitCalls as number, MAX_ROUTE_UNIT_CALLS) : undefined;
+  const calls = requested ?? ROUTE_UNIT_CALLS[String(action)] ?? 1;
+  const perCall = ROUTE_CALL_TOKENS[String(action)] ?? { input: 8000, output: 2000 };
   return {
     provider: 'openai',
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     actionKey: String(action),
-    maxInputTokens: 8000 * calls,
-    maxOutputTokens: 2000 * calls,
+    maxInputTokens: perCall.input * calls,
+    maxOutputTokens: perCall.output * calls,
   };
 }
 
@@ -133,6 +145,9 @@ export interface WirePhase2RouteArgs<T> {
   referenceId: string;
   /** The route's existing AI work, unchanged. */
   run: () => Promise<T>;
+  /** AI calls in THIS request's billed unit when it varies per request (a bulk batch): scales the HOLD only;
+   *  settlement is always the actual usage. Integer 1..MAX_ROUTE_UNIT_CALLS, else the action's default. */
+  unitCalls?: number;
 }
 
 /**
@@ -221,7 +236,7 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
             referenceId,
             idempotencyKey: makeIdempotencyKey(effectiveUserId, args.action, referenceId),
             validateMembership: hasActor, // system/admin context skips membership
-            llmPricing: routeLlmPricingFor(args.action),
+            llmPricing: routeLlmPricingFor(args.action, args.unitCalls),
             collectViaCollector: true,
             executor: args.run,
           });
