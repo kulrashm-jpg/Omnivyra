@@ -47,7 +47,6 @@ import { isCreatorDependentContentType } from '../utils/contentTaxonomy';
 import { getFormatLineForContentType, getIntentLabelForContentType, toneForUserDisplay } from '../utils/formatLineForContentType';
 import PlatformIcon from './ui/PlatformIcon';
 import { getViewMode } from '../utils/getViewMode';
-import { VIEW_RULES } from '../utils/viewVisibilityMatrix';
 import {
   saveWizardState,
   loadWizardState,
