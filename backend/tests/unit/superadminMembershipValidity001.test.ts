@@ -169,11 +169,18 @@ describe('the invited-SUPER_ADMIN state is unreachable by design', () => {
   });
 
   it('revocation downgrades the ROLE and never writes a status', () => {
-    const src: string = fs.readFileSync(path.join(repo, 'pages/api/admin/revoke-super-admin.ts'), 'utf8');
-    expect(src).toMatch(/user_company_roles[\s\S]{0,120}update\(\s*\{\s*role:\s*'COMPANY_ADMIN'/);
+    // M2 (e1, 2026-11-14): the downgrade moved from two route statements into ONE transaction, the SQL function
+    // public.revoke_super_admin (20270217000052); the route only calls it. The invariant this audit relies on is
+    // asserted where it now lives: the function downgrades user_company_roles.role and writes NO status.
+    const route: string = fs.readFileSync(path.join(repo, 'pages/api/admin/revoke-super-admin.ts'), 'utf8');
+    expect(route).toMatch(/rpc\('revoke_super_admin'/);
+    expect(route).not.toMatch(/from\('user_company_roles'\)/);   // no second, unguarded write path in the route
+    const sql: string = fs.readFileSync(path.join(repo, 'supabase/migrations/20270217000052_revoke_super_admin_last_admin_guard.sql'), 'utf8');
+    const fn = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.revoke_super_admin('), sql.indexOf('$$;'));
+    expect(fn).toMatch(/UPDATE public\.user_company_roles r SET role = 'COMPANY_ADMIN', updated_at = now\(\)/);
     // If revocation ever switches to a status flip, the primitive's contract
     // changes and this audit must be redone.
-    expect(src).not.toMatch(/update\(\s*\{[^}]*status:\s*'inactive'/);
+    expect(fn).not.toMatch(/user_company_roles[^;]*SET[^;]*status\s*=/);
   });
 });
 
