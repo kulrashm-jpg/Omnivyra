@@ -66,7 +66,7 @@ jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jes
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { executeWithCredits } = require('../../services/creditExecutionServiceRuntimeCore');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { readHoldSettlementState, isDefinitiveDbRefusal } = require('../../services/billing/holdSettlementState');
+const { readHoldSettlementState, isDefinitiveDbRefusal, settledAmountsFromPartialConfirm } = require('../../services/billing/holdSettlementState');
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const USER = '33333333-3333-4333-8333-333333333333';
@@ -172,6 +172,37 @@ describe('readHoldSettlementState', () => {
     db.byParent = { data: [], error: null };
     db.byKey = { data: null, error: { message: 'boom2' } };
     expect(await readHoldSettlementState(input)).toEqual({ state: 'unreadable', message: 'boom2' });
+  });
+});
+
+describe('settledAmountsFromPartialConfirm (e9 follow-up: replay payloads)', () => {
+  const planned = { consumed: 4, released: 6 };
+  it('a FRESH call payload: total_consumed / total_released are used', () => {
+    expect(settledAmountsFromPartialConfirm({ id: 'x', total_consumed: 3, total_released: 7, is_underfunded: false }, 10, planned))
+      .toEqual({ consumed: 3, released: 7, underfunded: false, amountEstimated: false });
+  });
+  it('a REPLAY payload (the LIVE ledger row: confirm_partial, deltas = -(consumed)) is read, not the plan', () => {
+    const liveRow = { id: 'cp', execution_phase: 'confirm_partial', free_delta: 0, paid_delta: -2, incentive_delta: -1, is_underfunded: false };
+    expect(settledAmountsFromPartialConfirm(liveRow, 10, planned)).toEqual({ consumed: 3, released: 7, underfunded: false, amountEstimated: false });
+  });
+  it('neither shape: the plan, FLAGGED as estimated', () => {
+    expect(settledAmountsFromPartialConfirm({ id: 'x' }, 10, planned)).toEqual({ consumed: 4, released: 6, underfunded: false, amountEstimated: true });
+    expect(settledAmountsFromPartialConfirm(null, 10, planned)).toMatchObject({ amountEstimated: true });
+  });
+});
+
+describe('executeWithCredits: a replayed partial_confirm reports the COMMITTED amount', () => {
+  it('a replay payload (ledger row, no total_*) -> settlement charges the row amount (3), not the planned 4', async () => {
+    partialConfirm.mockResolvedValue({ error: null, data: { id: 'cp-replay', execution_phase: 'confirm_partial', free_delta: 0, paid_delta: -3, incentive_delta: 0 } });
+    const r = await run('pc-replay-shape');
+    expect(r.status).toBe('executed');
+    expect(r.settlement).toMatchObject({ creditsCharged: 3, creditsReleased: 7 });
+    expect(r.settlement.amountEstimated).toBeUndefined();
+  });
+  it('control: a fresh payload still uses its totals', async () => {
+    partialConfirm.mockResolvedValue({ error: null, data: { id: 'cp-fresh', total_consumed: 4, total_released: 6 } });
+    const r = await run('pc-fresh-shape');
+    expect(r.settlement).toMatchObject({ creditsCharged: 4, creditsReleased: 6 });
   });
 });
 

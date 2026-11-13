@@ -48,7 +48,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
-import { readHoldSettlementState, isDefinitiveDbRefusal, pendingSettlement } from './billing/holdSettlementState';
+import { readHoldSettlementState, isDefinitiveDbRefusal, pendingSettlement, settledAmountsFromPartialConfirm } from './billing/holdSettlementState';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
@@ -465,16 +465,15 @@ export async function executeWithCredits<T>(
     }
 
     confirmId = adoptedConfirmId ?? (partialData as any)?.id ?? null;
-    const underfunded = !!(partialData as any)?.is_underfunded;
     // An adopted settle uses the amount the COMMITTED row records (05: for a partial settle actual != planned by
-    // definition); the planned figure is used only when that row carried none, and is then flagged as estimated.
-    const amountEstimated = !!adoptedConfirmId && adoptedCredits === null;
-    const consumedTotal = adoptedConfirmId
-      ? (adoptedCredits ?? actualCredits)
-      : Number((partialData as any)?.total_consumed ?? actualCredits);
-    const releasedTotal = adoptedConfirmId
-      ? Math.max(0, credits - consumedTotal)
-      : Number((partialData as any)?.total_released ?? Math.max(0, credits - actualCredits));
+    // definition). Otherwise the RPC payload - in EITHER shape (fresh totals, or the ledger row a replay returns) - is
+    // read; the planned figure is used only when neither is present, and is then flagged as estimated.
+    const fromPayload = settledAmountsFromPartialConfirm(partialData, credits,
+      { consumed: actualCredits, released: Math.max(0, credits - actualCredits) });
+    const underfunded = fromPayload.underfunded;
+    const amountEstimated = adoptedConfirmId ? adoptedCredits === null : fromPayload.amountEstimated;
+    const consumedTotal = adoptedConfirmId ? (adoptedCredits ?? actualCredits) : fromPayload.consumed;
+    const releasedTotal = adoptedConfirmId ? Math.max(0, credits - consumedTotal) : fromPayload.released;
 
     settlement = {
       creditsCharged:  consumedTotal,

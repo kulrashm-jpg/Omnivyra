@@ -48,7 +48,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
-import { readHoldSettlementState, isDefinitiveDbRefusal, pendingSettlement, type SettlementPending } from './billing/holdSettlementState';
+import { readHoldSettlementState, settledAmountsFromPartialConfirm, isDefinitiveDbRefusal, pendingSettlement, type SettlementPending } from './billing/holdSettlementState';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
@@ -418,8 +418,12 @@ export async function executeWithEntryConsumption<T>(
       exposureReleased   = Math.max(0, reservation - additionalConsumed);
       if (adoptedCredits === null) adoptedAmountEstimated = true;
     } else {
-      additionalConsumed = Number((settleData as any)?.total_consumed ?? plan.additionalConsumption);
-      exposureReleased   = Number((settleData as any)?.total_released ?? plan.exposureReleased);
+      // Either payload shape (fresh totals, or the ledger row a replay returns); planned only when neither (flagged).
+      const fromPayload = settledAmountsFromPartialConfirm(settleData, reservation,
+        { consumed: plan.additionalConsumption, released: plan.exposureReleased });
+      additionalConsumed = fromPayload.consumed;
+      exposureReleased   = fromPayload.released;
+      if (fromPayload.amountEstimated) adoptedAmountEstimated = true;
     }
 
     const settleConfirmId = adoptedConfirmId ?? (settleData as any)?.id ?? null;

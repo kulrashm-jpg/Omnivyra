@@ -170,3 +170,31 @@ export async function readHoldSettlementState(input: {
   }
   return state;
 }
+
+/**
+ * Settled amounts from an apply_credit_partial_confirm RESULT, whichever shape it has (e9 follow-up, 2026-11-14):
+ *   - a FRESH call returns {total_consumed, total_released, is_underfunded, ...};
+ *   - a REPLAY (same key) and the unique_violation path return row_to_json(the ledger row) - no total_* fields, but the
+ *     row's deltas are -(consumed) per category (live body, C100).
+ * The settlement report previously read only total_* and silently fell back to the PLANNED amounts on every replay.
+ * Planned is now used only when the payload carries neither shape, and is then flagged (amountEstimated).
+ */
+export function settledAmountsFromPartialConfirm(
+  data: unknown,
+  held: number,
+  planned: { consumed: number; released: number },
+): { consumed: number; released: number; underfunded: boolean; amountEstimated: boolean } {
+  const d = (data ?? {}) as Record<string, unknown>;
+  const underfunded = d.is_underfunded === true;
+  const total = Number(d.total_consumed);
+  if (d.total_consumed !== undefined && d.total_consumed !== null && Number.isFinite(total)) {
+    const rel = Number(d.total_released);
+    return { consumed: total, released: Number.isFinite(rel) ? rel : Math.max(0, held - total), underfunded, amountEstimated: false };
+  }
+  const deltas = [d.free_delta, d.paid_delta, d.incentive_delta];
+  if (deltas.some((v) => v !== undefined && v !== null)) {
+    const consumed = deltas.reduce<number>((sum, v) => sum + Math.abs(Number(v ?? 0) || 0), 0);
+    return { consumed, released: Math.max(0, held - consumed), underfunded, amountEstimated: false };
+  }
+  return { consumed: planned.consumed, released: planned.released, underfunded, amountEstimated: true };
+}

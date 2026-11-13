@@ -53,6 +53,7 @@ import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/hol
 import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
 import { resolveBillingPolicy } from './billing/billingPolicyResolver';
 import { assertUuid, canonicalizeReference, type Uuid } from '@/lib/shared/uuid';
+import { settledAmountsFromPartialConfirm } from './billing/holdSettlementState';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 
@@ -676,7 +677,8 @@ export async function confirmCreditReservationToActual(
   }
 
   const confirmId = (data as any)?.id ?? null;
-  const consumed = Number((data as any)?.total_consumed ?? actual);
+  // Either payload shape (fresh totals, or the ledger row a replay returns); planned `actual` only when neither.
+  const consumed = settledAmountsFromPartialConfirm(data, handle.creditsReserved, { consumed: actual, released: Math.max(0, handle.creditsReserved - actual) }).consumed;
   if (confirmId) {
     await trackUsage({
       orgId:                handle.orgId,
