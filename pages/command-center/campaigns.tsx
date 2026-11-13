@@ -1,5 +1,6 @@
 import React from 'react';
 import { useRouter } from 'next/router';
+import Link from 'next/link';
 import { useCompanyContext } from '../../components/CompanyContext';
 import PageLoader from '../../components/PageLoader';
 import AccessRestricted from '../../components/access/AccessRestricted';
@@ -19,7 +20,6 @@ interface CampaignCard {
   icon: string;
   category: string;
   effortBand: string;
-  outcome: string;
   title: string;
   description: string;
   bullets: string[];
@@ -37,7 +37,6 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
     icon: 'T',
     category: 'Text-led',
     effortBand: 'Fast Launch',
-    outcome: 'AI-run text campaigns for faster publishing and promotion',
     title: 'BOLT (Text)',
     description: 'Launch AI-driven campaigns using posts, articles, newsletters, and other text-first formats without creator production.',
     bullets: [
@@ -57,7 +56,6 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
     icon: 'C',
     category: 'Creator-led',
     effortBand: 'Produce Assets',
-    outcome: 'Campaigns built for creator media and production workflows',
     title: 'BOLT (Creator)',
     description: 'Use AI for planning while your team or creators produce videos, reels, carousels, images, and other media assets.',
     bullets: [
@@ -77,7 +75,6 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
     icon: 'M',
     category: 'Mixed Mode',
     effortBand: 'Combine Assets',
-    outcome: 'A guided mix of text and creator formats in one campaign',
     title: 'Intelligent Mix',
     description: 'Let AI recommend the right mix of text and creator formats based on goals, audience context, and campaign direction.',
     bullets: [
@@ -97,7 +94,6 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
     icon: 'S',
     category: 'Planner',
     effortBand: 'Full Control',
-    outcome: 'Full campaign planning with strategic control and structure',
     title: 'Strategic Mix',
     description: 'Build a more deliberate campaign with control over goals, formats, cadence, channels, and execution planning.',
     bullets: [
@@ -116,7 +112,7 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
 
 export default function CampaignsSubPage() {
   const router = useRouter();
-  const { user, authChecked, isLoading, userRole, selectedCompanyId } = useCompanyContext();
+  const { user, authChecked, isLoading, userRole, selectedCompanyId, isAdmin } = useCompanyContext();
   const sourceContentToken = typeof router.query.sourceContentToken === 'string' ? router.query.sourceContentToken : null;
   const sourcePayload = React.useMemo(() => readCampaignSourcePayload(sourceContentToken), [sourceContentToken]);
 
@@ -152,11 +148,11 @@ export default function CampaignsSubPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-5 sm:px-4 lg:px-6">
       <div className="mx-auto max-w-[1500px]">
         <button
           onClick={() => router.push('/command-center')}
-          className="mb-8 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-800"
+          className="mb-4 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-800"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
@@ -164,47 +160,18 @@ export default function CampaignsSubPage() {
           Back to Command Center
         </button>
 
-        <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
-            <div className="max-w-3xl">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
-                Campaign System
-              </p>
-              <h1 className="text-3xl font-bold tracking-tight text-gray-900 md:text-4xl">
-                Launch campaigns across every style
-              </h1>
-              <p className="mt-3 text-sm leading-relaxed text-gray-600 md:text-base">
-                Choose the campaign path that fits the execution model you need. Each route is structured to feel
-                consistent, controlled, and aligned to serious B2B campaign planning.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
-              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Campaign Modes</p>
-                <p className="mt-1 text-base font-semibold text-gray-900">4</p>
-              </div>
-              <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">UX Goal</p>
-                <p className="mt-1 text-base font-semibold text-gray-900">Consistent</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
-            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
-              <p className="mt-1 text-sm text-gray-700">Teams choosing between text-only, creator-led, mixed, or full-planning campaign execution.</p>
-            </div>
-            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
-              <p className="mt-1 text-sm text-gray-700">Each path helps teams choose the right execution model before planning begins.</p>
-            </div>
-            <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
-              <p className="mt-1 text-sm text-gray-700">Professional campaign workflows built for structured planning, delivery, and brand consistency.</p>
-            </div>
-          </div>
+        {/* D3 (owner rule 3): the hero keeps only the heading. The "Campaign Modes 4 / UX Goal:
+            Consistent" stat boxes and the three filler boxes were internal copy. */}
+        <div className="mb-5 rounded-[28px] border border-white/80 bg-white/92 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-6">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+            Campaign System
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">
+            Launch campaigns across every style
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            Choose the campaign path that fits the execution model you need.
+          </p>
         </div>
 
         {sourcePayload ? (
@@ -217,22 +184,29 @@ export default function CampaignsSubPage() {
           </div>
         ) : null}
 
-        <div className="mb-5 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Select A Campaign Type</p>
             <p className="mt-1 text-sm text-gray-600">Every card below leads into a more deliberate campaign planning path with stronger information hierarchy.</p>
           </div>
-          <p className="hidden text-sm text-gray-500 md:block">4 campaign paths</p>
+          {/* D3 (owner rule 2): existing campaigns are one click away from the modes hub. */}
+          <Link
+            href="/campaigns"
+            className="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 shadow-sm transition-colors hover:bg-gray-50"
+          >
+            Your campaigns →
+          </Link>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {CAMPAIGN_CARDS.map((card) => (
+            // D3 (owner rule 3): ONE control per card (the CTA); cards size to their content.
             <div
               key={card.id}
-              onClick={() => handleCardClick(card.route)}
-              className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)] xl:min-h-[540px] xl:p-4 2xl:p-5`}
+              data-testid={`campaign-mode-card-${card.id}`}
+              className={`group flex flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] xl:p-4 2xl:p-5`}
             >
-              <div className="mb-5 flex items-start justify-between gap-3 xl:mb-4">
+              <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/80 bg-white/85 text-lg font-semibold text-gray-900 shadow-sm">
                   {card.icon}
                 </div>
@@ -246,15 +220,10 @@ export default function CampaignsSubPage() {
 
               <div className="flex flex-col">
                 <h2 className="text-xl font-semibold tracking-tight text-gray-900 xl:text-lg 2xl:text-xl">{card.title}</h2>
-                <p className="mt-3 min-h-[84px] text-sm leading-relaxed text-gray-600 xl:min-h-[112px] 2xl:min-h-[84px]">{card.description}</p>
+                <p className="mt-2 text-sm leading-relaxed text-gray-600">{card.description}</p>
               </div>
 
-              <div className="mt-5 flex min-h-[74px] flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-3 xl:mt-4 xl:min-h-[94px] xl:px-3 2xl:min-h-[74px] 2xl:px-4">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Primary Outcome</p>
-                <p className="mt-1 text-sm font-medium leading-5 text-gray-800">{card.outcome}</p>
-              </div>
-
-              <ul className="mt-5 flex min-h-[102px] flex-col justify-start space-y-2 text-sm xl:mt-4 xl:min-h-[132px]">
+              <ul className="mt-3 flex flex-col justify-start space-y-1.5 text-sm">
                 {card.bullets.map((bullet, index) => (
                   <li key={index} className="flex items-start gap-2 text-gray-700">
                     <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-900/70" />
@@ -264,11 +233,9 @@ export default function CampaignsSubPage() {
               </ul>
 
               <button
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleCardClick(card.route);
-                }}
-                className={`mt-auto w-full rounded-xl px-3 py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
+                type="button"
+                onClick={() => handleCardClick(card.route)}
+                className={`mt-4 w-full rounded-xl px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
               >
                 {card.cta}
               </button>
@@ -280,8 +247,10 @@ export default function CampaignsSubPage() {
             active experiments + top winner cards so operators can
             assess the current campaign's experiment results without
             switching to the dedicated Variant Experience page. */}
-        {/* The SELECTED company, never the user's first one (55's active-company sweep). */}
-        <CampaignVariantHubSection companyId={selectedCompanyId} />
+        {/* The SELECTED company, never the user's first one (55's active-company sweep).
+            D3 / BETA-008: operator tooling (raw campaign-id input, strategy override), so
+            admins only (isAdmin = SUPER_ADMIN or COMPANY_ADMIN); customers never see it. */}
+        {isAdmin ? <CampaignVariantHubSection companyId={selectedCompanyId} /> : null}
       </div>
     </div>
   );

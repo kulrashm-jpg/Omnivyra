@@ -144,7 +144,7 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     label: 'Campaigns',
     href: '/command-center/campaigns',
     icon: Megaphone,
-    description: 'Four campaign workflows grouped under one menu.',
+    description: 'Your campaigns and the four ways to create one.',
     matchers: [
       '/campaigns',
       '/campaign-planner',
@@ -157,6 +157,8 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       '/command-center/bolt-combined-strategy',
     ],
     children: [
+      // D3 (owner rule 2): existing campaigns are reachable from the header in 2 clicks.
+      { label: 'All campaigns', href: '/campaigns', description: 'Every campaign you have, with its status.' },
       { label: 'BOLT Text', href: '/command-center/bolt-text', description: 'Fast text-first campaign path.' },
       { label: 'BOLT Creator', href: '/command-center/bolt-creator-strategy', description: 'Creator-led strategy flow.' },
       {
