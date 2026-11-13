@@ -82,8 +82,12 @@ jest.mock('../../db/supabaseClient', () => {
   const fake = m.supabase;
   // Closure-015L: models the CURRENT deployment — save_rbac_config (proposal 03) is not
   // deployed, so saveRbacConfig takes its legacy append path.
+  // M2 (20270217000052): the governed revoke is ONE function call; the harness rpc() models no write, so it is routed
+  // to the test-only model of revoke_super_admin over the harness rows (superAdminRpcModel).
+  const model = require('../helpers/superAdminRpcModel');
   const rpc = (fn: string, args?: unknown) => (fn === 'save_rbac_config'
     ? Promise.resolve({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.save_rbac_config' } })
+    : fn === 'revoke_super_admin' ? Promise.resolve(model.modelRevokeSuperAdmin(args))
     : fake.rpc(fn, args));
   const wrapped = { ...fake, rpc, from: (t: string) => mockWrap(fake.from(t), t) };
   return { supabase: wrapped, default: wrapped, getSupabase: () => wrapped, supabaseAdmin: wrapped };
@@ -228,6 +232,9 @@ function world(target: Record<string, unknown> = { role: 'CONTENT_CREATOR', stat
       { id: CADMIN, email: 'cadmin@example.test', is_deleted: false, role: 'COMPANY_ADMIN' },
       { id: TARGET, email: 'target@example.test', is_deleted: false, role: 'CONTENT_CREATOR' },
       { id: SA_IN_A, email: 'sa-in-a@example.test', is_deleted: false, role: 'SUPER_ADMIN' },
+      // M2: every active super-admin has a users row in prod (revoke_super_admin counts others via a JOIN on users).
+      { id: PSA, email: 'psa@example.test', is_deleted: false, role: 'SUPER_ADMIN' },
+      { id: PSA_NOSTEP, email: 'psa-nostep@example.test', is_deleted: false, role: 'SUPER_ADMIN' },
     ],
     stepup_sessions: [{ id: 'su-psa', user_id: PSA, auth_session_id: `sess-${PSA}`, factor: 'webauthn', expires_at: FUTURE(), consumed_at: null, revoked_at: null }],
     trusted_devices: [PSA, PSA_NOSTEP].map((u) => ({ id: `dev-${u}`, user_id: u, fingerprint: fingerprintForBareRequest(), expires_at: FUTURE(), revoked_at: null })),
@@ -564,13 +571,59 @@ describe('R-10 — rate limits before authorization; governed revoke audit and t
     expect(mem(SA_IN_A)).toMatchObject({ role: 'COMPANY_ADMIN' });
   });
 
-  it('revoke: membership downgrade failure → 500 MEMBERSHIP_DOWNGRADE_FAILED (partial, step 1 completed); no success audit', async () => {
+  // M2: the two downgrades are ONE transaction (revoke_super_admin), so the former partial state ("users.role downgraded,
+  // memberships not") can no longer exist: a failure leaves BOTH untouched.
+  it('revoke: the governed function fails → 500 REVOKE_FAILED; nothing downgraded (atomic); no success audit', async () => {
     world();
-    mockFail.add('user_company_roles:update');
-    const r = await revoke(PSA, SA_IN_A);
-    expect(r.status).toBe(500);
-    expect(r.body).toMatchObject({ code: 'MEMBERSHIP_DOWNGRADE_FAILED', partial: true, completed: ['users_role_downgraded'] });
+    const model = require('../helpers/superAdminRpcModel');
+    model.revokeModelControl.failWith = { code: 'XX000', message: 'boom' };
+    try {
+      const r = await revoke(PSA, SA_IN_A);
+      expect(r.status).toBe(500);
+      expect(r.body).toMatchObject({ code: 'REVOKE_FAILED' });
+      expect(mem(SA_IN_A)).toMatchObject({ role: 'SUPER_ADMIN' });
+      expect(rows('audit_logs').filter((a) => a.action === 'SUPER_ADMIN_REVOKE')).toHaveLength(0);
+    } finally {
+      model.revokeModelControl.failWith = null;
+    }
+  });
+
+  it('M2: the LAST active super-admin revoking THEMSELF → 409 LAST_SUPER_ADMIN (not retryable); nothing changed, no audit', async () => {
+    world();
+    // leave PSA (the stepped-up actor) as the only active super-admin
+    for (const r of rows('user_company_roles')) {
+      if (r.user_id !== PSA && String(r.role).toUpperCase() === 'SUPER_ADMIN') r.status = 'inactive';
+    }
+    const r = await revoke(PSA, PSA);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'LAST_SUPER_ADMIN', retryable: false });
+    expect(rows('user_company_roles').find((x) => x.id === 'r-psa')).toMatchObject({ role: 'SUPER_ADMIN', status: 'active' });
     expect(rows('audit_logs').filter((a) => a.action === 'SUPER_ADMIN_REVOKE')).toHaveLength(0);
+  });
+
+  it('M2: revoking one of TWO active super-admins is allowed (control for the guard)', async () => {
+    world();
+    for (const r of rows('user_company_roles')) {
+      if (![PSA, SA_IN_A].includes(r.user_id as string) && String(r.role).toUpperCase() === 'SUPER_ADMIN') r.status = 'inactive';
+    }
+    const r = await revoke(PSA, SA_IN_A);
+    expect(r.status).toBe(200);
+    expect(mem(SA_IN_A)).toMatchObject({ role: 'COMPANY_ADMIN' });
+  });
+
+  it('M2: the governed function not deployed → 503 REVOKE_UNAVAILABLE; NO fallback downgrade', async () => {
+    world();
+    const model = require('../helpers/superAdminRpcModel');
+    model.revokeModelControl.failWith = { code: 'PGRST202', message: 'Could not find the function public.revoke_super_admin' };
+    try {
+      const r = await revoke(PSA, SA_IN_A);
+      expect(r.status).toBe(503);
+      expect(r.body).toMatchObject({ code: 'REVOKE_UNAVAILABLE', retryable: true });
+      expect(mem(SA_IN_A)).toMatchObject({ role: 'SUPER_ADMIN' });
+      expect(calls().filter((c) => c.op === 'update' && (c.table === 'users' || c.table === 'user_company_roles'))).toHaveLength(0);
+    } finally {
+      model.revokeModelControl.failWith = null;
+    }
   });
 
   it('revoke: authorization failure (company admin) → 403; nothing changed, no audit row', async () => {

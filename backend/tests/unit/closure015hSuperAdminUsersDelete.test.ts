@@ -62,8 +62,12 @@ jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production'
 jest.mock('../../db/supabaseClient', () => {
   const m = require('../helpers/routeAuthHarness').supabaseModule();
   const fake = m.supabase;
+  // M2 (20270217000052): the governed revoke is ONE function call; the harness rpc() models no write, so it is routed
+  // to the test-only model of revoke_super_admin over the harness rows (superAdminRpcModel).
+  const model = require('../helpers/superAdminRpcModel');
   const wrapped = {
     ...fake,
+    rpc: (fn: string, args?: unknown) => (fn === 'revoke_super_admin' ? Promise.resolve(model.modelRevokeSuperAdmin(args)) : fake.rpc(fn, args)),
     from: (t: string) => mockWrap(fake.from(t), t),
     auth: { ...fake.auth, admin: { ...fake.auth.admin, deleteUser: (...a: unknown[]) => mockAuthDeleteUser(...(a as [])) } },
   };
@@ -151,6 +155,9 @@ function world(opts: { sa?: { role?: string; status?: string } | null; loner?: A
     users: [
       { id: LONER, supabase_uid: 'sb-loner', email: 'loner@example.test' },
       { id: SA_IN_A, supabase_uid: 'sb-sa', email: 'sa@example.test', role: 'SUPER_ADMIN' },
+      // M2: every active super-admin has a users row in prod (revoke_super_admin counts others via a JOIN on users).
+      { id: PSA, supabase_uid: 'sb-psa', email: 'psa@example.test', role: 'SUPER_ADMIN' },
+      { id: PSA_NOSTEP, supabase_uid: 'sb-psa-n', email: 'psa-nostep@example.test', role: 'SUPER_ADMIN' },
     ],
     capability_assignments: [{ user_id: GRANTEE, capability: IDENTITY_ADMIN_DELETE, organization_id: null, expires_at: null, revoked_at: null }],
     stepup_sessions: STEPPED.map((u) => ({ id: `su-${u}`, user_id: u, auth_session_id: `sess-${u}`, factor: 'webauthn', expires_at: FUTURE(), consumed_at: null, revoked_at: null })),

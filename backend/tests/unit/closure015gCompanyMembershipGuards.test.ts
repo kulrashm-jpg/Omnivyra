@@ -67,7 +67,11 @@ jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production'
 jest.mock('../../db/supabaseClient', () => {
   const m = require('../helpers/routeAuthHarness').supabaseModule();
   const fake = m.supabase;
-  const wrapped = { ...fake, from: (t: string) => mockWrap(fake.from(t), t) };
+  // M2 (20270217000052): the governed revoke is ONE function call; the harness rpc() models no write, so it is routed
+  // to the test-only model of revoke_super_admin over the harness rows (superAdminRpcModel).
+  const model = require('../helpers/superAdminRpcModel');
+  const rpc = (fn: string, args?: unknown) => (fn === 'revoke_super_admin' ? Promise.resolve(model.modelRevokeSuperAdmin(args)) : fake.rpc(fn, args));
+  const wrapped = { ...fake, rpc, from: (t: string) => mockWrap(fake.from(t), t) };
   return { supabase: wrapped, default: wrapped, getSupabase: () => wrapped, supabaseAdmin: wrapped };
 });
 jest.mock('../../db/writeOwner', () => {
@@ -146,7 +150,12 @@ function world(saRow: { role?: string; status?: string } | null = { role: 'SUPER
       { id: 'r-member-b', user_id: MEMBER, company_id: CO_B, role: 'CONTENT_REVIEWER', status: 'active' },
       { id: 'r-bonly', user_id: B_ONLY, company_id: CO_B, role: 'CONTENT_CREATOR', status: 'active' },
     ],
-    users: [{ id: SA, role: 'SUPER_ADMIN', email: 'sa@example.test' }],
+    users: [
+      { id: SA, role: 'SUPER_ADMIN', email: 'sa@example.test' },
+      // M2: every active super-admin has a users row in prod (revoke_super_admin counts others via a JOIN on users).
+      { id: PSA, role: 'SUPER_ADMIN', email: 'psa@example.test' },
+      { id: PSA_NOSTEP, role: 'SUPER_ADMIN', email: 'psa-nostep@example.test' },
+    ],
     stepup_sessions: [{ id: 'su-psa', user_id: PSA, auth_session_id: `sess-${PSA}`, factor: 'webauthn', expires_at: FUTURE(), consumed_at: null, revoked_at: null }],
     trusted_devices: [PSA, PSA_NOSTEP].map((u) => ({ id: `dev-${u}`, user_id: u, fingerprint: fingerprintForBareRequest(), expires_at: FUTURE(), revoked_at: null })),
     audit_logs: [],

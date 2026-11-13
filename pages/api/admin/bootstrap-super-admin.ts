@@ -46,7 +46,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Replay protection:
  *   - Single-use lock: after ANY SUPER_ADMIN row exists, all bootstrap-
  *     creating modes ('bootstrap', 'env-credential') return
- *     BOOTSTRAP_ALREADY_CONSUMED. The DB row is the lock.
+ *     BOOTSTRAP_ALREADY_CONSUMED. The DB row is the lock, checked INSIDE the
+ *     granting transaction under an advisory lock shared with revoke
+ *     (public.bootstrap_first_super_admin, M1 20270217000013); a failed
+ *     pre-check read answers 503, never "none exists".
  *   - Token compare is timing-safe.
  *   - Every attempt — success or failure — writes a capability_audit_log
  *     row (decision='super_admin_bootstrap_started' / '_completed' /
@@ -218,12 +221,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(401).json({ error: 'Invalid bootstrap token', code: 'BOOTSTRAP_TOKEN_INVALID' });
     }
 
-    // 3. Single-use check: refuse if any SUPER_ADMIN already exists.
-    const { count: existingCount2 } = await ownedDbTable('user_company_roles')
+    // 3. Single-use check: refuse if any SUPER_ADMIN already exists. A fast pre-check only - the authoritative check
+    //    runs inside the granting transaction (bootstrap_first_super_admin, M1). A FAILED read is not "none exists".
+    const { count: existingCount2, error: existingErr2 } = await ownedDbTable('user_company_roles')
       .select('id', { count: 'exact', head: true })
       .eq('role', SUPER_ADMIN_ROLE)
       .eq('status', 'active');
-    if ((existingCount2 ?? 0) > 0) {
+    if (existingErr2 || existingCount2 === null || existingCount2 === undefined) {
+      await deny('env_credential_existing_check_unavailable', ip, ua);
+      return res.status(503).json({ error: 'Bootstrap check unavailable; try again', code: 'BOOTSTRAP_CHECK_UNAVAILABLE', retryable: true });
+    }
+    if (existingCount2 > 0) {
       await deny('env_credential_already_consumed', ip, ua);
       return res.status(409).json({
         error: 'A SUPER_ADMIN already exists. Use mode=promote with a passkey-enrolled SUPER_ADMIN instead.',
@@ -252,11 +260,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // 5. Promote — assignSuperAdmin is idempotent and binds to an org.
-    const inserted = await assignSuperAdmin(target.id, organizationId);
+    // 5. Promote - atomically, re-checking "no SUPER_ADMIN exists" inside the granting transaction (M1).
+    const inserted = await bootstrapFirstSuperAdmin(target.id, organizationId);
     if (inserted.ok === false) {
       await deny(inserted.reason, ip, ua, null, target.id);
-      return res.status(inserted.status).json({ error: inserted.reason });
+      return res.status(inserted.status).json({ error: inserted.reason, code: inserted.reason, retryable: inserted.status === 503 });
     }
 
     // 6. Optional: mint canonical session for the target user so the
@@ -336,11 +344,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Verify NO existing SUPER_ADMIN — bootstrap mode is single-use by design.
   // user_company_roles uses status='active' + deactivated_at as its lifecycle
   // markers (no revoked_at column on this table).
-  const { count: existingCount } = await ownedDbTable('user_company_roles')
+  // A fast pre-check only; the authoritative check runs inside the granting transaction (M1). A FAILED read is not
+  // "none exists" (it used to be: `count ?? 0` permitted the bootstrap).
+  const { count: existingCount, error: existingErr } = await ownedDbTable('user_company_roles')
     .select('id', { count: 'exact', head: true })
     .eq('role', SUPER_ADMIN_ROLE)
     .eq('status', 'active');
-  if ((existingCount ?? 0) > 0) {
+  if (existingErr || existingCount === null || existingCount === undefined) {
+    await deny('bootstrap_existing_check_unavailable', ip, ua);
+    return res.status(503).json({ error: 'Bootstrap check unavailable; try again', code: 'BOOTSTRAP_CHECK_UNAVAILABLE', retryable: true });
+  }
+  if (existingCount > 0) {
     await deny('bootstrap_already_consumed', ip, ua);
     return res.status(409).json({
       error: 'A SUPER_ADMIN already exists. Use mode=promote.',
@@ -395,12 +409,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // All preconditions satisfied — promote the caller.
+  // All preconditions satisfied - promote the caller, atomically (M1).
   const organizationId = typeof body.organizationId === 'string' ? body.organizationId : null;
-  const inserted = await assignSuperAdmin(p.userId, organizationId);
+  const inserted = await bootstrapFirstSuperAdmin(p.userId, organizationId);
   if (inserted.ok === false) {
     await deny(inserted.reason, ip, ua, p.userId, p.userId);
-    return res.status(inserted.status).json({ error: inserted.reason });
+    return res.status(inserted.status).json({ error: inserted.reason, code: inserted.reason, retryable: inserted.status === 503 });
   }
 
   await logSecurityEvent({
@@ -445,10 +459,38 @@ interface AssignFailure {
   status: number;
 }
 
-async function assignSuperAdmin(
+/**
+ * M1 (e1, e9-approved BLOCKING 2026-11-13; 20270217000013): the FIRST super-admin, atomically. The RPC takes the
+ * super-admin lock shared with revoke, re-counts active SUPER_ADMIN memberships inside the transaction and grants via
+ * assign_super_admin only when there are none - two concurrent bootstraps can no longer both promote. No fallback: a
+ * missing function fails closed (503), never the count-then-grant path.
+ */
+async function bootstrapFirstSuperAdmin(
   userId: string,
   organizationIdOverride: string | null,
 ): Promise<AssignResult | AssignFailure> {
+  const organizationId = await resolveBindingOrganization(userId, organizationIdOverride);
+  if (!organizationId) return { ok: false, reason: 'no_organization_to_bind', status: 412 };
+  const { data, error } = await supabase.rpc('bootstrap_first_super_admin', {
+    p_user_id: userId,
+    p_company_id: organizationId,
+  });
+  if (error) {
+    const code = (error as { code?: string }).code;
+    const message = String((error as { message?: string }).message ?? '');
+    if (message.includes('BOOTSTRAP_ALREADY_CONSUMED')) return { ok: false, reason: 'BOOTSTRAP_ALREADY_CONSUMED', status: 409 };
+    if (message.includes('SUPER_ADMIN_MEMBERSHIP_COMPANY_')) {
+      return { ok: false, reason: message.includes('MISSING') ? 'company_missing' : 'company_not_active', status: 409 };
+    }
+    if (code === 'PGRST202' || code === '42883') return { ok: false, reason: 'BOOTSTRAP_UNAVAILABLE', status: 503 };
+    return { ok: false, reason: `db_rpc_failed:${message}`, status: 500 };
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { role_row_id?: string } | null;
+  if (!row?.role_row_id) return { ok: false, reason: 'db_rpc_no_result', status: 500 };
+  return { ok: true, roleRowId: row.role_row_id, organizationId };
+}
+
+async function resolveBindingOrganization(userId: string, organizationIdOverride: string | null): Promise<string | null> {
   // Resolve the org to bind the role row to:
   //   1. organizationIdOverride (caller-provided) if set;
   //   2. otherwise the user's active_company_id;
@@ -474,6 +516,14 @@ async function assignSuperAdmin(
     organizationId = (roleRow as { company_id: string | null } | null)?.company_id ?? null;
   }
 
+  return organizationId;
+}
+
+async function assignSuperAdmin(
+  userId: string,
+  organizationIdOverride: string | null,
+): Promise<AssignResult | AssignFailure> {
+  const organizationId = await resolveBindingOrganization(userId, organizationIdOverride);
   if (!organizationId) {
     return { ok: false, reason: 'no_organization_to_bind', status: 412 };
   }

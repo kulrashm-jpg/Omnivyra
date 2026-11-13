@@ -3,9 +3,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * POST /api/admin/revoke-super-admin
  *
- * Revokes platform super-admin status from a user by:
+ * Revokes platform super-admin status from a user, atomically (public.revoke_super_admin, 20270217000052):
  *  1. Downgrading users.role from SUPER_ADMIN to COMPANY_ADMIN
  *  2. Downgrading any SUPER_ADMIN role in user_company_roles to COMPANY_ADMIN
+ * Refused with 409 LAST_SUPER_ADMIN when the target is the last active super-admin.
  *
  * Authorization: capability `identity.admin.revoke` + step-up policy
  * (phishing-resistant + trusted device, 10-minute window). Bridge
@@ -42,32 +43,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const now = new Date().toISOString();
 
-    // 1. Revoke platform-level super-admin role
-    const { error: profileErr } = await supabase
-      .from('users')
-      .update({ role: 'COMPANY_ADMIN', updated_at: now })
-      .eq('id', userId)
-      .eq('role', 'SUPER_ADMIN');
-
-    if (profileErr) {
-      console.error('[revoke-super-admin] profile update failed:', profileErr.message);
-      return res.status(500).json({ error: 'Internal server error' });
+    // M2 (e1, e9-approved BLOCKING 2026-11-13; 20270217000052): ONE transaction under the super-admin lock shared with
+    // bootstrap - it refuses to revoke the LAST active super-admin (self-revoke included) and downgrades users.role and
+    // every SUPER_ADMIN membership together, so a half-revoked user can no longer exist. There is NO fallback to the
+    // former two-statement downgrade: if the function is missing the route fails closed.
+    const { data: rpcData, error: rpcErr } = await supabase.rpc('revoke_super_admin', { p_user_id: userId });
+    if (rpcErr) {
+      const message = String((rpcErr as { message?: string }).message ?? '');
+      const code = (rpcErr as { code?: string }).code;
+      if (message.includes('LAST_SUPER_ADMIN')) {
+        return res.status(409).json({
+          error: 'This is the last active super-admin; promote another super-admin before revoking this one.',
+          code: 'LAST_SUPER_ADMIN',
+          retryable: false,
+        });
+      }
+      if (code === 'PGRST202' || code === '42883') {
+        console.error('[revoke-super-admin] revoke_super_admin is not deployed:', message);
+        return res.status(503).json({ error: 'Revocation is temporarily unavailable', code: 'REVOKE_UNAVAILABLE', retryable: true });
+      }
+      console.error('[revoke-super-admin] revoke failed:', message);
+      return res.status(500).json({ error: 'Internal server error', code: 'REVOKE_FAILED' });
     }
-
-    // 2. Downgrade any SUPER_ADMIN company roles to COMPANY_ADMIN
-    // Closure-015J (R-10): read back what changed, and fail truthfully on error
-    // (the downgrade result was previously ignored).
-    const { data: downgraded, error: rolesErr } = await supabase
-      .from('user_company_roles')
-      .update({ role: 'COMPANY_ADMIN', updated_at: now })
-      .eq('user_id', userId)
-      .eq('role', 'SUPER_ADMIN')
-      .select('id, company_id');
-    if (rolesErr) {
-      console.error('[revoke-super-admin] membership downgrade failed:', rolesErr.message);
-      return res.status(500).json({ error: 'Internal server error', code: 'MEMBERSHIP_DOWNGRADE_FAILED', partial: true, completed: ['users_role_downgraded'] });
-    }
-    const downgradedMemberships = ((downgraded ?? []) as Array<{ company_id: string }>).map((r) => r.company_id);
+    const downgradedMemberships = ((rpcData as { downgraded_company_ids?: string[] } | null)?.downgraded_company_ids ?? []);
 
     // Closure-015J (R-10): the governed revoke now writes its own business audit
     // row (it had only the requireCapability security event). The revocation has
