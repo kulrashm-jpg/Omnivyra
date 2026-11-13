@@ -103,21 +103,15 @@ describe('stability/billing signup -> credits contract', () => {
     expect(setup).toContain('grantInitialFreeCredit');
     expect(setup).toMatch(/await grantInitialFreeCredit\(\{/);
 
-    // Document the known state of the sync backstop: bootstrapCompanyFromSignupIntent
-    // is currently disabled by an unconditional early return. This assertion is
-    // intentionally informational-locking: if a future dev RE-ENABLES the sync
-    // backstop (removing this early return) AND that becomes the credit path,
-    // they must revisit this guard. Until then, setup-company.ts is the ONLY
-    // reachable initial-credit grant, so its presence (asserted above) is the
-    // real safety net. We assert the early return still bookends the disabled
-    // bootstrap so the trap stays meaningful.
-    expectContainsAll(sync, [
-      'async function bootstrapCompanyFromSignupIntent(',
-      'auth_sync_signup_intent_company_bootstrap_disabled',
-      'return { ok: true };',
-    ]);
-    expectMatchesAll(sync, [
-      /auth_sync_signup_intent_company_bootstrap_disabled[\s\S]*?return \{ ok: true \};/,
-    ]);
+    // The sync path holds NO fresh-grant path (e9 ruling 2026-11-12, BLOCKING money - the initial credits come
+    // VIA ONBOARDING, after its eligibility checks). Asserted directly - not by pinning the existence of dead code:
+    //  - no company bootstrap / creation in sync-supabase-user;
+    //  - EVERY grantInitialFreeCredit call in it is repairOnly: true (repairs a company that already has a ledger
+    //    grant; never creates one). A new grant call without repairOnly fails this guard.
+    expect(sync).not.toMatch(/bootstrapCompanyFromSignupIntent/);
+    expect(sync).not.toMatch(/from\(['"]companies['"]\)\s*\.insert\(/);
+    const grantCalls = sync.match(/grantInitialFreeCredit\(\{[\s\S]*?\}\)/g) ?? [];
+    expect(grantCalls.length).toBeGreaterThan(0);
+    for (const call of grantCalls) expect(call).toMatch(/repairOnly:\s*true/);
   });
 });
