@@ -6,6 +6,7 @@ import Link from 'next/link';
 import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import CompanyStrategyProfileCard from '../components/company/CompanyStrategyProfileCard';
+import CompanyProfileRefineProgress from '../components/company/CompanyProfileRefineProgress';
 import type { useCompanyProfileState } from '../hooks/useCompanyProfileState';
 import type {
   CompanyContextIntelligence,
@@ -674,19 +675,7 @@ export function useCompanyProfileFormController(d: ProfileState) {
   const renderOnboardingRefineAction = () => (
     <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
       {isRefining ? (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
-            <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-            </svg>
-            Saving social links and enriching from your website
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100">
-            <div className="h-full w-1/2 animate-pulse rounded-full bg-indigo-500" />
-          </div>
-          <p className="text-xs text-slate-600">This can take a short moment. The website remains locked and will not be overwritten.</p>
-        </div>
+        <CompanyProfileRefineProgress steps={REFINE_STEPS} delaysMs={REFINE_STEP_DELAYS} />
       ) : (
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="max-w-2xl">
