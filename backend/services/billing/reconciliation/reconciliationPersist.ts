@@ -20,11 +20,15 @@
  *      invoice or credit note is merged into one manifest by the operator.
  *      (A DB unique index on (provider, period_start, period_end) follows in its
  *      own migration; this code does not depend on it.)
+ *      A run for the period that belongs to another invoice (or a legacy run
+ *      with no provider_invoice_id) is refused here too - BEFORE the import, so
+ *      a refused invoice is never stored.
  *   2. Import. 23505 (by code) means this invoice was imported before -> RESUME.
  *   3. Run upserted as 'running', carrying provider_invoice_id and a snapshot of
  *      the estimates it was matched against (sum, count, sha256).
  *   4. Adjustments: ONE insert statement (atomic). On resume, a run that already
- *      has adjustments is not inserted into again.
+ *      has adjustments is ONLY completed: its totals, buckets and estimates
+ *      still describe those adjustments, so they are not rewritten.
  *   5. Run marked 'completed'. Only a completed run makes a retry a 'duplicate'.
  *
  * RESUME uses the STORED line_items (never the new payload), refuses when the
@@ -98,8 +102,55 @@ async function refuseOtherInvoiceForPeriod(a: PersistArgs): Promise<void> {
   }
 }
 
+type RunRow = {
+  id: string; status: string; metadata: Record<string, unknown> | null;
+  estimated_usd_sum: number | string | null; actual_usd_sum: number | string | null;
+};
+
+async function readRunForPeriod(a: PersistArgs): Promise<RunRow | null> {
+  const { data, error } = await supabase
+    .from('cost_reconciliation_runs')
+    .select('id, status, metadata, estimated_usd_sum, actual_usd_sum')
+    .eq('provider', a.provider)
+    .eq('period_start', a.periodStart)
+    .eq('period_end', a.periodEnd)
+    .maybeSingle();
+  if (error) fail(a.provider, 'reconcile_run_read_failed', `run read failed: ${error.message}`);
+  return (data as RunRow | null) ?? null;
+}
+
+async function countAdjustments(a: PersistArgs, runId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('cost_reconciliation_adjustments')
+    .select('id', { count: 'exact', head: true })
+    .eq('run_id', runId);
+  if (error) fail(a.provider, 'reconcile_adjustment_count_failed', `adjustment count failed: ${error.message}`);
+  // A null count with a null error is NOT "zero rows" - refuse rather than double-insert.
+  if (typeof count !== 'number') fail(a.provider, 'reconcile_adjustment_count_failed', 'adjustment count returned no answer');
+  return count;
+}
+
+async function completeRun(a: PersistArgs, runId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('cost_reconciliation_runs')
+    .update({ status: 'completed', finished_at: new Date().toISOString() } as Record<string, unknown>)
+    .eq('id', runId)
+    .select('id');
+  if (error) fail(a.provider, 'reconcile_run_complete_failed', `run completion failed: ${error.message}`);
+  if (!Array.isArray(data) || data.length !== 1) fail(a.provider, 'reconcile_run_complete_failed', `run completion matched ${Array.isArray(data) ? data.length : 'no answer'} rows`);
+}
+
 export async function persistProviderReconciliation(a: PersistArgs): Promise<PersistOutcome> {
+  // 1) Refusals that must happen BEFORE the import is committed - otherwise the
+  //    invoice would be stored, every retry would resume into the same refusal,
+  //    and it would never be reconciled (e1). (a) another invoice is imported for
+  //    the period; (b) the period's run belongs to another invoice - a legacy run
+  //    without provider_invoice_id counts as another invoice.
   await refuseOtherInvoiceForPeriod(a);
+  const prev = await readRunForPeriod(a);
+  if (prev && prev.metadata?.provider_invoice_id !== a.providerInvoiceId) {
+    fail(a.provider, 'reconcile_run_conflict', `period already has a run for invoice ${String(prev.metadata?.provider_invoice_id ?? 'unknown (legacy run)')}`);
+  }
 
   // 2) Import (immutable). 23505 -> this invoice was imported before: resume.
   let lines = a.lines;
@@ -138,37 +189,36 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
     resumed = true;
   }
 
-  // Existing run for the period (unique per provider+period).
-  const { data: existing, error: runReadErr } = await supabase
-    .from('cost_reconciliation_runs')
-    .select('id, status, metadata')
-    .eq('provider', a.provider)
-    .eq('period_start', a.periodStart)
-    .eq('period_end', a.periodEnd)
-    .maybeSingle();
-  if (runReadErr) fail(a.provider, 'reconcile_run_read_failed', `run read failed: ${runReadErr.message}`);
-  const prev = existing as { id: string; status: string; metadata: Record<string, unknown> | null } | null;
-  // A run with no import of THIS invoice belongs to another one: never adopt it.
-  if (prev && (!resumed || prev.metadata?.provider_invoice_id !== a.providerInvoiceId)) {
-    fail(a.provider, 'reconcile_run_conflict', `period already has a run for invoice ${String(prev.metadata?.provider_invoice_id ?? 'unknown')}`);
-  }
+  // From here on, `prev` (if any) is THIS invoice's run.
   if (prev && prev.status === 'completed') {
     return { status: 'duplicate', provider_invoice_id: a.providerInvoiceId };
   }
 
-  const match = reconcileProviderInvoice({ provider: a.provider, invoiceLines: lines, usageAggregates: a.aggregates });
   const estimates = estimateSnapshot(a.aggregates);
   const firstEstimates = (prev?.metadata?.estimates_first ?? prev?.metadata?.estimates ?? null) as ReturnType<typeof estimateSnapshot> | null;
-  if (resumed) {
+  const already = prev ? await countAdjustments(a, prev.id) : 0;
+  if (resumed || prev) {
     logger.warn('reconcile_resumed', {
       provider: a.provider, provider_invoice_id: a.providerInvoiceId, run_status: prev?.status ?? 'none',
-      estimates_first: firstEstimates, estimates_now: estimates,
+      adjustments_already: already, estimates_first: firstEstimates, estimates_now: estimates,
       estimate_changed: firstEstimates !== null && firstEstimates.sha256 !== estimates.sha256,
     });
   }
 
-  // 3) Run as 'running'.
-  const now = new Date().toISOString();
+  if (prev && already > 0) {
+    // A crash AFTER the adjustments insert. The stored adjustments came from the
+    // first match, and the run row still describes exactly that match: do NOT
+    // rewrite its totals, buckets or estimates from a re-read - only complete it (e1).
+    await completeRun(a, prev.id);
+    return {
+      status: 'ingested', run_id: prev.id, adjustments_written: 0, warnings: a.warnings, resumed: true,
+      totals: { estimated_usd_sum: Number(prev.estimated_usd_sum ?? 0), actual_usd_sum: Number(prev.actual_usd_sum ?? 0) },
+    };
+  }
+
+  const match = reconcileProviderInvoice({ provider: a.provider, invoiceLines: lines, usageAggregates: a.aggregates });
+
+  // 3) Run as 'running' (no adjustments exist for it yet, so its totals are this match's).
   const { data: runRow, error: runErr } = await supabase
     .from('cost_reconciliation_runs')
     .upsert(
@@ -179,7 +229,7 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
         estimated_usd_sum: match.totals.estimated_usd_sum,
         actual_usd_sum: match.totals.actual_usd_sum,
         status: 'running',
-        started_at: now,
+        started_at: new Date().toISOString(),
         finished_at: null,
         metadata: {
           adapter_version: a.adapterVersion, warnings: a.warnings, buckets: match.buckets,
@@ -193,19 +243,10 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
   if (runErr || !runRow) fail(a.provider, 'reconcile_run_upsert_failed', `run upsert failed: ${runErr?.message ?? 'no row'}`);
   const run_id = String((runRow as { id: string }).id);
 
-  // 4) Adjustments: one INSERT statement (all or nothing). A resumed run that
-  //    already has them (a crash after the insert) is only completed.
-  let already = 0;
-  if (prev) {
-    const { count, error: cntErr } = await supabase
-      .from('cost_reconciliation_adjustments')
-      .select('id', { count: 'exact', head: true })
-      .eq('run_id', run_id);
-    if (cntErr) fail(a.provider, 'reconcile_adjustment_count_failed', `adjustment count failed: ${cntErr.message}`);
-    // A null count with a null error is NOT "zero rows" - refuse rather than double-insert.
-    if (typeof count !== 'number') fail(a.provider, 'reconcile_adjustment_count_failed', 'adjustment count returned no answer');
-    already = count;
-  }
+  // 4) Adjustments: one INSERT statement (all or nothing); the run has none yet (counted above).
+  //    ASSUMES ONE WRITER per (provider, period) - the single-operator localhost CLI. Two concurrent
+  //    resumes could both count 0 and double-insert; a scheduled caller needs
+  //    pg_advisory_xact_lock(hashtext(provider || period)) or a unique (run_id, bucket key) first (e1).
   const rows = match.adjustments.map((adj) => ({
     run_id,
     organization_id: adj.organization_id,
@@ -218,20 +259,14 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
     metadata: { ...adj.metadata, severity: adj.severity },
   }));
   let adjustments_written = 0;
-  if (already === 0 && rows.length > 0) {
+  if (rows.length > 0) {
     const { error: adjErr } = await supabase.from('cost_reconciliation_adjustments').insert(rows);
     if (adjErr) fail(a.provider, 'reconcile_adjustments_insert_failed', `adjustments insert failed: ${adjErr.message}`);
     adjustments_written = rows.length;
   }
 
   // 5) Completed: only now does a retry become a 'duplicate'.
-  const { data: done, error: doneErr } = await supabase
-    .from('cost_reconciliation_runs')
-    .update({ status: 'completed', finished_at: new Date().toISOString() } as Record<string, unknown>)
-    .eq('id', run_id)
-    .select('id');
-  if (doneErr) fail(a.provider, 'reconcile_run_complete_failed', `run completion failed: ${doneErr.message}`);
-  if (!Array.isArray(done) || done.length !== 1) fail(a.provider, 'reconcile_run_complete_failed', `run completion matched ${Array.isArray(done) ? done.length : 'no answer'} rows`);
+  await completeRun(a, run_id);
 
   return { status: 'ingested', run_id, adjustments_written, totals: match.totals, warnings: a.warnings, resumed };
 }

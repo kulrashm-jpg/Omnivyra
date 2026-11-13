@@ -417,10 +417,39 @@ describe('persist step: resumable, one invoice per period', () => {
     await expect(ingest()).rejects.toThrow(/run completion matched 0 rows/);
   });
 
-  it('a run that exists for the period WITHOUT this invoice imported is never adopted', async () => {
+  it('e1: a LEGACY run for the period (no provider_invoice_id) is refused BEFORE the import - no import row is stored', async () => {
     fixture();
     mockDb.tables.cost_reconciliation_runs = [{ id: 'legacy', provider: 'openai', period_start: WINDOW.periodStart, period_end: WINDOW.periodEnd, status: 'running', metadata: {} }];
-    await expect(ingest()).rejects.toThrow(/period already has a run/);
+    await expect(ingest()).rejects.toThrow(/period already has a run for invoice unknown \(legacy run\)/);
+    expect(mockDb.tables.provider_invoice_imports ?? []).toHaveLength(0);
     expect(mockDb.tables.cost_reconciliation_adjustments ?? []).toHaveLength(0);
+    expect(mockDb.writes).toEqual([]);
+  });
+
+  it('a run belonging to ANOTHER invoice is refused before the import too', async () => {
+    fixture();
+    mockDb.tables.cost_reconciliation_runs = [{ id: 'r-x', provider: 'openai', period_start: WINDOW.periodStart, period_end: WINDOW.periodEnd, status: 'completed', metadata: { provider_invoice_id: 'inv-other' } }];
+    await expect(ingest()).rejects.toThrow(/period already has a run for invoice inv-other/);
+    expect(mockDb.writes).toEqual([]);
+  });
+
+  it('e1: a crash AFTER the adjustments, resumed with a DIFFERENT estimate, keeps the run describing its own adjustments', async () => {
+    fixture();
+    mockDb.fail['cost_reconciliation_runs:update'] = { message: 'process killed' };
+    await expect(ingest()).rejects.toThrow(/run completion failed/);
+    const before = JSON.parse(JSON.stringify(runs()[0]));
+    expect(before.estimated_usd_sum).toBeCloseTo(2, 10);
+    mockDb.tables.usage_events.push(cust(ORG_A, 'openai', M, 0.75)); // estimate B (late usage)
+    const out = await ingest();
+    expect(out).toMatchObject({ status: 'ingested', resumed: true, adjustments_written: 0, totals: { estimated_usd_sum: 2, actual_usd_sum: 4 } });
+    const after = runs()[0];
+    expect(after.status).toBe('completed');
+    expect(after.estimated_usd_sum).toBe(before.estimated_usd_sum);
+    expect(after.actual_usd_sum).toBe(before.actual_usd_sum);
+    expect(after.started_at).toBe(before.started_at);
+    expect(after.metadata).toEqual(before.metadata); // buckets + estimates untouched
+    expect(mockDb.writes.filter((w) => w.op === 'upsert')).toHaveLength(1); // only the first attempt's
+    const call = (logger.warn as jest.Mock).mock.calls.find((c) => c[0] === 'reconcile_resumed');
+    expect(call[1]).toMatchObject({ estimate_changed: true, adjustments_already: 2 });
   });
 });
