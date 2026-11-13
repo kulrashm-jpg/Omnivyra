@@ -54,6 +54,11 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // The isolation fix reads platform rows with .is('company_id', null) and own rows with .eq('company_id', x).
+    is: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
     // Chainable filter reached by pricingService.fetchModelPricingRow:136, which
     // builds `.eq()x4.lte().order().limit().maybeSingle()`. Records into
     // state.filters like `eq` so resolveQuery can observe it. `gte`/`in`/`limit`/
@@ -86,8 +91,10 @@ const buildQuery = (table: string) => {
 const resolveQuery = (table: string, state: any) => {
   if (table === 'external_api_sources') {
     const rows = Array.from(sourcesStore.values());
+    // `company_id` filter: null = IS NULL (platform rows), a value = that company's rows, absent = no filter.
+    const hasCompany = Object.prototype.hasOwnProperty.call(state.filters, 'company_id');
     const companyId = state.filters.company_id;
-    const filtered = companyId ? rows.filter((row) => row.company_id === companyId) : rows;
+    const filtered = !hasCompany ? rows : rows.filter((row) => (companyId === null ? row.company_id == null : row.company_id === companyId));
     return { data: filtered, error: null };
   }
   if (table === 'external_api_user_access' || table === 'external_api_usage') {

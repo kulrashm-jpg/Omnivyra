@@ -1,3 +1,4 @@
+import { sourceVisibleToCompany } from '../../../backend/services/externalApi/platformConfig';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
@@ -104,6 +105,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!apiSourceId) {
       return res.status(400).json({ error: 'api_source_id required' });
     }
+
+    // Tenant isolation at the WRITE (defence in depth; the read carries its own predicate): a company may only
+    // reference a PLATFORM source or its OWN source - never another tenant's (05/e9 2026-11-14).
+    const sourceVisibility = await sourceVisibleToCompany(String(apiSourceId), String(companyId));
+    if (sourceVisibility === 'error') return res.status(500).json({ error: 'Failed to verify API source' });
+    if (sourceVisibility === 'not_found') return res.status(404).json({ error: 'API source not found' });
     const body = req.body || {};
     const polling_frequency =
       body.polling_frequency != null && body.polling_frequency !== ''
@@ -187,6 +194,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!apiSourceId) {
       return res.status(400).json({ error: 'api_source_id required' });
     }
+
     const { error } = await supabase
       .from('company_api_configs')
       .delete()

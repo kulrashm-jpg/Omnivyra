@@ -148,6 +148,30 @@ export async function saveTenantPlatformConfig(
   return result.data as ExternalApiSource;
 }
 
+/**
+ * The external_api_sources rows a company may see: PLATFORM rows (company_id IS NULL) plus its OWN rows. Two
+ * structural reads merged in memory (PostgREST cannot express "IS NULL OR = x" without an interpolated .or()),
+ * ordered by created_at like the single read they replace. An error on either read is returned as-is.
+ */
+async function visibleSources(base: () => any, companyId: string): Promise<{ data: any[] | null; error: any }> {
+  const [platform, own] = await Promise.all([base().is('company_id', null), base().eq('company_id', companyId)]);
+  if (platform.error || own.error) return { data: null, error: platform.error ?? own.error };
+  const rows = [...(platform.data || []), ...(own.data || [])];
+  rows.sort((a: any, b: any) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+  return { data: rows, error: null };
+}
+
+/**
+ * May `companyId` reference external_api_sources row `sourceId` (e.g. enable it in company_api_configs)? Only a
+ * PLATFORM row or the company's OWN row. 'error' = the check could not be made (answer 5xx, never "not found").
+ */
+export async function sourceVisibleToCompany(sourceId: string, companyId: string): Promise<'visible' | 'not_found' | 'error'> {
+  if (!sourceId || !companyId) return 'not_found';
+  const { data, error } = await visibleSources(() => ownedDbTable('external_api_sources').select('id').eq('id', sourceId), companyId);
+  if (error) return 'error';
+  return (data || []).length > 0 ? 'visible' : 'not_found';
+}
+
 export async function getPlatformConfigs(
   companyId?: string | null,
   options?: { skipCache?: boolean }
@@ -161,7 +185,9 @@ export async function getPlatformConfigs(
       .select('*')
       .order('created_at', { ascending: true });
 
-  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
+  // Tenant isolation AT THE READ (05/e9 2026-11-14): PLATFORM rows (company_id IS NULL) + this company's OWN rows, as
+  // two structural reads merged in memory - never an interpolated .or() filter string.
+  const scopedResult = await visibleSources(createQuery, companyId);
   let sources: any[] = scopedResult.error ? [] : (scopedResult.data || []);
   if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
     throw new Error(`Failed to load platform configs: ${scopedResult.error.message}`);
@@ -186,10 +212,12 @@ export async function getPlatformConfigs(
   let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
 
   if (enabledIds.length > 0 && selectedPresets.length === 0) {
-    const { data: enabledSources } = await ownedDbTable('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .in('id', enabledIds);
+    // The ids come from this company's company_api_configs, which is NOT trusted for isolation (a config row could name
+    // another tenant's source): only platform rows or this company's own rows are ever returned.
+    const { data: enabledSources } = await visibleSources(
+      () => ownedDbTable('external_api_sources').select('*').eq('is_active', true).in('id', enabledIds),
+      companyId,
+    );
     const fetched = (enabledSources || []).filter(
       (row: any) => !companySpecific.some((c: any) => c.id === row.id)
     );
@@ -198,10 +226,10 @@ export async function getPlatformConfigs(
 
   let data = [...companySpecific, ...selectedPresets];
   if (companyId && data.length === 0 && enabledIds.length > 0) {
-    const { data: fallbackSources } = await ownedDbTable('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .in('id', enabledIds);
+    const { data: fallbackSources } = await visibleSources(
+      () => ownedDbTable('external_api_sources').select('*').eq('is_active', true).in('id', enabledIds),
+      companyId,
+    );
     data = fallbackSources || [];
   }
 

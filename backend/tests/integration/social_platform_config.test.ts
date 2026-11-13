@@ -138,6 +138,12 @@ const resolveQuery = (table: string, state: any) => {
       });
       return { data: match ? [match] : [], error: null };
     }
+    // The isolation fix's paired reads: company_id null = IS NULL (platform rows), a value = that company's rows.
+    if (Object.prototype.hasOwnProperty.call(state.filters, 'company_id')) {
+      const want = state.filters.company_id;
+      const rows = Array.from(sourcesStore.values()).filter((row) => (want === null ? row.company_id == null : row.company_id === want));
+      return { data: rows, error: null };
+    }
     return { data: Array.from(sourcesStore.values()), error: null };
   }
 
