@@ -354,6 +354,13 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
             isActive={true}
             message="Generating strategic themes…"
             expectedSeconds={50}
+            // Mirrors /api/recommendations/generate: gather trend signals (AI themes as
+            // fallback when none), shape strategic themes, save recommendation snapshots.
+            stages={[
+              { label: 'Gathering trend signals', etaSeconds: 20 },
+              { label: 'Shaping strategic themes', etaSeconds: 25 },
+              { label: 'Saving your themes', etaSeconds: 5 },
+            ]}
           />
         </div>
       )}

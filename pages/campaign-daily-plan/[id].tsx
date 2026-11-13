@@ -601,15 +601,14 @@ export default function CampaignDailyPlanPage() {
               message="Generating 7 daily plans"
               expectedSeconds={25}
               maxSecondsHint={60}
-              rotatingMessages={[
-                'Generating Monday…',
-                'Generating Tuesday…',
-                'Generating Wednesday…',
-                'Generating Thursday…',
-                'Generating Friday…',
-                'Generating Saturday…',
-                'Generating Sunday…',
-                'Saving to database…',
+              // Mirrors executionPlannerService.generateFromAI: load campaign + week
+              // blueprint, schedule posting slots, ONE AI call writes all 7 days, save.
+              // (The previous day-by-day rotating messages did not match the backend.)
+              stages={[
+                { label: 'Reading your campaign and week plan', etaSeconds: 3 },
+                { label: 'Scheduling posting slots', etaSeconds: 3 },
+                { label: 'Writing the week’s daily plans with AI', etaSeconds: 15 },
+                { label: 'Saving the plans', etaSeconds: 4 },
               ]}
             />
           </div>

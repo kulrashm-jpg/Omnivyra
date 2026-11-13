@@ -428,6 +428,14 @@ export default function ContentCreationPanel({
               isActive={true}
               message="Generating content…"
               expectedSeconds={40}
+              // Mirrors /api/ai/generate-content → runPostGeneration: load brand profile,
+              // write the master draft, adapt it for the platform, persist the content row.
+              stages={[
+                { label: 'Reading your campaign and brand voice', etaSeconds: 5 },
+                { label: 'Writing the draft', etaSeconds: 20 },
+                { label: 'Adapting it for the platform', etaSeconds: 10 },
+                { label: 'Saving', etaSeconds: 5 },
+              ]}
             />
           </div>
         )}
