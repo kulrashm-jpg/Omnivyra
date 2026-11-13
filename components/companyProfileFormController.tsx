@@ -23,7 +23,7 @@ import { interpretCompanyFactsLookup, type CompanyFactsLookupPayload } from './c
 
 import { type ProfileState, type BrandAssetField, type InlineQuestionFieldKey, normalizeQuestionFieldKey, questionMatchesInlineField, questionMatchesAnyInlineField, formatBusinessClassificationLabel, BRAND_ASSET_SPECS, BRAND_ASSET_ACCEPT, SOCIAL_ACCOUNT_FIELDS, formatFileSize, prepareTransparentBrandAsset, StatCard, SectionCard, GuidedChatPanel } from './companyProfileFormSupportA';
 import { StatusChip, SavedHint, IntelligenceContextSections } from './companyProfileFormSupportB';
-import type { WizardStepId } from './company/profileWizard/wizardSteps';
+import { WIZARD_STEPS, type WizardStepId } from './company/profileWizard/wizardSteps';
 
 export function useCompanyProfileFormController(d: ProfileState) {
   const {
@@ -347,6 +347,11 @@ export function useCompanyProfileFormController(d: ProfileState) {
   // UI step 6.2: a block shows only on its wizard step once the profile exists; before
   // that (onboarding pre-refine) every block renders as before.
   const showStep = (id: WizardStepId) => !showOnboardingContinuation || wizardStep === id;
+  // 6.3: a card that holds fields of several steps shows on any of them, titled after the step.
+  const showAnyStep = (ids: readonly WizardStepId[]) => !showOnboardingContinuation || ids.includes(wizardStep);
+  const wizardStepTitle: string | null = showOnboardingContinuation
+    ? (WIZARD_STEPS.find((step) => step.id === wizardStep)?.title ?? null)
+    : null;
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
   const userGuidance = activeProfile.report_settings?.user_guidance ?? null;
   const industryReview = activeProfile.report_settings?.industry_review ?? null;
@@ -731,7 +736,7 @@ export function useCompanyProfileFormController(d: ProfileState) {
   );
 
   return {
-    wizardStep, setWizardStep, isWizardStep, showStep,
+    wizardStep, setWizardStep, isWizardStep, showStep, showAnyStep, wizardStepTitle,
     d, REFINE_STEPS, REFINE_STEP_DELAYS, actionableRefinementQuestions, activeProfile, addIdentityGuidance,
     addOtherSocial, approveStrategicField, brandAssetErrors, brandAssetUploading, businessClassification,
     calculateProblemTransformationCompletion, calculateProfileCompletion, campaignPurposeInput,

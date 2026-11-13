@@ -121,7 +121,7 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
     userGuidance, userRole,
   } = f;
-  const { showStep } = f;
+  const { showStep, showAnyStep, wizardStepTitle } = f;
   return (
     <>
             {showStep('basics') && (<>
@@ -194,12 +194,13 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
             </SectionCard>
             </>)}
 
-            {showStep('audience') && (<>
+            {showAnyStep(['offering', 'audience', 'voice', 'goals']) && (<>
             <SectionCard
-              title="Messaging & Audience"
+              title={wizardStepTitle ?? 'Messaging & Audience'}
               description="These are the main inputs Content Architect will keep revisiting when building messaging, themes, and competitor-aware campaign directions."
             >
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {showStep('offering') && (<>
             <div>
               <label className="text-sm font-medium text-gray-700">Products & Services</label>
               <textarea
@@ -211,6 +212,8 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               {!isEditing && <SavedHint value={displayFieldValue(activeProfile.products_services, activeProfile.products_services_list)} />}
               {renderInlineRefinementQuestions('products_services')}
             </div>
+            </>)}
+            {showStep('audience') && (<>
             <div>
               <label className="text-sm font-medium text-gray-700">Target Audience</label>
               <textarea
@@ -222,6 +225,8 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               {!isEditing && <SavedHint value={displayFieldValue(activeProfile.target_audience, activeProfile.target_audience_list)} />}
               {renderInlineRefinementQuestions('target_audience')}
             </div>
+            </>)}
+            {showStep('voice') && (<>
             <div>
               <label className="text-sm font-medium text-gray-700">Brand Voice</label>
               <textarea
@@ -233,6 +238,8 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               {!isEditing && <SavedHint value={displayFieldValue(activeProfile.brand_voice, activeProfile.brand_voice_list)} />}
               {renderInlineRefinementQuestions('brand_voice')}
             </div>
+            </>)}
+            {showStep('goals') && (<>
             <div>
               <label className="text-sm font-medium text-gray-700">Goals</label>
               <textarea
@@ -244,6 +251,8 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               {!isEditing && <SavedHint value={displayFieldValue(activeProfile.goals, activeProfile.goals_list)} />}
               {renderInlineRefinementQuestions('goals')}
             </div>
+            </>)}
+            {showStep('audience') && (<>
             {(canViewStrategicSections || isCompanyAdmin) && (
               <div>
                 <div className="flex items-center justify-between gap-2">
@@ -560,6 +569,8 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
                 </div>
               </div>
             )}
+            </>)}
+            {showStep('offering') && (<>
             <div>
               <label className="text-sm font-medium text-gray-700">Unique Value</label>
               <textarea
@@ -571,6 +582,8 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               {!isEditing && <SavedHint value={activeProfile.unique_value} />}
               {renderInlineRefinementQuestions('unique_value')}
             </div>
+            </>)}
+            {showStep('voice') && (<>
             <div>
               <label className="text-sm font-medium text-gray-700">Content Themes</label>
               <textarea
@@ -582,6 +595,7 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
               {!isEditing && <SavedHint value={displayFieldValue(activeProfile.content_themes, activeProfile.content_themes_list)} />}
               {renderInlineRefinementQuestions('content_themes')}
             </div>
+            </>)}
             </div>
             </SectionCard>
             </>)}

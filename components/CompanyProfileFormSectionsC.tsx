@@ -96,7 +96,7 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
     userGuidance, userRole,
   } = f;
-  const { showStep } = f;
+  const { showStep, showAnyStep, wizardStepTitle } = f;
   return (
     <>
             {showStep('advanced') && (<>
@@ -112,12 +112,13 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
             />
             </>)}
 
-            {showStep('goals') && (<>
+            {showAnyStep(['offering', 'audience', 'goals']) && (<>
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
-              <h3 className="text-base font-semibold text-gray-900 mb-2">Commercial Strategy</h3>
+              <h3 className="text-base font-semibold text-gray-900 mb-2">{wizardStepTitle ? `${wizardStepTitle}: commercial details` : 'Commercial Strategy'}</h3>
               <p className="text-sm text-gray-600 mb-4">
                 Define your target customer and commercial model. These fields are locked from AI overwrite once you save.
               </p>
+              {showStep('audience') && (<>
               <div className="flex flex-wrap gap-2 mb-4">
                 <button
                   type="button"
@@ -127,6 +128,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   Define Target Customer
                 </button>
               </div>
+              </>)}
+              {showStep('goals') && (<>
               <div className="mb-6">
                 <h4 className="text-sm font-semibold text-gray-800 mb-2">Campaign Purpose & Strategic Intent</h4>
                 {activeProfile.campaign_purpose_intent ? (
@@ -173,7 +176,9 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   ].filter(Boolean).join(', ')} />
                 )}
               </div>
+              </>)}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {showStep('audience') && (<>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Target customer segment</label>
                   <input
@@ -184,6 +189,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.target_customer_segment} />}
                 </div>
+                </>)}
+                {showStep('audience') && (<>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Ideal customer profile</label>
                   <textarea
@@ -195,6 +202,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.ideal_customer_profile} />}
                 </div>
+                </>)}
+                {showStep('offering') && (<>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Pricing model</label>
                   <input
@@ -205,6 +214,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.pricing_model} />}
                 </div>
+                </>)}
+                {showStep('audience') && (<>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Sales motion</label>
                   <input
@@ -215,6 +226,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.sales_motion} />}
                 </div>
+                </>)}
+                {showStep('audience') && (<>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Avg deal size</label>
                   <input
@@ -225,6 +238,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.avg_deal_size} />}
                 </div>
+                </>)}
+                {showStep('audience') && (<>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Sales cycle</label>
                   <input
@@ -235,6 +250,8 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.sales_cycle} />}
                 </div>
+                </>)}
+                {showStep('goals') && (<>
                 <div className="md:col-span-2">
                   <label className="text-sm font-medium text-gray-700">Key metrics</label>
                   <input
@@ -245,6 +262,7 @@ export default function CompanyProfileFormSectionsC({ f }: { f: ReturnType<typeo
                   />
                   {!isEditing && <SavedHint value={activeProfile.key_metrics} />}
                 </div>
+                </>)}
               </div>
               {activeProfile.last_edited_by === 'user' && (
                 <p className="text-xs text-gray-500 mt-2">
