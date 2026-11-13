@@ -502,7 +502,11 @@ export async function rejectPreemptionRequest(requestId: string, companyId: stri
       String(request.initiator_campaign_id ?? ''),
     );
   } catch (err) {
-    if (err instanceof TenantSeamError) throw new PreemptionValidationError('Preemption request not found.');
+    // An absent / foreign initiator is "not found". A FAILED parent read is not: rethrow it so the route answers a
+    // retryable 5xx instead of a permanent 400 (6f review; reads contract).
+    if (err instanceof TenantSeamError && err.code !== 'TENANT_PARENT_UNREADABLE') {
+      throw new PreemptionValidationError('Preemption request not found.');
+    }
     throw err;
   }
   const { error: updateError } = await requestsTable

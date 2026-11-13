@@ -26,7 +26,7 @@ export type TenantContext = {
 };
 
 export class TenantSeamError extends Error {
-  constructor(readonly code: 'TENANT_CONTEXT_MISSING' | 'TENANT_MISMATCH' | 'TENANT_TABLE_UNKNOWN' | 'TENANT_PAYLOAD_INVALID' | 'TENANT_PARENT_FANOUT', message: string) {
+  constructor(readonly code: 'TENANT_CONTEXT_MISSING' | 'TENANT_MISMATCH' | 'TENANT_TABLE_UNKNOWN' | 'TENANT_PAYLOAD_INVALID' | 'TENANT_PARENT_FANOUT' | 'TENANT_PARENT_UNREADABLE', message: string) {
     super(`${code}: ${message}`);
     this.name = 'TenantSeamError';
   }
@@ -216,11 +216,14 @@ const MAX_PARENT_ROWS = 50;
  *    tenant, is refused: the child filter `.eq(via, value)` cannot tell whose parent a child hangs off).
  *  - CHILD parent (multi-hop, e.g. content_asset_versions -> content_assets -> campaigns): the parent rows' own link
  *    values are read and each is verified recursively against ITS parent, up to MAX_HOPS.
- * Missing, unreadable, over-wide or NULL-linked parents all throw TENANT_MISMATCH (fail closed).
+ * Missing, over-wide or NULL-linked parents throw TENANT_MISMATCH; an UNREADABLE parent throws TENANT_PARENT_UNREADABLE
+ * (fail closed either way; only the latter is retryable).
  */
 async function verifyParent(child: string, c: TenantContext, parentTable: string, key: string, value: string, hop: number): Promise<void> {
   if (hop > MAX_HOPS) throw new TenantSeamError('TENANT_MISMATCH', `${child}: parent chain deeper than ${MAX_HOPS}`);
-  const unreadable = (e: unknown) => new TenantSeamError('TENANT_MISMATCH', `${child}: parent ${parentTable} unreadable (${(e as { code?: string }).code ?? 'error'})`);
+  // Its own code (6f review, 2026-11-13): a FAILED parent read is not an absent parent. Still a TenantSeamError, so
+  // every caller stays fail-closed; a caller that maps "absent" to a user-facing not-found must NOT map this one.
+  const unreadable = (e: unknown) => new TenantSeamError('TENANT_PARENT_UNREADABLE', `${child}: parent ${parentTable} unreadable (${(e as { code?: string }).code ?? 'error'})`);
   const absent = () => new TenantSeamError('TENANT_MISMATCH', `${child}: parent ${parentTable} is not in this tenant`);
   const fanout = () => new TenantSeamError('TENANT_PARENT_FANOUT', `${child}: parent key matches more than ${MAX_PARENT_ROWS} ${parentTable} rows (availability limit, not a tenant mismatch)`);
   const parentSpec = childSpec(parentTable);
@@ -322,7 +325,7 @@ export async function tenantChildTableOf(table: TenantChildTableName, ctx: Tenan
   if (ids.length > 0) {
     if (key === 'id' && !childSpec(spec.parent) && spec.parent in TENANT_TABLES) {
       const { data, error } = await tenantTable(spec.parent as TenantTableName, c).select('id').in('id', ids).limit(MAX_BATCH_PARENTS + 1);
-      if (error) throw new TenantSeamError('TENANT_MISMATCH', `${table}: parent ${spec.parent} unreadable (${(error as { code?: string }).code ?? 'error'})`);
+      if (error) throw new TenantSeamError('TENANT_PARENT_UNREADABLE', `${table}: parent ${spec.parent} unreadable (${(error as { code?: string }).code ?? 'error'})`);
       const found = new Set(((data ?? []) as Row[]).map((r) => String(r.id)));
       const missing = ids.filter((id) => !found.has(id));
       if (missing.length) throw new TenantSeamError('TENANT_MISMATCH', `${table}: ${missing.length} of ${ids.length} parents are not in this tenant`);

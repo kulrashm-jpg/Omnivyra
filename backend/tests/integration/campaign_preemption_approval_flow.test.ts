@@ -40,6 +40,7 @@ const tenantParentRead = () => {
 };
 // The seam's direct-parent check: tenantTable('campaigns').select('id').eq('company_id', co).eq('id', x).maybeSingle().
 // With a company filter, the row exists only for the authorized test company; without one, the original fake answers.
+let parentReadFails = false; // simulate a FAILED parent-campaign read (statement timeout)
 const tenantScopedIdRead = (base: any) => {
   const filters: Array<[string, unknown]> = [];
   const p: any = Object.create(base);
@@ -47,6 +48,7 @@ const tenantScopedIdRead = (base: any) => {
   p.maybeSingle = async () => {
     const co = filters.find(([k]) => k === 'company_id');
     if (!co) return base.maybeSingle();
+    if (parentReadFails) return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
     const id = filters.find(([k]) => k === 'id');
     return { data: co[1] === PREEMPT_TEST_COMPANY && id ? { id: id[1] } : null, error: null };
   };
@@ -293,6 +295,29 @@ describe('Campaign Preemption Approval Flow', () => {
       });
       await expect(rejectPreemptionRequest(requestId, OTHER_COMPANY)).rejects.toThrow('Preemption request not found.');
       expect(updates).toEqual([]);
+    });
+
+    it('a FAILED parent read is NOT "not found": it surfaces as a retryable error, nothing written (6f review)', async () => {
+      const requestId = 'request-unreadable-uuid';
+      const updates: unknown[] = [];
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        const c = chain({ data: null, error: null });
+        if (table === 'campaign_preemption_requests') {
+          c.maybeSingle = jest.fn().mockResolvedValue({ data: { id: requestId, initiator_campaign_id: 'campaign-initiator-uuid', status: 'PENDING' }, error: null });
+          c.update = jest.fn((v: unknown) => { updates.push(v); return c; });
+        }
+        return c;
+      });
+      parentReadFails = true;
+      try {
+        const err = await rejectPreemptionRequest(requestId, PREEMPT_TEST_COMPANY).then(() => null, (e: unknown) => e);
+        expect(err).toBeInstanceOf(Error);
+        expect(err).not.toBeInstanceOf(PreemptionValidationError); // the route maps that one to a permanent 400
+        expect(String((err as Error).message)).toMatch(/^TENANT_PARENT_UNREADABLE/);
+        expect(updates).toEqual([]);
+      } finally {
+        parentReadFails = false;
+      }
     });
 
     it('throws when request is not PENDING', async () => {

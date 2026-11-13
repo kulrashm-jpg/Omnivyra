@@ -94,7 +94,7 @@ describe('tenantChildTable (indirect tenancy)', () => {
     parentRow = null;
     await expect(tenantChildTable('daily_content_plans', ctxA, 'p-other')).rejects.toThrow(/TENANT_MISMATCH/);
     parentRow = { id: 'p-1' }; parentError = { code: '57014' };
-    await expect(tenantChildTable('daily_content_plans', ctxA, 'p-1')).rejects.toThrow(/unreadable/);
+    await expect(tenantChildTable('daily_content_plans', ctxA, 'p-1')).rejects.toThrow(/^TENANT_PARENT_UNREADABLE: .*unreadable/);
   });
   it('a child payload naming another parent is refused', async () => {
     const t = await tenantChildTable('daily_content_plans', ctxA, 'p-1');
@@ -129,7 +129,7 @@ describe('tenantChildTable multi-hop and non-id-key parents (55 S2)', () => {
     limitRows.content_assets = [];
     await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/TENANT_MISMATCH/);
     limitRows.content_assets = [{ campaign_id: 'c-1' }]; limitError.content_assets = { code: '57014' };
-    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/unreadable/);
+    await expect(tenantChildTable('content_asset_versions', ctxA, 'a-1')).rejects.toThrow(/^TENANT_PARENT_UNREADABLE: .*unreadable/);
   });
   it('a NON-unique direct key: every parent row must be this tenant\'s (shared with another tenant, or NULL, is refused)', async () => {
     const col = TENANT_TABLES.content_core_asset.column;
@@ -204,7 +204,7 @@ describe('tenantChildTableOf (many parents, one read; e1 S2)', () => {
     limitRows.campaigns = [{ id: 'c-1' }];
     await expect(tenantChildTableOf('scheduled_posts', ctxA, ['c-1', 'c-foreign'])).rejects.toThrow(/TENANT_MISMATCH: .*1 of 2/);
     limitRows.campaigns = [{ id: 'c-1' }]; limitError.campaigns = { code: '57014' };
-    await expect(tenantChildTableOf('scheduled_posts', ctxA, ['c-1'])).rejects.toThrow(/unreadable/);
+    await expect(tenantChildTableOf('scheduled_posts', ctxA, ['c-1'])).rejects.toThrow(/^TENANT_PARENT_UNREADABLE: .*unreadable/);
   });
   it('an EMPTY list reads no parent and returns verbs that match nothing (never "no filter")', async () => {
     const t = await tenantChildTableOf('scheduled_posts', ctxA, []);
