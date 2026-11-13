@@ -19,37 +19,24 @@ describe('stability/auth login contract', () => {
     ]);
   });
 
-  test('login precheck API keeps stable success and generic failure contracts', () => {
+  // e1 2026-11-13 (e9 ruling, no CAPTCHA): the pre-check is no longer an account-existence oracle. It used to
+  // answer INVALID_CREDENTIALS vs NO_PASSWORD per account; the contract is now ONE uniform 200 and no reads.
+  test('login precheck API answers uniformly and reads no account state', () => {
     const api = readRepoFile('pages/api/auth/login.ts');
 
     expectContainsAll(api, [
       'type SuccessResponse = { proceed: true }',
       "type ErrorResponse   = { error: string; code?: string }",
-      "code: 'INVALID_CREDENTIALS'",
-      "code: 'NO_PASSWORD'",
-      'supabase_uid',
-      "supabase.rpc('auth_user_has_password'",
       "return res.status(200).json({ proceed: true })",
     ]);
+    expect(api).not.toContain("code: 'INVALID_CREDENTIALS'");
+    expect(api).not.toContain("code: 'NO_PASSWORD'");
+    expect(api).not.toMatch(/supabase\.(from|rpc)\(/);
     expect(api).not.toContain('supabase.auth.admin');
   });
 
-  test('login password capability uses Supabase Auth as the source of truth', () => {
-    const api = readRepoFile('pages/api/auth/login.ts');
+  test('the password-capability RPC stays service_role only (no longer called by the login pre-check)', () => {
     const migration = readRepoFile('supabase/migrations/20260422_auth_user_has_password_fn.sql');
-
-    expectContainsAll(api, [
-      'supabase_uid',
-      'authHasPassword',
-      'publicHasPassword',
-      "supabase.rpc('auth_user_has_password'",
-      "p_user_id: supabaseUid",
-    ]);
-    // Source was intentionally refactored (commit 341d46c8 "source password
-    // capability from Supabase Auth"): when the user has a supabase_uid, Auth
-    // is the source of truth (authHasPassword !== true → NO_PASSWORD);
-    // otherwise fall back to public.users.has_password. Lock that decision.
-    expect(api).toMatch(/noPassword\s*=\s*hasSupabaseUid\s*\?\s*authHasPassword !== true\s*:\s*!publicHasPassword/);
 
     expectContainsAll(migration, [
       'CREATE OR REPLACE FUNCTION public.auth_user_has_password',

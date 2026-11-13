@@ -3,8 +3,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * POST /api/auth/login
  *
- * Public endpoint. Validates that an email exists in public.users and has a password.
- * Returns { proceed: true } so the frontend can call signInWithPassword().
+ * Public endpoint. Per-IP rate limit for the password sign-in, then { proceed: true } for every well-formed request
+ * so the frontend can call signInWithPassword(). It deliberately reveals NOTHING about whether an account exists
+ * (e1 2026-11-13; see the handler).
  *
  * Body: { email: string }
  * No auth required.
@@ -12,7 +13,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { authRequestIp } from '../../../backend/auth/requestClientIp';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 
 type SuccessResponse = { proceed: true };
@@ -24,9 +24,8 @@ async function handler(
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Rate limit: 10 pre-check attempts per IP per 15 min. Prevents email
-  // enumeration via the NO_PASSWORD vs INVALID_CREDENTIALS response split,
-  // and slows credential stuffing into signInWithPassword downstream.
+  // Rate limit: 10 pre-check attempts per IP per 15 min. Slows credential stuffing into signInWithPassword
+  // downstream (the pre-check itself no longer answers differently per account - see below).
   const ip = authRequestIp(req);
   const rl = await checkRateLimit(ip, LOGIN_LIMIT);
   if (!rl.allowed) {
@@ -38,75 +37,13 @@ async function handler(
 
   if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
 
-  const normalizedEmail = email.trim().toLowerCase();
-
-  // ── 1. Check user exists in public.users ──────────────────────────────────
-  const { data: userRow } = await supabase
-    .from('users')
-    .select('id, is_deleted, has_password, supabase_uid')
-    .eq('email', normalizedEmail)
-    .maybeSingle();
-
-  if (!userRow) {
-    try {
-      const { data: authConfirmed, error: rpcErr } = await supabase.rpc('auth_user_confirmed', {
-        p_email: normalizedEmail,
-      });
-      if (!rpcErr && authConfirmed === true) {
-        return res.status(200).json({ proceed: true });
-      }
-    } catch {
-      // Fall through to generic error
-    }
-    return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
-  }
-
-  if ((userRow as any).is_deleted) {
-    return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
-  }
-
-  const publicHasPassword = (userRow as any).has_password === true;
-  const supabaseUid = (userRow as any).supabase_uid;
-  const hasSupabaseUid =
-    typeof supabaseUid === 'string' && supabaseUid.trim().length > 0;
-
-  // For Supabase-linked accounts the auth identity is the single source of
-  // truth. public.users.has_password can drift `true` while the auth user has
-  // NO email/password identity (legacy / admin-created / migrated rows). The
-  // old logic fell back to that stale flag when the RPC was unavailable, which
-  // pushed such users into signInWithPassword → generic invalid_credentials
-  // instead of the recoverable NO_PASSWORD → magic-link path.
-  let authHasPassword: boolean | null = null;
-  if (hasSupabaseUid) {
-    try {
-      const { data, error } = await supabase.rpc('auth_user_has_password', {
-        p_user_id: supabaseUid,
-      });
-      if (!error) authHasPassword = data === true;
-    } catch {
-      // RPC unavailable — handled by the fail-safe below.
-    }
-  }
-
-  // Decision:
-  //  - Supabase-linked account: the RPC is AUTHORITATIVE. If it returned false
-  //    OR could not be resolved (null), FAIL SAFE to NO_PASSWORD so the user
-  //    is guided to the recoverable magic-link/reset path. Never fall back to
-  //    the stale public.users.has_password flag here.
-  //  - Non-linked row (no supabase_uid): preserve prior behavior — use
-  //    public.users.has_password as the compatibility signal.
-  const noPassword = hasSupabaseUid
-    ? authHasPassword !== true
-    : !publicHasPassword;
-
-  if (noPassword) {
-    return res.status(400).json({
-      error: 'No password set for this account. Please use magic link to sign in.',
-      code: 'NO_PASSWORD',
-    });
-  }
-
-  // ── 2. Return proceed — frontend calls signInWithPassword() ───────────────
+  // e1 2026-11-13 (e9 ruling; no CAPTCHA anywhere): the pre-check NO LONGER reveals whether an account exists.
+  // It used to answer INVALID_CREDENTIALS for an unknown / deleted address and NO_PASSWORD for an existing account
+  // without a password - an existence oracle bounded only by the rate limit. It now answers the SAME 200 for every
+  // well-formed request and reads nothing. The browser then calls signInWithPassword, whose failure is the same
+  // generic "Invalid login credentials" for an unknown address, a wrong password and a passwordless account; the
+  // login page shows one neutral message that points a genuine passwordless user to the magic link (which itself
+  // answers uniformly). Soft-deleted accounts are still refused after sign-in by sync-supabase-user (ACCOUNT_DELETED).
   return res.status(200).json({ proceed: true });
 }
 

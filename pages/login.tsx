@@ -182,9 +182,7 @@ export default function LoginPage() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setError(json.code === 'NO_PASSWORD'
-          ? 'No password set. Use "Send me a magic link" below to sign in.'
-          : json.error ?? 'Sign-in failed.');
+        setError(json.error ?? 'Sign-in failed.');
         setLoading(null);
         return;
       }
@@ -200,9 +198,11 @@ export default function LoginPage() {
     });
 
     if (signInErr) {
+      // One neutral message for every credential failure (unknown address, wrong password, or an account with no
+      // password) - it never reveals which, and it gives a passwordless user a way in (e9 2026-11-13).
       setError(
         signInErr.message.toLowerCase().includes('invalid login')
-          ? 'Incorrect email or password.'
+          ? 'Incorrect email or password. No password on your account? Use "Send me a magic link" below.'
           : signInErr.message,
       );
       setLoading(null);

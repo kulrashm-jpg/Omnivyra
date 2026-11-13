@@ -306,19 +306,28 @@ describe('P2-D magic-link: per-IP and global limits', () => {
     expect(wire(r2)).toBe(wire(r));
   });
 
-  it('global: once the shared budget is spent, a fresh IP is refused with 429', async () => {
+  it('global (e9 2026-11-13: ALERT-ONLY): a spent shared budget never pauses sign-in links for everyone', async () => {
     mockBuckets.set(`${MAGIC_LINK_GLOBAL_LIMIT.keyPrefix}:global`, MAGIC_LINK_GLOBAL_LIMIT.limit);
     const r = await call('magic-link', { email: EXISTING }, '198.51.100.77');
-    expect(r.status).toBe(429);
-    expect(r.body).toEqual(AUTH_RATE_LIMITED_BODY);
-    expect(mockDb.reads).toEqual([]);
-    expect(mockDb.sends).toEqual([]);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual(MAGIC_LINK_UNIFORM_BODY);
+    expect(mockDb.sends.length).toBe(1);
   });
 
-  it('the global limit is sensitive and checked after the per-IP limit', async () => {
+  it('per-EMAIL (enforcing): the 6th request for one address from fresh IPs is a 429 - identical for any address', async () => {
+    const ips = ['198.51.100.1', '198.51.100.2', '198.51.100.3', '198.51.100.4', '198.51.100.5', '198.51.100.6'];
+    for (let i = 0; i < 5; i++) expect((await call('magic-link', { email: MISSING }, ips[i])).status).toBe(200);
+    const blockedMissing = await call('magic-link', { email: MISSING }, ips[5]);
+    for (let i = 0; i < 5; i++) await call('magic-link', { email: EXISTING }, `203.0.113.${i + 10}`);
+    const blockedExisting = await call('magic-link', { email: EXISTING }, '203.0.113.99');
+    expect([blockedMissing.status, blockedExisting.status]).toEqual([429, 429]);
+    expect(wire(blockedMissing)).toBe(wire(blockedExisting));
+  });
+
+  it('limit order: per-IP, then the (alert-only) global, then per-email', async () => {
     await call('magic-link', { email: MISSING });
-    expect(mockLimitCalls.map((c) => c.config.keyPrefix)).toEqual(['rl:auth:magic-link', 'rl:auth:magic-link:global']);
-    expect(MAGIC_LINK_GLOBAL_LIMIT.sensitive).toBe(true);
+    expect(mockLimitCalls.map((c) => c.config.keyPrefix)).toEqual(['rl:auth:magic-link', 'rl:auth:magic-link:global', 'rl:auth:magic-link:email']);
+    expect(mockLimitCalls[2].key).not.toContain('@'); // hashed - no raw address reaches Redis
   });
 });
 
@@ -370,12 +379,11 @@ describe('P2-D check-user: per-IP and global limits', () => {
     expect(mockDb.reads).toEqual([]);
   });
 
-  it('global: once the shared budget is spent, a fresh IP is refused with 429', async () => {
+  it('global (ALERT-ONLY): a spent shared budget does not refuse a fresh IP', async () => {
     mockBuckets.set(`${CHECK_USER_GLOBAL_LIMIT.keyPrefix}:global`, CHECK_USER_GLOBAL_LIMIT.limit);
     const r = await call('check-user', { email: EXISTING }, '198.51.100.77');
-    expect(r.status).toBe(429);
-    expect(r.body).toEqual(AUTH_RATE_LIMITED_BODY);
-    expect(mockDb.reads).toEqual([]);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ exists: false });
   });
 });
 

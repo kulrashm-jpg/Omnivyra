@@ -50,10 +50,9 @@ export function opsAlertRecipient(): string {
   return configured || OPS_ALERT_DEFAULT_RECIPIENT;
 }
 
-let localFallbackBucket: string | null = null;
 /** Test seam only. */
 export function __resetOpsAlertStateForTest(): void {
-  localFallbackBucket = null;
+  localFallbackBuckets.clear();
 }
 
 /** Claim the right to send for this bucket. 'claimed' | 'already' | 'capped' | 'db_unavailable'. */
@@ -74,74 +73,101 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/**
- * Count (always) and notify the owner (at most once per window, cross-instance) that the signup rate limiter is
- * unavailable. Never throws. `endpoint` / `reason` are operator strings - never pass user data.
- */
 type NotifyDeps = { now?: () => number; send?: typeof sendOpsAlert };
 type NotifyResult = 'sent' | 'suppressed' | 'failed';
 
-function recordOccurrence(endpoint: string, reason: string): void {
-  incrementAuthMetric('auth.signup.limiter_unavailable', { endpoint });
-  logger.error('auth.signup_limiter_unavailable', { endpoint, reason });
+/**
+ * A generic operational alert (reusable by any track - e.g. 55's 'billing_invalid_event_stamp'). All operator-facing
+ * strings; NEVER user data. Dedupe is per (alertKind, 30-minute bucket) cross-instance via ops_alert_markers (PK is
+ * already (alert_kind, bucket) - a new kind needs no schema change), hard cap MAX_ALERTS_PER_HOUR per kind.
+ */
+export type OpsAlert = {
+  alertKind: string;     // stable machine id, e.g. 'signup_limiter_unavailable'
+  subject: string;       // short; prefixed "[Omnivyra ops]" by the template
+  detail: string;        // body text - time is prepended automatically
+  metric: string;        // counter name bumped on EVERY occurrence
+  logEvent: string;      // structured log event name, emitted on EVERY occurrence
+  logContext?: Record<string, string | number | boolean | null>;
+};
+
+function recordOccurrence(alert: OpsAlert): void {
+  incrementAuthMetric(alert.metric, (alert.logContext ?? {}) as Record<string, string>);
+  logger.error(alert.logEvent, { alertKind: alert.alertKind, ...(alert.logContext ?? {}) });
 }
 
-/** Send the alert email (time + reason only), with the hard timeout. Never throws. Performs NO database write. */
-async function deliverSignupLimiterAlert(endpoint: string, reason: string, nowMs: number, bucket: string, deps: NotifyDeps): Promise<NotifyResult> {
-  const at = new Date(nowMs).toISOString();
+const localFallbackBuckets = new Map<string, string>();
+/** In-process window: one email per instance per (kind, bucket). Used when the DB marker is unreachable / not allowed. */
+function claimLocalWindow(kind: string, bucket: string): boolean {
+  if (localFallbackBuckets.get(kind) === bucket) return false;
+  localFallbackBuckets.set(kind, bucket);
+  return true;
+}
+
+/** Send the alert email with the hard timeout. Never throws. Performs NO database write. */
+async function deliver(alert: OpsAlert, nowMs: number, bucket: string, deps: NotifyDeps): Promise<NotifyResult> {
   try {
     await withTimeout((deps.send ?? sendOpsAlert)(
       opsAlertRecipient(),
-      'Signup paused: rate limiter unavailable',
-      `At ${at} the signup rate limiter (Redis/Upstash) was unavailable or over quota, so new signups are being refused ` +
-      `with a retryable "servers are busy" message until it recovers.\n\nEndpoint: ${endpoint}\nReason: ${reason}\n\n` +
-      `Login and existing users are unaffected. You get at most one of these per ${SIGNUP_LIMITER_ALERT_WINDOW_MS / 60000} ` +
-      `minutes and at most ${MAX_ALERTS_PER_HOUR} per hour.`,
-      `ops-alert:${SIGNUP_LIMITER_ALERT_KIND}:${bucket}`,
+      alert.subject,
+      `At ${new Date(nowMs).toISOString()}: ${alert.detail}\n\nYou get at most one of these per ${SIGNUP_LIMITER_ALERT_WINDOW_MS / 60000} ` +
+      `minutes and at most ${MAX_ALERTS_PER_HOUR} per hour for this alert.`,
+      `ops-alert:${alert.alertKind}:${bucket}`,
     ), SEND_TIMEOUT_MS);
     return 'sent';
   } catch (err) {
-    logger.warn('ops_alert_send_failed', { kind: SIGNUP_LIMITER_ALERT_KIND, message: err instanceof Error ? err.message : String(err) });
+    logger.warn('ops_alert_send_failed', { kind: alert.alertKind, message: err instanceof Error ? err.message : String(err) });
     return 'failed';
   }
 }
 
-/** In-process window: one email per instance per bucket. Used when the DB marker is unreachable or not allowed. */
-function claimLocalWindow(bucket: string): boolean {
-  if (localFallbackBucket === bucket) return false;
-  localFallbackBucket = bucket;
-  return true;
-}
-
-/**
- * Count (always) and notify the owner (at most once per window CROSS-INSTANCE via the DB marker; hourly cap) that the
- * signup rate limiter is unavailable. Never throws. `endpoint` / `reason` are operator strings - never user data.
- * For AUTHENTICATED or public-signup call sites; pre-authentication callers use notifySignupLimiterUnavailablePreAuth.
- */
-export async function notifySignupLimiterUnavailable(endpoint: string, reason: string, deps: NotifyDeps = {}): Promise<NotifyResult> {
+/** Count + log (always) and email the owner at most once per window CROSS-INSTANCE (DB marker; hourly cap). */
+export async function notifyOpsAlert(alert: OpsAlert, deps: NotifyDeps = {}): Promise<NotifyResult> {
   const nowMs = (deps.now ?? Date.now)();
-  recordOccurrence(endpoint, reason);
+  recordOccurrence(alert);
   const bucket = String(Math.floor(nowMs / SIGNUP_LIMITER_ALERT_WINDOW_MS));
   let claim: Awaited<ReturnType<typeof claimBucket>>;
   try {
-    claim = await claimBucket(SIGNUP_LIMITER_ALERT_KIND, bucket, nowMs);
+    claim = await claimBucket(alert.alertKind, bucket, nowMs);
   } catch {
     claim = 'db_unavailable';
   }
   if (claim === 'already' || claim === 'capped') return 'suppressed';
-  if (claim === 'db_unavailable' && !claimLocalWindow(bucket)) return 'suppressed';
-  return deliverSignupLimiterAlert(endpoint, reason, nowMs, bucket, deps);
+  if (claim === 'db_unavailable' && !claimLocalWindow(alert.alertKind, bucket)) return 'suppressed';
+  return deliver(alert, nowMs, bucket, deps);
 }
 
 /**
- * PRE-AUTHENTICATION variant (05 review): route-auth forbids any write before authentication, so this path NEVER
- * touches the DB marker - it uses the in-process window (one email per instance per window) instead of going silent.
- * The log line + counter always fire, so the event is reconstructable even when the email is suppressed.
+ * PRE-AUTHENTICATION variant (05 review): route-auth forbids any write before authentication, so this NEVER touches
+ * the DB marker - in-process window (one email per instance per window) instead of silence; log + counter always.
  */
-export async function notifySignupLimiterUnavailablePreAuth(endpoint: string, reason: string, deps: NotifyDeps = {}): Promise<NotifyResult> {
+export async function notifyOpsAlertPreAuth(alert: OpsAlert, deps: NotifyDeps = {}): Promise<NotifyResult> {
   const nowMs = (deps.now ?? Date.now)();
-  recordOccurrence(endpoint, reason);
+  recordOccurrence(alert);
   const bucket = String(Math.floor(nowMs / SIGNUP_LIMITER_ALERT_WINDOW_MS));
-  if (!claimLocalWindow(bucket)) return 'suppressed';
-  return deliverSignupLimiterAlert(endpoint, reason, nowMs, bucket, deps);
+  if (!claimLocalWindow(alert.alertKind, bucket)) return 'suppressed';
+  return deliver(alert, nowMs, bucket, deps);
+}
+
+function signupLimiterAlert(endpoint: string, reason: string): OpsAlert {
+  return {
+    alertKind: SIGNUP_LIMITER_ALERT_KIND,
+    subject: 'Signup paused: rate limiter unavailable',
+    detail:
+      `the signup rate limiter (Redis/Upstash) was unavailable or over quota, so new signups are being refused with a ` +
+      `retryable "servers are busy" message until it recovers.\n\nEndpoint: ${endpoint}\nReason: ${reason}\n\n` +
+      `Login and existing users are unaffected.`,
+    metric: 'auth.signup.limiter_unavailable',
+    logEvent: 'auth.signup_limiter_unavailable',
+    logContext: { endpoint, reason },
+  };
+}
+
+/** Signup limiter outage (authenticated / public-signup call sites). */
+export function notifySignupLimiterUnavailable(endpoint: string, reason: string, deps: NotifyDeps = {}): Promise<NotifyResult> {
+  return notifyOpsAlert(signupLimiterAlert(endpoint, reason), deps);
+}
+
+/** Signup limiter outage, PRE-AUTHENTICATION call sites (no DB write). */
+export function notifySignupLimiterUnavailablePreAuth(endpoint: string, reason: string, deps: NotifyDeps = {}): Promise<NotifyResult> {
+  return notifyOpsAlertPreAuth(signupLimiterAlert(endpoint, reason), deps);
 }
