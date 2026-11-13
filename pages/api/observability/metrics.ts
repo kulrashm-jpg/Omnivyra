@@ -7,7 +7,8 @@
  * DARK BY DEFAULT: returns 404 unless OBSERVABILITY_EXPORT_TOKEN is set in the
  * environment. When set, requests must present the token via
  * `Authorization: Bearer <token>` or `x-metrics-secret: <token>` (the header
- * convention already used by /api/internal/metrics).
+ * convention already used by /api/internal/metrics). PL-09(b): OBSERVABILITY_EXPORT_TOKEN_PREVIOUS, when set, is
+ * also accepted (rotation) - see backend/security/metricsExportToken.ts; it never re-enables a dark endpoint.
  *
  * Note (same caveat as the super-admin snapshot): metrics are per-process. On
  * Vercel this reflects the instance that served the scrape; the long-lived
@@ -17,7 +18,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute } from '../../../lib/platform/routeFactory';
-import { constantTimeEqual } from '../../../backend/security/constantTimeEqual';
+import { decideMetricsExportToken } from '../../../backend/security/metricsExportToken';
 import {
   renderPrometheusText,
   PROMETHEUS_CONTENT_TYPE,
@@ -39,13 +40,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).end();
   }
 
-  const expected = process.env.OBSERVABILITY_EXPORT_TOKEN;
-  if (!expected) {
-    // Dark by default — indistinguishable from a missing route.
+  // PL-09(b): current OR previous token (rotation without a scrape gap) - the ONE shared decision, identical
+  // to the worker target. SEC-C4: every comparison is constant-time and both always run.
+  const decision = decideMetricsExportToken(presentedToken(req));
+  if (decision === 'dark') {
+    // Dark by default — indistinguishable from a missing route. A previous token never re-enables it.
     return res.status(404).end();
   }
-  // SEC-C4: constant-time comparison (no prefix-timing oracle).
-  if (!constantTimeEqual(presentedToken(req), expected)) {
+  if (decision !== 'accepted') {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

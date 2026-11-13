@@ -116,7 +116,9 @@ describe('no in-scope endpoint compares a machine secret with === / !==', () => 
     if (!HELPER_EXEMPT.has(rel)) {
       // Every endpoint that authenticates with a shared header secret must
       // make that decision through the constant-time helper.
-      expect(code).toMatch(/security\/constantTimeEqual['"]/);
+      // (PL-09(b): the metrics scrape targets decide through security/metricsExportToken, which is itself
+      // built on the constant-time helper; metricsExportTokenDualAccept.test.ts pins its behaviour.)
+      expect(code).toMatch(/security\/(?:constantTimeEqual|metricsExportToken)['"]/);
     }
   });
 });

@@ -7,6 +7,7 @@
 import http from 'http';
 import { renderPrometheusText, PROMETHEUS_CONTENT_TYPE } from '../observability';
 import { constantTimeEqual } from '../security/constantTimeEqual';
+import { decideMetricsExportToken } from '../security/metricsExportToken';
 
 let _startedAt = Date.now();
 
@@ -64,10 +65,12 @@ export function startHealthServer(port = 8080): http.Server {
     // to the API and indistinguishable from a missing route.
     if (path === '/metrics') {
       if (req.method !== 'GET') { res.writeHead(405, { Allow: 'GET' }); res.end(); return; }
-      const expected = process.env.OBSERVABILITY_EXPORT_TOKEN;
-      if (!expected) { res.writeHead(404); res.end(); return; }
-      // SEC-C4: constant-time comparison (no prefix-timing oracle).
-      if (!constantTimeEqual(presentedMetricsToken(req), expected)) {
+      // PL-09(b): current OR previous token (rotation without a scrape gap) - the ONE shared decision, identical
+      // to the API target. Dark (404) whenever the CURRENT token is unset, even if a previous one is set.
+      // SEC-C4: every comparison is constant-time (no prefix-timing oracle), and both always run.
+      const decision = decideMetricsExportToken(presentedMetricsToken(req));
+      if (decision === 'dark') { res.writeHead(404); res.end(); return; }
+      if (decision !== 'accepted') {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
