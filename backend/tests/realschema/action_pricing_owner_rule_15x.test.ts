@@ -55,13 +55,13 @@ describe('20270217000046 action_pricing_owner_rule_15x', () => {
     expect(wrong).toEqual([]);
   });
 
-  it('the keys 046 must not touch are not re-priced to the owner rule', async () => {
-    const a = await active();
-    for (const k of UNTOUCHED) {
-      for (const r of a.get(k) ?? []) {
-        expect(r.effective_from.toISOString()).not.toBe('2026-11-14T00:00:00.000Z');
-      }
-    }
+  it('the keys 046 must not touch have NO row written by 046 (its own note marker), whatever later migrations do', async () => {
+    // Asserted on 046's OWN rows (05): a later migration (e.g. 049 for voice_per_minute) may legitimately re-price an
+    // untouched key, so this must not depend on a timestamp another migration has to avoid.
+    const { rows } = await db.query(
+      `SELECT action_key FROM public.action_pricing_config
+        WHERE action_key = ANY($1::text[]) AND notes LIKE '%(20270217000046)%'`, [UNTOUCHED]);
+    expect(rows).toEqual([]);
   });
 
   it('re-running 046 is a no-op (no new rows, same active set)', async () => {

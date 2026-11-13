@@ -1,18 +1,21 @@
 -- 20270217000049 - voice_per_minute to the OWNER RULE (15x minimum margin) (e1; owner ruling 2026-11-13 via e9;
 -- version reserved by virality-83 in 9aa68c784; review: virality-05). Ships with 046 + 047, before the D8 rate step.
 --
--- WHY. Voice transcription costs USD 0.006/min (Whisper) / 0.0062 (AssemblyAI) - the route's own captured rates. At the
--- equalised credit rate (USD 0.007, 047 + D8) the old price of 10 credits/min = USD 0.07/min = 11.7x actual, BELOW the
--- 15x minimum. 15x needs >= USD 0.093/min = 13.3 credits -> 14 credits/min (USD 0.098, 15.8x).
+-- WHY. Voice transcription costs USD 0.006/min (Whisper) / 0.0062 (AssemblyAI) - the route's own captured rates. BASIS:
+-- the HIGHER actual cost, AssemblyAI 0.0062 (conservative). At the equalised credit rate (USD 0.007, 047 + D8) the old
+-- price of 10 credits/min = USD 0.07/min = 11.3x AssemblyAI (11.7x Whisper), BELOW the 15x minimum. 15x needs
+-- >= USD 0.093/min = 13.3 credits -> 14 credits/min = USD 0.098 = 15.8x AssemblyAI (16.3x Whisper).
 --
 -- WHAT (three rows, kept OUT of 046 so 046 keeps its reviewed contract - credit_cost_config and fixed rows untouched):
 --   (i)   credit_cost_config voice_per_minute.credits 10 -> 14   (getCreditCost reads this: the price that is charged)
 --   (ii)  action_pricing_config voice_per_minute: the active 'fixed' row's minimum_charge_usd / ceiling_usd 0.10 -> 0.098
 --         (14 x 0.007). Same mechanics as 046: the current active row is DEACTIVATED (kept as history) and a new active
---         row inserted with effective_from 2026-11-14 00:49:00+00 - distinct from 046's 00:00:00 so each migration's rows are identifiable as its own (046's suite asserts it left voice_per_minute alone); fixed, so a re-run recognises its own row.
+--         row inserted with effective_from 2026-11-14 00:49:00+00 - its own timestamp, so 049's rows are identifiable as
+--         049's (provenance); fixed, so a re-run recognises its own row.
 --   (iii) activity_class_economics VOICE maximum_credits 60 -> 75 - a REFERENCE copy (no code reads this table; the
---         operative value is activityEconomyCatalog.ts, raised in fix/profile-refine-billing-20261113 @ 65143c27f):
---         a 5:00 recording (the recorder's limit, enforced server-side) at 14 credits/min = 70, plus 1 minute headroom.
+--         operative value is activityEconomyCatalog.ts, raised in fix/profile-refine-billing-20261113): a 5:00 recording
+--         (the recorder's limit, enforced server-side) at 14 credits/min = 70 credits; + 5 credits (~21 s) headroom.
+--         Billing rounds CREDITS up, not minutes - max(1, ceil(seconds x 14 / 60)) - so a 5:00.4 clip bills 71, not 84.
 -- Idempotent: each step skips a row already at its target. ONE DO block = atomic under any runner.
 
 DO $preflight$
@@ -58,7 +61,7 @@ BEGIN
   INSERT INTO public.action_pricing_config
     (action_key, source_type, cost_multiplier, minimum_charge_usd, ceiling_usd, is_active, effective_from, notes)
   SELECT 'voice_per_minute', 'fixed', 1.0, 0.098, 0.098, true, '2026-11-14 00:49:00+00',
-         'owner rule 2026-11-13: 14 credits/min at 0.007 = 15.8x actual (Whisper 0.006/min) (20270217000049)'
+         'owner rule 2026-11-13: 14 credits/min at 0.007 = USD 0.098/min = 15.8x vs AssemblyAI 0.0062/min, 16.3x vs Whisper 0.006/min (20270217000049)'
    WHERE NOT EXISTS (SELECT 1 FROM public.action_pricing_config WHERE action_key = 'voice_per_minute' AND is_active);
 
   -- (iii) the reference copy of the VOICE class maximum

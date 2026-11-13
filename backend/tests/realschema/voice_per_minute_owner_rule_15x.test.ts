@@ -37,8 +37,16 @@ describe('20270217000049 voice_per_minute_owner_rule_15x', () => {
     expect(s.voice).toEqual([{ maximum_credits: 75 }]);
   });
 
-  it('14 credits/min at 0.007 is at least 15x the actual voice cost (Whisper 0.006, AssemblyAI 0.0062 per minute)', () => {
+  it('14 credits/min at 0.007 is at least 15x the HIGHER actual voice cost (AssemblyAI 0.0062/min; Whisper 0.006)', () => {
     expect((14 * 0.007) / 0.0062).toBeGreaterThanOrEqual(15);
+    expect((10 * 0.007) / 0.006).toBeLessThan(15); // the old price was below the minimum on either basis
+  });
+
+  it('a 5:00 clip (recorder limit) fits the VOICE max of 75 with credit-level rounding: 5:00.4 -> 71', () => {
+    const credits = (seconds: number) => Math.max(1, Math.ceil((seconds * 14) / 60));
+    expect(credits(300)).toBe(70);
+    expect(credits(300.4)).toBe(71);
+    expect(credits(300.4)).toBeLessThanOrEqual(75);
   });
 
   it('re-running 049 is a no-op (no new rows, same state)', async () => {
