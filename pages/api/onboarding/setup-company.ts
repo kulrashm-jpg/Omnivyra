@@ -39,6 +39,7 @@ import {
 } from '../../../backend/services/validatedWebsiteService';
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
+import { classifyCompanyDomainConflict } from '../../../backend/services/companyDomainUniqueness';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
 import { bootstrapCompanyProfile } from '../../../backend/services/companyBootstrapService';
@@ -539,8 +540,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
             const { data, error } = await supabase
               .from('companies').insert(record).select('id').single();
             if (error) {
-              const e = new Error(error.message) as Error & { code?: string };
+              const e = new Error(error.message) as Error & { code?: string; details?: string };
               e.code = error.code;
+              e.details = (error as { details?: string }).details; // carries the index name (050 classification)
               throw e;
             }
             return { id: (data as { id: string }).id };
@@ -555,22 +557,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     // 23505 can now fire on either partial unique index: admin_email_domain
     // (20260322) or website_domain (20260713, AUTH-001 §8). Re-resolve the
     // winner by whichever domain key we hold.
-    if (companyErr?.code === '23505' && (adminEmailDomain || websiteDomain)) {
-      const { data: raceWinnerByAdmin } = adminEmailDomain
-        ? await supabase
-            .from('companies')
-            .select('id, name')
-            .eq('admin_email_domain', adminEmailDomain)
-            .maybeSingle()
-        : { data: null };
-      const { data: raceWinnerByWebsite } = !raceWinnerByAdmin && websiteDomain
-        ? await supabase
-            .from('companies')
-            .select('id, name')
-            .eq('website_domain', websiteDomain)
-            .maybeSingle()
-        : { data: null };
-      const raceWinner = (raceWinnerByAdmin ?? raceWinnerByWebsite) as { id: string; name: string } | null;
+    // e1 2026-11-13 (050 + 05): a 23505 is a domain race ONLY when it names one of 050's domain indexes - companies has
+    // other unique rules, and a bare 23505 is ambiguous. The winner is looked up among NON-DELETED companies (the index
+    // is partial on deleted_at IS NULL, so a deleted row may share the domain), and a lookup ERROR is a retryable 503 -
+    // never a fall-through into a 500 or a second company on a claimed domain.
+    const domainConflict = classifyCompanyDomainConflict(companyErr);
+    if (domainConflict && (adminEmailDomain || websiteDomain)) {
+      const lookupWinner = async (column: 'admin_email_domain' | 'website_domain', value: string | null) => {
+        if (!value) return { data: null, error: null };
+        return supabase
+          .from('companies')
+          .select('id, name')
+          .eq(column, value)
+          .is('deleted_at', null)
+          .limit(1)
+          .maybeSingle();
+      };
+      const first = domainConflict === 'website_domain'
+        ? await lookupWinner('website_domain', websiteDomain)
+        : await lookupWinner('admin_email_domain', adminEmailDomain);
+      const second = !first.data && !first.error
+        ? (domainConflict === 'website_domain'
+            ? await lookupWinner('admin_email_domain', adminEmailDomain)
+            : await lookupWinner('website_domain', websiteDomain))
+        : { data: null, error: null };
+      if (first.error || second.error) {
+        return res.status(503).json({
+          error: 'We could not finish setting up your company right now. Please try again in a moment.',
+          code: 'DOMAIN_RACE_LOOKUP_UNAVAILABLE',
+          retryable: true,
+        });
+      }
+      const raceWinner = (first.data ?? second.data) as { id: string; name: string } | null;
 
       if (raceWinner) {
         // Another concurrent request won the INSERT race for this domain.
@@ -581,6 +599,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
           .select('id')
           .eq('user_id', user.id)
           .eq('company_id', raceWinner.id)
+          .eq('status', 'active') // only an ACTIVE membership lets the same user through (a removed one does not)
           .maybeSingle();
 
         if (existingRole) {
@@ -598,6 +617,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
           adminName,
         });
       }
+      // The 23505 named a domain index but no live owner could be read back (e.g. it was deleted in between): still a
+      // claimed-domain refusal - never a 500, never a retry that could create a second company on the domain.
+      await emitCompanyEvent('CompanyExists', 'denied', 'DOMAIN_UNIQUE_RACE_LOST', null);
+      return res.status(409).json({
+        error: 'A company is already registered for this domain.',
+        code: 'CLAIMED_DOMAIN',
+        conflict: domainConflict,
+      });
     }
 
     if (companyErr) throw companyErr;

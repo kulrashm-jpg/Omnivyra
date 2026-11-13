@@ -74,7 +74,8 @@ describe('Phase 11C — source contract on setup-company.ts', () => {
   });
 
   it('2+3. duplicate + race recovery preserved', () => {
-    expect(CODE).toContain("companyErr?.code === '23505'");
+    // 050 (e1 2026-11-13): the race is a 23505 classified BY INDEX NAME, not any 23505 (companies has other unique rules)
+    expect(CODE).toContain('classifyCompanyDomainConflict(companyErr)');
     expect(CODE).toMatch(/companyExists:\s*true/);
     expect(CODE).toContain('if (companyErr) throw companyErr;');
   });
