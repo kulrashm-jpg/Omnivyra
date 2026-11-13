@@ -1,7 +1,7 @@
 /**
  * Real-schema cover for 20270217000046_action_pricing_owner_rule_15x (e1, 2026-11-13; owner pricing ruling via e9).
  *
- * After the replay (which applies 046 like any migration): every one of the 45 target keys has EXACTLY ONE active row,
+ * After the replay (which applies 046 like any migration): every one of the 46 target keys has EXACTLY ONE active row,
  * priced multiplier 15 / floor 0.007 (1 credit at the new rate) / its ceiling; the keys 046 must not touch (report
  * pipelines, 'fixed' rows, embedding) keep their rows; re-running 046 changes nothing; the rollback restores each key's
  * previous active row (or none, for keys that had only a credit_cost_config price).
@@ -17,7 +17,7 @@ const ROLLBACK = fs.readFileSync(
   path.join(process.cwd(), 'supabase/migrations/rollbacks/action_pricing_owner_rule_15x_rollback.sql'), 'utf8');
 const TS = '2026-11-14 00:00:00+00';
 
-/** The 45 target keys and ceilings, read from the migration's own VALUES list (single source of truth). */
+/** The 46 target keys and ceilings, read from the migration's own VALUES list (single source of truth). */
 const TARGET: Array<[string, string]> = Array.from(
   MIG.matchAll(/^\s+\('([A-Za-z_]+)', ([0-9.]+)\)/gm), (m) => [m[1], m[2]] as [string, string]);
 const UNTOUCHED = ['website_audit', 'deep_analysis', 'full_strategy', 'auto_post', 'voice_per_minute', 'external_api', 'embedding'];
@@ -37,9 +37,9 @@ async function dropTemps(): Promise<void> {
 }
 
 describe('20270217000046 action_pricing_owner_rule_15x', () => {
-  it('parses 45 target keys from the migration (the test reads the same list the migration applies)', () => {
-    expect(TARGET).toHaveLength(45);
-    expect(new Set(TARGET.map(([k]) => k)).size).toBe(45);
+  it('parses 46 target keys from the migration (the test reads the same list the migration applies)', () => {
+    expect(TARGET).toHaveLength(46);
+    expect(new Set(TARGET.map(([k]) => k)).size).toBe(46);
     for (const k of UNTOUCHED) expect(TARGET.map(([t]) => t)).not.toContain(k);
   });
 

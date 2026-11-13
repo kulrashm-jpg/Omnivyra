@@ -28,8 +28,9 @@
 -- (20261024000002 used that, so on a fresh replay the 20260422 1.0/0/NULL rows win). Idempotent: a key whose active row
 -- already equals the target tuple is skipped.
 --
--- 45 keys: 24 existing llm keys re-priced + 21 that had only a credit_cost_config row (lead_qualification,
--- lead_predictive_scoring and 19 catalogue-only keys) gain a token price. Per-key basis (C82, all history):
+-- 46 keys: 24 existing llm keys re-priced + 21 that had only a credit_cost_config row (lead_qualification,
+-- lead_predictive_scoring and 19 catalogue-only keys) gain a token price + 1 NEW key with no prior row (profile_refine,
+-- added 2026-11-13 before release, 83-approved in-place edit). Per-key basis (C82, all history):
 --   ai_reply                         ceiling 0.1118  observed max 0.004965 x1 calls x15 x1.5 (438 calls)
 --   async_campaign_planning          ceiling 0.3500  no observed calls; prior prescribed 50 credits at 0.007
 --   blogAnalyticsInsight             ceiling 0.0560  no observed calls; prior prescribed 8 credits at 0.007
@@ -65,6 +66,9 @@
 --   prediction                       ceiling 0.0700  no observed calls; prior prescribed 10 credits at 0.007
 --   profile_enrichment               ceiling 0.1032  observed max 0.004586 x1 calls x15 x1.5 (66 calls)
 --   profile_extraction               ceiling 0.2441  observed max 0.010847 x1 calls x15 x1.5 (82 calls)
+--   profile_refine                   ceiling 1.1826  NEW KEY (e9 2026-11-13: onboarding setup-company + manual
+--                                    /api/company-profile/refine ran unpriced): one refine UNIT = up to 4 profileExtraction
+--                                    (observed max 0.010847, 82 calls) + 2 profileEnrichment (0.004586, 66 calls) x15 x1.5
 --   quick_platform_adapt             ceiling 0.0210  no observed calls; prior prescribed 3 credits at 0.007
 --   recommendations_generate         ceiling 0.0560  no observed calls; prior prescribed 8 credits at 0.007
 --   recommendations_group_preview    ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
@@ -137,6 +141,7 @@ INSERT INTO m046_target (action_key, ceiling_usd) VALUES
   ('prediction', 0.0700),
   ('profile_enrichment', 0.1032),
   ('profile_extraction', 0.2441),
+  ('profile_refine', 1.1826),
   ('quick_platform_adapt', 0.0210),
   ('recommendations_generate', 0.0560),
   ('recommendations_group_preview', 0.0070),
@@ -196,8 +201,8 @@ BEGIN
     RAISE EXCEPTION '046 postcondition: target keys without exactly one correct active row: %', v_bad;
   END IF;
   SELECT count(*) INTO v_n FROM m046_target;
-  IF v_n <> 45 THEN
-    RAISE EXCEPTION '046 postcondition: expected 45 target keys, found %', v_n;
+  IF v_n <> 46 THEN
+    RAISE EXCEPTION '046 postcondition: expected 46 target keys, found %', v_n;
   END IF;
   IF EXISTS (
        (SELECT id, action_key, source_type, cost_multiplier, minimum_charge_usd, ceiling_usd, is_active FROM m046_untouched
@@ -209,7 +214,7 @@ BEGIN
           FROM public.action_pricing_config WHERE action_key NOT IN (SELECT action_key FROM m046_target)
         EXCEPT
         SELECT id, action_key, source_type, cost_multiplier, minimum_charge_usd, ceiling_usd, is_active FROM m046_untouched)) THEN
-    RAISE EXCEPTION '046 postcondition: a row outside the 45 target keys changed';
+    RAISE EXCEPTION '046 postcondition: a row outside the 46 target keys changed';
   END IF;
   FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
     FOREACH p IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
