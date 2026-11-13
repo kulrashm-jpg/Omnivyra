@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import StepTracker, { type StepDef } from './progress/StepTracker';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from './CompanyContext';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
@@ -25,6 +26,20 @@ import { BOLT_DURATION_OPTIONS } from '../lib/shared/campaignDuration';
 import BoltPlatformPicker from './bolt/BoltPlatformPicker';
 
 import { type OutcomeView, type SharingMode, CONTENT_FORMATS, DURATION_OPTIONS, GOAL_OPTIONS, TONE_OPTIONS, AUDIENCE_HINT_EXAMPLES, STRATEGIC_FOCUS_OPTIONS, INTELLIGENCE_SOURCES, TagInput, StrategyCard } from './BoltStrategyViewWidgets';
+
+/**
+ * D8c: what /api/bolt/strategy-cards actually does (pages/api/bolt/strategy-cards.ts): prepare
+ * the topic, draft weekly themes for three options in parallel, shape each option's angle.
+ * Timed (the route reports no stages); the last step holds until the response arrives, and
+ * there is no percentage claim.
+ */
+export const BOLT_TEXT_CARD_STAGES: readonly StepDef[] = Object.freeze([
+  { key: 'bolt-cards-brief', label: 'Reading your campaign brief', etaSeconds: 2 },
+  { key: 'bolt-cards-themes', label: 'Drafting weekly themes for three options', etaSeconds: 15 },
+  { key: 'bolt-cards-angles', label: "Shaping each option's angle and title", etaSeconds: 8 },
+]);
+/** Well past the normal ~25 s: say so honestly instead of spinning silently. */
+export const BOLT_TEXT_CARD_STALLED_AFTER_SECONDS = 60;
 
 function CampaignBriefSection({
   topic, description, goals, tone, audienceText,
@@ -208,6 +223,12 @@ import type { useBoltStrategy } from '../hooks/useBoltStrategy';
 type S = ReturnType<typeof useBoltStrategy>;
 export default function BoltStrategyView({ d }: { d: S }) {
   const [showMore, setShowMore] = useState(false);
+  // D8c: when the current generation started (view-local; the hook is untouched).
+  const [genStartedAt, setGenStartedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (d.generating) setGenStartedAt((v) => v ?? Date.now());
+    else setGenStartedAt(null);
+  }, [d.generating]);
   const {
     _ef1,
     _ef2,
@@ -697,14 +718,16 @@ export default function BoltStrategyView({ d }: { d: S }) {
         </div>
 
         {/* ── Strategy Cards — full-width below form ── */}
-        {(hasGenerated || generating) && (
+        {/* D8c: also open on a first-run failure, which was previously invisible (hasGenerated
+            stays false and generating ends, so the error box below never rendered). */}
+        {(hasGenerated || generating || Boolean(genError)) && (
           <div ref={cardsRef}>
 
             {/* Section header */}
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg font-bold text-gray-900">
-                  {generating ? 'Generating your strategy options…' : `${cards.length} Strategy Options`}
+                  {generating ? 'Generating your strategy options…' : genError && cards.length === 0 ? "We couldn't generate strategy options" : `${cards.length} Strategy Options`}
                 </h2>
                 <p className="text-sm text-gray-400 mt-0.5">
                   {generating ? 'BOLT is crafting unique campaign angles for you.' : executing ? 'BOLT is building your campaign — hang tight.' : 'Select a strategy to launch BOLT in the chosen view.'}
@@ -729,12 +752,36 @@ export default function BoltStrategyView({ d }: { d: S }) {
                   className="mb-4"
                 />
               ) : (
-                <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700 mb-4">
-                  <strong>Error:</strong> {genError}
+                <div data-testid="bolt-cards-failed" className="p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700 mb-4">
+                  <p>
+                    <strong>That didn&apos;t work.</strong> {genError}
+                  </p>
+                  {/* Retry only once the request has ended (it has: generating is false here). */}
+                  {!generating && (
+                    <button
+                      type="button"
+                      onClick={() => { setGenError(null); void handleGenerate(); }}
+                      className="mt-2 rounded-lg border border-red-300 bg-white px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
+                    >
+                      Try again
+                    </button>
+                  )}
                 </div>
               )
             )}
 
+            {generating && genStartedAt != null && (
+              <StepTracker
+                stages={[...BOLT_TEXT_CARD_STAGES]}
+                startedAt={genStartedAt}
+                status="running"
+                accent="amber"
+                title="Generating strategy options"
+                variant="card"
+                className="mb-4"
+                stalledAfterSeconds={BOLT_TEXT_CARD_STALLED_AFTER_SECONDS}
+              />
+            )}
             {generating && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                 {[0, 1, 2].map((i) => (

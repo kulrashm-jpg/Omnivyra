@@ -50,7 +50,23 @@ export type StepTrackerProps = {
   /** Optional extra Tailwind gradient class (e.g. for BOLT theming). Overrides accent gradient. */
   gradientClass?: string;
   className?: string;
+  /**
+   * Honest "stalled" state (e9, D8): once a RUNNING operation exceeds this many seconds,
+   * say so in plain words instead of spinning silently. Omit to keep today's behaviour.
+   */
+  stalledAfterSeconds?: number;
+  /** Text shown when stalled. Default: still working, no need to start again. */
+  stalledMessage?: string;
+  /**
+   * Shown as a button only when status is 'failed' (the operation has ENDED). Never
+   * offered while running: a retry while a request is still in flight could start (and
+   * charge for) a second run.
+   */
+  onRetry?: () => void;
+  retryLabel?: string;
 };
+
+export const DEFAULT_STALLED_MESSAGE = 'This is taking longer than usual. It is still working, so there is no need to start again.';
 
 const ACCENTS: Record<StepTrackerAccent, { gradient: string; spinner: string; bar: string; runningBg: string; doneBg: string }> = {
   violet:  { gradient: 'from-violet-600 to-purple-600',   spinner: 'text-violet-500',   bar: 'from-violet-600 to-purple-600',   runningBg: 'bg-violet-500',   doneBg: 'bg-violet-500'  },
@@ -104,6 +120,10 @@ export default function StepTracker({
   variant = 'card',
   gradientClass,
   className = '',
+  stalledAfterSeconds,
+  stalledMessage = DEFAULT_STALLED_MESSAGE,
+  onRetry,
+  retryLabel = 'Try again',
 }: StepTrackerProps) {
   const [elapsedMs, setElapsedMs] = useState(() => Date.now() - startedAt);
 
@@ -118,6 +138,8 @@ export default function StepTracker({
   const gradient = gradientClass || palette.gradient;
   const isFailed = status === 'failed';
   const isCompleted = status === 'completed';
+  const isStalled =
+    status === 'running' && typeof stalledAfterSeconds === 'number' && elapsedMs >= stalledAfterSeconds * 1000;
 
   const currentIdx = useMemo(() => {
     if (isCompleted) return stages.length;
@@ -224,6 +246,18 @@ export default function StepTracker({
 
         {isFailed && errorMessage && (
           <p className="text-[11px] text-red-600 mt-2 leading-snug">{errorMessage}</p>
+        )}
+        {isStalled && (
+          <p data-testid="step-tracker-stalled" className="text-[11px] text-amber-700 mt-2 leading-snug">{stalledMessage}</p>
+        )}
+        {isFailed && onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-2 rounded-lg border border-gray-300 bg-white px-3 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            {retryLabel}
+          </button>
         )}
       </div>
     </div>
