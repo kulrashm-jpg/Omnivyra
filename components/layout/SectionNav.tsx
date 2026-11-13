@@ -31,15 +31,22 @@ export default function SectionNav() {
             <Link
               key={item.href}
               href={item.href}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors ${
+              className={`inline-flex items-center gap-2 ${item.hint ? 'rounded-xl' : 'rounded-full'} border px-3 py-1.5 text-sm transition-colors ${
                 active
                   ? 'border-sky-200 bg-sky-50 text-sky-700'
                   : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
               }`}
               aria-current={active ? 'page' : undefined}
             >
-              {item.icon ? <item.icon className="h-3.5 w-3.5" /> : null}
-              <span>{item.label}</span>
+              {item.icon ? <item.icon className="h-3.5 w-3.5 shrink-0" /> : null}
+              {item.hint ? (
+                <span className="flex flex-col leading-tight">
+                  <span>{item.label}</span>
+                  <span className="text-[11px] font-normal text-slate-500">{item.hint}</span>
+                </span>
+              ) : (
+                <span>{item.label}</span>
+              )}
             </Link>
           );
         })}

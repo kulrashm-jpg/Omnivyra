@@ -19,9 +19,11 @@ const ROUTE_LABELS: Record<string, string> = {
   recommendations: 'Recommendations',
   analytics: 'Analytics',
   leads: 'Active Leads',
-  'bolt-text-strategy': 'BOLT (Text)',
-  'bolt-creator-strategy': 'Creator Strategy',
-  'intelligent-mix-strategy': 'Multi-Channel Campaigns',
+  // Same product names as both menus (owner decision 2026-11-13).
+  'bolt-text': 'BOLT Text',
+  'bolt-text-strategy': 'BOLT Text',
+  'bolt-creator-strategy': 'BOLT Creator',
+  'intelligent-mix-strategy': 'Intelligent Mix',
 };
 
 function getLabel(segment: string): string {

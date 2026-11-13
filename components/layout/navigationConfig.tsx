@@ -20,6 +20,8 @@ export type SecondaryNavItem = {
   description: string;
   href: string;
   icon?: LucideIcon;
+  /** Short plain-English line shown under the label in the section tabs (product names need one). */
+  hint?: string;
 };
 
 export type PrimaryNavItem = {
@@ -87,29 +89,42 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       '/command-center/variant-experience',
     ],
     children: [
+      // Owner decision 2026-11-13: product name + a short plain-English hint, the same
+      // wording in the header menu and here. Hints approved verbatim by the owner.
       {
         label: 'All Campaigns',
-        description: 'Track every live and planned campaign.',
+        description: 'See and manage every campaign',
+        hint: 'See and manage every campaign',
         href: '/campaigns',
         icon: Megaphone,
       },
       {
-        label: 'Create Quick Posts',
-        description: 'Launch a lightweight text-first campaign fast.',
+        label: 'BOLT Text',
+        description: 'Quick text posts in minutes',
+        hint: 'Quick text posts in minutes',
         href: '/command-center/bolt-text',
         icon: Sparkles,
       },
       {
-        label: 'Creator Strategy',
-        description: 'Plan creator-led campaign execution.',
+        label: 'BOLT Creator',
+        description: 'Image, carousel and infographic campaigns',
+        hint: 'Image, carousel and infographic campaigns',
         href: '/command-center/bolt-creator-strategy',
         icon: Users,
       },
       {
-        label: 'Multi-Channel Campaigns',
-        description: 'Build a coordinated campaign across channels.',
+        label: 'Intelligent Mix',
+        description: 'Text and visuals together in one campaign',
+        hint: 'Text and visuals together in one campaign',
         href: '/command-center/intelligent-mix-strategy',
         icon: Rocket,
+      },
+      {
+        label: 'Strategic Mix',
+        description: 'Plan a full campaign step by step, your way',
+        hint: 'Plan a full campaign step by step, your way',
+        href: '/campaign-planner?mode=direct',
+        icon: Lightbulb,
       },
       // BETA-008 (RULE 8): "Variant Experience" hidden for Beta — operator/dev-only tooling.
     ],
