@@ -19,6 +19,9 @@
  *                       campaign_id). Use '.' to drop the object filter entirely (every write route).
  *   --role-gate <regex> extra role-gate call names your area uses (alternation, no parens), added to the defaults
  *   --membership <regex> extra membership-only gate names, added to the defaults
+ *   Recognised structurally (no flag needed): withRBAC(h, [..]) and withRBAC(h, CONST) with a same-file const array,
+ *   requireTenantAccess(..., { requireRoleIn: [..] }). A role list that admits VIEW_ONLY / VIEWER / CONTENT_ENGAGER is
+ *   NOT a write gate (reported with a note).
  *   --allow <file>      newline list of route paths (relative to the scanned dir root, '#' comments) reviewed as safe
  *   --json              machine-readable output
  *   --fail              exit 1 when any unallowed hit remains (use in a test / CI step)
@@ -60,10 +63,41 @@ const ROLE_GATES = [
   'requireCampaignAccess', 'requireCampaignTenantAccess', 'enforceCampaignWriteRole', 'enforceRole', 'hasPermission',
   'isSuperAdmin', 'isPlatformSuperAdmin', 'enforceContentWriteRole',
 ];
-const MEMBERSHIP_GATES = ['enforceCompanyAccess', 'requireTenantAccess', 'requireCompanyAccess', 'requireCompanyContext'];
-const ROLE = new RegExp(
-  [esc(ROLE_GATES), 'withRBAC\\(\\s*handler\\s*,\\s*\\[', opt.roleGate ? `(?:${opt.roleGate})\\(` : null].filter(Boolean).join('|'),
-);
+// withOrgAccess -> assertOrgAccess -> requireTenantAccess with no requireRoleIn: membership-only (e1, 2026-11-13).
+const MEMBERSHIP_GATES = [
+  'enforceCompanyAccess', 'requireTenantAccess', 'requireCompanyAccess', 'requireCompanyContext', 'withOrgAccess', 'assertOrgAccess',
+];
+const ROLE = new RegExp([esc(ROLE_GATES), opt.roleGate ? `(?:${opt.roleGate})\\(` : null].filter(Boolean).join('|'));
+// A role list that admits view-only roles is NOT a write gate.
+const VIEW_ROLES = /Role\.(VIEW_ONLY|VIEWER|CONTENT_ENGAGER)\b|['"](VIEW_ONLY|VIEWER|CONTENT_ENGAGER)['"]/;
+/**
+ * withRBAC(<handler>, [inline list]) or withRBAC(<handler>, CONST) where CONST is a top-level const array in the same
+ * file (e1); requireTenantAccess(..., { requireRoleIn: [...] }) (e1). Each counts only when its role list admits no
+ * view-only role. Returns 'gated' | 'view-roles' | null.
+ */
+function structuralRoleGate(s) {
+  let sawViewRoles = false;
+  const lists = [];
+  for (const m of s.matchAll(/withRBAC\(\s*[\w.]+\s*,\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/g)) {
+    if (m[1].startsWith('[')) lists.push(m[1]);
+    else {
+      const def = s.match(new RegExp(`^(?:export\\s+)?const\\s+${m[1]}\\b[^=]*=\\s*(\\[[^\\]]*\\])`, 'm'));
+      if (def) lists.push(def[1]);
+    }
+  }
+  for (const m of s.matchAll(/requireTenantAccess\([^;]*?requireRoleIn\s*:\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*)/g)) {
+    if (m[1].startsWith('[')) lists.push(m[1]);
+    else {
+      const def = s.match(new RegExp(`^(?:export\\s+)?const\\s+${m[1]}\\b[^=]*=\\s*(\\[[^\\]]*\\])`, 'm'));
+      lists.push(def ? def[1] : '[]'); // an imported list: counted as a gate, but unverifiable here - read it
+    }
+  }
+  for (const l of lists) {
+    if (VIEW_ROLES.test(l)) sawViewRoles = true;
+    else return 'gated';
+  }
+  return sawViewRoles ? 'view-roles' : null;
+}
 const MEMBERSHIP = new RegExp([esc(MEMBERSHIP_GATES), opt.membership ? `(?:${opt.membership})\\(` : null].filter(Boolean).join('|'));
 const WRITE = /\b(POST|PUT|PATCH|DELETE)\b/;
 const OBJ = opt.object === '.'
@@ -100,12 +134,14 @@ for (const dir of opt.dirs) {
     counts.membershipOnlyCandidates++;
     if (!OBJ.test(s)) continue;
     counts.objectMatched++;
-    if (ROLE.test(s)) {
+    const structural = structuralRoleGate(s);
+    if (ROLE.test(s) || structural === 'gated') {
       counts.roleGated++;
       continue;
     }
     const rel = path.relative(process.cwd(), f).replace(/\\/g, '/');
-    (allow.has(rel) ? allowedHits : hits).push(rel);
+    if (allow.has(rel)) allowedHits.push(rel);
+    else hits.push(rel + (structural === 'view-roles' ? '  (role list admits a view-only role)' : ''));
   }
 }
 if (counts.scanned === 0) {

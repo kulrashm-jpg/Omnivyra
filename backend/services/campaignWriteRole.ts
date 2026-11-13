@@ -29,6 +29,8 @@ export function asRawMembershipRole(value: unknown): RawMembershipRole | null {
   return typeof value === 'string' && value.trim() !== '' ? (value as RawMembershipRole) : null;
 }
 
+// AI spend follows authoring: a POST that CAN REACH the AI gateway needs the write role; the rule and its revisit
+// condition live in backend/services/content/contentWriteAuthz.ts.
 export const CAMPAIGN_WRITE_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** The ONLY campaign writes an Engager may make (owner ruling). */
