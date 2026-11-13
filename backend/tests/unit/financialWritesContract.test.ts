@@ -137,8 +137,6 @@ export const ALLOWLIST: Record<string, string> = {
     'B4 BLOCKING: invoice line / mark-paid unread (6f fixes) [L93 @9cecd075f]',
   'backend/services/billing/topupInvoiceService.ts:generateTopupInvoice|invoices|update|#1':
     'B4 BLOCKING: invoice line / mark-paid unread (6f fixes) [L107 @9cecd075f]',
-  'backend/services/billingSubscriptionService.ts:markExpiredSubscriptions|billing_subscriptions|update|#1':
-    'B5 BLOCKING: expiry update unread but count returned (6f fixes) [L210 @9cecd075f]',
   'backend/services/creator/rendering/processQueuedRenderJob.ts:releaseBilling|billing_operations|update|#1':
     'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L37 @9cecd075f]',
   'backend/services/creator/rendering/processQueuedRenderJob.ts:processQueuedRenderJob|billing_operations|update|#1':

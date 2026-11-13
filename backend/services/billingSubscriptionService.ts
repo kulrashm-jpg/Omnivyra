@@ -207,6 +207,17 @@ export async function markExpiredSubscriptions(deps: BillingSubDeps, graceDays =
   const ids: string[] = (data as any[]).map((r) => r.id);
   if (ids.length === 0) return { expired: 0, ids: [] };
   const nowIso = new Date(nowMs).toISOString();
-  await deps.db.from('billing_subscriptions').update({ status: 'expired', updated_at: nowIso }).in('id', ids);
-  return { expired: ids.length, ids };
+  // B5 (financial-writes contract): supabase-js returns write errors instead of throwing. The count reported is the
+  // rows ACTUALLY expired - never the rows selected - and a failed write THROWS, so the cron run is reported as
+  // failed and the next run retries, instead of claiming subscriptions expired that are still active.
+  const { data: updated, error: updErr } = await deps.db
+    .from('billing_subscriptions')
+    .update({ status: 'expired', updated_at: nowIso })
+    .in('id', ids)
+    .select('id');
+  if (updErr) {
+    throw new Error(`markExpiredSubscriptions: expire update failed for ${ids.length} subscription(s): ${updErr.message}`);
+  }
+  const expiredIds: string[] = Array.isArray(updated) ? (updated as Array<{ id: string }>).map((r) => r.id) : [];
+  return { expired: expiredIds.length, ids: expiredIds };
 }

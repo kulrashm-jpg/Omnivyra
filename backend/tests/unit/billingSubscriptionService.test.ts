@@ -61,7 +61,7 @@ describe('buildUpsertFromStripeSubscription', () => {
 });
 
 // minimal supabase stub
-function dbStub(opts: { selectRows?: any[] }, captured: { upserts: any[]; updates: any[] }) {
+function dbStub(opts: { selectRows?: any[]; updateError?: { message: string }; updateRows?: any[] }, captured: { upserts: any[]; updates: any[] }) {
   return {
     from() {
       const api: any = {
@@ -69,7 +69,18 @@ function dbStub(opts: { selectRows?: any[] }, captured: { upserts: any[]; update
         select: () => api,
         in: () => api,
         lt: () => api,
-        update: (row: any) => { captured.updates.push({ row }); return { in: () => Promise.resolve({ error: null }) }; },
+        // The update returns the rows it ACTUALLY changed (.select('id')) - by default every id it was given;
+        // updateRows models a partial update, updateError a failed one (B5: the result must be read).
+        update: (row: any) => {
+          captured.updates.push({ row });
+          return {
+            in: (_col: string, ids: string[]) => ({
+              select: () => Promise.resolve(opts.updateError
+                ? { data: null, error: opts.updateError }
+                : { data: opts.updateRows ?? ids.map((id) => ({ id })), error: null }),
+            }),
+          };
+        },
         then: (resolve: any) => Promise.resolve({ data: opts.selectRows ?? [], error: null }).then(resolve),
       };
       return api;
@@ -113,6 +124,17 @@ describe('markExpiredSubscriptions', () => {
     const r = await markExpiredSubscriptions({ db: db as any, now: () => NOW });
     expect(r.expired).toBe(2);
     expect(captured.updates[0].row.status).toBe('expired');
+  });
+  it('B5: a FAILED expire update throws - it never reports subscriptions expired that are still active', async () => {
+    const captured = { upserts: [] as any[], updates: [] as any[] };
+    const db = dbStub({ selectRows: [{ id: 'a' }, { id: 'b' }], updateError: { message: 'connection reset' } }, captured);
+    await expect(markExpiredSubscriptions({ db: db as any, now: () => NOW })).rejects.toThrow(/expire update failed for 2 subscription\(s\): connection reset/);
+  });
+  it('B5: expired = the rows ACTUALLY updated, not the rows selected', async () => {
+    const captured = { upserts: [] as any[], updates: [] as any[] };
+    const db = dbStub({ selectRows: [{ id: 'a' }, { id: 'b' }], updateRows: [{ id: 'b' }] }, captured);
+    const r = await markExpiredSubscriptions({ db: db as any, now: () => NOW });
+    expect(r).toEqual({ expired: 1, ids: ['b'] });
   });
   it('no lapsed rows → 0', async () => {
     const captured = { upserts: [] as any[], updates: [] as any[] };
