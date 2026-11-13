@@ -63,9 +63,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // (what the engagement inbox sends) - and only then the default (the user's first active membership). The old
     // order let a multi-company user's default silently override the company they had open. Membership in the
     // chosen company is enforced right below either way.
-    const explicitCompanyId = [req.body?.company_id, req.body?.organization_id]
-      .find((v): v is string => typeof v === 'string' && v.trim() !== '');
-    const company_id = (explicitCompanyId?.trim() || user?.defaultCompanyId || undefined) as string | undefined;
+    const named = [req.body?.company_id, req.body?.organization_id]
+      .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+      .map((v) => v.trim());
+    // Two names for one concept from different clients: if both are sent and DISAGREE the client has a bug -
+    // refuse rather than silently pick one and draft in a company the user did not intend (05 review).
+    if (new Set(named).size > 1) {
+      return res.status(400).json({ error: 'company_id and organization_id disagree', code: 'COMPANY_ID_CONFLICT' });
+    }
+    const explicitCompanyId = named[0];
+    const company_id = (explicitCompanyId || user?.defaultCompanyId || undefined) as string | undefined;
 
     if (!company_id) {
       return res.status(400).json({ error: 'company_id required' });

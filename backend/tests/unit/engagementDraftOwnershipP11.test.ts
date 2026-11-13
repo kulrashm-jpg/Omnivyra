@@ -170,6 +170,16 @@ describe('P1.1 draft ownership', () => {
     expect(denied.statusCode).toBe(403);
   });
 
+  it('T6d: company_id and organization_id that DISAGREE -> 400 COMPANY_ID_CONFLICT (no silent pick, no draft)', async () => {
+    memberships.add(OTHER_ORG);
+    const res = await post({ thread_id: 'mine', company_id: ORG, organization_id: OTHER_ORG });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('COMPANY_ID_CONFLICT');
+    expect(draftCount()).toBe(0);
+    const same = await post({ thread_id: 'mine', company_id: ORG, organization_id: ORG });
+    expect(same.statusCode).toBe(200);
+  });
+
   it('the signal-resolved path is authorized too, not just the direct thread_id', async () => {
     db.campaign_activity_engagement_signals = [{ id: 'sig1', source_id: 'msg1' }];
     // ENG-004/G-04: the message belongs to the RIVAL org, like its thread. The
