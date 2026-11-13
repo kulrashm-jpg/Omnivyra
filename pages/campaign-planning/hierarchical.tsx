@@ -5,6 +5,7 @@ import {
   WeekDetailView,
   DayDetailView
 } from '../../components/HierarchicalNavigation';
+import CampaignWriteGate from '../../components/access/CampaignWriteGate';
 
 type ViewType = 'overview' | 'week' | 'day';
 
@@ -15,7 +16,16 @@ interface NavigationState {
   day: string | null;
 }
 
+// F3g: editing tool; read-only roles get AccessRestricted.
 export default function HierarchicalCampaignPlanning() {
+  return (
+    <CampaignWriteGate area="campaign planning">
+      <HierarchicalCampaignPlanningInner />
+    </CampaignWriteGate>
+  );
+}
+
+function HierarchicalCampaignPlanningInner() {
   const [navigationState, setNavigationState] = useState<NavigationState>({
     currentView: 'overview',
     campaignId: null,
