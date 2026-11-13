@@ -21,6 +21,7 @@ import { resolveCampaignVariant } from '../../../backend/services/creator/campai
 import { randomUUID } from 'crypto';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { runEntryConsumptionForHttp, entryConsumptionHttpError } from '../../../backend/services/billing/entryConsumptionHttp';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -77,7 +78,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     }
 
-    const content = await generateContentForDay({
+    // C75 (BLOCKING money; owner ruling via e9): one billed entry, action content_basic (featureRegistry maps
+    // generateContentForDay there), token-actual via executeWithEntryConsumption: hold the prescribed price, settle
+    // the SUM of every provider call (incl. the overlap retry inside), release the remainder / on failure.
+    // Doubly dark: off unless PHASE2_ENTRY_CONSUMPTION + this org's gate for the surface -> the legacy path below.
+    const generateDay = async () => generateContentForDay({
       companyProfile: profile,
       campaign: resolved.campaign,
       weekPlan,
@@ -87,6 +92,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       forcedContext,
       campaignMemory: await getCampaignMemory({ companyId, campaignId }),
     });
+    const billing = await runEntryConsumptionForHttp({
+      surface:       'route.content-generate-day',
+      actorUserId:   String(access.userId),
+      orgId:         String(companyId),
+      action:        'content_basic',
+      referenceType: 'content_generate_day',
+      referenceId:   `generate-day:${campaignId}:${weekNumber}:${day}`,
+      requestBody:   { companyId, campaignId, weekNumber, day },
+      requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string' ? (req.headers['idempotency-key'] as string) : undefined,
+      llmPricing:    { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_basic', maxInputTokens: 8000, maxOutputTokens: 4000 },
+      note:          `generate-day ${campaignId} w${weekNumber} ${day}`,
+      executor:      generateDay,
+    });
+    let content: Awaited<ReturnType<typeof generateDay>>;
+    if (billing.kind === 'legacy') {
+      content = await generateDay();
+    } else {
+      const refusal = entryConsumptionHttpError(billing.result);
+      if (refusal) return res.status(refusal.status).json(refusal.body);
+      content = (billing.result as { status: 'executed'; result: typeof content }).result;
+    }
 
     const contentType = dayPlan.content_type || dayPlan.contentType || 'content';
     const derivedDayNumber = Number(

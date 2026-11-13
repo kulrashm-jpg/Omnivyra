@@ -307,7 +307,9 @@ function expandFrequencyRequests(
  */
 export async function generateFromAI(
   campaignId: string,
-  weekNumber: number
+  weekNumber: number,
+  /** The route's AUTHORITATIVE owner (campaign access seam, B4.1); preferred over campaigns.company_id. */
+  options?: { companyId?: string },
 ): Promise<{ rowsInserted: number }> {
   log('AI', 'generateFromAI', { campaignId, weekNumber });
 
@@ -324,7 +326,7 @@ export async function generateFromAI(
   } | null;
 
   const campaignName = cam?.name ?? 'Campaign';
-  const companyId = cam?.company_id ?? undefined;
+  const companyId = options?.companyId ?? cam?.company_id ?? undefined;
 
   let startDate: string = cam?.start_date?.split?.('T')?.[0] ?? '';
   if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
@@ -397,6 +399,7 @@ export async function generateFromAI(
           campaignName,
           targetAudience: cam?.target_audience ?? undefined,
           brandVoice: cam?.brand_voice ?? undefined,
+          companyId,
         });
         log('AI', 'frequencySlots from execution_items (intelligent)', { weekNumber, count: frequencySlots.length });
       }
@@ -419,6 +422,7 @@ export async function generateFromAI(
               campaignName,
               targetAudience: cam?.target_audience ?? undefined,
               brandVoice: cam?.brand_voice ?? undefined,
+              companyId,
             });
             log('AI', 'frequencySlots from platform_content_requests (intelligent)', { weekNumber, count: frequencySlots.length });
           }

@@ -133,10 +133,13 @@ export const MAX_HTTP_RECLAIM_ATTEMPTS = 20;
 export async function resolveHttpAttemptRoot(
   root: string,
   lookup: (key: string) => Promise<unknown | null>,
+  /** Where an attempt's settle / release rows live; default = runBilledOperation's `${root}:confirm` / `:release`. */
+  keysFor: (attemptRoot: string) => { confirm: string; release: string } = (r) => ({ confirm: `${r}:confirm`, release: `${r}:release` }),
 ): Promise<string> {
   for (let n = 0; n < MAX_HTTP_RECLAIM_ATTEMPTS; n++) {
     const candidate = n === 0 ? root : `${root}:r${n}`;
-    const [confirmed, released] = await Promise.all([lookup(`${candidate}:confirm`), lookup(`${candidate}:release`)]);
+    const keys = keysFor(candidate);
+    const [confirmed, released] = await Promise.all([lookup(keys.confirm), lookup(keys.release)]);
     if (confirmed || !released) return candidate;
   }
   // Cap reached: answer the last attempt (already_released) rather than loop without bound.

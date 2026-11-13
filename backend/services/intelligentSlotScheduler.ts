@@ -124,6 +124,7 @@ async function llmRefineSchedule(
     targetAudience?: string;
     region?: string;
     brandVoice?: string;
+    companyId?: string | null;
   }
 ): Promise<ScheduledSlot[] | null> {
   if (slots.length === 0) return deterministicResult;
@@ -170,7 +171,7 @@ You will receive a list of content slots with research-based day assignments and
 
   try {
     const result = await generateCampaignPlan({
-      companyId: null,
+      companyId: campaignContext?.companyId ?? null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.2,
       response_format: { type: 'json_object' } as any,
@@ -229,6 +230,8 @@ export async function scheduleSlotIntelligently(
     targetAudience?: string;
     region?: string;
     brandVoice?: string;
+    /** Owning company: attributes the model call so an enclosing credit handle for this org vouches for it (C75). */
+    companyId?: string | null;
   }
 ): Promise<ScheduledSlot[]> {
   if (slots.length === 0) return [];
