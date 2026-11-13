@@ -19,6 +19,8 @@ jest.mock('../../services/campaignAccessService', () => ({
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 
 /* eslint-disable @typescript-eslint/no-var-requires */
+// A MODULE, not a global script (83 CI-363 TS2451: a top-level `const route` collided with a6EnrichRoute.test.ts).
+export {};
 const route = require('../../../pages/api/campaigns/[id]/virality/assess').default;
 const { BilledRoutePaymentRequiredError, BilledRouteAlreadyProcessedError } = jest.requireActual('../../services/billing/phase2RouteWiring');
 /* eslint-enable @typescript-eslint/no-var-requires */

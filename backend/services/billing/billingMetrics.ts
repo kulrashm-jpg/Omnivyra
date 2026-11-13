@@ -20,7 +20,9 @@
  * branches.
  */
 
-const counters: Record<string, number> = {
+// The registry is a CLOSED set (83 2026-11-13): `satisfies` keeps the literal keys, so BillingCounter is the union of
+// the names below and incrCounter('unregistered') fails to COMPILE. (Typed Record<string, number> it was `string`.)
+const COUNTER_REGISTRY = {
   billing_operations_total:        0,
   billing_operations_confirmed:    0,
   billing_operations_settle_pending: 0,
@@ -76,9 +78,11 @@ const counters: Record<string, number> = {
   // type-check against BillingCounter AND appear in snapshotBillingMetrics (the exported metrics).
   phase2_route_without_idempotency_key_total: 0,
   phase2_route_reclaim_cap_exhausted_total:   0,
-};
+} satisfies Record<string, number>;
 
-export type BillingCounter = keyof typeof counters;
+const counters: Record<keyof typeof COUNTER_REGISTRY, number> = { ...COUNTER_REGISTRY };
+
+export type BillingCounter = keyof typeof COUNTER_REGISTRY;
 
 export function incrCounter(name: BillingCounter, by = 1): void {
   counters[name] = (counters[name] ?? 0) + by;
