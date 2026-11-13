@@ -20,14 +20,9 @@ jest.mock('../../db/writeOwner', () => ({
     b.update = (p: Record<string, unknown>) => { patch = p; return b; };
     b.eq = (c: string, v: unknown) => { filters.push((r) => r[c] === v); return b; };
     b.is = (c: string, v: unknown) => { filters.push((r) => (v === null ? r[c] == null : r[c] === v)); return b; };
-    // the conditional filter consumeTotpStep sends: last_used_step.is.null,last_used_step.lt.<n>
-    b.or = (expr: string) => {
-      const m = /^last_used_step\.is\.null,last_used_step\.lt\.(\d+)$/.exec(expr);
-      if (!m) throw new Error(`unexpected or(): ${expr}`);
-      const n = Number(m[1]);
-      filters.push((r) => r.last_used_step == null || r.last_used_step < n);
-      return b;
-    };
+    // the structural conditional consumeTotpStep sends (05: NOT NULL DEFAULT 0, so no .or() string)
+    b.lt = (c: string, v: number) => { filters.push((r) => r[c] < v); return b; };
+    b.or = () => { throw new Error('consumeTotpStep must not build an .or() filter string'); };
     const run = () => {
       const hit = [FACTOR].filter((r) => filters.every((f) => f(r)));
       if (patch) {
@@ -60,7 +55,7 @@ beforeEach(() => {
   for (const k of Object.keys(FACTOR)) delete FACTOR[k];
   Object.assign(FACTOR, {
     id: 'f-1', user_id: 'u-1', vault_secret_id: 'v-1', algorithm: 'SHA1', digits: 6, period_seconds: 30,
-    verified_at: '2026-11-01T00:00:00Z', last_used_at: null, revoked_at: null, revocation_reason: null, last_used_step: null,
+    verified_at: '2026-11-01T00:00:00Z', last_used_at: null, revoked_at: null, revocation_reason: null, last_used_step: 0,
   });
   mockUpdateError = null;
 });
@@ -97,8 +92,14 @@ it('if the one-time-use record cannot be written, the code is REFUSED (never acc
   expect(await verifyAt(T0, codeAt(T0))).toEqual({ ok: false, reason: 'VERIFICATION_UNAVAILABLE' });
 });
 
+it('ONE clock reading: a step computed exactly at a boundary matches the code generated at that same instant', () => {
+  const boundary = Date.UTC(2026, 10, 13, 12, 0, 30); // exactly the start of a step
+  const code = codeAt(boundary);
+  expect(matchedTotpStep(code, SECRET, boundary)).toBe(Math.floor(boundary / 30000));
+});
+
 it('control: a wrong code is still INVALID_TOKEN and records nothing', async () => {
   jest.setSystemTime(T0);
   expect(await verifyTotp({ userId: 'u-1', token: '000000' === codeAt(T0) ? '111111' : '000000' })).toEqual({ ok: false, reason: 'INVALID_TOKEN' });
-  expect(FACTOR.last_used_step).toBeNull();
+  expect(FACTOR.last_used_step).toBe(0);
 });

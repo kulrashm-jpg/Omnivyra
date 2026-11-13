@@ -108,7 +108,9 @@ export async function insertPending(input: InsertPendingFactorInput): Promise<St
 export async function markVerified(factorId: string, usedStep?: number): Promise<StoredTotpFactor | null> {
   const now = new Date().toISOString();
   // M3: the enrollment code's step is recorded as USED, so the same code cannot be replayed into a step-up / MFA
-  // verification within its window right after enrollment.
+  // verification within its window right after enrollment. This is a plain write (not the conditional consume): the
+  // factor is not yet verified, the `.is('verified_at', null)` guard makes activation one-time, and nothing can have
+  // consumed a step of an unverified factor - low risk by construction (05).
   const { data } = await ownedDbTable('totp_factors')
     .update({ verified_at: now, last_used_at: now, ...(Number.isSafeInteger(usedStep) ? { last_used_step: usedStep } : {}) })
     .eq('id', factorId)
@@ -124,7 +126,10 @@ export async function markVerified(factorId: string, usedStep?: number): Promise
  * it succeeds only when the factor has no recorded step or a strictly OLDER one - so the same code (same step), or a
  * code from an earlier step after a later one succeeded, can never verify twice; two concurrent submissions of one code
  * race on the same row and exactly one UPDATE matches. Persisted in the database (survives restarts), never in memory.
- * `step` is an integer computed by our own code (never request text), so it is safe in the filter.
+ * The column is NOT NULL DEFAULT 0 (05): the predicate is a single structural `.lt()` - no `.or()` filter string, no
+ * NULL branch (step 0 is 1970; no real code can match it).
+ * A 0-row result is reported as 'replayed'; it could also mean the factor vanished between the read and this UPDATE -
+ * the factor was read moments earlier in the same request, so that window is tiny and the outcome is a refusal either way.
  */
 export async function consumeTotpStep(
   factorId: string,
@@ -134,7 +139,7 @@ export async function consumeTotpStep(
   const { data, error } = await ownedDbTable('totp_factors')
     .update({ last_used_step: step, last_used_at: new Date().toISOString() })
     .eq('id', factorId)
-    .or(`last_used_step.is.null,last_used_step.lt.${step}`)
+    .lt('last_used_step', step)
     .select('id');
   if (error) return 'unavailable';
   return Array.isArray(data) && data.length === 1 ? 'consumed' : 'replayed';

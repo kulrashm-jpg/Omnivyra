@@ -98,9 +98,12 @@ export async function verifyTotp(input: VerifyTotpInput): Promise<TotpVerifyResu
 
 /** The absolute TOTP time step the token matched (now-step + otplib's delta), or null when it matches none. */
 export function matchedTotpStep(token: string, secret: string, nowMs: number = Date.now()): number | null {
-  const delta = authenticator.checkDelta(token, secret);
+  // ONE clock reading (05): otplib's delta and our base step must come from the SAME instant, or a read pair that
+  // straddles a step boundary would record a step one too high and pre-consume the user's next legitimate code.
+  const at = authenticator.clone({ epoch: nowMs });
+  const delta = at.checkDelta(token, secret);
   if (delta === null || delta === undefined) return null;
-  const period = Number(authenticator.allOptions().step) || 30;
+  const period = Number(at.allOptions().step) || 30;
   return Math.floor(nowMs / 1000 / period) + delta;
 }
 
