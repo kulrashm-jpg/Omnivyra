@@ -107,7 +107,9 @@ export async function readEstimatedUsageAggregates(
 
   for (const r of customerRows) {
     const raw = String(r.organization_id ?? '');
-    if (!raw) continue; // usage_events.organization_id is NOT NULL; defensive only
+    // Defensive by design: null-org (platform) spend lives ONLY in platform_usage_events - usage_events.organization_id
+    // stays NOT NULL (the nullable-org migration 038 was DROPPED, e9). A row without an org cannot reach here.
+    if (!raw) continue;
     add(raw === PLATFORM_SENTINEL_ORG ? null : raw, r, CUSTOMER.usdColumn);
   }
   for (const r of platformRows) add(null, r, PLATFORM.usdColumn);

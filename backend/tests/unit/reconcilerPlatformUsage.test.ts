@@ -70,7 +70,15 @@ jest.mock('../../db/supabaseClient', () => ({
         return { data: matched().map((r) => ({ ...r })), error: null };
       };
       b.then = (res: any, rej: any) => Promise.resolve(settle()).then(res, rej);
-      b.maybeSingle = () => { const r = settle() as { data: Row[] | null; error: Err | null }; return Promise.resolve({ data: r.data?.[0] ?? null, error: r.error }); };
+      // Like PostgREST: maybeSingle() with MORE than one matching row is an ERROR (PGRST116), never a first-row pick -
+      // otherwise the fake would be lenient in exactly the dimension (uniqueness) it also enforces (05).
+      b.maybeSingle = () => {
+        const r = settle() as { data: Row[] | null; error: Err | null };
+        if (r.error) return Promise.resolve({ data: null, error: r.error });
+        const rows = r.data ?? [];
+        if (rows.length > 1) return Promise.resolve({ data: null, error: { message: 'JSON object requested, multiple (or no) rows returned', code: 'PGRST116' } });
+        return Promise.resolve({ data: rows[0] ?? null, error: null });
+      };
       b.insert = (input: Row | Row[]) => {
         const rows = ([] as Row[]).concat(input);
         const f = takeFail(`${table}:insert`);
@@ -451,5 +459,17 @@ describe('persist step: resumable, one invoice per period', () => {
     expect(mockDb.writes.filter((w) => w.op === 'upsert')).toHaveLength(1); // only the first attempt's
     const call = (logger.warn as jest.Mock).mock.calls.find((c) => c[0] === 'reconcile_resumed');
     expect(call[1]).toMatchObject({ estimate_changed: true, adjustments_already: 2 });
+  });
+});
+
+describe('the fake is not kinder than PostgREST', () => {
+  it('CONTROL: maybeSingle with TWO matching rows errors (PGRST116) - persist refuses instead of picking the first run', async () => {
+    mockLines = [line('gpt-4o-mini', 1.0)];
+    mockDb.tables.usage_events = [];
+    mockDb.tables.platform_usage_events = [];
+    const run = { provider: 'openai', period_start: WINDOW.periodStart, period_end: WINDOW.periodEnd, status: 'running', metadata: { provider_invoice_id: 'inv-1' } };
+    mockDb.tables.cost_reconciliation_runs = [{ id: 'r1', ...run }, { id: 'r2', ...run }];
+    await expect(ingestOpenAiInvoice({ providerInvoiceId: 'inv-1', ...WINDOW, payload: {}, rates: {} as any })).rejects.toThrow(/run read failed: JSON object requested, multiple/);
+    expect(mockDb.writes).toEqual([]);
   });
 });
