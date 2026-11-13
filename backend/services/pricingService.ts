@@ -175,7 +175,7 @@ async function fetchActionPricingRow(
     throw new Error(`[pricingService] Action pricing lookup failed for ${actionKey}: ${error.message}`);
   }
   if (!data) {
-    throw new Error(`[pricingService] Missing action_pricing_config row for actionKey='${actionKey}'`);
+    throw new ActionPricingMissingError(actionKey);
   }
 
   return {
@@ -223,7 +223,21 @@ export function primePricingCache(): void {
   return;
 }
 
+/**
+ * An action has no ACTIVE action_pricing_config row - a configuration gap. Carries the machine CODE
+ * 'PRICING_UNAVAILABLE' (05 2026-11-13: the code is the contract, the message is prose - callers match the code).
+ */
+export class ActionPricingMissingError extends Error {
+  readonly code = 'PRICING_UNAVAILABLE' as const;
+  constructor(public readonly actionKey: string) {
+    super(`[pricingService] Missing action_pricing_config row for actionKey='${actionKey}'`);
+    this.name = 'ActionPricingMissingError';
+  }
+}
+
 export class PricingMissingError extends Error {
+  /** Machine code callers match on (never the message). */
+  readonly code = 'PRICING_UNAVAILABLE' as const;
   constructor(
     public readonly provider: string,
     public readonly model: string,

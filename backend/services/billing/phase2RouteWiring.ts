@@ -32,6 +32,7 @@ import {
 import { getRequestContext } from '../requestContext';
 import { hasEnoughCredits, type CreditAction } from '../creditDeductionService';
 import { incrCounter } from './billingMetrics';
+import { emitAnomaly } from './billingAuditEmitter';
 import { emitCreditEconomyShadowEvaluation } from './creditEconomyShadow';
 import { logger } from '../logger';
 
@@ -62,11 +63,11 @@ export class BilledRoutePricingUnavailableError extends Error {
   }
 }
 
-const isPricingMissing = (err: unknown): boolean => {
-  const name = (err as { name?: string } | null)?.name;
-  const msg = String((err as { message?: string } | null)?.message ?? '');
-  return name === 'PricingMissingError' || /No active pricing|No credit catalog entry|action_pricing/i.test(msg);
-};
+/** Matched on the machine CODE only (05: the code is the contract, the message is prose - a reworded message must
+ *  never turn a pricing outage into a 402 'payment' answer). pricingService's PricingMissingError and
+ *  ActionPricingMissingError both carry it. */
+const isPricingMissing = (err: unknown): boolean =>
+  (err as { code?: unknown } | null)?.code === 'PRICING_UNAVAILABLE';
 
 /** Upper bound on reclaimed (failed, uncharged) attempts for one request identity. */
 export const MAX_ROUTE_RECLAIM_ATTEMPTS = 20;
@@ -253,6 +254,17 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
             return { ok: false, reason: (result as { status: string }).status };
         }
       }
+      // Twenty failed attempts for ONE request identity is almost certainly a bug, not a user retrying: distinct and
+      // LOUD (05), never indistinguishable from an ordinary billing refusal.
+      incrCounter('phase2_route_reclaim_cap_exhausted_total');
+      logger.error('phase2_route_reclaim_cap_exhausted', { surface: args.surface, org: args.organizationId, action: args.action });
+      emitAnomaly({
+        organizationId: args.organizationId,
+        kind: 'reclaim_cap_exhausted',
+        severity: 'critical',
+        message: 'billed_route_reclaim_cap_exhausted',
+        metadata: { surface: String(args.surface), action: String(args.action), attempts: MAX_ROUTE_RECLAIM_ATTEMPTS },
+      });
       throw new BilledRouteAlreadyReleasedError(args.surface);
     },
   });

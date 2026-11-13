@@ -38,6 +38,8 @@ const mockCounters: string[] = [];
 jest.mock('../../services/billing/billingMetrics', () => ({ incrCounter: (n: string) => { mockCounters.push(n); } }));
 jest.mock('../../services/billing/creditEconomyShadow', () => ({ emitCreditEconomyShadowEvaluation: jest.fn(async () => undefined) }));
 jest.mock('../../services/billing/admissionControl', () => ({ evaluateActivityAdmission: jest.fn(async () => undefined) }));
+const mockAnomalies: any[] = [];
+jest.mock('../../services/billing/billingAuditEmitter', () => ({ emitAnomaly: (a: unknown) => { mockAnomalies.push(a); } }));
 const mockWarn = jest.fn();
 jest.mock('../../services/logger', () => ({ logger: { warn: (...a: unknown[]) => mockWarn(...a), info: jest.fn(), error: jest.fn() } }));
 
@@ -79,7 +81,7 @@ function faithfulEngine(): void {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  ledger.clear(); charges = 0; mockCounters.length = 0;
+  ledger.clear(); charges = 0; mockCounters.length = 0; mockAnomalies.length = 0;
   delete mockCtx.idempotencyKey; delete mockCtx.requestId;
   faithfulEngine();
 });
@@ -149,6 +151,9 @@ describe('wirePhase2Route ENFORCE - token-actual, per-request identity, never a 
     await expect(wirePhase2Route({ ...ARGS, run })).rejects.toBeInstanceOf(BilledRouteAlreadyReleasedError);
     expect(run).not.toHaveBeenCalled();
     expect(engine.executeWithEntryConsumption).toHaveBeenCalledTimes(MAX_ROUTE_RECLAIM_ATTEMPTS);
+    // distinct and LOUD (05): a critical anomaly + its own counter, never an ordinary refusal
+    expect(mockAnomalies).toEqual([expect.objectContaining({ kind: 'reclaim_cap_exhausted', severity: 'critical' })]);
+    expect(mockCounters).toContain('phase2_route_reclaim_cap_exhausted_total');
   });
 
   it('insufficient credits: 402 INSUFFICIENT_CREDITS with required + balance (still a PaymentRequiredError)', async () => {
@@ -166,7 +171,8 @@ describe('wirePhase2Route ENFORCE - token-actual, per-request identity, never a 
   });
 
   it('missing pricing: 503 PRICING_UNAVAILABLE (a configuration gap, never "top up"), nothing run', async () => {
-    const pm = Object.assign(new Error("No active pricing for provider='openai' model='x' kind='llm'."), { name: 'PricingMissingError' });
+    // matched on the CODE only (05): a reworded message with the code still maps to 503
+    const pm = Object.assign(new Error('pricing reworded entirely'), { code: 'PRICING_UNAVAILABLE' });
     engine.executeWithEntryConsumption.mockRejectedValue(pm);
     const run = jest.fn();
     const err = await wirePhase2Route({ ...ARGS, run }).catch((e) => e);
@@ -178,4 +184,50 @@ describe('wirePhase2Route ENFORCE - token-actual, per-request identity, never a 
   it('control: an unrelated error is NOT mapped (the route keeps its own handling)', () => {
     expect(billedRouteHttpError(new Error('boom'))).toBeNull();
   });
+});
+
+it('PRICING_UNAVAILABLE is matched by CODE, never by message: the old message text WITHOUT the code is NOT mapped', async () => {
+  const noCode = Object.assign(new Error("No active pricing for provider='openai' model='x' kind='llm'."), { name: 'PricingMissingError' });
+  engine.executeWithEntryConsumption.mockRejectedValue(noCode);
+  const err = await wirePhase2Route({ ...ARGS, run: jest.fn() }).catch((e) => e);
+  expect(err).toBe(noCode);
+  expect(billedRouteHttpError(err)).toBeNull();
+});
+
+it('pricingService errors carry the code: PricingMissingError and ActionPricingMissingError', () => {
+  const ps = jest.requireActual('../../services/pricingService');
+  expect(new ps.PricingMissingError('openai', 'm', 'llm').code).toBe('PRICING_UNAVAILABLE');
+  expect(new ps.ActionPricingMissingError('blog_generation').code).toBe('PRICING_UNAVAILABLE');
+});
+
+// 05 (b): the reclaim semantics are pinned by the SHARED case table, so wirePhase2Route and resolveHttpAttemptRoot
+// cannot silently diverge.
+import { RECLAIM_CASES, EXHAUSTED_CASE, RECLAIM_CAP } from '../helpers/reclaimSemanticsCases';
+describe('wirePhase2Route reclaim follows the shared semantics table', () => {
+  it('the cap equals the shared table', () => { expect(MAX_ROUTE_RECLAIM_ATTEMPTS).toBe(RECLAIM_CAP); });
+  for (const c of [...RECLAIM_CASES, EXHAUSTED_CASE]) {
+    it(c.name, async () => {
+      mockCtx.idempotencyKey = 'click-table';
+      const base = 'ref-1:k:' + require('crypto').createHash('sha256').update('click-table').digest('hex').slice(0, 24);
+      c.slots.forEach((st, i) => {
+        if (st) ledger.set(engine.makeIdempotencyKey('user-1', 'content_basic', i === 0 ? base : `${base}:r${i}`), st);
+      });
+      const run = jest.fn(async () => 'WORK');
+      const out = await wirePhase2Route({ ...ARGS, run }).then(() => 'ran', (e) => e);
+      if (c.expect === 'processed') {
+        expect(out).toBeInstanceOf(BilledRouteAlreadyProcessedError);
+        expect(run).not.toHaveBeenCalled();
+      } else if (c.expect === 'exhausted') {
+        expect(out).toBeInstanceOf(BilledRouteAlreadyReleasedError);
+        expect(run).not.toHaveBeenCalled();
+      } else {
+        const slot = Number(c.expect.split(':')[1]);
+        expect(out).toBe('ran');
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(charges).toBe(1);
+        const used = engine.executeWithEntryConsumption.mock.calls.at(-1)![0].referenceId as string;
+        expect(slot === 0 ? !/:r\d+$/.test(used) : used.endsWith(`:r${slot}`)).toBe(true);
+      }
+    });
+  }
 });
