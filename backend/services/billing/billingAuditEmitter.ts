@@ -31,7 +31,9 @@ export interface FinancialAuditEvent {
 
 export interface AnomalyEvent {
   organizationId?: string;
-  kind:            'double_deduct_prevented' | 'untracked_ai_call_blocked' | 'queue_replay_blocked' | 'reservation_orphan_reaped' | 'approval_self_signature_attempt' | 'underfunded_settlement';
+  kind:            'double_deduct_prevented' | 'untracked_ai_call_blocked' | 'queue_replay_blocked' | 'reservation_orphan_reaped' | 'approval_self_signature_attempt' | 'underfunded_settlement'
+                 // B3 (financial-writes contract): a render billing HOLD / CONFIRM / RELEASE write that did not happen.
+                   | 'render_billing_write_failed';
   severity:        'info' | 'warn' | 'critical';
   message:         string;
   correlationId?:  string;

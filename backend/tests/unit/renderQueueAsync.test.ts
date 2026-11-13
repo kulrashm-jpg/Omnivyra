@@ -16,6 +16,7 @@
  * re-confirms queue monotonic guard (tx + rollback).
  */
 
+jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 import {
   isCreatorRenderQueueEnabled, isTransientFailure, isTerminalFailure,
   enqueueRenderJob, failRenderJob, processQueuedRenderJob,
@@ -49,7 +50,7 @@ const SPEC = {
 };
 
 function mockDeps(o: {
-  claim?: any; job?: any; claimWins?: boolean; specOverride?: any;
+  claim?: any; job?: any; claimWins?: boolean; specOverride?: any; confirmRows?: number;
 } = {}) {
   const writes: { table: string; op: string; row?: any }[] = [];
   const reader = (table: string) => {
@@ -78,7 +79,15 @@ function mockDeps(o: {
       writes.push({ table, op: 'update', row: patch });
       const chain: any = {
         eq: () => chain, in: () => chain, lt: () => chain,
-        select: () => ({ maybeSingle: async () => ({ data: o.claimWins === false ? null : { id: 'q-1', render_job_id: 'job-1', provider_key: 'openai', retry_count: o.claim?.retry_count ?? 0 } }) }),
+        // .select() is awaitable like PostgREST (the rows the update changed - B3 reads the billing CONFIRM's), and
+        // still offers .maybeSingle() for the claim. confirmRows models a CONFIRM with no hold (0 rows).
+        select: () => Object.assign(
+          Promise.resolve({
+            data: Array.from({ length: table === 'billing_operations' && patch?.status === 'confirmed' ? (o.confirmRows ?? 1) : 1 }, (_v, i) => ({ id: `${table}-${i + 1}` })),
+            error: null,
+          }),
+          { maybeSingle: async () => ({ data: o.claimWins === false ? null : { id: 'q-1', render_job_id: 'job-1', provider_key: 'openai', retry_count: o.claim?.retry_count ?? 0 } }) },
+        ),
         then: undefined,
       };
       // terminal awaited update (no select)
@@ -147,6 +156,25 @@ describe('Validation-1/6/8/9 — async success + lineage + attach + isolation', 
     expect(m.writes.some((w) => w.table === 'content_asset_attachment')).toBe(true);
     expect(m.writes.some((w) => w.table === 'billing_operations' && w.op === 'update' && w.row.status === 'confirmed')).toBe(true);
     for (const w of m.writes) expect(['scheduled_posts', 'daily_content_plans']).not.toContain(w.table);
+  });
+});
+
+describe('B3 (financial-writes contract) — the queued CONFIRM must hit exactly its HOLD', () => {
+  it('CONTROL: a normal completion emits NO render billing anomaly', async () => {
+    process.env.ENABLE_CREATOR_RENDER_QUEUE = '1';
+    const logger = jest.requireMock('../../services/logger').logger;
+    (logger.error as jest.Mock).mockClear();
+    const m = mockDeps({ claim: { id: 'q-1', render_job_id: 'job-1', provider_key: 'openai', retry_count: 0, queue_state: 'queued' } });
+    await processQueuedRenderJob(m.deps as any, 'w1');
+    expect((logger.error as jest.Mock).mock.calls.filter((c: any[]) => c[0] === 'billing_anomaly')).toEqual([]);
+  });
+  it('a CONFIRM that matches 0 rows (no hold - unbilled) is a CRITICAL anomaly', async () => {
+    process.env.ENABLE_CREATOR_RENDER_QUEUE = '1';
+    const logger = jest.requireMock('../../services/logger').logger;
+    (logger.error as jest.Mock).mockClear();
+    const m = mockDeps({ claim: { id: 'q-1', render_job_id: 'job-1', provider_key: 'openai', retry_count: 0, queue_state: 'queued' }, confirmRows: 0 });
+    await processQueuedRenderJob(m.deps as any, 'w1');
+    expect((logger.error as jest.Mock).mock.calls.some((c: any[]) => c[0] === 'billing_anomaly' && c[1].kind === 'render_billing_write_failed' && c[1].phase === 'confirm' && c[1].severity === 'critical' && c[1].rows === 0)).toBe(true);
   });
 });
 

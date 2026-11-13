@@ -22,6 +22,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
+import { emitAnomaly } from '@/backend/services/billing/billingAuditEmitter';
 import { loadCreatorWorkspace } from '@/backend/services/creator/intelligence/workspace';
 import {
   isCreatorRenderingEnabled,
@@ -153,11 +154,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         await ownedDbTable('creator_render_job_state').insert({
           render_job_id: jobId, current_state: 'queued', last_transition_at: nowIso(),
         });
-        await ownedDbTable('billing_operations').insert({
+      }
+      // B3 (financial-writes contract): a queued render is NEVER enqueued without its billing HOLD - on the new-job
+      // path AND on the dedupe-reuse path (a retry after a failed hold used to find the job, skip the hold and
+      // enqueue unbilled). Every result is read: supabase-js returns errors, it does not throw.
+      const holdKey = `render:${jobId}`;
+      const { data: holds, error: holdReadErr } = await supabase
+        .from('billing_operations').select('id').eq('idempotency_key', holdKey);
+      let holdErrMsg: string | null = holdReadErr?.message ?? null;
+      if (!holdErrMsg && (!Array.isArray(holds) || holds.length === 0)) {
+        const { error: holdErr } = await ownedDbTable('billing_operations').insert({
           correlation_id: contentCoreId, module: 'creator_render', action: 'render_image',
-          organization_id: orgId, idempotency_key: `render:${jobId}`,
+          organization_id: orgId, idempotency_key: holdKey,
           amount_estimated: 5, status: 'held', metadata: { provider: chain[0], async: true },
         });
+        holdErrMsg = holdErr?.message ?? null;
+      }
+      if (holdErrMsg) {
+        emitAnomaly({
+          kind: 'render_billing_write_failed', severity: 'warn', organizationId: orgId,
+          message: 'queued render refused: billing HOLD could not be ensured',
+          metadata: { phase: 'hold', render_job_id: jobId, error: holdErrMsg },
+        });
+        return res.status(503).json({ render: { ok: false, status: 'failed', reason: 'billing_hold_failed', render_job_id: jobId } });
       }
       const enq = await enqueueRenderJob(
         { supabase, ownedDbTable, now: nowIso },

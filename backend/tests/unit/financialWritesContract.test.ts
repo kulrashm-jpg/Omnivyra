@@ -133,16 +133,6 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 export const ALLOWLIST: Record<string, string> = {
   'backend/services/billing/idempotency/heartbeatService.ts:heartbeatBillingOperation|billing_operations|update|#1':
     'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L45 @9cecd075f]',
-  'backend/services/creator/rendering/processQueuedRenderJob.ts:releaseBilling|billing_operations|update|#1':
-    'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L37 @9cecd075f]',
-  'backend/services/creator/rendering/processQueuedRenderJob.ts:processQueuedRenderJob|billing_operations|update|#1':
-    'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L176 @9cecd075f]',
-  'backend/services/creator/rendering/renderExecutor.ts:releaseBilling|billing_operations|update|#1':
-    'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L79 @9cecd075f]',
-  'backend/services/creator/rendering/renderExecutor.ts:releaseBilling|billing_operations|insert|#1':
-    'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L164 @9cecd075f]',
-  'backend/services/creator/rendering/renderExecutor.ts:releaseBilling|billing_operations|update|#2':
-    'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L238 @9cecd075f]',
   'backend/services/creditAlertService.ts:emitConsumptionAlert|credit_alert_log|insert|#1':
     'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L52 @9cecd075f]',
   'backend/services/creditAlertService.ts:recordForecastEmail|credit_alert_log|insert|#1':
@@ -185,8 +175,6 @@ export const ALLOWLIST: Record<string, string> = {
     'B6 BLOCKING: purchase status update unread (6f fixes) [L297 @9cecd075f]',
   'backend/services/usageLedgerService.ts:logUsageEvent|usage_events|insert|#1':
     'N: usage telemetry insert unread - 6f fixes (logger.error + counter, never throws) [L434 @9cecd075f]',
-  'pages/api/activity-workspace/[id]/render-image.ts:coerceGovernanceRow|billing_operations|insert|#1':
-    'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L156 @9cecd075f]',
   'pages/api/stripe/webhook.ts:markEvent|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L144 @9cecd075f]',
 };

@@ -17,6 +17,7 @@
  * micro-check re-confirms render_job immutability (tx + rollback).
  */
 
+jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 import { executeRenderJob, isCreatorRenderingEnabled } from '../../services/creator/rendering';
 import type { RenderProvider, RenderProviderRegistry } from '../../services/creator/rendering';
 
@@ -63,7 +64,7 @@ function registryOf(p: RenderProvider | null): RenderProviderRegistry {
 }
 
 /** In-memory supabase + ownedDbTable. Records every write for asserts. */
-function mockDeps(opts: { existingJob?: any; existingOutput?: any } = {}) {
+function mockDeps(opts: { existingJob?: any; existingOutput?: any; failHold?: boolean; failConfirm?: 'error' | 'zero' } = {}) {
   const tables: Record<string, any[]> = {};
   const writes: { table: string; op: string; row?: any }[] = [];
   let seq = 0;
@@ -82,14 +83,28 @@ function mockDeps(opts: { existingJob?: any; existingOutput?: any } = {}) {
     const q: any = { _t: table };
     q.insert = (row: any) => {
       const rec = Array.isArray(row) ? row[0] : row;
+      if (opts.failHold && table === 'billing_operations') {
+        return { select: () => ({ single: async () => ({ data: null, error: { message: 'insert refused' } }) }) };
+      }
       const withId = { id: `${table}-${++seq}`, ...rec };
       (tables[table] ||= []).push(withId);
       writes.push({ table, op: 'insert', row: withId });
       return { select: () => ({ single: async () => ({ data: withId }) }) };
     };
+    // Like PostgREST: the update chain is awaitable ({ error }) and .select() returns the rows it changed
+    // (B3: the billing writes now read their result). failConfirm models a failed / 0-row CONFIRM.
     q.update = (patch: any) => {
       writes.push({ table, op: 'update', row: patch });
-      return { eq: () => ({ eq: async () => ({ error: null }) }), };
+      const isConfirm = table === 'billing_operations' && patch?.status === 'confirmed';
+      const result = () => (isConfirm && opts.failConfirm === 'error' ? { data: null, error: { message: 'write refused' } }
+        : isConfirm && opts.failConfirm === 'zero' ? { data: [], error: null }
+          : { data: [{ id: `${table}-u` }], error: null });
+      const chain: any = {
+        eq: () => chain,
+        select: async () => result(),
+        then: (res: any, rej: any) => Promise.resolve({ error: result().error }).then(res, rej),
+      };
+      return chain;
     };
     q.upsert = (row: any) => {
       (tables[table] ||= []).push(row);
@@ -182,6 +197,30 @@ describe('Validation-3/4 — billing RELEASE + moderation enforcement', () => {
     expect(r.events).toContain('moderation_blocked');
     expect(m.writes.some((w) => w.table === 'billing_operations')).toBe(false);
     expect(m.writes.some((w) => w.table === 'creator_render_job')).toBe(false);
+  });
+});
+
+describe('B3 (financial-writes contract) — render billing writes are READ', () => {
+  beforeEach(() => { process.env[FLAG] = '1'; });
+
+  it('a failed HOLD refuses the render BEFORE the provider is called (it used to render unbilled)', async () => {
+    const m = mockDeps({ failHold: true });
+    const submit = jest.fn(async () => { throw new Error('must not be called'); });
+    m.setProvider(mockProvider({ submit } as any));
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r).toMatchObject({ ok: false, status: 'failed', reason: 'billing_hold_failed' });
+    expect(r.events).toEqual(expect.arrayContaining(['billing_hold_failed', 'render_failed']));
+    expect(submit).not.toHaveBeenCalled();
+    expect(m.writes.some((w) => w.table === 'creator_render_output')).toBe(false);
+  });
+
+  it.each([['an error', 'error'], ['0 rows', 'zero']] as const)('a CONFIRM with %s is surfaced - billing_confirm_failed + a CRITICAL anomaly, never billing_confirmed', async (_n, mode) => {
+    const m = mockDeps({ failConfirm: mode });
+    const logger = jest.requireMock('../../services/logger').logger;
+    const r = await executeRenderJob(m.deps as any, ARGS);
+    expect(r.events).toContain('billing_confirm_failed');
+    expect(r.events).not.toContain('billing_confirmed');
+    expect((logger.error as jest.Mock).mock.calls.some((c: any[]) => c[0] === 'billing_anomaly' && c[1].kind === 'render_billing_write_failed' && c[1].phase === 'confirm' && c[1].severity === 'critical')).toBe(true);
   });
 });
 

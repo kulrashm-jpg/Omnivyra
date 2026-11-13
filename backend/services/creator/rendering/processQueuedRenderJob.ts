@@ -14,6 +14,7 @@ import { validateRenderProjection, RenderProjectionError } from './projector';
 import { preRenderModeration, postRenderModeration } from './moderation/renderModerationGate';
 import { computeDeterministicInputHash } from './contracts';
 import type { RenderSpec, RenderProviderRegistry } from './contracts';
+import { emitAnomaly } from '../../billing/billingAuditEmitter';
 import {
   claimRenderJob, advanceQueueState, completeRenderJob, failRenderJob,
   type RenderQueueDeps,
@@ -34,9 +35,18 @@ export interface ProcessResult {
 
 async function releaseBilling(deps: ProcessRenderDeps, jobId: string, reason: string) {
   try {
-    await deps.ownedDbTable('billing_operations')
+    const { data: released, error: relErr } = await deps.ownedDbTable('billing_operations')
       .update({ status: 'released', failure_reason: reason, completed_at: deps.now() })
-      .eq('idempotency_key', `render:${jobId}`);
+      .eq('idempotency_key', `render:${jobId}`)
+      .select('id');
+    if (relErr || !Array.isArray(released) || released.length !== 1) {
+      // B3: the hold stays held until the orphan reaper releases it - visible, never silent.
+      emitAnomaly({
+        kind: 'render_billing_write_failed', severity: 'warn',
+        message: 'queued render billing RELEASE did not happen',
+        metadata: { phase: 'release', render_job_id: jobId, reason, error: relErr?.message ?? null, rows: Array.isArray(released) ? released.length : null },
+      });
+    }
   } catch { /* fail-closed best-effort */ }
 }
 
@@ -171,11 +181,21 @@ export async function processQueuedRenderJob(
       version: 1, moderation_state: 'allowed',
     }).select('id, storage_ref').single();
 
-    // Billing CONFIRM.
+    // Billing CONFIRM. It must hit EXACTLY the one hold: 0 rows means the job ran without a hold (unbilled), an error
+    // means the charge was not recorded and the reaper would release it. Both are critical and countable (B3, e1).
     try {
-      await deps.ownedDbTable('billing_operations')
+      const { data: confirmed, error: confErr } = await deps.ownedDbTable('billing_operations')
         .update({ status: 'confirmed', completed_at: deps.now() })
-        .eq('idempotency_key', `render:${jobId}`);
+        .eq('idempotency_key', `render:${jobId}`)
+        .select('id');
+      if (confErr || !Array.isArray(confirmed) || confirmed.length !== 1) {
+        emitAnomaly({
+          kind: 'render_billing_write_failed', severity: 'critical', organizationId: job.organization_id ?? undefined,
+          message: confErr ? 'queued render billing CONFIRM did not happen - the render will end up unbilled'
+            : 'queued render had no billing HOLD to confirm - the render is unbilled',
+          metadata: { phase: 'confirm', render_job_id: jobId, error: confErr?.message ?? null, rows: Array.isArray(confirmed) ? confirmed.length : null },
+        });
+      }
     } catch { /* advisory */ }
 
     // Shared-media lineage attach (Step-15/16 auto-propagation).

@@ -17,6 +17,7 @@ import { projectRenderRequest, RenderProjectionError } from './projector';
 import { preRenderModeration, postRenderModeration } from './moderation/renderModerationGate';
 import { computeDeterministicInputHash } from './contracts';
 import type { RenderProviderRegistry, RenderSpec } from './contracts';
+import { emitAnomaly } from '../../billing/billingAuditEmitter';
 
 export function isCreatorRenderingEnabled(): boolean {
   const raw = String(process.env.ENABLE_CREATOR_RENDERING ?? '').trim().toLowerCase();
@@ -27,6 +28,8 @@ export type RenderEvent =
   | 'render_started' | 'render_completed' | 'render_failed'
   | 'moderation_blocked' | 'duplicate_render_reused' | 'provider_rejected'
   | 'billing_hold_created' | 'billing_confirmed' | 'billing_released'
+  // B3: a billing write that did not happen (the result is read - supabase-js returns errors, it does not throw).
+  | 'billing_hold_failed' | 'billing_confirm_failed' | 'billing_release_failed'
   | 'render_skipped_disabled' | 'media_lineage_attached';
 
 export interface RenderDeps {
@@ -76,9 +79,20 @@ export async function executeRenderJob(
   const releaseBilling = async (reason: string) => {
     if (!billingId) return;
     try {
-      await ownedDbTable('billing_operations')
+      const { data: released, error: relErr } = await ownedDbTable('billing_operations')
         .update({ status: 'released', failure_reason: reason, completed_at: now() })
-        .eq('id', billingId);
+        .eq('id', billingId)
+        .select('id');
+      if (relErr || !Array.isArray(released) || released.length !== 1) {
+        // The hold stays 'held' until the orphan reaper releases it - visible, never silent (B3).
+        events.push('billing_release_failed');
+        emitAnomaly({
+          kind: 'render_billing_write_failed', severity: 'warn', organizationId: args.organizationId,
+          message: 'render billing RELEASE did not happen',
+          metadata: { phase: 'release', billing_operation_id: billingId, reason, error: relErr?.message ?? null, rows: Array.isArray(released) ? released.length : null },
+        });
+        return;
+      }
       events.push('billing_released');
     } catch { /* fail-closed: best-effort */ }
   };
@@ -161,14 +175,24 @@ export async function executeRenderJob(
 
     // 6) billing HOLD (reuse billing_operations; NO parallel ledger)
     const estimate = provider.estimateCost(spec);
-    const { data: bo } = await ownedDbTable('billing_operations').insert({
+    const { data: bo, error: holdErr } = await ownedDbTable('billing_operations').insert({
       correlation_id: args.contentCoreId, module: 'creator_render', action: 'render_image',
       organization_id: args.organizationId, actor_user_id: args.createdBy ?? null,
       idempotency_key: `render:${spec.spec_id}`, amount_estimated: estimate.estimated_credits,
       status: 'held', metadata: { provider: provider.key },
     }).select('id').single();
     billingId = bo?.id ?? null;
-    if (billingId) events.push('billing_hold_created');
+    if (holdErr || !billingId) {
+      // B3: no HOLD, no render. The provider is NEVER called without a billing hold (it used to render unbilled).
+      events.push('billing_hold_failed', 'render_failed');
+      emitAnomaly({
+        kind: 'render_billing_write_failed', severity: 'warn', organizationId: args.organizationId,
+        message: 'render refused: billing HOLD could not be created',
+        metadata: { phase: 'hold', spec_id: spec.spec_id, error: holdErr?.message ?? 'no id returned' },
+      });
+      return { ok: false, status: 'failed', events, spec_id: spec.spec_id, reason: 'billing_hold_failed' };
+    }
+    events.push('billing_hold_created');
 
     // 7) immutable job + state + variant + attempt
     const { data: job } = await ownedDbTable('creator_render_job').insert({
@@ -235,10 +259,22 @@ export async function executeRenderJob(
 
     // CONFIRM billing
     if (billingId) {
-      await ownedDbTable('billing_operations')
+      const { data: confirmed, error: confErr } = await ownedDbTable('billing_operations')
         .update({ status: 'confirmed', amount_charged: estimate.estimated_credits, completed_at: now() })
-        .eq('id', billingId);
-      events.push('billing_confirmed');
+        .eq('id', billingId)
+        .select('id');
+      if (confErr || !Array.isArray(confirmed) || confirmed.length !== 1) {
+        // B3 (e1): the render HAPPENED but the charge was not recorded - the hold stays open and the orphan reaper
+        // would RELEASE it, i.e. the render ends up unbilled. Critical and countable, never silent.
+        events.push('billing_confirm_failed');
+        emitAnomaly({
+          kind: 'render_billing_write_failed', severity: 'critical', organizationId: args.organizationId,
+          message: 'render billing CONFIRM did not happen - the render will end up unbilled',
+          metadata: { phase: 'confirm', billing_operation_id: billingId, amount_credits: estimate.estimated_credits, error: confErr?.message ?? null, rows: Array.isArray(confirmed) ? confirmed.length : null },
+        });
+      } else {
+        events.push('billing_confirmed');
+      }
     }
     try {
       await supabase.rpc('advance_job_execution', {
