@@ -52,6 +52,19 @@ describe('registrableRoot — suffixes the old 25-entry list collapsed', () => {
   });
 });
 
+describe('STALENESS PIN (05 review): a fixed set of multi-part suffixes resolves to the registrable domain, never the suffix', () => {
+  // If a refreshed / stale snapshot ever mis-groups one of these, this fails before a customer hits it.
+  it.each([
+    ['www.acme.co.uk', 'acme.co.uk'],
+    ['www.acme.com.au', 'acme.com.au'],
+    ['www.acme.com.sg', 'acme.com.sg'],
+    ['www.acme.co.il', 'acme.co.il'],
+    ['www.acme.com.br', 'acme.com.br'],
+  ])('%s -> %s', (host, root) => {
+    expect(registrableRoot(host)).toBe(root);
+  });
+});
+
 describe('registrableRoot — behaviour the old list already got right is kept', () => {
   it.each([
     ['shop.acme.co.uk', 'acme.co.uk'],

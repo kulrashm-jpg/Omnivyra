@@ -113,3 +113,20 @@ describe('alert dedupe: DB-backed, cross-instance, capped, timed out', () => {
     expect(ops.SIGNUP_BUSY_BODY).toEqual({ error: ops.SIGNUP_BUSY_MESSAGE, code: 'SIGNUP_TEMPORARILY_UNAVAILABLE' });
   });
 });
+
+describe('pre-authentication alert path (05 review: never silent, never a DB write)', () => {
+  const T0 = Date.parse('2026-11-13T10:00:00.000Z');
+  it('sends via the in-process window WITHOUT touching the DB marker; one email per instance per window', async () => {
+    const send = jest.fn(async () => undefined);
+    for (let i = 0; i < 5; i++) await ops.notifySignupLimiterUnavailablePreAuth('/api/onboarding/revalidate-signup', 'per-ip limiter degraded', { now: () => T0 + i, send });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(mockMarkers).toEqual([]); // no write before auth
+  });
+  it('the log line still fires on every occurrence even when the email is suppressed', async () => {
+    const { logger } = require('../../services/logger');
+    (logger.error as jest.Mock).mockClear();
+    const send = jest.fn(async () => undefined);
+    for (let i = 0; i < 3; i++) await ops.notifySignupLimiterUnavailablePreAuth('/x', 'r', { now: () => T0, send });
+    expect((logger.error as jest.Mock).mock.calls.filter((c: unknown[]) => c[0] === 'auth.signup_limiter_unavailable')).toHaveLength(3);
+  });
+});

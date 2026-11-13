@@ -78,26 +78,16 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * Count (always) and notify the owner (at most once per window, cross-instance) that the signup rate limiter is
  * unavailable. Never throws. `endpoint` / `reason` are operator strings - never pass user data.
  */
-export async function notifySignupLimiterUnavailable(
-  endpoint: string,
-  reason: string,
-  deps: { now?: () => number; send?: typeof sendOpsAlert } = {},
-): Promise<'sent' | 'suppressed' | 'failed'> {
-  const nowMs = (deps.now ?? Date.now)();
+type NotifyDeps = { now?: () => number; send?: typeof sendOpsAlert };
+type NotifyResult = 'sent' | 'suppressed' | 'failed';
+
+function recordOccurrence(endpoint: string, reason: string): void {
   incrementAuthMetric('auth.signup.limiter_unavailable', { endpoint });
   logger.error('auth.signup_limiter_unavailable', { endpoint, reason });
-  const bucket = String(Math.floor(nowMs / SIGNUP_LIMITER_ALERT_WINDOW_MS));
-  let claim: Awaited<ReturnType<typeof claimBucket>>;
-  try {
-    claim = await claimBucket(SIGNUP_LIMITER_ALERT_KIND, bucket, nowMs);
-  } catch {
-    claim = 'db_unavailable';
-  }
-  if (claim === 'already' || claim === 'capped') return 'suppressed';
-  if (claim === 'db_unavailable') {
-    if (localFallbackBucket === bucket) return 'suppressed';
-    localFallbackBucket = bucket;
-  }
+}
+
+/** Send the alert email (time + reason only), with the hard timeout. Never throws. Performs NO database write. */
+async function deliverSignupLimiterAlert(endpoint: string, reason: string, nowMs: number, bucket: string, deps: NotifyDeps): Promise<NotifyResult> {
   const at = new Date(nowMs).toISOString();
   try {
     await withTimeout((deps.send ?? sendOpsAlert)(
@@ -114,4 +104,44 @@ export async function notifySignupLimiterUnavailable(
     logger.warn('ops_alert_send_failed', { kind: SIGNUP_LIMITER_ALERT_KIND, message: err instanceof Error ? err.message : String(err) });
     return 'failed';
   }
+}
+
+/** In-process window: one email per instance per bucket. Used when the DB marker is unreachable or not allowed. */
+function claimLocalWindow(bucket: string): boolean {
+  if (localFallbackBucket === bucket) return false;
+  localFallbackBucket = bucket;
+  return true;
+}
+
+/**
+ * Count (always) and notify the owner (at most once per window CROSS-INSTANCE via the DB marker; hourly cap) that the
+ * signup rate limiter is unavailable. Never throws. `endpoint` / `reason` are operator strings - never user data.
+ * For AUTHENTICATED or public-signup call sites; pre-authentication callers use notifySignupLimiterUnavailablePreAuth.
+ */
+export async function notifySignupLimiterUnavailable(endpoint: string, reason: string, deps: NotifyDeps = {}): Promise<NotifyResult> {
+  const nowMs = (deps.now ?? Date.now)();
+  recordOccurrence(endpoint, reason);
+  const bucket = String(Math.floor(nowMs / SIGNUP_LIMITER_ALERT_WINDOW_MS));
+  let claim: Awaited<ReturnType<typeof claimBucket>>;
+  try {
+    claim = await claimBucket(SIGNUP_LIMITER_ALERT_KIND, bucket, nowMs);
+  } catch {
+    claim = 'db_unavailable';
+  }
+  if (claim === 'already' || claim === 'capped') return 'suppressed';
+  if (claim === 'db_unavailable' && !claimLocalWindow(bucket)) return 'suppressed';
+  return deliverSignupLimiterAlert(endpoint, reason, nowMs, bucket, deps);
+}
+
+/**
+ * PRE-AUTHENTICATION variant (05 review): route-auth forbids any write before authentication, so this path NEVER
+ * touches the DB marker - it uses the in-process window (one email per instance per window) instead of going silent.
+ * The log line + counter always fire, so the event is reconstructable even when the email is suppressed.
+ */
+export async function notifySignupLimiterUnavailablePreAuth(endpoint: string, reason: string, deps: NotifyDeps = {}): Promise<NotifyResult> {
+  const nowMs = (deps.now ?? Date.now)();
+  recordOccurrence(endpoint, reason);
+  const bucket = String(Math.floor(nowMs / SIGNUP_LIMITER_ALERT_WINDOW_MS));
+  if (!claimLocalWindow(bucket)) return 'suppressed';
+  return deliverSignupLimiterAlert(endpoint, reason, nowMs, bucket, deps);
 }
