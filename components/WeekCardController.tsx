@@ -104,7 +104,6 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
     executionMomentumRecovery,
     executionPressure,
     expandedDiagnostics,
-    expandedSystemWeek,
     expandedWeeks,
     fetchAiDurationSuggestion,
     focusQueryValue,
@@ -200,7 +199,6 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
     setExecutionMomentumRecovery,
     setExecutionPressure,
     setExpandedDiagnostics,
-    setExpandedSystemWeek,
     setExpandedWeeks,
     setFrequencyValidation,
     setGovernanceAnalytics,
@@ -257,7 +255,6 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
     showRequiredActions,
     toggleDiagnostic,
     toggleWeekExpansion,
-    viewMode,
     viralityDiagnostics,
     viralityGate,
     weeklyPlans,
@@ -302,65 +299,8 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
                     : 0;
                   const showHighCreatorWorkload = creatorShare > 0.6;
 
-                  // CMO: Execution Risk — creatorRatio = (creator + conditional*0.7) / total
-                  const creatorRatio = ownershipCounts.total > 0
-                    ? (ownershipCounts.creator + ownershipCounts.conditional * 0.7) / ownershipCounts.total
-                    : 0;
-                  const executionRiskLabel = creatorRatio <= 0.35 ? 'LOW' : creatorRatio <= 0.65 ? 'MEDIUM' : 'HIGH';
-                  const executionRiskClass = creatorRatio <= 0.35 ? 'bg-emerald-100 text-emerald-800' : creatorRatio <= 0.65 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800';
-
-                  // CMO/SYSTEM: Execution Pressure (system-only) — same chip size as Execution Risk
-                  const weekIntelligence = getExecutionIntelligence(undefined, ownershipCounts);
-                  const pressureLabel = weekIntelligence.pressureLabel;
-                  const pressureColorClass = weekIntelligence.pressureColorClass;
-
-                  // AUTO EXECUTION BALANCER: read-only recommendations when pressure is HIGH (no DB/API changes)
-                  const executionBalancerRecommendations = (() => {
-                    if (pressureLabel !== 'HIGH' || ownershipCounts.total <= 0) return [];
-                    const creatorRatio = ownershipCounts.creator / ownershipCounts.total;
-                    const conditionalRatio = ownershipCounts.conditional / ownershipCounts.total;
-                    const recs: string[] = [];
-                    if (creatorRatio > 0.5) recs.push('Reduce creator-dependent content or stagger execution.');
-                    if (conditionalRatio > 0.2) recs.push('Templates could unlock more AI execution.');
-                    if (ownershipCounts.creator + ownershipCounts.conditional > ownershipCounts.ai) {
-                      recs.push('Consider shifting some ideas toward AI-executable formats.');
-                    }
-                    return recs.slice(0, 3);
-                  })();
-
-                  // CMO: Capacity Fit — only if weekly capacity value exists
-                  const weeklyCapacity = typeof (weekPlan as any)?.capacity === 'number' && Number.isFinite((weekPlan as any).capacity)
-                    ? (weekPlan as any).capacity
-                    : typeof (weekPlan as any)?.weekly_capacity === 'number' && Number.isFinite((weekPlan as any).weekly_capacity)
-                      ? (weekPlan as any).weekly_capacity
-                      : null;
-                  const creatorLoad = ownershipCounts.creator + ownershipCounts.conditional;
-                  const capacityRatio = weeklyCapacity != null && weeklyCapacity > 0 ? creatorLoad / weeklyCapacity : null;
-                  const capacityFitLabel = capacityRatio == null ? null : capacityRatio <= 0.8 ? 'Strong' : capacityRatio <= 1 ? 'Tight' : 'Overloaded';
-                  const capacityFitClass = capacityRatio != null ? (capacityRatio <= 0.8 ? 'bg-gray-100 text-gray-700' : capacityRatio <= 1 ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700') : '';
-
-                  // CMO: Momentum — current vs previous week creator share
-                  const prevWeekPlan = weekNumber > 1 ? weeklyPlans.find((w: any) => w.weekNumber === weekNumber - 1) : null;
-                  const prevFlatSlots = prevWeekPlan && Array.isArray((prevWeekPlan as any)?.execution_items)
-                    ? (prevWeekPlan as any).execution_items.flatMap((e: any) => Array.isArray(e?.topic_slots) ? e.topic_slots : [])
-                    : [];
-                  const prevCounts = (() => {
-                    let ai = 0, creator = 0, conditional = 0;
-                    prevFlatSlots.forEach((s: any) => {
-                      const m = s?.execution_mode;
-                      if (m === 'AI_AUTOMATED') ai += 1;
-                      else if (m === 'CREATOR_REQUIRED') creator += 1;
-                      else if (m === 'CONDITIONAL_AI') conditional += 1;
-                    });
-                    const total = ai + creator + conditional;
-                    return { creator, conditional, total };
-                  })();
-                  const prevCreatorShare = prevCounts.total > 0 ? (prevCounts.creator + prevCounts.conditional) / prevCounts.total : null;
-                  const momentumLabel = prevCreatorShare == null ? null
-                    : creatorShare < prevCreatorShare - 0.1 ? 'Building ↑'
-                    : Math.abs(creatorShare - prevCreatorShare) <= 0.1 ? 'Balanced →'
-                    : creatorShare > prevCreatorShare + 0.1 ? 'Heavy Load ↓'
-                    : 'Balanced →';
+                  // F2 follow-up: the CMO chip values (execution risk, pressure, balancer tips, capacity fit,
+                  // momentum) rendered for nobody and were removed with their layer (3bfb61c8a).
                   // --- Activity card derivation for BOLT / legacy campaigns (no topics[] in blueprint) ---
                   //
                   // Card count = unique CONTENT PIECES (not DB rows).
@@ -650,15 +590,11 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
     _ef1, _ef2, _ef3, _ef4, _ef5, acceptDuration, activeTab, aiSuggestion, aiSuggestionLoading,
     bestDerivedTopics, blueprintFrozen, blueprintGeneratedSuccess, blueprintImmutable,
     blueprintRegenerateFailedMsg, buildCampaignCalendarUrl, buildCampaignDetailsUrl, buildDailyPlanPageUrl,
-    buildPlanningWorkspaceUrl, campaign, campaignMode, capacityFitClass, capacityFitLabel, capacityRatio,
-    contentTypes, contentTypesBySlotIndex, createWeekPlanFromStoredContext, creatorLoad, creatorRatio,
-    creatorShare, crossPlatformSharingEnabled, crossPlatformSharingEnabledLegacy, dailyPlans,
+    buildPlanningWorkspaceUrl, campaign, campaignMode, contentTypes, contentTypesBySlotIndex, createWeekPlanFromStoredContext, creatorShare, crossPlatformSharingEnabled, crossPlatformSharingEnabledLegacy, dailyPlans,
     derivedTopicsFromDailyPlans, derivedTopicsFromResolvedPostings, derivedTopicsFromSlots, didAutoOpenChatRef,
     displayWeeklyTitle, distributionMode, durationWeeks, editedWeekDailyPlans, effectiveCompanyId,
-    effectiveHasTopics, enhanceAllWeeksWithAI, enhanceWeekWithAI, executionBalancerRecommendations,
-    executionDrift, executionHealth, executionItems, executionMomentum, executionMomentumRecovery,
-    executionPressure, executionRiskClass, executionRiskLabel, expandedDiagnostics, expandedSystemWeek,
-    expandedWeeks, fetchAiDurationSuggestion, flatSlots, focusQueryValue, formatPlatformLabel,
+    effectiveHasTopics, enhanceAllWeeksWithAI, enhanceWeekWithAI, executionDrift, executionHealth, executionItems, executionMomentum, executionMomentumRecovery,
+    executionPressure, expandedDiagnostics, expandedWeeks, fetchAiDurationSuggestion, flatSlots, focusQueryValue, formatPlatformLabel,
     frequencyValidation, frequencyValidationTimeoutRef, fromOpportunity, getActivityColorClasses,
     getConfidenceBadgeColor, getGateBadgeColor, getGateLabel, getPhaseColor, getStageColor, getStageLabel,
     getStatusColor, getWeekDatesFromCampaignStart, governanceAnalytics, governanceAuditStatus,
@@ -667,21 +603,19 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
     handleDailyPlanDragOver, handleDailyPlanDragStart, handleDailyPlanDrop, hasEnrichedTopics,
     hasRestoredWizardStateRef, id, isAdmin, isEnhancingAllWeeks, isExpanded, isGeneratingWeek, isLoading,
     isRegeneratingBlueprint, isSavingWeekPlan, isViralityExpanded, isVisualContentType, isWeeklyBlueprintFocus,
-    loadCampaignDetails, loadGovernance, momentumLabel, needsPrePlanning, negotiationLoading,
+    loadCampaignDetails, loadGovernance, needsPrePlanning, negotiationLoading,
     negotiationMessage, negotiationResult, normalizeComparableText, notice, notify, openCampaignCalendar,
     openTopicWorkspaceFromWeeklyCard, ownershipCounts, performanceSummary, planDurationLimit, plannedStartDate,
     plannedStartDateLegacy, plannerQueryConsumed, platformTargets, postingSource, prePlanningLoading,
     prePlanningResult, prePlanningResultLegacy, prePlanningWizardStep, prePlanningWizardStepLegacy,
-    prefilledPlanning, pressureColorClass, pressureLabel, prevCounts, prevCreatorShare, prevFlatSlots,
-    prevWeekPlan, questionnaireAnswers, questionnaireAnswersLegacy, readiness, recommendationContext,
+    prefilledPlanning, questionnaireAnswers, questionnaireAnswersLegacy, readiness, recommendationContext,
     recommendationId, recommendationSummary, regenerateWeekDailyPlan, requestedWeeksForPreplan, router,
     runPrePlanningFlow, saveWeekDailyPlan, selectedCompanyId, selectedWeekDay, session, setActiveTab,
     setAiSuggestion, setAiSuggestionLoading, setBlueprintFrozen, setBlueprintGeneratedSuccess,
     setBlueprintImmutable, setBlueprintRegenerateFailedMsg, setCampaign, setCampaignMode,
     setCrossPlatformSharingEnabled, setCrossPlatformSharingEnabledLegacy, setDailyPlans, setDistributionMode,
     setEditedWeekDailyPlans, setExecutionDrift, setExecutionHealth, setExecutionMomentum,
-    setExecutionMomentumRecovery, setExecutionPressure, setExpandedDiagnostics, setExpandedSystemWeek,
-    setExpandedWeeks, setFrequencyValidation, setGovernanceAnalytics, setGovernanceAuditStatus,
+    setExecutionMomentumRecovery, setExecutionPressure, setExpandedDiagnostics, setExpandedWeeks, setFrequencyValidation, setGovernanceAnalytics, setGovernanceAuditStatus,
     setGovernanceEvents, setGovernanceLatestSnapshotId, setGovernanceLedgerIntegrity,
     setGovernanceLoadGuardCounts, setGovernanceLoading, setGovernanceLocked, setGovernanceSnapshotAt,
     setGovernanceSnapshotCount, setGovernanceStatus, setIsAdmin, setIsEnhancingAllWeeks, setIsGeneratingWeek,
@@ -695,7 +629,6 @@ export function useWeekCardController({ weekNumber, d }: { weekNumber: number; d
     setShowAIChat, setShowAdvisoryNotes, setShowRequiredActions, setViralityDiagnostics, setViralityGate,
     setWeeklyPlans, shouldForceWeeklyBlueprintView, showAIChat, showAdvisoryNotes, showHighCreatorWorkload,
     showRequiredActions, slotIndexGlobal, toggleDiagnostic, toggleWeekExpansion, topicBriefs, topicsCount,
-    topicsWithExecution, viewMode, viralityDiagnostics, viralityGate, weekDailyPlans, weekIntelligence,
-    weekIsStaggered, weekPlan, weeklyCapacity, weeklyPlans, wizardStateDbSaveTimeoutRef, wizardStore
+    topicsWithExecution, viralityDiagnostics, viralityGate, weekDailyPlans, weekIsStaggered, weekPlan, weeklyPlans, wizardStateDbSaveTimeoutRef, wizardStore
   };
 }

@@ -1,6 +1,4 @@
 import React from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
-import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
 import CreatorContentPanel from '@/components/activity-workspace/CreatorContentPanel';
 import AISuggestionPanel from '@/components/activity-workspace/AISuggestionPanel';
 import type { useActivityWorkspace } from '../../hooks/useActivityWorkspace';
@@ -43,11 +41,8 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
     labelize,
     notify,
     payload,
-    setSystemBlockExpanded,
     suggestedPlatforms,
-    systemBlockExpanded,
     topicText,
-    viewMode,
     writerBrief,
     variantStatusDot,
     variantStatusLabel,
@@ -221,7 +216,7 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
         );
       })()}
 
-      {VIEW_RULES[viewMode].showCreatorBrief && dailyRaw?.creator_instruction && typeof dailyRaw.creator_instruction === 'object' && (
+      {dailyRaw?.creator_instruction && typeof dailyRaw.creator_instruction === 'object' && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
           <h2 className="text-lg font-semibold text-gray-900">Creator Brief</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
@@ -267,29 +262,6 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
                 </div>
               )}
           </div>
-        </div>
-      )}
-
-      {VIEW_RULES[viewMode].showSystemFields && dailyRaw && (
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setSystemBlockExpanded((value) => !value)}
-            className="w-full px-5 py-3 flex items-center justify-between text-left text-sm font-medium text-gray-700 hover:bg-gray-50 border-b border-gray-100"
-          >
-            <span>System Execution Intelligence</span>
-            {systemBlockExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-          {systemBlockExpanded && (
-            <div className="p-5 space-y-2 text-xs text-gray-600 grid grid-cols-1 md:grid-cols-2 gap-2">
-              {dailyRaw.execution_mode != null && <div><span className="font-medium text-gray-500">execution_mode:</span> {String(dailyRaw.execution_mode)}</div>}
-              {dailyRaw.ai_generated != null && <div><span className="font-medium text-gray-500">ai_generated:</span> {String(dailyRaw.ai_generated)}</div>}
-              {dailyRaw.master_content_id != null && <div className="md:col-span-2"><span className="font-medium text-gray-500">master_content_id:</span> {String(dailyRaw.master_content_id)}</div>}
-              {dailyRaw.narrativeStyle != null && <div className="md:col-span-2"><span className="font-medium text-gray-500">narrativeStyle:</span> {String(dailyRaw.narrativeStyle)}</div>}
-              {(dailyRaw.contentGuidance && typeof dailyRaw.contentGuidance === 'object') && <div className="md:col-span-2"><span className="font-medium text-gray-500">contentGuidance:</span> {JSON.stringify(dailyRaw.contentGuidance)}</div>}
-              {dailyRaw.weeklyContextCapsule != null && typeof dailyRaw.weeklyContextCapsule === 'object' && <div className="md:col-span-2"><span className="font-medium text-gray-500">weeklyContextCapsule:</span> {JSON.stringify(dailyRaw.weeklyContextCapsule)}</div>}
-            </div>
-          )}
         </div>
       )}
 
