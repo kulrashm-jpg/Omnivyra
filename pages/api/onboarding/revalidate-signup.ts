@@ -33,6 +33,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { httpStatusFor, ELIGIBILITY_MESSAGES } from '../../../lib/auth/domainEligibilityModel';
 import { logger } from '../../../backend/services/logger';
+import { notifySignupLimiterUnavailable, sendSignupBusy } from '../../../backend/services/opsAlertService';
 import { ensureSignupCorrelationId, requestIp } from '../../../backend/services/signupEventService';
 import {
   lookupExistingAccount,
@@ -55,13 +56,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
 
   // ── Rate limiting — IP gate before auth, UID gate after (as setup-company).
   const ip = requestIp(req);
-  const ipRl = await checkRateLimit(ip, { keyPrefix: 'rl:onboarding:revalidate-signup', limit: 5, windowSecs: 3600 });
+  const ipRl = await checkRateLimit(ip, { keyPrefix: 'rl:onboarding:revalidate-signup', limit: 5, windowSecs: 3600, onRedisFailure: 'closed' });
+  // Owner ruling (e1 2026-11-13): limiter unavailable (Redis/Upstash down or over quota) -> FAIL CLOSED, retryable 503,
+  // owner notified at most once per outage window. Same rule as /api/auth/signup.
+  if (ipRl.bypassed) {
+    // Pre-authentication: answer the busy 503 but write nothing (the owner alert's DB marker is a write, and nothing
+    // may be written before auth on this route). The same outage is reported by /api/auth/signup and by this
+    // route's post-auth per-user check.
+    return sendSignupBusy(res);
+  }
   if (!ipRl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
-  const uidRl = await checkRateLimit(user.id, { keyPrefix: 'rl:uid:revalidate-signup', limit: 5, windowSecs: 3600 });
+  const uidRl = await checkRateLimit(user.id, { keyPrefix: 'rl:uid:revalidate-signup', limit: 5, windowSecs: 3600, onRedisFailure: 'closed' });
+  if (uidRl.bypassed) {
+    void notifySignupLimiterUnavailable('/api/onboarding/revalidate-signup', `per-user limiter degraded (${uidRl.degradedMode ?? 'unknown'})`);
+    return sendSignupBusy(res);
+  }
   if (!uidRl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
 
   // ── App-level email-verification gate (AUTH-001 §1).

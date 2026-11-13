@@ -12,6 +12,8 @@ const mockCreateUser = jest.fn();
 const mockOtp = jest.fn();
 const mockRecorded: Array<[string, string]> = [];
 const mockPeek: Record<string, number> = {};
+let mockBypass = false;
+const mockOpsSend = jest.fn(async () => undefined);
 const mockGate = { claimed: null as any, claimedThrows: false, identity: 'pass' as 'pass' | 'refused' | 'unavailable', mintOk: true };
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
@@ -45,7 +47,9 @@ jest.mock('../../../lib/auth/rateLimit', () => ({
       mockPeek[key] = (mockPeek[key] ?? 0) + 1;
       return { allowed: true, remaining: Math.max(0, cfg.limit - mockPeek[key]), resetAt: 0, bypassed: false };
     }
-    return { allowed: true, remaining: 4, resetAt: 0, bypassed: false };
+    return mockBypass
+      ? { allowed: true, remaining: 4, resetAt: 0, bypassed: true, degradedMode: 'strict' }
+      : { allowed: true, remaining: 4, resetAt: 0, bypassed: false };
   },
   peekRateLimit: async (id: string, cfg: { keyPrefix: string; limit: number }) => {
     const count = mockPeek[`${cfg.keyPrefix}:${id}`] ?? 0;
@@ -57,6 +61,7 @@ jest.mock('../../services/signupEventService', () => ({
   emitSignupEvent: jest.fn(async () => undefined), ensureSignupCorrelationId: async () => 'corr', signupRejectionEventFor: () => 'SignupRejected', requestUserAgent: () => null,
 }));
 jest.mock('../../services/authMetrics', () => ({ incrementAuthMetric: jest.fn() }));
+jest.mock('../../services/emailService', () => ({ sendOpsAlert: (...a: unknown[]) => (mockOpsSend as any)(...a) }));
 jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 jest.mock('../../services/requestContext', () => ({ seedRequestContextFromRequest: () => undefined }));
 jest.mock('../../auth/requestClientIp', () => ({ authRequestIp: () => '1.2.3.4' }));
@@ -71,7 +76,8 @@ async function post(body: Record<string, unknown>) {
   const res: any = { statusCode: 0, body: null };
   res.status = (c: number) => { res.statusCode = c; return res; };
   res.json = (x: unknown) => { res.body = x; return res; };
-  res.setHeader = () => res;
+  res.headers = {} as Record<string, string>;
+  res.setHeader = (k: string, v: string) => { res.headers[k] = v; return res; };
   await route({ method: 'POST', headers: {}, query: {}, body }, res);
   return res;
 }
@@ -82,6 +88,9 @@ beforeEach(() => {
   mockRecorded.length = 0;
   for (const k of Object.keys(mockPeek)) delete mockPeek[k];
   Object.assign(mockGate, { claimed: null, claimedThrows: false, identity: 'pass', mintOk: true });
+  mockBypass = false;
+  mockOpsSend.mockClear();
+  require('../../services/opsAlertService').__resetOpsAlertStateForTest();
 });
 
 describe('order: gates BEFORE the identity exists', () => {
@@ -162,4 +171,47 @@ it('an admin-API failure other than "already registered" is a retryable 500 and 
   const r = await post(ok);
   expect([r.statusCode, r.body?.code]).toEqual([500, 'IDENTITY_CREATE_FAILED']);
   expect(mockOtp).not.toHaveBeenCalled();
+});
+
+describe('owner ruling: rate limiter unavailable (Redis/Upstash down or over quota) -> FAIL CLOSED', () => {
+  it('503 + Retry-After + a friendly retryable message, NO identity, NO link, and exactly ONE notification across repeated attempts', async () => {
+    mockBypass = true;
+    for (let i = 0; i < 5; i++) {
+      const r = await post(ok);
+      expect([r.statusCode, r.body?.code, r.headers['Retry-After']]).toEqual([503, 'SIGNUP_TEMPORARILY_UNAVAILABLE', '120']);
+      expect(r.body.error).toMatch(/busy right now/);
+      expect(r.headers['Cache-Control']).toBe('no-store');
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(mockOtp).not.toHaveBeenCalled();
+    expect(mockOpsSend).toHaveBeenCalledTimes(1);
+    const [recipient, subject, detail] = mockOpsSend.mock.calls[0] as unknown as [string, string, string];
+    expect(recipient).toBe('kuldeep@omnivyra.com');
+    expect(subject).toMatch(/rate limiter unavailable/);
+    expect(detail).toMatch(/Reason: per-ip limiter degraded/);
+    expect(detail).not.toMatch(/jane@acme\.com/); // never user data
+  });
+
+  it('the recipient comes from config (OPS_ALERT_EMAIL), default kuldeep@omnivyra.com', () => {
+    const { opsAlertRecipient } = require('../../services/opsAlertService');
+    const prev = process.env.OPS_ALERT_EMAIL;
+    process.env.OPS_ALERT_EMAIL = 'ops@example.test';
+    expect(opsAlertRecipient()).toBe('ops@example.test');
+    delete process.env.OPS_ALERT_EMAIL;
+    expect(opsAlertRecipient()).toBe('kuldeep@omnivyra.com');
+    if (prev !== undefined) process.env.OPS_ALERT_EMAIL = prev;
+  });
+
+  it('scope: only signup + revalidate-signup carry the fail-closed rule (login and the rest of the app unchanged)', () => {
+    const fs = require('fs'); const path = require('path');
+    const root = path.join(__dirname, '..', '..', '..');
+    const hits: string[] = [];
+    const walk = (d: string) => { for (const e of fs.readdirSync(path.join(root, d), { withFileTypes: true })) {
+      const rel = `${d}/${e.name}`;
+      if (e.isDirectory()) walk(rel); else if (/\.tsx?$/.test(e.name) && fs.readFileSync(path.join(root, rel), 'utf8').includes('notifySignupLimiterUnavailable')) hits.push(rel);
+    } };
+    walk('pages');
+    expect(hits.sort()).toEqual(['pages/api/auth/signup.ts', 'pages/api/onboarding/revalidate-signup.ts']);
+  });
 });

@@ -117,8 +117,15 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (t: string) => db.from(t),
     rpc: (n: string, a: unknown) => db.rpc(n, a),
+    // P2 (e1 2026-11-13): signup creates the identity via the admin API AFTER the mint, then sends the link.
+    auth: {
+      admin: { createUser: async () => ({ data: { user: { id: 'sb-new' } }, error: null }) },
+      signInWithOtp: async () => ({ error: null }),
+    },
   },
 }));
+jest.mock('../../services/opsAlertService', () => ({ notifySignupLimiterUnavailable: jest.fn(async () => 'sent'), sendSignupBusy: jest.fn() }));
+jest.mock('../../config/getCanonicalAppUrl', () => ({ getCanonicalAppUrl: () => 'https://app.example.test' }));
 jest.mock('../../services/logger', () => ({ logger: { error: jest.fn(), warn: jest.fn(), info: jest.fn() } }));
 jest.mock('../../services/requestContext', () => ({ seedRequestContextFromRequest: jest.fn() }));
 jest.mock('../../auth/requestClientIp', () => ({ authRequestIp: () => '203.0.113.7' }));
@@ -129,6 +136,8 @@ jest.mock('../../../lib/auth/captcha', () => ({
 const mockCheckRateLimit = jest.fn();
 jest.mock('../../../lib/auth/rateLimit', () => ({
   checkRateLimit: (...a: unknown[]) => mockCheckRateLimit(...a),
+  // P2 success-only ceilings: nothing recorded in this suite (ceilings are covered by p2SignupServerCreation).
+  peekRateLimit: async () => ({ allowed: true, remaining: 100, resetAt: 0, bypassed: false, count: 0 }),
   EMAIL_LINK_LIMIT: { keyPrefix: 'rl:email_link', sensitive: true, limit: 3, windowSecs: 3600 },
 }));
 jest.mock('../../services/signupEventService', () => ({
@@ -211,7 +220,7 @@ function seedClaimedDomain(domain: string) {
 
 beforeEach(() => {
   db = new FakeDb();
-  mockCheckRateLimit.mockReset().mockResolvedValue({ allowed: true });
+  mockCheckRateLimit.mockReset().mockResolvedValue({ allowed: true, bypassed: false, remaining: 4 });
   mockNotify.mockReset().mockResolvedValue(undefined);
   mockValidate.mockReset().mockImplementation(async (email: string) => identityFor(email));
   mockGetUser.mockReset().mockResolvedValue({
@@ -225,7 +234,7 @@ afterEach(() => { jest.useRealTimers(); });
 // ── signup.ts ────────────────────────────────────────────────────────────────
 
 describe('POST /api/auth/signup — mints through the shared service', () => {
-  const body = { email: 'Founder@Acme.com', companyName: '  Acme Ltd  ', captchaToken: null };
+  const body = { email: 'Founder@Acme.com', companyName: '  Acme Ltd  ', captchaToken: null, password: 'correct-horse-battery' };
 
   test('eligible signup mints one pending intent with verdict eligible that satisfies the consumer contract', async () => {
     const res = mockRes();

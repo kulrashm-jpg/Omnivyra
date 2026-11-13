@@ -155,7 +155,15 @@ type CreditAlertPayload = {
   ctaUrl: string;
 };
 
+type OpsAlertPayload = {
+  type: 'ops_alert';
+  recipientEmail: string;
+  subject: string;
+  detail: string;
+};
+
 type EmailPayload =
+  | OpsAlertPayload
   | InvitePayload
   | CompanyReferralPayload
   | InboundSignupNoticePayload
@@ -177,6 +185,11 @@ async function invokeEdgeFunction(payload: EmailPayload, context: { idempotencyK
     });
     throw new Error(`TRANSACTIONAL_EMAIL_FAILED:${payload.type}:${error.message}`);
   }
+}
+
+/** Internal operational alert (e1 2026-11-13). Recipient comes from config (opsAlertService), never user input. */
+export async function sendOpsAlert(recipientEmail: string, subject: string, detail: string, idempotencyKey?: string): Promise<void> {
+  await invokeEdgeFunction({ type: 'ops_alert', recipientEmail, subject, detail }, { idempotencyKey });
 }
 
 export async function sendInvite(
