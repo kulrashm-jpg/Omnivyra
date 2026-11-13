@@ -141,13 +141,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     applySubscriptionEvent: async (eventType, obj, organizationId, event) =>
       applyStripeSubscriptionEvent(eventType, obj as any, organizationId, { db: { from: ownedDbTable } }, event),
     markEvent: async (eventId, status, errorMsg) => {
-      await ownedDbTable('payment_provider_events')
+      // The write result is READ and logged (05, 2026-11-13). On main this UPDATE targets the immutable parent row and
+      // is rejected by its immutable_update trigger (migration 20260663); the state belongs in
+      // payment_provider_event_state, a redirect owned by e1's fix/payment-event-state branch. Until then the failure
+      // is visible instead of silently discarded. Not thrown: the webhook's HTTP answer must not depend on the mark.
+      const { error } = await ownedDbTable('payment_provider_events')
         .update({
           processing_status: status,
           processed_at: new Date().toISOString(),
           error_message: errorMsg ?? null,
         })
         .eq('id', eventId);
+      if (error) {
+        console.error('[stripe/webhook] processing-state mark NOT persisted', {
+          payment_provider_event_id: eventId, wanted_status: status, db_error: error.message,
+        });
+      }
     },
   };
 
