@@ -2,4 +2,58 @@
 # tenant data a view-only role could misuse. Every other outreach write route is role-gated (outreachWriteRolesAllRoutes).
 pages/api/engagement/sync.ts                          # GET/POST only echo a sync window; no DB write (ingestion is extension-driven)
 pages/api/active-leads/credit-estimate.ts             # POST computes an estimate + hash; writes no rows
-pages/api/active-leads/semantic-retrieval.ts          # a query; inserts an explanation row as a side effect - e9: leave, post-launch register row
+pages/api/active-leads/semantic-retrieval.ts          # a query, BUT retrieveHybrid INSERTs a semantic_retrieval_explanations row (hybridSemanticRetrievalService.ts:242) - a Viewer-triggered write; e9: leave, post-launch register row names THAT insert
+# MLC-INLINE: the admin-only inline gate getUserRole -> hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES') -> 403
+# (COMPANY_ADMIN / SUPER_ADMIN). Listed here, not via --role-gate (05: a reader is not a refuser); outreachWriteRoleScan
+# asserts every MLC-INLINE file still contains that whole refusing pattern, so removing the gate fails a test.
+pages/api/active-leads/analytics-warehouse.ts         # MLC-INLINE admin gate
+pages/api/active-leads/audit-export.ts                # MLC-INLINE admin gate
+pages/api/active-leads/capabilities.ts                # MLC-INLINE admin gate
+pages/api/active-leads/compliance-evidence.ts         # MLC-INLINE admin gate
+pages/api/active-leads/configuration.ts               # MLC-INLINE admin gate
+pages/api/active-leads/connector-sandbox.ts           # MLC-INLINE admin gate
+pages/api/active-leads/cost-governance.ts             # MLC-INLINE admin gate
+pages/api/active-leads/customer-operations.ts         # MLC-INLINE admin gate
+pages/api/active-leads/deployment-telemetry.ts        # MLC-INLINE admin gate
+pages/api/active-leads/disaster-recovery.ts           # MLC-INLINE admin gate
+pages/api/active-leads/discovery.ts                   # MLC-INLINE admin gate
+pages/api/active-leads/enterprise-onboarding.ts       # MLC-INLINE admin gate
+pages/api/active-leads/escalations.ts                 # MLC-INLINE admin gate
+pages/api/active-leads/executions.ts                  # MLC-INLINE admin gate
+pages/api/active-leads/feature-flags.ts               # MLC-INLINE admin gate
+pages/api/active-leads/governance-convergence.ts      # MLC-INLINE admin gate
+pages/api/active-leads/governance.ts                  # MLC-INLINE admin gate
+pages/api/active-leads/identity-resolution.ts         # MLC-INLINE admin gate
+pages/api/active-leads/incidents.ts                   # MLC-INLINE admin gate
+pages/api/active-leads/intelligence-rbac.ts           # MLC-INLINE admin gate
+pages/api/active-leads/intelligence-trends.ts         # MLC-INLINE admin gate
+pages/api/active-leads/investigations.ts              # MLC-INLINE admin gate
+pages/api/active-leads/lifecycle.ts                   # MLC-INLINE admin gate
+pages/api/active-leads/marketplace-connectors.ts      # MLC-INLINE admin gate
+pages/api/active-leads/migration-tooling.ts           # MLC-INLINE admin gate
+pages/api/active-leads/observability-convergence.ts   # MLC-INLINE admin gate
+pages/api/active-leads/operator-tools.ts              # MLC-INLINE admin gate
+pages/api/active-leads/partitions.ts                  # MLC-INLINE admin gate
+pages/api/active-leads/platform-stabilization.ts      # MLC-INLINE admin gate
+pages/api/active-leads/production-certification.ts    # MLC-INLINE admin gate
+pages/api/active-leads/production-rollout.ts          # MLC-INLINE admin gate
+pages/api/active-leads/production-safeguards.ts       # MLC-INLINE admin gate
+pages/api/active-leads/recommendations.ts             # MLC-INLINE admin gate
+pages/api/active-leads/region-routing.ts              # MLC-INLINE admin gate
+pages/api/active-leads/replay-coordination.ts         # MLC-INLINE admin gate
+pages/api/active-leads/replay.ts                      # MLC-INLINE admin gate
+pages/api/active-leads/reports.ts                     # MLC-INLINE admin gate
+pages/api/active-leads/resilience-advisory.ts         # MLC-INLINE admin gate
+pages/api/active-leads/resilience-validation.ts       # MLC-INLINE admin gate
+pages/api/active-leads/retention.ts                   # MLC-INLINE admin gate
+pages/api/active-leads/safety-rails.ts                # MLC-INLINE admin gate
+pages/api/active-leads/semantic-indexing.ts           # MLC-INLINE admin gate
+pages/api/active-leads/semantic-runtime.ts            # MLC-INLINE admin gate
+pages/api/active-leads/sla.ts                         # MLC-INLINE admin gate
+pages/api/active-leads/source-health.ts               # MLC-INLINE admin gate
+pages/api/active-leads/source-recommendations/discovery.ts  # MLC-INLINE admin gate
+pages/api/active-leads/sources.ts                     # MLC-INLINE admin gate
+pages/api/active-leads/sre-operations.ts              # MLC-INLINE admin gate
+pages/api/active-leads/support-snapshots.ts           # MLC-INLINE admin gate
+pages/api/active-leads/tenant-onboarding-runtime.ts   # MLC-INLINE admin gate
+pages/api/active-leads/workflow.ts                    # MLC-INLINE admin gate

@@ -99,6 +99,9 @@ describe('ENGAGER (owner ruling: triage + draft, never send)', () => {
   });
 });
 
+// LOAD-BEARING (05): extension/bootstrap is asserted with 'any403' above (its refusal comes from enforceRole, not the
+// ROLE_FORBIDDEN guard). An unrelated 403 would satisfy that - it is THIS admin control (`not.toBe(403)` on the SAME
+// case) that makes it meaningful. Do not prune these admin cases as redundant.
 describe('CONTROL: COMPANY_ADMIN passes every role gate', () => {
   beforeEach(() => setRole('COMPANY_ADMIN'));
   it.each([...ENGAGER_ALLOWED, ...DEFAULT_RULE, ...SPECIAL].map((c) => [`${c.rel}${c.body?.action ? ` (${c.body.action})` : ''}`, c] as const))(

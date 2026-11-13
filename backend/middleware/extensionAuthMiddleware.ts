@@ -19,8 +19,8 @@ import {
   verifyExtensionRequestSignature,
 } from '@/backend/services/extensionSessionService';
 import { supabase } from '@/backend/db/supabaseClient';
-import { COMMUNITY_AI_CAPABILITIES } from '@/backend/services/rbac/communityAiCapabilities';
-import { normalizePermissionRole, isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { hasCommunityAiCapability } from '@/backend/services/rbac/communityAiCapabilities';
+import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 
 /**
  * e9 BLOCKING (b), 2026-11-13: an extension token EXECUTES engagement actions (command leasing, action results, event
@@ -33,7 +33,18 @@ import { normalizePermissionRole, isPlatformSuperAdmin } from '@/backend/service
  * Only ALLOWED results are cached (EXTENSION_ROLE_CACHE_MS): a re-grant takes effect at once; a revoke within that.
  */
 export const EXTENSION_ROLE_CACHE_MS = 60_000;
+/** Bounded (05): expired entries are pruned on write, and the map never exceeds this many live entries. */
+export const EXTENSION_ROLE_CACHE_MAX = 5_000;
 const extensionRoleCache = new Map<string, number>();
+function cacheAllow(key: string, nowMs: number): void {
+  for (const [k, until] of extensionRoleCache) if (until <= nowMs) extensionRoleCache.delete(k);
+  if (extensionRoleCache.size >= EXTENSION_ROLE_CACHE_MAX) {
+    const oldest = extensionRoleCache.keys().next().value; // insertion order: the oldest entry
+    if (oldest !== undefined) extensionRoleCache.delete(oldest);
+  }
+  extensionRoleCache.set(key, nowMs + EXTENSION_ROLE_CACHE_MS);
+}
+export function __extensionRoleCacheSizeForTests(): number { return extensionRoleCache.size; }
 export function __resetExtensionRoleCacheForTests(): void { extensionRoleCache.clear(); }
 
 export async function extensionUserMayExecute(userId: string, orgId: string, nowMs: number = Date.now()): Promise<'allow' | 'deny' | 'unavailable'> {
@@ -47,11 +58,14 @@ export async function extensionUserMayExecute(userId: string, orgId: string, now
       .eq('company_id', orgId)
       .eq('status', 'active');
     if (error) return 'unavailable';
-    const allowed = new Set<string>(COMMUNITY_AI_CAPABILITIES.EXECUTE_ACTIONS as readonly string[]);
-    let ok = (Array.isArray(data) ? data : []).some((r: { role?: unknown }) => allowed.has(String(normalizePermissionRole(String(r.role ?? '').trim().toUpperCase()))));
-    if (!ok) ok = await isPlatformSuperAdmin(userId); // EXECUTE_ACTIONS includes SUPER_ADMIN, as enforceRole honours it
+    // The ONE capability check (05: reuse hasCommunityAiCapability). The UPPER-CASING is NOT redundant: the helper's
+    // normalizePermissionRole does not fold case, so a stored 'company_admin' would otherwise be refused (pinned).
+    let ok = (Array.isArray(data) ? data : []).some((r: { role?: unknown }) => hasCommunityAiCapability(String(r.role ?? '').trim().toUpperCase(), 'EXECUTE_ACTIONS'));
+    // EXECUTE_ACTIONS includes SUPER_ADMIN, as enforceRole honours it. If isPlatformSuperAdmin swallows a read
+    // failure as "not a super-admin", the result is a false DENY - safe (fails closed), deliberately not a 503.
+    if (!ok) ok = await isPlatformSuperAdmin(userId);
     if (!ok) return 'deny';
-    extensionRoleCache.set(key, nowMs + EXTENSION_ROLE_CACHE_MS);
+    cacheAllow(key, nowMs);
     return 'allow';
   } catch {
     return 'unavailable';

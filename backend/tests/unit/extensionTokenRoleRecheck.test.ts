@@ -79,3 +79,13 @@ it('the middleware answers 403 / 503 from the decision (source pin: both branche
   expect(recheckAt).toBeGreaterThan(sigAt);
   expect(src.slice(recheckAt)).toMatch(/status\(503\)[\s\S]*ROLE_CHECK_UNAVAILABLE[\s\S]*status\(403\)[\s\S]*EXTENSION_ROLE_REVOKED[\s\S]*return \{ session \}/);
 });
+
+it('05: the cache is BOUNDED - expired entries are pruned on write', async () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const m = require('@/backend/middleware/extensionAuthMiddleware');
+  mockDb.rows = [{ role: 'COMPANY_ADMIN' }];
+  for (let i = 0; i < 10; i++) await extensionUserMayExecute(`u${i}`, O, T0);
+  expect(m.__extensionRoleCacheSizeForTests()).toBe(10);
+  await extensionUserMayExecute('u-late', O, T0 + EXTENSION_ROLE_CACHE_MS + 1); // all 10 expired -> pruned on this write
+  expect(m.__extensionRoleCacheSizeForTests()).toBe(1);
+});
