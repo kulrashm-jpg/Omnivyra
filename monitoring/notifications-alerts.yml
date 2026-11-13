@@ -15,6 +15,15 @@
 #             campaign_approved, credit_alert, ...)
 # The LOG event NOTIFICATION_UNDELIVERABLE carries the company id for diagnosis; the metric deliberately does not
 # (label cardinality).
+#
+# LIVENESS DEPENDENCY (05, 2026-11-13) - these rules are only as live as the counter behind them:
+#   recordRawCounter is safeIncr (backend/observability/metrics.ts), which DROPS every counter when
+#   observabilityConfig.enabled is false. That flag is env OBSERVABILITY_ENABLED (backend/observability/config.ts),
+#   DEFAULT TRUE. Production state: UNCONFIRMED - asked of virality-83 (an env fact; not read by 6f). Until it is
+#   confirmed true AND this file is loaded by the production Prometheus that scrapes the exporter, treat the rules
+#   as a RELEASE CONDITION, not a shipped control. Fallback that exists today regardless: the log lines
+#   NOTIFICATION_UNDELIVERABLE / NOTIFICATION_INSERT_FAILED - route CreditAlertUndeliverable through log-based
+#   alerting if the metric path is off (the one case where nobody noticing has a money consequence).
 ---
 groups:
   - name: notification_delivery
