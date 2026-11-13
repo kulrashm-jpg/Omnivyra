@@ -68,6 +68,31 @@ describe('batchAiProcessor: one LLM prompt never carries more than one company',
     expect((await pb).hook).toBe(`HOOK for ${b.topic}`);
   });
 
+  it('fairness (05): the OLDEST pending item’s company flushes first - a later burst from A never starves B', async () => {
+    const b = batchedGenerateBlueprint(item(CO_B, 'B early'));
+    const burst = Array.from({ length: 10 }, () => batchedGenerateBlueprint(item(CO_A, 'A burst')));
+    await flushBatchNow();
+    expect(prompts[0].every((x) => x.topic.startsWith('B '))).toBe(true);
+    await flushBatchNow();
+    await Promise.all([b, ...burst]);
+    expect(prompts[1].every((x) => x.topic.startsWith('A '))).toBe(true);
+  });
+
+  it('a second company’s leftover items flush immediately, not after another coalescing window', async () => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    try {
+      const pa = batchedGenerateBlueprint(item(CO_A, 'A timed'));
+      const pb = batchedGenerateBlueprint(item(CO_B, 'B timed'));
+      await jest.advanceTimersByTimeAsync(3_000); // the one coalescing window -> A's batch
+      expect(prompts).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(1); // leftover B flushes at once (delay 0), not after another 3 s
+      expect(prompts).toHaveLength(2);
+      await Promise.all([pa, pb]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('fails closed without a company: rejects, and nothing reaches the LLM', async () => {
     await expect(batchedGenerateBlueprint(item(undefined, 'no company'))).rejects.toThrow(/company_id is required/);
     await flushBatchNow();

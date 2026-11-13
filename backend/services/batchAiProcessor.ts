@@ -77,9 +77,9 @@ function asObject(v: unknown): Record<string, unknown> {
 let _pending: PendingRequest[] = [];
 let _timer: ReturnType<typeof setTimeout> | null = null;
 
-function scheduleFlusher() {
+function scheduleFlusher(delayMs: number = BATCH_WINDOW_MS) {
   if (_timer !== null) return;
-  _timer = setTimeout(flushBatch, BATCH_WINDOW_MS);
+  _timer = setTimeout(flushBatch, delayMs);
 }
 
 async function flushBatch() {
@@ -98,7 +98,10 @@ async function flushBatch() {
     if (p.companyId === batchCompany && batch.length < batchSize) batch.push(p); else rest.push(p);
   }
   _pending = rest;
-  if (_pending.length > 0) scheduleFlusher();
+  // Fairness: the batch company is the OLDEST pending item's, so draining is FIFO by company and no company waits
+  // behind a busy one indefinitely. Items left over have already waited a full window, so the next flush runs
+  // immediately instead of opening another coalescing window per remaining company.
+  if (_pending.length > 0) scheduleFlusher(0);
 
   const { content: systemPrompt } = getContentBlueprintPromptWithFingerprint();
 
