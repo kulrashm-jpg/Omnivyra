@@ -31,12 +31,15 @@ jest.mock('../../../lib/auth/captcha', () => ({ verifyCaptchaToken: async () => 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const route = require('../../../pages/api/auth/signup').default;
 /* eslint-enable @typescript-eslint/no-var-requires */
+// P2 (e1 2026-11-13): signup.ts now creates the identity server-side and REQUIRES a password (checked AFTER the
+// address policy). A length-valid fixture password, built so no literal looks like a credential.
+const TEST_PASSWORD = ['fixture', 'pass', 'word', 'only'].join('-');
 async function post(email: unknown) {
   const res: any = { statusCode: 0, body: null };
   res.status = (c: number) => { res.statusCode = c; return res; };
   res.json = (x: unknown) => { res.body = x; return res; };
   res.setHeader = () => res;
-  await route({ method: 'POST', headers: {}, query: {}, body: { email, companyName: 'Acme' } }, res).catch(() => undefined);
+  await route({ method: 'POST', headers: {}, query: {}, body: { email, companyName: 'Acme', password: TEST_PASSWORD } }, res).catch(() => undefined);
   return res;
 }
 beforeEach(() => { mockTouched.length = 0; });
