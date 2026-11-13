@@ -15,6 +15,12 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+// Live prod settles token-priced work with ONE credit_transactions row of execution_phase 'confirm_partial' (C100,
+// 2026-11-13: the live apply_credit_partial_confirm); fixed-cost confirms write 'confirm'. Both are credits USED.
+// TODO(e1): replace with CONFIRM_PHASES from backend/services/billing/holdSettlementState.ts once the settle fix
+// (fix/settle-ambiguity-no-release-20261113) is on main - kept local so this customer-visible fix ships first.
+const CONFIRM_PHASES: readonly string[] = ['confirm', 'confirm_partial'];
+
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { assertOrgAccess } from '../../../../backend/services/requestAccessService';
 import { getBillingWalletSnapshot } from '../../../../backend/services/billing/payments/billingWalletService';
@@ -64,7 +70,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .from('credit_transactions')
       .select('reference_type, credits_delta')
       .eq('organization_id', companyId)
-      .eq('execution_phase', 'confirm')
+      .in('execution_phase', [...CONFIRM_PHASES])
       .gte('created_at', periodStart)
       .limit(2000);
     const byModule: Record<string, number> = {};
