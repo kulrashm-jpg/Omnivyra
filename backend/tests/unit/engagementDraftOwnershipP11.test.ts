@@ -53,9 +53,16 @@ const OTHER_ORG = 'org_rival';
 const USER = 'user_1';
 
 let accessAllowed = true;
+// Faithful to the real enforceCompanyAccess: the caller must be an ACTIVE member of the company it names
+// (403 otherwise). The default company is the first active membership.
+const memberships = new Set<string>([ORG]);
 jest.mock('../../services/userContextService', () => ({
   resolveUserContext: async () => ({ userId: USER, defaultCompanyId: ORG }),
-  enforceCompanyAccess: async () => (accessAllowed ? { userId: USER } : null),
+  enforceCompanyAccess: async ({ res, companyId }: { res: any; companyId: string }) => {
+    if (!accessAllowed) return null;
+    if (!memberships.has(companyId)) { res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' }); return null; }
+    return { userId: USER };
+  },
 }));
 jest.mock('@/lib/api/withContract', () => ({ withContract: (h: unknown) => h }));
 
@@ -97,6 +104,8 @@ beforeEach(() => {
   db.engagement_messages = [];
   db.campaign_activity_engagement_signals = [];
   accessAllowed = true;
+  memberships.clear();
+  memberships.add(ORG);
   generateEngagementResponseMock.mockClear();
 });
 
@@ -137,12 +146,28 @@ describe('P1.1 draft ownership', () => {
     expect(draftCount()).toBe(0);
   });
 
-  it('T6: a client-supplied company_id cannot redirect the ownership check', async () => {
-    // The authenticated default company wins; the body value is only a fallback
-    // and is still membership-checked by enforceCompanyAccess.
+  it('T6: a client-supplied company_id the caller is NOT a member of is refused (no draft)', async () => {
+    // Pre-launch (active-company sweep): the explicit company the client works in now wins over the default, so
+    // the guard is the membership check on THAT company - a non-member company can never be named.
     const res = await post({ thread_id: 'theirs', company_id: OTHER_ORG });
     expect(res.statusCode).toBe(403);
     expect(draftCount()).toBe(0);
+  });
+
+  it('T6b: a member of TWO companies working in the second one gets that company (not the default)', async () => {
+    memberships.add(OTHER_ORG);
+    const res = await post({ thread_id: 'theirs', company_id: OTHER_ORG });
+    expect(res.statusCode).toBe(200);
+    expect(draftCount()).toBe(1);
+    expect(db.ai_message_drafts[0].thread_id).toBe('theirs');
+  });
+
+  it('T6c: organization_id (what the engagement inbox sends) is honoured the same way', async () => {
+    memberships.add(OTHER_ORG);
+    const res = await post({ thread_id: 'theirs', organization_id: OTHER_ORG });
+    expect(res.statusCode).toBe(200);
+    const denied = await post({ thread_id: 'mine', organization_id: 'org_nobody' });
+    expect(denied.statusCode).toBe(403);
   });
 
   it('the signal-resolved path is authorized too, not just the direct thread_id', async () => {

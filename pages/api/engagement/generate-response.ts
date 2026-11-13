@@ -59,7 +59,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const user = await resolveUserContext(req);
-    const company_id = (user?.defaultCompanyId || req.body?.company_id) as string | undefined;
+    // Pre-launch (active-company sweep): the company the client is WORKING IN wins - company_id, or organization_id
+    // (what the engagement inbox sends) - and only then the default (the user's first active membership). The old
+    // order let a multi-company user's default silently override the company they had open. Membership in the
+    // chosen company is enforced right below either way.
+    const explicitCompanyId = [req.body?.company_id, req.body?.organization_id]
+      .find((v): v is string => typeof v === 'string' && v.trim() !== '');
+    const company_id = (explicitCompanyId?.trim() || user?.defaultCompanyId || undefined) as string | undefined;
 
     if (!company_id) {
       return res.status(400).json({ error: 'company_id required' });

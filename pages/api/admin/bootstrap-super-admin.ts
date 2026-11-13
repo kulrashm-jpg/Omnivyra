@@ -449,29 +449,28 @@ async function assignSuperAdmin(
   userId: string,
   organizationIdOverride: string | null,
 ): Promise<AssignResult | AssignFailure> {
-  // Resolve the org to bind the role row to:
+  // Resolve the org to bind the role row to (pre-launch, active-company sweep):
   //   1. organizationIdOverride (caller-provided) if set;
-  //   2. otherwise the user's active_company_id;
-  //   3. otherwise the most recent company_id from any user_company_roles row;
-  //   4. otherwise reject — SUPER_ADMIN must bind to at least one org row.
+  //   2. otherwise the user's ONLY ACTIVE membership;
+  //   3. several active memberships -> 412 organization_ambiguous (the caller must name the org);
+  //   4. none -> 412 no_organization_to_bind.
+  // Never users.active_company_id (a mutable pointer: in prod most pointers name a company whose membership is
+  // INACTIVE) and never an inactive role row - SUPER_ADMIN must not be bound to a company the user is not an
+  // active member of.
   let organizationId: string | null = organizationIdOverride;
 
   if (!organizationId) {
-    const { data: userRow } = await ownedDbTable('users')
-      .select('active_company_id')
-      .eq('id', userId)
-      .maybeSingle();
-    organizationId = (userRow as { active_company_id: string | null } | null)?.active_company_id ?? null;
-  }
-
-  if (!organizationId) {
-    const { data: roleRow } = await ownedDbTable('user_company_roles')
+    const { data: activeRows } = await ownedDbTable('user_company_roles')
       .select('company_id')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    organizationId = (roleRow as { company_id: string | null } | null)?.company_id ?? null;
+      .eq('status', 'active');
+    const activeCompanies = Array.from(new Set(
+      ((activeRows ?? []) as Array<{ company_id: string | null }>).map((r) => r.company_id).filter((c): c is string => !!c),
+    ));
+    if (activeCompanies.length > 1) {
+      return { ok: false, reason: 'organization_ambiguous', status: 412 };
+    }
+    organizationId = activeCompanies[0] ?? null;
   }
 
   if (!organizationId) {

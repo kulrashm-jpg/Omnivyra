@@ -145,9 +145,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     actorUserId,
     action: 'SUPER_ADMIN_USER_SUSPEND',
     targetUserId: userId,
-    companyId: u.active_company_id,
+    // A user-level platform action: not filed under any company (the target's active_company_id is a mutable,
+    // often stale pointer - filing under it showed this row, incl. target_email, in an unrelated company's audit).
+    companyId: null,
     metadata: {
       capability: IDENTITY_ADMIN_ASSIGN,
+      target_active_company_id: u.active_company_id ?? null, // forensic context only; never used for scoping
       reason,
       before: { status: u.status ?? 'active' },
       after: { status: 'suspended' },
