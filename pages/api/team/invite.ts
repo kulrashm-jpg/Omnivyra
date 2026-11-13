@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../../lib/auth/emailAddressPolicy';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
@@ -47,8 +48,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     companyId?: string;
   };
 
-  if (!email || typeof email !== 'string' || !email.includes('@')) {
-    return res.status(400).json({ error: 'A valid email address is required' });
+  // Conservative address policy where an invited address first enters (defence in depth).
+  if (!email || typeof email !== 'string' || !isAcceptableEmailAddress(email)) {
+    return res.status(400).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE });
   }
   if (!VALID_ROLES.has(role)) {
     return res.status(400).json({ error: `role must be one of: ${[...VALID_ROLES].join(', ')}` });

@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../../lib/auth/emailAddressPolicy';
 
 /**
  * POST /api/auth/signup
@@ -79,7 +80,7 @@ async function handler(
     captchaToken?: string | null;
   };
 
-  if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
+  if (typeof email !== 'string' || !email.trim()) return res.status(400).json({ error: 'email is required' });
 
   // ── 0. CAPTCHA (no-op until CAPTCHA_PROVIDER is configured) ──────────────
   const captcha = await verifyCaptchaToken(captchaToken, ip);
@@ -95,6 +96,8 @@ async function handler(
   if (!trimmedCompany) return res.status(400).json({ error: 'companyName is required' });
   if (trimmedCompany.length > 80) return res.status(400).json({ error: 'companyName is too long' });
 
+  // Conservative address policy where an address first enters (defence in depth; never rely on the provider).
+  if (!isAcceptableEmailAddress(email)) return res.status(400).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE });
   const normalizedEmail = email.trim().toLowerCase();
   const domain = normalizedEmail.split('@')[1] ?? '';
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });

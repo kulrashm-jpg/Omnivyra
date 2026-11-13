@@ -78,6 +78,16 @@ export const AUTH_ERROR_REGISTRY: Readonly<Record<AuthErrorCode, AuthErrorContra
     analyticsEvent: 'auth.account_deleted',
     defaultMessage: 'This account has been removed.',
   },
+  [AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED]: {
+    code:           AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED,
+    category:       'identity',
+    httpStatus:     403,
+    fatal:          true,
+    retryable:      false,
+    presentation:   'redirect_login',
+    analyticsEvent: 'auth.email_policy_refused',
+    defaultMessage: 'Please use a standard email address (letters, digits and . _ + - before the @).',
+  },
   [AUTH_ERROR_CODE.ACCOUNT_DISABLED]: {
     code:           AUTH_ERROR_CODE.ACCOUNT_DISABLED,
     category:       'lifecycle',
