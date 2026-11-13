@@ -27,26 +27,28 @@ jest.mock('../../services/userContextService', () => {
     enforceCompanyAccessUniform: async ({ res, companyId }: Row) => (member(companyId) ? { userId: 'user-a' } : (res.status(404).json(NF), null)),
   };
 });
-jest.mock('../../services/creator/userTemplateService', () => ({
-  getUserTemplateCompanyId: async (id: string) => ({ 'tpl-a': '11111111-1111-4111-8111-111111111111', 'tpl-b': '22222222-2222-4222-8222-222222222222' } as Record<string, string>)[id] ?? null,
-  getUserTemplateForCompany: async (id: string, companyId: string) =>
-    (({ 'tpl-a': '11111111-1111-4111-8111-111111111111', 'tpl-b': '22222222-2222-4222-8222-222222222222' } as Record<string, string>)[id] === companyId ? { id } : null),
-  getUserTemplate: async (id: string) => ({ id }),
-}));
+// The REAL health service runs over this template store. "Health resolved" = the template's
+// audit trail was read (mockHealthCalls), which must never happen for another tenant's id.
+jest.mock('../../services/creator/userTemplateService', () => {
+  const owner: Record<string, string> = { 'tpl-a': '11111111-1111-4111-8111-111111111111', 'tpl-b': '22222222-2222-4222-8222-222222222222' };
+  return {
+    getUserTemplateCompanyId: async (id: string) => owner[id] ?? null,
+    getUserTemplateForCompany: async (id: string, companyId: string) => (owner[id] === companyId ? { id, version: 1, status: 'published', metadata: {} } : null),
+    getUserTemplate: async (id: string) => ({ id }),
+    listTemplateAudit: async (id: string) => { require('./creatorTemplateHealthTenant.test').__calls.push(id); return []; },
+    listUserTemplateVersions: async () => [],
+    listUserTemplates: async ({ companyId }: { companyId: string }) => Object.keys(owner).filter((k) => owner[k] === companyId).map((id) => ({ id })),
+  };
+});
 jest.mock('../../services/creator/userTemplatePreviewService', () => ({ enqueueUserTemplatePreview: jest.fn() }));
 jest.mock('../../services/creator/creatorObservabilityService', () => ({ getCreatorObservabilityReport: async () => ({}) }));
-jest.mock('../../services/creator/templateHealthService', () => ({
-  getTemplateHealth: async (id: string) => { mockHealthCalls.push(id); return { id, status: 'published' }; },
-  getTemplateOperationalDashboard: async ({ templateIds }: { templateIds?: string[] }) => {
-    for (const id of templateIds ?? []) mockHealthCalls.push(id);
-    return { templates: (templateIds ?? []).map((id) => ({ id })), system: {} };
-  },
-}));
+export const __calls = mockHealthCalls;
 // The registry: one real system template, and a USER template that a render already registered
 // (the registry serves both - only `ownership` tells them apart).
-jest.mock('../../../lib/creator-templates', () => ({
-  getTemplateById: (id: string) => (id === 'sys-carousel' ? { id, ownership: 'system' } : id === 'tpl-b' ? { id, ownership: 'user' } : null),
-}));
+jest.mock('../../../lib/creator-templates', () => {
+  const actual = jest.requireActual('../../../lib/creator-templates');
+  return { ...actual, getTemplateById: (id: string) => (id === 'sys-carousel' ? { id, ownership: 'system', version: 3 } : id === 'tpl-b' ? { id, ownership: 'user', version: 1 } : null) };
+});
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const health = require('../../../pages/api/creator-templates/health').default;
@@ -94,7 +96,8 @@ describe('health dashboard ?company_id=&ids= (path 2)', () => {
   it("another tenant's ids are dropped BEFORE resolution; own + system are kept", async () => {
     const r = await call(health, 'GET', { company_id: A, ids: 'tpl-a,tpl-b,sys-carousel,tpl-nope' });
     expect(r.statusCode).toBe(200);
-    expect(mockHealthCalls.sort()).toEqual(['sys-carousel', 'tpl-a']);
+    expect(mockHealthCalls).toEqual(['tpl-a']); // only A's trail read; system = catalog only
+    expect(r.body.templates.map((t: Row) => t.templateId ?? t.id).sort()).toEqual(['sys-carousel', 'tpl-a']);
     expect(JSON.stringify(r.body)).not.toContain('tpl-b');
   });
 
@@ -123,5 +126,23 @@ describe('observability retry_preview', () => {
   it('own template -> 202 retried', async () => {
     const r = await call(observability, 'POST', {}, { company_id: A, action: 'retry_preview', template_id: 'tpl-a' });
     expect(r.statusCode).toBe(202);
+  });
+});
+
+describe('05 NB-1: the invariant lives in the SERVICE (any future caller inherits it)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const svc = require('../../services/creator/templateHealthService');
+  it("getTemplateHealth(foreignId, A) is null and reads nothing of B's", async () => {
+    await expect(svc.getTemplateHealth('tpl-b', A)).resolves.toBeNull();
+    expect(mockHealthCalls).toEqual([]);
+  });
+  it("getTemplateOperationalDashboard({ companyId: A, templateIds: [B's] }) returns nothing of B's", async () => {
+    const d = await svc.getTemplateOperationalDashboard({ companyId: A, templateIds: ['tpl-b'] });
+    expect(d.templates).toEqual([]);
+    expect(mockHealthCalls).toEqual([]);
+  });
+  it('05 NB-2: ONE system predicate - isSystemTemplate rejects a registered USER template', () => {
+    expect(svc.isSystemTemplate('sys-carousel')).toBe(true);
+    expect(svc.isSystemTemplate('tpl-b')).toBe(false);
   });
 });
