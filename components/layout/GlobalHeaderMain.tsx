@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   BarChart3,
   BookOpen,
+  Building2,
   Camera,
   ChevronDown,
   ChevronRight,
@@ -288,6 +289,11 @@ function UserMenu({
           </div>
 
           <div className="space-y-0.5 p-1.5">
+            {/* Company profile was reachable from no menu (only dashboard cards). */}
+            <Link href="/company-profile" className={itemClassName}>
+              <Building2 className="h-4 w-4 text-slate-400" />
+              Company profile
+            </Link>
             <Link href="/pricing" className={itemClassName}>
               <CreditCard className="h-4 w-4 text-slate-400" />
               Pricing & Plans

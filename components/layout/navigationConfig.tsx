@@ -1,10 +1,12 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  Building2,
   CreditCard,
   FileText,
   Home,
   LayoutDashboard,
   Lightbulb,
+  Link2,
   Megaphone,
   MessageSquare,
   PenTool,
@@ -169,6 +171,35 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       },
     ],
   },
+  {
+    // Company set-up in one section: profile, every integration, and the team.
+    // Company profile previously had no menu entry at all.
+    label: 'Company',
+    href: '/company-profile',
+    icon: Building2,
+    description: 'Your company profile, integrations, and team.',
+    matchers: ['/company-profile', '/integrations', '/external-apis', '/social-platforms', '/team-management'],
+    children: [
+      {
+        label: 'Company profile',
+        description: 'Who you are, what you offer, and who you serve.',
+        href: '/company-profile',
+        icon: Building2,
+      },
+      {
+        label: 'Integrations',
+        description: 'Connect social accounts, analytics, data sources, and API keys.',
+        href: '/integrations',
+        icon: Link2,
+      },
+      {
+        label: 'Team',
+        description: 'Invite teammates and manage their roles.',
+        href: '/team-management',
+        icon: Users,
+      },
+    ],
+  },
 ];
 
 export const CREATE_ACTIONS: CreateAction[] = [
@@ -328,4 +359,9 @@ export const COMMAND_ITEMS: CommandItem[] = [
     group: 'Create' as const,
     keywords: item.keywords,
   })),
-];
+].filter(
+  // A section and its first child often share a destination (Campaigns / All
+  // Campaigns, Company / Company profile). Keep the first entry per id so the
+  // palette lists each destination once and React keys (key={item.id}) stay unique.
+  (item, index, all) => all.findIndex((other) => other.id === item.id) === index,
+);
