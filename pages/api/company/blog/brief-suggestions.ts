@@ -75,8 +75,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Verify user authentication and company access
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
-  // Write-role gate (e1 2026-11-13, 55's write-role scan): membership alone let a VIEW_ONLY member write here.
-  // Reads stay membership-only; every non-GET method needs a content authoring role.
+  // Write-role gate (e1 2026-11-13, 55's write-role scan): this POST writes no row but SPENDS the company's credits on
+  // AI, so it takes the write role under the "AI spend follows authoring" policy (contentWriteAuthz.ts). Revisit if a
+  // read-and-spend-but-not-author role is ever introduced - this is the first route that would move.
   if (req.method !== 'GET' && !(await enforceContentWriteRole({ req, res, companyId: company_id }))) return;
 
   try {

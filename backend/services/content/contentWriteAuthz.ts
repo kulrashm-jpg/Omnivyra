@@ -30,6 +30,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceRole, Role } from '../rbacService';
 
+/**
+ * POLICY - AI spend follows authoring (owner ruling "Viewers trigger no AI"; written down 2026-11-13 after 55, 6f and
+ * e1 applied it independently): a POST that REACHES THE AI GATEWAY requires this write role even when it writes no
+ * row - it spends the company's credits. A POST that reaches no AI gateway and writes nothing (e.g. a pure preview)
+ * may stay membership-only. Apply this rule; do not re-decide it per route.
+ * Revisit if a role is ever introduced that may read and SPEND but not author (an analyst / reviewer archetype): then
+ * spend needs its own role set, and the spend-only POSTs gated here (first: company blog brief-suggestions) move to it.
+ */
 /** Content authoring roles — rbacService PERMISSIONS.CREATE_CAMPAIGN. */
 export const CONTENT_WRITE_ROLES: readonly Role[] = Object.freeze([
   Role.COMPANY_ADMIN,
