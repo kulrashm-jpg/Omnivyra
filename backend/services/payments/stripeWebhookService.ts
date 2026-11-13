@@ -211,7 +211,8 @@ export interface StripeWebhookDeps {
 
   recordPaymentTransaction?: (input: RecordPaymentTransactionInput) => Promise<{ inserted: boolean; duplicate: boolean }>;
 
-  /** Subscription lifecycle write-path — populates billing_subscriptions from sub events. Best-effort. */
+  /** Subscription lifecycle write-path — populates billing_subscriptions from sub events. Its result is READ: a
+   *  non-terminal outcome fails the webhook (500) so Stripe retries (see isTerminalSubscriptionOutcome). */
   /** `event` = the provider event's id + created: the ledger applies subscription events in that order. */
   applySubscriptionEvent?: (eventType: string, obj: StripeEventObject, organizationId: string | null, event: { id: string; created: number }) => Promise<{ applied: boolean; reason?: string }>;
 
@@ -267,7 +268,7 @@ export async function processStripeWebhookEvent(
     organizationId: resolved.organizationId,
     payload: evt as unknown as Record<string, unknown>,
   });
-  if (recorded.duplicate) {
+  if (recorded.duplicate && !shouldReprocessSubscriptionDuplicate(action, recorded.processingStatus)) {
     return { status: 'duplicate', eventId: evt.id, eventType: evt.type };
   }
 
@@ -277,21 +278,41 @@ export async function processStripeWebhookEvent(
     return { status: 'ignored', eventId: evt.id, eventType: evt.type, reason: 'unsupported_event_type' };
   }
 
-  if (action === 'record_refund' || action === 'record_dispute' || action === 'record_subscription') {
+  if (action === 'record_subscription') {
+    // BLOCKING money fix (e9 ruling 2026-11-13): this used to swallow every ledger failure ("best-effort"), mark the
+    // event processed and answer 200, so Stripe never retried a dropped cancel/activation. Now the result is READ:
+    // a terminal outcome (applied, or a deliberate/unfixable skip) marks processed and answers 2xx; anything else
+    // marks the event 'failed' and THROWS, so the route answers 500 and Stripe redelivers (bounded by Stripe's retry
+    // window, ~3 days). 'processed' is written only after the apply returned a terminal outcome, never before.
+    if (deps.applySubscriptionEvent) {
+      let outcome: { applied: boolean; reason?: string };
+      try {
+        outcome = await deps.applySubscriptionEvent(evt.type, obj, resolved.organizationId, { id: evt.id, created: evt.created });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await markFailed(deps, recorded.id, `subscription_ledger_threw:${message}`);
+        throw new SubscriptionLedgerRetryableError(`subscription_ledger_threw:${message}`);
+      }
+      if (!isTerminalSubscriptionOutcome(outcome)) {
+        const reason = outcome?.reason ?? 'unknown';
+        await markFailed(deps, recorded.id, `subscription_ledger_failed:${reason}`);
+        throw new SubscriptionLedgerRetryableError(`subscription_ledger_failed:${reason}`);
+      }
+    }
+    await markProcessed(deps, recorded.id);
+    return {
+      status: 'processed',
+      eventId: evt.id,
+      eventType: evt.type,
+      organizationId: resolved.organizationId,
+      paymentRecorded: false,
+    };
+  }
+
+  if (action === 'record_refund' || action === 'record_dispute') {
     // Append-only: we record into payment_provider_events (already done).
     // No payment_transactions write; reconciler (7F) emits compensating
     // adjustment rows from Stripe's balance_transactions export.
-    //
-    // Subscription lifecycle write-path: maintain billing_subscriptions as the authoritative
-    // ledger. Best-effort — a failure here never breaks webhook processing (the event is
-    // already durably recorded above and can be replayed/reconciled).
-    if (action === 'record_subscription' && deps.applySubscriptionEvent) {
-      try {
-        await deps.applySubscriptionEvent(evt.type, obj, resolved.organizationId, { id: evt.id, created: evt.created });
-      } catch {
-        /* best-effort: ledger upsert failure must not fail the webhook */
-      }
-    }
     await markProcessed(deps, recorded.id);
     return {
       status: 'processed',
@@ -372,6 +393,39 @@ export async function processStripeWebhookEvent(
     creditsGranted,
     paymentRecorded,
   };
+}
+
+async function markFailed(deps: StripeWebhookDeps, id: string | null, reason: string): Promise<void> {
+  if (deps.markEvent && id) await deps.markEvent(id, 'failed', reason);
+}
+
+/** A subscription-ledger failure Stripe should retry: the route answers 500 (it catches throws). */
+export class SubscriptionLedgerRetryableError extends Error {
+  constructor(message: string) { super(message); this.name = 'SubscriptionLedgerRetryableError'; }
+}
+
+/**
+ * Ledger outcomes that are FINAL: retrying cannot change them, so the event is marked processed and answered 2xx.
+ * applied; stale_event / duplicate_event (deliberate no-ops of the ordering fix); no_org / incomplete_event /
+ * missing_event_ref (the event itself lacks what the ledger needs). Everything else (a read/write error, contention,
+ * invalid_event_stamp, an unknown reason) is retryable.
+ */
+export const TERMINAL_SUBSCRIPTION_SKIPS = ['stale_event', 'duplicate_event', 'no_org', 'incomplete_event', 'missing_event_ref'] as const;
+export function isTerminalSubscriptionOutcome(outcome: { applied: boolean; reason?: string } | null | undefined): boolean {
+  if (!outcome) return false;
+  if (outcome.applied === true) return true;
+  return (TERMINAL_SUBSCRIPTION_SKIPS as readonly string[]).includes(String(outcome.reason));
+}
+
+/**
+ * A redelivered subscription event is reprocessed when its earlier attempt did not reach a terminal outcome
+ * ('failed', or still 'recorded' / 'requeued'). Safe: the ordered ledger write is idempotent per provider event id
+ * (a repeat of an applied event is a duplicate_event no-op). A 'processed' (or 'duplicate'/'ignored') event is never
+ * reprocessed, so a terminal outcome is not retried forever. Other actions keep the plain duplicate short-circuit.
+ */
+export function shouldReprocessSubscriptionDuplicate(action: string, processingStatus: string | null | undefined): boolean {
+  if (action !== 'record_subscription') return false;
+  return processingStatus === 'failed' || processingStatus === 'recorded' || processingStatus === 'requeued';
 }
 
 async function markProcessed(deps: StripeWebhookDeps, id: string | null): Promise<void> {
