@@ -722,6 +722,25 @@ export const TENANT_CHILD_TABLES = {
 } as const satisfies Record<string, { via: string; parent: TenantTableName | string; parentKey?: string; tag: TenantTag }>;
 export type TenantChildTableName = keyof typeof TENANT_CHILD_TABLES;
 /** GLOBAL tables (no tenant): platform-wide rows; the reason is the review record. */
+export const NOT_TENANT_TABLES: Record<string, string> = {
+  adapter_configs: "per-USER content-adapter preferences, UNIQUE(user_id, platform); not tenant content",
+  auth_audit_logs: "identity layer: user auth event audit",
+  auth_sessions: "identity layer: per user, spans companies",
+  companies: "tenant ROOT: the row IS the tenant; scope by id = ctx.companyId, never by a tenant column",
+  engagement_authors: "external platform identities deduped ACROSS tenants; tenant linkage is on the referencing engagement rows",
+  recovery_codes: "identity layer: user MFA recovery codes",
+  referrals: "cross-tenant referral ledger (referrer and referee orgs) by design",
+  signup_intents: "pre-account signup intent keyed by email: no company exists yet",
+  stepup_sessions: "identity layer: user step-up auth sessions",
+  totp_factors: "identity layer: user MFA factors",
+  trusted_devices: "identity layer: user device trust",
+  user_company_roles: "membership: keyed by user across companies BY DESIGN (auth resolves which companies a user may act in)",
+  user_preferences: "per-USER UI preference, UNIQUE(user_id); a user spans companies",
+  users: "identity: a user spans companies; users.company_id is legacy (C21: 105 NULL); access is the membership layer's",
+  webauthn_challenges: "identity layer: passkey ceremony challenges",
+  webauthn_credentials: "identity layer: user passkeys",
+};
+/** GLOBAL: no tenant at all (platform-wide content or system state). */
 export const GLOBAL_TABLES: Record<string, string> = {
   access_request_rate_limit: "pre-auth access-request abuse guard keyed by ip_hash (no tenant rows)",
   action_pricing_config: "platform credit pricing per action_key",

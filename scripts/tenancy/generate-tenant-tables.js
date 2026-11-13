@@ -223,25 +223,25 @@ const GLOBAL_TABLES = {
   worker_health: 'worker heartbeat telemetry (ops)',
 };
 /** Tables that carry a tenant-named column but are NOT tenant-owned rows (global config or cross-tenant ledgers). */
-const NOT_TENANT = new Set([
-  'users', // identity: a user spans companies; users.company_id is legacy (C21: 105 NULL); access is the membership layer's
-  'user_company_roles', // membership: keyed by user across companies BY DESIGN (auth resolves which companies a user may act in)
-  // 55 S2 U classification (2026-11-13, e9-assigned): tenant root, identity layer, cross-tenant by design.
-  'companies', // tenant ROOT: the row IS the tenant; scope by id = ctx.companyId, never by a tenant column
-  'engagement_authors', // external platform identities deduped ACROSS tenants; tenant linkage is on the referencing engagement rows
-  'referrals', // cross-tenant referral ledger (referrer and referee orgs) by design
-  'signup_intents', // pre-account signup intent keyed by email: no company exists yet
-  'auth_sessions', // identity layer: per user, spans companies
-  'auth_audit_logs', // identity layer: user auth event audit
-  'trusted_devices', // identity layer: user device trust
-  'webauthn_credentials', // identity layer: user passkeys
-  'webauthn_challenges', // identity layer: passkey ceremony challenges
-  'totp_factors', // identity layer: user MFA factors
-  'recovery_codes', // identity layer: user MFA recovery codes
-  'stepup_sessions', // identity layer: user step-up auth sessions
-  'user_preferences', // per-USER UI preference, UNIQUE(user_id); a user spans companies
-  'adapter_configs', // per-USER content-adapter preferences, UNIQUE(user_id, platform); not tenant content
-]);
+const NOT_TENANT_REASONS = {
+  users: "identity: a user spans companies; users.company_id is legacy (C21: 105 NULL); access is the membership layer's",
+  user_company_roles: "membership: keyed by user across companies BY DESIGN (auth resolves which companies a user may act in)",
+  companies: "tenant ROOT: the row IS the tenant; scope by id = ctx.companyId, never by a tenant column",
+  engagement_authors: "external platform identities deduped ACROSS tenants; tenant linkage is on the referencing engagement rows",
+  referrals: "cross-tenant referral ledger (referrer and referee orgs) by design",
+  signup_intents: "pre-account signup intent keyed by email: no company exists yet",
+  auth_sessions: "identity layer: per user, spans companies",
+  auth_audit_logs: "identity layer: user auth event audit",
+  trusted_devices: "identity layer: user device trust",
+  webauthn_credentials: "identity layer: user passkeys",
+  webauthn_challenges: "identity layer: passkey ceremony challenges",
+  totp_factors: "identity layer: user MFA factors",
+  recovery_codes: "identity layer: user MFA recovery codes",
+  stepup_sessions: "identity layer: user step-up auth sessions",
+  user_preferences: "per-USER UI preference, UNIQUE(user_id); a user spans companies",
+  adapter_configs: "per-USER content-adapter preferences, UNIQUE(user_id, platform); not tenant content",
+};
+const NOT_TENANT = new Set(Object.keys(NOT_TENANT_REASONS));
 const TAG_RULES = [
   ['money', /(credit|billing|invoice|payment|wallet|purchase|refund|subscription|pricing|monetiz|settlement|usage_event|cost|quota|ledger|charge)/],
   ['pii', /(person|persons|contact|lead|prospect|user|member|identity|email|phone|recipient|author|consent|erasure|suppression|governance|invitation|address|profile_person|unified_)/],
@@ -357,6 +357,7 @@ function build() {
   }
   const body = rows.map(([t, c, g]) => `  ${t}: { column: '${c}', tag: '${g}' },`).join('\n');
   const globalBody = Object.entries(GLOBAL_TABLES).sort().map(([t, why]) => `  ${t}: ${JSON.stringify(why)},`).join('\n');
+  const notTenantBody = Object.entries(NOT_TENANT_REASONS).sort().map(([t, why]) => `  ${t}: ${JSON.stringify(why)},`).join('\n');
   // Multi-hop overrides: a parent that is itself a child. Iterate to a fixpoint; an override whose chain never
   // reaches a direct table stays unclassified (and --strict refuses), never silently direct.
   for (let changed = true; changed;) {
@@ -395,6 +396,10 @@ ${viaBody}
 } as const satisfies Record<string, { via: string; parent: TenantTableName | string; parentKey?: string; tag: TenantTag }>;
 export type TenantChildTableName = keyof typeof TENANT_CHILD_TABLES;
 /** GLOBAL tables (no tenant): platform-wide rows; the reason is the review record. */
+export const NOT_TENANT_TABLES: Record<string, string> = {
+${notTenantBody}
+};
+/** GLOBAL: no tenant at all (platform-wide content or system state). */
 export const GLOBAL_TABLES: Record<string, string> = {
 ${globalBody}
 };
