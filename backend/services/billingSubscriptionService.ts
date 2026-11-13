@@ -172,6 +172,10 @@ export interface BillingSubDeps {
 // rejected: updated_at moves on ANY write, so it would refuse legitimate events.)
 // A stamp that is PRESENT but malformed (not {id: string, created: number}) fails closed: ordering cannot be decided
 // and silently treating it as unstamped would lose ordering without any error.
+// AT SHIP TIME (2026-11-13, reported by C53/C54 via e9 + 05, not measured here): prod billing_subscriptions had
+// 0 rows, so NO pre-existing row is unstamped; the audit line is a permanent first-event record, not a deploy-window
+// instrument. Prod has no metrics backend yet, so getUnstampedOldEventsApplied / getStaleSubscriptionEventsSkipped
+// are INERT until one exists: the log lines are the live control (log-based alerts, Grafana Cloud), not the counters.
 export interface ProviderEventRef { id: string; created: number }
 export type EventOrder = 'newer' | 'stale' | 'duplicate';
 
