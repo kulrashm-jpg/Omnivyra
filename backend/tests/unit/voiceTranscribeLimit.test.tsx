@@ -12,6 +12,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+// ChatVoiceButton now reads the active company + role (transcribe is company-scoped).
+jest.mock('../../../components/CompanyContext', () => ({ useCompanyContext: () => ({ selectedCompanyId: 'c1', userRole: 'CONTENT_CREATOR' }) }));
 import ChatVoiceButton, { MAX_RECORDING_MS, transcriptionErrorMessage } from '../../../components/ChatVoiceButton';
 
 const ROUTE = fs.readFileSync(path.join(__dirname, '../../../pages/api/voice/transcribe.ts'), 'utf8');
