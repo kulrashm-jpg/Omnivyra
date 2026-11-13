@@ -64,7 +64,7 @@ describe('the two usage summary routes count confirm_partial (source pin; mutati
   const src = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), 'utf8');
   it.each(['pages/api/credits/summary.ts', 'pages/api/company/billing/summary.ts'])('%s', (rel) => {
     const s = src(rel);
-    expect(s).toMatch(/const CONFIRM_PHASES: readonly string\[\] = \['confirm', 'confirm_partial'\];/);
+    expect(s).toMatch(/import \{ CONFIRM_PHASES \} from '[./]+shared\/billing\/creditPhaseVocabulary';/);
     expect(s).toMatch(/\.in\('execution_phase', \[\.\.\.CONFIRM_PHASES\]\)/);
     // positive control for the negative: the old single-phase filter is gone
     expect(s).not.toMatch(/\.eq\('execution_phase', 'confirm'\)/);

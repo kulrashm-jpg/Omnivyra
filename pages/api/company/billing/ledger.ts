@@ -16,6 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { assertOrgAccess } from '../../../../backend/services/requestAccessService';
+import { CONFIRM_PHASES, isConfirmPhase } from '../../../../shared/billing/creditPhaseVocabulary';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -39,7 +40,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .range(offset, offset + limit - 1);
 
   const phase = typeof req.query.executionPhase === 'string' ? req.query.executionPhase : null;
-  if (phase) q = q.eq('execution_phase', phase);
+  // 'confirm' (credits used) covers the live token-priced 'confirm_partial' rows too (shared vocabulary).
+  if (phase) q = isConfirmPhase(phase) ? q.in('execution_phase', [...CONFIRM_PHASES]) : q.eq('execution_phase', phase);
   const refType = typeof req.query.referenceType === 'string' ? req.query.referenceType : null;
   if (refType) q = q.eq('reference_type', refType);
   const since = typeof req.query.since === 'string' ? req.query.since : null;

@@ -61,6 +61,8 @@ function installSupabase(captured: Array<[string, unknown]>) {
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: (col: string, val: unknown) => { captured.push([col, val]); return chain; },
+      // .in() is a real PostgREST filter (usage readers use .in('execution_phase', CONFIRM_PHASES)); org pinning stays .eq.
+      in: () => chain,
       gte: () => chain,
       lte: () => chain,
       order: () => chain,

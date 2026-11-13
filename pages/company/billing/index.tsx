@@ -23,6 +23,7 @@ const CreditAdvisorDashboard = dynamic(() => import('../../../components/credit-
 import OptimizationPanel from '../../../components/credit-advisor/OptimizationPanel';
 import TopUpPanel from '../../../components/billing/TopUpPanel';
 import ActivityCostRange from '../../../components/billing/ActivityCostRange';
+import { customerLedgerPhaseLabel, isConfirmPhase } from '../../../shared/billing/creditPhaseVocabulary';
 
 type BillingView = 'advisor' | 'billing' | 'buy';
 
@@ -94,7 +95,7 @@ function dt(s: string | null | undefined): string {
   return s ? new Date(s).toLocaleString() : '—';
 }
 function phasePill(p: string): string {
-  if (['confirm', 'grant'].includes(p)) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  if (isConfirmPhase(p) || p === 'grant') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
   if (p === 'hold') return 'bg-blue-50 text-blue-700 border-blue-200';
   if (['release', 'expire', 'expire_incentive'].includes(p)) return 'bg-amber-50 text-amber-700 border-amber-200';
   return 'bg-slate-100 text-slate-700 border-slate-200';
@@ -425,7 +426,7 @@ export default function CompanyBillingPortal() {
                   <td className="py-2 pr-3 text-slate-500 whitespace-nowrap">{dt(r.created_at)}</td>
                   <td className="py-2 pr-3 whitespace-nowrap">
                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${phasePill(r.execution_phase)}`}>
-                      {r.execution_phase}
+                      {customerLedgerPhaseLabel(r.execution_phase)}
                     </span>
                     {r.execution_phase === 'hold' && (
                       <span className="ml-1 text-[10px] text-amber-700" title="Provisional reservation — not a firm charge until confirmed.">
@@ -463,7 +464,7 @@ export default function CompanyBillingPortal() {
           {(summary?.recentEvents ?? []).slice(0, expandEvents ? 12 : 2).map(e => (
             <li key={e.id} className="flex gap-3 text-sm">
               <span className="w-40 shrink-0 text-slate-500 text-xs">{dt(e.created_at)}</span>
-              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${phasePill(e.execution_phase)}`}>{e.execution_phase}</span>
+              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${phasePill(e.execution_phase)}`}>{customerLedgerPhaseLabel(e.execution_phase)}</span>
               <span className="text-slate-700">{e.credits_delta} cr · {e.reference_type ?? 'n/a'}</span>
             </li>
           ))}

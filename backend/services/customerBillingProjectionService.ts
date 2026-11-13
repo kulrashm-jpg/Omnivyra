@@ -9,12 +9,8 @@ import {
   guidanceForCustomerState,
 } from './customerBillingStatusService';
 import { getOrganizationBetaTag } from './monetizationBetaAccessService';
+import { CONFIRM_PHASES } from '../../shared/billing/creditPhaseVocabulary';
 
-// Live prod settles token-priced work with ONE credit_transactions row of execution_phase 'confirm_partial' (C100,
-// 2026-11-13: the live apply_credit_partial_confirm); fixed-cost confirms write 'confirm'. Both are credits USED.
-// TODO(e1): replace with CONFIRM_PHASES from backend/services/billing/holdSettlementState.ts once the settle fix
-// (fix/settle-ambiguity-no-release-20261113) is on main - kept local so this customer-visible fix ships first.
-const CONFIRM_PHASES: readonly string[] = ['confirm', 'confirm_partial'];
 
 export type CustomerBillingEventType =
   | 'purchase'
