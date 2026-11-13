@@ -13,7 +13,7 @@
  *
  * NOW.
  *   1. One invoice per (provider, period). A different provider_invoice_id for
- *      an already-imported period is REFUSED: the matcher compares an invoice
+ *      an already-imported OVERLAPPING period ([start, end) half-open) is REFUSED: the matcher compares an invoice
  *      against the WHOLE period's estimate, so two invoices for one period
  *      would each be matched against it and double-count the variance (and the
  *      run, unique per period, would have its totals overwritten). A split
@@ -85,19 +85,26 @@ export function estimateSnapshot(aggregates: UsageAggregate[]): { estimated_usd_
   };
 }
 
+/**
+ * Refuses when ANY other invoice of this provider covers a period that OVERLAPS this one (e1): identical bounds,
+ * a split window inside it, or bounds shifted by a timezone offset all double-count the overlap. Half-open
+ * [start, end), as the estimate reader uses (gte / lt): periods that merely TOUCH (one ends where the next starts)
+ * do not overlap and are allowed. The DB enforces identical bounds only (20270217000040's unique index; btree_gist
+ * is not installed, so no EXCLUDE constraint) - the overlap rule lives here.
+ */
 async function refuseOtherInvoiceForPeriod(a: PersistArgs): Promise<void> {
   const { data, error } = await supabase
     .from('provider_invoice_imports')
-    .select('provider_invoice_id')
+    .select('provider_invoice_id, period_start, period_end')
     .eq('provider', a.provider)
-    .eq('period_start', a.periodStart)
-    .eq('period_end', a.periodEnd);
+    .lt('period_start', a.periodEnd)
+    .gt('period_end', a.periodStart);
   if (error) fail(a.provider, 'reconcile_period_check_failed', `period check failed: ${error.message}`);
   if (!Array.isArray(data)) fail(a.provider, 'reconcile_period_check_failed', 'period check returned no answer');
   const others = (data as Array<{ provider_invoice_id: string }>).map((r) => r.provider_invoice_id).filter((id) => id !== a.providerInvoiceId);
   if (others.length > 0) {
     fail(a.provider, 'reconcile_period_has_other_invoice',
-      `period ${a.periodStart}..${a.periodEnd} is already reconciled by invoice ${others.join(', ')}; merge into one manifest`,
+      `period ${a.periodStart}..${a.periodEnd} overlaps the period of invoice ${others.join(', ')}, already reconciled; merge into one manifest`,
       { provider_invoice_id: a.providerInvoiceId, existing: others });
   }
 }

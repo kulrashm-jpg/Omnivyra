@@ -50,8 +50,13 @@ jest.mock('../../db/supabaseClient', () => ({
         filters.push((r) => alts.some(([c, re]) => re.test(String(r[c] ?? ''))));
         return b;
       };
-      b.gte = (c: string, v: string) => { filters.push((r) => String(r[c]) >= v); return b; };
-      b.lt = (c: string, v: string) => { filters.push((r) => String(r[c]) < v); return b; };
+      // Ordering compares TIMESTAMPS as instants (timestamptz), so bounds written with different offsets compare
+      // like Postgres does - not as strings.
+      const cmp = (x: unknown, v: string) => { const a = Date.parse(String(x)), b2 = Date.parse(v); return Number.isFinite(a) && Number.isFinite(b2) ? a - b2 : String(x).localeCompare(v); };
+      b.lte = (c: string, v: string) => { filters.push((r) => cmp(r[c], v) <= 0); return b; };
+      b.gte = (c: string, v: string) => { filters.push((r) => cmp(r[c], v) >= 0); return b; };
+      b.lt = (c: string, v: string) => { filters.push((r) => cmp(r[c], v) < 0); return b; };
+      b.gt = (c: string, v: string) => { filters.push((r) => cmp(r[c], v) > 0); return b; };
       const settle = () => {
         if (mode === 'update') {
           const f = takeFail(`${table}:update`);
@@ -393,8 +398,33 @@ describe('persist step: resumable, one invoice per period', () => {
     fixture();
     await ingest('inv-1');
     const before = mockDb.writes.length;
-    await expect(ingest('inv-2')).rejects.toThrow(/already reconciled by invoice inv-1/);
+    await expect(ingest('inv-2')).rejects.toThrow(/overlaps the period of invoice inv-1/);
     expect(mockDb.writes.length).toBe(before);
+  });
+
+  const ingestWin = (id: string, periodStart: string, periodEnd: string) =>
+    ingestOpenAiInvoice({ providerInvoiceId: id, periodStart, periodEnd, payload: {}, rates: {} as any });
+
+  it('e1: an OVERLAPPING window (a split invoice inside an imported one) is refused before any write', async () => {
+    fixture();
+    await ingest('inv-1'); // [2026-11-10, 2026-11-11)
+    const before = mockDb.writes.length;
+    await expect(ingestWin('inv-2', '2026-11-10T12:00:00Z', '2026-11-11T00:00:00Z')).rejects.toThrow(/overlaps the period of invoice inv-1/);
+    await expect(ingestWin('inv-3', '2026-11-09T00:00:00Z', '2026-11-10T00:00:01Z')).rejects.toThrow(/overlaps the period of invoice inv-1/);
+    expect(mockDb.writes.length).toBe(before);
+  });
+
+  it('e1: the SAME window written with another timezone offset is refused (instants, not strings)', async () => {
+    fixture();
+    await ingest('inv-1');
+    await expect(ingestWin('inv-2', '2026-11-10T05:30:00+05:30', '2026-11-11T05:30:00+05:30')).rejects.toThrow(/overlaps the period of invoice inv-1/);
+  });
+
+  it('e1 CONTROL: a TOUCHING window (it starts where the imported one ends) is allowed - half-open periods', async () => {
+    fixture();
+    await ingest('inv-1'); // ends 2026-11-11T00:00:00Z
+    await expect(ingestWin('inv-2', '2026-11-11T00:00:00Z', '2026-11-12T00:00:00Z')).resolves.toMatchObject({ status: 'ingested' });
+    await expect(ingestWin('inv-0', '2026-11-09T00:00:00Z', '2026-11-10T00:00:00Z')).resolves.toMatchObject({ status: 'ingested' });
   });
 
   it('23505 for an invoice that is NOT stored (another invoice won the period) is refused, not resumed', async () => {
