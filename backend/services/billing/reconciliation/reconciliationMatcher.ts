@@ -2,7 +2,9 @@
  * Pure, deterministic reconciliation matcher.
  *
  * Given normalized provider invoice lines + estimated-cost aggregates
- * read from our `usage_events` (per (organization_id, period_day, model)),
+ * read from our `usage_events` AND `platform_usage_events` (per
+ * (organization_id, period_day, model); platform spend has organization_id
+ * null - see usageAggregateReader),
  * produces a deterministic set of `cost_reconciliation_adjustments` rows.
  *
  * MATCHING MODEL (faithful, non-speculative):
@@ -15,6 +17,8 @@
  *  - If our customer-attributed estimated USD > 0 for that bucket we
  *    PRO-RATA the bucket's variance back to orgs by their share of the
  *    bucket's estimated USD — deterministic, replay-safe, no speculation.
+ *    Platform spend is one of those shares (organization_id null), so the
+ *    platform's part of the invoice is never spread onto customers.
  *  - Orgs with zero estimated for the bucket receive no per-org adjustment.
  *  - If the bucket has no customer-attributed usage at all (estimated == 0)
  *    we emit a platform-level (organization_id=null) adjustment marked
@@ -28,7 +32,14 @@ import { computeReconciliationVariance, type ReconciliationSeverity } from '../r
 import type { NormalizedInvoiceLine } from './openaiAdapter';
 
 export interface UsageAggregate {
-  organization_id: string;
+  /**
+   * Customer company the estimated spend belongs to, or `null` for PLATFORM
+   * spend (platform_usage_events, or the all-zero sentinel org in usage_events
+   * - see usageAggregateReader). A platform aggregate takes part in its bucket
+   * like any other share, and its adjustment carries organization_id = null:
+   * it is never attributed to a company.
+   */
+  organization_id: string | null;
   period_day: string;
   model: string;
   estimated_usd: number;
@@ -67,6 +78,18 @@ export interface MatchResult {
 
 type BucketKey = string; // `${day}|${model}`
 const bk = (day: string, model: string): BucketKey => `${day}|${model}`;
+
+/**
+ * Null-safe, deterministic organization_id comparator. Platform (`null`)
+ * sorts FIRST; two non-null ids compare exactly as before (`localeCompare`),
+ * so ordering among customer orgs is unchanged.
+ */
+export function compareOrganizationId(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return -1;
+  if (b === null) return 1;
+  return a.localeCompare(b);
+}
 
 function roundCents(n: number): number {
   // Numeric stability for jsonb / numeric storage.
@@ -171,7 +194,7 @@ export function reconcileProviderInvoice(args: {
     const bucketAdjUsd = actual_usd - estimated_usd;
     // Deterministic order: by org id then by hold anchor.
     const sortedOrgs = [...u.orgs].sort((a, b) => {
-      const c = a.organization_id.localeCompare(b.organization_id);
+      const c = compareOrganizationId(a.organization_id, b.organization_id);
       if (c !== 0) return c;
       return String(a.ledger_hold_transaction_id ?? '').localeCompare(String(b.ledger_hold_transaction_id ?? ''));
     });

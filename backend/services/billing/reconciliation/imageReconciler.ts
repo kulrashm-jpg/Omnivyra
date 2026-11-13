@@ -37,6 +37,7 @@ import {
   type ImageNormalizeResult,
 } from './imageAdapter';
 import type { RateTable } from './openaiAdapter';
+import { readEstimatedUsageAggregates, type UsageFilter } from './usageAggregateReader';
 import { reconcileProviderInvoice, type UsageAggregate, type MatchResult } from './reconciliationMatcher';
 
 export type ImageProviderTag = 'openai_image' | `image:${string}`;
@@ -65,51 +66,18 @@ async function readUsageAggregates(
   periodStart: string,
   periodEnd: string,
 ): Promise<UsageAggregate[]> {
-  let query = supabase
-    .from('usage_events')
-    .select('organization_id, model_name, total_cost_usd, created_at, ledger_hold_transaction_id')
-    .gte('created_at', periodStart)
-    .lt('created_at', periodEnd);
-
+  let filter: UsageFilter;
   if (providerTag === 'openai_image') {
-    query = query.eq('provider_name', 'openai').or('model_name.like.dall-e%,model_name.like.gpt-image%');
+    filter = (q) => q.eq('provider_name', 'openai').or('model_name.like.dall-e%,model_name.like.gpt-image%');
   } else if (usageEventsProviderName) {
-    query = query.eq('provider_name', usageEventsProviderName);
+    filter = (q) => q.eq('provider_name', usageEventsProviderName);
   } else {
     // No usage filter we can trust — return empty so reconciliation surfaces
     // platform-level `missing_attribution` rows rather than mis-attributing.
     logger.warn('image_reconcile_missing_provider_filter', { providerTag });
     return [];
   }
-
-  const { data, error } = await query;
-  if (error) {
-    logger.warn('image_reconcile_usage_read_failed', { message: error.message, providerTag });
-    return [];
-  }
-  const map: Map<string, UsageAggregate> = new Map();
-  for (const r of (data || []) as Array<Record<string, unknown>>) {
-    const org   = String(r.organization_id ?? '');
-    const model = String(r.model_name ?? '').trim();
-    const ts    = String(r.created_at ?? '');
-    if (!org || !model || !ts) continue;
-    const day = ts.slice(0, 10);
-    const key = `${org}|${day}|${model}`;
-    const usd = Math.max(0, Number(r.total_cost_usd ?? 0) || 0);
-    const ledgerAnchor = (r.ledger_hold_transaction_id as string | null) ?? null;
-    const slot = map.get(key);
-    if (!slot) {
-      map.set(key, { organization_id: org, period_day: day, model, estimated_usd: usd, ledger_hold_transaction_id: ledgerAnchor });
-    } else {
-      slot.estimated_usd += usd;
-      slot.ledger_hold_transaction_id = slot.ledger_hold_transaction_id ?? ledgerAnchor;
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => {
-    const c = a.organization_id.localeCompare(b.organization_id); if (c) return c;
-    const d = a.period_day.localeCompare(b.period_day);            if (d) return d;
-    return a.model.localeCompare(b.model);
-  });
+  return readEstimatedUsageAggregates(providerTag, filter, periodStart, periodEnd);
 }
 
 function adapterVersionFor(kind: ImagePayloadKind): string {
@@ -128,6 +96,10 @@ export async function ingestImageInvoice(args: IngestImageArgs): Promise<IngestO
     norm = normalizeImageBillingExport({ payload: args.payload, rates: args.rates });
   }
   const total_actual_usd = norm.lines.reduce((s, l) => s + (Number.isFinite(l.total_usd) ? l.total_usd : 0), 0);
+
+  // 0) Read the estimates FIRST: the read fails closed (throws), and nothing has
+  //    been written yet, so a failed read leaves the invoice importable on retry.
+  const aggregates = await readUsageAggregates(args.providerTag, args.usageEventsProviderName, args.periodStart, args.periodEnd);
 
   // 1) Idempotent invoice import.
   const { error: insertErr } = await supabase.from('provider_invoice_imports').insert({
@@ -149,8 +121,7 @@ export async function ingestImageInvoice(args: IngestImageArgs): Promise<IngestO
     throw new Error(`image invoice import failed: ${insertErr.message}`);
   }
 
-  // 2) Reconcile against our usage_events for the same window.
-  const aggregates = await readUsageAggregates(args.providerTag, args.usageEventsProviderName, args.periodStart, args.periodEnd);
+  // 2) Reconcile against our customer + platform estimates (usageAggregateReader).
   const match = reconcileProviderInvoice({ provider: args.providerTag, invoiceLines: norm.lines, usageAggregates: aggregates });
 
   const { data: runRow, error: runErr } = await supabase

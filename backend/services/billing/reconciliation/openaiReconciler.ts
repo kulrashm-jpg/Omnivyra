@@ -34,6 +34,7 @@ import {
   type NormalizeResult,
   type RateTable,
 } from './openaiAdapter';
+import { readEstimatedUsageAggregates } from './usageAggregateReader';
 import { reconcileOpenAi, type UsageAggregate, type MatchResult } from './reconciliationMatcher';
 
 export interface IngestOpenAiArgs {
@@ -49,50 +50,18 @@ export type IngestOutcome =
   | { status: 'duplicate'; provider_invoice_id: string }
   | { status: 'ingested'; run_id: string; adjustments_written: number; totals: MatchResult['totals']; warnings: string[] };
 
-/** Read customer-attributed estimated cost per (org, day, model) for the window. */
-async function readUsageAggregates(periodStart: string, periodEnd: string): Promise<UsageAggregate[]> {
-  // Conservative deterministic aggregation — we read the rows and group in JS
-  // to avoid any DB feature drift; volumes per (provider, day, model) are
-  // bounded by org × model × days so this is fine for a daily reconciliation.
-  const { data, error } = await supabase
-    .from('usage_events')
-    .select('organization_id, model_name, total_cost_usd, created_at, ledger_hold_transaction_id')
-    .eq('provider_name', 'openai')
-    .gte('created_at', periodStart)
-    .lt('created_at', periodEnd);
-  if (error) {
-    logger.warn('openai_reconcile_usage_read_failed', { message: error.message });
-    return [];
-  }
-  const map: Map<string, UsageAggregate> = new Map();
-  for (const r of (data || []) as Array<Record<string, unknown>>) {
-    const org   = String(r.organization_id ?? '');
-    const model = String(r.model_name ?? '').trim();
-    const ts    = String(r.created_at ?? '');
-    if (!org || !model || !ts) continue;
-    const day = ts.slice(0, 10); // YYYY-MM-DD
-    const key = `${org}|${day}|${model}`;
-    const usd = Math.max(0, Number(r.total_cost_usd ?? 0) || 0);
-    const ledgerAnchor = (r.ledger_hold_transaction_id as string | null) ?? null;
-    const slot = map.get(key);
-    if (!slot) {
-      map.set(key, { organization_id: org, period_day: day, model, estimated_usd: usd, ledger_hold_transaction_id: ledgerAnchor });
-    } else {
-      slot.estimated_usd += usd;
-      // Prefer the first-seen anchor for determinism (matcher will re-sort).
-      slot.ledger_hold_transaction_id = slot.ledger_hold_transaction_id ?? ledgerAnchor;
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => {
-    const c = a.organization_id.localeCompare(b.organization_id); if (c) return c;
-    const d = a.period_day.localeCompare(b.period_day);            if (d) return d;
-    return a.model.localeCompare(b.model);
-  });
+/** Estimated customer + platform spend per (org, day, model) for the window (see usageAggregateReader). */
+function readUsageAggregates(periodStart: string, periodEnd: string): Promise<UsageAggregate[]> {
+  return readEstimatedUsageAggregates('openai', (q) => q.eq('provider_name', 'openai'), periodStart, periodEnd);
 }
 
 export async function ingestOpenAiInvoice(args: IngestOpenAiArgs): Promise<IngestOutcome> {
   const norm: NormalizeResult = normalizeOpenAiUsageExport({ payload: args.payload, rates: args.rates });
   const total_actual_usd = norm.lines.reduce((s, l) => s + (Number.isFinite(l.total_usd) ? l.total_usd : 0), 0);
+
+  // 0) Read the estimates FIRST: the read fails closed (throws), and nothing has
+  //    been written yet, so a failed read leaves the invoice importable on retry.
+  const aggregates = await readUsageAggregates(args.periodStart, args.periodEnd);
 
   // 1) Idempotent invoice import (UNIQUE on (provider, provider_invoice_id)).
   const { error: insertErr } = await supabase.from('provider_invoice_imports').insert({
@@ -115,7 +84,6 @@ export async function ingestOpenAiInvoice(args: IngestOpenAiArgs): Promise<Inges
   }
 
   // 2) Upsert reconciliation run for the period.
-  const aggregates = await readUsageAggregates(args.periodStart, args.periodEnd);
   const match = reconcileOpenAi({ provider: 'openai', invoiceLines: norm.lines, usageAggregates: aggregates });
 
   const { data: runRow, error: runErr } = await supabase

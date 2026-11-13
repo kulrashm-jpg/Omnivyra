@@ -23,6 +23,7 @@ import {
   type AnthropicNormalizeResult,
 } from './anthropicAdapter';
 import type { RateTable } from './openaiAdapter';
+import { readEstimatedUsageAggregates } from './usageAggregateReader';
 import { reconcileProviderInvoice, type UsageAggregate, type MatchResult } from './reconciliationMatcher';
 
 export type AnthropicPayloadKind = 'billing' | 'messages_usage';
@@ -41,40 +42,8 @@ export type IngestOutcome =
   | { status: 'duplicate'; provider_invoice_id: string }
   | { status: 'ingested'; run_id: string; adjustments_written: number; totals: MatchResult['totals']; warnings: string[] };
 
-async function readUsageAggregates(periodStart: string, periodEnd: string): Promise<UsageAggregate[]> {
-  const { data, error } = await supabase
-    .from('usage_events')
-    .select('organization_id, model_name, total_cost_usd, created_at, ledger_hold_transaction_id')
-    .eq('provider_name', 'anthropic')
-    .gte('created_at', periodStart)
-    .lt('created_at', periodEnd);
-  if (error) {
-    logger.warn('anthropic_reconcile_usage_read_failed', { message: error.message });
-    return [];
-  }
-  const map: Map<string, UsageAggregate> = new Map();
-  for (const r of (data || []) as Array<Record<string, unknown>>) {
-    const org   = String(r.organization_id ?? '');
-    const model = String(r.model_name ?? '').trim();
-    const ts    = String(r.created_at ?? '');
-    if (!org || !model || !ts) continue;
-    const day = ts.slice(0, 10);
-    const key = `${org}|${day}|${model}`;
-    const usd = Math.max(0, Number(r.total_cost_usd ?? 0) || 0);
-    const ledgerAnchor = (r.ledger_hold_transaction_id as string | null) ?? null;
-    const slot = map.get(key);
-    if (!slot) {
-      map.set(key, { organization_id: org, period_day: day, model, estimated_usd: usd, ledger_hold_transaction_id: ledgerAnchor });
-    } else {
-      slot.estimated_usd += usd;
-      slot.ledger_hold_transaction_id = slot.ledger_hold_transaction_id ?? ledgerAnchor;
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => {
-    const c = a.organization_id.localeCompare(b.organization_id); if (c) return c;
-    const d = a.period_day.localeCompare(b.period_day);            if (d) return d;
-    return a.model.localeCompare(b.model);
-  });
+function readUsageAggregates(periodStart: string, periodEnd: string): Promise<UsageAggregate[]> {
+  return readEstimatedUsageAggregates('anthropic', (q) => q.eq('provider_name', 'anthropic'), periodStart, periodEnd);
 }
 
 export async function ingestAnthropicInvoice(args: IngestAnthropicArgs): Promise<IngestOutcome> {
@@ -82,6 +51,10 @@ export async function ingestAnthropicInvoice(args: IngestAnthropicArgs): Promise
     ? normalizeAnthropicBillingExport({ payload: args.payload, rates: args.rates })
     : normalizeAnthropicMessagesUsage({ payload: args.payload, rates: args.rates });
   const total_actual_usd = norm.lines.reduce((s, l) => s + (Number.isFinite(l.total_usd) ? l.total_usd : 0), 0);
+
+  // 0) Read the estimates FIRST: the read fails closed (throws), and nothing has
+  //    been written yet, so a failed read leaves the invoice importable on retry.
+  const aggregates = await readUsageAggregates(args.periodStart, args.periodEnd);
 
   // 1) Idempotent invoice import.
   const { error: insertErr } = await supabase.from('provider_invoice_imports').insert({
@@ -103,8 +76,7 @@ export async function ingestAnthropicInvoice(args: IngestAnthropicArgs): Promise
     throw new Error(`anthropic invoice import failed: ${insertErr.message}`);
   }
 
-  // 2) Reconcile against our usage_events for the same window.
-  const aggregates = await readUsageAggregates(args.periodStart, args.periodEnd);
+  // 2) Reconcile against our customer + platform estimates (usageAggregateReader).
   const match = reconcileProviderInvoice({ provider: 'anthropic', invoiceLines: norm.lines, usageAggregates: aggregates });
 
   const { data: runRow, error: runErr } = await supabase
