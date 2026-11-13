@@ -10,15 +10,17 @@ import { ownedDbTable } from '../db/writeOwner';
  *   await logAuditEvent({
  *     operation: 'SELECT',
  *     table: 'campaigns',
- *     companyId: 'company-123',
- *     userId: 'user-456',
- *     recordIds: ['campaign-1', 'campaign-2'],
+ *     companyId: '<company uuid>',
+ *     userId: '<user uuid>',
+ *     recordIds: ['<campaign uuid>'],
  *     success: true,
  *   });
  */
 
 import { supabase } from '../db/supabaseClient';
 import { config } from '../../config';
+import { logger } from './logger';
+import { recordRawCounter } from '../observability';
 
 export type AuditOperation = 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'UPSERT';
 
@@ -38,9 +40,9 @@ interface StoredAuditLog {
   id?: string;
   operation: AuditOperation;
   table_name: string;
-  company_id: string;
-  user_id: string;
-  record_ids?: string[];
+  company_id: string | null;
+  user_id: string | null;
+  record_ids?: string[] | null;
   success: boolean;
   error_message?: string | null;
   duration_ms?: number | null;
@@ -48,8 +50,75 @@ interface StoredAuditLog {
   timestamp: string;
 }
 
+/**
+ * AUDIT-WRITER FIX (e9 BLOCKING, 2026-11-13; C86: this writer had NEVER landed a row).
+ * Callers pass non-UUID strings ('SYSTEM', 'unknown', '', 'system:dispatch-recovery', ...) into the uuid columns
+ * company_id / user_id / record_ids. Postgres rejects the WHOLE multi-row insert (22P02), the batch was requeued
+ * with the bad row in it, and the error was only console-printed - so after a process's first bad event, nothing it
+ * logged ever landed. Three layers, each tested:
+ *   1. VALUES: a non-UUID id is stored as NULL in its uuid column and the raw value is kept in metadata
+ *      (`raw_company_id` / `raw_user_id` / `raw_record_ids`), so nothing is lost and the row is valid.
+ *   2. ISOLATION: a failed batch is retried ROW BY ROW, so one bad row can never sink the others.
+ *   3. BOUND + DEAD LETTER: a row that fails on its own is dead-lettered at once when the error is a data error
+ *      (SQLSTATE class 22 / 23 - retrying cannot help) and after MAX_ROW_ATTEMPTS otherwise. A dead-lettered row is
+ *      written to the structured log (`audit_log_dead_letter`, Loki keeps it) and counted - never requeued forever.
+ * Every write error is SURFACED: logger.error plus `audit_log_write_failed{stage}`; dead letters count
+ * `audit_log_dead_lettered{reason}` (bounded labels only).
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const MAX_ROW_ATTEMPTS = 3;
+
+type QueuedAuditLog = StoredAuditLog & { _attempts?: number };
+
+function uuidOrNull(v: unknown): string | null {
+  return typeof v === 'string' && UUID_RE.test(v) ? v : null;
+}
+
+/** Column-correct values: uuid columns get a UUID or NULL; any non-UUID raw value is preserved in metadata. */
+export function sanitizeAuditRow(row: StoredAuditLog): StoredAuditLog {
+  const extra: Record<string, unknown> = {};
+  const companyId = uuidOrNull(row.company_id);
+  if (companyId === null && row.company_id != null && row.company_id !== '') extra.raw_company_id = String(row.company_id);
+  const userId = uuidOrNull(row.user_id);
+  if (userId === null && row.user_id != null && row.user_id !== '') extra.raw_user_id = String(row.user_id);
+  let recordIds: string[] | null = null;
+  if (Array.isArray(row.record_ids)) {
+    const good = row.record_ids.filter((r) => uuidOrNull(r) !== null);
+    const bad = row.record_ids.filter((r) => uuidOrNull(r) === null).map(String);
+    recordIds = good.length ? good : null;
+    if (bad.length) extra.raw_record_ids = bad.slice(0, 50);
+  }
+  return {
+    ...row,
+    company_id: companyId,
+    user_id: userId,
+    record_ids: recordIds,
+    metadata: Object.keys(extra).length ? { ...(row.metadata ?? {}), ...extra } : (row.metadata ?? null),
+  };
+}
+
+function isDataError(code: unknown): boolean {
+  return typeof code === 'string' && /^2[23]/.test(code);
+}
+
+function deadLetter(row: QueuedAuditLog, reason: 'data_error' | 'retry_exhausted', err: { message?: string; code?: string }): void {
+  const { _attempts, ...stored } = row;
+  logger.error('audit_log_dead_letter', {
+    reason, attempts: _attempts ?? 0, code: err.code ?? null, message: err.message ?? null,
+    // the row itself, so the event is recoverable from the log store
+    operation: stored.operation, table_name: stored.table_name, company_id: stored.company_id, user_id: stored.user_id,
+    success: stored.success, timestamp: stored.timestamp, metadata: stored.metadata ?? null,
+  });
+  try { recordRawCounter('audit_log_dead_lettered', 1, { reason }); } catch { /* metrics never break the writer */ }
+}
+
+function surfaceWriteError(stage: 'batch' | 'row', err: { message?: string; code?: string }, count: number): void {
+  logger.error('audit_log_write_failed', { stage, count, code: err.code ?? null, message: err.message ?? null });
+  try { recordRawCounter('audit_log_write_failed', 1, { stage }); } catch { /* metrics never break the writer */ }
+}
+
 // Queue for batching (store up to 50 events, flush every 5s)
-const _queue: StoredAuditLog[] = [];
+const _queue: QueuedAuditLog[] = [];
 let _flushTimer: NodeJS.Timeout | null = null;
 const MAX_QUEUE = 50;
 const FLUSH_INTERVAL_MS = 5000;
@@ -64,7 +133,7 @@ export async function logAuditEvent(event: AuditEvent): Promise<void> {
     return;
   }
 
-  const auditLog: StoredAuditLog = {
+  const auditLog: StoredAuditLog = sanitizeAuditRow({
     operation: event.operation,
     table_name: event.table,
     company_id: event.companyId,
@@ -75,7 +144,7 @@ export async function logAuditEvent(event: AuditEvent): Promise<void> {
     duration_ms: event.durationMs ?? null,
     metadata: event.metadata ?? null,
     timestamp: new Date().toISOString(),
-  };
+  });
 
   _queue.push(auditLog);
 
@@ -109,27 +178,39 @@ export async function flushAuditQueue(): Promise<void> {
     _flushTimer = null;
   }
 
-  try {
-    // Insert in batches to avoid overwhelming the database
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
-      const batch = toInsert.slice(i, i + BATCH_SIZE);
-      const { error } = await ownedDbTable('audit_logs')
-        .insert(batch);
-
-      if (error) {
-        console.error('[auditLogging] Failed to flush batch:', {
-          count: batch.length,
-          error: error.message,
-        });
-        // Put failed records back in queue for retry
-        _queue.push(...batch);
-      }
+  // Insert in batches; a failed batch falls back to ROW-BY-ROW so one bad row cannot sink the others.
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+    const batch = toInsert.slice(i, i + BATCH_SIZE);
+    let batchErr: { message?: string; code?: string } | null = null;
+    try {
+      const { error } = await ownedDbTable('audit_logs').insert(batch.map(({ _attempts, ...r }) => r));
+      batchErr = error ?? null;
+    } catch (err) {
+      batchErr = { message: err instanceof Error ? err.message : String(err) };
     }
-  } catch (err) {
-    console.error('[auditLogging] Unexpected error during flush:', err);
-    // Put records back in queue
-    _queue.push(...toInsert);
+    if (!batchErr) continue;
+    surfaceWriteError('batch', batchErr, batch.length);
+    for (const row of batch) {
+      let rowErr: { message?: string; code?: string } | null = null;
+      try {
+        const { _attempts, ...stored } = row;
+        const { error } = await ownedDbTable('audit_logs').insert(stored);
+        rowErr = error ?? null;
+      } catch (err) {
+        rowErr = { message: err instanceof Error ? err.message : String(err) };
+      }
+      if (!rowErr) continue;
+      surfaceWriteError('row', rowErr, 1);
+      row._attempts = (row._attempts ?? 0) + 1;
+      if (isDataError(rowErr.code)) deadLetter(row, 'data_error', rowErr);
+      else if (row._attempts >= MAX_ROW_ATTEMPTS) deadLetter(row, 'retry_exhausted', rowErr);
+      else _queue.push(row); // transient: retried on a later flush, at most MAX_ROW_ATTEMPTS times
+    }
+  }
+  // A transient row requeued above must not wait for the next event to arrive - schedule its retry.
+  if (_queue.length > 0 && !_flushTimer) {
+    _flushTimer = setTimeout(() => { void flushAuditQueue(); }, FLUSH_INTERVAL_MS);
   }
 }
 
