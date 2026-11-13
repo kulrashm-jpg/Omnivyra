@@ -21,6 +21,7 @@ import {
 import { recordUnifiedTransaction } from './unifiedTransactionService';
 import { logger } from './logger';
 import { ledgerLinkColumnEnabled } from './billing/ledgerLinkColumnFlag';
+import { incrCounter } from './billing/billingMetrics';
 import {
   getProcessTypeToActionKeyMap,
   isKnownPricingKey,
@@ -431,7 +432,7 @@ export async function logUsageEvent(params: {
     // kept flowing via its own first-class columns. We now write ONLY columns
     // that exist; provider/model values fall back into provider_name/model_name,
     // and feature_area is preserved inside `metadata`. No billing/behavior change.
-    await ownedDbTable('usage_events').insert({
+    const { error: usageErr } = await ownedDbTable('usage_events').insert({
       organization_id: params.organization_id,
       campaign_id: params.campaign_id ?? null,
       user_id: params.user_id ?? null,
@@ -467,6 +468,15 @@ export async function logUsageEvent(params: {
       // feature_area preserved here (its dedicated column doesn't exist in prod).
       metadata: { ...(mergedMetadata ?? {}), feature_area: params.feature_area ?? null },
     });
+    if (usageErr) {
+      // Financial-writes contract (N; also e1's C75 "make it loud"): the usage ledger row did not land. Never thrown
+      // into the AI request path - an error log and a counter, so a log alert can page on it.
+      logger.error('usage_event_insert_failed', {
+        organization_id: params.organization_id, source_type: params.source_type, process_type: params.process_type,
+        message: usageErr.message,
+      });
+      try { incrCounter('usage_event_insert_failed_total'); } catch { /* metrics never break the caller */ }
+    }
 
     // ── Phase 5: dual-write to unified_transactions ───────────────────────
     // Analytics and reporting read only from this table going forward.

@@ -19,6 +19,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import { supabase } from '../db/supabaseClient';
+import { logger } from './logger';
 
 export type AlertType =
   // Absolute low-balance ladder (owner policy 2026-07-10): <100 / <50 / <20.
@@ -49,7 +50,10 @@ export async function getFiredConsumptionThresholds(orgId: string, sinceIso: str
 export async function emitConsumptionAlert(orgId: string, threshold: number, consumedPct: number): Promise<void> {
   const type = CONSUMED_ALERT_BY_THRESHOLD[threshold];
   if (!type) return;
-  await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: type, balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: logErr } = await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: type, balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  // The log row is the per-cycle dedup key: if it is not recorded the same alert can fire again.
+  if (logErr) logger.error('credit_alert_log_write_failed', { orgId, alertType: type, message: logErr.message });
   try {
     await ownedDbTable('notifications').insert({
       organization_id: orgId, type: 'credit_alert', category: type,
@@ -67,7 +71,9 @@ export async function wasForecastEmailSent(orgId: string, sinceIso: string): Pro
 
 /** Record that the forecast email fired (per-cycle dedup). */
 export async function recordForecastEmail(orgId: string, consumedPct: number): Promise<void> {
-  await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: 'forecast_insufficient_85', balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: logErr } = await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: 'forecast_insufficient_85', balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  if (logErr) logger.error('credit_alert_log_write_failed', { orgId, alertType: 'forecast_insufficient_85', message: logErr.message });
 }
 
 export type CreditAlertResult = {
@@ -195,12 +201,14 @@ async function sendAlertEmail(orgId: string, alertType: AlertType, balance: numb
 }
 
 async function recordAlert(orgId: string, alertType: AlertType, balance: number): Promise<void> {
-  await ownedDbTable('credit_alert_log').insert({
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: logErr } = await ownedDbTable('credit_alert_log').insert({
     organization_id: orgId,
     alert_type:      alertType,
     balance_at_alert: balance,
     notified_at:     new Date().toISOString(),
   });
+  if (logErr) logger.error('credit_alert_log_write_failed', { orgId, alertType, message: logErr.message });
 }
 
 /** Send an in-app notification for a credit alert. */

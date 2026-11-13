@@ -21,6 +21,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { createHash } from 'crypto';
 import type { CategorySplit } from './creditPriorityService';
+import { logger } from './logger';
 
 // ── Category constants — expiry is ONLY allowed for these ─────────────────────
 
@@ -186,7 +187,8 @@ async function expireOrgFreeCredits(
 
   const expired = toExpire;
 
-  await ownedDbTable('credit_expiry_log').insert({
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: logErr } = await ownedDbTable('credit_expiry_log').insert({
     organization_id: orgId,
     user_id:         userId,
     amount_expired:  expired,
@@ -194,6 +196,8 @@ async function expireOrgFreeCredits(
     balance_after:   before.free_balance - expired,
     reason:          `free_credit_expiry:${dayKey}`,
   });
+  // The balance already changed; a missing log row is an audit-trail gap, never silent.
+  if (logErr) logger.error('credit_expiry_log_write_failed', { orgId, pool: 'free', amountExpired: expired, message: logErr.message });
 
   return expired;
 }
@@ -270,7 +274,8 @@ async function expireOrgIncentiveCredits(
     throw new Error(msg);
   }
 
-  await ownedDbTable('credit_expiry_log').insert({
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: logErr } = await ownedDbTable('credit_expiry_log').insert({
     organization_id: orgId,
     user_id:         null,
     amount_expired:  toExpire,
@@ -278,6 +283,7 @@ async function expireOrgIncentiveCredits(
     balance_after:   before.incentive_balance - toExpire,
     reason:          `incentive_credit_expiry:${dayKey}`,
   });
+  if (logErr) logger.error('credit_expiry_log_write_failed', { orgId, pool: 'incentive', amountExpired: toExpire, message: logErr.message });
 
   return toExpire;
 }

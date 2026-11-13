@@ -71,6 +71,8 @@ const counters: Record<string, number> = {
   // Phase 8E — credit-economy shadow adoption (telemetry only; dark by default).
   credit_economy_shadow_would_allow:    0,
   credit_economy_shadow_would_block:    0,
+  // Financial-writes contract (N): a usage_events ledger insert that did not land (see usageLedgerService).
+  usage_event_insert_failed_total:      0,
 };
 
 export type BillingCounter = keyof typeof counters;

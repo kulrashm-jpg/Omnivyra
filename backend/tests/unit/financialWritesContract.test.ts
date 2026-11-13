@@ -131,28 +131,10 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
  * its site is fixed - the test fails until you do.
  */
 export const ALLOWLIST: Record<string, string> = {
-  'backend/services/billing/idempotency/heartbeatService.ts:heartbeatBillingOperation|billing_operations|update|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L45 @9cecd075f]',
-  'backend/services/creditAlertService.ts:emitConsumptionAlert|credit_alert_log|insert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L52 @9cecd075f]',
-  'backend/services/creditAlertService.ts:recordForecastEmail|credit_alert_log|insert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L70 @9cecd075f]',
-  'backend/services/creditAlertService.ts:recordAlert|credit_alert_log|insert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L198 @9cecd075f]',
-  'backend/services/creditEfficiencyEngine.ts:upsertEfficiencyTier|credit_efficiency_scores|upsert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L80 @9cecd075f]',
-  'backend/services/creditEfficiencyEngine.ts:optimizeCreditEfficiency|credit_efficiency_scores|update|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L155 @9cecd075f]',
-  'backend/services/creditExpiryService.ts:expireOrgFreeCredits|credit_expiry_log|insert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L189 @9cecd075f]',
-  'backend/services/creditExpiryService.ts:expireOrgIncentiveCredits|credit_expiry_log|insert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L273 @9cecd075f]',
   'backend/services/initialFreeCreditService.ts:grantInitialFreeCredit|credit_transactions|update|#1':
     'N: e1-owned (pricing D-step touches this file) - e1 fixes [L120 @9cecd075f]',
   'backend/services/initialFreeCreditService.ts:grantInitialFreeCredit|organization_credits|upsert|#1':
     'N: e1-owned (pricing D-step touches this file) - e1 fixes [L164 @9cecd075f]',
-  'backend/services/monetizationReservationReconciliationService.ts:stampHold|credit_transactions|update|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L228 @9cecd075f]',
   'backend/services/payments/razorpayStagingService.ts:markProviderEvent|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L308 @9cecd075f]',
   'backend/services/payments/razorpayStagingService.ts:recordRejectedWebhook|payment_provider_events|update|#1':
@@ -161,12 +143,8 @@ export const ALLOWLIST: Record<string, string> = {
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L482 @9cecd075f]',
   'backend/services/payments/razorpayStagingService.ts:verifyAndFulfillRazorpayStagingPayment|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L711 @9cecd075f]',
-  'backend/services/pricingService.ts:recordCostAnomaly|cost_anomalies|insert|#1':
-    'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L661 @9cecd075f]',
   'backend/services/purchaseService.ts:reopenSystemClosedPurchase|credit_purchases|update|#1':
     'FP: { data } read; null -> not-updated branch is safe (verified 6f) [L255 @9cecd075f]',
-  'backend/services/usageLedgerService.ts:logUsageEvent|usage_events|insert|#1':
-    'N: usage telemetry insert unread - 6f fixes (logger.error + counter, never throws) [L434 @9cecd075f]',
   'pages/api/stripe/webhook.ts:markEvent|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L144 @9cecd075f]',
 };

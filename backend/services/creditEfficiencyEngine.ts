@@ -17,6 +17,7 @@ import { supabase } from '../db/supabaseClient';
 import { getCreditCost } from './creditDeductionService';
 import { getCompanyOutcomeStats } from './outcomeTrackingService';
 import { amplifyWinningPatterns } from './patternAmplificationService';
+import { logger } from './logger';
 
 const TIER_THRESHOLDS = {
   elite: 5,
@@ -77,7 +78,8 @@ async function upsertEfficiencyTier(
   totalOutcomes: number,
   creditsSaved: number,
 ): Promise<void> {
-  await ownedDbTable('credit_efficiency_scores').upsert(
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: upsertErr } = await ownedDbTable('credit_efficiency_scores').upsert(
     {
       organization_id: orgId,
       efficiency_tier: tier,
@@ -89,6 +91,7 @@ async function upsertEfficiencyTier(
     },
     { onConflict: 'organization_id' },
   );
+  if (upsertErr) logger.error('credit_efficiency_write_failed', { orgId, tier, message: upsertErr.message });
 }
 
 function determineTier(avgCPO: number, totalOutcomes: number): { tier: string; discount: number } {
@@ -152,9 +155,13 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
     creditsSavedEstimate += predictionCost * 2;
   }
 
+  // Fire-and-forget by design (the caller gets its answer now) - but a failed write is logged, not lost (N).
   void ownedDbTable('credit_efficiency_scores')
     .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
-    .eq('organization_id', companyId);
+    .eq('organization_id', companyId)
+    .then(({ error }: { error: { message: string } | null }) => {
+      if (error) logger.warn('credit_efficiency_write_failed', { orgId: companyId, field: 'credits_saved_total', message: error.message });
+    });
 
   return {
     company_id: companyId,

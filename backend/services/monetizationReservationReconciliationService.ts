@@ -225,7 +225,8 @@ async function classifyHold(row: HoldRow): Promise<{ decision: ReconciliationDec
 }
 
 async function stampHold(row: HoldRow, fields: Record<string, unknown>): Promise<void> {
-  await ownedDbTable('credit_transactions')
+  // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+  const { error: stampErr } = await ownedDbTable('credit_transactions')
     .update({
       metadata: {
         ...(row.metadata ?? {}),
@@ -233,6 +234,7 @@ async function stampHold(row: HoldRow, fields: Record<string, unknown>): Promise
       },
     })
     .eq('id', row.id);
+  if (stampErr) logger.error('reservation_hold_stamp_failed', { holdId: row.id, fields: Object.keys(fields), message: stampErr.message });
 }
 
 async function stampReportArtifact(row: HoldRow, reason: string, reconciledBy: string): Promise<void> {

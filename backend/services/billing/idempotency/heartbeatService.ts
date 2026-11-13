@@ -41,10 +41,12 @@ export async function heartbeatBillingOperation(operationId: string): Promise<vo
     if (readErr || !data) return;
     const existing = (data as { metadata?: Record<string, unknown> | null }).metadata ?? {};
     const merged = { ...existing, last_heartbeat_at: new Date(now).toISOString() };
-    await supabase
+    // Financial-writes contract (N): supabase-js returns write errors instead of throwing - read and log, never silent.
+    const { error: hbErr } = await supabase
       .from('billing_operations')
       .update({ metadata: merged })
       .eq('id', operationId);
+    if (hbErr) logger.warn('heartbeat_billing_op_failed', { operationId, message: hbErr.message });
   } catch (err) {
     logger.warn('heartbeat_billing_op_failed', { operationId, message: err instanceof Error ? err.message : String(err) });
   }
