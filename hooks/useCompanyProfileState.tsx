@@ -20,6 +20,7 @@ import {
   buildSocialProfilesFromScalars,
 } from '../pages/company-profile.types';
 import { normalizeCanonicalWebsite } from '../utils/companyProfileValidation';
+import { mergeCampaignPurposeIntent } from '../utils/mergeCampaignPurposeIntent';
 
 const ONBOARDING_CHECKPOINT_PREFIX = 'company_profile_onboarding:';
 const ONBOARDING_REFINE_STALE_MS = 2 * 60 * 1000;
@@ -1411,7 +1412,10 @@ export function useCompanyProfileState() {
         const updated = {
           ...activeProfile,
           ...data.structuredFields,
-          ...(data.campaign_purpose_intent != null ? { campaign_purpose_intent: data.campaign_purpose_intent } : {}),
+          // MERGE, never replace: this chat returns 5 of the 8 keys (D3, 2026-11-13).
+          ...(data.campaign_purpose_intent != null
+            ? { campaign_purpose_intent: mergeCampaignPurposeIntent(activeProfile.campaign_purpose_intent, data.campaign_purpose_intent) }
+            : {}),
         };
         updateActiveProfile(updated);
         setTargetCustomerPendingSave(true);
@@ -1481,7 +1485,11 @@ export function useCompanyProfileState() {
       }
       const data = await response.json();
       if (data.done && data.campaign_purpose_intent) {
-        updateActiveProfile({ ...activeProfile, campaign_purpose_intent: data.campaign_purpose_intent });
+        // MERGE, never replace: keys this chat leaves empty keep their stored value (D3).
+        updateActiveProfile({
+          ...activeProfile,
+          campaign_purpose_intent: mergeCampaignPurposeIntent(activeProfile.campaign_purpose_intent, data.campaign_purpose_intent),
+        });
         setCampaignPurposePanelOpen(false);
         setCampaignPurposeMessages([]);
         setSuccessMessage('Campaign purpose updated. Click Save Profile to lock it.');
