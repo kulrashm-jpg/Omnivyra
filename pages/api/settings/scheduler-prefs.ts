@@ -16,6 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { pickOperationalMembership } from '../../../backend/services/rbacPrimitives';
 
 const VALID_INTERVALS = [15, 30, 60, 120, 240, 480];
 

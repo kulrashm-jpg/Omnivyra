@@ -19,6 +19,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { pickOperationalMembership } from '../../../../backend/services/rbacPrimitives';
 import {
   checkAndGrantSetupCredits,
   notifyEarnProgress,
