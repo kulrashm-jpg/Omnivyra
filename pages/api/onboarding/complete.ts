@@ -272,13 +272,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       if (createError && (createError as { code?: string }).code === '23505') {
         // The intent was already consumed (companies.id = intent id). Re-enter ONLY for a user who already holds
-        // that company; anyone else is refused (never a second company from one intent).
+        // an ACTIVE membership in that company; anyone else is refused (never a second company from one intent).
+        // `createdHere` stays false on this path, so the credit grant below can never fire a second time.
         const { data: heldRole } = await supabase
           .from('user_company_roles')
           .select('id')
           .eq('user_id', userId)
           .eq('company_id', bootstrap.intent.intentId)
-          .in('status', ['active', 'invited'])
+          .eq('status', 'active')
           .limit(1)
           .maybeSingle();
         if (!heldRole) {

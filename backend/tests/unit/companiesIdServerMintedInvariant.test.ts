@@ -41,6 +41,10 @@ const REVIEWED_ID_SITES: Record<string, string> = {
   'pages/api/onboarding/setup-company.ts': 'the injected insert receives createCompanyIdentity({ id: bootstrap.intent.intentId }) - a server-minted signup intent id (P1)',
   'backend/services/companyIdentityWriter.ts': 'the canonical writer inserts the record its caller built; its only id-setting caller is setup-company (intent id)',
   'pages/api/onboarding/complete.ts': 'id: bootstrap.intent.intentId - a server-minted signup intent id (P1)',
+  // DEPENDENCY (05 review): this exception is safe only while NO route lets a caller create a user_company_roles row
+  // with an arbitrary company_id - its safety lives on the ROLE-insert surface, not this one. If a role-insert path
+  // ever accepts a caller-chosen company_id, this site becomes the signup-pre-emption primitive this suite exists
+  // to prevent: re-review it then (or remove the exception - 5fc820a17 already turns it into a plain insert).
   'pages/api/external-apis/access.ts': 'KNOWN EXCEPTION, separately fixed (5fc820a17 makes it a plain insert): the id is the route companyId, reachable only by a caller already authorized on that company id (role check / platform admin); a role row for a non-existent company cannot be self-created',
 };
 
