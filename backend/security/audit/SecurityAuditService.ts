@@ -86,6 +86,8 @@ export type AuditDecision =
   | 'bridge_authority_used'
   | 'bridge_authority_rejected'
   | 'trust_authority_conflict_detected'
+  // 05 (2026-11-14): a suspended / deleted user's identity attempt, recorded before the legacy-bridge fallback.
+  | 'lifecycle_refused_identity_attempt'
   | 'suspicious_login'
   | 'privilege_escalated'
   | 'capability_granted'

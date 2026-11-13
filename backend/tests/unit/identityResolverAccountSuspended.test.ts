@@ -14,8 +14,10 @@ jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jes
 jest.mock('../../services/userColumnProjection', () => ({ tolerantUserSelect: jest.fn() }));
 jest.mock('../../security/SessionAuthorityService', () => ({ resolveSessionFromRequest: jest.fn(async () => ({ ok: false })), touchSession: jest.fn() }));
 jest.mock('../../security/CapabilityService', () => ({ resolveUserCapabilities: jest.fn(async () => []) }));
-jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({ resolveLegacyCookieSuperAdminPrincipal: jest.fn(async () => null) }));
-jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async () => undefined) }));
+const bridge: { principal: unknown } = { principal: null };
+jest.mock('../../security/legacyCookieSuperAdminBridge', () => ({ resolveLegacyCookieSuperAdminPrincipal: jest.fn(async () => bridge.principal) }));
+const securityEvents: Array<Record<string, unknown>> = [];
+jest.mock('../../security/audit/SecurityAuditService', () => ({ logSecurityEvent: jest.fn(async (e: Record<string, unknown>) => { securityEvents.push(e); }) }));
 jest.mock('../../security/platformCapabilities', () => ({}));
 
 import { resolvePrincipal } from '../../security/IdentityResolver';
@@ -36,4 +38,28 @@ it.each([
 ])('controls: %s -> %s (unchanged)', async (authError, reason) => {
   resolveAuthenticatedUserMock.mockResolvedValue({ user: null, error: authError });
   expect(await resolvePrincipal(freshReq())).toEqual({ ok: false, reason });
+});
+
+describe('05: a refused lifecycle state is RECORDED before the bridge fallback', () => {
+  beforeEach(() => { securityEvents.length = 0; bridge.principal = null; });
+
+  it.each(['ACCOUNT_SUSPENDED', 'ACCOUNT_DELETED'])('%s: a security event is logged even though no bridge exists', async (code) => {
+    resolveAuthenticatedUserMock.mockResolvedValue({ user: null, error: code });
+    await resolvePrincipal(freshReq());
+    expect(securityEvents).toContainEqual(expect.objectContaining({ decision: 'lifecycle_refused_identity_attempt', reason: expect.stringContaining(code) }));
+  });
+
+  it('with a bridge principal present the request still resolves to the bridge (authorization unchanged) - and the attempt is recorded', async () => {
+    resolveAuthenticatedUserMock.mockResolvedValue({ user: null, error: 'ACCOUNT_SUSPENDED' });
+    bridge.principal = { userId: 'env-super-admin', legacyCookieSuperAdmin: true };
+    const r = await resolvePrincipal(freshReq());
+    expect(r).toMatchObject({ ok: true, principal: { userId: 'env-super-admin' } });
+    expect(securityEvents).toContainEqual(expect.objectContaining({ decision: 'lifecycle_refused_identity_attempt' }));
+  });
+
+  it('control: an ordinary invalid token is not recorded as a lifecycle refusal', async () => {
+    resolveAuthenticatedUserMock.mockResolvedValue({ user: null, error: 'INVALID_TOKEN' });
+    await resolvePrincipal(freshReq());
+    expect(securityEvents.filter((e) => e.decision === 'lifecycle_refused_identity_attempt')).toEqual([]);
+  });
 });
