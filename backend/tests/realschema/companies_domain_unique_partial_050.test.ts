@@ -1,7 +1,8 @@
 /**
  * Real-schema cover for 20270217000050_companies_domain_unique_partial (e1, 2026-11-13).
  * After the replay: both partial unique indexes exist, are valid and ready; a duplicate non-deleted domain (any case /
- * surrounding space) gets 23505 NAMING the index - which the app classifies as a domain conflict; a DELETED company and
+ * surrounding space) is refused by the canonical CHECK (23514); a duplicate canonical domain gets 23505 NAMING the index - which
+ * the app classifies as a domain conflict; a DELETED company and
  * an empty string are excluded, an INACTIVE company is included (as decided); the migration re-runs as a no-op.
  */
 import * as fs from 'fs';
@@ -33,12 +34,20 @@ describe('20270217000050 companies_domain_unique_partial', () => {
   });
 
   it.each([['website_domain', 'website_domain'], ['admin_email_domain', 'admin_email_domain']])(
-    'a duplicate %s (different case / spaces) -> 23505 naming the index, classified by the app', async (col, expected) => {
+    'a duplicate %s -> 23505 naming the index, classified by the app', async (col, expected) => {
       await inRollback(async () => {
         await ins(A, { [col]: 'acme-050.example' });
-        const e = await errOf(ins(B, { [col]: '  ACME-050.example ' }));
+        const e = await errOf(ins(B, { [col]: 'acme-050.example' }));
         expect(e?.code).toBe('23505');
         expect(classifyCompanyDomainConflict({ code: e?.code, message: e?.message, details: e?.detail })).toBe(expected);
+      });
+    });
+
+  it.each([['website_domain'], ['admin_email_domain']])(
+    'a NON-CANONICAL %s (case / spaces) is refused by the CHECK (23514) - the index and exact .eq lookups agree', async (col) => {
+      await inRollback(async () => {
+        expect((await errOf(ins(A, { [col]: '  ACME-050.example ' })))?.code).toBe('23514');
+        expect((await errOf(ins(B, { [col]: 'Acme-050.example' })))?.code).toBe('23514');
       });
     });
 

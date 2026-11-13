@@ -2,3 +2,5 @@
 -- fail-closed claimed-domain gate (P2) remains the primary defence.
 DROP INDEX IF EXISTS public.idx_companies_website_domain_unique;
 DROP INDEX IF EXISTS public.idx_companies_admin_email_domain_unique;
+ALTER TABLE public.companies DROP CONSTRAINT IF EXISTS companies_website_domain_canonical;
+ALTER TABLE public.companies DROP CONSTRAINT IF EXISTS companies_admin_email_domain_canonical;

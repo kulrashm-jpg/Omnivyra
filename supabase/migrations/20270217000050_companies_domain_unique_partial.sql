@@ -15,6 +15,14 @@
 -- another tenant register it would be a takeover path). The app's claim gate counts active companies only; a signup
 -- racing an INACTIVE owner therefore hits 23505 here and is answered by the same CLAIMED_DOMAIN refusal (app mapping).
 --
+-- WHAT IS AND IS NOT ENFORCED (05, finding B): uniqueness is PER COLUMN. Company A with website_domain = x and company B
+-- with admin_email_domain = x satisfies both indexes; "one company per domain across both columns" is NOT a DB
+-- guarantee - the app's claimed-domain gate treats either column as claimed and remains that rule's enforcer.
+-- CANONICAL FORM (05, finding A): CHECK constraints require each stored value to already equal lower(btrim(value)), so
+-- the exact .eq() lookups every app path uses and the index expression coincide BY CONSTRUCTION (a stored
+-- ' Example.COM ' would occupy example.com in the index while invisible to the gate - a dead end). Every writer already
+-- stores trimmed lowercase domains (companyIdentityWriter / normalizeCompanyDomain, create-company, onboarding/complete).
+--
 -- LOCK. Plain CREATE UNIQUE INDEX (not CONCURRENTLY: the apply runner may wrap the file in one transaction, where
 -- CONCURRENTLY is not allowed). companies is tiny (C95: 9 rows with a domain); the ACCESS-EXCLUSIVE window is negligible.
 
@@ -33,19 +41,28 @@ BEGIN
     RAISE EXCEPTION '050 preflight: companies.deleted_at does not exist - the partial predicate cannot be built';
   END IF;
   -- 0 DUPLICATES or ABORT (never a WARNING - that is how 20260713's index silently never existed).
-  SELECT count(*), string_agg(d, ', ') INTO v_n, v_sample FROM (
-    SELECT lower(btrim(website_domain)) AS d FROM public.companies
+  SELECT count(*), string_agg(d, ', ') FILTER (WHERE rn <= 20) INTO v_n, v_sample FROM (
+    SELECT lower(btrim(website_domain)) AS d, row_number() OVER (ORDER BY lower(btrim(website_domain))) AS rn
+      FROM public.companies
      WHERE deleted_at IS NULL AND website_domain IS NOT NULL AND btrim(website_domain) <> ''
-     GROUP BY 1 HAVING count(*) > 1 LIMIT 20) x;
+     GROUP BY 1 HAVING count(*) > 1) x;
   IF v_n > 0 THEN
     RAISE EXCEPTION '050 preflight: % duplicated website_domain value(s) among non-deleted companies - resolve first (owner-approved D-step): %', v_n, v_sample;
   END IF;
-  SELECT count(*), string_agg(d, ', ') INTO v_n, v_sample FROM (
-    SELECT lower(btrim(admin_email_domain)) AS d FROM public.companies
+  SELECT count(*), string_agg(d, ', ') FILTER (WHERE rn <= 20) INTO v_n, v_sample FROM (
+    SELECT lower(btrim(admin_email_domain)) AS d, row_number() OVER (ORDER BY lower(btrim(admin_email_domain))) AS rn
+      FROM public.companies
      WHERE deleted_at IS NULL AND admin_email_domain IS NOT NULL AND btrim(admin_email_domain) <> ''
-     GROUP BY 1 HAVING count(*) > 1 LIMIT 20) x;
+     GROUP BY 1 HAVING count(*) > 1) x;
   IF v_n > 0 THEN
     RAISE EXCEPTION '050 preflight: % duplicated admin_email_domain value(s) among non-deleted companies - resolve first (owner-approved D-step): %', v_n, v_sample;
+  END IF;
+  -- Canonical form or ABORT: the CHECK below validates EVERY row (deleted ones too).
+  SELECT count(*) INTO v_n FROM public.companies
+   WHERE (website_domain IS NOT NULL AND website_domain <> lower(btrim(website_domain)))
+      OR (admin_email_domain IS NOT NULL AND admin_email_domain <> lower(btrim(admin_email_domain)));
+  IF v_n > 0 THEN
+    RAISE EXCEPTION '050 preflight: % companies row(s) hold a non-canonical domain (not lower(btrim(...))) - normalise first (owner-approved D-step)', v_n;
   END IF;
   -- A pre-existing index under either NAME must be exactly ours (re-run) - anything else is refused, not adopted.
   SELECT pg_get_indexdef(to_regclass('public.idx_companies_website_domain_unique')) INTO v_def;
@@ -66,6 +83,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_website_domain_unique
 CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_admin_email_domain_unique
   ON public.companies (lower(btrim(admin_email_domain)))
   WHERE deleted_at IS NULL AND btrim(admin_email_domain) <> '';
+
+DO $canonical$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.companies'::regclass
+                  AND conname = 'companies_website_domain_canonical') THEN
+    ALTER TABLE public.companies ADD CONSTRAINT companies_website_domain_canonical
+      CHECK (website_domain IS NULL OR website_domain = lower(btrim(website_domain)));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.companies'::regclass
+                  AND conname = 'companies_admin_email_domain_canonical') THEN
+    ALTER TABLE public.companies ADD CONSTRAINT companies_admin_email_domain_canonical
+      CHECK (admin_email_domain IS NULL OR admin_email_domain = lower(btrim(admin_email_domain)));
+  END IF;
+END
+$canonical$;
 
 -- POSTCONDITION (05/e9): each index EXISTS, is UNIQUE, VALID and READY, with exactly our definition - created is not
 -- the same as present (C93/C96).
@@ -89,6 +121,11 @@ BEGIN
      OR pg_get_indexdef(to_regclass('public.idx_companies_admin_email_domain_unique'))
        <> 'CREATE ' || 'UNIQUE INDEX idx_companies_admin_email_domain_unique ON public.companies USING btree (lower(btrim(admin_email_domain))) WHERE ((deleted_at IS NULL) AND (btrim(admin_email_domain) <> ''''::text))' THEN
     RAISE EXCEPTION '050 postcondition: a domain index has an unexpected definition';
+  END IF;
+  IF (SELECT count(*) FROM pg_constraint
+       WHERE conrelid = 'public.companies'::regclass AND contype = 'c' AND convalidated
+         AND conname IN ('companies_website_domain_canonical', 'companies_admin_email_domain_canonical')) <> 2 THEN
+    RAISE EXCEPTION '050 postcondition: the canonical-domain CHECK constraints are missing or not validated';
   END IF;
 END
 $verify$;
