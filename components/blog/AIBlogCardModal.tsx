@@ -18,6 +18,11 @@ import {
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import ChatVoiceButton from '../ChatVoiceButton';
 import { describeChatSeed, sanitizeChatSeed, type SuggestionChatSeed } from '../../lib/content/suggestionChatSeed';
+import { classifyBilledResponse, billedOutcomeText } from '../../lib/billing/billedResponse';
+import { createBilledActionKeyGate } from '../../lib/idempotency';
+
+/** Billed: one Idempotency-Key per sent message (lib/idempotency). */
+const blogChatKeys = createBilledActionKeyGate('blog-card-chat');
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -190,9 +195,10 @@ export default function AIBlogCardModal({
         content: m.message,
       }));
 
+      const chatOp = blogChatKeys.begin(String(companyId ?? 'default'));
       const response = await fetchWithAuth('/api/ai/blog-card-chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...chatOp.headers },
         body: JSON.stringify({
           message: input,
           companyId,
@@ -219,9 +225,22 @@ export default function AIBlogCardModal({
       }
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        const errorData = await response.json().catch(() => ({}));
         console.error('❌ API Error:', errorData);
-        throw new Error(errorData.error || `API error: ${response.status}`);
+        // Canonical billed-response mapping (402 credits / 409 already processed / retry).
+        const outcome = classifyBilledResponse(response.status, errorData, 'Something went wrong. Please try again.');
+        if (outcome.kind === 'already_processed') {
+          // The same message was already answered and charged (double send): not an error.
+          const note: ChatMessage = {
+            id: Date.now() + 1,
+            type: 'ai',
+            message: 'That message was already answered above; carry on when you’re ready.',
+            timestamp: new Date().toLocaleTimeString(),
+          };
+          setMessages((prev) => [...prev, note]);
+          return;
+        }
+        throw new Error(billedOutcomeText(outcome));
       }
 
       const data = await response.json();
@@ -279,6 +298,7 @@ export default function AIBlogCardModal({
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
+      blogChatKeys.end(String(companyId ?? 'default'));
       setIsLoading(false);
     }
   };

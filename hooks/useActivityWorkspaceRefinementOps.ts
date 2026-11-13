@@ -5,6 +5,11 @@ import { htmlToPlainText } from '@/components/RichTextEditor';
 import { apiFetch } from '@/lib/apiFetch';
 import type { ScheduleItem } from '../types/activityWorkspace';
 import type { RefineChatMessage, WorkspacePayload } from '@/lib/activity-workspace/shared';
+import { classifyBilledResponse, billedOutcomeText } from '../lib/billing/billedResponse';
+import { createBilledActionKeyGate } from '../lib/idempotency';
+
+/** Billed: one Idempotency-Key per refine action, per schedule (lib/idempotency). */
+const refineKeys = createBilledActionKeyGate('activity-refine-variant');
 
 type NotifyFn = (type: 'success' | 'error' | 'info', message: string) => void;
 
@@ -117,9 +122,10 @@ export function useActivityWorkspaceRefinementOps({
     }
     try {
       setIsRefiningByScheduleId((prev) => ({ ...prev, [schedule.id]: true }));
+      const refineOp = refineKeys.begin(String(schedule.id));
       const response = await apiFetch('/api/activity-workspace/content', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...refineOp.headers },
         body: JSON.stringify({
           action: 'refine_variant',
           activity: buildActivityRequestPayload(payload, schedules),
@@ -133,7 +139,14 @@ export function useActivityWorkspaceRefinementOps({
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(String(data?.message || data?.error || 'Failed to refine content'));
+        const outcome = classifyBilledResponse(response.status, data, 'Failed to refine content');
+        if (outcome.kind === 'already_processed') {
+          // Already refined and charged (double click / retry): not an error.
+          notify('success', 'This refinement was already applied.');
+          return;
+        }
+        notify(outcome.kind === 'retry' ? 'info' : 'error', billedOutcomeText(outcome));
+        return;
       }
       const refinedContent = String(data?.refined_content || '').trim();
       if (!refinedContent) {
@@ -160,6 +173,7 @@ export function useActivityWorkspaceRefinementOps({
       console.error('Refine with AI failed:', error);
       notify('error', `Failed to refine content: ${String((error as any)?.message || error)}`);
     } finally {
+      refineKeys.end(String(schedule.id));
       setIsRefiningByScheduleId((prev) => ({ ...prev, [schedule.id]: false }));
     }
   };

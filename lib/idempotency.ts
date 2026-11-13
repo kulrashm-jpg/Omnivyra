@@ -64,3 +64,37 @@ export function createIdempotentOperation(prefix: string): IdempotentOperation {
   const key = makeIdemKey(prefix);
   return { key, headers: idempotencyHeaders(key) };
 }
+
+/**
+ * Billed AI actions (e9 ruling, 2026-11-13): one user action (a click or submit) gets
+ * ONE key, reused if the same action is fired again while it's still in flight (a
+ * double-click, an automatic retry), so the server answers 409 ALREADY_PROCESSED
+ * instead of charging twice. When the action ends (success or failure), the next
+ * deliberate action gets a NEW key. After ALREADY_RELEASED the earlier key is spent,
+ * so "try again" must be a new action.
+ *
+ * `scope` separates independent actions on the same screen (e.g. regenerating two
+ * different assets). Keep one gate per component (useRef), not per render.
+ */
+export interface BilledActionKeyGate {
+  /** The key for the in-flight action in `scope`, minting one if none is in flight. */
+  begin(scope?: string): IdempotentOperation;
+  /** The action in `scope` finished (any outcome): the next begin() mints a new key. */
+  end(scope?: string): void;
+}
+
+export function createBilledActionKeyGate(prefix: string): BilledActionKeyGate {
+  const inFlight = new Map<string, IdempotentOperation>();
+  return {
+    begin(scope = 'default') {
+      const existing = inFlight.get(scope);
+      if (existing) return existing;
+      const op = createIdempotentOperation(prefix);
+      inFlight.set(scope, op);
+      return op;
+    },
+    end(scope = 'default') {
+      inFlight.delete(scope);
+    },
+  };
+}

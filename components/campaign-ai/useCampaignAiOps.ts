@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../../lib/apiFetch';
 import type { AiHistoryEntry } from './types';
+import { classifyBilledResponse, billedOutcomeText } from '../../lib/billing/billedResponse';
+import { createBilledActionKeyGate } from '../../lib/idempotency';
+
+/** Billed: one Idempotency-Key per regenerate action, per asset (lib/idempotency). */
+const regenerateKeys = createBilledActionKeyGate('content-regenerate');
 
 type CampaignAiOpsTab =
   | 'chat'
@@ -281,18 +286,27 @@ export function useCampaignAiOps({
     }
     try {
       if (!ensureCompanyId()) return;
+      const regenOp = regenerateKeys.begin(assetId);
       const response = await fetch('/api/content/regenerate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...regenOp.headers },
         body: JSON.stringify({ companyId: resolvedCompanyId, assetId, instruction: regenerateInstruction }),
       });
       if (!response.ok) {
-        throw new Error('Failed to regenerate content');
+        const body = await response.json().catch(() => ({}));
+        const outcome = classifyBilledResponse(response.status, body, 'Failed to regenerate content.');
+        // Already done and charged (double click / retry): success, just refresh.
+        if (outcome.kind !== 'already_processed') {
+          onError(billedOutcomeText(outcome));
+          return;
+        }
       }
       await loadContentAssets(campaignId || '');
     } catch (error) {
       console.error('Error regenerating content:', error);
       onError('Failed to regenerate content.');
+    } finally {
+      regenerateKeys.end(assetId);
     }
   };
 

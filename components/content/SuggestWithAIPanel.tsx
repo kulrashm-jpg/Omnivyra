@@ -3,6 +3,11 @@
 import { useState } from 'react';
 import { ArrowRight, Loader2, MessageSquare, RefreshCw, Sparkles, Wand2 } from 'lucide-react';
 import type { ContentSuggestion } from '../../lib/content/contentSuggestionContract';
+import { createBilledActionKeyGate } from '../../lib/idempotency';
+import { classifyBilledResponse, billedOutcomeText } from '../../lib/billing/billedResponse';
+
+/** Billed: one Idempotency-Key per suggest action (lib/idempotency). */
+const suggestKeys = createBilledActionKeyGate('content-suggest');
 
 /**
  * P1.6 — "Suggest with AI".
@@ -63,10 +68,11 @@ export default function SuggestWithAIPanel({
     const nextRevisionIndex = instruction ? revisionIndex + 1 : 0;
 
     try {
+      const suggestOp = suggestKeys.begin(String(companyId ?? 'default'));
       const response = await fetch('/api/content/suggest', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...suggestOp.headers },
         body: JSON.stringify({
           company_id: companyId,
           content_type: contentType,
@@ -80,8 +86,12 @@ export default function SuggestWithAIPanel({
       });
 
       const data = (await response.json().catch(() => null)) as { suggestion?: ContentSuggestion; error?: string } | null;
-      if (!response.ok || !data?.suggestion) {
-        throw new Error(data?.error || 'Could not generate a suggestion right now.');
+      if (!response.ok) {
+        // Canonical billed-response mapping (402 credits etc.); never a raw code.
+        throw new Error(billedOutcomeText(classifyBilledResponse(response.status, data, 'Could not generate a suggestion right now.')));
+      }
+      if (!data?.suggestion) {
+        throw new Error('Could not generate a suggestion right now.');
       }
 
       setSuggestion(data.suggestion);
@@ -92,6 +102,8 @@ export default function SuggestWithAIPanel({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not generate a suggestion right now.');
       setPhase(suggestion ? 'ready' : 'idle');
+    } finally {
+      suggestKeys.end(String(companyId ?? 'default'));
     }
   };
 
