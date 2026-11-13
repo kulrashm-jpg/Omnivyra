@@ -23,12 +23,18 @@ function isEmpty(v: unknown): boolean {
   return false;
 }
 
-/** Canonical JSON: object keys sorted (recursively); strings trimmed; arrays keep their order. */
+/**
+ * Canonical JSON: object keys sorted (recursively); strings trimmed; arrays keep their order. Empty array elements
+ * and empty object values are DROPPED at every depth (05 review 2026-11-13): a blank row added then removed, or an
+ * `undefined` slot, is not an edit. Where "same" vs "differ" is ambiguous this errs toward SAME, because a spurious
+ * stamp silently blocks currently-approved guidance for that field.
+ */
 function canonical(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(canonical);
+  if (Array.isArray(v)) return v.filter((x) => !isEmpty(x)).map(canonical);
   if (v && typeof v === 'object') {
     return Object.keys(v as Record<string, unknown>).sort().reduce<Record<string, unknown>>((acc, k) => {
-      acc[k] = canonical((v as Record<string, unknown>)[k]);
+      const child = (v as Record<string, unknown>)[k];
+      if (!isEmpty(child)) acc[k] = canonical(child);
       return acc;
     }, {});
   }
@@ -38,9 +44,8 @@ function canonical(v: unknown): unknown {
 
 /** True when `a` and `b` differ by CONTENT. All empties (null, undefined, '', [], {}) are equal to each other. */
 export function valuesDiffer(a: unknown, b: unknown): boolean {
-  if (isEmpty(a) && isEmpty(b)) return false;
-  if (isEmpty(a) !== isEmpty(b)) return true;
-  return JSON.stringify(canonical(a)) !== JSON.stringify(canonical(b));
+  const norm = (v: unknown) => { const c = canonical(v); return isEmpty(c) ? null : c; };
+  return JSON.stringify(norm(a)) !== JSON.stringify(norm(b));
 }
 
 /**
@@ -49,6 +54,11 @@ export function valuesDiffer(a: unknown, b: unknown): boolean {
  *  - locked, guidance updated AFTER the edit time -> yes (newer user intent)
  *  - locked, no edit time recorded (legacy lock)  -> NO  (the manual edit wins)
  *  - locked, guidance older or same as the edit   -> NO
+ *
+ * BOTH clocks are load-bearing and MUST be server-generated: `fieldEditedAt` is stamped by saveProfile (nowIso), and
+ * `guidanceUpdatedAt` (user_guidance.messaging[section].updated_at) is assigned by normalizeUserGuidedIntelligence,
+ * which never reads a client-supplied value. A new guidance-write path must do the same: a forward-dated client
+ * timestamp would let guidance beat every manual edit with no error anywhere.
  */
 export function guidanceMayOverwrite(
   field: string,
@@ -84,17 +94,20 @@ export function computeEditStamps(params: {
   return { editedAt, changed };
 }
 
-/** A USER save that actually changes Market Pulse solution domains locks them against refine. */
+/**
+ * A USER save that actually changes Market Pulse solution domains locks them against refine. Deliberately EMPTYING
+ * the list is a change too (05 review 2026-11-13): deletion is the strongest input a user gives, not "no input".
+ */
 export function shouldLockMarketPulseDomains(source: string, nextDomains: unknown, prevDomains: unknown): boolean {
-  return source === 'user' && Array.isArray(nextDomains) && nextDomains.length > 0 && valuesDiffer(nextDomains, prevDomains);
+  return source === 'user' && Array.isArray(nextDomains) && valuesDiffer(nextDomains, prevDomains);
 }
 
-/** Refine's solution_domains: a user-locked value is kept; otherwise (empty / AI-sourced) the AI classification. */
+/** Refine's solution_domains: a user-locked value is kept (an emptied list included); otherwise the AI classification. */
 export function resolveRefinedSolutionDomains(
   locked: ReadonlySet<string>,
   userDomains: string[] | null | undefined,
   aiDomains: string[] | null | undefined,
 ): string[] | null | undefined {
-  if (locked.has(MARKET_PULSE_SOLUTION_DOMAINS_LOCK) && Array.isArray(userDomains) && userDomains.length > 0) return userDomains;
+  if (locked.has(MARKET_PULSE_SOLUTION_DOMAINS_LOCK) && Array.isArray(userDomains)) return userDomains;
   return aiDomains;
 }

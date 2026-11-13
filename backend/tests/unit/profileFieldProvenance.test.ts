@@ -12,7 +12,7 @@ import {
   valuesDiffer, guidanceMayOverwrite, computeEditStamps, shouldLockMarketPulseDomains, resolveRefinedSolutionDomains,
   MARKET_PULSE_SOLUTION_DOMAINS_LOCK,
 } from '../../services/companyProfile/fieldProvenance';
-import { applyApprovedStrategicGuidance } from '../../services/companyProfile/userGuidance';
+import { applyApprovedStrategicGuidance, normalizeUserGuidedIntelligence } from '../../services/companyProfile/userGuidance';
 
 const T0 = '2026-11-01T10:00:00.000Z';
 const T1 = '2026-11-05T10:00:00.000Z';
@@ -30,6 +30,15 @@ describe('valuesDiffer compares by CONTENT (e1 D2 reuses it)', () => {
     expect(valuesDiffer(null, 'x')).toBe(true);
     expect(valuesDiffer(['a'], ['a', 'b'])).toBe(true);
     expect(valuesDiffer(['a', 'b'], ['b', 'a'])).toBe(true); // order is content for lists
+  });
+  it('05: empty ELEMENTS / empty object values are not content (a blank row added then removed is not an edit)', () => {
+    expect(valuesDiffer(['a', ''], ['a'])).toBe(false);
+    expect(valuesDiffer(['a', '  '], ['a'])).toBe(false);
+    expect(valuesDiffer([undefined], [])).toBe(false);
+    expect(valuesDiffer([null, ''], null)).toBe(false);
+    expect(valuesDiffer({ a: 1, b: '' }, { a: 1 })).toBe(false);
+    expect(valuesDiffer({ a: '' }, null)).toBe(false);
+    expect(valuesDiffer(['a', ''], ['a', 'b'])).toBe(true);
   });
 });
 
@@ -65,17 +74,21 @@ describe('computeEditStamps: only a real content change is stamped', () => {
 });
 
 describe('Market Pulse solution_domains (D5)', () => {
-  it('a USER save that changes them locks them; AI saves / unchanged / empty do not', () => {
+  it('a USER save that changes them (emptying included) locks them; AI saves / unchanged do not', () => {
     expect(shouldLockMarketPulseDomains('user', ['Payments'], ['Lending'])).toBe(true);
     expect(shouldLockMarketPulseDomains('ai_refined', ['Payments'], ['Lending'])).toBe(false);
     expect(shouldLockMarketPulseDomains('user', ['Payments'], ['Payments'])).toBe(false);
-    expect(shouldLockMarketPulseDomains('user', [], ['Payments'])).toBe(false);
+    expect(shouldLockMarketPulseDomains('user', [], ['Payments'])).toBe(true); // 05: deliberately emptying IS an edit
+    expect(shouldLockMarketPulseDomains('user', [], [])).toBe(false);
+    expect(shouldLockMarketPulseDomains('user', [], undefined)).toBe(false);
   });
-  it('refine keeps a user-locked value; refreshes an unlocked (AI-sourced) or empty one', () => {
+  it('refine keeps a user-locked value (an emptied one too); refreshes an unlocked (AI-sourced) or absent one', () => {
     const locked = new Set([MARKET_PULSE_SOLUTION_DOMAINS_LOCK]);
     expect(resolveRefinedSolutionDomains(locked, ['User domain'], ['AI domain'])).toEqual(['User domain']);
     expect(resolveRefinedSolutionDomains(new Set(), ['Old AI domain'], ['AI domain'])).toEqual(['AI domain']);
-    expect(resolveRefinedSolutionDomains(locked, [], ['AI domain'])).toEqual(['AI domain']);
+    expect(resolveRefinedSolutionDomains(locked, [], ['AI domain'])).toEqual([]); // 05: an emptied, locked list stays empty
+    expect(resolveRefinedSolutionDomains(locked, undefined, ['AI domain'])).toEqual(['AI domain']);
+    expect(resolveRefinedSolutionDomains(new Set(), [], ['AI domain'])).toEqual(['AI domain']);
   });
 });
 
@@ -106,6 +119,25 @@ describe('applyApprovedStrategicGuidance (D4, real function)', () => {
   });
   it('CONTROL: an unlocked field still receives approved guidance', () => {
     expect(applyApprovedStrategicGuidance(profile({ user_locked_fields: [] })).brand_positioning).toBe('GUIDANCE positioning');
+  });
+});
+
+describe('guidance updated_at is SERVER-authoritative (05: the precedence clock is load-bearing)', () => {
+  const NOW = new Date('2026-11-13T12:00:00.000Z');
+  const section = (o: Record<string, unknown>) => ({ messaging: { positioning: { status: 'approved', approved_value: 'P1', ...o } } });
+  it('a client-supplied (forward-dated) updated_at is ignored on a new approval', () => {
+    const out = normalizeUserGuidedIntelligence(section({ updated_at: '2099-01-01T00:00:00.000Z' }), { previous: null, now: NOW });
+    expect(out?.messaging?.positioning?.updated_at).toBe(NOW.toISOString());
+  });
+  it('an unchanged approval keeps its STORED time, whatever the client sends', () => {
+    const previous = section({ updated_at: T0 }) as any;
+    const out = normalizeUserGuidedIntelligence(section({ updated_at: '2099-01-01T00:00:00.000Z' }), { previous, now: NOW });
+    expect(out?.messaging?.positioning?.updated_at).toBe(T0);
+  });
+  it('a changed approval (new approved_value) is stamped now; an ai_value-only change is not', () => {
+    const previous = section({ updated_at: T0, ai_value: 'A1' }) as any;
+    expect(normalizeUserGuidedIntelligence(section({ approved_value: 'P2', updated_at: T0 }), { previous, now: NOW })?.messaging?.positioning?.updated_at).toBe(NOW.toISOString());
+    expect(normalizeUserGuidedIntelligence(section({ ai_value: 'A2', updated_at: T0 }), { previous, now: NOW })?.messaging?.positioning?.updated_at).toBe(T0);
   });
 });
 

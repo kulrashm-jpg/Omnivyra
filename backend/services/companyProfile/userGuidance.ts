@@ -4,7 +4,7 @@ import type {
   UserGuidanceStrategicSection,
   UserGuidedIntelligence,
 } from './types';
-import { guidanceMayOverwrite } from './fieldProvenance';
+import { guidanceMayOverwrite, valuesDiffer } from './fieldProvenance';
 
 const GUIDANCE_VERSION = 1;
 const MAX_COMPETITOR_GUIDANCE = 40;
@@ -70,15 +70,26 @@ export function normalizeUserGuidedIntelligence(
   for (const section of Object.keys(STRATEGIC_FIELD_MAP) as UserGuidanceStrategicSection[]) {
     const field = raw.messaging?.[section];
     if (!field) continue;
-    messaging[section] = {
+    const next = {
       ai_value: cleanText(field.ai_value, 1200),
       approved_value: cleanText(field.approved_value, 1200),
       edited_value: cleanText(field.edited_value, 1200),
       status: ['ai_suggested', 'approved', 'edited', 'rejected', 'regenerate_requested'].includes(String(field.status))
         ? field.status
-        : 'edited',
+        : 'edited' as const,
       guidance: cleanText(field.guidance, 500),
-      updated_at: cleanText(field.updated_at, 40) ?? nowIso,
+    };
+    // SERVER-AUTHORITATIVE clock (05 review 2026-11-13): guidanceMayOverwrite compares this against the field's manual
+    // edit time, so a client-supplied (e.g. forward-dated) value is NEVER read. An unchanged approval keeps its stored
+    // time; a changed approval (status / approved / edited value) is stamped now.
+    const prev = options?.previous?.messaging?.[section];
+    const approvalChanged = !prev || valuesDiffer(
+      { status: next.status, approved_value: next.approved_value, edited_value: next.edited_value },
+      { status: prev.status, approved_value: prev.approved_value, edited_value: prev.edited_value },
+    );
+    messaging[section] = {
+      ...next,
+      updated_at: approvalChanged ? nowIso : (cleanText(prev?.updated_at, 40) ?? nowIso),
     };
   }
 
