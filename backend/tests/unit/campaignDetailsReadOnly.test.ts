@@ -8,30 +8,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
+import { insideWriteGate } from '../helpers/writeGateScan';
 
 const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), 'utf8');
 const FILES = ['components/CampaignDetailsContent.tsx', 'components/CampaignWeeklySection.tsx', 'components/WeekCard.tsx'];
-
-/** Is `marker` inside an open `canWriteThisCampaign && (` … `)` group? (paren-balanced scan) */
-function insideWriteGate(src: string, marker: string): boolean {
-  const at = src.indexOf(marker);
-  if (at < 0) throw new Error(`marker not found: ${marker}`);
-  const OPEN = 'canWriteThisCampaign && (';
-  let from = 0;
-  for (;;) {
-    const o = src.indexOf(OPEN, from);
-    if (o < 0 || o > at) return false;
-    // find the matching ')' of the '(' that ends OPEN
-    let depth = 0;
-    let i = o + OPEN.length - 1;
-    for (; i < src.length; i++) {
-      if (src[i] === '(') depth++;
-      else if (src[i] === ')') { depth--; if (depth === 0) break; }
-    }
-    if (at > o && at < i) return true;
-    from = o + OPEN.length;
-  }
-}
 
 describe('campaign details: write and AI controls only for writers (F3c)', () => {
   it.each(FILES)('%s parses (no JSX syntax errors from the wraps)', (p) => {
