@@ -36,6 +36,7 @@ export default function LoginPage() {
   const [loading, setLoading]   = useState<string | null>(null); // 'password' | 'magic' | 'forgot'
   const [error, setError]       = useState<string | null>(
     errorParam === 'account_deleted' ? 'This account has been removed.' :
+    errorParam === 'email_not_accepted' ? 'Please use a standard email address (letters, digits and . _ + - before the @).' :
     errorParam === 'invalid_session' ? 'Your session is invalid or expired.' :
     errorParam === 'auth_failed'     ? 'Sign-in failed. Please try again.' :
     null,
@@ -220,9 +221,12 @@ export default function LoginPage() {
         });
 
         if (syncRes.status === 403) {
+          const refusal = await syncRes.clone().json().catch(() => ({})) as { code?: string };
           await getSupabaseBrowser().auth.signOut();
           clearBrowserAuthState({ preservePkce: false });
-          router.replace('/login?error=account_deleted');
+          router.replace(refusal.code === 'EMAIL_NOT_ACCEPTED'
+            ? '/login?error=email_not_accepted'
+            : '/login?error=account_deleted');
           return;
         }
 

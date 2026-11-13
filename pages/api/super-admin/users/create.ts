@@ -40,6 +40,7 @@
  */
 
 import { randomBytes } from 'crypto';
+import { isAcceptableEmailAddress } from '../../../../lib/auth/emailAddressPolicy';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -82,7 +83,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const inviteMode: InviteMode = body.inviteMode === 'temp_password' ? 'temp_password' : 'magic_link';
   const shouldSendInvite = body.sendInvite !== false;
 
-  if (!email || !EMAIL_RE.test(email)) {
+  // Conservative address policy (defence in depth) on top of the legacy shape check.
+  if (!email || !EMAIL_RE.test(email) || !isAcceptableEmailAddress(email)) {
     return res.status(400).json({ error: 'INVALID_EMAIL', details: 'email is required and must be well-formed' });
   }
   if (!companyId) {

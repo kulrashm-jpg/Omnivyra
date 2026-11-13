@@ -374,28 +374,39 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    // Ensure company exists in companies table (company_api_configs FK requires it)
+    // Ensure company exists in companies table (company_api_configs FK requires it).
+    // BLOCKING fix (e1, 2026-11-12; 05 finding, e9 ruling): this was an UPSERT on id (ignoreDuplicates false ->
+    // ON CONFLICT (id) DO UPDATE) entered on `companyErr || !existingCompany`, so a transient READ error against a
+    // LIVE company overwrote its name (to 'Company'), fabricated a `.local` website with no website_domain, and
+    // forced status = 'active' - REACTIVATING a disabled / suspended company. companies.status is an authorization
+    // signal (TenantGuard ORG_INACTIVE, companyOperationalState, the invitation-activation and super-admin
+    // assignment RPCs), so that was a privilege change. Now:
+    //   - a read error is "unknown", not "missing": fail closed (503, retryable), write nothing;
+    //   - a genuinely missing row is created with a plain INSERT that can never update; 23505 (created
+    //     concurrently) is success;
+    //   - no website is written (a fabricated URL without website_domain is the partial pair companyIdentityWriter
+    //     exists to prevent).
     const { data: existingCompany, error: companyErr } = await supabase
       .from('companies')
       .select('id')
       .eq('id', companyId)
       .maybeSingle();
-    if (companyErr || !existingCompany) {
+    if (companyErr) {
+      console.error('access POST company lookup failed', companyErr);
+      return res.status(503).json({ error: 'Company lookup failed, please retry' });
+    }
+    if (!existingCompany) {
       const { data: profile } = await supabase
         .from('company_profiles')
         .select('company_id, name')
         .eq('company_id', companyId)
         .maybeSingle();
-      const { error: insertErr } = await supabase.from('companies').upsert(
-        {
-          id: companyId,
-          name: profile?.name || 'Company',
-          website: `https://company-${companyId}.local`,
-          status: 'active',
-        },
-        { onConflict: 'id' }
-      );
-      if (insertErr) {
+      const { error: insertErr } = await supabase.from('companies').insert({
+        id: companyId,
+        name: profile?.name || 'Company',
+        status: 'active',
+      });
+      if (insertErr && (insertErr as { code?: string }).code !== '23505') {
         console.error('access POST ensure company failed', insertErr);
         return res.status(500).json({
           error: 'Company not found or could not be created',

@@ -26,8 +26,9 @@
  *   USER_INVITED            | 401  | show "complete activation" UI, do NOT signOut
  *   SCHEMA_MISMATCH         | 503  | show transient error, do NOT signOut, allow retry
  *   PROFILE_LOAD_FAILED     | 500  | show transient error, do NOT signOut, allow retry
+ *   EMAIL_NOT_ACCEPTED      | 403  | signOut() + redirect /login?error=email_not_accepted
  *
- * Only the first three are session-fatal. Everything else preserves the
+ * INVALID_SESSION, ACCOUNT_DELETED, ACCOUNT_DISABLED and EMAIL_NOT_ACCEPTED are session-fatal. Everything else preserves the
  * session and surfaces a visible state the user can act on.
  */
 
@@ -46,6 +47,11 @@ export const AUTH_ERROR_CODE = {
   SCHEMA_MISMATCH:    'SCHEMA_MISMATCH',
   /** Generic non-auth load failure (DB outage, query timeout, etc.). */
   PROFILE_LOAD_FAILED:'PROFILE_LOAD_FAILED',
+  /**
+   * The identity's email address fails the conservative address policy (lib/auth/emailAddressPolicy) - the
+   * provider accepted an address this app refuses to store. Permanent for this address: sign out, explain.
+   */
+  EMAIL_NOT_ACCEPTED: 'EMAIL_NOT_ACCEPTED',
 } as const;
 
 export type AuthErrorCode = typeof AUTH_ERROR_CODE[keyof typeof AUTH_ERROR_CODE];
@@ -77,6 +83,7 @@ export const SESSION_FATAL_AUTH_CODES: ReadonlySet<AuthErrorCode> = new Set([
   AUTH_ERROR_CODE.INVALID_SESSION,
   AUTH_ERROR_CODE.ACCOUNT_DELETED,
   AUTH_ERROR_CODE.ACCOUNT_DISABLED,
+  AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED,
 ]);
 
 export function isSessionFatalCode(code: string | null | undefined): boolean {

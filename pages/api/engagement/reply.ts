@@ -949,16 +949,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // it accepted and thread in the correlation id so intelligence can
     // join "suggestion shown → executed action".
     if (body.suggestion_id) {
+      // Bound to the AUTHORIZED organization: a caller-supplied suggestion_id
+      // naming another tenant's suggestion matches no row (two-id sweep).
       void recordSuggestionAccepted({
         suggestion_id: body.suggestion_id,
         correlation_id: result.correlation_id,
         action_id: actionId,
+        organization_id: organizationId,
       }).catch(() => {});
     } else if (result.correlation_id) {
       // No explicit id: best-effort accept-by-correlation (no-op if none exists).
       void recordSuggestionAccepted({
         correlation_id: result.correlation_id,
         action_id: actionId,
+        organization_id: organizationId,
       }).catch(() => {});
     }
 

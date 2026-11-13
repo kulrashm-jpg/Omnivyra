@@ -7,6 +7,7 @@ import { resolveAuthenticatedUser } from '@/backend/services/authResolver';
 import { getCanonicalAppUrl } from '@/backend/config/getCanonicalAppUrl';
 import { randomBytes, createHash } from 'crypto';
 import { normalizeRole, Role } from '@/backend/services/rbacPrimitives';
+import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '@/lib/auth/emailAddressPolicy';
 
 async function getActorUserId(req: NextApiRequest): Promise<string | null> {
   // resolveAuthenticatedUser already returns public.users.id after joining
@@ -107,6 +108,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { email, companyId } = req.body || {};
   if (!email || !companyId) {
     return res.status(400).json({ error: 'email and companyId are required' });
+  }
+  // Conservative address policy where an invited address enters (defence in depth) - before any lookup or write.
+  if (typeof email !== 'string' || !isAcceptableEmailAddress(email)) {
+    return res.status(400).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE });
   }
 
   const companyContext = await requireCompanyContext({ req, res, companyId: String(companyId).trim() });
