@@ -293,6 +293,7 @@ async function createLegacyScheduledPostRuntime(input: {
     idempotency_key: legacyIdempotencyKey,
   };
 
+  // cross-tenant: scheduled-posts-user-anchored-legacy-posts
   const { data, error } = await ownedDbTable('scheduled_posts').insert(payload).select('*').single();
   if (error) {
     // Recover from 23505 (the unique index from migration 20260725)
@@ -387,6 +388,7 @@ export async function updateLegacyScheduledPost(input: {
   }
   patch.updated_at = new Date().toISOString();
 
+  // cross-tenant: scheduled-posts-user-anchored-legacy-posts
   const { error } = await ownedDbTable('scheduled_posts')
     .update(patch)
     .eq('id', input.id)
@@ -400,6 +402,7 @@ export async function updateLegacyScheduledPost(input: {
 }
 
 export async function cancelLegacyScheduledPost(input: { userId: string; id: string }): Promise<void> {
+  // cross-tenant: scheduled-posts-user-anchored-legacy-posts
   const { error } = await ownedDbTable('scheduled_posts')
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
     .eq('id', input.id)
@@ -414,6 +417,7 @@ export async function cancelLegacyScheduledPost(input: { userId: string; id: str
 
 export async function publishLegacyScheduledPostNow(input: { userId: string; id: string }): Promise<void> {
   const now = new Date().toISOString();
+  // cross-tenant: scheduled-posts-user-anchored-legacy-posts
   const { error } = await ownedDbTable('scheduled_posts')
     .update({ status: 'scheduled', scheduled_for: now, updated_at: now })
     .eq('id', input.id)

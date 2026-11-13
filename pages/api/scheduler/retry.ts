@@ -136,6 +136,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const claimCode = retryPreparingCode(Date.now(), randomUUID());
   const pinRead = <Q extends { is: (c: string, v: null) => Q; eq: (c: string, v: string) => Q }>(q: Q): Q =>
     (read.error_code == null ? q.is('error_code', null) : q.eq('error_code', read.error_code));
+  // cross-tenant: scheduled-posts-user-anchored-scheduler-retry
   const { data: claimRows, error: claimError } = await pinRead(
     supabase
       .from('scheduled_posts')
@@ -157,6 +158,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // Give the claim back (compare-and-set on it) after a step that changed nothing.
   const releaseClaim = async (): Promise<boolean> => {
+    // cross-tenant: scheduled-posts-user-anchored-scheduler-retry
     const { data, error } = await supabase
       .from('scheduled_posts')
       .update({ error_code: read.error_code })
@@ -197,6 +199,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // deferring to the safety-net cron); computed after the cancel so the
   // margin is not spent on it.
   const scheduledFor = new Date(Date.now() + 3000).toISOString();
+  // cross-tenant: scheduled-posts-user-anchored-scheduler-retry
   const { data: resetRows, error: resetError } = await supabase
     .from('scheduled_posts')
     .update({ status: 'scheduled', error_message: null, error_code: null, scheduled_for: scheduledFor })
@@ -226,6 +229,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // it had (compare-and-set on the reset this retry wrote), so it is never
   // left 'scheduled' with no live job and the retry can simply be repeated.
   const restoreFailed = async (): Promise<boolean> => {
+    // cross-tenant: scheduled-posts-user-anchored-scheduler-retry
     const { data, error } = await supabase
       .from('scheduled_posts')
       .update({ status: 'failed', error_code: read.error_code, error_message: read.error_message, scheduled_for: read.scheduled_for })

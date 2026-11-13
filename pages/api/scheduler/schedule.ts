@@ -486,6 +486,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       insertPayload.social_account_id = accountId;
     }
 
+    // cross-tenant: scheduled-posts-user-anchored-scheduler-schedule
     const { data: newPost, error: insertError } = await supabase
       .from('scheduled_posts')
       .insert(insertPayload)

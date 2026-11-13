@@ -72,7 +72,24 @@ function loadAllowList() {
   for (const m of src.matchAll(/id:\s*'([^']+)',\s*tables:\s*\[([^\]]*)\],\s*file:\s*'([^']+)'/g)) {
     out.set(m[1], { tables: [...m[2].matchAll(/'([^']+)'/g)].map((x) => x[1]), file: m[3] });
   }
+  // R11 (e9 2026-11-13): an interim entry names the migration whose prod application ends it (read per entry block).
+  for (const blk of src.matchAll(/\{\s*id:\s*'([^']+)'([\s\S]*?)\n  \},/g)) {
+    const x = blk[2].match(/exitWhenApplied:\s*'(\d{14})'/);
+    const e = out.get(blk[1]);
+    if (e && x) e.exitWhenApplied = x[1];
+  }
   return out;
+}
+/** R11: versions recorded as applied in prod (scripts/migrations/version-reservations.json, applied_in_prod: true). */
+function appliedInProd() {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts', 'migrations', 'version-reservations.json'), 'utf8'));
+    return new Set((j.reservations || []).filter((r) => r && r.applied_in_prod === true).map((r) => String(r.version)));
+  } catch { return new Set(); }
+}
+function expiredInterimEntries(allow) {
+  const applied = appliedInProd();
+  return [...allow.entries()].filter(([, e]) => e.exitWhenApplied && applied.has(e.exitWhenApplied)).map(([id, e]) => `${id} (exit: ${e.exitWhenApplied} applied in prod)`);
 }
 /** Blank out comments and string contents EXCEPT single-quoted table literals right after a call paren. */
 /** Blank out comments (keeping line structure). Linear; collects chars in an array. */
@@ -300,6 +317,15 @@ function nullsWarnings() {
 // unclassified tables (unknown until classified).
 const prelaunch = (f) => f.kind === 'write' || f.kind === 'context' || f.tag !== 'other' || f.rule === 'R6' || f.rule === 'E' || (f.rule === 'R7' && (f.kind === 'write' || f.tag !== 'other'));
 const { findings, unclassified, files } = scan();
+// R11 (e9 2026-11-13): an INTERIM cross-tenant entry (exitWhenApplied) must not outlive its exit migration.
+// Enforced in EVERY mode, before any other output decision, so WARN runs fail too.
+{
+  const expired = expiredInterimEntries(loadAllowList());
+  if (expired.length) {
+    console.error(`[tenant-seam] BLOCK (R11): interim cross-tenant entries outlived their exit migration: ${expired.join('; ')}. Convert the marked sites and delete these entries.`);
+    process.exit(1);
+  }
+}
 const by = (keyFn) => { const m = new Map(); for (const f of findings) { const k = keyFn(f); m.set(k, (m.get(k) || 0) + 1); } return [...m].sort((a, b) => b[1] - a[1]); };
 console.log(`[tenant-seam] scanned ${files} files: ${findings.length} findings (${findings.filter(prelaunch).length} pre-launch), ${[...unclassified.values()].reduce((a, b) => a + b, 0)} unclassified sites over ${unclassified.size} tables`);
 console.log(`  without ANY tenant predicate in the call chain: ${findings.filter((f) => f.rule === 'R1' && !f.predicated).length} (pre-launch ${findings.filter((f) => f.rule === 'R1' && !f.predicated && prelaunch(f)).length}; writes ${findings.filter((f) => f.rule === 'R1' && !f.predicated && f.kind === 'write').length})`);

@@ -157,6 +157,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       ? await (await tenantChildTable('scheduled_posts', tenantContextFor({ userId: user.userId }, ownerCompanyId), campaignId))
           .update(patch)
           .eq('id', postId)
+      // cross-tenant: scheduled-posts-user-anchored-schedule-reschedule
       : await supabase
           .from('scheduled_posts')
           .update(patch)
