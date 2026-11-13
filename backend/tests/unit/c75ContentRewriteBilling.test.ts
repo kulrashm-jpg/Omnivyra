@@ -163,7 +163,7 @@ describe.each(Object.keys(ROUTES) as Array<keyof typeof ROUTES>)('C75 billing: %
     expect(modelCalls).toHaveLength(0);
     expect(holds).toHaveLength(0);
     expect(res.statusCode).toBe(402);
-    expect(res.body).toEqual({ error: 'Insufficient credits to generate content', required: PRICE, balance: PRICE - 1 });
+    expect(res.body).toEqual({ error: 'Insufficient credits to generate content', code: 'INSUFFICIENT_CREDITS', required: PRICE, balance: PRICE - 1 });
   });
 
   it('(c) the same request retried -> 1 hold total, 1 model call, charged once', async () => {
@@ -220,8 +220,8 @@ describe('billedAiHttpError + the refine_variant twin', () => {
   const { BilledAiNotExecutedError } = require('../../services/billing/runBilledAiCompletion');
   it('maps refusals to the MonetizedWorkflowError shapes; other errors -> null', () => {
     expect(billedAiHttpError(new BilledAiNotExecutedError('insufficient_credits', { available: 1, required: 5 })))
-      .toEqual({ status: 402, body: { error: 'Insufficient credits to generate content', required: 5, balance: 1 } });
-    expect(billedAiHttpError(new BilledAiNotExecutedError('no_credit_account'))).toEqual({ status: 402, body: { error: 'No credit account for org' } });
+      .toEqual({ status: 402, body: { error: 'Insufficient credits to generate content', code: 'INSUFFICIENT_CREDITS', required: 5, balance: 1 } });
+    expect(billedAiHttpError(new BilledAiNotExecutedError('no_credit_account'))).toEqual({ status: 402, body: { error: 'No credit account for org', code: 'NO_CREDIT_ACCOUNT' } });
     expect(billedAiHttpError(new BilledAiNotExecutedError('not_a_member'))).toEqual({ status: 403, body: { error: 'ORG_SCOPE_VIOLATION' } });
     expect(billedAiHttpError(new BilledAiNotExecutedError('org_control_blocked', { code: 'ORG_BLOCKED', reason: 'r' }))).toEqual({ status: 403, body: { error: 'ORG_BLOCKED', detail: 'r' } });
     expect(billedAiHttpError(new BilledAiNotExecutedError('already_confirmed')).status).toBe(409);

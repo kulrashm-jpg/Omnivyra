@@ -1,6 +1,8 @@
 /**
  * Maps a runBilledAiCompletion refusal (BilledAiNotExecutedError) to the EXISTING HTTP shapes used by the
- * activity-workspace monetized workflows (contentRouteModel.ts MonetizedWorkflowError payloads), so every
+ * activity-workspace monetized workflows (contentRouteModel.ts MonetizedWorkflowError payloads) PLUS the shared
+ * billed-response `code` (e9 2026-11-13: INSUFFICIENT_CREDITS / NO_CREDIT_ACCOUNT / ALREADY_PROCESSED /
+ * ALREADY_RELEASED; the UI keys on status + code, never message text), so every
  * runBilledAiCompletion route answers a refusal the same way: 402 insufficient / no account, 403 scope or org
  * control, 409 already settled. Returns null for any other error (the caller's own handling applies).
  */
@@ -11,9 +13,9 @@ export function billedAiHttpError(err: unknown): { status: number; body: Record<
   const detail = err.detail as { required?: number; available?: number; code?: string; reason?: string };
   switch (err.status) {
     case 'insufficient_credits':
-      return { status: 402, body: { error: 'Insufficient credits to generate content', required: detail.required, balance: detail.available } };
+      return { status: 402, body: { error: 'Insufficient credits to generate content', code: 'INSUFFICIENT_CREDITS', required: detail.required, balance: detail.available } };
     case 'no_credit_account':
-      return { status: 402, body: { error: 'No credit account for org' } };
+      return { status: 402, body: { error: 'No credit account for org', code: 'NO_CREDIT_ACCOUNT' } };
     case 'not_a_member':
       return { status: 403, body: { error: 'ORG_SCOPE_VIOLATION' } };
     case 'org_control_blocked':
