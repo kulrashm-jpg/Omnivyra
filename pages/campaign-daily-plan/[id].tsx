@@ -4,6 +4,8 @@
  * Features: Regenerate (per week), click activity → Activity Content Workspace.
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useCompanyContext } from '../../components/CompanyContext';
+import { canWriteCampaign } from '../../lib/access/campaignWriteAccess';
 import { createIdempotentOperation } from '../../lib/idempotency';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
@@ -45,6 +47,8 @@ function nonEmpty(v: unknown): string {
 }
 
 export default function CampaignDailyPlanPage() {
+  // F3: Viewers / view-only / Engagers see the plan but not its write or AI controls.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
   const router = useRouter();
   const id = typeof router.query.id === 'string' ? router.query.id : '';
   const companyId = typeof router.query.companyId === 'string' ? router.query.companyId : '';
@@ -639,6 +643,7 @@ export default function CampaignDailyPlanPage() {
                 Calendar
               </button>
               {!campaignScheduled ? (
+                canWriteThisCampaign && (
                 <button
                   onClick={() => setShowScheduleConfirm(true)}
                   disabled={isRepurposeScheduling}
@@ -654,6 +659,7 @@ export default function CampaignDailyPlanPage() {
                     'Repurpose & Schedule Campaign'
                   )}
                 </button>
+                )
               ) : (
                 <span className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-100 text-emerald-800 text-sm font-medium">
                   <CheckCircle className="w-4 h-4" />
@@ -740,6 +746,7 @@ export default function CampaignDailyPlanPage() {
                     {!hasActivities ? (
                       <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 mb-4 flex items-center justify-between gap-4">
                         <span>No daily activities for Week {weekNumber} yet.</span>
+                        {canWriteThisCampaign && (
                         <button
                           type="button"
                           onClick={() => handleGenerateFromAI(weekNumber)}
@@ -748,6 +755,7 @@ export default function CampaignDailyPlanPage() {
                         >
                           Generate from AI
                         </button>
+                        )}
                       </div>
                     ) : null}
                     <CampaignDailyPlanSingleWeekView
@@ -760,11 +768,11 @@ export default function CampaignDailyPlanPage() {
                       onWeekSelect={handleWeekSelect}
                       onDaySelect={setSelectedDayIndex}
                       onActivityClick={openActivityWorkspace}
-                      onRegenerateWeek={handleRegenerateWeek}
+                      onRegenerateWeek={canWriteThisCampaign ? handleRegenerateWeek : undefined}
                       regeneratingWeek={regeneratingWeek}
-                      onGenerateFromAI={handleGenerateFromAI}
+                      onGenerateFromAI={canWriteThisCampaign ? handleGenerateFromAI : undefined}
                       generatingFromAI={generatingFromAI}
-                      onSaveDayChanges={handleSaveDayChanges}
+                      onSaveDayChanges={canWriteThisCampaign ? handleSaveDayChanges : undefined}
                     />
                   </>
                 );
@@ -795,6 +803,7 @@ export default function CampaignDailyPlanPage() {
               >
                 Cancel
               </button>
+              {canWriteThisCampaign && (
               <button
                 onClick={handleRepurposeAndSchedule}
                 disabled={isRepurposeScheduling}
@@ -809,6 +818,7 @@ export default function CampaignDailyPlanPage() {
                   'Confirm & Schedule'
                 )}
               </button>
+              )}
             </div>
           </div>
         </div>
