@@ -28,8 +28,15 @@
  */
 
 import { readFileSync } from 'fs';
+// PL-18 (e9, pre-launch): the extension source is NOT in this repo. These suites used to read it from one person's
+// Desktop (C:/Users/Admin/OneDrive/...), so they failed to LOAD everywhere else - CI included (0 tests, invisible to
+// parity). They now read VERBATIM LINE EXCERPTS of the v1.4.0 source - only the lines asserted on (owner ruling: public
+// repo, minimum product code) - in backend/tests/fixtures/chrome-extension-v1.4.0; fixture-tool.js there verifies them
+// (and the whole-file properties) against the real source. See that folder's README.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const EXT_FIXTURE = require('path').resolve(__dirname, '../fixtures/chrome-extension-v1.4.0') + '/';
 
-const SW_PATH = 'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/background/serviceWorker.js';
+const SW_PATH = EXT_FIXTURE + 'background/serviceWorker.js';
 const swSrc = readFileSync(SW_PATH, 'utf8');
 
 const PRODUCTION_EXTENSION_ID = 'khlballmijciomdbigljpafliajdekbg';
@@ -253,7 +260,7 @@ describe('source shape — the guard is present at every activation site', () =>
 
   it('manifest version is 1.4.0 and the store id is the one gated on', () => {
     const manifest = JSON.parse(
-      readFileSync('C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/manifest.json', 'utf8'),
+      readFileSync(EXT_FIXTURE + 'manifest.json', 'utf8'),
     );
     expect(manifest.version).toBe('1.4.0');
   });
@@ -262,7 +269,7 @@ describe('source shape — the guard is present at every activation site', () =>
 describe('T9 — the authenticated command protocol is untouched', () => {
   it('renewal and result submission are unchanged by this hardening', () => {
     const apiSrc = readFileSync(
-      'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/apiClient.js',
+      EXT_FIXTURE + 'core/apiClient.js',
       'utf8',
     );
     expect(apiSrc).toContain('async renewDispatchLease');

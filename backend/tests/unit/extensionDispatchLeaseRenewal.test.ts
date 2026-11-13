@@ -64,6 +64,13 @@ jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unk
 
 import { createHash } from 'crypto';
 import renewHandler from '../../../pages/api/extension/dispatch/renew';
+// PL-18 (e9, pre-launch): the extension source is NOT in this repo. These suites used to read it from one person's
+// Desktop (C:/Users/Admin/OneDrive/...), so they failed to LOAD everywhere else - CI included (0 tests, invisible to
+// parity). They now read VERBATIM LINE EXCERPTS of the v1.4.0 source - only the lines asserted on (owner ruling: public
+// repo, minimum product code) - in backend/tests/fixtures/chrome-extension-v1.4.0; fixture-tool.js there verifies them
+// (and the whole-file properties) against the real source. See that folder's README.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const EXT_FIXTURE = require('path').resolve(__dirname, '../fixtures/chrome-extension-v1.4.0') + '/';
 
 /** Same derivation the route uses. */
 const holderFor = (s: { userId: string; orgId: string; hmacNonce: string }) =>
@@ -255,11 +262,11 @@ describe('re-offer rule is gated on PROVEN client capability', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('extension side — renewal before EVERY attempt', () => {
   const procSrc = require('fs').readFileSync(
-    'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/commandProcessor.js',
+    EXT_FIXTURE + 'core/commandProcessor.js',
     'utf8',
   );
   const apiSrc = require('fs').readFileSync(
-    'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/core/apiClient.js',
+    EXT_FIXTURE + 'core/apiClient.js',
     'utf8',
   );
 
@@ -307,7 +314,7 @@ describe('extension side — renewal before EVERY attempt', () => {
   it('the extension release version was incremented — v1.3.9 is NOT fixed', () => {
     const manifest = JSON.parse(
       require('fs').readFileSync(
-        'C:/Users/Admin/OneDrive/Desktop/omnivyra chrome ext/extension/manifest.json',
+        EXT_FIXTURE + 'manifest.json',
         'utf8',
       ),
     );
