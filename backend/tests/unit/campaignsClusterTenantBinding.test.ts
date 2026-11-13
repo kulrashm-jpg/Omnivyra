@@ -308,15 +308,23 @@ describe('campaigns/create-12week-plan — tenant binding', () => {
     expect(res.statusCode).toBe(200);
     const v = tenantWrites().find(w => w.table === 'campaign_versions');
     if (v) expect(v.payload.company_id).toBe(COMPANY_A);
+    // TENANT (NULL company_id trace, e9 2026-11-12): the campaign ROW is owned by the authorized company.
+    const created = tenantWrites().filter(w => w.table === 'campaigns' && w.op === 'insert');
+    expect(created).toHaveLength(1);
+    expect(created[0].payload.company_id).toBe(COMPANY_A);
   });
 
-  it('creating a campaign with NO companyId still works (the shipped caller omits it)', async () => {
+  it('TENANT: creating a campaign with NO companyId is refused and writes nothing (was a company-less campaign)', async () => {
+    // Changed contract (e9, 2026-11-12): this used to assert that a company-less campaign was created.
+    // That row is the NULL campaigns.company_id defect. The tenant guard does no active-company
+    // inference, so the caller must name the company; the legacy callers that omit it pass an
+    // EXISTING campaignId and never reach this branch.
     const res = await post(createPlanRoute, MEMBER_A, {
       campaignId: NEW_CAMPAIGN, campaignName: 'X', ...PLAN,
     });
-    expect(res.statusCode).toBe(200);
-    // No company means no campaign_versions row — the pre-existing behaviour.
-    expect(tenantWrites().some(w => w.table === 'campaign_versions')).toBe(false);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ code: 'COMPANY_REQUIRED' });
+    expect(tenantWrites()).toEqual([]);
   });
 
   it('missing required fields are rejected before any write', async () => {

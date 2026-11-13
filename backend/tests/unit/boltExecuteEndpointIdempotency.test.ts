@@ -215,3 +215,47 @@ describe('D. concurrent duplicates are arbitrated by the database', () => {
     expect(res.statusCode).toBe(500);
   });
 });
+
+describe('E. the campaign duplicate-run guard (05 finding): uuid-only and scoped to the authorized company', () => {
+  const CAMP = 'cafecafe-0000-4000-8000-00000000c0de';
+  const live = (company: string) => runs.push({ id: `live-${company}`, company_id: company, campaign_id: CAMP, status: 'running' });
+
+  test("CRITICAL: another company's live run for the same campaign id is neither returned nor blocking", async () => {
+    live('company-2');
+    const res = await post({ ...BODY, generatedCampaignId: CAMP });
+    expect(res.statusCode).toBe(202);
+    expect(res.body.run_id).not.toBe('live-company-2');
+    expect(insertedCount).toBe(1);
+  });
+
+  test("CONTROL: the caller's OWN live run for the campaign is returned and nothing new starts", async () => {
+    live('company-1');
+    const res = await post({ ...BODY, generatedCampaignId: CAMP });
+    expect(res.statusCode).toBe(202);
+    expect(res.body.run_id).toBe('live-company-1');
+    expect(insertedCount).toBe(0);
+  });
+
+  test('a live run that names the campaign as its TARGET is found too (own company only)', async () => {
+    runs.push({ id: 'live-target-2', company_id: 'company-2', target_campaign_id: CAMP, status: 'started' });
+    runs.push({ id: 'live-target-1', company_id: 'company-1', target_campaign_id: CAMP, status: 'started' });
+    const res = await post({ ...BODY, generatedCampaignId: CAMP });
+    expect(res.body.run_id).toBe('live-target-1');
+    expect(insertedCount).toBe(0);
+  });
+
+  test('a non-string generatedCampaignId is refused (400) and nothing is persisted', async () => {
+    const res = await post({ ...BODY, generatedCampaignId: 12345 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('INVALID_CAMPAIGN_ID');
+    expect(insertedCount).toBe(0);
+  });
+
+  test('a non-uuid generatedCampaignId is refused (400) before any filter is built, even if the preflight passed it', async () => {
+    live('company-1');
+    const res = await post({ ...BODY, generatedCampaignId: `${CAMP},status.eq.failed` });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('INVALID_CAMPAIGN_ID');
+    expect(insertedCount).toBe(0);
+  });
+});

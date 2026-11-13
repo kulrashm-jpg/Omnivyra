@@ -1,4 +1,9 @@
 import handler from '../../../pages/api/recommendations/[id]/create-campaign';
+
+/** TENANT: the campaigns insert, captured so its payload can be asserted. */
+const campaignInsertMock = jest.fn();
+/** TENANT: the recommendation's company for the next request (null = a company-less recommendation). */
+let recommendationCompanyId: string | null = 'default';
 import { runCampaignAiPlan } from '../../services/campaignAiOrchestrator';
 import { supabase } from '../../db/supabaseClient';
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -34,10 +39,12 @@ const createMockRes = () => {
 
 describe('Recommendation create campaign API', () => {
   beforeEach(() => {
+    campaignInsertMock.mockClear();
+    recommendationCompanyId = 'default';
     (getSupabaseUserFromRequest as jest.Mock).mockResolvedValue({ user: { id: 'user-1' }, error: null });
     const recommendationRecord = {
       id: 'rec-1',
-      company_id: 'default',
+      get company_id() { return recommendationCompanyId; },
       trend_topic: 'AI marketing',
       category: 'marketing',
       audience: { segment: 'founders' },
@@ -76,7 +83,7 @@ describe('Recommendation create campaign API', () => {
       }
       if (table === 'campaigns') {
         return {
-          insert: jest.fn().mockReturnValue({
+          insert: campaignInsertMock.mockReturnValue({
             select: jest.fn().mockReturnValue({
               single: jest.fn().mockResolvedValue({ data: campaignRecord, error: null }),
             }),
@@ -121,5 +128,23 @@ describe('Recommendation create campaign API', () => {
     expect(payload.campaign_id).toBe('camp-1');
     expect(payload.snapshot_hash).toBe('hash123');
     expect(payload.omnivyre_decision).toBeDefined();
+    // TENANT (NULL company_id trace, e9 2026-11-12): the campaign row is owned by the recommendation's company.
+    expect(campaignInsertMock).toHaveBeenCalledTimes(1);
+    expect(campaignInsertMock.mock.calls[0][0]).toMatchObject({ company_id: 'default' });
+  });
+
+  it('TENANT: a company-less recommendation is refused (400) and no campaign is created', async () => {
+    recommendationCompanyId = null;
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer test' },
+      query: { id: 'rec-1' },
+      body: { durationWeeks: 12 },
+    } as unknown as NextApiRequest;
+    const res = createMockRes();
+    await handler(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect((res.json as jest.Mock).mock.calls[0][0]).toMatchObject({ code: 'COMPANY_REQUIRED' });
+    expect(campaignInsertMock).not.toHaveBeenCalled();
   });
 });
