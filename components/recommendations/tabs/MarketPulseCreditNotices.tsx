@@ -15,9 +15,11 @@
 import React from 'react';
 import Link from 'next/link';
 
-export const TOP_UP_HREF = '/company/billing';
+import { TOP_UP_HREF, classifyBilledResponse } from '../../../lib/billing/billedResponse';
 
-const CREDIT_ERROR_CODES = new Set(['insufficient_credits', 'no_credit_account', 'pricing_unavailable']);
+// The canonical billed-response mapping lives in lib/billing/billedResponse (e9 ruling);
+// Market Pulse is one of its callers. Re-exported so existing imports keep working.
+export { TOP_UP_HREF };
 
 export type CreditNotice = {
   kind: 'credits';
@@ -29,7 +31,8 @@ export type CreditNotice = {
 
 export type RunStartError = CreditNotice | { kind: 'error'; message: string };
 
-const FALLBACK_CREDIT_MESSAGE: Record<string, string> = {
+/** Scan-specific wording when the server sends no message. */
+const SCAN_CREDIT_FALLBACK: Record<string, string> = {
   insufficient_credits: 'You don’t have enough credits to run this scan.',
   no_credit_account: 'Your company doesn’t have a credit account yet.',
   pricing_unavailable: 'Scan pricing is temporarily unavailable, so the scan wasn’t started. Please try again shortly.',
@@ -37,19 +40,17 @@ const FALLBACK_CREDIT_MESSAGE: Record<string, string> = {
 
 /** Map a failed POST /api/market-pulse/run response to what the user should see. */
 export function parseRunStartError(status: number, body: unknown): RunStartError {
-  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-  const code = typeof b.error === 'string' ? b.error : '';
-  const message = typeof b.message === 'string' && b.message.trim() ? b.message.trim() : '';
-  if (status === 402 || CREDIT_ERROR_CODES.has(code)) {
-    return {
-      kind: 'credits',
-      code: code || 'insufficient_credits',
-      message: message || FALLBACK_CREDIT_MESSAGE[code] || FALLBACK_CREDIT_MESSAGE.insufficient_credits,
-      ...(typeof b.required === 'number' ? { required: b.required } : {}),
-      ...(typeof b.available === 'number' ? { available: b.available } : {}),
-    };
+  const outcome = classifyBilledResponse(status, body, 'Failed to start Market Pulse run');
+  if (outcome.kind === 'credits') {
+    // A human sentence arrives in `message` (older bodies) or `error` (final shape).
+    const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+    const isSentence = (v: unknown) => typeof v === 'string' && v.trim() !== '' && !/^[A-Za-z0-9_]+$/.test(v.trim());
+    const hasServerMessage = isSentence(b.message) || isSentence(b.error);
+    return hasServerMessage ? outcome : { ...outcome, message: SCAN_CREDIT_FALLBACK[outcome.code] ?? outcome.message };
   }
-  return { kind: 'error', message: message || (code && !/^[a-z_]+$/.test(code) ? code : '') || 'Failed to start Market Pulse run' };
+  if (outcome.kind === 'error') return outcome;
+  // A run start never answers 409 today; if it does, show its plain text rather than a code.
+  return { kind: 'error', message: outcome.kind === 'ok' ? 'Failed to start Market Pulse run' : outcome.message };
 }
 
 export type RegionIssue = { region: string; code?: string | null; charged?: boolean; message?: string | null };

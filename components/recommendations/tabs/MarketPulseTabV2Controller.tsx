@@ -8,6 +8,10 @@ import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 import { MARKET_PULSE_CATEGORIES, type ContextResponse, type AutomationResponse, SOURCE_STRATEGIES, type MarketPulseFinding, type RunResponse, type HistoryItem, type PendingRunState, type MarketDimension, type AttentionFilter, MARKET_DIMENSIONS, ATTENTION_FILTERS, findingMatchesDimension, findingMatchesAttention, sortBySignalAttention, SignalExplainability } from './MarketPulseTabV2Model';
 import { SignificanceBadge, SignalMovement, ExecutiveScanStrip, SinceLastPulseStrip, filterDeltaSummary, DimensionFilters, AttentionFilters, MarketNarrativesSection, type MarketPulseLoadError, OBJECTIVES, toTitle, buildResolvedRegionPreview, buildFocusedCategoryDefaults, buildExpandedCategoryDefaults, wait, FeedSection, ExecutivePanels } from './MarketPulseTabV2Widgets';
 import { parseRunStartError, type CreditNotice } from './MarketPulseCreditNotices';
+import { createBilledActionKeyGate } from '../../../lib/idempotency';
+
+/** Billed: one Idempotency-Key per "run scan" action (lib/idempotency). */
+const mpRunKeys = createBilledActionKeyGate('market-pulse-run');
 
 export function useMarketPulseTabController(props: OpportunityTabProps) {
   const { companyId, fetchWithAuth } = props;
@@ -431,9 +435,11 @@ export function useMarketPulseTabController(props: OpportunityTabProps) {
       progress_stage: 'INITIALIZING',
     });
     try {
+      // One key per user action, reused if fired again while in flight (billed route).
+      const runOp = mpRunKeys.begin(companyId);
       const res = await fetchWithAuth('/api/market-pulse/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...runOp.headers },
         body: JSON.stringify({
           companyId,
           mode,
@@ -507,6 +513,8 @@ export function useMarketPulseTabController(props: OpportunityTabProps) {
       setRunning(false);
       setPendingRun(null);
       setErrorMessage((error as Error).message || 'Failed to start Market Pulse run');
+    } finally {
+      mpRunKeys.end(companyId);
     }
   };
 
