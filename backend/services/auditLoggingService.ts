@@ -64,6 +64,9 @@ interface StoredAuditLog {
  *      written to the structured log (`audit_log_dead_letter`, Loki keeps it) and counted - never requeued forever.
  * Every write error is SURFACED: logger.error plus `audit_log_write_failed{stage}`; dead letters count
  * `audit_log_dead_lettered{reason}` (bounded labels only).
+ * PRECONDITION (05): the dead letter is a log line, so it is DURABLE only once log ingestion (Loki / Grafana) is
+ * live - until then (C54: no metrics/log backend in prod) a dead letter is local-only and may rotate away. The counter
+ * is what keeps the log-only choice honest: a real volume before ingestion lands brings a DB dead-letter table back.
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_ROW_ATTEMPTS = 3;
