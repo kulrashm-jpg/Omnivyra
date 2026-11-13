@@ -315,29 +315,38 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
               Back to Campaigns
             </button>
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => router.push(`/campaign-health/${campaign.id}`)}
-                className="px-3 py-1.5 text-sm bg-slate-700 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-1.5"
-              >
-                <Activity className="h-3.5 w-3.5" />
-                View Campaign Health
-              </button>
-              <button
-                onClick={() => router.push(`/campaigns/${campaign.id}/recommendations`)}
-                className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-1.5"
-              >
-                <TrendingUp className="h-3.5 w-3.5" />
-                Expert Recommendations
-              </button>
-              {isAdmin && (
-                <button
-                  onClick={() => router.push(`/recommendations/policy?campaignId=${campaign.id}`)}
-                  className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-1.5"
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                  Policy
-                </button>
-              )}
+              {/* D9 (owner rule 3): secondary destinations live in one "More" menu; the header
+                  keeps Back and the AI Assistant. Native <details>: keyboard-accessible, no state. */}
+              <details className="relative" data-testid="campaign-more-menu">
+                <summary className="list-none cursor-pointer select-none px-3 py-1.5 text-sm border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50">
+                  More ▾
+                </summary>
+                <div className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                  <button
+                    onClick={() => router.push(`/campaign-health/${campaign.id}`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <Activity className="h-3.5 w-3.5" />
+                    View Campaign Health
+                  </button>
+                  <button
+                    onClick={() => router.push(`/campaigns/${campaign.id}/recommendations`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <TrendingUp className="h-3.5 w-3.5" />
+                    Expert Recommendations
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => router.push(`/recommendations/policy?campaignId=${campaign.id}`)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                      Policy
+                    </button>
+                  )}
+                </div>
+              </details>
               {canWriteThisCampaign && (
               <button
                 onClick={() => setShowAIChat(true)}
@@ -361,7 +370,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                 </span>
               )}
             </h1>
-            <p className="text-xs text-gray-500 mt-1">Content Marketing Plan · ID: {campaign.id}</p>
+            <p className="text-xs text-gray-500 mt-1">Content Marketing Plan</p>
             <div className="flex flex-wrap items-center gap-2 mt-2">
               <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${getStageColor(campaign.current_stage || campaign.status)}`}>
                 {getStageLabel(campaign.current_stage || campaign.status, campaign.duration_weeks)}
@@ -460,21 +469,9 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                 executionHealth != null) && (
               <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
                 <div className="font-semibold text-gray-800 mb-1">Execution Intelligence</div>
+                {/* D9: Health / Pressure / Momentum / Drift are the coloured badges just above; this
+                    box keeps only what they don't say (warnings, adjustments, recovery steps). */}
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-600">
-                  {executionHealth != null && (
-                    <span>
-                      Health: {executionHealth.score ?? 0}% {executionHealth.state ?? '—'}
-                    </span>
-                  )}
-                  {executionPressure?.pressureLevel != null && (
-                    <span>Pressure: {executionPressure.pressureLevel}</span>
-                  )}
-                  {executionMomentum?.state != null && (
-                    <span>
-                      Momentum: {executionMomentum.state}
-                      {executionMomentum.state === 'WEAK' && ' ⚠'}
-                    </span>
-                  )}
                   {executionMomentum?.state === 'WEAK' && (
                     <span className="text-amber-700">Narrative drift detected</span>
                   )}
@@ -495,12 +492,6 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                   )}
                   {executionPressure?.platformStaggeringSuggested && (
                     <span>Platform staggering suggested</span>
-                  )}
-                  {executionDrift?.state != null && (
-                    <span>
-                      Drift: {executionDrift.state}
-                      {(executionDrift.state === 'MAJOR' || executionDrift.state === 'MINOR') && ' ⚠'}
-                    </span>
                   )}
                   {executionDrift?.state === 'MAJOR' && (
                     <span className="text-red-700">Campaign execution has drifted significantly from the plan.</span>
