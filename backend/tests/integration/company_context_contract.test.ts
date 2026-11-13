@@ -13,6 +13,47 @@ import { validateUniqueness } from '../../services/campaignMemoryService';
 import { generateCampaignStrategy } from '../../services/campaignRecommendationService';
 import { isOmnivyraEnabled } from '../../services/omnivyraClientV1';
 
+// Tests never call a real provider (e9 standing rule). generateRecommendations reaches the REAL profile
+// refinement (canonicalProfileAdapter -> getProfile -> refineProfileWithAI -> AI gateway -> OpenAI SDK), which
+// used to send a live request with the placeholder key (401). The SDK is faked at its boundary - every client the
+// code constructs records the call and answers '{}' (refinement parses it with a {} fallback) - and fetch to any
+// NON-loopback host throws, so any OTHER outbound path fails loudly instead of reaching the network. Loopback
+// (the placeholder SUPABASE_URL a secondary, un-mocked client hits) keeps its pre-existing behaviour.
+const mockOpenAiCreate = jest.fn(async (..._a: unknown[]) => ({
+  id: 'chatcmpl-test', model: 'gpt-4o-mini',
+  choices: [{ index: 0, message: { role: 'assistant', content: '{}' }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+}));
+jest.mock('openai', () => {
+  class FakeOpenAI {
+    chat = { completions: { create: (...a: unknown[]) => mockOpenAiCreate(...a) } };
+    constructor(_opts: unknown) { /* no network */ }
+  }
+  return { __esModule: true, default: FakeOpenAI, OpenAI: FakeOpenAI };
+});
+const realFetch = global.fetch;
+const mockExternalFetch = jest.fn();
+const isLoopback = (u: string) => { try { return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(new URL(u).hostname); } catch { return false; } };
+beforeAll(() => {
+  global.fetch = (async (input: unknown, init?: unknown) => {
+    const url = typeof input === 'string' ? input : String((input as { url?: string })?.url ?? input);
+    if (isLoopback(url)) return realFetch(input as any, init as any);
+    mockExternalFetch(url);
+    throw new Error(`company_context_contract: outbound fetch to a non-loopback host blocked in tests (${url})`);
+  }) as unknown as typeof fetch;
+});
+afterAll(() => { global.fetch = realFetch; });
+
+// The contract under test is the company_context WIRING, not profile refinement. The engine reads the profile
+// through canonicalProfileAdapter -> getProfile (companyProfileServiceRest1Rest2Pulse), which runs the full AI
+// refinement pipeline (refineProfileWithAI). That step is replaced by an identity stub that records its calls;
+// the OpenAI SDK fake + the non-loopback fetch guard above remain as safety nets for any other AI path.
+const mockRefineProfileWithAI = jest.fn(async (profile: unknown) => profile);
+jest.mock('../../services/companyProfileServiceRest1Rest2Competitors', () => ({
+  ...jest.requireActual('../../services/companyProfileServiceRest1Rest2Competitors'),
+  refineProfileWithAI: (profile: unknown) => mockRefineProfileWithAI(profile),
+}));
+
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));
@@ -178,6 +219,10 @@ describe('company_context_contract', () => {
     expect(result.company_context!.problem_transformation).toHaveProperty('pain_symptoms');
     expect(result.company_context!.problem_transformation).toHaveProperty('desired_transformation');
     expect(result.company_context!.problem_transformation).toHaveProperty('authority_domains');
+    // POSITIVE CONTROL: the profile refinement step (the path that used to call OpenAI live) really ran - through
+    // the stub - and nothing reached a non-loopback host.
+    expect(mockRefineProfileWithAI).toHaveBeenCalled();
+    expect(mockExternalFetch).not.toHaveBeenCalled();
   });
 
   it('3. buildProfileKeywords includes authority_domains and desired_transformation tokens', () => {
