@@ -32,6 +32,7 @@ import { useIntegrationsPageController } from './integrationsController';
 // PHASE-1A: the shared hub nav. This page keeps its own content unchanged — the
 // nav is added above it so every integration area is reachable from one spine.
 import IntegrationHubNav from './integrations/IntegrationHubNav';
+import IntegrationFocusSwitch from './integrations/IntegrationFocusSwitch';
 
 export default function IntegrationsPage() {
   const f = useIntegrationsPageController();
@@ -76,7 +77,10 @@ export default function IntegrationsPage() {
           )}
         </div>
 
-        <IntegrationHubNav active="api" />
+        {/* This page IS the "Website & Analytics" section for both of its views (it
+            used to highlight "API Integrations", which links away to /external-apis). */}
+        <IntegrationHubNav active="website_data" />
+        <IntegrationFocusSwitch focus={focus} />
 
         {showWebsiteFlow ? (
           <WebsiteCommandCenter

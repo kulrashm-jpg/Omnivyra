@@ -102,8 +102,10 @@ beforeEach(() => {
 describe('Phase 1 — the navigation spine', () => {
   it('exposes every canonical section exactly once', () => {
     const keys = INTEGRATION_HUB_AREAS.map((a) => a.key);
+    // 'website_data' added first 2026-11-13 by coordinator approval (owner UI brief,
+    // PI hub owner consulted): the /integrations page needed a section of its own.
     expect(keys).toEqual([
-      'api', 'prospect_sources', 'enrichment', 'social', 'outreach', 'intelligence',
+      'website_data', 'api', 'prospect_sources', 'enrichment', 'social', 'outreach', 'intelligence',
     ]);
     expect(new Set(keys).size).toBe(keys.length);
   });
@@ -124,6 +126,8 @@ describe('Phase 1 — the navigation spine', () => {
 
   it('points Prospect Sources and Enrichment at their own routes, not at the legacy one', () => {
     const byKey = Object.fromEntries(INTEGRATION_HUB_AREAS.map((a) => [a.key, a.href]));
+    // Direct to the website view: avoids the getServerSideProps redirect hop.
+    expect(byKey.website_data).toBe('/integrations?focus=website');
     expect(byKey.prospect_sources).toBe('/integrations/prospect-sources');
     expect(byKey.enrichment).toBe('/integrations/enrichment');
     expect(byKey.social).toBe('/social-platforms');
