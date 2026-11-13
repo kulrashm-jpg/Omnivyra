@@ -158,8 +158,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       );
 
       // e1 2026-11-12 (e9 ruling B, HIGH): a config view returns headers / query_params / oauth_* to NOBODY.
-      const viewableSources = stripSourceSecrets(sources as Array<Record<string, any>>);
-      const apis = viewableSources.map((source: Record<string, any>) => {
+      // Keep `id` in the element type: spreading a bare Record<string, any> drops index-signature keys (TS2339 at apisById).
+      type ViewableSource = Record<string, any> & { id: string };
+      const viewableSources = stripSourceSecrets(sources as ViewableSource[]);
+      const apis = viewableSources.map((source: ViewableSource) => {
         const rows = usageByApi[source.id] || [];
         const nonFeatureRows = rows.filter((row) => !isFeatureUsageRow(row.user_id));
         const requestCount = nonFeatureRows.reduce(
