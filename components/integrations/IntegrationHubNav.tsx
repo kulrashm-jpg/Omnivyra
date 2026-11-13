@@ -25,6 +25,12 @@ import Link from 'next/link';
  * is a destination worth reaching. `ready: false` stays reserved for an area
  * with no page at all.
  *
+ * AMENDMENT — six sections plus API; extended 2026-11-13 by coordinator approval
+ * per the owner's UI brief ("all integrations in one place"): `website_data`
+ * ("Website & Analytics" → /integrations, which holds the website registry,
+ * CMS publishing, lead webhooks, GA/GSC, CRM and imports) was added first. That
+ * page previously had no section of its own and highlighted "API Integrations".
+ *
  * ─── "DATA SOURCES" IS GONE AS A PRODUCT TERM ─────────────────────────────
  * The canonical term is PROSPECT SOURCE. The old label is removed here; the old
  * URL is NOT. `/integrations/data-sources` remains valid and redirects to
@@ -52,6 +58,13 @@ export interface IntegrationHubArea {
 }
 
 export const INTEGRATION_HUB_AREAS: readonly IntegrationHubArea[] = Object.freeze([
+  {
+    key: 'website_data',
+    label: 'Website & Analytics',
+    href: '/integrations?focus=website',
+    ready: true,
+    description: 'Website, publishing, lead webhooks, Google Analytics, Search Console and CRM',
+  },
   {
     key: 'api',
     label: 'API Integrations',
