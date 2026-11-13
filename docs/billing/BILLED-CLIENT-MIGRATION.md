@@ -60,6 +60,14 @@ Batches group screens that share a feature, so each one can be reviewed and chec
 - [ ] `/api/ai/content-suggestions`: `components/activity-workspace/AISuggestionPanel.tsx`
 - [ ] `/api/engagement/refine-suggestion`: `components/engagement/AISuggestionPanel.tsx`
 - [ ] `/api/blogs/[id]/repurpose`: `pages/company-blog/[slug].tsx`
+  - **source=public now requires login and is charged to the caller's company** (owner ruling via e9; 55's fix/public-repurpose-rate-limit-20261113). The client must ALWAYS send `company_id` = the selected company, so multi-company users never get 400.
+  - New responses on the public source, which the client must handle:
+    - 401 `AUTH_REQUIRED` → prompt sign-in
+    - 400 `COMPANY_REQUIRED` (several companies, none named)
+    - 403 `NO_ACTIVE_COMPANY` / 403 company not theirs
+    - 429 `RATE_LIMITED` (per-IP / global limit)
+    - plus the shared billing 402s
+  - Find and migrate the public-blog caller(s) too (re-run the caller grep on 55's branch).
 
 ### Batch 5: Creator
 - [ ] `/api/creator-templates/chat-brief`: `components/creator/CreateWithAIChat.tsx`
