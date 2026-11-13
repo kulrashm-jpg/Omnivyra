@@ -63,6 +63,11 @@ const COPY: Record<AuthErrorCode, CopyForCode> = {
     body:  'This account has been removed.',
     cta:   'Sign in',
   },
+  [AUTH_ERROR_CODE.EMAIL_NOT_ACCEPTED]: {
+    title: 'Email address not accepted',
+    body:  'Please sign up with a standard email address (letters, digits and . _ + - before the @).',
+    cta:   'Sign in',
+  },
   [AUTH_ERROR_CODE.ACCOUNT_DISABLED]: {
     title: 'Account suspended',
     body:  'This account is currently suspended. Contact support if you think this is a mistake.',

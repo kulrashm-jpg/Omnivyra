@@ -72,6 +72,15 @@ export async function recordSuggestionShown(input: AiSuggestionInput): Promise<A
  * one distinguishes "not found" from "lookup failed": a transient failure must
  * never be read as "no owner, therefore allow", so it also returns null and
  * the caller denies.
+ *
+ * WHY THIS IS NOT SELF-AUTHORIZING (05, 2026-11-13): it derives a tenant from a
+ * caller-supplied id, which looks like the anti-pattern — and is safe ONLY
+ * because the caller then authorizes the USER against the derived tenant
+ * (ai-suggestion.ts: enforceCompanyAccess({ companyId: owningOrganizationId }))
+ * before anything is written, and passes that tenant into the write. A member
+ * of A naming B's suggestion derives B and is refused. Never use this result
+ * without that access check. It must also pick the SAME identifier the write
+ * keys on: suggestion_id first, correlation_id only when no suggestion_id.
  */
 export async function getSuggestionOrganizationId(input: {
   suggestion_id?: string;
@@ -99,6 +108,18 @@ export async function getSuggestionOrganizationId(input: {
 }
 
 /**
+ * Fail closed: every suggestion mutation is bound to the tenant the caller was
+ * authorized against. Throws (a programming error, not a data condition) when
+ * the tenant is missing, so no future caller can omit it and silently write
+ * across tenants.
+ */
+function requireSuggestionTenant(organizationId: unknown, fn: string): asserts organizationId is string {
+  if (typeof organizationId !== 'string' || organizationId.trim() === '') {
+    throw new Error(`[aiSuggestionTracking] ${fn}: organization_id is required (tenant-bound write)`);
+  }
+}
+
+/**
  * Mark a suggestion accepted. Idempotent: the unique (accepted_at XOR
  * rejected_at) CHECK allows at most one outcome per row; the UPDATE only
  * sets accepted_at when no outcome is already recorded.
@@ -111,12 +132,15 @@ export async function recordSuggestionAccepted(input: {
   suggestion_id?: string;
   correlation_id?: string;
   action_id?: string | null;
-  /** WSF-ORD-004 — the tenant the caller was authorized against. When given it
-   *  is carried into the UPDATE's predicate, so the write can only ever land on
-   *  a row of that tenant: the authorization and the mutation are one
-   *  statement, not a check followed by an unscoped act. */
-  organization_id?: string | null;
+  /** WSF-ORD-004 — the tenant the caller was authorized against. It is carried
+   *  into the UPDATE's predicate, so the write can only ever land on a row of
+   *  that tenant: the authorization and the mutation are one statement, not a
+   *  check followed by an unscoped act. REQUIRED (two-id sweep 2026-11-13): an
+   *  optional tenant let engagement/reply.ts accept ANY tenant's suggestion by a
+   *  caller-supplied id; a missing tenant now throws before anything is read. */
+  organization_id: string;
 }): Promise<boolean> {
+  requireSuggestionTenant(input.organization_id, 'recordSuggestionAccepted');
   const now = new Date().toISOString();
   try {
     let q = ownedDbTable('ai_suggestions')
@@ -127,7 +151,7 @@ export async function recordSuggestionAccepted(input: {
       })
       .is('accepted_at', null)
       .is('rejected_at', null);
-    if (input.organization_id) q = q.eq('organization_id', input.organization_id);
+    q = q.eq('organization_id', input.organization_id);
     if (input.suggestion_id) {
       q = q.eq('id', input.suggestion_id);
     } else if (input.correlation_id) {
@@ -152,9 +176,10 @@ export async function recordSuggestionRejected(input: {
   correlation_id?: string;
   reason?: string;
   /** WSF-ORD-004 — see recordSuggestionAccepted: the authorized tenant is part
-   *  of the UPDATE's predicate, not a separate earlier check. */
-  organization_id?: string | null;
+   *  of the UPDATE's predicate, not a separate earlier check. REQUIRED. */
+  organization_id: string;
 }): Promise<boolean> {
+  requireSuggestionTenant(input.organization_id, 'recordSuggestionRejected');
   const now = new Date().toISOString();
   try {
     let q = ownedDbTable('ai_suggestions')
@@ -165,7 +190,7 @@ export async function recordSuggestionRejected(input: {
       })
       .is('accepted_at', null)
       .is('rejected_at', null);
-    if (input.organization_id) q = q.eq('organization_id', input.organization_id);
+    q = q.eq('organization_id', input.organization_id);
     if (input.suggestion_id) {
       q = q.eq('id', input.suggestion_id);
     } else if (input.correlation_id) {
