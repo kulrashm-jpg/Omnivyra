@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { isAcceptableEmailAddress } from '../../../lib/auth/emailAddressPolicy';
 
 /**
  * POST /api/onboarding/revalidate-signup
@@ -49,30 +50,6 @@ type Result =
   | ClaimedDomainBody
   | { error: string; code?: string };
 
-/**
- * Conservative email-address policy. lib/auth/emailAddressPolicy.ts
- * (isAcceptableEmailAddress) is NOT on this base yet; this local check applies
- * the same accepted grammar and should be replaced by that import once it lands.
- *   local  1-64 chars of A-Z a-z 0-9 . _ + -  (no leading/trailing dot, no "..")
- *   domain 2+ labels of A-Z a-z 0-9 - (1-63 chars, no leading/trailing "-"),
- *          alphabetic TLD of 2+ chars; whole address <= 254, exactly one "@".
- */
-const LOCAL_PART = /^[A-Za-z0-9_+-]+(?:\.[A-Za-z0-9_+-]+)*$/;
-const DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
-const TLD_LABEL = /^[A-Za-z]{2,63}$/;
-function isAcceptableSignupEmail(raw: unknown): boolean {
-  if (typeof raw !== 'string') return false;
-  const email = raw.trim();
-  if (email.length === 0 || email.length > 254) return false;
-  const at = email.indexOf('@');
-  if (at <= 0 || at !== email.lastIndexOf('@')) return false;
-  const local = email.slice(0, at);
-  const labels = email.slice(at + 1).split('.');
-  if (local.length > 64 || !LOCAL_PART.test(local)) return false;
-  if (labels.length < 2 || !labels.every((l) => DOMAIN_LABEL.test(l))) return false;
-  return TLD_LABEL.test(labels[labels.length - 1]);
-}
-
 async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -93,7 +70,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   }
 
   // ── Email-address policy.
-  if (!isAcceptableSignupEmail(user.email)) {
+  if (!isAcceptableEmailAddress(user.email)) {
     return res.status(400).json({
       error: 'Please use a standard email address (letters, digits and . _ + - before the @).',
       code:  'EMAIL_NOT_ACCEPTABLE',
