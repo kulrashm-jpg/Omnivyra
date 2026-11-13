@@ -12,7 +12,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -81,9 +81,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ suggestion, insight_id, campaignId });
   } catch (err: unknown) {
-    if (err instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: err.message, code: err.code });
-    }
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('[planner/suggest-update]', err);
     return res.status(500).json({
       error: (err as Error)?.message ?? 'Failed to generate planning suggestion',

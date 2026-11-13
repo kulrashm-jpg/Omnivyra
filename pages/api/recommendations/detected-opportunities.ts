@@ -10,7 +10,7 @@ import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 import {
   countActive,
   upsertOpportunities,
@@ -436,9 +436,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ opportunities: opportunitiesFromRows });
   } catch (error) {
-    if (error instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: error.message, code: error.code });
-    }
+    { const billedErr = billedRouteHttpError(error); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     console.error('Error loading detected opportunities:', error);
     return res.status(500).json({ error: 'Failed to load detected opportunities' });
   }

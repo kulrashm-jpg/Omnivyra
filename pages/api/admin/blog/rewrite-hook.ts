@@ -25,7 +25,7 @@ import { runCompletionWithOperation } from '../../../../backend/services/aiGatew
 import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 
 function extractFirstParagraph(html: string): string {
   const m = html.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
@@ -117,9 +117,7 @@ ${grounding.directive}`,
     }
     return res.status(502).json({ error: 'AI returned unexpected output' });
   } catch (e) {
-    if (e instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: e.message, code: e.code });
-    }
+    { const billedErr = billedRouteHttpError(e); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     return res.status(500).json({ error: 'Hook rewrite failed' });
   }
 }

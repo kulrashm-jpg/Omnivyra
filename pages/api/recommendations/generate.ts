@@ -11,7 +11,7 @@ import { getStrategyHistoryForCompany } from '../../../backend/services/strategy
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -507,9 +507,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     return res.status(200).json(refined);
   } catch (error: any) {
-    if (error instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: error.message, code: error.code });
-    }
+    { const billedErr = billedRouteHttpError(error); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     if (error?.code === 'CAMPAIGN_NOT_IN_COMPANY') {
       return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });
     }

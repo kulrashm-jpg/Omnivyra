@@ -1,44 +1,57 @@
 /**
- * Phase 8C — wirePhase2Route engine-selection test.
+ * wirePhase2Route ENFORCE path (e1 2026-11-13; owner pricing ruling + e9 BLOCKING-for-flip).
  *
- * Verifies the central ENFORCE-path switch: the SAME wired route runs through
- * executeWithCredits (default) or executeWithEntryConsumption (when
- * PHASE2_ENTRY_CONSUMPTION=true), and idempotent replay re-runs the work
- * without re-charging. The enforcement gate is mocked to invoke the enforce
- * branch directly, isolating the routing logic.
+ * Replaces the Phase-8C engine-selection pins, whose behaviour was REMOVED on purpose:
+ *   - "default uses executeWithCredits (fixed)"   -> every billed route now settles TOKEN-ACTUAL (entry consumption,
+ *                                                     llmPricing + collectViaCollector), never a fixed price;
+ *   - "already_settled re-runs work, no charge"   -> that was a FREE re-run of the AI work for any identical request;
+ *                                                     a charged replay is now 409 ALREADY_PROCESSED and run() is NOT
+ *                                                     called again.
+ * New: the identity is inputs + the client's Idempotency-Key (else the per-request id); a released (failed,
+ * uncharged) attempt is reclaimed under the next slot; requests without the header are counted; the STANDARD billed
+ * HTTP shape via billedRouteHttpError.
+ * The gate is mocked to run the enforce branch directly (the real PaymentRequiredError class is kept).
  */
 
 const engine = {
-  executeWithCredits: jest.fn(),
   executeWithEntryConsumption: jest.fn(),
-  makeIdempotencyKey: jest.fn(() => 'idem-key'),
-  // Phase 10A: the flag helper now lives in creditExecutionService; read env so
-  // the existing PHASE2_ENTRY_CONSUMPTION-based test control still works.
-  isEntryConsumptionEnabled: () => String(process.env.PHASE2_ENTRY_CONSUMPTION ?? '').toLowerCase() === 'true',
+  makeIdempotencyKey: jest.fn((u: string, a: string, r: string) => `${u}|${a}|${r}`),
 };
 jest.mock('../../services/creditExecutionService', () => engine);
 
-// Phase 11B: engine selection now reads the single activation verdict. Mock it
-// to the env-driven control the test already uses, isolating the routing logic.
-jest.mock('../../services/billing/creditEconomyActivation', () => ({
-  getCreditEconomyExecutionMode: async () =>
-    (String(process.env.PHASE2_ENTRY_CONSUMPTION ?? '').toLowerCase() === 'true' ? 'enforce' : 'off'),
-}));
+const mockCtx: { idempotencyKey?: string; requestId?: string } = {};
+jest.mock('../../services/requestContext', () => ({ getRequestContext: () => mockCtx }));
 
-// Gate runs the enforce branch and surfaces ok/!ok like the real gate.
-jest.mock('../../services/billing/phase2EnforcementGate', () => ({
-  runWithPhase2Enforcement: async (args: any) => {
-    const r = await args.enforce();
-    if (!r.ok) throw new Error(`PaymentRequired:${r.reason}`);
-    return r.result;
-  },
-}));
-jest.mock('../../services/creditDeductionService', () => ({
-  hasEnoughCredits: jest.fn(async () => ({ sufficient: true })),
-}));
-jest.mock('../../services/billing/billingMetrics', () => ({ incrCounter: jest.fn() }));
+jest.mock('../../services/billing/phase2EnforcementGate', () => {
+  const actual = jest.requireActual('../../services/billing/phase2EnforcementGate');
+  return {
+    ...actual,
+    runWithPhase2Enforcement: async (args: any) => {
+      const r = await args.enforce();
+      if (!r.ok) throw new actual.PaymentRequiredError(args.surface, r.reason);
+      return r.result;
+    },
+  };
+});
+jest.mock('../../services/creditDeductionService', () => ({ hasEnoughCredits: jest.fn(async () => ({ sufficient: true })) }));
+const mockCounters: string[] = [];
+jest.mock('../../services/billing/billingMetrics', () => ({ incrCounter: (n: string) => { mockCounters.push(n); } }));
+jest.mock('../../services/billing/creditEconomyShadow', () => ({ emitCreditEconomyShadowEvaluation: jest.fn(async () => undefined) }));
+jest.mock('../../services/billing/admissionControl', () => ({ evaluateActivityAdmission: jest.fn(async () => undefined) }));
+const mockWarn = jest.fn();
+jest.mock('../../services/logger', () => ({ logger: { warn: (...a: unknown[]) => mockWarn(...a), info: jest.fn(), error: jest.fn() } }));
 
-import { wirePhase2Route } from '../../services/billing/phase2RouteWiring';
+import {
+  wirePhase2Route,
+  routeLlmPricingFor,
+  BilledRouteAlreadyProcessedError,
+  BilledRouteAlreadyReleasedError,
+  BilledRoutePaymentRequiredError,
+  BilledRoutePricingUnavailableError,
+  MAX_ROUTE_RECLAIM_ATTEMPTS,
+} from '../../services/billing/phase2RouteWiring';
+import { billedRouteHttpError } from '../../services/billing/billedRouteHttpError';
+import { PaymentRequiredError } from '../../services/billing/phase2EnforcementGate';
 
 const ARGS = {
   surface: 'test.surface' as any,
@@ -49,67 +62,120 @@ const ARGS = {
   referenceId: 'ref-1',
 };
 
-const FLAG = 'PHASE2_ENTRY_CONSUMPTION';
-// Ambient config must not decide this suite's outcome. `.env.local` is loaded
-// into every jest run by backend/tests/setupEnv.ts and sets BOTH of these to
-// 'true' for local implementation work, so the default-case test was asserting
-// the documented dark default while running with the master switch ON, and the
-// shadow emitter was reaching real Redis and outliving the test. Snapshot and
-// restore rather than delete: the developer's .env.local stays untouched.
-const AMBIENT = ['PHASE2_ENTRY_CONSUMPTION', 'PHASE2_CREDIT_ECONOMY_SHADOW'] as const;
-const ORIGINAL_AMBIENT: Record<string, string | undefined> = {};
-
-beforeAll(() => { for (const k of AMBIENT) ORIGINAL_AMBIENT[k] = process.env[k]; });
-afterAll(() => {
-  for (const k of AMBIENT) {
-    if (ORIGINAL_AMBIENT[k] === undefined) delete process.env[k];
-    else process.env[k] = ORIGINAL_AMBIENT[k];
-  }
-});
+/** A ledger-faithful fake: one settlement per idempotency key; a key can be pre-marked released. */
+const ledger = new Map<string, 'settled' | 'released'>();
+let charges = 0;
+function faithfulEngine(): void {
+  engine.executeWithEntryConsumption.mockImplementation(async (o: any) => {
+    const st = ledger.get(o.idempotencyKey);
+    if (st === 'settled') return { status: 'already_settled' };
+    if (st === 'released') return { status: 'already_released' };
+    const result = await o.executor();
+    ledger.set(o.idempotencyKey, 'settled');
+    charges += 1;
+    return { status: 'executed', result };
+  });
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
-  for (const k of AMBIENT) delete process.env[k];
-  engine.executeWithCredits.mockResolvedValue({ status: 'executed', result: 'CREDITS' });
-  engine.executeWithEntryConsumption.mockResolvedValue({ status: 'executed', result: 'ENTRY' });
+  ledger.clear(); charges = 0; mockCounters.length = 0;
+  delete mockCtx.idempotencyKey; delete mockCtx.requestId;
+  faithfulEngine();
 });
 
-// (env restoration is handled by the AMBIENT afterAll above)
-
-describe('wirePhase2Route ENFORCE engine selection', () => {
-  it('default (flag unset): uses executeWithCredits (HOLD-MAX), not entry consumption', async () => {
+describe('wirePhase2Route ENFORCE - token-actual, per-request identity, never a free re-run', () => {
+  it('settles TOKEN-ACTUAL: entry consumption with llmPricing + collectViaCollector, the route run() as executor', async () => {
+    mockCtx.idempotencyKey = 'click-1';
     const run = jest.fn(async () => 'WORK');
-    const out = await wirePhase2Route({ ...ARGS, run });
-    expect(out).toBe('CREDITS');
-    expect(engine.executeWithCredits).toHaveBeenCalledTimes(1);
-    expect(engine.executeWithEntryConsumption).not.toHaveBeenCalled();
-  });
-
-  it('PHASE2_ENTRY_CONSUMPTION=true: routes the SAME wiring through entry consumption', async () => {
-    process.env[FLAG] = 'true';
-    const run = jest.fn(async () => 'WORK');
-    const out = await wirePhase2Route({ ...ARGS, run });
-    expect(out).toBe('ENTRY');
-    expect(engine.executeWithEntryConsumption).toHaveBeenCalledTimes(1);
-    expect(engine.executeWithCredits).not.toHaveBeenCalled();
-    // executor is the route's run, passed through unchanged
+    expect(await wirePhase2Route({ ...ARGS, run })).toBe('WORK');
     const call = engine.executeWithEntryConsumption.mock.calls[0][0];
-    expect(call.action).toBe('content_basic');
-    expect(call.executor).toBe(run);
+    expect(call).toMatchObject({ action: 'content_basic', collectViaCollector: true, executor: run, orgId: 'org-1' });
+    expect(call.llmPricing).toEqual(routeLlmPricingFor('content_basic' as any));
+    expect(call.llmPricing.actionKey).toBe('content_basic');
   });
 
-  it('entry-consumption replay (already_settled): re-runs work, no re-charge', async () => {
-    process.env[FLAG] = 'true';
-    engine.executeWithEntryConsumption.mockResolvedValue({ status: 'already_settled' });
-    const run = jest.fn(async () => 'WORK-AGAIN');
-    const out = await wirePhase2Route({ ...ARGS, run });
-    expect(out).toBe('WORK-AGAIN');
-    expect(run).toHaveBeenCalledTimes(1); // re-run to produce the response
+  it('a multi-call unit holds proportionally more (virality = 5 calls, blog = 7)', () => {
+    const one = routeLlmPricingFor('content_basic' as any);
+    expect(routeLlmPricingFor('insight_generation' as any).maxOutputTokens).toBe(one.maxOutputTokens * 5);
+    expect(routeLlmPricingFor('blog_generation' as any).maxInputTokens).toBe(one.maxInputTokens * 7);
   });
 
-  it('insufficient credits surfaces as a blocked enforcement (gate throws)', async () => {
-    process.env[FLAG] = 'true';
+  it('the SAME Idempotency-Key twice: the 2nd is 409 ALREADY_PROCESSED - no AI call, no second charge', async () => {
+    mockCtx.idempotencyKey = 'click-1';
+    const run = jest.fn(async () => 'WORK');
+    await wirePhase2Route({ ...ARGS, run });
+    await expect(wirePhase2Route({ ...ARGS, run })).rejects.toBeInstanceOf(BilledRouteAlreadyProcessedError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(charges).toBe(1);
+    expect(billedRouteHttpError(new BilledRouteAlreadyProcessedError('s' as any))).toMatchObject({ status: 409, body: { code: 'ALREADY_PROCESSED' } });
+  });
+
+  it('two DELIBERATE identical requests (different Idempotency-Keys) are charged twice - never a free regeneration', async () => {
+    const run = jest.fn(async () => 'WORK');
+    mockCtx.idempotencyKey = 'click-1';
+    await wirePhase2Route({ ...ARGS, run });
+    mockCtx.idempotencyKey = 'click-2';
+    await wirePhase2Route({ ...ARGS, run });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(charges).toBe(2);
+  });
+
+  it('WITHOUT a header every request is a new charge (per-request id) and is counted + logged', async () => {
+    const run = jest.fn(async () => 'WORK');
+    mockCtx.requestId = 'req-A';
+    await wirePhase2Route({ ...ARGS, run });
+    mockCtx.requestId = 'req-B';
+    await wirePhase2Route({ ...ARGS, run });
+    expect(charges).toBe(2);
+    expect(mockCounters.filter((c) => c === 'phase2_route_without_idempotency_key_total')).toHaveLength(2);
+    expect(mockWarn).toHaveBeenCalledWith('phase2_route_without_idempotency_key', expect.objectContaining({ surface: 'test.surface' }));
+  });
+
+  it('a RELEASED (failed, uncharged) attempt is reclaimed: the retry runs and is charged ONCE', async () => {
+    mockCtx.idempotencyKey = 'click-1';
+    const first = engine.makeIdempotencyKey('user-1', 'content_basic', 'ref-1:k:' + require('crypto').createHash('sha256').update('click-1').digest('hex').slice(0, 24));
+    ledger.set(first, 'released');
+    const run = jest.fn(async () => 'WORK');
+    expect(await wirePhase2Route({ ...ARGS, run })).toBe('WORK');
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(charges).toBe(1);
+    expect(engine.executeWithEntryConsumption.mock.calls[1][0].referenceId).toMatch(/:r1$/);
+  });
+
+  it(`after ${MAX_ROUTE_RECLAIM_ATTEMPTS} released slots: 409 ALREADY_RELEASED, nothing run`, async () => {
+    engine.executeWithEntryConsumption.mockResolvedValue({ status: 'already_released' });
+    const run = jest.fn();
+    await expect(wirePhase2Route({ ...ARGS, run })).rejects.toBeInstanceOf(BilledRouteAlreadyReleasedError);
+    expect(run).not.toHaveBeenCalled();
+    expect(engine.executeWithEntryConsumption).toHaveBeenCalledTimes(MAX_ROUTE_RECLAIM_ATTEMPTS);
+  });
+
+  it('insufficient credits: 402 INSUFFICIENT_CREDITS with required + balance (still a PaymentRequiredError)', async () => {
     engine.executeWithEntryConsumption.mockResolvedValue({ status: 'insufficient_credits', available: 1, required: 15 });
-    await expect(wirePhase2Route({ ...ARGS, run: jest.fn() })).rejects.toThrow('PaymentRequired:insufficient_credits');
+    const err = await wirePhase2Route({ ...ARGS, run: jest.fn() }).catch((e) => e);
+    expect(err).toBeInstanceOf(PaymentRequiredError);
+    expect(billedRouteHttpError(err)).toEqual({ status: 402, body: { error: expect.any(String), code: 'INSUFFICIENT_CREDITS', required: 15, balance: 1 } });
+  });
+
+  it('no credit account: 402 NO_CREDIT_ACCOUNT', async () => {
+    engine.executeWithEntryConsumption.mockResolvedValue({ status: 'no_credit_account' });
+    const err = await wirePhase2Route({ ...ARGS, run: jest.fn() }).catch((e) => e);
+    expect(err).toBeInstanceOf(BilledRoutePaymentRequiredError);
+    expect(billedRouteHttpError(err)).toMatchObject({ status: 402, body: { code: 'NO_CREDIT_ACCOUNT' } });
+  });
+
+  it('missing pricing: 503 PRICING_UNAVAILABLE (a configuration gap, never "top up"), nothing run', async () => {
+    const pm = Object.assign(new Error("No active pricing for provider='openai' model='x' kind='llm'."), { name: 'PricingMissingError' });
+    engine.executeWithEntryConsumption.mockRejectedValue(pm);
+    const run = jest.fn();
+    const err = await wirePhase2Route({ ...ARGS, run }).catch((e) => e);
+    expect(err).toBeInstanceOf(BilledRoutePricingUnavailableError);
+    expect(billedRouteHttpError(err)).toMatchObject({ status: 503, body: { code: 'PRICING_UNAVAILABLE' } });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('control: an unrelated error is NOT mapped (the route keeps its own handling)', () => {
+    expect(billedRouteHttpError(new Error('boom'))).toBeNull();
   });
 });

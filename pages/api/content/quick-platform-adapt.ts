@@ -8,6 +8,7 @@ import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../backend/services/billing/billedRouteHttpError';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildAdaptationContextBlock } from '@/backend/services/context/canonicalContentContextResolver';
 import type { CompanyProfile } from '@/backend/services/companyProfile/types';
@@ -504,9 +505,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     });
   } catch (routeError) {
-    if (routeError instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: routeError.message, code: routeError.code });
-    }
+    { const billedErr = billedRouteHttpError(routeError); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     return res.status(500).json({
       error: routeError instanceof Error ? routeError.message : 'Failed to adapt content quickly',
     });

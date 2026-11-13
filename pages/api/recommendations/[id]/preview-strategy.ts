@@ -7,7 +7,7 @@ import { getCanonicalProfile as getProfile } from '@/backend/services/context/ca
 import { previewStrategy } from '../../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
-import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
@@ -116,9 +116,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     parsed = completion.output || {};
   } catch (e) {
-    if (e instanceof PaymentRequiredError) {
-      return res.status(402).json({ error: e.message, code: e.code });
-    }
+    { const billedErr = billedRouteHttpError(e); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     return res.status(500).json({ error: 'Failed to parse preview response' });
   }
 
