@@ -100,7 +100,8 @@ export function evaluateBridgeCookieLifecycle(
 
 // ── Cookie name (matches existing /api/super-admin/login.ts) ─────────────────
 const SUPER_ADMIN_COOKIE = 'super_admin_session';
-const CONTENT_ARCHITECT_COOKIE = 'content_architect_session';
+// The Content Architect cookie this bridge also accepted was REMOVED pre-launch
+// (owner ruling 2026-11-13): it no longer confers any authority anywhere.
 
 // ── Synthetic principal ids ──────────────────────────────────────────────────
 /**
@@ -137,7 +138,6 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
   req: NextApiRequest,
 ): Promise<AuthenticatedPrincipal | null> {
   const superAdminCookie = readCookie(req, SUPER_ADMIN_COOKIE);
-  const contentArchitectCookie = readCookie(req, CONTENT_ARCHITECT_COOKIE);
   // Phase 2: bridge cookie is now signed (see backend/security/bridgeCookie.ts).
   // Static `=1` is the legacy Phase 1 format and is rejected here AFTER
   // emitting an audit row so operators see when stale cookies persist.
@@ -149,11 +149,6 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
   // hard-expiry arms below — a second copy of the sequence living in the same
   // module as the first.
   const bridgeParse = evaluateBridgeCookieLifecycle(superAdminCookie);
-  // SEC-001A: the content-architect cookie is held to the SAME standard as the
-  // super-admin one. It previously granted bridge authority on the static `=1`
-  // value, so anyone able to set a cookie could mint this principal — the exact
-  // hole Phase 2 closed for super_admin but left open here.
-  const contentArchitectParse = evaluateBridgeCookieLifecycle(contentArchitectCookie);
 
   /**
    * A cookie that was STRUCTURALLY valid but denied by a lifecycle arm
@@ -176,26 +171,7 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
     return raw != null && r !== null && !presented(v) && r !== 'no_value';
   };
 
-  const hasContentArchitect = contentArchitectParse.ok === true;
-  const hasBridgeCookie = presented(bridgeParse) || presented(contentArchitectParse);
-
-  if (rejectedOnSignature(contentArchitectParse, contentArchitectCookie)) {
-    const caReason = reasonOf(contentArchitectParse) ?? 'unknown';
-    await logCookieSuperAdminUsage({
-      capability: 'super_admin.legacy',
-      decision: 'bridge_authority_rejected',
-      reason: `content-architect bridge cookie rejected: ${caReason}`,
-      ip,
-      userAgent,
-    });
-    logger.warn('legacy_content_architect_bridge_cookie_rejected', {
-      reason: caReason,
-      action:
-        caReason === 'legacy_format'
-          ? 'operator must re-login to receive the SEC-001A signed cookie'
-          : 'possible tamper / wrong signing secret / forged cookie',
-    });
-  }
+  const hasBridgeCookie = presented(bridgeParse);
 
   // Tamper / legacy-format detection: log the failure mode before
   // returning null so the resolver attribution shows up in audit even
@@ -226,7 +202,7 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
   // every bridge dependency that WOULD break under Wave 3 removal, without
   // actually granting authority. Runs BEFORE the hard-expiry check so the
   // simulation is deterministic regardless of clock state.
-  if (reasonOf(bridgeParse) === 'dry_run' || reasonOf(contentArchitectParse) === 'dry_run') {
+  if (reasonOf(bridgeParse) === 'dry_run') {
     await logCookieSuperAdminUsage({
       capability: 'super_admin.legacy',
       decision: 'bridge_authority_rejected',
@@ -235,17 +211,14 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
       userAgent,
     });
     logger.warn('legacy_super_admin_bridge_dry_run_rejection', {
-      // SEC-001B: attribute by VERDICT, not by the Phase-1 literal. A signed
-      // super-admin cookie is never `'1'`, so the old test mislabelled every
-      // legitimate super-admin session as content-architect in this audit line.
-      cookie: presented(bridgeParse) ? 'super_admin_session' : 'content_architect_session',
+      cookie: 'super_admin_session',
       ip,
     });
     return null;
   }
 
   // Hard expiry.
-  if (reasonOf(bridgeParse) === 'hard_expired' || reasonOf(contentArchitectParse) === 'hard_expired') {
+  if (reasonOf(bridgeParse) === 'hard_expired') {
     await logCookieSuperAdminUsage({
       capability: 'super_admin.legacy',
       decision: 'bridge_rejected',
@@ -279,7 +252,7 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
     decision: 'bridge_used',
     reason: bridgeParse.ok === true
       ? `super_admin_session cookie (signed; issued ${new Date(bridgeParse.issuedAtUnix * 1000).toISOString()})`
-      : 'content_architect_session cookie',
+      : 'super_admin_session cookie',
     ip,
     userAgent,
   });

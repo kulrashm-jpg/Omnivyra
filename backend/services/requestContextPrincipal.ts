@@ -75,7 +75,7 @@ export type AttributionOutcome =
   | 'skipped';
 
 /** Synthetic principals that must never become a shared rate-limit key. */
-const SYNTHETIC_PRINCIPALS = new Set(['content_architect', 'dev-user', 'unknown']);
+const SYNTHETIC_PRINCIPALS = new Set(['dev-user', 'unknown']);
 
 function usableId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/\s/.test(value);

@@ -3,8 +3,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * POST /api/super-admin/logout
  *
  * Phase 1 — super-admin canonicalization:
- *   - Clears legacy bridge cookies (super_admin_session, content_architect_session,
- *     content_architect_company_id) — UNCHANGED behavior.
+ *   - Clears legacy bridge cookies (super_admin_session and the two retired
+ *     Content Architect cookies, so stale browser copies are wiped) — UNCHANGED behavior.
  *   - Additionally revokes the canonical auth_session if one is bound to
  *     the request and clears the omnivyra_session cookie.
  */

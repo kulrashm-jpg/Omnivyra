@@ -134,8 +134,6 @@ const PRIMITIVES = {
   // requireSuperAdminGaAccess (the READ gate above); returns null on denial.
   requireSuperAdminGaWriteAccess: { from: /^backend\/services\/superAdminGaAccess$/, level: 'platform' },
   getLegacySuperAdminSession: { from: /^backend\/services\/superAdminSession$/, level: 'platform' },
-  // Signed, hard-expiring content-architect bridge session (SEC-001A/C).
-  isContentArchitectSession: { from: /^backend\/services\/contentArchitectService$/, level: 'platform' },
   // ── machine ──
   verifyRpaAuthToken: { from: /^backend\/services\/rpaWorker\/rpaAuthTokens$/, level: 'machine' },
 };

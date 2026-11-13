@@ -761,10 +761,6 @@
       "reason": "Stripe webhook: raw-body signature verified with STRIPE_WEBHOOK_SECRET; fails closed when the secret is unset.",
       "verifier": "verifyStripeWebhookSignature"
     },
-    "pages/api/super-admin/content-architect-login.ts": {
-      "kind": "auth-flow",
-      "reason": "Legacy content-architect credential login (bridge). It creates the signed session; the bridge is hard-expired (SEC-001C)."
-    },
     "pages/api/super-admin/login.ts": {
       "kind": "auth-flow",
       "reason": "Legacy super-admin credential login (bridge). It creates the session, so it cannot require one; the bridge is hard-expired (SEC-001C)."

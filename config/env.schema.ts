@@ -355,7 +355,6 @@ export const envSchema = z.object({
   DISABLE_AUDIT_LOGGING: z.string().optional(),
 
   // ── Content architect ─────────────────────────────────────────────────────
-  CONTENT_ARCHITECT_PASSWORD: z.string().optional(),
 
   // ── Critical webhook / scheduler secrets ──────────────────────────────────
   // Previously read via direct `process.env.X` in pages/api/stripe/webhook.ts,
@@ -528,7 +527,6 @@ export function validateEnv(): EnvConfig {
       DISABLE_AUDIT_LOGGING: process.env.DISABLE_AUDIT_LOGGING,
 
       // Content architect
-      CONTENT_ARCHITECT_PASSWORD: process.env.CONTENT_ARCHITECT_PASSWORD,
 
       // Critical webhook / scheduler secrets — wiring them here brings them
       // into the validated config object so callers can switch from direct

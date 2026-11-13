@@ -23,7 +23,7 @@ import {
 } from '../../../backend/services/companyContextIntelligenceService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { resolveCompanyAccess, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { extractDomain, validatePublicWebsite } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
@@ -91,8 +91,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
       if (mode === 'list') {
-        // Legacy super admin takes precedence: when both super_admin_session and content_architect_session
-        // exist (e.g. stale content architect cookie), treat as super admin so external-apis etc. work.
+        // Legacy super admin bridge: list every company (external-apis etc.).
         const legacySuperAdmin = getLegacySuperAdminSession(req);
         if (legacySuperAdmin) {
           const { data: companyRows } = await supabase
@@ -124,22 +123,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }));
           return res.status(200).json({ companies, rolesByCompany });
         }
-        // SECURITY (2026-11-11): a branch here answered from the
-        // content-architect pinned-company cookie BEFORE any authentication
-        // (that cookie was never signed or session-bound), returning the named
-        // company's profile name to anyone who set it. Removed.
-        if (isContentArchitectSession(req)) {
-          const { data: rows } = await supabase.from('company_profiles').select('company_id, name');
-          const companies = (rows || []).map((r: { company_id: string; name?: string }) => ({
-            company_id: r.company_id,
-            name: r.name || r.company_id,
-          }));
-          const rolesByCompany = companies.map((c: { company_id: string }) => ({
-            company_id: c.company_id,
-            role: 'CONTENT_ARCHITECT',
-          }));
-          return res.status(200).json({ companies, rolesByCompany });
-        }
+        // SECURITY (2026-11-11 / 2026-11-13): the legacy Content Architect
+        // cookie branches that listed EVERY company before (or instead of)
+        // authentication were removed (owner ruling, pre-launch).
         // auth_validate / auth_user come from inside the resolver via the sink;
         // `auth` remains the outer boundary so the two are comparable.
         const authTiming = createTimingSink();
@@ -469,15 +455,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (!access) return;
       const existingProfile = await getProfile(resolvedCompanyId, { autoRefine: false, languageRefine: false });
       const normalizedRole = String(access.role ?? '').toUpperCase();
-      const canEditCanonicalWebsite = normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'CONTENT_ARCHITECT';
+      const canEditCanonicalWebsite = normalizedRole === 'SUPER_ADMIN';
       const incomingReportSettings =
         (body.report_settings as CompanyProfile['report_settings'] | undefined) ?? undefined;
       const incomingWebsite = typeof body.website_url === 'string' ? body.website_url.trim() : body.website_url;
       const existingWebsite = existingProfile?.website_url ?? null;
       // Soft fallback: a normal user may set the canonical website ONCE when none has
       // been derived (e.g. their work-email domain hosts no resolvable site), so they
-      // are not stuck on a read-only field. After it exists, only SUPER_ADMIN /
-      // CONTENT_ARCHITECT may change it.
+      // are not stuck on a read-only field. After it exists, only SUPER_ADMIN
+      // may change it.
       const hasExistingCanonical = String(existingWebsite || '').trim().length > 0;
       const mayProvideCanonical = canEditCanonicalWebsite || !hasExistingCanonical;
       if (incomingWebsite !== undefined && String(incomingWebsite || '').trim() !== String(existingWebsite || '').trim()) {

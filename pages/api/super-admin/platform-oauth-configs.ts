@@ -10,7 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   - Step-up required (capability is in STEP_UP_REQUIRED_CAPABILITIES).
  *   - Removes the previous 5 parallel auth surfaces:
  *       - direct super_admin_session cookie short-circuit
- *       - direct content_architect_session cookie short-circuit
+ *       - direct Content Architect bridge-cookie short-circuit (path since removed)
  *       - Bearer + role-string allowlist (incl. lowercase variants)
  *       - SSR Supabase cookies via @supabase/ssr
  *       - super_admins table lookup (table absent in DB; dead authority)

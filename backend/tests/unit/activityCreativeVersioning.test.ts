@@ -310,7 +310,8 @@ describe('F — route and panel keep the same promises', () => {
 
   it('CRITICAL: the route uses the workspace access gate', () => {
     expect(ROUTE).toContain('enforceCompanyAccess');
-    expect(ROUTE).toContain('isContentArchitectSession');
+    // The legacy content-architect bypass was removed (owner ruling 2026-11-13).
+    expect(ROUTE).not.toContain('isContentArchitectSession');
   });
 
   it('CRITICAL: a foreign activity is 404; a real failure is 422', () => {

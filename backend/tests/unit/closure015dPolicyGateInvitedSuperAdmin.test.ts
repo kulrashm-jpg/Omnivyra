@@ -16,7 +16,6 @@
  */
 const mockResolvePrincipal = jest.fn();
 jest.mock('../../../backend/security/IdentityResolver', () => ({ resolvePrincipal: (...a: unknown[]) => mockResolvePrincipal(...a) }));
-jest.mock('../../../backend/services/contentArchitectService', () => ({ isContentArchitectSession: jest.fn().mockReturnValue(false) }));
 jest.mock('../../../backend/services/logger', () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 import type { NextApiRequest } from 'next';

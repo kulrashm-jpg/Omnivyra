@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { isContentArchitectSession, resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getMarketPulseContext } from '../../../backend/services/marketPulseV2Service';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -14,9 +14,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'companyId is required' });
     }
 
-    const access = isContentArchitectSession(req)
-      ? { userId: 'content_architect', role: 'CONTENT_ARCHITECT' }
-      : await resolveCompanyAccess(req, res, companyId);
+    const access = await resolveCompanyAccess(req, res, companyId);
     if (!access) return;
 
     const viewType = typeof req.query.viewType === 'string' ? req.query.viewType : 'executive';

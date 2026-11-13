@@ -343,7 +343,7 @@ export function useCompanyProfileFormController(d: ProfileState) {
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
   const userGuidance = activeProfile.report_settings?.user_guidance ?? null;
   const industryReview = activeProfile.report_settings?.industry_review ?? null;
-  const isPrivilegedWebsiteEditor = ['SUPER_ADMIN', 'CONTENT_ARCHITECT'].includes(String(userRole || '').toUpperCase());
+  const isPrivilegedWebsiteEditor = String(userRole || '').toUpperCase() === 'SUPER_ADMIN';
   // Soft fallback: in onboarding, if no canonical website was auto-derived from the
   // verified work-email domain (e.g. the domain hosts no resolvable website), let the
   // user provide their own instead of being stuck on a read-only field. The server

@@ -499,7 +499,6 @@ const NON_CAPABILITY_WRITE_ROUTES: Record<string, string> = {
   'super-admin/billing-exports/generate': 'finance auditor',
   'super-admin/billing-forensics/job-replay': 'finance auditor',
   'super-admin/billing-forensics/trace': 'finance auditor',
-  'super-admin/content-architect-login': 'login endpoint (credential check)',
   'super-admin/creator-render-ops': 'role: isSuperAdmin',
   'super-admin/credit-packages/index': 'role: requireSuperAdmin',
   'super-admin/financial-control': 'finance role (isFinanceAdmin)',

@@ -3,8 +3,6 @@ import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { apiFetch } from '../../lib/apiFetch';
 
-type LoginMode = 'super_admin' | 'content_architect';
-
 /**
  * Phase A.1 — Super-admin login is now canonical Supabase Auth.
  *
@@ -19,7 +17,8 @@ type LoginMode = 'super_admin' | 'content_architect';
  * via `requireCapability` — no env-var identity check, no bridge
  * elevation, no step-up bypass.
  *
- * Content Architect mode is left untouched (separate credential path).
+ * The former Content Architect mode (shared env-credential login) was
+ * REMOVED pre-launch (owner ruling 2026-11-13).
  *
  * The legacy /api/super-admin/login backend endpoint is intentionally
  * NOT removed in this change — it remains usable for any tooling that
@@ -28,7 +27,6 @@ type LoginMode = 'super_admin' | 'content_architect';
  */
 export default function SuperAdminLoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<LoginMode>('super_admin');
   const [emailOrUsername, setEmailOrUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -38,20 +36,6 @@ export default function SuperAdminLoginPage() {
     setError(null);
     setIsSubmitting(true);
     try {
-      // ── Content Architect mode — legacy credential endpoint, untouched ────
-      if (mode === 'content_architect') {
-        const response = await fetch('/api/super-admin/content-architect-login', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: emailOrUsername, password }),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data?.error || 'Login failed');
-        router.replace('/content-architect');
-        return;
-      }
-
       // ── Super Admin mode — canonical Supabase Auth path ───────────────────
       const supabase = getSupabaseBrowser();
       const { data, error: signInErr } = await supabase.auth.signInWithPassword({
@@ -114,40 +98,14 @@ export default function SuperAdminLoginPage() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
       <div className="bg-white rounded-lg shadow p-6 max-w-md w-full space-y-4">
         <h1 className="text-2xl font-bold text-gray-900">Admin Login</h1>
-        <div className="flex rounded-lg border border-gray-200 p-0.5 bg-gray-50">
-          <button
-            type="button"
-            onClick={() => setMode('super_admin')}
-            className={`flex-1 py-2 text-sm font-medium rounded-md ${
-              mode === 'super_admin'
-                ? 'bg-white text-gray-900 shadow'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Super Admin
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('content_architect')}
-            className={`flex-1 py-2 text-sm font-medium rounded-md ${
-              mode === 'content_architect'
-                ? 'bg-white text-gray-900 shadow'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            Content Architect
-          </button>
-        </div>
         <p className="text-sm text-gray-600">
-          {mode === 'super_admin'
-            ? 'Sign in with your Omnivyra account email and password. Authorization comes from the SUPER_ADMIN role.'
-            : 'Content Architect still uses the dedicated credential-based access path.'}
+          Sign in with your Omnivyra account email and password. Authorization comes from the SUPER_ADMIN role.
         </p>
         <input
           className="border rounded-md px-3 py-2 w-full"
-          placeholder={mode === 'super_admin' ? 'Email' : 'Username'}
-          type={mode === 'super_admin' ? 'email' : 'text'}
-          autoComplete={mode === 'super_admin' ? 'email' : 'username'}
+          placeholder="Email"
+          type="email"
+          autoComplete="email"
           value={emailOrUsername}
           onChange={(e) => setEmailOrUsername(e.target.value)}
           disabled={isSubmitting}

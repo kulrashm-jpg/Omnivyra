@@ -236,11 +236,19 @@ describe('principals whose membership shape matters (current access preserved)',
   const cases: Array<[string, W2GPrincipal, WriteCase]> = [];
   // Closure-015E: INVITED_ADMIN moved to the refused set below — an invited
   // membership (any role) confers nothing before acceptance.
-  for (const w of subset) for (const who of ['LEGACY_ADMIN', 'LEGACY_MANAGER', 'ARCHITECT'] as const) cases.push([w.name, who, w]);
+  // 2026-11-13 (owner ruling): ARCHITECT — the retired legacy content-architect
+  // principal — moved to the refused set below; it no longer holds any access.
+  for (const w of subset) for (const who of ['LEGACY_ADMIN', 'LEGACY_MANAGER'] as const) cases.push([w.name, who, w]);
   it.each(cases)('%s as %s → allowed', async (_n, who, w) => {
     const r = await call(w, who);
     expect(r.status).toBeLessThan(300);
     expect(w.wrote()).toBe(true);
+  });
+
+  it.each(subset.map((w) => [w.name, w] as const))('%s as the retired legacy content-architect principal → 403, nothing written', async (_n, w) => {
+    const r = await call(w, 'ARCHITECT');
+    expect(r.status).toBe(403);
+    expect(w.wrote()).toBe(false);
   });
 
   it.each(subset.map((w) => [w.name, w] as const))('%s as an INVITED (not accepted) CONTENT_CREATOR → 403, nothing written', async (_n, w) => {

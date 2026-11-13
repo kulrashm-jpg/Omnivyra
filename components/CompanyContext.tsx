@@ -89,7 +89,7 @@ const normalizeCompanyRole = (role?: string | null) => {
   if (upper === 'ADMIN') return 'COMPANY_ADMIN';
   // SUPER_ADMIN in user_company_roles means the row was miscreated during onboarding.
   // Real platform super admins authenticate via the super-admin cookie path
-  // (loadContentArchitectContext), not via normal Supabase auth. Downgrade silently.
+  // (loadLegacySuperAdminContext), not via normal Supabase auth. Downgrade silently.
   if (upper === 'SUPER_ADMIN') return 'COMPANY_ADMIN';
   if (upper === 'CONTENT_MANAGER') return 'CONTENT_CREATOR';
   if (upper === 'CONTENT_PLANNER') return 'CONTENT_CREATOR';
@@ -299,8 +299,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setSelectedCompanyId = (companyId: string) => {
     if (!companyId) return;
     const isAllowedCompany = !!rolesByCompany[companyId];
-    const isContentArchitect = user?.userId === 'content_architect' || userRole === 'CONTENT_ARCHITECT';
-    if (userRole && userRole !== 'SUPER_ADMIN' && !isContentArchitect && !isAllowedCompany) {
+    if (userRole && userRole !== 'SUPER_ADMIN' && !isAllowedCompany) {
       return;
     }
     setSelectedCompanyIdInternal(companyId);
@@ -357,12 +356,10 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // existing loading behaviour rather than guessing an identity.
       setAuthUserId(hasSession ? decodeJwtSub(sessionToken) : null);
       if (!hasSession) {
-        // No bearer token — may be content-architect cookie path. Cookie-
-        // based Supabase sessions are also handled by the API route via
-        // `credentials: 'include'`, but we only reach this branch after
-        // two failed token fetches, so try the architect path.
-        const asArchitect = await loadContentArchitectContext();
-        if (!asArchitect) {
+        // No bearer token — may be the legacy super-admin cookie path. We
+        // only reach this branch after two failed token fetches.
+        const asLegacySuperAdmin = await loadLegacySuperAdminContext();
+        if (!asLegacySuperAdmin) {
           setUser(null);
           setUserName('');
           setCompanies([]);
@@ -606,7 +603,10 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const loadContentArchitectContext = async () => {
+  // Legacy super-admin bridge-cookie path only. The Content Architect cookie
+  // branch this used to serve was removed (owner ruling 2026-11-13): an answer
+  // that is not the legacy super-admin listing is NOT adopted as a session.
+  const loadLegacySuperAdminContext = async () => {
     try {
       const res = await fetch('/api/company-profile?mode=list', { credentials: 'include' });
       if (!res.ok) return false;
@@ -616,28 +616,28 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       type RoleEntry = { company_id: string; role: string };
       const roles = ((data?.rolesByCompany || []) as RoleEntry[]).reduce<Record<string, string>>(
         (acc, entry) => {
-          if (entry?.company_id) acc[entry.company_id] = entry.role || 'CONTENT_ARCHITECT';
+          if (entry?.company_id && entry.role) acc[entry.company_id] = entry.role;
           return acc;
         },
         {}
       );
+      const firstRole = Object.values(roles)[0];
+      if (firstRole !== 'SUPER_ADMIN') return false;
       list.forEach((c: CompanyOption) => {
-        if (!roles[c.company_id]) roles[c.company_id] = 'CONTENT_ARCHITECT';
+        if (!roles[c.company_id]) roles[c.company_id] = 'SUPER_ADMIN';
       });
       const companyIds = list.map((c: CompanyOption) => c.company_id);
-      const firstRole = Object.values(roles)[0] || 'CONTENT_ARCHITECT';
-      const isSuperAdmin = firstRole === 'SUPER_ADMIN';
       setUser({
-        userId: isSuperAdmin ? 'legacy_super_admin' : 'content_architect',
+        userId: 'legacy_super_admin',
         role: 'admin',
         companyIds,
         defaultCompanyId: companyIds[0] || '',
       });
-      setUserName(isSuperAdmin ? 'Super Admin' : 'Content Architect');
+      setUserName('Super Admin');
       setCompanies(list);
       setRolesByCompany(roles);
-      setUserRole(isSuperAdmin ? 'SUPER_ADMIN' : 'CONTENT_ARCHITECT');
-      const storageUserId = isSuperAdmin ? 'legacy_super_admin' : 'content_architect';
+      setUserRole('SUPER_ADMIN');
+      const storageUserId = 'legacy_super_admin';
       const stored = resolveStoredCompanyId(storageUserId);
       // Same rule on the legacy path: one membership resolves itself, several
       // require a choice. See the ambiguity note on the context type.
@@ -714,9 +714,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (probeInFlight) return;
       authIdentityRef.current = null;
       clearAuthScopedAppState();
-      // No session — check for content-architect cookie session
-      const asArchitect = await loadContentArchitectContext();
-      setIsAuthenticated(asArchitect);
+      // No session — check for the legacy super-admin cookie session
+      const asLegacySuperAdmin = await loadLegacySuperAdminContext();
+      setIsAuthenticated(asLegacySuperAdmin);
       setAuthChecked(true);
     });
 

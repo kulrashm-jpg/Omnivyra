@@ -265,7 +265,6 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isPlatformExternalApis =
     router.pathname === '/external-apis' && router.asPath.includes('mode=platform');
   const isCompanyProfile = router.pathname === '/company-profile';
-  const isContentArchitectHub = router.pathname === '/content-architect';
   const isRecommendationsPage = router.pathname === '/recommendations';
   const isCampaignOrPlanRoute =
     router.pathname.startsWith('/campaigns') || router.pathname.startsWith('/campaign-daily-plan');
@@ -278,7 +277,6 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     isSuperAdminRoute ||
     isPlatformExternalApis ||
     isCompanyProfile ||
-    isContentArchitectHub ||
     isRecommendationsPage ||
     isCampaignOrPlanRoute;
 

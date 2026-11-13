@@ -24,9 +24,6 @@ jest.mock('../../../backend/security/IdentityResolver', () => {
   mockIdentityLoaded = true;
   return { resolvePrincipal: mockResolvePrincipal };
 });
-jest.mock('../../../backend/services/contentArchitectService', () => ({
-  isContentArchitectSession: jest.fn().mockReturnValue(false),
-}));
 jest.mock('../../../backend/services/logger', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));

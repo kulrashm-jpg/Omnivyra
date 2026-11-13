@@ -21,8 +21,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!userContext?.userId) {
     return res.status(404).json({ error: 'Job not found' });
   }
-  const isContentArchitect = userContext.userId === 'content_architect';
-  const isPlatformAdmin = isContentArchitect || (await isSuperAdmin(userContext.userId));
+  const isPlatformAdmin = await isSuperAdmin(userContext.userId);
 
   let query = supabase
     .from('recommendation_jobs')

@@ -25,7 +25,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 const mockResolvePrincipal = jest.fn();
 jest.mock('../../../backend/security/IdentityResolver', () => ({ resolvePrincipal: (...a: unknown[]) => mockResolvePrincipal(...a) }));
-jest.mock('../../../backend/services/contentArchitectService', () => ({ isContentArchitectSession: jest.fn().mockReturnValue(false) }));
 jest.mock('../../../backend/services/logger', () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 import { createApiRoute } from '../../../lib/platform/routeFactory';
@@ -193,7 +192,8 @@ describe('setPrincipal inside an awaited guard', () => {
   it('synthetic principals are never attributed', async () => {
     process.env[MODE] = 'enforce';
     await runWithRequestExecutionContext({}, async () => {
-      await guard({ userId: 'content_architect' });
+      // 2026-11-13: the legacy content-architect id is retired; dev-user remains synthetic.
+      await guard({ userId: 'dev-user' });
       expect(getRequestContext().authPrincipal).toBeUndefined();
       expect(getPrincipal().userId).toBeUndefined();
     });
