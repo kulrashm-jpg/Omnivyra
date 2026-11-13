@@ -1,3 +1,4 @@
+import { isConfirmPhase } from '../../shared/billing/creditPhaseVocabulary';
 /**
  * Phase 9B — company credit experience: PURE presentation transforms.
  *
@@ -85,7 +86,8 @@ export function groupCreditHistoryByActivity(rows: LedgerRowLike[]): ActivityHis
     const g = m.get(activity) ?? { activity, consumed: 0, reserved: 0, released: 0, settlements: 0, events: 0 };
     const mag = Math.abs(n(r.credits_delta));
     g.events += 1;
-    if (r.execution_phase === 'confirm') {
+    // Live token-priced settles are 'confirm_partial' (shared vocabulary): credits consumed, like 'confirm'.
+    if (isConfirmPhase(r.execution_phase)) {
       g.consumed += mag;
       g.settlements += 1;
     } else if (r.execution_phase === 'hold') {

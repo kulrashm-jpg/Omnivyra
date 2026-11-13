@@ -40,6 +40,7 @@ jest.mock('../../services/monetizationBetaAccessService', () => ({
 
 import { exportCompanyUsage, exportReservationLifecycle } from '../../services/billing/exports/ledgerExportService';
 import { listCustomerBillingEvents } from '../../services/customerBillingProjectionService';
+import { groupCreditHistoryByActivity } from '../../../components/company-credits/creditPresentation';
 
 describe('customer-visible usage includes LIVE confirm_partial settles', () => {
   it('usage export (company/billing/export -> exportCompanyUsage) includes the confirm_partial row', async () => {
@@ -51,6 +52,14 @@ describe('customer-visible usage includes LIVE confirm_partial settles', () => {
   it('reservation lifecycle export includes the confirm_partial row', async () => {
     const r = await exportReservationLifecycle({ format: 'json' as never, requestedBy: 'u', organizationId: 'org-1' });
     expect(r.body).toContain('cp-1');
+  });
+
+  it('company credits page activity history counts a confirm_partial row as CONSUMED', () => {
+    const groups = groupCreditHistoryByActivity([
+      { execution_phase: 'confirm_partial', credits_delta: -4, reference_type: 'content_generation' },
+      { execution_phase: 'confirm', credits_delta: -2, reference_type: 'content_generation' },
+    ] as never);
+    expect(groups[0]).toMatchObject({ consumed: 6, settlements: 2 });
   });
 
   it('billing history (credits/transactions) shows the confirm_partial row as "credits used" with its charge', async () => {
