@@ -34,6 +34,7 @@ import {
 import CampaignAIChat from './CampaignAIChat';
 import AIGenerationProgress from './AIGenerationProgress';
 import { useCompanyContext } from './CompanyContext';
+import { canWriteCampaign } from '../lib/access/campaignWriteAccess';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 import { GovernanceStatusCard } from './governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from './governance/GovernanceAnalyticsCard';
@@ -68,6 +69,8 @@ import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, 
 import { useWeekCardController } from './WeekCardController';
 
 export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }) {
+  // F3: Viewers / view-only / Engagers see the campaign but not its write or AI controls.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
   const f = useWeekCardController({ weekNumber, d });
   const {
     _ef1, _ef2, _ef3, _ef4, _ef5, acceptDuration, activeTab, aiSuggestion, aiSuggestionLoading, bestDerivedTopics, blueprintFrozen,
@@ -289,6 +292,7 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                               </div>
                             </div>
                             
+                            {canWriteThisCampaign && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -305,6 +309,7 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                               )}
                               {isGeneratingWeek === weekNumber ? 'Enhancing…' : 'Enhance with AI'}
                             </button>
+                            )}
 
                             <button
                               type="button"
@@ -666,6 +671,7 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                               <div className="flex flex-wrap items-center gap-2">
                                 {weekDailyPlans.length > 0 && (
                                   <>
+                                    {canWriteThisCampaign && (
                                     <button
                                       type="button"
                                       onClick={() => regenerateWeekDailyPlan(weekNumber)}
@@ -676,6 +682,8 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                                       {isGeneratingWeek === weekNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
                                       Regenerate
                                     </button>
+                                    )}
+                                    {canWriteThisCampaign && (
                                     <button
                                       type="button"
                                       onClick={() => saveWeekDailyPlan(weekNumber)}
@@ -686,6 +694,7 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                                       {isSavingWeekPlan === weekNumber ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                                       Save & freeze
                                     </button>
+                                    )}
                                   </>
                                 )}
                                 <button
@@ -962,6 +971,7 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                               <div className="text-center py-4 text-gray-500">
                                 <Calendar className="h-8 w-8 mx-auto mb-2 text-gray-400" />
                                 <p>No daily plans generated yet</p>
+                                {canWriteThisCampaign && (
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -976,6 +986,7 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                                 >
                                   Generate Daily Plans
                                 </button>
+                                )}
                               </div>
                             )}
                           </div>}
