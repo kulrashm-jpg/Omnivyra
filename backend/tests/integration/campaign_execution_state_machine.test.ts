@@ -36,7 +36,7 @@ jest.mock('../../services/campaignOwnershipService', () => ({
 }));
 
 function chain(result: { data: any; error: any }) {
-  const updateChain = { eq: jest.fn().mockResolvedValue({ data: null, error: null }) };
+  const updateChain = { eq: jest.fn(function eqc(this: any) { return this; }), then: (r: any) => Promise.resolve({ data: null, error: null }).then(r) }; // chainable for the seam's tenant .eq
   const q = {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
@@ -60,7 +60,7 @@ function chainArray(result: { data: any; error: any }) {
     }),
     maybeSingle: jest.fn().mockResolvedValue(result),
     single: jest.fn().mockResolvedValue(result),
-    update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ data: null, error: null }) }),
+    update: jest.fn().mockReturnValue({ eq: jest.fn(function eqc(this: any) { return this; }), then: (r: any) => Promise.resolve({ data: null, error: null }).then(r) }),
   };
   (q as any).then = (resolve: any) => Promise.resolve(result).then(resolve);
   return q;
@@ -200,7 +200,7 @@ describe('Campaign Execution State Machine', () => {
         initiatorCampaignId: initiatorId,
         preemptedCampaignId: preemptedId,
         justification: 'Revenue-critical board commitment for Q4 launch.',
-        companyId: 'company-123',
+        companyId: 'c0000000-0000-4000-8000-000000000123',
       });
 
       const transitionCalls = (recordGovernanceEvent as jest.Mock).mock.calls.filter(
@@ -249,7 +249,7 @@ describe('Campaign Execution State Machine', () => {
         body: {
           initiatorCampaignId: initiatorId,
           preemptedCampaignId: preemptedId,
-          companyId: 'company-123',
+          companyId: 'c0000000-0000-4000-8000-000000000123',
           justification: 'Revenue-critical board commitment for Q4 launch.',
         },
       });

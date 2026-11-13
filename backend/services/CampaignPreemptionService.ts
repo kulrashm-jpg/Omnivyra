@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext, tenantChildTable, tenantTable, TenantSeamError } from '../db/tenantTable';
 /**
  * Controlled Preemption Execution Service.
  * Safely executes PREEMPT_LOWER_PRIORITY_CAMPAIGN when explicitly requested.
@@ -244,7 +245,9 @@ async function performPreemption(
   assertValidExecutionTransition(fromState, 'PREEMPTED');
 
   const nowIso = new Date().toISOString();
-  const { error: updateError } = await ownedDbTable('campaigns')
+  // S2 tenant seam: the company the caller was authorized for (params.companyId; both campaigns were verified
+  // owned by it in assertBothOwnedBy before performPreemption runs). The update reaches only that company's row.
+  const { error: updateError } = await tenantTable('campaigns', systemTenantContext(params.companyId, 'campaign preemption: authorized company'))
     .update({
       execution_status: 'PREEMPTED',
       blueprint_status: 'INVALIDATED',
@@ -450,7 +453,14 @@ export async function executePreemptionFromRequest(
     { fromApprovedRequest: true }
   );
 
-  const { error: updateError } = await ownedDbTable('campaign_preemption_requests')
+  // S2 tenant seam: campaign_preemption_requests is a child of campaigns via initiator_campaign_id; the context is the
+  // authorized company (assertBothOwnedBy above).
+  const requestsTable = await tenantChildTable(
+    'campaign_preemption_requests',
+    systemTenantContext(companyId, 'campaign preemption: authorized company'),
+    String(request.initiator_campaign_id),
+  );
+  const { error: updateError } = await requestsTable
     .update({
       status: 'EXECUTED',
       approved_at: new Date().toISOString(),
@@ -467,9 +477,9 @@ export async function executePreemptionFromRequest(
 /**
  * Reject a pending preemption request.
  */
-export async function rejectPreemptionRequest(requestId: string): Promise<void> {
+export async function rejectPreemptionRequest(requestId: string, companyId: string): Promise<void> {
   const { data: request, error: fetchError } = await ownedDbTable('campaign_preemption_requests')
-    .select('id, status')
+    .select('id, status, initiator_campaign_id')
     .eq('id', requestId)
     .maybeSingle();
 
@@ -481,7 +491,21 @@ export async function rejectPreemptionRequest(requestId: string): Promise<void> 
     throw new PreemptionValidationError(`Request is not pending. Current status: ${request.status}`);
   }
 
-  const { error: updateError } = await ownedDbTable('campaign_preemption_requests')
+  // S2 tenant seam: the company the route authorized for this request's initiator campaign
+  // (reject-preemption.ts: enforceCompanyAccess with campaignId = initiator_campaign_id). A request whose initiator is
+  // not in that company is refused like a missing one.
+  let requestsTable;
+  try {
+    requestsTable = await tenantChildTable(
+      'campaign_preemption_requests',
+      systemTenantContext(companyId, 'campaign preemption reject: authorized company'),
+      String(request.initiator_campaign_id ?? ''),
+    );
+  } catch (err) {
+    if (err instanceof TenantSeamError) throw new PreemptionValidationError('Preemption request not found.');
+    throw err;
+  }
+  const { error: updateError } = await requestsTable
     .update({
       status: 'REJECTED',
       rejected_at: new Date().toISOString(),

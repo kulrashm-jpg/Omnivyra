@@ -62,7 +62,7 @@ function chainArray(result: ChainResult) {
 }
 
 const VALID_JUSTIFICATION = 'Revenue-critical board commitment for Q4 launch.';
-const COMPANY_ID = 'company-uuid-123';
+const COMPANY_ID = 'c0000000-0000-4000-8000-000000000123'; // a real uuid: the tenant seam refuses a non-uuid company
 const CAMPAIGN_ID = 'campaign-uuid-456';
 
 describe('Governance Event Persistence', () => {

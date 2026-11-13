@@ -30,9 +30,31 @@ jest.mock('../../services/campaignOwnershipService', () => ({
 
 type ChainResult = { data: any; error: any };
 
+// S2 tenant seam: tenantChildTable verifies the parent campaign with select('company_id').eq('id', ...).limit(...);
+// that one read answers with the authorized test company (the campaigns are owned by it - checkCampaignOwnership is
+// mocked 'owned' above). Every other select behaves as before.
+const tenantParentRead = () => {
+  const r = { data: [{ company_id: PREEMPT_TEST_COMPANY }], error: null };
+  const p: any = { eq: () => p, limit: () => p, then: (resolve: any) => Promise.resolve(r).then(resolve) };
+  return p;
+};
+// The seam's direct-parent check: tenantTable('campaigns').select('id').eq('company_id', co).eq('id', x).maybeSingle().
+// With a company filter, the row exists only for the authorized test company; without one, the original fake answers.
+const tenantScopedIdRead = (base: any) => {
+  const filters: Array<[string, unknown]> = [];
+  const p: any = Object.create(base);
+  p.eq = (k: string, v: unknown) => { filters.push([k, v]); return p; };
+  p.maybeSingle = async () => {
+    const co = filters.find(([k]) => k === 'company_id');
+    if (!co) return base.maybeSingle();
+    const id = filters.find(([k]) => k === 'id');
+    return { data: co[1] === PREEMPT_TEST_COMPANY && id ? { id: id[1] } : null, error: null };
+  };
+  return p;
+};
 function chain(result: ChainResult) {
   const mock = {
-    select: jest.fn().mockReturnThis(),
+    select: jest.fn(function (this: any, cols?: string) { return cols === 'company_id' ? tenantParentRead() : cols === 'id' ? tenantScopedIdRead(this) : this; }),
     eq: jest.fn().mockReturnThis(),
     neq: jest.fn().mockReturnThis(),
     in: jest.fn().mockReturnThis(),
@@ -252,9 +274,25 @@ describe('Campaign Preemption Approval Flow', () => {
         return chain({ data: null, error: null });
       });
 
-      await rejectPreemptionRequest(requestId);
+      await rejectPreemptionRequest(requestId, PREEMPT_TEST_COMPANY);
 
       expect(reqCalls).toBeGreaterThanOrEqual(2);
+    });
+
+    it('S2 NEGATIVE CONTROL: a company that does not own the initiator campaign is refused; nothing is written', async () => {
+      const requestId = 'request-foreign-uuid';
+      const OTHER_COMPANY = 'f0000000-0000-4000-8000-0000000000ff';
+      const updates: unknown[] = [];
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        const c = chain({ data: null, error: null });
+        if (table === 'campaign_preemption_requests') {
+          c.maybeSingle = jest.fn().mockResolvedValue({ data: { id: requestId, initiator_campaign_id: 'campaign-initiator-uuid', status: 'PENDING' }, error: null });
+          c.update = jest.fn((v: unknown) => { updates.push(v); return c; });
+        }
+        return c;
+      });
+      await expect(rejectPreemptionRequest(requestId, OTHER_COMPANY)).rejects.toThrow('Preemption request not found.');
+      expect(updates).toEqual([]);
     });
 
     it('throws when request is not PENDING', async () => {
@@ -269,8 +307,8 @@ describe('Campaign Preemption Approval Flow', () => {
         return chain({ data: null, error: null });
       });
 
-      await expect(rejectPreemptionRequest(requestId)).rejects.toThrow(PreemptionValidationError);
-      await expect(rejectPreemptionRequest(requestId)).rejects.toThrow('not pending');
+      await expect(rejectPreemptionRequest(requestId, PREEMPT_TEST_COMPANY)).rejects.toThrow(PreemptionValidationError);
+      await expect(rejectPreemptionRequest(requestId, PREEMPT_TEST_COMPANY)).rejects.toThrow('not pending');
     });
   });
 

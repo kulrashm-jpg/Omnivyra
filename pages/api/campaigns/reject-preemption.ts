@@ -45,7 +45,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    await rejectPreemptionRequest(requestId);
+    // companyId: the company enforceCompanyAccess just authorized for the request's initiator campaign (it returns
+    // null - and we exit above - otherwise). Passed through, never re-derived.
+    await rejectPreemptionRequest(requestId, String(companyId));
 
     return res.status(200).json({
       status: 'REJECTED',

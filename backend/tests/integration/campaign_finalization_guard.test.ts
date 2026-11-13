@@ -411,9 +411,8 @@ describe('Campaign Finalization Guard (Stage 20)', () => {
             return m;
           }
           return {
-            update: jest.fn().mockReturnValue({
-              eq: jest.fn().mockResolvedValue({ error: null }),
-            }),
+            // chainable: the tenant seam adds .eq('company_id', ...) before the caller's .eq('id', ...)
+            update: jest.fn().mockReturnValue({ eq: jest.fn(function eqc(this: any) { return this; }), then: (r: any) => Promise.resolve({ data: null, error: null }).then(r) }),
           };
         }
         if (table === 'campaign_preemption_log') {
