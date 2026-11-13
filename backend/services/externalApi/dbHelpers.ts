@@ -4,7 +4,6 @@ import type {
   ExternalApiSource,
   ExternalApiUserAccess,
   ExternalApiHealth,
-  PlatformConfig,
 } from './types';
 import { isApiSourceExecutable, getEnabledApiIdsFromCompanyConfig } from './accessChecks';
 import { computeFreshnessScore, computeReliabilityScore } from './responseMapping';
@@ -388,62 +387,6 @@ export async function getExternalApiSourceById(apiSourceId: string): Promise<Ext
   return source;
 }
 
-export async function getPlatformConfigs(
-  companyId?: string | null,
-  options?: { skipCache?: boolean }
-): Promise<PlatformConfig[]> {
-  if (!companyId) return [];
-  const createQuery = () =>
-    ownedDbTable('external_api_sources').select('*').order('created_at', { ascending: true });
-
-  const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
-  let sources: any[] = scopedResult.error ? [] : (scopedResult.data || []);
-  if (scopedResult.error && !scopedResult.error.message?.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to load platform configs: ${scopedResult.error.message}`);
-  }
-  if (scopedResult.error) {
-    const fallbackResult = await createQuery();
-    if (fallbackResult.error) throw new Error(`Failed to load platform configs: ${fallbackResult.error.message}`);
-    sources = fallbackResult.data || [];
-  }
-
-  const companyScoped = sources.some((row: any) => Object.prototype.hasOwnProperty.call(row, 'company_id'));
-  const companySpecific = companyScoped
-    ? sources.filter((row: any) => row.company_id === companyId)
-    : sources.filter((row: any) => !row.is_preset);
-  const globalPresets = sources.filter((row: any) => row.is_preset && (!companyScoped || !row.company_id));
-  let enabledIds = await getEnabledApiIdsFromCompanyConfig(companyId, options);
-  if (enabledIds.length === 0 && (sources.length > 0 || companyId)) {
-    enabledIds = await getEnabledApiIdsFromCompanyConfig(companyId, { ...options, skipCache: true });
-  }
-  const enabledSet = new Set(enabledIds);
-  let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
-
-  if (enabledIds.length > 0 && selectedPresets.length === 0) {
-    const { data: enabledSources } = await ownedDbTable('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .in('id', enabledIds);
-    const fetched = (enabledSources || []).filter(
-      (row: any) => !companySpecific.some((c: any) => c.id === row.id)
-    );
-    selectedPresets = fetched;
-  }
-
-  let data = [...companySpecific, ...selectedPresets];
-  if (companyId && data.length === 0 && enabledIds.length > 0) {
-    const { data: fallbackSources } = await ownedDbTable('external_api_sources')
-      .select('*')
-      .eq('is_active', true)
-      .in('id', enabledIds);
-    data = fallbackSources || [];
-  }
-
-  const apiIds = data.map((row: any) => row.id);
-  const healthMap = await fetchHealthMapForApiIds(apiIds);
-  return data.map((row: any) => ({ ...row, health: healthMap[row.id] || null }));
-}
-
 // ── Platform config write helpers ─────────────────────────────────────────────
 const buildPlatformPayload = (input: Partial<ExternalApiSource>) => ({
   name: input.name,
@@ -471,62 +414,6 @@ const buildPlatformPayload = (input: Partial<ExternalApiSource>) => ({
   requires_admin: input.requires_admin ?? true,
   created_at: input.created_at ?? new Date().toISOString(),
 });
-
-export async function savePlatformConfig(input: Partial<ExternalApiSource>): Promise<ExternalApiSource> {
-  const basePayload = buildPlatformPayload(input);
-  const payloadWithCompany = { ...basePayload, company_id: input.company_id ?? null };
-
-  const sanitizePayload = (payload: Record<string, any>, message: string) => {
-    const next = { ...payload };
-    const lower = message.toLowerCase();
-    if (lower.includes('is_preset')) delete next.is_preset;
-    if (lower.includes('company_id')) delete next.company_id;
-    return next;
-  };
-
-  let initial = await ownedDbTable('external_api_sources').insert(payloadWithCompany).select('*').single();
-  if (!initial.error) return initial.data as ExternalApiSource;
-
-  const message = initial.error.message || '';
-  const sanitized = sanitizePayload(payloadWithCompany, message);
-  if (Object.keys(sanitized).length !== Object.keys(payloadWithCompany).length) {
-    initial = await ownedDbTable('external_api_sources').insert(sanitized).select('*').single();
-    if (!initial.error) return initial.data as ExternalApiSource;
-  }
-  if (!message.toLowerCase().includes('company_id')) {
-    throw new Error(`Failed to save platform config: ${message}`);
-  }
-
-  const fallback = await ownedDbTable('external_api_sources')
-    .insert(sanitizePayload(basePayload, message))
-    .select('*')
-    .single();
-  if (fallback.error) throw new Error(`Failed to save platform config: ${fallback.error.message}`);
-  return fallback.data as ExternalApiSource;
-}
-
-export async function saveTenantPlatformConfig(
-  input: Partial<ExternalApiSource> & { company_id: string }
-): Promise<ExternalApiSource> {
-  if (!input.company_id) throw new Error('company_id is required for tenant-scoped API');
-  const payload = { ...buildPlatformPayload(input), company_id: input.company_id };
-  let result = await ownedDbTable('external_api_sources').insert(payload).select('*').single();
-
-  if (result.error) {
-    const message = result.error.message || '';
-    if (message.toLowerCase().includes('is_preset')) {
-      const sanitized = { ...payload };
-      delete (sanitized as any).is_preset;
-      result = await ownedDbTable('external_api_sources').insert(sanitized).select('*').single();
-      if (!result.error) return result.data as ExternalApiSource;
-    }
-    if (message.toLowerCase().includes('company_id')) {
-      throw new Error('company_id column missing for tenant-scoped API');
-    }
-    throw new Error(`Failed to save tenant platform config: ${message}`);
-  }
-  return result.data as ExternalApiSource;
-}
 
 export async function checkCompanyApiLimitsForPolling(
   companyId: string,
