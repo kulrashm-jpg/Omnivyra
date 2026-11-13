@@ -11,8 +11,11 @@
 -- WHAT. public.revoke_super_admin(p_user_id): ONE transaction that
 --   1. takes the advisory lock shared with M1's bootstrap (public.super_admin_membership_lock_key(), 20270217000013), so
 --      two concurrent revokes of the last two super-admins serialise: the second one re-counts and is refused;
---   2. counts the OTHER users holding an ACTIVE SUPER_ADMIN membership whose users row is not soft-deleted (a deleted
---      user cannot administer anything);
+--   2. counts the OTHER users holding an ACTIVE SUPER_ADMIN membership who can still AUTHENTICATE: users row present,
+--      not soft-deleted, and users.status = 'active' (NULL treated as active). An ALLOWLIST on purpose (05): a suspended
+--      user is refused by IdentityResolver and cannot administer anything, and an unknown future status must make the
+--      count SMALLER (refuse the revoke - an inconvenience), never larger (permit removing the last usable admin - a
+--      lockout);
 --   3. refuses LAST_SUPER_ADMIN (P0001) when the target holds an active SUPER_ADMIN membership and no other user does -
 --      an explicit, typed refusal, not an incidental error;
 --   4. otherwise downgrades users.role and EVERY SUPER_ADMIN membership of the target (any status; role compared
@@ -29,8 +32,9 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'role')
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'is_deleted')
-     OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'updated_at') THEN
-    RAISE EXCEPTION '052 preflight: users.role / is_deleted / updated_at missing';
+     OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'updated_at')
+     OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'status') THEN
+    RAISE EXCEPTION '052 preflight: users.role / is_deleted / updated_at / status missing';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_company_roles' AND column_name = 'updated_at') THEN
     RAISE EXCEPTION '052 preflight: user_company_roles.updated_at missing';
@@ -62,7 +66,8 @@ BEGIN
     JOIN public.users u ON u.id = r.user_id
    WHERE upper(btrim(r.role)) = 'SUPER_ADMIN' AND r.status = 'active'
      AND r.user_id <> p_user_id
-     AND coalesce(u.is_deleted, false) = false;
+     AND coalesce(u.is_deleted, false) = false
+     AND coalesce(u.status, 'active') = 'active';
   IF v_target_active AND v_others = 0 THEN
     RAISE EXCEPTION 'LAST_SUPER_ADMIN' USING ERRCODE = 'P0001',
       DETAIL = 'revoking this user would leave the platform with no active super-admin';

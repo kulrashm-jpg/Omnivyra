@@ -10,6 +10,9 @@
  *
  * The realschema project runs --runInBand, so this suite may briefly own the platform's super-admin set: it snapshots
  * every pre-existing ACTIVE SUPER_ADMIN membership, deactivates them for the zero-admin cases, and restores them.
+ * CONDITION THIS RESTS ON (05): the target is a DISPOSABLE replay container owned by one CI job. A killed process skips
+ * afterAll and leaves zero active super-admins behind; never point this suite at a persistent or shared database -
+ * there the restore would have to be a transaction rollback or a dedicated fixture org instead.
  */
 import { Client } from 'pg';
 import { db } from './setup';
@@ -24,11 +27,28 @@ async function attemptOn(c: Client, sql: string, params: unknown[]): Promise<'ok
 const activeSa = async (uid: string) => Number((await db.query(
   `SELECT count(*) n FROM public.user_company_roles WHERE user_id = $1 AND upper(btrim(role)) = 'SUPER_ADMIN' AND status = 'active'`, [uid])).rows[0].n);
 
+/** e9: the zero-SA window is only allowed on the disposable CI database - decided on the CLIENT-side URL host
+ *  (inet_server_addr is not loopback in CI), and serialised against any other job on the same database. */
+const ZERO_SA_WINDOW_LOCK = 7302118099;
+function assertDisposableTarget(): void {
+  let host = '';
+  try { host = new globalThis.URL(URL).hostname.replace(/^\[|\]$/g, ''); } catch { host = ''; }
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
+    throw new Error(`super_admin_guards_m1_m2 REFUSES to run: W6_DB_URL host '${host || '?'}' is not loopback. This suite briefly leaves the database with ZERO active super-admins and may only target the disposable CI replay container.`);
+  }
+}
+
 describe('M1 / M2 super-admin guards (real Postgres, separate connections)', () => {
   const extra: Client[] = [];
   let preexisting: string[] = [];
+  let windowLock: Client | null = null;
 
   beforeAll(async () => {
+    assertDisposableTarget();
+    windowLock = new Client({ connectionString: URL });
+    await windowLock.connect();
+    const got = (await windowLock.query('SELECT pg_try_advisory_lock($1) AS ok', [ZERO_SA_WINDOW_LOCK])).rows[0].ok;
+    if (!got) throw new Error('super_admin_guards_m1_m2 REFUSES to run: another session holds the zero-super-admin window lock on this database');
     preexisting = (await db.query(
       `SELECT id FROM public.user_company_roles WHERE upper(btrim(role)) = 'SUPER_ADMIN' AND status = 'active'`)).rows.map((r) => r.id);
     await db.query(`UPDATE public.user_company_roles SET status = 'inactive' WHERE id = ANY($1::uuid[])`, [preexisting]);
@@ -42,13 +62,14 @@ describe('M1 / M2 super-admin guards (real Postgres, separate connections)', () 
 
   beforeEach(async () => {
     await db.query(`DELETE FROM public.user_company_roles WHERE user_id = ANY($1::uuid[])`, [U]);
-    await db.query(`UPDATE public.users SET is_deleted = false, role = 'COMPANY_ADMIN' WHERE id = ANY($1::uuid[])`, [U]);
+    await db.query(`UPDATE public.users SET is_deleted = false, role = 'COMPANY_ADMIN', status = 'active' WHERE id = ANY($1::uuid[])`, [U]);
   });
 
   afterAll(async () => {
     await db.query(`DELETE FROM public.user_company_roles WHERE user_id = ANY($1::uuid[])`, [U]);
     await db.query(`UPDATE public.user_company_roles SET status = 'active' WHERE id = ANY($1::uuid[])`, [preexisting]);
     await Promise.all(extra.map((c) => c.end()));
+    if (windowLock) { await windowLock.query('SELECT pg_advisory_unlock($1)', [ZERO_SA_WINDOW_LOCK]); await windowLock.end(); }
   });
 
   const grant = (uid: string) => db.query('SELECT * FROM public.assign_super_admin($1, $2)', [uid, CO]);
@@ -67,6 +88,29 @@ describe('M1 / M2 super-admin guards (real Postgres, separate connections)', () 
     await grant(U[0]); await grant(U[1]);
     await db.query('UPDATE public.users SET is_deleted = true WHERE id = $1', [U[1]]);
     expect(await attemptOn(extra[0], REVOKE, [U[0]])).toMatch(/LAST_SUPER_ADMIN/);
+  });
+
+  it('M2 (05): a SUSPENDED super-admin cannot authenticate, so does not count - revoking the other is refused', async () => {
+    await grant(U[0]); await grant(U[1]);
+    await db.query(`UPDATE public.users SET status = 'suspended' WHERE id = $1`, [U[1]]);
+    try {
+      expect(await attemptOn(extra[0], REVOKE, [U[0]])).toMatch(/LAST_SUPER_ADMIN/);
+      expect(await activeSa(U[0])).toBe(1);
+    } finally {
+      await db.query(`UPDATE public.users SET status = 'active' WHERE id = $1`, [U[1]]);
+    }
+  });
+
+  it('M2: an unknown future users.status also does not count (allowlist on active)', async () => {
+    await grant(U[0]); await grant(U[1]);
+    const { rows } = await db.query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='status'`);
+    if (rows[0]?.data_type !== 'text' && rows[0]?.data_type !== 'character varying') return; // an enum/CHECK would refuse the probe value
+    await db.query(`UPDATE public.users SET status = 'some_future_status' WHERE id = $1`, [U[1]]);
+    try {
+      expect(await attemptOn(extra[0], REVOKE, [U[0]])).toMatch(/LAST_SUPER_ADMIN/);
+    } finally {
+      await db.query(`UPDATE public.users SET status = 'active' WHERE id = $1`, [U[1]]);
+    }
   });
 
   it('M2: TWO CONCURRENT revokes of the last two super-admins -> exactly one succeeds', async () => {

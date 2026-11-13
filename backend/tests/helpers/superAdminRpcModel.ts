@@ -20,7 +20,8 @@ export function modelRevokeSuperAdmin(args: { p_user_id?: string } | undefined):
   if (!target) return { data: null, error: { code: 'P0001', message: 'REVOKE_SUPER_ADMIN_MISSING_ARGUMENT' } };
   const memberships = rows('user_company_roles');
   const users = rows('users');
-  const notDeleted = (uid: unknown) => users.some((u) => u.id === uid && u.is_deleted !== true);
+  // mirrors the SQL allowlist: users row present, not soft-deleted, status 'active' (NULL treated as active)
+  const notDeleted = (uid: unknown) => users.some((u) => u.id === uid && u.is_deleted !== true && (u.status ?? 'active') === 'active');
 
   const targetActive = memberships.some((r) => r.user_id === target && isSa(r) && r.status === 'active');
   const others = new Set(

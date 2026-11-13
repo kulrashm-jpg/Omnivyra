@@ -51,3 +51,16 @@ it('the matcher WOULD catch a revoke that took its own key (mutation)', () => {
   const mutated = body(M2, 'revoke_super_admin').replace('public.super_admin_membership_lock_key()', '7302118001');
   expect(mutated).not.toMatch(TAKES_SHARED_LOCK);
 });
+
+// 05/e9 (BLOCKING): the "others" count is an ALLOWLIST on users.status - a suspended (or unknown-status) super-admin
+// cannot authenticate and must not count, or the guard permits revoking the last USABLE admin.
+const STATUS_ALLOWLIST = /coalesce\(u\.status, 'active'\) = 'active'/;
+it('revoke_super_admin counts only ACTIVE-status, non-deleted users as other super-admins', () => {
+  const b = body(M2, 'revoke_super_admin');
+  expect(b).toMatch(STATUS_ALLOWLIST);
+  expect(b).toMatch(/coalesce\(u\.is_deleted, false\) = false/);
+});
+it('the pin WOULD catch the old filter (mutation: status clause removed)', () => {
+  const old = body(M2, 'revoke_super_admin').replace(/\n\s*AND coalesce\(u\.status, 'active'\) = 'active'/, '');
+  expect(old).not.toMatch(STATUS_ALLOWLIST);
+});

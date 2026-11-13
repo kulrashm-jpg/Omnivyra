@@ -601,6 +601,18 @@ describe('R-10 — rate limits before authorization; governed revoke audit and t
     expect(rows('audit_logs').filter((a) => a.action === 'SUPER_ADMIN_REVOKE')).toHaveLength(0);
   });
 
+  it('M2 (05): the other super-admin is SUSPENDED (cannot authenticate) → self-revoke of the last usable one → 409', async () => {
+    world();
+    for (const r of rows('user_company_roles')) {
+      if (![PSA, SA_IN_A].includes(r.user_id as string) && String(r.role).toUpperCase() === 'SUPER_ADMIN') r.status = 'inactive';
+    }
+    const sa = rows('users').find((u) => u.id === SA_IN_A)!;
+    sa.status = 'suspended';
+    const r = await revoke(PSA, PSA);
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'LAST_SUPER_ADMIN' });
+  });
+
   it('M2: revoking one of TWO active super-admins is allowed (control for the guard)', async () => {
     world();
     for (const r of rows('user_company_roles')) {
