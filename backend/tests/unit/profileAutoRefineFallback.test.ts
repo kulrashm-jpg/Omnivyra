@@ -147,11 +147,22 @@ describe('Report 2 refresh: refine only inside the priced report scope (e9 2026-
     expect(s).toMatch(/getProfile\(params\.companyId, \{ autoRefine: isProfileRefineOptedIn\(\) \}\)/);
     expect(s).not.toMatch(/runWithProfileRefineOptIn/);
   });
-  it('only the priced report-card pipeline opens the scope, around the performance compose', () => {
+  it('only the priced report-card pipeline opens the scope, around the performance AND growth composes', () => {
     const openers = execFileSync('git', ['grep', '-l', 'runWithProfileRefineOptIn(', '--', 'backend', 'pages', 'lib',
       ':!backend/tests', ':!backend/services/profileRefineScope.ts'], { cwd: root, encoding: 'utf8' }).trim().split('\n');
     expect(openers).toEqual(['backend/services/reportCardServiceAssembly.ts']);
-    expect(src('backend/services/reportCardServiceAssembly.ts'))
-      .toMatch(/runWithProfileRefineOptIn\(\(\) => composePerformanceIntelligenceReport\(/);
+    const asm = src('backend/services/reportCardServiceAssembly.ts');
+    expect(asm).toMatch(/runWithProfileRefineOptIn\(\(\) => composePerformanceIntelligenceReport\(/);
+    expect(asm).toMatch(/runWithProfileRefineOptIn\(\(\) => composeGrowthReport\(/);
+    expect((asm.match(/runWithProfileRefineOptIn\(/g) ?? []).length).toBe(2); // exactly these two openings
+    // Both composes sit inside generateReportPayload, whose ONLY caller wraps it in the billed usage collector.
+    expect(asm).toMatch(/runWithUsageCollection\(\(\) => generateReportPayload\(report\)\)/);
+    expect((asm.match(/generateReportPayload\(/g) ?? []).length).toBe(2); // the definition + that one call
+  });
+  it('the FREE entry points never open the scope', () => {
+    for (const rel of ['backend/services/analyticsHealthService.ts', 'backend/services/growthReportService.ts',
+      'backend/services/performanceReportService.ts', 'pages/api/dashboard/intelligence.ts', 'pages/api/reports/performance.ts']) {
+      expect(src(rel)).not.toMatch(/runWithProfileRefineOptIn/);
+    }
   });
 });

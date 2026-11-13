@@ -430,7 +430,9 @@ export async function generateReportPayload(
   try {
     if (requestedCategory === 'growth') {
       const { composeGrowthReport } = await import('./growthReportService');
-      composed_report = await composeGrowthReport(report.company_id, { resolvedInput }) as unknown as Record<string, unknown>;
+      // Paid feature -> may refresh the profile (e9 2026-11-13): billed growth compose opens the refine opt-in.
+      const { runWithProfileRefineOptIn } = await import('./profileRefineScope');
+      composed_report = await runWithProfileRefineOptIn(() => composeGrowthReport(report.company_id, { resolvedInput })) as unknown as Record<string, unknown>;
     } else if (requestedCategory === 'performance') {
       const { composePerformanceIntelligenceReport } = await import('./performanceReportService');
       // Report 2 refreshes a stale profile BY DESIGN, and this is its PRICED path (inside runWithUsageCollection,
