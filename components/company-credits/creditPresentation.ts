@@ -32,7 +32,7 @@ export interface CompanyCreditSummary {
   totalPurchasedCredits: number;
   /** Bonus / promotional credit balance. */
   totalBonusCredits: number;
-  /** What can actually start NEW work: available − reserved (admission basis). */
+  /** What can actually start NEW work: the balance (holds already moved reserved credits out of it; 053). */
   effectiveCredits: number;
 }
 
@@ -50,7 +50,8 @@ export function summarizeCompanyCredits(w: WalletLike): CompanyCreditSummary {
     consumedCredits: n(w.lifetimeConsumed),
     totalPurchasedCredits: n(w.lifetimePurchased),
     totalBonusCredits: n(w.incentiveBalance),
-    effectiveCredits: Math.max(0, grossBalance - reserved),
+    // shared availability definition: the balance already excludes reserved credits (a hold moves them out).
+    effectiveCredits: Math.max(0, grossBalance),
   };
 }
 

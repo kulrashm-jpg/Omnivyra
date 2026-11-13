@@ -6,7 +6,7 @@
  *
  *   availableCredits   = free + paid + incentive balance (gross spendable)
  *   activeReservations = reserved_free + reserved_paid + reserved_incentive
- *   effectiveCredits   = availableCredits − activeReservations
+ *   effectiveCredits   = availableCredits (a hold already moved reserved credits out of the balances; 053)
  *   requiredCredits    = resolveActivityEconomics(activity).maximumCredits
  *   allowed            = effectiveCredits >= requiredCredits        // MAX, not min/entry
  *
@@ -140,7 +140,10 @@ export async function canStartActivity(input: {
 
   const availableCredits   = wallet.free_balance + wallet.paid_balance + wallet.incentive_balance;
   const activeReservations = wallet.reserved_free + wallet.reserved_paid + wallet.reserved_incentive;
-  const effectiveCredits   = availableCredits - activeReservations;
+  // e9 BLOCKING-launch (2026-11-14): a hold already moved these credits out of *_balance into reserved_*, so the balance
+  // IS the available amount - subtracting reserved again counted every open hold twice (shared definition:
+  // creditPriorityService.computeAvailable / 20270217000053; pinned by creditAvailabilityDefinition.test.ts).
+  const effectiveCredits   = availableCredits;
   const allowed            = effectiveCredits >= requiredCredits;
   const shortfall          = allowed ? 0 : Math.max(0, requiredCredits - effectiveCredits);
 

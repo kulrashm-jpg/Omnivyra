@@ -17,7 +17,7 @@ describe('summarizeCompanyCredits (TASK 1)', () => {
     expect(s).toEqual({
       availableCredits: 170,    // 100+50+20
       reservedCredits: 15,      // 10+5+0
-      effectiveCredits: 155,    // 170−15
+      effectiveCredits: 170,    // 053: the balance already excludes the 15 held (a hold moves them out) - not 170-15
       consumedCredits: 300,
       totalPurchasedCredits: 500,
       totalBonusCredits: 20,

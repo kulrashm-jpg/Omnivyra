@@ -71,14 +71,23 @@ describe('canStartActivity — 9 validation cases', () => {
     expect(d).toMatchObject({ allowed: false, reason: 'insufficient_credits', effectiveCredits: 10, requiredCredits: 15, shortfall: 5 });
   });
 
-  it('4. existing active reservations reduce effective → blocked', async () => {
-    priority.getWalletSnapshot.mockResolvedValue(wallet(20, 0, 0, 10)); // 20 balance, 10 reserved
+  // 053 / e9 BLOCKING-launch: a HOLD moves credits OUT of *_balance INTO reserved_* (live apply_credit_reservation), so
+  // the wallet snapshot's balance already excludes open holds. Fixtures model that: "20 granted, 10 held" is
+  // balance 10 + reserved 10 - not balance 20 + reserved 10 (which would be 30 granted).
+  it('4. existing active reservations reduce capacity → blocked (20 granted, 10 held: balance 10)', async () => {
+    priority.getWalletSnapshot.mockResolvedValue(wallet(10, 0, 0, 10));
     const d = await canStartActivity({ organizationId: ORG, activity: ACTION });
-    expect(d).toMatchObject({ availableCredits: 20, activeReservations: 10, effectiveCredits: 10, allowed: false, shortfall: 5 });
+    expect(d).toMatchObject({ availableCredits: 10, activeReservations: 10, effectiveCredits: 10, allowed: false, shortfall: 5 });
   });
 
-  it('5. multiple concurrent activities (reservations consume capacity) → blocked', async () => {
-    priority.getWalletSnapshot.mockResolvedValue(wallet(30, 0, 0, 30)); // fully reserved in-flight
+  it('4b. an open hold is NOT subtracted twice: balance 20 + reserved 10 → 20 effective → allowed (old formula: 10, blocked)', async () => {
+    priority.getWalletSnapshot.mockResolvedValue(wallet(20, 0, 0, 10));
+    const d = await canStartActivity({ organizationId: ORG, activity: ACTION });
+    expect(d).toMatchObject({ availableCredits: 20, activeReservations: 10, effectiveCredits: 20, allowed: true, shortfall: 0 });
+  });
+
+  it('5. multiple concurrent activities (reservations consume capacity) → blocked (30 granted, all held: balance 0)', async () => {
+    priority.getWalletSnapshot.mockResolvedValue(wallet(0, 0, 0, 30));
     const d = await canStartActivity({ organizationId: ORG, activity: ACTION });
     expect(d).toMatchObject({ effectiveCredits: 0, allowed: false, shortfall: 15 });
   });

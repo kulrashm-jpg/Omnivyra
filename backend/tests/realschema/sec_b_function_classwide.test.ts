@@ -217,9 +217,25 @@ async function pseProductionState(): Promise<void> {
   if (rows[0]?.prosecdef === true) await q(PSE_S1_DEF);
 }
 
+/**
+ * expire_org_free_credits(uuid,integer,text) in its PRODUCTION pre-053 state. 20270217000053 DROPS it (20260625
+ * intended to; no caller). This SEC-B file re-applies a migration that REVOKEs / ALTERs it, so a replay that carries
+ * 053 needs the production function back - restored byte-for-byte from the committed C100 fixture. Inside the test
+ * transaction; nothing persists. No-op on a replay without 053.
+ */
+const EXPIRE_LIVE_BODY = fs.readFileSync(
+  path.join(__dirname, '..', 'fixtures', 'live-credit-functions-20261113', 'LIVE-expire_org_free_credits.prosrc.sql'), 'utf8');
+async function expireOrgFreeCreditsProductionState(): Promise<void> {
+  const { rows } = await q(`SELECT to_regprocedure('public.expire_org_free_credits(uuid,integer,text)') IS NULL AS missing`);
+  if (!rows[0].missing) return;
+  await q('CREATE FUNCTION public.expire_org_free_credits(p_org_id uuid, p_amount int, p_note text DEFAULT \'free credit expiry\') '
+    + 'RETURNS int LANGUAGE plpgsql AS $fn$' + EXPIRE_LIVE_BODY + '$fn$');
+}
+
 /** Step 1 + 2: production state for every listed function, then the migration. */
 async function prodStateThenMigration(): Promise<void> {
   await pseProductionState();
+  await expireOrgFreeCreditsProductionState();
   const emu: string[] = [];
   for (const [sig, , pin, anon, auth, pub] of PROD) {
     emu.push(`REVOKE ALL ON FUNCTION ${sig} FROM PUBLIC, anon, authenticated`);

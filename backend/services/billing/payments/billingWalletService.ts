@@ -55,10 +55,10 @@ export async function getBillingWalletSnapshot(orgId: string): Promise<BillingWa
   const reservedIncentive = Number(w.reserved_incentive ?? 0);
   const rate = Number(w.credit_rate_usd ?? 0.01);
 
-  const totalAvailable =
-    Math.max(0, free - reservedFree) +
-    Math.max(0, paid - reservedPaid) +
-    Math.max(0, incentive - reservedIncentive);
+  // e9 BLOCKING-launch (2026-11-14): a hold already moved these credits out of *_balance into reserved_*, so the balance
+  // IS the available amount - subtracting reserved again counted every open hold twice (shared definition:
+  // creditPriorityService.computeAvailable / 20270217000053; pinned by creditAvailabilityDefinition.test.ts).
+  const totalAvailable = Math.max(0, free) + Math.max(0, paid) + Math.max(0, incentive);
 
   const { data: lastTx } = await supabase
     .from('credit_transactions')
@@ -111,7 +111,7 @@ export async function getPortfolioWalletAggregate(limit = 100): Promise<BillingW
     const rp   = Number(r.reserved_paid ?? 0);
     const ri   = Number(r.reserved_incentive ?? 0);
     const rate = Number(r.credit_rate_usd ?? 0.01);
-    const avail = Math.max(0, free - rf) + Math.max(0, paid - rp) + Math.max(0, inc - ri);
+    const avail = Math.max(0, free) + Math.max(0, paid) + Math.max(0, inc); // shared availability definition (see above)
     totalAvail    += avail;
     totalUsd      += avail * rate;
     totalReserved += rf + rp + ri;

@@ -70,9 +70,13 @@ export async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot |
  */
 export function computeAvailable(wallet: WalletSnapshot, opts?: { topupUsable?: boolean }): AvailableBalance {
   const topupUsable = opts?.topupUsable !== false; // default true (backward compatible)
-  const free      = Math.max(0, wallet.free_balance      - wallet.reserved_free);
-  const incentive = Math.max(0, wallet.incentive_balance - wallet.reserved_incentive);
-  const paid      = topupUsable ? Math.max(0, wallet.paid_balance - wallet.reserved_paid) : 0;
+  // ONE definition, shared with the DB (20270217000053 apply_credit_reservation 'hold' branch) and every other reader;
+  // pinned by creditAvailabilityDefinition.test.ts. A HOLD moves credits OUT of *_balance INTO reserved_*, so
+  // *_balance already excludes every open hold. Subtracting reserved_* again counted each open hold twice and refused
+  // customers who had spendable credits (e9 BLOCKING-launch, 2026-11-14). Availability is the balance itself.
+  const free      = Math.max(0, wallet.free_balance);
+  const incentive = Math.max(0, wallet.incentive_balance);
+  const paid      = topupUsable ? Math.max(0, wallet.paid_balance) : 0;
   return { free, incentive, paid, total: free + incentive + paid };
 }
 
