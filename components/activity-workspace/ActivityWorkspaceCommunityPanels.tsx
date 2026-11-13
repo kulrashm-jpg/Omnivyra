@@ -1,12 +1,17 @@
 import React from 'react';
 import { Bookmark, ExternalLink, Loader2, MessageSquare, Send, UserPlus } from 'lucide-react';
 import ActivityDiscussionTab from '@/components/activity-workspace/ActivityDiscussionTab';
+import { useCompanyContext } from '../CompanyContext';
+import { canPostCampaignMessages } from '../../lib/access/campaignWriteAccess';
 import PlatformIcon from '@/components/ui/PlatformIcon';
 import type { useActivityWorkspace } from '../../hooks/useActivityWorkspace';
 
 type S = ReturnType<typeof useActivityWorkspace>;
 
 export default function ActivityWorkspaceCommunityPanels({ d }: { d: S }) {
+  // F3f: campaign discussion is for writers and Engagers (owner ruling; /api/activity/messages
+  // carries the server's campaign_messages Engager exception). Viewers can read it only.
+  const canPostMessages = canPostCampaignMessages(useCompanyContext().userRole);
   const {
     activityTab,
     communitySignals,
@@ -20,6 +25,7 @@ export default function ActivityWorkspaceCommunityPanels({ d }: { d: S }) {
     return (
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden min-h-[240px]">
         {payload?.campaignId && (queryExecutionId || payload?.activityId) ? (
+          <fieldset disabled={!canPostMessages} data-testid="workspace-discussion" className="m-0 min-w-0 border-0 p-0">
           <ActivityDiscussionTab
             campaignId={payload.campaignId}
             activityId={queryExecutionId || payload.activityId || ''}
@@ -30,6 +36,7 @@ export default function ActivityWorkspaceCommunityPanels({ d }: { d: S }) {
               return apiFetch(url, init);
             }}
           />
+          </fieldset>
         ) : (
           <div className="p-6 text-sm text-gray-500">Open an activity to view discussion.</div>
         )}
