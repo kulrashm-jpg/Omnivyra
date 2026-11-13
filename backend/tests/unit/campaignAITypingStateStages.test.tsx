@@ -91,3 +91,17 @@ describe('CampaignAITypingState shows traced steps', () => {
     expect(screen.queryByText(/Generating day content/)).not.toBeInTheDocument();
   });
 });
+
+describe('CampaignAITypingState plain waiting line is truthful', () => {
+  it.each(['gpt', 'claude'])('provider %s: neutral text, no provider name or unverified claim', (provider) => {
+    render(<CampaignAITypingState {...base} selectedProvider={provider} />);
+    expect(screen.getByText('Thinking about your campaign…')).toBeInTheDocument();
+    expect(screen.queryByText(/Claude|GPT|learning from past campaigns/i)).not.toBeInTheDocument();
+  });
+
+  it('demo: says it is a demo reply, not AI analysis', () => {
+    render(<CampaignAITypingState {...base} selectedProvider="demo" />);
+    expect(screen.getByText('Preparing a demo reply…')).toBeInTheDocument();
+    expect(screen.queryByText(/Demo AI is analyzing/)).not.toBeInTheDocument();
+  });
+});

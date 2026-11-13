@@ -131,12 +131,14 @@ export function CampaignAITypingState(props: any) {
               <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
             </div>
           )}
+          {/* Must match what actually happens (e9 ruling 2026-11-13):
+              - 'gpt'/'claude' both call /api/campaigns/ai/plan, and the provider choice is
+                NOT sent, so the server picks the model. Naming "Claude" or claiming
+                "learning from past campaigns" (learnings only feed the demo responder)
+                was unverified, so the text is neutral.
+              - 'demo' builds a canned local reply (generateDemoResponse); no AI runs. */}
           <span className="text-sm text-gray-600">
-            {selectedProvider === 'demo'
-              ? 'Demo AI is analyzing campaign data...'
-              : selectedProvider === 'gpt'
-                ? 'AI Assistant is learning from past campaigns...'
-                : 'Claude is reasoning with campaign context...'}
+            {selectedProvider === 'demo' ? 'Preparing a demo reply…' : 'Thinking about your campaign…'}
           </span>
         </div>
       </div>
