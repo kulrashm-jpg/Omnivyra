@@ -48,7 +48,6 @@ import { isCreatorDependentContentType } from '../utils/contentTaxonomy';
 import { getFormatLineForContentType, getIntentLabelForContentType, toneForUserDisplay } from '../utils/formatLineForContentType';
 import PlatformIcon from './ui/PlatformIcon';
 import { getViewMode } from '../utils/getViewMode';
-import { VIEW_RULES } from '../utils/viewVisibilityMatrix';
 import {
   saveWizardState,
   loadWizardState,
@@ -126,67 +125,11 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                               <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">⚠ High creator workload</span>
                             </>
                           )}
-                          {VIEW_RULES[viewMode].showCMOLayer && (
-                            <>
-                              <span className="text-gray-400">•</span>
-                              <span className={`px-1.5 py-0.5 rounded font-medium ${executionRiskClass}`}>Execution Risk: {executionRiskLabel}</span>
-                              {pressureLabel != null && pressureColorClass != null && (
-                                <>
-                                  <span className="text-gray-400">•</span>
-                                  <span className={`px-1.5 py-0.5 rounded font-medium ${pressureColorClass}`}>Execution Pressure: {pressureLabel}</span>
-                                </>
-                              )}
-                              {capacityFitLabel != null && (
-                                <>
-                                  <span className="text-gray-400">•</span>
-                                  <span className={`px-1.5 py-0.5 rounded ${capacityFitClass}`}>Capacity Fit: {capacityFitLabel}</span>
-                                </>
-                              )}
-                              {momentumLabel != null && (
-                                <>
-                                  <span className="text-gray-400">•</span>
-                                  <span className="text-gray-500">Momentum: {momentumLabel}</span>
-                                </>
-                              )}
-                            </>
-                          )}
-                          {VIEW_RULES[viewMode].showSystemFields && (
-                            <>
-                              <span className="text-gray-400">•</span>
-                              <button
-                                type="button"
-                                onClick={(e) => { e.stopPropagation(); setExpandedSystemWeek(expandedSystemWeek === weekNumber ? null : weekNumber); }}
-                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 text-xs"
-                                title="Execution intelligence"
-                              >
-                                <Settings className="h-3 w-3" /> Execution Intelligence
-                              </button>
-                            </>
-                          )}
                         </div>
                       )}
                       {ownershipCounts.total > 0 && creatorShare > 0.6 && (
                         <div className="px-4 py-1 bg-gray-50 border-b border-gray-100 text-[10px] text-amber-600">
                           ⚠ Creator-heavy week — consider reducing manual load.
-                        </div>
-                      )}
-                      {VIEW_RULES[viewMode].showCMOLayer && executionBalancerRecommendations.length > 0 && (
-                        <div className="px-4 py-1.5 bg-gray-50 border-b border-gray-100 text-[10px] text-gray-600">
-                          <ul className="list-none space-y-0.5">
-                            {executionBalancerRecommendations.map((text, i) => (
-                              <li key={i} className="flex gap-1.5">
-                                <span className="shrink-0">•</span>
-                                <span>{text}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {expandedSystemWeek === weekNumber && VIEW_RULES[viewMode].showSystemFields && ownershipCounts.total > 0 && (
-                        <div className="px-4 py-2 bg-gray-100 border-b border-gray-200 text-xs text-gray-600 space-y-0.5">
-                          <div>Execution items: {Array.isArray((weekPlan as any)?.execution_items) ? (weekPlan as any).execution_items.length : 0}</div>
-                          <div>Slots (topic_slots): {flatSlots.length}</div>
-                          <div>Ownership: AI {Math.round((ownershipCounts.ai / ownershipCounts.total) * 100)}% · Creator {Math.round((ownershipCounts.creator / ownershipCounts.total) * 100)}% · Conditional {Math.round((ownershipCounts.conditional / ownershipCounts.total) * 100)}%</div>
                         </div>
                       )}
                       {/* Week Header */}
