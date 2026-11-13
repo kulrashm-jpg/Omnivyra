@@ -58,16 +58,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const offset     = (pageNum - 1) * perPageNum;
 
   // Join to scheduled_posts to filter by company_id
+  // scheduled_posts has NO company_id column in prod (C35; no applied migration adds it - 028 is pending), so the old
+  // filter .eq('scheduled_posts.company_id', ...) errored (42703) on EVERY call. A post's company is its social account's
+  // company (the link migration 028 backfills from); both embeds are !inner so the TOP-LEVEL rows are filtered, and a
+  // post with no account or a NULL-company account is excluded, never attributed.
   let query = supabase
     .from('content_analytics')
     .select(
       `id, scheduled_post_id, platform, analytics_date,
        views, likes, shares, comments, saves, reactions,
        engagement_rate, reach, impressions, updated_at,
-       scheduled_posts!inner(company_id, platform_post_id, content)`,
+       scheduled_posts!inner(platform_post_id, content, social_accounts!inner(company_id))`,
       { count: 'exact' },
     )
-    .eq('scheduled_posts.company_id', company_id)
+    .eq('scheduled_posts.social_accounts.company_id', company_id)
     .order('analytics_date', { ascending: false })
     .range(offset, offset + perPageNum - 1);
 

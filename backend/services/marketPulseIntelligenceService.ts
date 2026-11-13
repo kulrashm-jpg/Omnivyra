@@ -683,8 +683,11 @@ export async function persistMarketPulseSignalForCompany(params: {
 }
 
 export async function getAdaptiveMarketPulseFeed(companyId: string, digestType: string = 'executive') {
+  // marketpulse_company_signal_relevance has no foreign key to marketpulse_signal_impacts (both reference
+  // marketpulse_signals), so embedding impacts from relevance failed (PGRST200) and this read threw. Impacts are
+  // embedded through the signal and mapped back to the old row shape (row.marketpulse_signal_impacts).
   const rows = await ownedDbTable('marketpulse_company_signal_relevance')
-    .select('*, marketpulse_signals(*), marketpulse_signal_impacts(*)')
+    .select('*, marketpulse_signals(*, marketpulse_signal_impacts(*))')
     .eq('company_id', companyId)
     .order('relevance_score', { ascending: false })
     .order('created_at', { ascending: false })
@@ -692,6 +695,7 @@ export async function getAdaptiveMarketPulseFeed(companyId: string, digestType: 
   if (rows.error) throw new Error(`Failed to load adaptive MarketPulse feed: ${rows.error.message}`);
   const seen = new Set<string>();
   return (rows.data ?? [])
+    .map((row: any) => ({ ...row, marketpulse_signal_impacts: row.marketpulse_signals?.marketpulse_signal_impacts ?? [] }))
     .filter((row: any) => {
       const signal = row.marketpulse_signals;
       if (!signal) return false;

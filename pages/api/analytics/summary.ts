@@ -77,14 +77,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const dto      = date_to   ?? today;
 
   // ── 1. Post-level metrics from content_analytics ─────────────────────────
+  // scheduled_posts has NO company_id column in prod (C35; no applied migration adds it - 028 is pending), so the old
+  // filter .eq('scheduled_posts.company_id', ...) errored (42703) on EVERY call. A post's company is its social account's
+  // company (the link migration 028 backfills from); both embeds are !inner so the TOP-LEVEL rows are filtered, and a
+  // post with no account or a NULL-company account is excluded, never attributed.
   const { data: postRows, error: postErr } = await supabase
     .from('content_analytics')
     .select(
       `platform, impressions, reach, likes, shares, comments, saves,
        reactions, views, engagement_rate,
-       scheduled_posts!inner(company_id)`,
+       scheduled_posts!inner(social_accounts!inner(company_id))`,
     )
-    .eq('scheduled_posts.company_id', company_id)
+    .eq('scheduled_posts.social_accounts.company_id', company_id)
     .gte('analytics_date', dfrom)
     .lte('analytics_date', dto);
 

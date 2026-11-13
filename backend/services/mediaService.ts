@@ -465,7 +465,9 @@ export async function linkMediaToPost(
     .insert({
       scheduled_post_id: scheduledPostId,
       media_file_id: mediaFileId,
-      display_order: displayOrder,
+      // The column is `position` (scheduled_post_media has no display_order): the old insert errored (42703), so
+      // attaching media to a post failed in prod.
+      position: displayOrder,
     });
 
   if (error) {
@@ -480,11 +482,11 @@ export async function getPostMedia(scheduledPostId: string): Promise<MediaFile[]
   const { data, error } = await ownedDbTable('scheduled_post_media')
     .select(`
       media_file_id,
-      display_order,
+      position,
       media_files (*)
     `)
     .eq('scheduled_post_id', scheduledPostId)
-    .order('display_order', { ascending: true });
+    .order('position', { ascending: true });
 
   if (error) {
     throw new Error(`Failed to get post media: ${error.message}`);

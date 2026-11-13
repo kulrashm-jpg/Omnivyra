@@ -96,14 +96,20 @@ function relationshipType(parent: SignalRow, related: SignalRow): 'supports' | '
 }
 
 async function loadRelevantSignals(companyId: string): Promise<RelevanceRow[]> {
+  // marketpulse_company_signal_relevance has no foreign key to marketpulse_signal_impacts (both reference
+  // marketpulse_signals), so embedding impacts from relevance failed (PGRST200) and this read threw. Impacts are
+  // embedded through the signal and mapped back to the old row shape (row.marketpulse_signal_impacts).
   const result = await ownedDbTable('marketpulse_company_signal_relevance')
-    .select('*, marketpulse_signals(*), marketpulse_signal_impacts(*)')
+    .select('*, marketpulse_signals(*, marketpulse_signal_impacts(*))')
     .eq('company_id', companyId)
     .order('relevance_score', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(80);
   if (result.error) throw new Error(`Failed to load MarketPulse synthesis inputs: ${result.error.message}`);
-  return (result.data ?? []) as RelevanceRow[];
+  return ((result.data ?? []) as any[]).map((row) => ({
+    ...row,
+    marketpulse_signal_impacts: row.marketpulse_signals?.marketpulse_signal_impacts ?? [],
+  })) as RelevanceRow[];
 }
 
 async function synthesizeRelationships(rows: RelevanceRow[]) {

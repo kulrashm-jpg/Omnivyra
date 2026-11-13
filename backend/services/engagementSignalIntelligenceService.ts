@@ -252,6 +252,10 @@ export async function getEngagementSignalsDashboardData(
 
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
+  // scheduled_posts has NO company_id column in prod (C35; no applied migration adds it - 028 is pending), so the old
+  // filter .eq('scheduled_posts.company_id', ...) errored (42703) on EVERY call. A post's company is its social account's
+  // company (the link migration 028 backfills from); both embeds are !inner so the TOP-LEVEL rows are filtered, and a
+  // post with no account or a NULL-company account is excluded, never attributed.
   const { data, error } = await supabase
     .from('content_analytics')
     .select(`
@@ -267,14 +271,14 @@ export async function getEngagementSignalsDashboardData(
       scheduled_post_id,
       scheduled_posts!inner (
         id,
-        company_id,
         campaign_id,
+        social_accounts!inner ( company_id ),
         content,
         published_at,
         created_at
       )
     `)
-    .eq('scheduled_posts.company_id', companyId)
+    .eq('scheduled_posts.social_accounts.company_id', companyId)
     .gte('analytics_date', since)
     .order('analytics_date', { ascending: false })
     .limit(250);

@@ -191,17 +191,30 @@ async function get12WeekPlanOverview(campaignId: string, res: NextApiResponse) {
 // Get specific week details
 async function getWeekDetails(campaignId: string, weekNumber: string, res: NextApiResponse) {
   try {
-    const { data: weekContent, error } = await supabase
+    // The embed users!content_plans_reviewed_by_fkey(name) named a foreign key that does not exist (PGRST200), so
+    // week details answered 500 every time. Reviewer names are resolved by id instead. reviewed_by is only ever written
+    // as the authenticated member who aligned this campaign's week (alignWeek / update_weekly_alignment), so these are
+    // the campaign company's own users.
+    const { data: planRows, error } = await supabase
       .from('content_plans')
-      .select(`
-        *,
-        users!content_plans_reviewed_by_fkey(name)
-      `)
+      .select('*')
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber)
       .order('date', { ascending: true });
 
     if (error) throw error;
+    const reviewerIds = Array.from(new Set((planRows ?? []).map((r: any) => r.reviewed_by).filter((v: unknown): v is string => typeof v === 'string' && v.length > 0)));
+    const reviewerNames = new Map<string, string | null>();
+    if (reviewerIds.length > 0) {
+      const { data: reviewers, error: reviewerError } = await supabase.from('users').select('id, name').in('id', reviewerIds);
+      if (reviewerError) throw reviewerError;
+      for (const u of (reviewers ?? []) as Array<{ id: string; name: string | null }>) reviewerNames.set(u.id, u.name);
+    }
+    // Same shape as the old embed: users = { name } | null.
+    const weekContent = (planRows ?? []).map((r: any) => ({
+      ...r,
+      users: r.reviewed_by && reviewerNames.has(r.reviewed_by) ? { name: reviewerNames.get(r.reviewed_by) ?? null } : null,
+    }));
 
     // Get performance data for the week
     const { data: performance, error: perfError } = await supabase
