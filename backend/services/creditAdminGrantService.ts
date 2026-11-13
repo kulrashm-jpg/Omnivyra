@@ -1,28 +1,24 @@
-import { ownedDbTable } from '../db/writeOwner';
 /**
  * Credit Admin Grant Service
  *
- * Manual extension of free credits by a super-admin. Distinct from
- * grantCredits() in consumptionAnalyticsService, which grants category='paid'
- * (simulated purchase). This service grants category='free' and writes an
- * audit row to credit_admin_grants.
+ * Manual credit extension by a super-admin (category 'paid' on the ledger, an audit row in credit_admin_grants).
+ *
+ * M5 (e1, e9-approved BLOCKING money 2026-11-13; migration 20270217000017): the grant is ONE database transaction,
+ * public.admin_grant_credits - a per-org advisory lock, the rolling 24h count, the ledger credit and the audit row
+ * together. The former count-then-act sequence let concurrent grants all pass, turned a failed count into 0 (fail-open),
+ * credited the ledger BEFORE the counted audit row (and swallowed the audit failure, so the cap under-counted forever),
+ * and keyed idempotency on a MINUTE BUCKET (two grants in one minute collapsed; a retry across a minute granted twice).
  *
  * Guards:
- *   - Hard limit of 3 admin grants per organization per 24h. The 4th request
- *     is rejected with GRANT_LIMIT_EXCEEDED. A caller (e.g. an ops escalation
- *     tool) can bypass by passing { allowOverLimit: true }.
- *   - Expiry mirrors initial grants: default 14 days, overridable per-grant.
- *     Caller can pass expiryDays=0 for a no-expiry grant.
- *
- * Idempotency:
- *   - Minute-bucket key (or caller-supplied clientKey) means retries within the
- *     same bucket are absorbed by both the ledger
- *     (credit_transactions.idempotency_key) and the audit row
- *     (credit_admin_grants.idempotency_key UNIQUE).
+ *   - At most ADMIN_GRANT_MAX_PER_DAY grants per organization in any rolling 24h; the next is GRANT_LIMIT_EXCEEDED.
+ *     allowOverLimit (super-admin escalation) bypasses it - recorded on the audit row and logged at WARN.
+ *   - clientKey is REQUIRED: one key per grant REQUEST (the route passes the request's Idempotency-Key). A replay of the
+ *     same key returns the same grant; the same key for a different org/amount is refused (GRANT_KEY_REUSED).
+ *   - Expiry mirrors initial grants: default 14 days, 0 = no expiry.
+ * No fallback: if the function is missing the grant fails closed (GRANT_UNAVAILABLE), never the old path.
  */
 
 import { supabase } from '../db/supabaseClient';
-import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 import { logger } from './logger';
 import {
   ADMIN_GRANT_MAX_PER_DAY,
@@ -47,7 +43,7 @@ export interface AdminGrantOpts {
   actorUserId:    string;
   /** Grant expiry in days. Defaults to 14 (matches initial-grant expiry). Pass 0 for no expiry. */
   expiryDays?:    number;
-  /** Optional caller-supplied uniqueness scope (e.g. request id). */
+  /** REQUIRED (M5): one key per grant request - the route passes the request's Idempotency-Key. */
   clientKey?:     string;
   /** Extra context for the audit row. */
   metadata?:      Record<string, unknown>;
@@ -58,21 +54,6 @@ export interface AdminGrantOpts {
 function isValidReasonType(v: unknown): v is AdminGrantReasonType {
   return typeof v === 'string'
     && (ADMIN_GRANT_REASON_TYPES as readonly string[]).includes(v);
-}
-
-async function countRecentGrants(orgId: string): Promise<number> {
-  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { count, error } = await ownedDbTable('credit_admin_grants')
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', orgId)
-    .gt('created_at', since24h);
-  if (error) {
-    logger.warn('admin_grant_rate_count_failed', { orgId, message: error.message });
-    // Fail-open on rate-count errors — the hard DB UNIQUE on idempotency_key
-    // still prevents replay; only the per-org velocity guard is affected.
-    return 0;
-  }
-  return count ?? 0;
 }
 
 export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<AdminGrantResult> {
@@ -88,81 +69,63 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
   if (!Number.isInteger(opts.credits) || opts.credits <= 0) {
     return { ok: false, error: 'credits must be a positive integer', code: 'INVALID_CREDITS' };
   }
-
   const expiryDays = opts.expiryDays ?? DEFAULT_ADMIN_GRANT_EXPIRY_DAYS;
   if (!Number.isFinite(expiryDays) || expiryDays < 0) {
     return { ok: false, error: 'expiryDays must be >= 0', code: 'INVALID_EXPIRY' };
+  }
+  const clientKey = typeof opts.clientKey === 'string' ? opts.clientKey.trim() : '';
+  if (!clientKey) {
+    return { ok: false, error: 'clientKey (one key per grant request) is required', code: 'MISSING_CLIENT_KEY' };
   }
   const expiresAt: string | null = expiryDays > 0
     ? new Date(Date.now() + expiryDays * 86400 * 1000).toISOString()
     : null;
 
-  // ── Velocity guard: max 3 admin grants per org per 24h ──────────────────
-  if (!opts.allowOverLimit) {
-    const recent = await countRecentGrants(opts.organizationId);
-    if (recent >= ADMIN_GRANT_MAX_PER_DAY) {
-      logger.warn('admin_grant_limit_exceeded', {
-        orgId: opts.organizationId,
-        actor: opts.actorUserId,
-        recentCount: recent,
-        attemptedCredits: opts.credits,
-        reasonType: opts.reasonType,
-      });
+  const { data, error } = await supabase.rpc('admin_grant_credits', {
+    p_org_id:           opts.organizationId,
+    p_actor_user_id:    opts.actorUserId,
+    p_credits:          opts.credits,
+    p_reason:           opts.reason.trim(),
+    p_reason_type:      opts.reasonType,
+    p_expires_at:       expiresAt,
+    p_client_key:       clientKey,
+    p_max_per_24h:      ADMIN_GRANT_MAX_PER_DAY,
+    p_allow_over_limit: opts.allowOverLimit === true,
+    p_metadata:         opts.metadata ?? {},
+  });
+
+  if (error) {
+    const message = String((error as { message?: string }).message ?? '');
+    const code = (error as { code?: string }).code;
+    if (message.includes('GRANT_LIMIT_EXCEEDED')) {
+      logger.warn('admin_grant_limit_exceeded', { orgId: opts.organizationId, actor: opts.actorUserId, attemptedCredits: opts.credits });
       return {
         ok:    false,
         error: `Admin grant limit exceeded (${ADMIN_GRANT_MAX_PER_DAY} per 24h). Wait or pass allowOverLimit=true for escalation.`,
         code:  'GRANT_LIMIT_EXCEEDED',
       };
     }
+    if (message.includes('ADMIN_GRANT_KEY_REUSED')) {
+      return { ok: false, error: 'This request key was already used for a different grant', code: 'GRANT_KEY_REUSED' };
+    }
+    if (code === 'PGRST202' || code === '42883') {
+      logger.error('admin_grant_function_missing', { orgId: opts.organizationId, message });
+      return { ok: false, error: 'Admin credit grants are temporarily unavailable', code: 'GRANT_UNAVAILABLE' };
+    }
+    // Any other failure rolled back the WHOLE grant (ledger + audit are one transaction): nothing was granted.
+    logger.error('admin_grant_failed', { orgId: opts.organizationId, actor: opts.actorUserId, message });
+    return { ok: false, error: message || 'Admin grant failed', code: 'LEDGER_FAILED' };
   }
 
-  const minuteBucket = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
-  const scope        = opts.clientKey ?? minuteBucket;
-  const idempotencyKey = makeIdempotencyKey(
-    opts.actorUserId,
-    'admin_credit_extension',
-    opts.organizationId,
-    scope,
-  );
-
-  // ── 1. Grant credits on the ledger (idempotent at the DB layer) ──────────
-  try {
-    await createCredit({
-      orgId:          opts.organizationId,
-      amount:         opts.credits,
-      category:       'paid', // approved policy: admin grants → PAID (never expire, consumed after FREE, subscription-locked)
-      referenceType:  'admin_extension',
-      referenceId:    opts.organizationId,
-      note:           `Admin free-credit extension (${opts.reasonType}): ${opts.reason}`,
-      performedBy:    opts.actorUserId,
-      idempotencyKey,
-    });
-  } catch (err: any) {
-    logger.error('admin_grant_ledger_failed', {
-      orgId: opts.organizationId, actor: opts.actorUserId, message: err?.message,
-    });
-    return { ok: false, error: err?.message ?? 'Ledger grant failed', code: 'LEDGER_FAILED' };
+  const row = (data ?? {}) as { idempotency_key?: string; expires_at?: string | null; replayed?: boolean; over_limit?: boolean };
+  if (!row.idempotency_key) {
+    logger.error('admin_grant_no_result', { orgId: opts.organizationId });
+    return { ok: false, error: 'Admin grant returned no result', code: 'LEDGER_FAILED' };
   }
-
-  // ── 2. Audit row — 23505 means a retry inside the same idempotency bucket ──
-  const { error: auditErr } = await ownedDbTable('credit_admin_grants').insert({
-    organization_id:    opts.organizationId,
-    granted_by_user_id: opts.actorUserId,
-    credits_granted:    opts.credits,
-    reason:             opts.reason,
-    reason_type:        opts.reasonType,
-    expires_at:         expiresAt,
-    idempotency_key:    idempotencyKey,
-    metadata:           opts.metadata ?? {},
-  });
-
-  if (auditErr && (auditErr as any).code !== '23505') {
-    logger.error('admin_grant_audit_failed', {
-      orgId: opts.organizationId, message: auditErr.message,
+  if (row.over_limit) {
+    logger.warn('admin_grant_over_limit_override', {
+      orgId: opts.organizationId, actor: opts.actorUserId, credits: opts.credits, reasonType: opts.reasonType,
     });
-    // Ledger already granted — don't unwind. Caller sees success; the audit
-    // row is recoverable via the ledger's credit_transactions log.
   }
-
-  return { ok: true, credits: opts.credits, idempotencyKey, expiresAt };
+  return { ok: true, credits: opts.credits, idempotencyKey: row.idempotency_key, expiresAt: row.expires_at ?? expiresAt };
 }

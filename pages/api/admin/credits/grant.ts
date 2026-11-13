@@ -19,8 +19,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  *   }
  *
  * Auth: Super-admin token via requireAuthenticatedInternalUser + RBAC check.
- * Idempotency: withIdempotency middleware (Idempotency-Key header) + minute-
- *              bucketed ledger key inside grantAdminCreditExtension.
+ * Idempotency: withIdempotency middleware (Idempotency-Key header). M5: the grant itself is keyed on the REQUEST -
+ *              body.clientKey, else the Idempotency-Key header - inside one DB transaction (admin_grant_credits).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -148,7 +148,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       actorUserId: user.id,
       expiryDays,
       allowOverLimit,
-      clientKey,
+      // M5: one key per grant REQUEST - the caller's clientKey, else this request's Idempotency-Key (the admin UI sends
+      // a fresh one per submission). Never a clock bucket.
+      clientKey: clientKey ?? (typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined),
       metadata,
     });
   } catch (err: any) {
@@ -160,9 +162,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const failure = result as Extract<AdminGrantResult, { ok: false }>;
     const statusCode =
       failure.code === 'LEDGER_FAILED'         ? 500 :
+      failure.code === 'GRANT_UNAVAILABLE'     ? 503 :
       failure.code === 'GRANT_LIMIT_EXCEEDED'  ? 429 :
+      failure.code === 'GRANT_KEY_REUSED'      ? 409 :
                                                  400;
-    return billingFail(res, statusCode, { rawMessage: failure.error, legacyCode: failure.code });
+    // M5 codes the generic classifier does not know: a reused or missing request key is a caller error (never
+    // retryable as-is); an undeployed grant function is a retryable outage.
+    const m5Override =
+      failure.code === 'GRANT_KEY_REUSED' || failure.code === 'MISSING_CLIENT_KEY'
+        ? { errorCode: 'VALIDATION' as const, retryable: false }
+        : failure.code === 'GRANT_UNAVAILABLE'
+          ? { errorCode: 'INTERNAL' as const, retryable: true }
+          : {};
+    return billingFail(res, statusCode, { rawMessage: failure.error, legacyCode: failure.code, ...m5Override });
   }
 
   try {

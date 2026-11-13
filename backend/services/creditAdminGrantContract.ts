@@ -20,7 +20,11 @@ export type AdminGrantErrorCode =
   | 'INVALID_CREDITS'
   | 'INVALID_EXPIRY'
   | 'GRANT_LIMIT_EXCEEDED'
-  | 'LEDGER_FAILED';
+  | 'LEDGER_FAILED'
+  // M5 (20270217000017)
+  | 'MISSING_CLIENT_KEY'
+  | 'GRANT_KEY_REUSED'
+  | 'GRANT_UNAVAILABLE';
 
 export type AdminGrantResult =
   | {
