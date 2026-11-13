@@ -221,6 +221,9 @@ const GLOBAL_TABLES = {
   user_override: 'Super Admin free-credit eligibility override per auth user (platform signup gate)',
   worker_dead_letter_queue: 'worker dead-letter queue (ops); tenant only inside job_payload JSON',
   worker_health: 'worker heartbeat telemetry (ops)',
+  // e9 ruling 2026-11-14 (a): SA-authored (requireSuperAdmin writes only), read only by the system poller, which since
+  // fix/intel-poll-platform-sources-only runs ONLY against platform sources. Capability-checked: no tenant writer/reader.
+  intelligence_query_templates: 'platform query templates: Super Admin authored, read only by the platform intelligence poller (platform sources only)',
 };
 /** Tables that carry a tenant-named column but are NOT tenant-owned rows (global config or cross-tenant ledgers). */
 const NOT_TENANT_REASONS = {
@@ -346,7 +349,9 @@ function build() {
     rows.push([t, column, tagOf(t)]);
   }
   for (const [t] of sorted) {
-    if (direct.has(t) || NOT_TENANT.has(t)) continue;
+    // A table classified GLOBAL with a reason is never re-derived as a child of its FK parent (55, e9 2026-11-14:
+    // intelligence_query_templates FKs a TENANT_OR_PLATFORM source but is SA-authored, system-read platform data).
+    if (direct.has(t) || NOT_TENANT.has(t) || Object.prototype.hasOwnProperty.call(GLOBAL_TABLES, t)) continue;
     if (VIA_OVERRIDES[t] && direct.has(VIA_OVERRIDES[t][1])) { via.push([t, VIA_OVERRIDES[t][0], VIA_OVERRIDES[t][1], tagOf(t), VIA_OVERRIDES[t][2]]); continue; }
     if (VIA_OVERRIDES[t]) continue; // multi-hop: resolved after the first pass
     const cands = (fks.get(t) || []).filter(([, parent]) => direct.has(parent));
@@ -364,7 +369,7 @@ function build() {
     changed = false;
     const viaSet = new Set(via.map((v) => v[0]));
     for (const [t, ov] of Object.entries(VIA_OVERRIDES)) {
-      if (direct.has(t) || viaSet.has(t) || !tables.has(t) || !viaSet.has(ov[1])) continue;
+      if (direct.has(t) || viaSet.has(t) || !tables.has(t) || !viaSet.has(ov[1]) || Object.prototype.hasOwnProperty.call(GLOBAL_TABLES, t)) continue;
       via.push([t, ov[0], ov[1], tagOf(t), ov[2]]); changed = true;
     }
   }

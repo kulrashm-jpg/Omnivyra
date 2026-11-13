@@ -262,6 +262,7 @@ export async function createApiPreset(params: {
   headers?: Record<string, string>;
   query_params?: Record<string, string | number>;
 }): Promise<ApiPreset> {
+  // cross-tenant: intelligence-governance-sa-platform-presets
   const { data, error } = await ownedDbTable('external_api_sources')
     .insert({
       name: params.name.trim(),
@@ -310,6 +311,7 @@ export async function updateApiPreset(
     if (!data) throw new Error('API preset not found');
     return data as ApiPreset;
   }
+  // cross-tenant: intelligence-governance-sa-platform-presets
   const { data, error } = await ownedDbTable('external_api_sources')
     .update(updates)
     .eq('id', id)
@@ -321,6 +323,7 @@ export async function updateApiPreset(
 }
 
 export async function setApiPresetEnabled(id: string, is_active: boolean): Promise<ApiPreset> {
+  // cross-tenant: intelligence-governance-sa-platform-presets
   const { data, error } = await ownedDbTable('external_api_sources')
     .update({ is_active })
     .eq('id', id)

@@ -109,20 +109,25 @@ jest.mock('../../db/supabaseClient', () => ({
       builder.eq = (col: string, val: unknown) => { filters[col] = val; return builder; };
       builder.update = (p: Row) => { op = 'update'; payload = p; return builder; };
       builder.delete = () => { op = 'delete'; return builder; };
-      const resolve = () => {
+      // PostgREST shapes (S2): .single() on no row -> an error; .maybeSingle() -> { data: null, error: null };
+      // a plain/array statement (e.g. delete().select()) -> { data: [], error: null }.
+      const resolve = (mode: 'single' | 'maybe' | 'many') => {
         if (table !== 'external_api_sources') return { data: null, error: null };
         const id = filters.id as string;
         const owner = id in ROW_OWNER ? ROW_OWNER[id] : undefined;
-        if (owner === undefined) return { data: null, error: { message: 'no rows' } };
         // A company filter is applied only when the route asked for one.
-        if ('company_id' in filters && filters.company_id !== owner) {
-          return { data: null, error: { message: 'no rows' } };
+        const matched = owner !== undefined && !('company_id' in filters && filters.company_id !== owner);
+        if (!matched) {
+          if (mode === 'single') return { data: null, error: { message: 'no rows' } };
+          return { data: mode === 'many' ? [] : null, error: null };
         }
         if (op !== 'select') writes.push({ op, filters: { ...filters }, payload });
-        return { data: { id, company_id: owner, name: 'catalog entry', base_url: 'https://real.example' }, error: null };
+        const row = { id, company_id: owner, name: 'catalog entry', base_url: 'https://real.example' };
+        return { data: mode === 'many' ? [row] : row, error: null };
       };
-      builder.single = () => Promise.resolve(resolve());
-      builder.then = (r: any) => Promise.resolve(resolve()).then(r);
+      builder.single = () => Promise.resolve(resolve('single'));
+      builder.maybeSingle = () => Promise.resolve(resolve('maybe'));
+      builder.then = (r: any) => Promise.resolve(resolve('many')).then(r);
       return builder;
     },
   },
@@ -195,6 +200,25 @@ describe('C — a tenant admin cannot claim platform scope', () => {
 
   it('DELETE was already correct and stays correct', async () => {
     await call({ as: ATTACKER, method: 'DELETE', id: PLATFORM_ROW, scope: 'platform', companyId: COMPANY_A });
+    expect(writes.filter((w) => w.op === 'delete')).toEqual([]);
+  });
+});
+
+/* ── S2 (e9 2026-11-14): ordinary company scope never reaches a PLATFORM row (company_id NULL) ── */
+describe('S2 — a company admin in ordinary scope cannot read, update or delete a PLATFORM row', () => {
+  it('GET (no flag) of a platform row: 404, no row returned', async () => {
+    const res = await call({ as: ATTACKER, method: 'GET', id: PLATFORM_ROW, companyId: COMPANY_A });
+    expect(res.statusCode).toBe(404);
+    expect(res.body?.api).toBeUndefined();
+  });
+  it('PUT (no flag) of a platform row: 404, no write', async () => {
+    const res = await call({ as: ATTACKER, method: 'PUT', id: PLATFORM_ROW, companyId: COMPANY_A, body: { name: 'pwned' } });
+    expect(res.statusCode).toBe(404);
+    expect(writes.filter((w) => w.op === 'update')).toEqual([]);
+  });
+  it('DELETE (no flag) of a platform row: 404, no delete', async () => {
+    const res = await call({ as: ATTACKER, method: 'DELETE', id: PLATFORM_ROW, companyId: COMPANY_A });
+    expect(res.statusCode).toBe(404);
     expect(writes.filter((w) => w.op === 'delete')).toEqual([]);
   });
 });

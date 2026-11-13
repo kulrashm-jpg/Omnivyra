@@ -110,12 +110,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!platformScopeGranted) {
       query = query.eq('company_id', companyId);
     }
-    const { data, error } = await query.single();
+    // S2 (e9 2026-11-14): a row outside the caller's scope - e.g. a PLATFORM row (company_id NULL) read in ordinary
+    // company scope - is "not found" (404), never a 500; and the DB error text never reaches the client.
+    const { data, error } = await query.maybeSingle();
     if (error) {
-      return res.status(500).json({
-        error: 'Failed to load external API',
-        detail: error.message,
-      });
+      return res.status(500).json({ error: 'Failed to load external API' });
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'External API not found' });
     }
     const { data: healthData } = await supabase
       .from('external_api_health')
@@ -320,12 +322,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!hasPlatformScope) {
       deleteQuery.eq('company_id', companyId);
     }
-    const { error } = await deleteQuery;
+    // S2: a delete that matched nothing (another scope's row, or a PLATFORM row in ordinary company scope) is a 404,
+    // not a silent 200 "success"; the DB error text never reaches the client.
+    const { data: deleted, error } = await deleteQuery.select('id');
     if (error) {
-      return res.status(500).json({
-        error: 'Failed to delete external API',
-        detail: error.message,
-      });
+      return res.status(500).json({ error: 'Failed to delete external API' });
+    }
+    if (!Array.isArray(deleted) || deleted.length === 0) {
+      return res.status(404).json({ error: 'External API not found' });
     }
     await invalidateCompanyConfigCacheForApiSource(id);
     return res.status(200).json({ success: true });

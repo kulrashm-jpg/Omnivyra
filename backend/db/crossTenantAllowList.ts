@@ -75,6 +75,13 @@ export const CROSS_TENANT_ALLOW_LIST: readonly CrossTenantEntry[] = [
     owner: 'virality-55',
     exitWhenApplied: '20270217000028', // 028 scheduled_posts.company_id: then convert to tenantTable on company_id (read the constraints first)
   },
+  {
+    id: 'intelligence-governance-sa-platform-presets',
+    tables: ['external_api_sources'],
+    file: 'backend/services/intelligenceGovernanceService.ts',
+    reason: "Super Admin platform API preset writes (pages/api/admin/intelligence/api-presets.ts: requireSuperAdmin). external_api_sources is TENANT_OR_PLATFORM (e9 2026-11-14); a PLATFORM row (company_id NULL, is_preset) is reachable only on ownedDbTable by an SA path - tenantOrPlatformTable deliberately cannot modify platform rows",
+    owner: 'virality-55',
+  },
 ] as const;
 
 export const CROSS_TENANT_IDS: ReadonlySet<string> = new Set(CROSS_TENANT_ALLOW_LIST.map((e) => e.id));
