@@ -16,6 +16,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { stripComments, statementStart, declarations, sourceFiles } from '../utils/sourceContractScan';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const SCAN_DIRS = ['backend', 'lib', 'pages'];
@@ -28,25 +29,6 @@ const isMoneyTable = (t: string) => NAMED.has(t) || MONEY_TABLE.test(t);
 
 export interface WriteSite { file: string; key: string; table: string; op: string; read: boolean; unparseable: boolean; line: number }
 
-// Removes line and block comments, leaving string / template literals intact.
-function stripComments(src: string): string {
-  let out = '';
-  let i = 0;
-  while (i < src.length) {
-    const ch = src[i], nx = src[i + 1];
-    if (ch === '/' && nx === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
-    if (ch === '/' && nx === '*') { const e = src.indexOf('*/', i + 2); const end = e < 0 ? src.length : e + 2; out += src.slice(i, end).replace(/[^\n]/g, ' '); i = end; continue; }
-    if (ch === '\'' || ch === '"' || ch === '`') {
-      const q = ch; out += ch; i++;
-      while (i < src.length && src[i] !== q) { if (src[i] === '\\') { out += src[i] + (src[i + 1] ?? ''); i += 2; continue; } out += src[i]; i++; }
-      if (i < src.length) { out += src[i]; i++; }
-      continue;
-    }
-    out += ch; i++;
-  }
-  return out;
-}
-
 const READ_BEFORE = [
   /(?:const|let|var)\s*\{[^}]*\berror\b[^}]*\}\s*=\s*(?:await\s*)?$/, // const { error } = await
   /(?:const|let|var)\s+\w+\s*(?::[^=]+)?=\s*(?:await\s*)?$/,          // const res = await
@@ -54,23 +36,6 @@ const READ_BEFORE = [
   /(?<![=!<>])\b\w+(?:\.\w+)*\s*=\s*(?:await\s*)?$/,                    // x = await / this.y = await
   /=>\s*(?:await\s*)?\(?\s*$/,                                          // arrow body (implicit return)
 ];
-
-function statementStart(s: string, i: number): number {
-  // '=>' is kept IN the statement (an arrow body is a returned value); the other boundaries start after themselves.
-  return Math.max(s.lastIndexOf(';', i) + 1, s.lastIndexOf('{\n', i) + 1, s.lastIndexOf('}\n', i) + 1, s.lastIndexOf('=>', i), s.lastIndexOf(',\n', i) + 1);
-}
-
-const NOT_FN = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'await', 'function', 'typeof', 'new', 'with']);
-/** Function / method declarations (name, offset), so a write is keyed by its WRITER (e1), not by a line number. */
-function declarations(s: string): Array<{ name: string; at: number }> {
-  const out: Array<{ name: string; at: number }> = [];
-  const re = /\bfunction\s+(\w+)\s*[<(]|\b(\w+)\s*[:=]\s*(?:async\s*)?(?:function\b[^(]*)?\([^()]*\)\s*(?::[^={]+)?=>|\b(?:async\s+)?(\w+)\s*\([^()]*\)\s*(?::\s*[^={;]+)?\{/g;
-  for (const m of s.matchAll(re)) {
-    const name = m[1] ?? m[2] ?? m[3];
-    if (name && !NOT_FN.has(name)) out.push({ name, at: m.index! });
-  }
-  return out;
-}
 
 export function scanSource(file: string, raw: string): WriteSite[] {
   const s = stripComments(raw);
@@ -112,16 +77,6 @@ export function scanSource(file: string, raw: string): WriteSite[] {
   return sites;
 }
 
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if (['node_modules', 'tests', '__tests__'].includes(e.name) || e.name.startsWith('.')) continue;
-      sourceFiles(p, out);
-    } else if (/\.(ts|tsx)$/.test(e.name) && !/\.d\.ts$/.test(e.name)) out.push(p);
-  }
-  return out;
-}
 
 /**
  * KNOWN unread money writes (6f triage 2026-11-13; e9 rulings). Keyed file:writer|table|op|#n - the writer is the
