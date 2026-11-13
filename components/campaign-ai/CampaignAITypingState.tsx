@@ -41,12 +41,17 @@ export function CampaignAITypingState(props: any) {
             expectedSeconds={planTiming.expectedSeconds}
             maxSecondsHint={planTiming.maxSecondsHint}
             onCancel={() => planAbortRef.current?.abort()}
-            rotatingMessages={[
-              'Validating your inputs...',
-              `Structuring ${resolvedWeeks} weeks...`,
-              'Building weekly themes...',
-              'Assigning content types...',
-              finalMessage,
+            // Mirrors /api/campaigns/ai/plan (generate_plan) + runCampaignAiPlanExecutor:
+            // moderate + load campaign/version/planning inputs, resolve assist context,
+            // runWithContext (AI), evaluateGeneratedPlan + calendar conflict check,
+            // saveAiCampaignPlan / saveDraftBlueprint. The AI step takes the remaining time.
+            // (The old rotating messages named sub-steps that aren't separate stages.)
+            stages={[
+              { label: 'Reading your campaign and answers', etaSeconds: 4 },
+              { label: 'Gathering your company context', etaSeconds: 6 },
+              `Writing the ${resolvedWeeks}-week plan with AI`,
+              { label: 'Checking the plan and your calendar', etaSeconds: 5 },
+              { label: 'Saving the plan', etaSeconds: 3 },
             ]}
           />
         </div>
@@ -63,10 +68,14 @@ export function CampaignAITypingState(props: any) {
             message="Scheduling structured plan"
             expectedSeconds={45}
             maxSecondsHint={90}
-            rotatingMessages={[
-              'Applying schedule...',
-              'Updating calendar...',
-              'Finishing schedule...',
+            // Mirrors /api/campaigns/[id]/schedule-structured-plan: governance + blueprint
+            // checks, scheduler lock, saveCampaignBlueprintFromLegacy, scheduleStructuredPlan;
+            // then the client re-fetches the plan (useStructuredPlanScheduling).
+            stages={[
+              { label: 'Checking the plan can be scheduled', etaSeconds: 4 },
+              { label: 'Saving the blueprint', etaSeconds: 4 },
+              'Placing posts on your calendar',
+              { label: 'Refreshing your plan', etaSeconds: 3 },
             ]}
           />
         </div>
@@ -82,11 +91,16 @@ export function CampaignAITypingState(props: any) {
       : isPlatformCustomize
         ? 'Customizing platform content'
         : 'Refining campaign inputs';
-    const rotatingMessages = isRefineDay
-      ? ['Loading week...', 'Generating day content...', 'Applying refinements...']
+    // Mirrors /api/campaigns/ai/plan for each mode (runCampaignAiPlanExecutor loads the
+    // campaign + context, then the AI call), then the client saves the chat message
+    // (saveCampaignMessage) before the loading flag clears. generate_plan here is the
+    // conversational gathering turn (runGatherPhaseGate decides the next question).
+    // The AI step takes the remaining time.
+    const stages = isRefineDay
+      ? [{ label: 'Reading your plan', etaSeconds: 5 }, 'Rewriting the day with AI', { label: 'Saving', etaSeconds: 3 }]
       : isPlatformCustomize
-        ? ['Loading platforms...', 'Customizing per platform...', 'Applying changes...']
-        : ['Reading your answers...', 'Structuring next steps...', 'Preparing next question...'];
+        ? [{ label: 'Reading your plan', etaSeconds: 5 }, 'Tailoring content for each platform', { label: 'Saving', etaSeconds: 3 }]
+        : [{ label: 'Reading your answers', etaSeconds: 4 }, 'Working out the next question', { label: 'Saving', etaSeconds: 2 }];
 
     return (
       <div className="flex justify-start w-full px-1 sm:px-2">
@@ -97,7 +111,7 @@ export function CampaignAITypingState(props: any) {
             expectedSeconds={isRefineDay ? 60 : isPlatformCustomize ? 45 : 30}
             maxSecondsHint={120}
             onCancel={() => planAbortRef.current?.abort()}
-            rotatingMessages={rotatingMessages}
+            stages={stages}
           />
         </div>
       </div>
