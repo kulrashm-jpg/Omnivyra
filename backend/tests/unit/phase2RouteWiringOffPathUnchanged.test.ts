@@ -58,3 +58,10 @@ it('positive control: the SAME harness with PHASE2_BILLING_FORCE_ENFORCE=true DO
     delete process.env.PHASE2_BILLING_FORCE_ENFORCE;
   }
 });
+
+it('the route-wiring counters are REGISTERED (type-checked names, exported in the metrics snapshot)', () => {
+  const real = jest.requireActual('../../services/billing/billingMetrics') as typeof import('../../services/billing/billingMetrics');
+  const snap = real.snapshotBillingMetrics();
+  expect(snap).toHaveProperty('phase2_route_without_idempotency_key_total');
+  expect(snap).toHaveProperty('phase2_route_reclaim_cap_exhausted_total');
+});
