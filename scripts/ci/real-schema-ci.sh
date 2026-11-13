@@ -473,9 +473,36 @@ if [ -n "${W6_ONLY:-}" ]; then
 fi
 # W6-SAFE-03 — under `set -e` a failing jest aborted here before `$?` could be
 # read, losing the summary. Capture it directly; no pipe in the path.
+#
+# COMMITTING SUITES (`*_concurrency_real.test.ts`) need two independent connections,
+# so their fixtures are COMMITTED, not rolled back, and they stay in the database.
+# Run anywhere in the main pass, those rows change what later suites count (CI-2,
+# 2026-11-10: seven unrelated suites failed after d2_frequency_claim_concurrency_real).
+# So the full gate runs them in a SECOND pass, after every rolled-back suite. Both
+# passes are the gate: either failing fails the stage. A partial (W6_ONLY) run keeps
+# one pass.
+COMMITTING_SUITES='_concurrency_real\.test\.ts$'
 set +e
-W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}"
-SUITE_STATUS=$?
+if [ "$GATE" = "full" ]; then
+  W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}" --testPathIgnorePatterns '/node_modules/' "$COMMITTING_SUITES"
+  MAIN_STATUS=$?
+  # A branch with NO committing suites must not run pass 2: jest exits 1 on "No tests found" (83 overlay
+  # regression, 2026-11-12, CI-129..145). Count them on disk; the workflow's partition check then expects 0.
+  COMMITTING_COUNT=$(find backend/tests/realschema -name '*_concurrency_real.test.ts' -not -path '*/node_modules/*' | wc -l | tr -d ' ')
+  if [ "$COMMITTING_COUNT" -gt 0 ]; then
+    log "Running committing suites (second pass): $COMMITTING_COUNT"
+    W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}" --testPathPattern "$COMMITTING_SUITES"
+    COMMITTING_STATUS=$?
+  else
+    log "No committing (*_concurrency_real) suites on this branch: second pass skipped"
+    COMMITTING_STATUS=0
+  fi
+  SUITE_STATUS=$MAIN_STATUS
+  [ "$SUITE_STATUS" = "0" ] && SUITE_STATUS=$COMMITTING_STATUS
+else
+  W6_DB_URL="$DB_URL" npx jest "${JEST_ARGS[@]}"
+  SUITE_STATUS=$?
+fi
 set -e
 
 # Only a passing suite is "complete"; otherwise the exit trap must name the stage
