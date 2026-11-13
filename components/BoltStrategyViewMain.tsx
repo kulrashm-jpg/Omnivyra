@@ -28,8 +28,10 @@ import { type OutcomeView, type SharingMode, CONTENT_FORMATS, DURATION_OPTIONS, 
 
 function CampaignBriefSection({
   topic, description, goals, tone, audienceText,
-  setTopic, setDescription, toggleGoal, toggleTone, setAudienceText,
+  setTopic, setDescription, toggleGoal, toggleTone, setAudienceText, showDetails,
 }: {
+  /** D6: Description, Goal, Tone and Audience show only under "More options". */
+  showDetails: boolean;
   topic: string;
   description: string;
   goals: string[];
@@ -105,6 +107,7 @@ function CampaignBriefSection({
             />
           </div>
 
+          {showDetails && (<>
           {/* Description — optional. AI suggestion-apply fills this. */}
           <div>
             <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">
@@ -193,6 +196,7 @@ function CampaignBriefSection({
               className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 placeholder:text-gray-300"
             />
           </div>
+          </>)}
         </div>
       )}
     </div>
@@ -203,6 +207,7 @@ function CampaignBriefSection({
 import type { useBoltStrategy } from '../hooks/useBoltStrategy';
 type S = ReturnType<typeof useBoltStrategy>;
 export default function BoltStrategyView({ d }: { d: S }) {
+  const [showMore, setShowMore] = useState(false);
   const {
     _ef1,
     _ef2,
@@ -291,6 +296,12 @@ export default function BoltStrategyView({ d }: { d: S }) {
     topic,
     user,
   } = d;
+  // D6: how many folded options differ from their defaults (shown in the fold summary).
+  const advancedSetCount =
+    (description.trim() ? 1 : 0) + (goals.length > 0 ? 1 : 0) + (tone.length > 0 ? 1 : 0) +
+    (audienceText.trim() ? 1 : 0) + (strategicFocus.length > 0 ? 1 : 0) + (offerings.length > 0 ? 1 : 0) +
+    (contentFormats.length > 0 ? 1 : 0) + (themeSource !== 'hybrid' ? 1 : 0) + (sharingMode !== 'ai' ? 1 : 0) +
+    (outcomeView !== 'week_plan' ? 1 : 0);
 
     return (
     <>
@@ -329,7 +340,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
             </p>
           </div>
         )}
-        <div className="flex gap-5 items-start">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
 
           {/* LEFT: Form */}
           <div className="flex-1 min-w-0 bg-white rounded-2xl border border-gray-200 shadow-sm divide-y divide-gray-100">
@@ -356,8 +367,32 @@ export default function BoltStrategyView({ d }: { d: S }) {
               toggleGoal={toggleGoal}
               toggleTone={toggleTone}
               setAudienceText={setAudienceText}
+              showDetails={showMore}
             />
 
+            {/* D6 (owner rules 1 + 3): primary fields first (Topic, Duration, Platforms, Start date,
+                Generate); everything else folds under "More options" with today's defaults. The
+                fold is presentation only: no form state changes, so the payload is unchanged. */}
+            <div className="px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setShowMore((v) => !v)}
+                aria-expanded={showMore}
+                data-testid="bolt-more-options"
+                className="text-sm font-semibold text-amber-700 hover:text-amber-800"
+              >
+                {showMore ? 'Fewer options ▲' : 'More options ▼'}
+              </button>
+              {!showMore && (
+                <p className="mt-1 text-[11px] text-gray-500" data-testid="bolt-more-options-summary">
+                  {advancedSetCount === 0
+                    ? 'Using defaults for goal, tone, focus, formats, ideas source, sharing and where to open after launch.'
+                    : `${advancedSetCount} more option${advancedSetCount === 1 ? '' : 's'} set. Open to review.`}
+                </p>
+              )}
+            </div>
+
+            {showMore && (<>
             {/* Strategic Focus */}
             <div className="p-5">
               <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">Strategic Focus</label>
@@ -380,9 +415,11 @@ export default function BoltStrategyView({ d }: { d: S }) {
               <p className="text-xs text-gray-400 mb-2">What should BOLT highlight? Type and press Enter.</p>
               <TagInput tags={offerings} onChange={setOfferings} placeholder="e.g. Analytics Dashboard, Free Trial…" />
             </div>
+            </>)}
 
             {/* Format + Duration + Source */}
-            <div className="grid grid-cols-3 divide-x divide-gray-100">
+            <div className={`grid grid-cols-1 divide-gray-100 ${showMore ? 'sm:grid-cols-3 sm:divide-x' : ''}`}>
+              {showMore && (
               <div className="p-5">
                 <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">
                   Content Format <span className="font-normal text-gray-400">(select up to 2)</span>
@@ -434,6 +471,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
                   })}
                 </div>
               </div>
+              )}
               <div className="p-5">
                 <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Duration</label>
                 <div className="flex flex-col gap-1.5">
@@ -447,6 +485,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
                   ))}
                 </div>
               </div>
+              {showMore && (
               <div className="p-5">
                 <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Intelligence Source</label>
                 <div className="flex flex-col gap-1.5">
@@ -461,9 +500,11 @@ export default function BoltStrategyView({ d }: { d: S }) {
                   ))}
                 </div>
               </div>
+              )}
             </div>
 
             {/* Content Sharing Mode */}
+            {showMore && (
             <div className="px-5 pt-4 pb-4 border-t border-gray-100">
               <div className="flex items-center gap-2 mb-2">
                 <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">Content Sharing</label>
@@ -492,6 +533,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
                 ))}
               </div>
             </div>
+            )}
 
             {/* Platforms — capability-aware picker (Round-6 Phase 4 shared component) */}
             <div className="px-5 pt-4 pb-4 border-t border-gray-100">
@@ -524,6 +566,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
             </div>
 
             {/* View in row */}
+            {showMore && (
             <div className="px-5 pt-4 pb-2 border-t border-gray-100">
               <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">View In</label>
               <div className="flex gap-2">
@@ -548,6 +591,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
                 ))}
               </div>
             </div>
+            )}
 
             {/* Generate button */}
             <div className="p-5 bg-amber-50/60 rounded-b-2xl">
@@ -572,7 +616,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
           </div>
 
           {/* RIGHT: Suggestions + AI Chat */}
-          <div className="w-[36%] flex-shrink-0 flex flex-col gap-4">
+          <div className="w-full lg:w-[36%] lg:flex-shrink-0 flex flex-col gap-4">
 
             {/* Suggestions */}
             <div className="bg-white rounded-2xl border border-amber-200 shadow-sm overflow-hidden">
@@ -692,7 +736,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
             )}
 
             {generating && (
-              <div className="grid grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
                 {[0, 1, 2].map((i) => (
                   <div key={i} className="rounded-2xl border-2 border-gray-100 bg-white overflow-hidden animate-pulse">
                     <div className="h-32 bg-gray-100" />
