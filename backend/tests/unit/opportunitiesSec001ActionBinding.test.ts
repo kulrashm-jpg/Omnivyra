@@ -72,7 +72,17 @@ jest.mock('../../db/supabaseClient', () => {
     b.select = () => b;
     b.eq = (c: string, v: unknown) => { filters[c] = v; return b; };
     b.limit = () => b; b.order = () => b;
+    b.in = (c: string, vs: unknown[]) => { filters[c] = { in: vs }; return b; };
     const rows = (): any[] => {
+      // e1 2026-11-13 (inactive-company role gate): every company a role row references exists and is ACTIVE
+      // (companies.status NOT NULL DEFAULT 'active'); the gate itself is proven in inactiveCompanyRoleGate.test.ts.
+      if (table === 'companies') {
+        const ids = Array.from(new Set(ROLES.map((r: any) => r.company_id)));
+        const want = filters.id as any;
+        return ids
+          .filter((id) => want === undefined || (want && typeof want === 'object' && 'in' in want ? want.in.includes(id) : id === want))
+          .map((id) => ({ id, status: 'active', deleted_at: null }));
+      }
       if (table === 'user_company_roles') {
         return ROLES.filter(r =>
           (filters.user_id === undefined || r.user_id === filters.user_id) &&

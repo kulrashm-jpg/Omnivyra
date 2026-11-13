@@ -3,6 +3,12 @@ import type { NextApiResponse } from 'next';
 export const actionStore = new Map<string, any>();
 export const actionLogStore: Array<any> = [];
 export const roleStore: Array<any> = [];
+/**
+ * companies status (e1 2026-11-13, inactive-company role gate): a company referenced by roleStore is ACTIVE unless a
+ * test overrides it here - the schema default (companies.status NOT NULL DEFAULT 'active'). A company referenced by
+ * no role row does not exist (no row), exactly as the real table would answer.
+ */
+export const companyStatusOverrides = new Map<string, { status: string; deleted_at?: string | null }>();
 export const notificationStore: Array<any> = [];
 export const analyticsStore: Array<any> = [];
 export const scheduledPostStore: Array<any> = [];
@@ -67,6 +73,7 @@ export const resetCommunityAiStores = () => {
   actionStore.clear();
   actionLogStore.length = 0;
   roleStore.length = 0;
+  companyStatusOverrides.clear();
   notificationStore.length = 0;
   analyticsStore.length = 0;
   scheduledPostStore.length = 0;
@@ -205,6 +212,17 @@ const resolveSelect = (table: string, state: any) => {
       rows.sort((a, b) =>
         state.order?.ascending ? a[state.order.field].localeCompare(b[state.order.field]) : b[state.order.field].localeCompare(a[state.order.field])
       );
+    }
+    return { data: rows, error: null };
+  }
+  if (table === 'companies') {
+    const ids = Array.from(new Set(roleStore.map((r) => r.company_id).filter(Boolean)));
+    let rows = ids.map((id) => ({ id, status: 'active', deleted_at: null, ...(companyStatusOverrides.get(id) ?? {}) }));
+    if (state.filters.id) rows = rows.filter((row) => row.id === state.filters.id);
+    if (state.inFilter?.field === 'id') rows = rows.filter((row) => state.inFilter.values.includes(row.id));
+    if (state.single) {
+      if (rows.length > 1) return { data: null, error: { code: 'PGRST116', message: 'multiple rows' } };
+      return { data: rows[0] ?? null, error: null };
     }
     return { data: rows, error: null };
   }

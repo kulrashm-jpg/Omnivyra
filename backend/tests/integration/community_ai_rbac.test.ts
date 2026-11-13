@@ -18,6 +18,7 @@ import {
   socialAccountStore,
   tokenStore,
   webhookStore,
+  companyStatusOverrides,
 } from './communityAiTestHarness';
 
 jest.mock('../../services/userContextService', () => ({
@@ -80,6 +81,7 @@ describe('Community-AI RBAC', () => {
     actionStore.clear();
     actionLogStore.length = 0;
     roleStore.length = 0;
+    companyStatusOverrides.clear();
     notificationStore.length = 0;
     analyticsStore.length = 0;
     scheduledPostStore.length = 0;
@@ -180,6 +182,23 @@ describe('Community-AI RBAC', () => {
     const execRes = createMockRes();
     await executeHandler(execReq, execRes);
     expect(execRes.status).toHaveBeenCalledWith(200);
+  });
+
+  it('NEGATIVE CONTROL (inactive-company gate): the same executor in a SUSPENDED company is refused, nothing executes', async () => {
+    setRole('CONTENT_PUBLISHER');
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
+    companyStatusOverrides.set('tenant-1', { status: 'suspended' });
+    actionStore.set('rbac-3s', {
+      id: 'rbac-3s', tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', action_type: 'reply',
+      target_id: 'post-3', suggested_text: 'Thanks!', playbook_id: 'playbook-1', status: 'approved', requires_human_approval: false,
+    });
+    const execRes = createMockRes();
+    await executeHandler({
+      method: 'POST', headers: {},
+      body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-3s', approved: true },
+    } as unknown as NextApiRequest, execRes);
+    expect(execRes.status).toHaveBeenCalledWith(403);
+    expect(actionStore.get('rbac-3s').status).toBe('approved');
   });
 
   it('admin can approve and execute', async () => {

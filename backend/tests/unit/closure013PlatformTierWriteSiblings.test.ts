@@ -31,11 +31,22 @@ const echo = (p: unknown) => (Array.isArray(p) ? p : [p]).map((r, i) => ({ id: `
 const persist = (table: string, p: unknown) => { const r = echo(p); (mockTables[table] ??= []).push(...r); return r; };
 function mockBuilder(table: string) {
   mockReads.push(table);
+  const readIndex = mockReads.length - 1;
   let rows = [...(mockTables[table] ?? [])];
   const b: Record<string, unknown> = {};
   const chain = () => b;
   Object.assign(b, {
-    select: chain, order: chain, gt: chain, lt: chain, gte: chain, lte: chain, neq: chain, range: chain, not: chain,
+    // A companies read of exactly the authorization gate's status columns (rbacPrimitives COMPANY_GATE_*) is the
+    // inactive-company membership gate resolving the principal - an identity-chain read, NOT a business read.
+    select: (cols?: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const gate = require('../../services/rbacPrimitives');
+      if (table === 'companies' && (cols === gate.COMPANY_GATE_SELECT || cols === gate.COMPANY_GATE_BATCH_SELECT)) {
+        mockReads[readIndex] = 'companies#authz-status-gate';
+      }
+      return b;
+    },
+    order: chain, gt: chain, lt: chain, gte: chain, lte: chain, neq: chain, range: chain, not: chain,
     contains: chain, or: chain, ilike: chain, like: chain, match: chain, filter: chain, returns: chain, csv: chain,
     eq: (c: string, v: unknown) => { rows = rows.filter((r) => r[c] === v); return b; },
     is: (c: string, v: unknown) => { rows = rows.filter((r) => (r[c] ?? null) === v); return b; },
@@ -279,7 +290,8 @@ const BODY_OVERRIDES: Record<string, Record<string, unknown>> = {
 const code = (r: Res) => (r.body as { code?: string } | undefined)?.code;
 /** Identity-chain and idempotency-reservation tables; anything else read is a business read. */
 const NON_BUSINESS = new Set(['user_company_roles', 'capability_assignments', 'stepup_sessions', 'trusted_devices', 'users',
-  'auth_sessions', 'totp_factors', 'webauthn_credentials', 'recovery_codes', 'api_idempotency_keys']);
+  'auth_sessions', 'totp_factors', 'webauthn_credentials', 'recovery_codes', 'api_idempotency_keys',
+  'companies#authz-status-gate']);
 const WRITE_CAPS = new Set<string>(PLATFORM_TIER_CAPABILITIES.filter((c) => c !== SUPER_ADMIN_DASHBOARD_VIEW && c !== CONSUMPTION_VIEW_AGGREGATE));
 /** Removed endpoints answer 410 to everyone before any business work. */
 const TOMBSTONES = new Set(['admin/platform-oauth-configs/index']);
