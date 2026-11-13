@@ -39,7 +39,7 @@ import {
 } from '../../../backend/services/validatedWebsiteService';
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
-import { classifyCompanyDomainConflict, reportCanonicalDomainViolation } from '../../../backend/services/companyDomainUniqueness';
+import { classifyCompanyDomainConflict } from '../../../backend/services/companyDomainUniqueness';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
 import { bootstrapCompanyProfile } from '../../../backend/services/companyBootstrapService';
@@ -548,6 +548,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
             }
             return { id: (data as { id: string }).id };
           },
+          writer: 'onboarding/setup-company',   // the writer reports a canonical-domain CHECK violation itself
         },
       );
     } catch (err) {
@@ -629,8 +630,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     }
 
     if (companyErr) {
-      reportCanonicalDomainViolation(companyErr, 'onboarding/setup-company', logger);
-      throw companyErr;
+      throw companyErr;   // a canonical-domain CHECK violation was already reported inside createCompanyIdentity
     }
 
     // ── 4. Create user_company_roles row (company admin) ─────────────────────

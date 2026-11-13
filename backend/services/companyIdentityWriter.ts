@@ -24,6 +24,8 @@
 
 import { supabase } from '../db/supabaseClient';
 import { normalizeCompanyDomain } from '../../lib/shared/domain/companyDomain';
+import { reportCanonicalDomainViolation } from './companyDomainUniqueness';
+import { logger } from './logger';
 
 export class CompanyIdentityInvariantError extends Error {
   readonly code = 'COMPANY_IDENTITY_INVARIANT_VIOLATION';
@@ -93,17 +95,41 @@ export function prepareCompanyIdentityWrite(input: CompanyIdentityInput): Compan
 export interface CompanyIdentityWriterDeps {
   insertCompany?: (record: Record<string, unknown>) => Promise<{ id: string }>;
   updateCompany?: (companyId: string, patch: Record<string, unknown>) => Promise<void>;
+  /** Names the calling writer in the canonical-domain violation log (e.g. 'onboarding/setup-company'). */
+  writer?: string;
+}
+
+/** Re-throw a PostgREST error WITH its code and details (the canonical-domain reporter and 23505 classification need them). */
+function toThrowable(error: { message?: string; code?: string; details?: string }, fallback: string): Error {
+  const e = new Error(error.message ?? fallback) as Error & { code?: string; details?: string };
+  e.code = error.code;
+  e.details = error.details;
+  return e;
+}
+
+/**
+ * 05 (2026-11-13 follow-up): the canonical-domain CHECK violation is reported INSIDE the governed writer, so every
+ * caller - including a future one - inherits it structurally instead of by enumeration of call sites.
+ */
+async function reportingCanonicalViolation<T>(writer: string | undefined, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    reportCanonicalDomainViolation(err, writer ?? 'companyIdentityWriter', logger);
+    throw err;
+  }
 }
 
 const defaultInsertCompany = async (record: Record<string, unknown>): Promise<{ id: string }> => {
   const { data, error } = await supabase.from('companies').insert(record).select('id').single();
-  if (error || !data) throw new Error(error?.message ?? 'company insert failed');
+  if (error) throw toThrowable(error, 'company insert failed');
+  if (!data) throw new Error('company insert failed');
   return { id: (data as { id: string }).id };
 };
 
 const defaultUpdateCompany = async (companyId: string, patch: Record<string, unknown>): Promise<void> => {
   const { error } = await supabase.from('companies').update(patch).eq('id', companyId);
-  if (error) throw new Error(error.message);
+  if (error) throw toThrowable(error, 'company update failed');
 };
 
 /**
@@ -120,7 +146,7 @@ export async function createCompanyIdentity(
   // Strip the camelCase identity inputs so they don't leak as bogus columns.
   const { website, websiteDomain, adminEmailDomain, ...rest } = record;
   void website; void websiteDomain; void adminEmailDomain;
-  return insert({ ...rest, ...identity });
+  return reportingCanonicalViolation(deps.writer, () => insert({ ...rest, ...identity }));
 }
 
 /**
@@ -140,5 +166,5 @@ export async function updateCompanyIdentity(
   // signature the update seam's parameter type requires. Routed via `unknown`
   // (the standard widening cast) so the stricter worker tsconfig accepts it. No
   // runtime change.
-  await update(companyId, identity as unknown as Record<string, unknown>);
+  await reportingCanonicalViolation(deps.writer, () => update(companyId, identity as unknown as Record<string, unknown>));
 }
