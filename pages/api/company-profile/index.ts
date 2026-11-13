@@ -490,13 +490,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           //     stays at setup-company's resolveDomain by design — no probe here.)
           const candidateDomain = extractDomain(trimmedIncoming);
           if (candidateDomain) {
-            const { data: domainOwners } = await supabase
-              .from('companies')
-              .select('id')
-              .or(`website_domain.eq.${candidateDomain},admin_email_domain.eq.${candidateDomain}`)
-              .neq('id', resolvedCompanyId)
-              .limit(1);
-            if (domainOwners && domainOwners.length > 0) {
+            // BLOCKING fix (e1, 2026-11-13; 05/e9 review of the .or() class): this was one `.or()` with the
+            // user-supplied domain interpolated into the filter string, and its read ERROR was discarded - a failed
+            // read meant "no owner", letting a tenant register a domain already registered to another company. Now
+            // two structural `.eq()` reads (website_domain, admin_email_domain); either read failing is a retryable
+            // 503 that says why, never "available".
+            const owners: string[] = [];
+            for (const column of ['website_domain', 'admin_email_domain'] as const) {
+              const { data: hit, error: ownerErr } = await supabase
+                .from('companies')
+                .select('id')
+                .eq(column, candidateDomain)
+                .neq('id', resolvedCompanyId)
+                .limit(1);
+              if (ownerErr) {
+                return res.status(503).json({
+                  error: 'We could not verify that this website domain is available right now. Please try again in a moment.',
+                  code: 'DOMAIN_CHECK_UNAVAILABLE',
+                  retryable: true,
+                });
+              }
+              if (Array.isArray(hit) && hit.length > 0) owners.push(String((hit[0] as { id: string }).id));
+            }
+            const domainOwners = owners;
+            if (domainOwners.length > 0) {
               return res.status(400).json({
                 error: `${candidateDomain} is already registered to another account. Please use your own company's website domain.`,
                 code: 'DOMAIN_ALREADY_REGISTERED',

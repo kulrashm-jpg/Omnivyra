@@ -45,7 +45,11 @@ const deps = {
   probeWebsite: async () => { throw new Error('probe must not run for a claimed domain'); },
 };
 
-describe('claimed-domain gate (defaultLookupClaimedCompany)', () => {
+// NOTE (05/e9 review): defaultLookupClaimedCompany has NO production caller today - signup passes
+// lookupClaimedCompany: async () => null and owns the claimed check itself in §4. The LIVE signup gate is
+// resolveClaimedDomainRefusal (P2, fix/p2-signup-20261113), pinned by p2ClaimedDomainLookupFailClosed.test.ts.
+// These tests keep the library default fail-closed for any future caller; they are NOT evidence about signup.
+describe('claimed-domain library default (defaultLookupClaimedCompany - not on the signup path)', () => {
   it('TWO active companies on the domain (one by website, one by admin email) -> CLAIMED, never "not claimed"', async () => {
     mockDb.companies = [
       { id: 'c-web', name: 'Web', status: 'active', website_domain: 'acme.com', admin_email_domain: 'other.com', created_at: '1' },
@@ -125,18 +129,5 @@ describe('team/accept-invite resolves the caller structurally', () => {
   });
 });
 
-describe('super-admin request search', () => {
-  it('quotes and LIKE-escapes the search term (no filter rewrite, no wildcard)', () => {
-    /* eslint-disable @typescript-eslint/no-var-requires */
-    const src: string = require('fs').readFileSync(require('path').join(__dirname, '../../../pages/api/super-admin/free-credits/requests.ts'), 'utf8');
-    /* eslint-enable @typescript-eslint/no-var-requires */
-    expect(src).not.toMatch(/ilike\.%\$\{search\}%/);
-    const body = src.slice(src.indexOf('function likeLiteral'), src.indexOf('async function handler'));
-    // eslint-disable-next-line no-new-func
-    const likeLiteral = new Function(`${body.replace(/: string/g, '')}; return likeLiteral;`)();
-    expect(likeLiteral('a,b')).toBe('a,b');            // inside a double-quoted value a comma is literal
-    // LIKE escape (\%, \_) then PostgREST quoting doubles each backslash
-    expect(likeLiteral('50%_off')).toBe(String.raw`50\\%\\_off`);
-    expect(likeLiteral('x"y')).toBe(String.raw`x\"y`);
-  });
-});
+// The super-admin search filter is asserted by CAPTURE in orFilterThirdSiteAndSearch.test.ts (replaces the source-text pin).
+

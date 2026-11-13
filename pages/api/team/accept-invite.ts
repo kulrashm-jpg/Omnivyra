@@ -105,6 +105,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // with a quoted local part may contain commas and dots, so a crafted address could append filter terms and
   // resolve ANOTHER user's row. Now two structural `.eq()` reads: by supabase_uid first, then by the exact email.
   // A read error fails closed (retryable 503), never "not found" and never another row.
+  // WHICH EMAIL (05): callerEmail is auth.users.email from the Supabase-validated access token
+  // (resolveAuthenticatedUser -> validateTokenWithSupabase); it is NOT required to be email-confirmed here. The
+  // email fallback is safe because the caller ALSO holds this invitation's raw token (delivered to that inbox and
+  // hash-checked in step 2) and step 3 requires callerEmail == invitation.email - so the fallback can only ever bind
+  // the row of the address the invitation was sent to.
   const byUid = await supabase
     .from('users')
     .select('id, active_company_id, status')
