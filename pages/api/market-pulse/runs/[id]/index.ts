@@ -1,8 +1,9 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
+import { refuseUnlessMarketPulseConsoleRole } from '../../../../../backend/services/marketPulse/consoleAccess';
+import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { config } from '@/config';
 import { ownedDbTable } from '../../../../../backend/db/writeOwner';
-import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { getMarketPulseRun, syncLegacyJobIntoRun } from '../../../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../../../backend/services/marketPulseJobProcessor';
 import { isUuid } from '../../../../../lib/shared/uuid';
@@ -55,8 +56,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'Invalid Market Pulse run id' });
     }
 
+    // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
     const access = await resolveCompanyAccess(req, res, companyId);
     if (!access) return;
+    if (!refuseUnlessMarketPulseConsoleRole(access, res)) return;
 
     const { data: runLookup, error: runLookupError } = await ownedDbTable('market_pulse_runs')
       .select('id, company_id')

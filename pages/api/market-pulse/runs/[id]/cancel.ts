@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
-import { NextApiRequest, NextApiResponse } from 'next';
+import { refuseUnlessMarketPulseConsoleRole } from '../../../../../backend/services/marketPulse/consoleAccess';
 import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
+import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../../backend/db/supabaseClient';
 import { syncLegacyJobIntoRun } from '../../../../../backend/services/marketPulseV2Service';
 
@@ -23,8 +24,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'run id and companyId are required' });
     }
 
+    // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
     const access = await resolveCompanyAccess(req, res, companyId);
     if (!access) return;
+    if (!refuseUnlessMarketPulseConsoleRole(access, res)) return;
 
     const { data: run, error: runError } = await supabase
       .from('market_pulse_runs')

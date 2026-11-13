@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { requireMarketPulseConsoleAccess } from '../../../../backend/services/marketPulse/consoleAccess';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
@@ -59,6 +60,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requireCampaignId: false,
   });
   if (!access) return;
+  // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
+  if (!(await requireMarketPulseConsoleAccess(req, res, job.company_id))) return;
 
   const consolidated = (job.consolidated_result ?? {}) as {
     global_topics?: ConsolidatedTopic[];

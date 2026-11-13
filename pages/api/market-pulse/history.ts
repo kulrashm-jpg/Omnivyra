@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
-import { NextApiRequest, NextApiResponse } from 'next';
+import { refuseUnlessMarketPulseConsoleRole } from '../../../backend/services/marketPulse/consoleAccess';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { NextApiRequest, NextApiResponse } from 'next';
 import { getMarketPulseHistory } from '../../../backend/services/marketPulseV2Service';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -14,8 +15,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'companyId is required' });
     }
 
+    // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
     const access = await resolveCompanyAccess(req, res, companyId);
     if (!access) return;
+    if (!refuseUnlessMarketPulseConsoleRole(access, res)) return;
 
     const history = await getMarketPulseHistory(companyId);
     return res.status(200).json({ history });

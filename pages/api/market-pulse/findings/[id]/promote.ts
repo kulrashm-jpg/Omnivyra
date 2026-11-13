@@ -1,4 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
+import { refuseUnlessMarketPulseConsoleRole } from '../../../../../backend/services/marketPulse/consoleAccess';
+import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 /**
  * POST /api/market-pulse/findings/[id]/promote
  *
@@ -24,7 +26,6 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { ownedDbTable } from '../../../../../backend/db/writeOwner';
 import { upsertOpportunities } from '../../../../../backend/services/opportunityService';
 import { buildCampaignFromOpportunity } from '../../../../../backend/services/opportunityCampaignBuilder';
@@ -46,8 +47,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = typeof body.companyId === 'string' ? body.companyId : '';
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
+  // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
   const access = await resolveCompanyAccess(req, res, companyId);
   if (!access) return;
+  if (!refuseUnlessMarketPulseConsoleRole(access, res)) return;
 
   // ── 1. Load + verify ownership ──────────────────────────────────────────────
   const { data: findingRow, error: lookupError } = await ownedDbTable('market_pulse_findings')

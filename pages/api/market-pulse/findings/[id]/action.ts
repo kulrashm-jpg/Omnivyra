@@ -1,4 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
+import { refuseUnlessMarketPulseConsoleRole } from '../../../../../backend/services/marketPulse/consoleAccess';
+import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 /**
  * POST /api/market-pulse/findings/[id]/action
  *
@@ -17,7 +19,6 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { ownedDbTable } from '../../../../../backend/db/writeOwner';
 import { recordActionAsFeedback } from '../../../../../backend/services/marketPulse/learningFeedbackService';
 
@@ -47,8 +48,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: `unsupported action: ${action}` });
   }
 
+  // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
   const access = await resolveCompanyAccess(req, res, companyId);
   if (!access) return;
+  if (!refuseUnlessMarketPulseConsoleRole(access, res)) return;
 
   // Verify finding belongs to this company before mutating — otherwise an
   // attacker with a leaked id from another tenant could close it.

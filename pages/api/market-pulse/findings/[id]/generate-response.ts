@@ -1,4 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
+import { refuseUnlessMarketPulseConsoleRole } from '../../../../../backend/services/marketPulse/consoleAccess';
+import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 /**
  * POST /api/market-pulse/findings/[id]/generate-response
  *
@@ -21,7 +23,6 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { ownedDbTable } from '../../../../../backend/db/writeOwner';
 
 const HANDOFF_TOKEN = 'market_pulse_finding_bridge';
@@ -36,8 +37,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = typeof body.companyId === 'string' ? body.companyId : '';
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
+  // Market Pulse scan CONSOLE: company admins only (owner ruling 2026-11-13); members use the Executive room.
   const access = await resolveCompanyAccess(req, res, companyId);
   if (!access) return;
+  if (!refuseUnlessMarketPulseConsoleRole(access, res)) return;
 
   type FindingRow = {
     id: string;
