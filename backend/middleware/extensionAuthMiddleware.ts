@@ -21,6 +21,7 @@ import {
 import { supabase } from '@/backend/db/supabaseClient';
 import { hasCommunityAiCapability } from '@/backend/services/rbac/communityAiCapabilities';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { normalizeRole } from '@/backend/services/rbacPrimitives';
 
 /**
  * e9 BLOCKING (b), 2026-11-13: an extension token EXECUTES engagement actions (command leasing, action results, event
@@ -58,9 +59,14 @@ export async function extensionUserMayExecute(userId: string, orgId: string, now
       .eq('company_id', orgId)
       .eq('status', 'active');
     if (error) return 'unavailable';
-    // The ONE capability check (05: reuse hasCommunityAiCapability). The UPPER-CASING is NOT redundant: the helper's
-    // normalizePermissionRole does not fold case, so a stored 'company_admin' would otherwise be refused (pinned).
-    let ok = (Array.isArray(data) ? data : []).some((r: { role?: unknown }) => hasCommunityAiCapability(String(r.role ?? '').trim().toUpperCase(), 'EXECUTE_ACTIONS'));
+    // The ONE capability check (05: reuse hasCommunityAiCapability). Its normalizePermissionRole conditions NOTHING
+    // (no trim / case fold / spaces), and user_company_roles has no role CHECK - so the stored value is conditioned
+    // first with normalizeRole (trim, upper, spaces -> '_', COMPANYADMIN). normalizeRole folds the Engager into
+    // VIEW_ONLY, which is fine HERE: EXECUTE_ACTIONS is Publisher / Admin / Super-admin (no Engager distinction).
+    let ok = (Array.isArray(data) ? data : []).some((r: { role?: unknown }) => {
+      const role = normalizeRole(typeof r.role === 'string' ? r.role : null);
+      return role !== null && hasCommunityAiCapability(role, 'EXECUTE_ACTIONS');
+    });
     // EXECUTE_ACTIONS includes SUPER_ADMIN, as enforceRole honours it. If isPlatformSuperAdmin swallows a read
     // failure as "not a super-admin", the result is a false DENY - safe (fails closed), deliberately not a 503.
     if (!ok) ok = await isPlatformSuperAdmin(userId);

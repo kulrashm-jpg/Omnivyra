@@ -27,12 +27,12 @@ import { extensionUserMayExecute, EXTENSION_ROLE_CACHE_MS, __resetExtensionRoleC
 const U = 'user-1'; const O = 'org-1'; const T0 = 1_800_000_000_000;
 beforeEach(() => { mockDb.rows = []; mockDb.error = null; mockDb.superAdmin = false; mockDb.reads = 0; __resetExtensionRoleCacheForTests(); });
 
-it.each(['CONTENT_PUBLISHER', 'COMPANY_ADMIN', 'company_admin'])('%s holds EXECUTE_ACTIONS -> allow', async (role) => {
+it.each(['CONTENT_PUBLISHER', 'COMPANY_ADMIN', 'company_admin', 'company admin', 'COMPANYADMIN', ' Content_Publisher ', 'ADMIN'])('%p holds EXECUTE_ACTIONS -> allow (stored spellings conditioned)', async (role) => {
   mockDb.rows = [{ role }];
   expect(await extensionUserMayExecute(U, O, T0)).toBe('allow');
 });
 
-it.each(['VIEWER', 'CONTENT_ENGAGER', 'CONTENT_CREATOR', 'CONTENT_REVIEWER'])('%s does NOT -> deny', async (role) => {
+it.each(['VIEWER', 'CONTENT_ENGAGER', 'CONTENT_CREATOR', 'CONTENT_REVIEWER', 'content engager', '', 'SOMETHING_ELSE'])('%p does NOT -> deny', async (role) => {
   mockDb.rows = [{ role }];
   expect(await extensionUserMayExecute(U, O, T0)).toBe('deny');
 });
