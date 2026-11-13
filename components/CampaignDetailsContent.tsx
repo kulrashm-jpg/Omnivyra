@@ -584,7 +584,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                 : 'bg-white text-gray-700 border'
             }`}
           >
-            Governance
+            Settings
           </button>
         </div>
         {router.query.fromRecommendation && recommendationId && (
@@ -799,10 +799,10 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
 
             <CampaignWeeklySection d={d} />
 
-            {/* Virality Review — readiness check (assets, platforms, engagement); fix blocking issues before scheduling */}
+            {/* Virality check (e9 copy; was "Virality Review") — readiness check (assets, platforms, engagement); fix blocking issues before scheduling */}
             <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border mb-8">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-xl font-semibold">Virality Review</h2>
+                <h2 className="text-xl font-semibold">Virality check</h2>
                 <button
                   onClick={() => setIsViralityExpanded(!isViralityExpanded)}
                   className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-2"
