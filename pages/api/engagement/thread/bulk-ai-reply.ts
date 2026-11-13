@@ -14,6 +14,9 @@ import { getControls } from '../../../../backend/services/engagementGovernanceSe
 import { bulkReplyThreads } from '../../../../backend/services/bulkEngagementService';
 import { generateReplySuggestions } from '../../../../backend/services/engagementAiAssistantService';
 import { getThreadActionability } from '../../../../backend/services/engagementThreadService';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { billedRouteHttpError } from '../../../../backend/services/billing/billedRouteHttpError';
 
 const MAX_BATCH = 20;
 
@@ -95,12 +98,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     };
 
-    const { sent, skipped, errors, outcomes } = await bulkReplyThreads(
-      organizationId,
-      actionableIds,
-      getReplyText,
-      roleGate?.userId
-    );
+    // e9 2026-11-13 (BLOCKING for the flip): this AI ran UNBILLED. The whole batch is ONE billed unit: the HOLD is
+    // scaled by the number of actionable threads (one reply generation each), settlement is the actual usage. The
+    // same Idempotency-Key is answered 409 ALREADY_PROCESSED - a retried click never generates or SENDS twice.
+    // Nothing actionable -> no AI -> nothing billed.
+    const runBatch = () => bulkReplyThreads(organizationId, actionableIds, getReplyText, roleGate?.userId);
+    const { sent, skipped, errors, outcomes } = actionableIds.length === 0
+      ? await runBatch()
+      : await wirePhase2Route({
+          surface:        'engagement.bulk-ai-reply',
+          organizationId,
+          action:         'reply_generation',
+          referenceType:  'engagement_bulk_reply',
+          referenceId:    createHash('sha256').update([organizationId, ...[...actionableIds].sort()].join('|')).digest('hex').slice(0, 40),
+          unitCalls:      actionableIds.length,
+          run:            runBatch,
+        });
 
     return res.status(200).json({
       success: true,
@@ -116,6 +129,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       errors: errors.slice(0, 5),
     });
   } catch (err) {
+    { const billedErr = billedRouteHttpError(err); if (billedErr) return res.status(billedErr.status).json(billedErr.body); }
     const msg = (err as Error)?.message ?? 'Failed';
     console.error('[engagement/thread/bulk-ai-reply]', msg);
     return res.status(500).json({ error: msg });
