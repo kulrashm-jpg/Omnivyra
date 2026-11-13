@@ -55,6 +55,12 @@ describe('scan-write-role-gates structural rules', () => {
       'with-org-access.ts',
     ]);
   });
+  it('a role READER passed as --role-gate is refused (e9: only things that can refuse are gates)', () => {
+    const r = spawnSync(process.execPath, [SCRIPT, '--dir', '.', '--role-gate', 'enforceRole|getUserRole'], { cwd: dir, encoding: 'utf8' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/getUserRole' is a role READER/);
+    expect(scan(['--role-gate', 'requireCapability']).status).toBe(0); // a real gate name is still accepted
+  });
   it('--fail exits 1 on hits; an empty dir exits 2 (nothing scanned is not a pass)', () => {
     expect(scan(['--fail']).status).toBe(1);
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-wrg-empty-'));

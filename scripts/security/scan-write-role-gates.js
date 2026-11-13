@@ -57,6 +57,16 @@ for (let i = 0; i < args.length; i++) {
   } else throw new Error(`unknown option ${a}`);
 }
 if (opt.dirs.length === 0) opt.dirs.push('pages/api');
+// e9 ruling 2026-11-13 (05 review): the role-gate list names ONLY things that can REFUSE. A role READER (its null
+// means "no role" OR "read failed") is not a gate: a file using one goes on a reviewed --allow list with its reason,
+// so a NEW file calling it is flagged instead of silently counting as gated.
+const ROLE_READERS = ['getUserRole', 'getActiveRawCompanyRole', 'getUserCompanyRole', 'getCompanyRole'];
+for (const r of ROLE_READERS) {
+  if (opt.roleGate && new RegExp(`(^|\\|)\\s*${r}\\s*($|\\|)`).test(opt.roleGate)) {
+    console.error(`scan-write-role-gates: '${r}' is a role READER, not a gate (it cannot refuse). Remove it from --role-gate and allow-list the reviewed files with a reason.`);
+    process.exit(2);
+  }
+}
 
 const esc = (names) => names.map((n) => `${n}\\(`).join('|');
 const ROLE_GATES = [
