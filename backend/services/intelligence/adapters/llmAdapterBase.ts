@@ -5,6 +5,7 @@
 //
 // Every concrete subclass overrides `buildRequest()` and `extractAnswer()`.
 
+import { randomUUID } from 'crypto';
 import type {
   AIProviderId,
   AIVisibilityProbe,
@@ -262,9 +263,11 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
         try {
           // PA-004: transport via the overridable seam (legacy by default; a
           // subclass may route through the Platform gateway dispatcher).
+          // 039: one call id per billed provider call, minted at the call site (keys the platform usage row).
+          const probeCallId = randomUUID();
           const json = await this.fetchCompletionJson(apiKey, query);
           // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
-          void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
+          void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json, callId: probeCallId })).catch(() => {});
           // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (the only writer to
           // the scan ledger — no duplicate accounting; cost is null when the provider's pricing is unknown).
           if (scanId) {

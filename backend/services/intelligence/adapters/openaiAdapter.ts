@@ -8,6 +8,7 @@
 // returns AIVisibilityProbeResult with state='unavailable' and the actual
 // reason. No synthesized citation rates ever.
 
+import { randomUUID } from 'crypto';
 import type {
   AIProviderId,
   AIVisibilityProbe,
@@ -343,9 +344,11 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
             { role: 'user', content: formatted.user },
           ];
           // PA-003: transport via the flag-gated seam (gateway dispatcher or legacy).
+          // 039: one call id per billed provider call, minted at the call site (keys the platform usage row).
+          const probeCallId = randomUUID();
           const json = await this.fetchProbeChat(apiKey, messages);
           // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
-          void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
+          void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json, callId: probeCallId })).catch(() => {});
           // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (sole writer to the
           // scan ledger — no duplicate accounting; cost null when pricing is unknown).
           if (scanId) {

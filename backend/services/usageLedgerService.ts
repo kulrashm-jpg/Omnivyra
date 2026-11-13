@@ -21,6 +21,14 @@ import {
 import { recordUnifiedTransaction } from './unifiedTransactionService';
 import { logger } from './logger';
 import { ledgerLinkColumnEnabled } from './billing/ledgerLinkColumnFlag';
+import { PLATFORM_SENTINEL_ORG } from './billing/platformSentinel';
+import {
+  buildPlatformCallKey,
+  platformResourceOf,
+  recordPlatformUsage,
+  type PlatformCallIdentity,
+} from './billing/platformUsageLedgerService';
+import { incrCounter } from './billing/billingMetrics';
 import {
   getProcessTypeToActionKeyMap,
   isKnownPricingKey,
@@ -244,7 +252,19 @@ export async function logUsageEvent(params: {
    * (migration 20260667) is the post-apply upgrade.
    */
   ledger_hold_transaction_id?: string | null;
+
+  /**
+   * 039: identity of the billed provider attempt, REQUIRED for platform-scope rows (organization_id NULL or the
+   * all-zero sentinel). Those rows go to platform_usage_events only - see recordPlatformLedgerEvent.
+   */
+  platform_call?: PlatformCallIdentity;
 }): Promise<void> {
+  // 039 - THE CHOKE POINT. Platform-scope spend (no company: organization_id NULL or the all-zero sentinel) is
+  // written to platform_usage_events ONLY - never usage_events (a fake tenant) and never unified_transactions.
+  if (params.organization_id == null || params.organization_id === PLATFORM_SENTINEL_ORG) {
+    await recordPlatformLedgerEvent(params);
+    return;
+  }
   try {
     const attemptMeta =
       params.retry_attempt != null || params.final_attempt != null
@@ -611,3 +631,102 @@ export function resolveActionKey(processType: string): string | null {
 }
 
 export const PROCESS_TYPE_TO_ACTION_KEY: Record<string, string> = getProcessTypeToActionKeyMap();
+
+// ── 039: platform-scope spend → platform_usage_events ───────────────────────
+
+type LogUsageEventParams = Parameters<typeof logUsageEvent>[0];
+
+/** Source types platform_usage_events accepts (039 CHECK). */
+const PLATFORM_SOURCE_TYPES = new Set(['system', 'embedding', 'llm', 'internal', 'cache', 'external_api']);
+
+/**
+ * A platform-ledger write that did not happen. NEVER throws into the caller (the AI request path must not fail
+ * on accounting), and is NEVER silent: one structured error line + a counter, so a log-based alert can page on
+ * it (prod has no metrics backend). TODO(e1): also raise notifyOpsAlert kind 'platform_usage_write_failed' once
+ * P2's notifyOpsAlert is on main (it is not, at 17e23b61b).
+ */
+function platformUsageWriteFailed(reason: string, params: LogUsageEventParams): void {
+  try {
+    incrCounter('platform_usage_write_failed_total');
+  } catch { /* metrics never break the caller */ }
+  logger.error('platform_usage_write_failed', {
+    reason,
+    source_type: params.source_type,
+    process_type: params.process_type,
+    provider: params.provider_name ?? params.provider ?? null,
+    model: params.model_name ?? params.model ?? null,
+    writer: params.platform_call?.writer ?? null,
+  });
+}
+
+/**
+ * Writes one platform-scope usage event to platform_usage_events (039). Exported for tests. Never throws.
+ *   - the idempotency key is one billed provider ATTEMPT (buildPlatformCallKey); a caller that supplies no
+ *     platform_call is REFUSED loudly - a key from now() or a random value could double-record a retry (e1);
+ *   - cost: a caller-priced amount is kept (no re-pricing); cache rows and external-API calls are 0 when the caller
+ *     gave none; llm/embedding rows without a price are priced org-free from model_pricing;
+ *   - resource: a uuid reference is the resource, anything else is 'unattributed'.
+ */
+export async function recordPlatformLedgerEvent(params: LogUsageEventParams): Promise<void> {
+  try {
+    if (!params.platform_call) {
+      platformUsageWriteFailed('missing_call_identity', params);
+      return;
+    }
+    if (!PLATFORM_SOURCE_TYPES.has(params.source_type)) {
+      platformUsageWriteFailed(`unsupported_source_type:${params.source_type}`, params);
+      return;
+    }
+    const provider = params.provider_name ?? params.provider ?? null;
+    if (!provider) {
+      platformUsageWriteFailed('missing_provider', params);
+      return;
+    }
+    const model = params.model_name ?? params.model ?? null;
+    const callerCost = params.total_cost_usd ?? params.total_cost ?? null;
+    const prePriced = callerCost != null
+      ? { totalCost: callerCost, unitCost: params.unit_cost ?? null, pricingSnapshot: params.pricing_snapshot ?? null }
+      : (params.source_type === 'cache' || params.source_type === 'external_api')
+        ? { totalCost: 0, unitCost: 0, pricingSnapshot: { source: 'zero_cost', reason: params.source_type } }
+        : undefined;
+    const { resourceType, resourceId } = platformResourceOf(params.reference_type, params.reference_id);
+    const inTok = params.input_tokens ?? null;
+    const outTok = params.output_tokens ?? null;
+    const outcome = await recordPlatformUsage({
+      providerName: provider,
+      modelName: model,
+      modelVersion: params.model_version ?? null,
+      sourceType: params.source_type as 'system' | 'embedding' | 'llm' | 'internal' | 'cache' | 'external_api',
+      sourceName: params.source_name,
+      processType: params.process_type,
+      resourceType,
+      resourceId,
+      inputTokens: inTok,
+      outputTokens: outTok,
+      totalTokens: params.total_tokens ?? ((inTok ?? 0) + (outTok ?? 0)),
+      idempotencyKey: buildPlatformCallKey(provider, params.platform_call),
+      prePriced,
+      metadata: {
+        ...(params.metadata ?? {}),
+        platform_scope: true,
+        writer: params.platform_call.writer,
+        call_id: params.platform_call.callId,
+        call_kind: params.platform_call.kind,
+        provider_attempt: params.platform_call.attempt ?? 1,
+        provider_response_id: params.platform_call.responseId ?? null,
+        feature_area: params.feature_area ?? null,
+        latency_ms: params.latency_ms ?? null,
+        error_flag: params.error_flag === true,
+        error_type: params.error_type ?? null,
+        retry_attempt: params.retry_attempt ?? null,
+        final_attempt: params.final_attempt ?? null,
+        reference_type: params.reference_type ?? null,
+        reference_id: params.reference_id ?? null,
+        campaign_id: params.campaign_id ?? null,
+      },
+    });
+    if ('reason' in outcome) platformUsageWriteFailed(outcome.reason, params);
+  } catch (err) {
+    platformUsageWriteFailed(`exception:${err instanceof Error ? err.message : String(err)}`, params);
+  }
+}

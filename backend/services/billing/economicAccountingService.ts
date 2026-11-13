@@ -329,35 +329,36 @@ export async function getProfitabilityReport(w: Window): Promise<ProfitabilityRe
 }
 
 /**
- * Platform-global (null-org) system rows from usage_events. These are
- * non-customer provider costs (e.g. AI-visibility probes — Phase 8G-B) that
- * carry no organization and therefore never reach unified_transactions
- * (organization_id NOT NULL). Disjoint from the org-attributed system rows in
- * unified_transactions, so combining the two never double-counts. activity =
- * reference_type (falls back to process_type); margin = −cost (pure platform
- * spend, no credit value). Excluded when an org filter is set (these belong to
- * no org).
+ * Platform-global spend (no customer org): platform_usage_events, its one home (B7.8-C; 039 routes the gateway's
+ * no-company calls, AI-visibility probes and no-company external-API calls there). Before 039 this read
+ * usage_events WHERE organization_id IS NULL - a population that could never exist (that column is NOT NULL),
+ * so platform accounting silently missed all of it.
+ * Disjoint from the org-attributed system rows in unified_transactions (platform rows never reach unified), so
+ * combining the two never double-counts. activity = metadata.activity, else metadata.reference_type, else
+ * process_type; margin = -cost (pure platform spend, no credit value). Excluded when an org filter is set.
  */
 async function fetchPlatformGlobalUsageRows(w: Window): Promise<UnifiedTxnRow[]> {
   if (w.organizationId) return [];
   let q = supabase
-    .from('usage_events')
-    .select('process_type, reference_type, provider_name, provider, model_name, model, total_tokens, total_cost_usd')
-    .eq('source_type', 'system')
-    .is('organization_id', null)
+    .from('platform_usage_events')
+    .select('process_type, provider_name, model_name, total_tokens, total_cost, metadata')
     .gte('created_at', w.since)
     .limit(MAX_ROWS);
   if (w.until) q = q.lte('created_at', w.until);
   const { data, error } = await q;
-  if (error) throw new Error(`[economicAccounting] platform usage_events read failed: ${error.message}`);
+  if (error) throw new Error(`[economicAccounting] platform_usage_events read failed: ${error.message}`);
   return (data ?? []).map((r: any) => {
-    const cost = num(r.total_cost_usd);
+    const cost = num(r.total_cost);
+    const md = (r.metadata ?? {}) as Record<string, unknown>;
+    const activity = (typeof md.activity === 'string' && md.activity)
+      || (typeof md.reference_type === 'string' && md.reference_type)
+      || r.process_type || null;
     return {
       organization_id: null,
-      action_key: r.reference_type ?? r.process_type ?? null,
+      action_key: activity,
       source_type: 'system',
-      provider_name: r.provider_name ?? r.provider ?? null,
-      model_name: r.model_name ?? r.model ?? null,
+      provider_name: r.provider_name ?? null,
+      model_name: r.model_name ?? null,
       total_tokens: num(r.total_tokens),
       api_cost_usd: cost,
       credits_charged: 0,

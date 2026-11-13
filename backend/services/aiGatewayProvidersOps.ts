@@ -253,6 +253,10 @@ const executeGatewayCompletion = async (
   // Wrap the rest of the call so concurrent callers share one Promise
   const promise = (async (): Promise<GatewayResponse<string>> => {
   const start = Date.now();
+  // 039: ONE call id per logical request, minted here - inside the shared promise, before any retry loop - so
+  // concurrent callers sharing this promise share one identity, and every platform usage write of this request
+  // (plan limit, cache hit, each provider attempt, final) keys off it (buildPlatformCallKey).
+  const platformCallId = randomUUID();
 
   const preEnforcement = await checkUsageBeforeExecution({
     organization_id: request.companyId ?? UNKNOWN_ORG,
@@ -282,6 +286,7 @@ const executeGatewayCompletion = async (
       error_type: 'PLAN_LIMIT_EXCEEDED',
       retry_attempt: 1,
       final_attempt: true,
+      platform_call: { writer: 'gateway', callId: platformCallId, kind: 'plan_limit', attempt: 1 },
     });
     throw Object.assign(
       new Error('Monthly LLM token limit exceeded for current plan.'),
@@ -309,6 +314,7 @@ const executeGatewayCompletion = async (
       organization_id: request.companyId ?? UNKNOWN_ORG,
       campaign_id:     request.campaignId ?? null,
       source_type:     'cache',
+      platform_call:   { writer: 'gateway', callId: platformCallId, kind: 'cache_hit', attempt: 1 },
       provider_name:   activeProvider,
       model_name:      activeModel,
       source_name:     `${activeProvider}:${activeModel}`,
@@ -378,6 +384,7 @@ const executeGatewayCompletion = async (
     operation:   request.operation,
     featureArea: FEATURE_AREA_MAP[request.operation] ?? 'Other',
     startedAt:   start,
+    callId:      platformCallId,
   };
   let normalized: NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string; retry_attempt: number };
   try {
@@ -420,6 +427,7 @@ const executeGatewayCompletion = async (
       pricing_snapshot: null,
       retry_attempt: finalAttempt,
       final_attempt: true,
+      platform_call: { writer: 'gateway', callId: platformCallId, kind: 'final', attempt: finalAttempt },
     });
     throw error;
   }
@@ -500,6 +508,7 @@ const executeGatewayCompletion = async (
     pricing_snapshot: cost?.pricing_snapshot ?? null,
     retry_attempt: normalized.retry_attempt,
     final_attempt: true,
+    platform_call: { writer: 'gateway', callId: platformCallId, kind: 'final', attempt: normalized.retry_attempt },
   });
   void incrementUsageMeter({
     organization_id: orgIdForBilling,

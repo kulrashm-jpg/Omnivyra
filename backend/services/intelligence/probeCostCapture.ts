@@ -3,9 +3,9 @@
  *
  * Visibility probes (Gemini/Claude/Perplexity/Copilot/OpenAI) measure whether a
  * brand is cited in AI answers. They are org-blind PLATFORM costs, not customer
- * activity. This bridges the adapter probe responses to the existing platform
- * cost-capture pipeline (capturePlatformProviderCost → usage_events,
- * source_type:'system', organization_id NULL). Best-effort; never throws.
+ * activity. This bridges the adapter probe responses to the platform cost-capture
+ * pipeline (capturePlatformProviderCost → logUsageEvent with no org → 039:
+ * platform_usage_events, source_type:'system'). Best-effort; never throws.
  *
  * Token usage is read from each provider's native response shape (the adapters
  * don't otherwise extract it). Model is taken from the response, falling back to
@@ -56,6 +56,13 @@ const PROVIDER_DEFAULT_MODEL: Record<string, string> = {
   chatgpt: 'gpt-4o-mini',
 };
 
+/** 039: the provider's own response id - OpenAI-style / Anthropic `id`, Gemini `responseId` - or null. */
+export function extractProbeResponseId(providerId: string, json: unknown): string | null {
+  const j = (json ?? {}) as Record<string, unknown>;
+  const v = providerId === 'gemini' ? j.responseId : j.id;
+  return typeof v === 'string' && v.trim() !== '' ? v : null;
+}
+
 /**
  * Fire-and-forget platform cost capture for a single visibility-probe response.
  * Callers do `void captureProbeCost({...})` — never awaited on the probe path.
@@ -65,6 +72,8 @@ export function captureProbeCost(input: {
   json: unknown;
   requestCount?: number;
   errorFlag?: boolean;
+  /** 039: minted ONCE at the probe call site, before the provider call - one id per billed call (e1). */
+  callId: string;
 }): Promise<void> {
   const usage = extractProbeTokenUsage(input.providerId, input.json);
   const model = usage.model ?? PROVIDER_DEFAULT_MODEL[input.providerId] ?? input.providerId;
@@ -76,5 +85,7 @@ export function captureProbeCost(input: {
     requestCount: input.requestCount ?? 1,
     errorFlag: input.errorFlag,
     activity: 'ai_visibility_probe',
+    callId: input.callId,
+    responseId: extractProbeResponseId(input.providerId, input.json),
   });
 }

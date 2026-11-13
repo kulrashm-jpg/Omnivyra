@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { supabase } from '../../db/supabaseClient';
 import { updateApiHealth } from '../externalApiHealthService';
 import { logUsageEvent } from '../usageLedgerService';
@@ -164,6 +164,9 @@ export const executeExternalApiRequest = async (input: {
   const retryCount = input.retryCount ?? DEFAULT_RETRY_COUNT;
   const startedAt = Date.now();
   const orgId = input.source.company_id ?? UNKNOWN_ORG;
+  // 039: one call id per invocation (fetchWithRetry's internal retries stay one row) - keys the platform-scope
+  // row when there is no company (buildPlatformCallKey).
+  const platformCallId = randomUUID();
   const sourceName = input.source.name || 'external_api';
 
   const enforcement = await checkUsageBeforeExecution({
@@ -202,6 +205,7 @@ export const executeExternalApiRequest = async (input: {
       error_type: response.ok ? null : `HTTP ${response.status}`,
       total_cost: 0,
       pricing_snapshot: { fixedCost: 0 },
+      platform_call: { writer: 'external_api', callId: platformCallId, kind: 'ok', attempt: 1 },
     });
     if (response.ok) {
       void incrementUsageMeter({
@@ -227,6 +231,7 @@ export const executeExternalApiRequest = async (input: {
       error_flag: true,
       error_type: error?.message ?? 'unknown',
       pricing_snapshot: null,
+      platform_call: { writer: 'external_api', callId: platformCallId, kind: 'error', attempt: 1 },
     });
     throw error;
   }

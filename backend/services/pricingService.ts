@@ -305,6 +305,32 @@ export async function estimateEmbeddingCostUsd(
 }
 
 /**
+ * Org-free provider USD for a token-priced COMPLETION (platform spend, 039). Sibling of
+ * estimateEmbeddingCostUsd: it reads the same model_pricing row resolveLlmCost reads, and never calls
+ * fetchCreditRateUsd - the only org-dependent step - because platform spend charges no customer credits.
+ * Throws when no pricing row exists (the caller records the row with total_cost NULL and logs it).
+ */
+export async function estimateCompletionCostUsd(
+  provider: string,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  timestamp?: string | Date,
+): Promise<{ inputCostUsd: number; outputCostUsd: number; totalUsd: number; row: unknown }> {
+  const row = await fetchModelPricingRow(
+    requireNonEmpty(provider, 'provider').toLowerCase(),
+    requireNonEmpty(model, 'model').toLowerCase(),
+    'completion',
+    normalizeTimestamp(timestamp),
+  );
+  const inTok = Math.max(0, Number(inputTokens ?? 0));
+  const outTok = Math.max(0, Number(outputTokens ?? 0));
+  const inputCostUsd = (inTok / 1000) * Number(row.input_per_1k_usd ?? 0);
+  const outputCostUsd = (outTok / 1000) * Number(row.output_per_1k_usd ?? 0);
+  return { inputCostUsd, outputCostUsd, totalUsd: inputCostUsd + outputCostUsd, row };
+}
+
+/**
  * Upper-bound credit estimate for the HOLD phase of a token-priced action.
  *
  * Returns ceil(ceiling_usd / credit_rate_usd) — i.e. the most credits this

@@ -62,6 +62,8 @@ const counters: Record<string, number> = {
   phase2_shadow_would_block_total:      0,
   // Phase 3.1 — black-hole cost-capture failure (was logs-only).
   black_hole_cost_capture_failed_total: 0,
+  // 039: a platform-scope usage write (platform_usage_events) that did not happen - see usageLedgerService.
+  platform_usage_write_failed_total: 0,
   // Task 5H — pre-HOLD 80% executable-balance safety gate blocked an execution.
   credit_safety_gate_blocked_total:     0,
   // Phase 8D — launch-time admission control (read-only; dark by default).

@@ -191,6 +191,10 @@ export interface PlatformProviderCaptureInput {
   activity: string;
   /** process_type resolving to a known action_key (avoids ledger refusal). */
   processType?: string;
+  /** 039: minted ONCE at the probe call site (one billed provider call) - keys the platform_usage_events row. */
+  callId: string;
+  /** 039: the provider's own response id, when it returned one (the most specific call identity). */
+  responseId?: string | null;
 }
 
 /**
@@ -198,12 +202,11 @@ export interface PlatformProviderCaptureInput {
  * probes (Gemini/Claude/Perplexity/Copilot/OpenAI), system evaluations,
  * internal model checks. Phase 8G-B.
  *
- * Reuses the EXISTING usage_events pipeline as source_type:'system' with
- * organization_id = NULL → platform-global, NEVER attributed to a customer org,
- * NEVER billed, NEVER a credit transaction. (logUsageEvent skips the org-scoped
- * unified_transactions dual-write for null org, so these rows live in
- * usage_events only — economicAccountingService reads them into platform
- * accounting.) Best-effort; never throws.
+ * Written through logUsageEvent with organization_id = NULL, which (039) routes it to platform_usage_events
+ * ONLY - never usage_events, never unified_transactions, never attributed to a customer org, never billed, never
+ * a credit transaction. The cost is the caller's static estimate (pre-priced; no re-pricing). Keyed by the
+ * probe call's identity (callId / provider response id), so two genuine calls with byte-identical bodies are two
+ * rows (e1). economicAccountingService reads platform_usage_events into platform accounting. Best-effort; never throws.
  */
 export async function capturePlatformProviderCost(input: PlatformProviderCaptureInput): Promise<void> {
   try {
@@ -236,6 +239,7 @@ export async function capturePlatformProviderCost(input: PlatformProviderCapture
         platform_cost: true,
         request_count: requestCount,
       },
+      platform_call: { writer: 'probe', callId: input.callId, kind: 'final', attempt: 1, responseId: input.responseId ?? null },
     });
   } catch (err) {
     incrCounter('black_hole_cost_capture_failed_total');

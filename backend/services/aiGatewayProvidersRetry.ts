@@ -150,6 +150,8 @@ export type RetryTrackingContext = {
   operation:   string;
   featureArea: string | null;
   startedAt:   number;
+  /** 039: the request's platform call id (minted once at the gateway entry); keys platform-scope attempt rows. */
+  callId?:     string;
 };
 
 function logIntermediateAttempt(
@@ -177,6 +179,8 @@ function logIntermediateAttempt(
     error_type:      asGatewayError(err).status?.toString() ?? asGatewayError(err).code ?? (err instanceof Error ? err.message.slice(0, 200) : 'unknown'),
     retry_attempt:   attempt,
     final_attempt:   false,
+    // 039: attempt = the PROVIDER attempt index, so each failed provider attempt is its own platform row.
+    platform_call:   ctx.callId ? { writer: 'gateway', callId: ctx.callId, kind: 'attempt_error', attempt } : undefined,
   });
 }
 
