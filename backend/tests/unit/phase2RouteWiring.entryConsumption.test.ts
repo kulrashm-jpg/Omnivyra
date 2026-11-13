@@ -47,7 +47,7 @@ import {
   wirePhase2Route,
   routeLlmPricingFor,
   BilledRouteAlreadyProcessedError,
-  BilledRouteAlreadyReleasedError,
+  BilledRouteReclaimExhaustedError,
   BilledRoutePaymentRequiredError,
   BilledRoutePricingUnavailableError,
   MAX_ROUTE_RECLAIM_ATTEMPTS,
@@ -145,15 +145,18 @@ describe('wirePhase2Route ENFORCE - token-actual, per-request identity, never a 
     expect(engine.executeWithEntryConsumption.mock.calls[1][0].referenceId).toMatch(/:r1$/);
   });
 
-  it(`after ${MAX_ROUTE_RECLAIM_ATTEMPTS} released slots: 409 ALREADY_RELEASED, nothing run`, async () => {
+  it(`after ${MAX_ROUTE_RECLAIM_ATTEMPTS} released slots: 500 RECLAIM_CAP_EXHAUSTED (distinct from any 409), nothing run`, async () => {
     engine.executeWithEntryConsumption.mockResolvedValue({ status: 'already_released' });
     const run = jest.fn();
-    await expect(wirePhase2Route({ ...ARGS, run })).rejects.toBeInstanceOf(BilledRouteAlreadyReleasedError);
+    await expect(wirePhase2Route({ ...ARGS, run })).rejects.toBeInstanceOf(BilledRouteReclaimExhaustedError);
     expect(run).not.toHaveBeenCalled();
     expect(engine.executeWithEntryConsumption).toHaveBeenCalledTimes(MAX_ROUTE_RECLAIM_ATTEMPTS);
     // distinct and LOUD (05): a critical anomaly + its own counter, never an ordinary refusal
     expect(mockAnomalies).toEqual([expect.objectContaining({ kind: 'reclaim_cap_exhausted', severity: 'critical' })]);
     expect(mockCounters).toContain('phase2_route_reclaim_cap_exhausted_total');
+    // the client sees the SAME distinction (05 d): its own code on a 5xx, never the benign 409 family
+    const err = await wirePhase2Route({ ...ARGS, run }).catch((e) => e);
+    expect(billedRouteHttpError(err)).toEqual({ status: 500, body: { error: expect.any(String), code: 'RECLAIM_CAP_EXHAUSTED', retryable: false } });
   });
 
   it('insufficient credits: 402 INSUFFICIENT_CREDITS with required + balance (still a PaymentRequiredError)', async () => {
@@ -218,7 +221,7 @@ describe('wirePhase2Route reclaim follows the shared semantics table', () => {
         expect(out).toBeInstanceOf(BilledRouteAlreadyProcessedError);
         expect(run).not.toHaveBeenCalled();
       } else if (c.expect === 'exhausted') {
-        expect(out).toBeInstanceOf(BilledRouteAlreadyReleasedError);
+        expect(out).toBeInstanceOf(BilledRouteReclaimExhaustedError);
         expect(run).not.toHaveBeenCalled();
       } else {
         const slot = Number(c.expect.split(':')[1]);
