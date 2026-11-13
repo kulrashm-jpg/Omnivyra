@@ -277,6 +277,7 @@ import type { useExtApisAccess } from '../hooks/useExtApisAccess';
 import { useExtApisAccessViewController } from './ExtApisAccessViewController';
 import ExtApisAccessSectionsA from './ExtApisAccessSectionsA';
 import ExtApisAccessSectionsB from './ExtApisAccessSectionsB';
+import IntegrationHubNav from './integrations/IntegrationHubNav';
 
 export default function ExtApisAccessView({ d }: { d: ReturnType<typeof useExtApisAccessViewController>['d'] }) {
   const f = useExtApisAccessViewController({ d });
@@ -292,6 +293,12 @@ export default function ExtApisAccessView({ d }: { d: ReturnType<typeof useExtAp
   } = f;
     return (
     <div className="min-h-screen bg-gray-50 p-6">
+      {/* e9 ruling 2026-11-13: this page stays for launch (it owns per-company API config),
+          so it carries the integration hub bar like /external-apis. The user is never
+          stranded. Merging it into /external-apis is a post-launch item. */}
+      <div className="max-w-6xl mx-auto">
+        <IntegrationHubNav active="api" />
+      </div>
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">External API Access</h1>
