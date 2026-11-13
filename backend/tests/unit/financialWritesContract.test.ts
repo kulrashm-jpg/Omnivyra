@@ -133,10 +133,6 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 export const ALLOWLIST: Record<string, string> = {
   'backend/services/billing/idempotency/heartbeatService.ts:heartbeatBillingOperation|billing_operations|update|#1':
     'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L45 @9cecd075f]',
-  'backend/services/billing/topupInvoiceService.ts:generateTopupInvoice|invoice_line_items|insert|#1':
-    'B4 BLOCKING: invoice line / mark-paid unread (6f fixes) [L93 @9cecd075f]',
-  'backend/services/billing/topupInvoiceService.ts:generateTopupInvoice|invoices|update|#1':
-    'B4 BLOCKING: invoice line / mark-paid unread (6f fixes) [L107 @9cecd075f]',
   'backend/services/creator/rendering/processQueuedRenderJob.ts:releaseBilling|billing_operations|update|#1':
     'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L37 @9cecd075f]',
   'backend/services/creator/rendering/processQueuedRenderJob.ts:processQueuedRenderJob|billing_operations|update|#1':
