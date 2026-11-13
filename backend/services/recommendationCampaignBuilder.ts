@@ -67,7 +67,8 @@ export async function buildCampaignFromRecommendation(input: {
     throw new Error('Recommendation not found');
   }
 
-  const profile = await getProfile(recommendation.company_id, { autoRefine: true });
+  // No auto-refine: this builder has NO callers and no billed unit (e9 2026-11-13: every AI action is priced).
+  const profile = await getProfile(recommendation.company_id, { autoRefine: false });
 
   const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .insert({

@@ -706,9 +706,11 @@ export async function deriveAndStoreStrategyProfile(
 //   1. the raw profile row is request-memoized (same-request re-reads hit the
 //      memo; zero staleness — one request sees one snapshot),
 //   2. autoRefine becomes OPT-IN on read paths (only callers that explicitly
-//      pass autoRefine:true trigger the staleness-driven LLM refine; the
+//      opt in to autoRefine trigger the staleness-driven LLM refine; the
 //      refresh cron / explicit refine flows are unaffected).
-// Flag off (default) = fetch-per-call + autoRefine-by-default, as before.
+// Flag off (default) = fetch-per-call (no memo).
+// 2026-11-13 (e9, owner rule "every AI action is priced"): autoRefine is OPT-IN REGARDLESS of the flag. The old
+// flag-off default ran an unpriced LLM refine inside 8 plain reads. Only callers that pass autoRefine set to true refine.
 // Kill: ROLLOUT_PROFILE_CACHE_KILL. Invalidation: writes happen through
 // updateProfile paths which always re-read (memo is request-scoped only —
 // no cross-request profile cache in this batch, freshness preserved).
@@ -735,8 +737,8 @@ export async function getProfile(
   if (!profile) return null;
 
   let result: CompanyProfile | null = profile;
-  const autoRefineDefault = cacheOn ? false : true; // W4-5: opt-in under the flag
-  if ((options?.autoRefine ?? autoRefineDefault) && shouldRefineProfile(profile.last_refined_at)) {
+  // OPT-IN: an absent autoRefine never refines (see the note above PROFILE_CACHE_FLAG).
+  if (options?.autoRefine === true && shouldRefineProfile(profile.last_refined_at)) {
     // The staleness refine is BACKGROUND work for the read: it must never fail the caller's request (e9, PL 11-13).
     // On any refine error, serve the unrefined profile; log + count so a broken refine stays visible.
     try {

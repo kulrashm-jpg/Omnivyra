@@ -68,7 +68,7 @@ export async function resolveAnalyticsReportInput(params: {
  * Report 2 DOES refine the Company Profile by design, but through a DIFFERENT chain:
  * `composePerformanceIntelligenceReport` → `getAnalyticsEnterpriseSnapshot` →
  * `discoverAndPersistCompetitorDomains` / `bootstrapCompetitorDataset` → `getProfile(companyId)`
- * with NO options, so `autoRefine` defaults ON → `refineProfileWithAI` →
+ * with NO options, so (until 2026-11-13, when autoRefine became OPT-IN) `autoRefine` defaulted ON → `refineProfileWithAI` →
  * `saveProfile(..., { source: 'ai_refined' })`. That chain is documented in
  * `intelligence/reportDeadlineContext.ts`, is attributed as a machine refinement, honours
  * `user_locked_fields` and preserves `last_edited_by`. It is untouched here.

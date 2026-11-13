@@ -8,7 +8,7 @@
  *
  *   getAnalyticsEnterpriseSnapshot → computeAnalyticsEnterpriseSnapshot
  *     → discoverAndPersistCompetitorDomains / bootstrapCompetitorDataset
- *       → getProfile(companyId)            (no options ⇒ autoRefine defaults ON)
+ *       → getProfile(companyId)            (no options; autoRefine was default-ON until 2026-11-13, now OPT-IN, so this chain no longer refines)
  *         → refineProfileWithAI → runProfileRefinement
  *             ├─ cleanEvidenceWithAi            (profileEnrichment)
  *             ├─ profileExtraction
