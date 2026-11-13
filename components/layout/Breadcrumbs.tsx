@@ -2,6 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { ChevronRight, Home } from 'lucide-react';
+import { CAMPAIGN_FLOWS } from '../../lib/navigation/campaignFlows';
 
 const ROUTE_LABELS: Record<string, string> = {
   'command-center': 'Dashboard',
@@ -12,7 +13,7 @@ const ROUTE_LABELS: Record<string, string> = {
   'content-studio': 'Content Studio',
   'content-creation': 'Content',
   campaigns: 'Campaigns',
-  'campaign-planner': 'Strategic Mix Planner',
+  'campaign-planner': CAMPAIGN_FLOWS.strategicMix.label,
   'campaign-details': 'Campaign Details',
   engagement: 'Engagement',
   reports: 'Reports',
@@ -20,10 +21,10 @@ const ROUTE_LABELS: Record<string, string> = {
   analytics: 'Analytics',
   leads: 'Active Leads',
   // Same product names as both menus (owner decision 2026-11-13).
-  'bolt-text': 'BOLT Text',
-  'bolt-text-strategy': 'BOLT Text',
-  'bolt-creator-strategy': 'BOLT Creator',
-  'intelligent-mix-strategy': 'Intelligent Mix',
+  'bolt-text': CAMPAIGN_FLOWS.boltText.label,
+  'bolt-text-strategy': CAMPAIGN_FLOWS.boltText.label,
+  'bolt-creator-strategy': CAMPAIGN_FLOWS.boltCreator.label,
+  'intelligent-mix-strategy': CAMPAIGN_FLOWS.intelligentMix.label,
 };
 
 function getLabel(segment: string): string {

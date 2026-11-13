@@ -14,6 +14,7 @@ import {
   Users,
   Wallet,
 } from 'lucide-react';
+import { CAMPAIGN_FLOWS } from '../../lib/navigation/campaignFlows';
 
 export type SecondaryNavItem = {
   label: string;
@@ -92,38 +93,38 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       // Owner decision 2026-11-13: product name + a short plain-English hint, the same
       // wording in the header menu and here. Hints approved verbatim by the owner.
       {
-        label: 'All Campaigns',
-        description: 'See and manage every campaign',
-        hint: 'See and manage every campaign',
-        href: '/campaigns',
+        label: CAMPAIGN_FLOWS.all.label,
+        description: CAMPAIGN_FLOWS.all.hint,
+        hint: CAMPAIGN_FLOWS.all.hint,
+        href: CAMPAIGN_FLOWS.all.href,
         icon: Megaphone,
       },
       {
-        label: 'BOLT Text',
-        description: 'Quick text posts in minutes',
-        hint: 'Quick text posts in minutes',
-        href: '/command-center/bolt-text',
+        label: CAMPAIGN_FLOWS.boltText.label,
+        description: CAMPAIGN_FLOWS.boltText.hint,
+        hint: CAMPAIGN_FLOWS.boltText.hint,
+        href: CAMPAIGN_FLOWS.boltText.href,
         icon: Sparkles,
       },
       {
-        label: 'BOLT Creator',
-        description: 'Image, carousel and infographic campaigns',
-        hint: 'Image, carousel and infographic campaigns',
-        href: '/command-center/bolt-creator-strategy',
+        label: CAMPAIGN_FLOWS.boltCreator.label,
+        description: CAMPAIGN_FLOWS.boltCreator.hint,
+        hint: CAMPAIGN_FLOWS.boltCreator.hint,
+        href: CAMPAIGN_FLOWS.boltCreator.href,
         icon: Users,
       },
       {
-        label: 'Intelligent Mix',
-        description: 'Text and visuals together in one campaign',
-        hint: 'Text and visuals together in one campaign',
-        href: '/command-center/intelligent-mix-strategy',
+        label: CAMPAIGN_FLOWS.intelligentMix.label,
+        description: CAMPAIGN_FLOWS.intelligentMix.hint,
+        hint: CAMPAIGN_FLOWS.intelligentMix.hint,
+        href: CAMPAIGN_FLOWS.intelligentMix.href,
         icon: Rocket,
       },
       {
-        label: 'Strategic Mix',
-        description: 'Plan a full campaign step by step, your way',
-        hint: 'Plan a full campaign step by step, your way',
-        href: '/campaign-planner?mode=direct',
+        label: CAMPAIGN_FLOWS.strategicMix.label,
+        description: CAMPAIGN_FLOWS.strategicMix.hint,
+        hint: CAMPAIGN_FLOWS.strategicMix.hint,
+        href: CAMPAIGN_FLOWS.strategicMix.href,
         icon: Lightbulb,
       },
       // BETA-008 (RULE 8): "Variant Experience" hidden for Beta — operator/dev-only tooling.

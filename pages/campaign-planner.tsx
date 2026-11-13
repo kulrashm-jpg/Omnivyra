@@ -41,6 +41,7 @@ import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
 import { AccountContext } from '../lib/shared/accountContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { CAMPAIGN_FLOWS } from '../lib/navigation/campaignFlows';
 
 interface CampaignPlannerLayoutProps {
   companyId?: string | null;
@@ -825,7 +826,11 @@ function CampaignPlannerInner({
               <ArrowLeft className="h-5 w-5" />
               Back
             </button>
-            <h1 className="text-lg font-bold text-gray-900">Campaign Planner</h1>
+            {/* D4: one name everywhere (product name + the owner-approved hint). */}
+            <div className="text-center">
+              <h1 className="text-lg font-bold text-gray-900">{CAMPAIGN_FLOWS.strategicMix.label}</h1>
+              <p className="text-xs text-gray-500">{CAMPAIGN_FLOWS.strategicMix.hint}</p>
+            </div>
             <div className="w-16" />
           </div>
         </div>

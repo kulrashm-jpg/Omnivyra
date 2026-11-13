@@ -1,6 +1,6 @@
 /** Part 2/2 of BoltStrategyView.tsx — verbatim split (barrel preserved; importers unchanged). */
 /**
- * Command Center → BOLT (Text) Strategy Builder
+ * Command Center → BOLT Text (campaign builder)
  *
  * Layout:
  *   Top two-column: Left = form inputs | Right = suggestions + AI chat
@@ -25,6 +25,7 @@ import { BOLT_DURATION_OPTIONS } from '../lib/shared/campaignDuration';
 import BoltPlatformPicker from './bolt/BoltPlatformPicker';
 
 import { type OutcomeView, type SharingMode, CONTENT_FORMATS, DURATION_OPTIONS, GOAL_OPTIONS, TONE_OPTIONS, AUDIENCE_HINT_EXAMPLES, STRATEGIC_FOCUS_OPTIONS, INTELLIGENCE_SOURCES, TagInput, StrategyCard } from './BoltStrategyViewWidgets';
+import { CAMPAIGN_FLOWS } from '../lib/navigation/campaignFlows';
 
 function CampaignBriefSection({
   topic, description, goals, tone, audienceText,
@@ -311,8 +312,9 @@ export default function BoltStrategyView({ d }: { d: S }) {
           <div className="flex items-center gap-3 mb-1">
             <span className="text-3xl">⚡</span>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">BOLT (Text) Strategy Builder</h1>
-              <p className="text-sm font-medium text-gray-600">AI Automated Campaign</p>
+              {/* D4: one name everywhere (product name + the owner-approved hint). */}
+              <h1 className="text-xl font-bold text-gray-900">{CAMPAIGN_FLOWS.boltText.label}</h1>
+              <p className="text-sm font-medium text-gray-600">{CAMPAIGN_FLOWS.boltText.hint}</p>
             </div>
             <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">AI Automated</span>
           </div>
