@@ -15,6 +15,7 @@ import {
   recordOpportunityImpact,
   completeOpportunity,
 } from '../../../../backend/services/contentOpportunityLifecycleService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 type LifecycleBody = {
   id?: string;
@@ -54,6 +55,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const linkCampaignId = action === 'link_campaign' ? body.campaign_id?.trim() || null : null;
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId, campaignId: linkCampaignId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
     let ok = false;
     switch (action) {

@@ -49,6 +49,9 @@ const SESSION = { userId: 'user-r3', orgId: 'org-r3', expiresAt: Date.now() + 36
 jest.mock('@/backend/middleware/extensionAuthMiddleware', () => ({ requireExtensionAuth: async () => ({ session: SESSION }) }));
 jest.mock('../../middleware/extensionAuthMiddleware', () => ({ requireExtensionAuth: async () => ({ session: SESSION }) }));
 jest.mock('@/backend/services/userContextService', () => ({ enforceCompanyAccess: async () => ({ userId: 'user-r3' }) }));
+// The write-role gate (e9 outreach write roles) runs after membership; this suite's subject is SUSPENSION, so its actor
+// is a member allowed to write. The gate itself is pinned in outreachWriteRolesAllRoutes.test.ts.
+jest.mock('../../services/campaignWriteRole', () => ({ ...jest.requireActual('../../services/campaignWriteRole'), enforceCampaignWriteRole: async () => true }));
 jest.mock('@/backend/services/engagementCapabilityMap', () => ({ CAPABILITY_MAP_VERSION: 'cap-test', resolveEngagementCapability: () => ({ status: 'api_verified' }) }));
 jest.mock('@/backend/services/extensionReliabilityService', () => ({ isCurrentlyDisabled: () => false }));
 jest.mock('@/backend/services/extensionCommandSchema', () => ({ COMMAND_SCHEMA_VERSION: 'schema-test', validateCommandPayload: (_p: string, _a: string, payload: unknown) => ({ ok: true, payload }) }));

@@ -19,6 +19,44 @@ import {
   verifyExtensionRequestSignature,
 } from '@/backend/services/extensionSessionService';
 import { supabase } from '@/backend/db/supabaseClient';
+import { COMMUNITY_AI_CAPABILITIES } from '@/backend/services/rbac/communityAiCapabilities';
+import { normalizePermissionRole, isPlatformSuperAdmin } from '@/backend/services/rbacService';
+
+/**
+ * e9 BLOCKING (b), 2026-11-13: an extension token EXECUTES engagement actions (command leasing, action results, event
+ * ingestion). Minting one now needs EXECUTE_ACTIONS (extension/bootstrap), and EVERY token request re-checks that the
+ * token's user STILL holds EXECUTE_ACTIONS in the token's company - so a role downgrade or removal revokes the token
+ * instead of leaving it valid until expiry.
+ *   - no longer allowed  -> 403 EXTENSION_ROLE_REVOKED
+ *   - role lookup FAILED -> 503 ROLE_CHECK_UNAVAILABLE (retryable; nothing granted - a DB blip must neither let a
+ *     revoked user through nor read as a revocation)
+ * Only ALLOWED results are cached (EXTENSION_ROLE_CACHE_MS): a re-grant takes effect at once; a revoke within that.
+ */
+export const EXTENSION_ROLE_CACHE_MS = 60_000;
+const extensionRoleCache = new Map<string, number>();
+export function __resetExtensionRoleCacheForTests(): void { extensionRoleCache.clear(); }
+
+export async function extensionUserMayExecute(userId: string, orgId: string, nowMs: number = Date.now()): Promise<'allow' | 'deny' | 'unavailable'> {
+  const key = `${userId}:${orgId}`;
+  if ((extensionRoleCache.get(key) ?? 0) > nowMs) return 'allow';
+  try {
+    const { data, error } = await supabase
+      .from('user_company_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .eq('company_id', orgId)
+      .eq('status', 'active');
+    if (error) return 'unavailable';
+    const allowed = new Set<string>(COMMUNITY_AI_CAPABILITIES.EXECUTE_ACTIONS as readonly string[]);
+    let ok = (Array.isArray(data) ? data : []).some((r: { role?: unknown }) => allowed.has(String(normalizePermissionRole(String(r.role ?? '').trim().toUpperCase()))));
+    if (!ok) ok = await isPlatformSuperAdmin(userId); // EXECUTE_ACTIONS includes SUPER_ADMIN, as enforceRole honours it
+    if (!ok) return 'deny';
+    extensionRoleCache.set(key, nowMs + EXTENSION_ROLE_CACHE_MS);
+    return 'allow';
+  } catch {
+    return 'unavailable';
+  }
+}
 
 function take(h: string | string[] | undefined) { return (Array.isArray(h) ? h[0] : h) || ''; }
 
@@ -122,6 +160,16 @@ export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResp
 
   if (!verify.ok) {
     res.status(401).json({ success: false, error: 'SIGNATURE_INVALID', reason: verify.reason });
+    return null;
+  }
+
+  const may = await extensionUserMayExecute(session.userId, session.orgId);
+  if (may === 'unavailable') {
+    res.status(503).json({ success: false, error: 'ROLE_CHECK_UNAVAILABLE', retryable: true });
+    return null;
+  }
+  if (may === 'deny') {
+    res.status(403).json({ success: false, error: 'EXTENSION_ROLE_REVOKED' });
     return null;
   }
 

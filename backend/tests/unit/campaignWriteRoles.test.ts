@@ -230,9 +230,21 @@ describe('inventory: no campaign write route without a role gate', () => {
       expect(fs.readFileSync(path.join(API, rel), 'utf8')).toContain('requireCampaignTenantAccess(');
     }
   });
-  it('only campaign messages and voice notes name the Engager exception', () => {
+  it('only campaign messages, voice notes and the engagement triage/draft routes name an Engager exception', () => {
     const named = walk(API).filter((f) => /engagerException:|engagerCampaignWriteException:/.test(fs.readFileSync(f, 'utf8')))
       .map((f) => path.relative(API, f).replace(/\\/g, '/')).sort();
-    expect(named).toEqual(['campaign/messages.ts', 'voice/notes.ts', 'voice/notes/[noteId].ts', 'voice/transcribe.ts']);
+    expect(named).toEqual([
+      'campaign/messages.ts',
+      // owner ruling 2026-11-13 (via e9): Engager = TRIAGE + DRAFT in the Engagement inbox ('engagement_triage_draft')
+      'engagement/ai-suggestion.ts', 'engagement/generate-response.ts', 'engagement/message/mark-self.ts',
+      'engagement/refine-suggestion.ts', 'engagement/signal/status.ts', 'engagement/thread/assign.ts',
+      'engagement/thread/bulk-ignore.ts', 'engagement/thread/bulk-resolve.ts', 'engagement/thread/ignore.ts',
+      'engagement/thread/reply-lock.ts',
+      'voice/notes.ts', 'voice/notes/[noteId].ts', 'voice/transcribe.ts',
+    ]);
+    // and each engagement route names exactly the triage/draft allowance - never a campaign one
+    for (const rel of named.filter((r) => r.startsWith('engagement/'))) {
+      expect([rel, /engagerException: 'engagement_triage_draft'/.test(fs.readFileSync(path.join(API, rel), 'utf8'))]).toEqual([rel, true]);
+    }
   });
 });

@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import * as ops from '../../../backend/services/operations/operationalCoreService';
 import type { OperationalEntityRef, OperationalEntityType } from '../../../backend/services/operations/operationalCoreService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 /**
  * /api/lead-intelligence/operations — THE single operational mutation + read layer for
@@ -35,6 +36,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'company_id required' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
   const actor = { userId: user.userId };
 
   try {

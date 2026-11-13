@@ -17,6 +17,7 @@ import { triggerLeadIntelligence } from '../../../backend/services/leadIntellige
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { getTrustedClientIp } from '../../../lib/security/clientIp';
 import { recordRawCounter } from '../../../backend/observability';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 /**
  * WSF-ORD-003 abuse controls for the ANONYMOUS embedded-form branch (Mode 2).
@@ -83,6 +84,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId) return res.status(400).json({ error: 'company_id is required' });
     const access = await enforceCompanyAccess({ req, res, companyId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
     const { form_id, integration_id, source, since, is_test } = req.query;
     try {
@@ -292,6 +294,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
     const { name, email, phone, source, metadata } = body;
     if (!name || !email) return res.status(400).json({ error: 'name and email are required' });

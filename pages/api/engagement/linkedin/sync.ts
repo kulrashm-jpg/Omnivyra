@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { syncLinkedInEngagement } from '../../../../backend/services/linkedinEngagementWorkspaceService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -25,6 +26,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: false,
     });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
     const result = await syncLinkedInEngagement(companyId);
     return res.status(200).json({ success: true, result });

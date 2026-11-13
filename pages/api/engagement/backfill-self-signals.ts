@@ -39,6 +39,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { isAuthorSelf } from '../../../lib/engagement/messageRoles';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 function normalizeLinkedInProfileUrl(input: string | null | undefined): { url: string; slug: string } | null {
   if (!input) return null;
@@ -81,6 +82,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
   // ── Identity resolution ─────────────────────────────────────────────────
   // Stable per-person LinkedIn identity. Display name is intentionally NOT

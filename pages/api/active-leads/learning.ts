@@ -17,6 +17,7 @@ import {
 } from '../../../backend/services/orgLearningMemoryService';
 import type { LearningMetricKey } from '../../../backend/types/orgLearningMetric';
 import { LEARNING_METRIC_KEYS } from '../../../backend/types/orgLearningMetric';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -30,6 +31,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   const metricKey = typeof req.query.metricKey === 'string' && LEARNING_METRIC_KEYS.includes(req.query.metricKey as LearningMetricKey)
     ? (req.query.metricKey as LearningMetricKey)
     : undefined;
@@ -49,6 +51,7 @@ async function handleRecompute(req: NextApiRequest, res: NextApiResponse) {
   if (body.action !== 'recompute') return res.status(400).json({ error: 'action must be recompute' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   const windowHours = typeof body.windowHours === 'number' && body.windowHours > 0
     ? Math.min(24 * 90, Math.floor(body.windowHours))
     : undefined;

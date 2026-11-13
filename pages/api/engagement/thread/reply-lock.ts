@@ -12,6 +12,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 const LOCK_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -40,6 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
     const me = access.userId;
 
     const { data: thread } = await supabase

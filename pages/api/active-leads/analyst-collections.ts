@@ -30,6 +30,7 @@ import {
   type CollectionItemKind,
   type SavedViewKind,
 } from '../../../backend/types/analystCollection';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -43,6 +44,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (req.query.collectionId && req.query.items) {
       const items = await listCollectionItems(companyId, String(req.query.collectionId));
@@ -67,6 +69,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   }
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (action === 'upsert_view') {
       const view = await upsertSavedView({

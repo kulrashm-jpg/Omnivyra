@@ -34,7 +34,12 @@ export function asRawMembershipRole(value: unknown): RawMembershipRole | null {
 export const CAMPAIGN_WRITE_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** The ONLY campaign writes an Engager may make (owner ruling). */
-export type EngagerCampaignWriteException = 'campaign_messages' | 'voice_notes';
+/**
+ * 'engagement_triage_draft' (owner ruling 2026-11-13, via e9): in the Engagement inbox an Engager may TRIAGE (assign,
+ * ignore, resolve, reply-lock, mark-self, signal status) and DRAFT AI reply suggestions (credits allowed) - never SEND
+ * (replies / likes stay EXECUTE_ACTIONS: Publisher / Admin). Opted into by exactly those routes.
+ */
+export type EngagerCampaignWriteException = 'campaign_messages' | 'voice_notes' | 'engagement_triage_draft';
 
 export const ROLE_FORBIDDEN_BODY = {
   error: 'Your role can view this campaign but not change it.',

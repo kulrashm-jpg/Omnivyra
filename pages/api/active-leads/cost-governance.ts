@@ -55,7 +55,9 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   }
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
-  if (action === 'upsert_budget') {
+  // e9 BLOCKING (d): record / evaluate are ADMIN-ONLY like upsert_budget (they insert cost events and can publish a
+  // realtime alert) - no longer membership-only.
+  {
     const { role, error: roleError } = await getUserRole(ctx.userId, companyId);
     if (roleError || !role) return res.status(403).json({ error: roleError ?? 'FORBIDDEN_ROLE' });
     if (!hasCommunityAiCapability(role, 'MANAGE_LISTENING_CAPABILITIES')) {

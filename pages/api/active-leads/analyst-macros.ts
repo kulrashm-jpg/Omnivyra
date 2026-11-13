@@ -24,6 +24,7 @@ import {
   type AnalystMacroKind,
   type AnalystMacroStep,
 } from '../../../backend/types/analystMacro';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -37,6 +38,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (req.query.executions) {
       const items = await listAnalystMacroExecutions(companyId, {
@@ -64,6 +66,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   }
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (action === 'upsert') {
       const macroKind = ANALYST_MACRO_KINDS.includes(body.macroKind as AnalystMacroKind) ? (body.macroKind as AnalystMacroKind) : null;

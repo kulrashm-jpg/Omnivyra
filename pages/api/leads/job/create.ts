@@ -9,6 +9,7 @@ import {
 } from '../../../../backend/queue/leadQueueHardening';
 import { recordLeadQueueEnqueue } from '../../../../backend/queue/leadQueueObservability';
 import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -40,6 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: false,
     });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
     const mode = modeInput === 'PREDICTIVE' ? 'PREDICTIVE' : 'REACTIVE';
 

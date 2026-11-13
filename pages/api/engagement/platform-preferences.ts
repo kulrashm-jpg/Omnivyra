@@ -6,6 +6,7 @@ import {
   upsertEngagementPlatformPreference,
 } from '@/backend/services/engagementPlatformPreferenceService';
 import { normalizePlatform } from '@/utils/platformIcons';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 type SuccessResponse =
   | {
@@ -46,6 +47,7 @@ async function handler(
     requireCampaignId: false,
   });
   if (!access) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   if (req.method === 'GET') {
     const preferences = await getEngagementPlatformPreferences(companyId, access.userId);

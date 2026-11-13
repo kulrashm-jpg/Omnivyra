@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { EXTENSION_BROWSER_INGESTION_SUSPENDED, refuseSuspendedIngestion } from '@/backend/services/extensionIngestionSuspension';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 const SYNC_COMMAND_PLATFORMS = new Set(['linkedin']);
 const IDEMPOTENCY_BUCKET_MS = 5 * 60 * 1000;
@@ -207,6 +208,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId, requireCampaignId: false });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
     if (req.method === 'POST') {
       // R-3: browser ingestion is suspended; queue no sync_*_inbox browser

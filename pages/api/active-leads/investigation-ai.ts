@@ -23,6 +23,7 @@ import {
   INVESTIGATION_AI_KINDS,
   type InvestigationAiKind,
 } from '../../../backend/types/investigationAi';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -36,6 +37,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     if (req.query.summaryId) {
       const summary = await getInvestigationSummary(companyId, String(req.query.summaryId));
@@ -61,6 +63,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId || !investigationKind) return res.status(400).json({ error: 'companyId and valid investigationKind required' });
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(ctx.userId) }))) return;
   try {
     const summary = await generateInvestigationSummary({
       organizationId: companyId,

@@ -10,6 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { recordThreadEvent } from '../../../../backend/services/engagementThreadEventService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 type Body = {
   thread_id?: string;
@@ -37,6 +38,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId), engagerException: 'engagement_triage_draft' }))) return;
 
     const { data: thread, error: fetchError } = await supabase
       .from('engagement_threads')

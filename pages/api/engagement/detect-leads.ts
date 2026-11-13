@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { processMessageForLeads } from '../../../backend/services/leadDetectionService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -28,6 +29,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(organizationId), userId: String(access.userId) }))) return;
 
     let threadIds: string[] = [];
     if (threadId) {
