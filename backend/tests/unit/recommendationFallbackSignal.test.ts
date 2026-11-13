@@ -49,6 +49,17 @@ jest.mock('../../services/omnivyraClientV1', () => ({
   }),
 }));
 
+// The engine reads the profile through canonicalProfileAdapter -> companyProfileServiceRest1Rest2Pulse.getProfile
+// (since fd0d31e4b), which this suite's companyProfileService mock does not intercept. engine.ts passes
+// autoRefine:true + languageRefine:true and the fixture profile has no last_refined_at, so the REAL AI refine ran and
+// called OpenAI from a unit test (401 with the placeholder key - the CI failure, 2 of 5). Stub both refines at the
+// module the path actually uses; implementations are (re)set in beforeEach because afterEach resets all mocks.
+jest.mock('../../services/companyProfileServiceRest1Rest2Competitors', () => ({
+  ...jest.requireActual('../../services/companyProfileServiceRest1Rest2Competitors'),
+  refineProfileWithAI: jest.fn(),
+  refineProfileForPrompts: jest.fn(),
+}));
+
 jest.mock('../../services/trendNormalizationService', () => ({
   normalizeTrends: jest.fn().mockReturnValue([]),
 }));
@@ -151,6 +162,10 @@ describe('generateRecommendations fallback signals', () => {
       then: (resolve: any) => resolve({ data: [{ id: 'link' }], error: null }),
     }));
 
+    const refines = jest.requireMock('../../services/companyProfileServiceRest1Rest2Competitors');
+    refines.refineProfileWithAI.mockImplementation(async (p: unknown) => p);
+    refines.refineProfileForPrompts.mockImplementation(async (p: unknown) => p);
+
     (getProfile as jest.Mock).mockResolvedValue({
       company_id: 'c-1',
       category: 'marketing',
@@ -214,6 +229,10 @@ describe('generateRecommendations fallback signals', () => {
     expect(result.trends_used.length).toBeGreaterThan(0);
     expect(result.signals_source).toBe('PROFILE_ONLY');
     expect(result.trends_used[0]?.source).toBe('fallback_context');
+    // The refine path IS exercised (stale fixture profile) - and it is the stub, never a live provider call.
+    const refines = jest.requireMock('../../services/companyProfileServiceRest1Rest2Competitors');
+    expect(refines.refineProfileWithAI).toHaveBeenCalled();
+    expect(refines.refineProfileForPrompts).toHaveBeenCalled();
   });
 
   it('keeps scoring path active for fallback signals', async () => {
