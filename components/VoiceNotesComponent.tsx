@@ -17,6 +17,8 @@ import {
   Brain
 } from 'lucide-react';
 import { transcriptionErrorMessage } from './ChatVoiceButton';
+import { useCompanyContext } from './CompanyContext';
+import { canPostCampaignMessages } from '../lib/access/campaignWriteAccess';
 
 interface VoiceNote {
   id: string;
@@ -47,6 +49,10 @@ export default function VoiceNotesComponent({
   onTranscriptionComplete,
   onSuggestionApply 
 }: VoiceNotesComponentProps) {
+  // Transcription is authorised against the ACTIVE company (paired with 55's server change);
+  // Viewers / view-only users can't record (Engagers can: voice_notes exception).
+  const { selectedCompanyId, userRole } = useCompanyContext();
+  const mayRecord = canPostCampaignMessages(userRole);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
@@ -83,6 +89,8 @@ export default function VoiceNotesComponent({
   };
 
   const startRecording = async () => {
+    // No active company: never call transcribe (the server requires one).
+    if (!selectedCompanyId) return;
     try {
       setError(null);
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -163,6 +171,7 @@ export default function VoiceNotesComponent({
         body: JSON.stringify({
           audioFile: audioDataUrl,
           provider: 'whisper',
+          companyId: selectedCompanyId,
           context: context
         })
       });
@@ -291,14 +300,17 @@ export default function VoiceNotesComponent({
         
         <div className="flex items-center gap-2">
           {!isRecording ? (
+            mayRecord && (
             <button
               onClick={startRecording}
-              disabled={isProcessing}
+              disabled={isProcessing || !selectedCompanyId}
+              title={!selectedCompanyId ? 'Select a company to use voice' : undefined}
               className="bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center gap-2"
             >
               <Mic className="h-4 w-4" />
               Start Recording
             </button>
+            )
           ) : (
             <button
               onClick={stopRecording}
@@ -408,6 +420,7 @@ export default function VoiceNotesComponent({
                   >
                     <Play className="h-4 w-4" />
                   </button>
+                  {mayRecord && (
                   <button
                     onClick={() => deleteVoiceNote(note.id)}
                     className="p-1 hover:bg-red-100 rounded text-red-600"
@@ -415,6 +428,7 @@ export default function VoiceNotesComponent({
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
+                  )}
                 </div>
               </div>
               

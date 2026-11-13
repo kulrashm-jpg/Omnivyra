@@ -2,6 +2,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Loader2 } from 'lucide-react';
+import { useCompanyContext } from './CompanyContext';
+import { canPostCampaignMessages } from '../lib/access/campaignWriteAccess';
 
 export type ChatVoiceButtonProps = {
   /** Called once with the final transcript when transcription completes. */
@@ -68,6 +70,13 @@ export default function ChatVoiceButton({
   const contextRef = useRef(context);
   onTranscriptionRef.current = onTranscription;
   contextRef.current = context;
+  // Transcription is billed to and authorised against the ACTIVE company (paired with 55's
+  // server change: transcribe requires a company). Viewers / view-only users have nothing
+  // they may write, so they get no mic; Engagers keep it (they triage and draft).
+  const { selectedCompanyId, userRole } = useCompanyContext();
+  const companyIdRef = useRef(selectedCompanyId);
+  companyIdRef.current = selectedCompanyId;
+  const mayDictate = canPostCampaignMessages(userRole);
 
   const stopStream = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -96,7 +105,7 @@ export default function ChatVoiceButton({
       const res = await fetch('/api/voice/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audioFile: dataUrl, provider: 'whisper', context: contextRef.current }),
+        body: JSON.stringify({ audioFile: dataUrl, provider: 'whisper', context: contextRef.current, companyId: companyIdRef.current }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.success) throw new Error(transcriptionErrorMessage(res.status, typeof json?.error === 'string' ? json.error : null));
@@ -183,26 +192,30 @@ export default function ChatVoiceButton({
     // status transitions to 'transcribing' inside recorder.onstop
   };
 
+  // No active company: never call (the server would answer 400 COMPANY_REQUIRED).
+  const noCompany = !selectedCompanyId;
   const handleClick = () => {
-    if (disabled || status === 'transcribing') return;
+    if (disabled || noCompany || status === 'transcribing') return;
     if (status === 'recording') stopRecording();
     else void startRecording();
   };
 
-  const effectiveTitle =
-    title ??
+  const effectiveTitle = noCompany
+    ? 'Select a company to use voice'
+    : title ??
     (status === 'recording'
       ? 'Stop and transcribe'
       : status === 'transcribing'
         ? 'Transcribing…'
         : 'Record a voice note (transcribed by Whisper)');
 
+  if (!mayDictate) return null;
   return (
     <span className="inline-flex flex-col items-center gap-0.5">
       <button
         type="button"
         onClick={handleClick}
-        disabled={disabled || status === 'transcribing'}
+        disabled={disabled || noCompany || status === 'transcribing'}
         title={error || effectiveTitle}
         className={
           className ||
