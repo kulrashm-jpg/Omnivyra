@@ -81,6 +81,12 @@ export interface ResolveLlmCostInput {
    * ceiling. Floor at minimum_charge_usd still applies. Default: true.
    */
   applyCeiling?: boolean;
+  /**
+   * The action's ceiling_usd is per billed UNIT of its usual size. A unit whose size varies per request (a bulk
+   * batch of N replies) scales the ceiling by N so the charge is not capped at one call's price (e1 2026-11-13).
+   * Integer >= 1; anything else = 1. The floor (minimum_charge_usd) is per unit and is NOT scaled.
+   */
+  ceilingScale?: number;
 }
 
 export interface ResolveEmbeddingCostInput {
@@ -200,17 +206,20 @@ async function fetchCreditRateUsd(orgId: string): Promise<number> {
   return parsePositiveRate((data as any)?.credit_rate_usd, orgId);
 }
 
-function applyPricingLayer(
+export function applyPricingLayer(
   baseCostUsd: number,
   actionRow:   ActionPricingRow,
   applyCeiling = true,
+  ceilingScale = 1,
 ): number {
   let priceUsd = baseCostUsd * actionRow.cost_multiplier;
   if (priceUsd < actionRow.minimum_charge_usd) {
     priceUsd = actionRow.minimum_charge_usd;
   }
-  if (applyCeiling && actionRow.ceiling_usd != null && priceUsd > actionRow.ceiling_usd) {
-    priceUsd = actionRow.ceiling_usd;
+  const scale = Number.isInteger(ceilingScale) && ceilingScale >= 1 ? ceilingScale : 1;
+  const ceiling = actionRow.ceiling_usd != null ? actionRow.ceiling_usd * scale : null;
+  if (applyCeiling && ceiling != null && priceUsd > ceiling) {
+    priceUsd = ceiling;
   }
   return priceUsd;
 }
@@ -530,7 +539,7 @@ export async function resolveLlmCost(input: ResolveLlmCostInput): Promise<Resolv
   const outputCostUsd = (outputTokens / 1000) * modelRow.output_per_1k_usd;
   const totalCostUsd = inputCostUsd + outputCostUsd;
   const applyCeiling  = input.applyCeiling !== false;
-  const finalPriceUsd = applyPricingLayer(totalCostUsd, actionRow, applyCeiling);
+  const finalPriceUsd = applyPricingLayer(totalCostUsd, actionRow, applyCeiling, input.ceilingScale ?? 1);
   const credits = Math.ceil(finalPriceUsd / creditRateUsd);
 
   return {

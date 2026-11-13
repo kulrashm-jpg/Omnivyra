@@ -99,6 +99,8 @@ export interface LlmPricingSpec {
   maxInputTokens:  number;
   maxOutputTokens: number;
   timestamp?:      string | Date;
+  /** Per-request unit size (e.g. a bulk batch): scales the action's settlement ceiling. See ResolveLlmCostInput. */
+  ceilingScale?:   number;
 }
 
 export interface ExecuteBase {

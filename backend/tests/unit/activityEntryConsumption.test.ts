@@ -85,6 +85,16 @@ const REF = '00000000-0000-4000-8000-000000000003';
 const IDEM = 'idem-key-abc';
 const ACTION = 'content_basic'; // SHORT_GENERATION: entry 2, reservation 13, max 15
 
+/** Token-priced: the engine prices the HOLD (applyCeiling:false, on the max tokens) and the ACTUAL separately. */
+function tokenPricing(holdCredits: number, actualCredits: number) {
+  pricing.resolveLlmCost.mockImplementation(async (i: any) => ({ credits: i.applyCeiling === false ? holdCredits : actualCredits }));
+}
+/** Credits drawn from the exposure by the n-th partial-confirm call. */
+function settledTotal(n = 0): number {
+  const s = repo.callCreditPartialConfirm.mock.calls[n][0].actualSplit;
+  return (s.free ?? 0) + (s.incentive ?? 0) + (s.paid ?? 0);
+}
+
 function holdTotal(call: any): number {
   const s = call.split;
   return (s.free ?? 0) + (s.incentive ?? 0) + (s.paid ?? 0);
@@ -205,7 +215,7 @@ describe('executeWithEntryConsumption — happy path (fixed action)', () => {
 
 describe('executeWithEntryConsumption — token-metered settlement (Phase 10B / M2, engine-collected)', () => {
   it('settles token-ACTUAL from the engine-collected scope usage, releasing unused exposure', async () => {
-    pricing.resolveLlmCost.mockResolvedValue({ credits: 9 }); // actual token cost = 9
+    tokenPricing(20, 9); // hold 20 (token bound), actual token cost = 9
     // Phase 12E — the executor records provider usage into the engine's scope.
     const executor = jest.fn(async () => { recordProviderUsage(1000, 500); return 'OUTPUT'; });
 
@@ -225,8 +235,10 @@ describe('executeWithEntryConsumption — token-metered settlement (Phase 10B / 
     );
     expect(res.status).toBe('executed');
     if (res.status !== 'executed') throw new Error('unreachable');
-    // SHORT_GENERATION entry 2; actual 9 → additional 7 (from partial_confirm mock), release 6
-    expect(res.settlement).toMatchObject({ entryConsumed: 2, additionalConsumed: 7, exposureReleased: 6, underfunded: false });
+    // owner rule (e1/e9 2026-11-13): token-priced entry = the 1-credit floor (was the class entry 2); actual 9 →
+    // draw 8 more from the exposure, release the rest
+    expect(res.settlement).toMatchObject({ entryConsumed: 1, underfunded: false });
+    expect(settledTotal()).toBe(8);
     expect(repo.callCreditPartialConfirm).toHaveBeenCalledTimes(1);
   });
 });
@@ -263,7 +275,7 @@ describe('confirmCreditReservationToActual (Phase 10F — reports settlement)', 
 
 describe('executeWithEntryConsumption — text + asset settlement (Phase 10E)', () => {
   it('adds asset credits (additionalCredits) to token-priced settlement', async () => {
-    pricing.resolveLlmCost.mockResolvedValue({ credits: 4 });      // text cost = 4
+    tokenPricing(20, 4);                                            // text cost = 4
     repo.callCreditPartialConfirm.mockResolvedValue({ error: null, data: { id: 's', total_consumed: 7, total_released: 6 } });
     // Phase 12E — text tokens + asset credits both recorded into the engine scope.
     const executor = jest.fn(async () => { recordProviderUsage(1000, 500); recordAssetCredits(5); return 'CREATOR'; });
@@ -278,11 +290,11 @@ describe('executeWithEntryConsumption — text + asset settlement (Phase 10E)', 
     });
 
     expect(res.status).toBe('executed');
-    // actual = text(4) + assets(5) = 9; SHORT_GENERATION entry 2 → additional 7
-    // (if assets were NOT added, actual would be 4 → additional 2)
+    // actual = text(4) + assets(5) = 9; token-priced entry 1 → additional 8
+    // (if assets were NOT added, actual would be 4 → additional 3)
     const settle = repo.callCreditPartialConfirm.mock.calls[0][0];
     const settleTotal = settle.actualSplit.free + settle.actualSplit.incentive + settle.actualSplit.paid;
-    expect(settleTotal).toBe(7);
+    expect(settleTotal).toBe(8);
   });
 });
 
@@ -339,14 +351,14 @@ describe('executeWithEntryConsumption — Phase 12E first-consumable entry trigg
   const LLM = { provider: 'openai', model: 'gpt-4o-mini', actionKey: 'content_basic', maxInputTokens: 1000, maxOutputTokens: 500 } as const;
 
   it('A. provider call occurs → entry consumed exactly once (even across multiple calls)', async () => {
-    pricing.resolveLlmCost.mockResolvedValue({ credits: 9 });
+    tokenPricing(20, 9);
     const executor = jest.fn(async () => { recordProviderUsage(500, 200); recordProviderUsage(300, 100); return 'OK'; });
     const res = await executeWithEntryConsumption({
       userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
       idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
     });
     expect(res.status).toBe('executed');
-    if (res.status === 'executed') expect(res.settlement.entryConsumed).toBe(2);
+    if (res.status === 'executed') expect(res.settlement.entryConsumed).toBe(1); // token-priced floor
     const entryConfirms = repo.callCreditReservation.mock.calls.map((c) => c[0]).filter((r) => r.idempotencyKey === `${IDEM}:entry:confirm`);
     expect(entryConfirms.length).toBe(1); // consumed ONCE despite two provider calls
   });
@@ -364,7 +376,8 @@ describe('executeWithEntryConsumption — Phase 12E first-consumable entry trigg
     expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
   });
 
-  it('C. abandonment AFTER a provider call → entry KEPT, exposure released', async () => {
+  it('C. abandonment AFTER a provider call → entry KEPT, the ACTUAL usage so far charged, the rest released (owner rule)', async () => {
+    tokenPricing(20, 6); // the partial usage before the failure prices at 6
     const executor = jest.fn(async () => { recordProviderUsage(300, 100); throw new Error('boom after provider'); });
     await expect(executeWithEntryConsumption({
       userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
@@ -373,8 +386,11 @@ describe('executeWithEntryConsumption — Phase 12E first-consumable entry trigg
     const calls = repo.callCreditReservation.mock.calls.map((c) => c[0]);
     expect(calls.some((r) => r.idempotencyKey === `${IDEM}:entry:confirm` && r.phase === 'confirm')).toBe(true); // entry kept
     expect(calls.some((r) => r.idempotencyKey === `${IDEM}:entry:release`)).toBe(false);
-    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:exposure:release`)).toBe(true);
-    expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
+    // entry 1 + 5 drawn = the actual 6, filed under the RELEASE key (the slot reads as failed, not completed)
+    expect(repo.callCreditPartialConfirm).toHaveBeenCalledTimes(1);
+    expect(settledTotal()).toBe(5);
+    expect(repo.callCreditPartialConfirm.mock.calls[0][0].idempotencyKey).toBe(`${IDEM}:exposure:release`);
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:exposure:release` && r.phase === 'release')).toBe(false);
   });
 
   it('D. replay (exposure already settled) → no re-execution, no duplicate charge', async () => {
@@ -390,15 +406,16 @@ describe('executeWithEntryConsumption — Phase 12E first-consumable entry trigg
   });
 
   it('E. settlement math unchanged — token-actual = entry + (actual−entry), release remainder', async () => {
-    pricing.resolveLlmCost.mockResolvedValue({ credits: 9 });
-    repo.callCreditPartialConfirm.mockResolvedValue({ error: null, data: { id: 's', total_consumed: 7, total_released: 6 } });
+    tokenPricing(20, 9);
+    repo.callCreditPartialConfirm.mockResolvedValue({ error: null, data: { id: 's', total_consumed: 8, total_released: 11 } });
     const executor = jest.fn(async () => { recordProviderUsage(1000, 500); return 'OK'; });
     const res = await executeWithEntryConsumption({
       userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
       idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
     });
     if (res.status !== 'executed') throw new Error('unreachable');
-    expect(res.settlement).toMatchObject({ entryConsumed: 2, additionalConsumed: 7, exposureReleased: 6, totalConsumed: 9, underfunded: false });
+    expect(res.settlement).toMatchObject({ entryConsumed: 1, additionalConsumed: 8, exposureReleased: 11, totalConsumed: 9, underfunded: false });
+    expect(settledTotal()).toBe(8);
   });
 });
 
@@ -441,5 +458,108 @@ describe('executeWithEntryConsumption — admission control (Phase 8 TASK 2)', (
     if (res.status === 'insufficient_credits') expect(res.required).toBe(15);
     expect(executor).not.toHaveBeenCalled();
     expect(repo.callCreditReservation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * OWNER PRICING RULE for TOKEN-PRICED activities (e1/e9 2026-11-13): hold = the caller's token upper bound priced by
+ * the action row (ceiling NOT applied), entry = the 1-credit floor at the first provider event, success = max(1,
+ * actual) clamped to the hold, failure = the actual usage so far (rest released), no provider call = 0. Fixed-price
+ * activities keep the catalog (pinned by the happy-path / asset / admission tests above).
+ */
+describe('executeWithEntryConsumption — owner pricing rule for token-priced activities', () => {
+  const LONG = 'content_generation'; // LONG_GENERATION class: catalog entry 10, max 60
+  const LLM = { provider: 'openai', model: 'gpt-4o-mini', actionKey: LONG, maxInputTokens: 8000, maxOutputTokens: 2000 } as const;
+  const run = (executor: () => Promise<unknown>, llmPricing: any = LLM) => executeWithEntryConsumption({
+    userId: USER, orgId: ORG, action: LONG as any, referenceType: 'content', referenceId: REF,
+    idempotencyKey: IDEM, validateMembership: false, llmPricing, collectViaCollector: true, executor,
+  } as any);
+  const exposureHold = () => repo.callCreditReservation.mock.calls.map((c) => c[0]).find((r) => r.idempotencyKey === `${IDEM}:exposure:hold`);
+  const exposureReleased = () => repo.callCreditReservation.mock.calls.map((c) => c[0]).some((r) => r.idempotencyKey === `${IDEM}:exposure:release` && r.phase === 'release');
+
+  it('(a) a SMALL successful call is charged its ACTUAL (2), not the class entry (10)', async () => {
+    tokenPricing(30, 2);
+    const res = await run(async () => { recordProviderUsage(400, 100); return 'OK'; });
+    if (res.status !== 'executed') throw new Error(res.status);
+    expect(res.settlement.entryConsumed).toBe(1);
+    expect(settledTotal()).toBe(1); // 1 entry + 1 drawn = actual 2
+  });
+
+  it('(a) an actual below the floor is charged the 1-credit floor', async () => {
+    tokenPricing(30, 0);
+    const res = await run(async () => { recordProviderUsage(10, 1); return 'OK'; });
+    if (res.status !== 'executed') throw new Error(res.status);
+    expect(res.settlement.entryConsumed).toBe(1);
+    expect(settledTotal()).toBe(0);
+  });
+
+  it('(b) the HOLD and admission come from the TOKEN bound (priced without the ceiling), not the catalog max', async () => {
+    tokenPricing(30, 5);
+    await run(async () => { recordProviderUsage(100, 10); return 'OK'; });
+    const holdCall = pricing.resolveLlmCost.mock.calls.map((c) => c[0]).find((i: any) => i.applyCeiling === false);
+    expect(holdCall).toMatchObject({ inputTokens: 8000, outputTokens: 2000, actionKey: LONG });
+    expect(holdTotal(exposureHold())).toBe(29); // hold 30 = entry 1 + exposure 29 (catalog: 10 + 50)
+    expect(pricing.estimateLlmHoldCredits).not.toHaveBeenCalled(); // no single-call model-limit check on a unit
+    priority.getTotalAvailable.mockResolvedValue(29);
+    repo.callCreditReservation.mockClear();
+    const res = await run(async () => 'never');
+    expect(res).toMatchObject({ status: 'insufficient_credits', required: 30 });
+  });
+
+  it('(b) a bulk unit: the hold scales with the unit tokens and ceilingScale reaches the settlement pricing', async () => {
+    tokenPricing(200, 20);
+    const bulk = { ...LLM, actionKey: 'reply_generation', maxInputTokens: 3000 * 20, maxOutputTokens: 700 * 20, ceilingScale: 20 };
+    await executeWithEntryConsumption({
+      userId: USER, orgId: ORG, action: 'reply_generation' as any, referenceType: 'bulk', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, llmPricing: bulk, collectViaCollector: true,
+      executor: async () => { recordProviderUsage(15000, 2000); return 'SENT'; },
+    } as any);
+    expect(holdTotal(exposureHold())).toBe(199); // the REPLY catalog max would have clamped this unit at 3
+    const settleCall = pricing.resolveLlmCost.mock.calls.map((c) => c[0]).find((i: any) => i.applyCeiling !== false);
+    expect(settleCall).toMatchObject({ ceilingScale: 20, inputTokens: 15000, outputTokens: 2000 });
+    expect(settledTotal()).toBe(19); // actual 20 = entry 1 + 19
+  });
+
+  it('(b) actual above the hold is clamped to the hold with the underfunded flag (as today)', async () => {
+    tokenPricing(10, 25);
+    const res = await run(async () => { recordProviderUsage(9000, 3000); return 'OK'; });
+    if (res.status !== 'executed') throw new Error(res.status);
+    expect(settledTotal()).toBe(9);
+    expect(res.settlement.underfunded).toBe(true);
+  });
+
+  it('(c) a FAILED attempt is charged its actual-so-far: never the class entry, never the whole hold', async () => {
+    tokenPricing(30, 4);
+    await expect(run(async () => { recordProviderUsage(500, 200); throw new Error('provider timeout'); })).rejects.toThrow('provider timeout');
+    expect(settledTotal()).toBe(3); // 1 + 3 = actual 4 (old engine: class entry 10)
+    expect(exposureReleased()).toBe(false); // the remainder is released BY the partial confirm, not a second release
+  });
+
+  it('(c) a failed attempt that cannot be PRICED charges the entry only and releases the exposure (never over-charges)', async () => {
+    pricing.resolveLlmCost.mockImplementation(async (i: any) => { if (i.applyCeiling === false) return { credits: 30 }; throw new Error('pricing down'); });
+    await expect(run(async () => { recordProviderUsage(500, 200); throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
+    expect(exposureReleased()).toBe(true);
+  });
+
+  it('(c) if the failed-attempt settle write fails, the exposure is RELEASED (no dangling hold)', async () => {
+    tokenPricing(30, 4);
+    repo.callCreditPartialConfirm.mockResolvedValue({ error: new Error('rpc down'), data: null });
+    await expect(run(async () => { recordProviderUsage(500, 200); throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(exposureReleased()).toBe(true);
+  });
+
+  it('(c) a partially charged failed slot reads as RELEASED to the next attempt (reclaim moves on, no false "already processed")', async () => {
+    repo.findCreditTransaction.mockImplementation(async (key: string) => (key === `${IDEM}:exposure:release` ? { id: 'failed-partial', execution_phase: 'confirm' } : null));
+    const executor = jest.fn();
+    expect(await run(executor)).toEqual({ status: 'already_released' });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('a failure BEFORE any provider call is still free (unchanged)', async () => {
+    tokenPricing(30, 4);
+    await expect(run(async () => { throw new Error('validation'); })).rejects.toThrow('validation');
+    expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
+    expect(exposureReleased()).toBe(true);
   });
 });

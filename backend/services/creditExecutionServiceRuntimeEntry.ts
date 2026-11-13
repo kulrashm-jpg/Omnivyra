@@ -55,6 +55,12 @@ import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
 import { resolveBillingPolicy } from './billing/billingPolicyResolver';
 import { assertUuid, canonicalizeReference, type Uuid } from '@/lib/shared/uuid';
 
+/**
+ * The entry (floor) for a TOKEN-PRICED activity: the owner's 1-credit minimum, consumed at the first provider event
+ * so a crashed run is never free. Fixed-price activities keep the catalog entry.
+ */
+export const TOKEN_PRICED_ENTRY_CREDITS = 1;
+
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 import { fireAlerts, type LlmUsageSource, type LlmExecutorResult, type LlmPricingSpec, type ExecuteBase, type ExecuteWithCreditsOptions, type SettlementReport, type ExecuteResult, type CreditReservationHandle, type CreditReservationResult, type CreateCreditOptions, makeIdempotencyKey, scaleSplitToActual, getReservationKeys, assertCanonicalBillingIdentifiers, assertCanonicalCreditAction, reserveCreditsForWork, confirmCreditReservation, releaseCreditReservation } from './creditExecutionServiceContracts';
 
@@ -192,11 +198,36 @@ export async function executeWithEntryConsumption<T>(
     throw new Error(`[entryConsumption] MISSING idempotencyKey for action "${action}"`);
   }
 
-  // TASK 1 — economics from the Phase 8A catalog.
-  const econ        = resolveActivityEconomics(action);
-  const entry       = econ.entryConsumption;          // TASK 2
-  const reservation = econ.reservationCredits;        // TASK 3 (= max − entry)
-  const maxExposure = econ.maximumCredits;            // admission ceiling
+  // TASK 1 — economics. FIXED-price activities: the Phase 8A catalog. TOKEN-PRICED activities (llmPricing): the
+  // owner pricing rule (e1/e9 2026-11-13) - HOLD the caller's token upper bound priced by the action's pricing row,
+  // ENTRY = the 1-credit floor, settle the ACTUAL. The catalog's class entry/max used to apply to token-priced calls
+  // too: a long generation costing 2 credits was charged its class entry 10, and a 20-call bulk reply was clamped at
+  // the REPLY max of 3. The hold is priced exactly as estimateLlmHoldCredits prices it (resolveLlmCost on the max
+  // tokens, ceiling NOT applied) but WITHOUT its single-call model-limit check: here maxTokens bound a whole
+  // multi-call UNIT (a 5-call assessment, a 20-thread bulk reply), not one completion.
+  const econ = resolveActivityEconomics(action);
+  let entry: number;
+  let reservation: number;
+  let maxExposure: number;
+  if (opts.llmPricing) {
+    const holdEstimate = await resolveExecutionLlmCost({
+      provider:     opts.llmPricing.provider,
+      model:        opts.llmPricing.model,
+      inputTokens:  Math.max(0, Number(opts.llmPricing.maxInputTokens) || 0),
+      outputTokens: Math.max(0, Number(opts.llmPricing.maxOutputTokens) || 0),
+      actionKey:    opts.llmPricing.actionKey,
+      orgId:        opts.orgId,
+      timestamp:    opts.llmPricing.timestamp,
+      applyCeiling: false, // a HOLD is never capped by the ceiling (as estimateLlmHoldCredits)
+    });
+    maxExposure = Math.max(TOKEN_PRICED_ENTRY_CREDITS, Math.ceil(Number(holdEstimate.credits) || 0));
+    entry       = TOKEN_PRICED_ENTRY_CREDITS;
+    reservation = maxExposure - entry;
+  } else {
+    entry       = econ.entryConsumption;          // TASK 2
+    reservation = econ.reservationCredits;        // TASK 3 (= max − entry)
+    maxExposure = econ.maximumCredits;            // admission ceiling
+  }
 
   // Distinct, deterministic per-stage idempotency roots (TASK 6 replay safety).
   const entryKey    = `${opts.idempotencyKey}:entry`;
@@ -303,6 +334,7 @@ export async function executeWithEntryConsumption<T>(
         actionKey:    opts.llmPricing.actionKey,
         orgId:        opts.orgId,
         timestamp:    opts.llmPricing.timestamp,
+        ceilingScale: opts.llmPricing.ceilingScale,
       });
       // Phase 10E — token credits + non-token artifact credits (e.g. images).
       actualCredits = Math.max(0, pricing.credits) + Math.max(0, u.assetCredits);
@@ -317,6 +349,7 @@ export async function executeWithEntryConsumption<T>(
         actionKey:    opts.llmPricing.actionKey,
         orgId:        opts.orgId,
         timestamp:    opts.llmPricing.timestamp,
+        ceilingScale: opts.llmPricing.ceilingScale,
       });
       actualCredits = Math.max(0, pricing.credits);
     } else {
@@ -324,13 +357,56 @@ export async function executeWithEntryConsumption<T>(
       actualCredits  = opts.amountOverride ?? await getCreditCost(action);
     }
   } catch (execErr: any) {
-    // ── ABANDONMENT (Phase 12E): entry kept ONLY if a consumable event fired;
-    // exposure released. A failure BEFORE the first provider call consumes
-    // NOTHING (entry not charged) — the requirement's core guarantee.
+    // ── ABANDONMENT (Phase 12E): entry kept ONLY if a consumable event fired.
+    // A failure BEFORE the first provider call consumes NOTHING (entry not charged).
+    // TOKEN-PRICED (owner rule, e1/e9 2026-11-13): a failed attempt is charged the ACTUAL usage collected so far,
+    // the rest returned - never the whole hold, never less than the provider work done. The partial charge is
+    // filed under the exposure RELEASE key, so the attempt still reads as a FAILED (released) slot to the
+    // idempotency gate and reclaim moves to the next slot - it is never mistaken for a completed, charged run.
     let abandonEntry = 0;
     if (entryPromise) { try { abandonEntry = await entryPromise; } catch { /* ignore */ } }
     if (exposureHandle) {
-      await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — executor error` });
+      let failedAdditional = 0;
+      if (opts.llmPricing && abandonEntry > 0) {
+        try {
+          const u = scope.usage;
+          const partial = await resolveExecutionLlmCost({
+            provider:     opts.llmPricing.provider,
+            model:        opts.llmPricing.model,
+            inputTokens:  Math.max(0, u.inputTokens),
+            outputTokens: Math.max(0, u.outputTokens),
+            actionKey:    opts.llmPricing.actionKey,
+            orgId:        opts.orgId,
+            timestamp:    opts.llmPricing.timestamp,
+            ceilingScale: opts.llmPricing.ceilingScale,
+          });
+          const partialActual = Math.max(0, partial.credits) + Math.max(0, u.assetCredits);
+          failedAdditional = planEntryConsumptionSettlement({ entry: abandonEntry, reservation, actualCredits: partialActual }).additionalConsumption;
+        } catch (pricingErr: any) {
+          logger.error('entry_consumption_failed_attempt_pricing_failed', { orgId: opts.orgId, action, message: pricingErr?.message });
+          failedAdditional = 0; // cannot price it -> charge the entry only, release the rest (never over-charge)
+        }
+      }
+      let failedSettled = false;
+      if (failedAdditional > 0) {
+        const { error: failSettleErr } = await callCreditPartialConfirm({
+          orgId:          exposureHandle.orgId,
+          holdTxnId:      exposureHandle.holdTransactionId,
+          actualSplit:    scaleSplitToActual(exposureHandle.split, failedAdditional),
+          idempotencyKey: exposureReleaseKey,
+          referenceType:  exposureHandle.referenceType,
+          referenceId:    exposureHandle.referenceId,
+          note:           `[EXPOSURE][FAILED-ATTEMPT-ACTUAL] ${action} — executor error`,
+          performedBy:    exposureHandle.userId,
+        });
+        failedSettled = !failSettleErr;
+        if (failSettleErr) {
+          logger.error('entry_consumption_failed_attempt_settle_failed', { orgId: opts.orgId, action, message: (failSettleErr as any).message });
+        }
+      }
+      if (!failedSettled) {
+        await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — executor error` });
+      }
     }
     void import('./billing/creditEconomyObservability')
       .then((m) => m.recordSettlementObservation({
