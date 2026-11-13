@@ -42,9 +42,16 @@ import { authRequestIpOrNull } from '../../../../backend/auth/requestClientIp';
 export const PUBLIC_REPURPOSE_COMPANY_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:public:blog-repurpose:company', limit: 30, windowSecs: 3600, onRedisFailure: 'strict',
 };
+/**
+ * INVARIANT (05 review): GLOBAL must stay a RUNAWAY backstop, never the limit that catches normal customers:
+ *   GLOBAL.limit >= active_companies x COMPANY.limit  (headroom for ~100 companies at their own cap).
+ * REVIEW TRIGGER: revisit when active companies approach GLOBAL.limit / COMPANY.limit (100) - a fixed number beside a
+ * per-tenant number crosses over eventually; at 300/h it already did at 10 companies.
+ */
 export const PUBLIC_REPURPOSE_GLOBAL_LIMIT: RateLimitConfig = {
-  keyPrefix: 'rl:public:blog-repurpose:global', limit: 300, windowSecs: 3600, onRedisFailure: 'strict',
+  keyPrefix: 'rl:public:blog-repurpose:global', limit: 3000, windowSecs: 3600, onRedisFailure: 'strict',
 };
+export const PUBLIC_REPURPOSE_GLOBAL_HEADROOM_COMPANIES = 100;
 export const PUBLIC_REPURPOSE_IP_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:public:blog-repurpose:ip', limit: 120, windowSecs: 3600, onRedisFailure: 'strict',
 };

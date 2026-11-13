@@ -59,7 +59,7 @@ jest.mock('../../services/billing/phase2RouteWiring', () => ({
   },
 }));
 
-import handler, { PUBLIC_REPURPOSE_IP_LIMIT, PUBLIC_REPURPOSE_GLOBAL_LIMIT, PUBLIC_REPURPOSE_COMPANY_LIMIT } from '../../../pages/api/blogs/[id]/repurpose';
+import handler, { PUBLIC_REPURPOSE_IP_LIMIT, PUBLIC_REPURPOSE_GLOBAL_LIMIT, PUBLIC_REPURPOSE_COMPANY_LIMIT, PUBLIC_REPURPOSE_GLOBAL_HEADROOM_COMPANIES } from '../../../pages/api/blogs/[id]/repurpose';
 import { resolveRedisFailureMode } from '../../../lib/auth/rateLimit';
 
 function mockRes() {
@@ -162,6 +162,10 @@ describe('public repurpose limits: per COMPANY (real), global (backstop), per IP
       if ((await post({ ip: `198.51.${Math.floor(i / 250)}.${i % 250}` })).statusCode === 200) served += 1;
     }
     expect(served).toBe(PUBLIC_REPURPOSE_GLOBAL_LIMIT.limit);
+  });
+  it('INVARIANT: the global backstop covers 100 companies at their own cap (it never throttles normal customers first)', () => {
+    expect(PUBLIC_REPURPOSE_GLOBAL_LIMIT.limit).toBeGreaterThanOrEqual(PUBLIC_REPURPOSE_GLOBAL_HEADROOM_COMPANIES * PUBLIC_REPURPOSE_COMPANY_LIMIT.limit);
+    expect(PUBLIC_REPURPOSE_GLOBAL_HEADROOM_COMPANIES).toBeGreaterThanOrEqual(100);
   });
   it('per IP is only a loose burst backstop (well above the per-company cap)', () => {
     expect(PUBLIC_REPURPOSE_IP_LIMIT.limit).toBeGreaterThan(PUBLIC_REPURPOSE_COMPANY_LIMIT.limit);
