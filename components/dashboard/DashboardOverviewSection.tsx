@@ -58,7 +58,7 @@ export default function DashboardOverviewSection({ d }: { d: DashboardState }) {
                             accountId: selectedCompanyId,
                             context: 'dashboard_insight',
                           });
-                          window.location.href = `/dashboard/intelligence${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}&intelTab=market-pulse` : '?intelTab=market-pulse'}`;
+                          window.location.href = '/market-pulse';
                         },
                       }}
                       secondaryAction={{

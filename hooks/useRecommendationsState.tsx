@@ -296,7 +296,9 @@ export function useRecommendationsState() {
       return;
     }
     if (activeOpportunityTab !== 'LEAD') return;
-    void router.replace('/dashboard?tab=intelligence&intelTab=active-leads');
+    // The old dashboard "intelligence" tab link isn't a real dashboard tab (it fell back to the overview);
+    // Active Leads lives at /command-center/active-leads (as openIntelligenceTab does).
+    void router.replace('/command-center/active-leads');
   }, [activeOpportunityTab, router]);
 
   useEffect(() => {

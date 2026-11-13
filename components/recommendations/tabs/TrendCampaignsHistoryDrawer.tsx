@@ -52,7 +52,7 @@ export default function TrendCampaignsHistoryDrawer({
             <EmptyState
               title="Build your first recommendation history"
               description="Run the strategic theme builder once and this drawer will start showing what was generated, when, and with what confidence."
-              primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+              primaryAction={{ label: 'Generate your first insight', href: '/market-pulse' }}
               secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
               examplePreview={<ExamplePreview variant="insight" />}
             />

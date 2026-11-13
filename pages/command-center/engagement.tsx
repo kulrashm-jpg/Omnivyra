@@ -56,7 +56,7 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
       'Supports faster strategic response',
     ],
     cta: 'Open Market Pulse',
-    route: '/dashboard/intelligence?intelTab=market-pulse',
+    route: '/market-pulse',
     accentFrom: 'from-blue-50',
     accentTo: 'to-cyan-50',
     borderColor: 'border-blue-200',

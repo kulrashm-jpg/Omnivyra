@@ -57,7 +57,7 @@ export function TrendSignalsPanel({
           <EmptyState
             title="Spot your first trend"
             description="Trend signals help you see what topics are gaining momentum before they become obvious everywhere else."
-            primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+            primaryAction={{ label: 'Generate your first insight', href: '/market-pulse' }}
             secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
             examplePreview={<ExamplePreview variant="insight" />}
           />

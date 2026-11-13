@@ -188,7 +188,7 @@ export function IntelligenceTimeline({
           <EmptyState
             title="Build your first intelligence timeline"
             description="This timeline becomes useful as soon as the system starts detecting trends, insights, opportunities, and campaign moves over time."
-            primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
+            primaryAction={{ label: 'Generate your first insight', href: '/market-pulse' }}
             secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
             examplePreview={<ExamplePreview variant="insight" />}
           />

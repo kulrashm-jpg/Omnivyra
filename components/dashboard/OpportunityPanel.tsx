@@ -220,7 +220,7 @@ export function OpportunityPanel({
                     accountId: companyId,
                     context: 'dashboard_opportunities',
                   });
-                  router.push('/dashboard?tab=intelligence&intelTab=market-pulse');
+                  router.push('/market-pulse');
                 },
               }}
               secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
@@ -325,7 +325,7 @@ export function OpportunityPanel({
                   accountId: companyId,
                   context: 'opportunity_panel',
                 });
-                router.push('/dashboard?tab=intelligence&intelTab=market-pulse');
+                router.push('/market-pulse');
               },
             }}
             secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
