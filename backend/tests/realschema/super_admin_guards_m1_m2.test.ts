@@ -130,6 +130,37 @@ describe('M1 / M2 super-admin guards (real Postgres, separate connections)', () 
     expect(await activeSa(U[1])).toBe(0);
   });
 
+  // R-10's successor (05's condition): partial failure CANNOT occur - a fault injected at EACH write step of the revoke
+  // leaves NO change at all (not merely "the happy path is atomic"). A BEFORE trigger raises on exactly one step's write
+  // for the target user; the whole function call must roll back.
+  async function revokeWithFaultAt(table: 'users' | 'user_company_roles'): Promise<string> {
+    await db.query('BEGIN');
+    try {
+      await db.query(`CREATE FUNCTION pg_temp.m2_fault() RETURNS trigger LANGUAGE plpgsql AS $f$
+        BEGIN IF NEW.id IS NOT NULL AND (TG_TABLE_NAME = 'users' AND NEW.id = '${U[1]}'::uuid
+                                          OR TG_TABLE_NAME = 'user_company_roles' AND NEW.user_id = '${U[1]}'::uuid)
+              THEN RAISE EXCEPTION 'M2_INJECTED_FAULT at %', TG_TABLE_NAME; END IF; RETURN NEW; END $f$`);
+      await db.query(`CREATE TRIGGER m2_fault BEFORE UPDATE ON public.${table} FOR EACH ROW EXECUTE FUNCTION pg_temp.m2_fault()`);
+      await db.query('SAVEPOINT rv');
+      let outcome = 'ok';
+      try { await db.query(REVOKE, [U[1]]); } catch (e: any) { outcome = String(e.message); await db.query('ROLLBACK TO SAVEPOINT rv'); }
+      const role = (await db.query('SELECT role FROM public.users WHERE id = $1', [U[1]])).rows[0].role;
+      const active = await activeSa(U[1]);
+      return `${outcome}|role=${role}|activeSa=${active}`;
+    } finally {
+      await db.query('ROLLBACK');
+    }
+  }
+
+  it.each(['users', 'user_company_roles'] as const)(
+    'R-10 successor: a fault injected at the %s downgrade step leaves NOTHING downgraded (no partial state)', async (table) => {
+      await grant(U[0]); await grant(U[1]);
+      await db.query(`UPDATE public.users SET role = 'SUPER_ADMIN' WHERE id = $1`, [U[1]]);
+      const r = await revokeWithFaultAt(table);
+      expect(r).toMatch(/^M2_INJECTED_FAULT at /);
+      expect(r).toMatch(/\|role=SUPER_ADMIN\|activeSa=1$/);   // users.role AND the membership both untouched
+    });
+
   it('M1: with an active super-admin, bootstrap is refused BOOTSTRAP_ALREADY_CONSUMED', async () => {
     await grant(U[0]);
     expect(await attemptOn(extra[0], BOOTSTRAP, [U[1], CO])).toMatch(/BOOTSTRAP_ALREADY_CONSUMED/);
