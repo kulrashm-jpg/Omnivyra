@@ -23,6 +23,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { normalizeCompanyDomain } from '../../lib/shared/domain/companyDomain';
 import {
   validateCompanyIdentity,
   COMPANY_IDENTITY_VALIDATION_VERSION,
@@ -95,26 +96,39 @@ export function maskEmail(email: string | null): string | null {
  * returns the 409 body; returns null when the domain is unclaimed.
  * `domain` is the raw email host, exactly as signup.ts matches it.
  */
+/** The claimed-domain lookup could not be completed - never treated as "unclaimed". */
+export class ClaimedDomainLookupError extends Error {
+  constructor(message: string) {
+    super(`CLAIMED_DOMAIN_LOOKUP_FAILED:${message}`);
+    this.name = 'ClaimedDomainLookupError';
+  }
+}
+
 export async function resolveClaimedDomainRefusal(args: {
   normalizedEmail: string;
   domain: string;
   correlationId: string;
 }): Promise<{ companyId: string; body: ClaimedDomainBody } | null> {
   const { normalizedEmail, domain, correlationId } = args;
-  const { data: byWebsite } = await supabase
-    .from('companies')
-    .select('id, name')
-    .eq('website_domain', domain)
-    .maybeSingle();
-  const claimedCompany =
-    byWebsite ??
-    (
-      await supabase
-        .from('companies')
-        .select('id, name')
-        .eq('admin_email_domain', domain)
-        .maybeSingle()
-    ).data;
+  // e1 2026-11-13 (P2): the claimed check FAILS CLOSED and matches at the REGISTRABLE domain too. Previously both
+  // reads discarded their error (a transient read error, or a multi-row maybeSingle, read as "unclaimed") and matched
+  // only the raw email host - so jane@bot1.example.com was not refused at signup when example.com was claimed (rule
+  // 5 is disabled inside the identity gate, so this is the ONLY claimed check before the intent is minted).
+  // Now: website_domain / admin_email_domain IN (raw host, registrable domain); ANY match is claimed (oldest wins);
+  // a read error THROWS ClaimedDomainLookupError - callers answer a retryable 503 and mint nothing.
+  const candidates = Array.from(new Set([domain, normalizeCompanyDomain(normalizedEmail)].filter(Boolean)));
+  let claimedCompany: { id: string; name: string | null } | null = null;
+  for (const column of ['website_domain', 'admin_email_domain'] as const) {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, name')
+      .in(column, candidates)
+      .order('created_at', { ascending: true })
+      .limit(1);
+    if (error) throw new ClaimedDomainLookupError(error.message);
+    const row = (data as Array<{ id: string; name?: string | null }> | null)?.[0];
+    if (row) { claimedCompany = { id: row.id, name: row.name ?? null }; break; }
+  }
 
   if (!claimedCompany) return null;
   const company = claimedCompany as { id: string; name: string | null };

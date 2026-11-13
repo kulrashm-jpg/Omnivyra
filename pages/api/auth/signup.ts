@@ -4,24 +4,18 @@ import { isAcceptableEmailAddress, EMAIL_ADDRESS_POLICY_MESSAGE } from '../../..
 /**
  * POST /api/auth/signup
  *
- * Public pre-signup gate. Runs the checks that must happen BEFORE the
- * browser fires `supabase.auth.signUp`. Responsibilities:
+ * The ONLY self-serve creator of an auth identity (P2, e1 2026-11-13; owner ruling: no CAPTCHA, public signup
+ * disabled at the provider once this ships). In order - and the order is load-bearing:
  *
- *   1. Personal-email / MX / rate-limit gates.
- *   2. ACCOUNT_EXISTS  — email is already a completed user (active role).
- *   3. ACCOUNT_EXISTS  — email is already confirmed in auth.users from a
- *                        prior flow (orphaned). Blocks the silent
- *                        user_repeated_signup failure mode.
- *   4. CLAIMED_DOMAIN — another user from this email's domain is already
- *                        the COMPANY_ADMIN. First time we see this email,
- *                        we send them a referral email with the admin's
- *                        contact details and write a signup_referrals row.
- *                        Subsequent attempts skip the email and return
- *                        alreadyReferred=true.
- *   5. Upsert signup_intents row and return { proceed: true }.
- *
- * Does NOT send a confirmation email — Supabase sends that itself when the
- * client calls `supabase.auth.signUp({ email, password, options: { emailRedirectTo } })`.
+ *   0. Per-IP rate limit; input checks (email, password policy, company name; address policy where present).
+ *   1. ACCOUNT_EXISTS / ACCOUNT_DELETED / orphan-resume for an email that already has an account.
+ *   2. CLAIMED_DOMAIN - matched on the raw host AND the registrable domain; fails CLOSED (503) on a read error.
+ *   3. The authoritative company-identity gate (runSignupIdentityGate).
+ *   4. Success-only ceilings: per registrable domain (3/h, 10/day -> 429) and global (200/h -> 503; alert at 30/h).
+ *   5. Mint the signup intent (signupIntentMint - the single writer; carries the verdict P1's bootstrap requires).
+ *   6. ONLY NOW create the identity via the admin API (email_confirm false - confirmation stays enforced), so a
+ *      refused attempt writes NO auth.users row.
+ *   7. Send the confirmation link (signInWithOtp, shouldCreateUser:false), then record the success + telemetry.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -34,7 +28,11 @@ import {
   runSignupIdentityGate,
 } from '../../../backend/services/signupIntentMint';
 import { httpStatusFor, ELIGIBILITY_MESSAGES } from '../../../lib/auth/domainEligibilityModel';
-import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
+import { checkRateLimit, peekRateLimit, EMAIL_LINK_LIMIT, type RateLimitConfig } from '../../../lib/auth/rateLimit';
+import { validatePassword } from '../../../lib/auth/passwordPolicy';
+import { normalizeCompanyDomain } from '../../../lib/shared/domain/companyDomain';
+import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
+import { incrementAuthMetric } from '../../../backend/services/authMetrics';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
@@ -66,10 +64,11 @@ async function handler(
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const { email, companyName, captchaToken } = body as {
+  const { email, companyName, captchaToken, password } = body as {
     email?: string;
     companyName?: string;
     captchaToken?: string | null;
+    password?: unknown;
   };
 
   if (typeof email !== 'string' || !email.trim()) return res.status(400).json({ error: 'email is required' });
@@ -90,9 +89,17 @@ async function handler(
 
   // Conservative address policy where an address first enters (defence in depth; never rely on the provider).
   if (!isAcceptableEmailAddress(email)) return res.status(400).json({ error: EMAIL_ADDRESS_POLICY_MESSAGE });
+  // P2 (e1 2026-11-13): signup.ts is the ONLY self-serve creator of an auth identity, so it takes the password and
+  // creates the identity itself (after every gate - see step 6). The browser no longer calls supabase.auth.signUp.
+  if (typeof password !== 'string' || !password) return res.status(400).json({ error: 'password is required', code: 'PASSWORD_REQUIRED' });
+  const passwordCheck = validatePassword(password);
+  if (!passwordCheck.valid) return res.status(400).json({ error: passwordCheck.reason, code: 'PASSWORD_INVALID' });
+
   const normalizedEmail = email.trim().toLowerCase();
   const domain = normalizedEmail.split('@')[1] ?? '';
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });
+  // Identity + quota key: the REGISTRABLE domain (eTLD+1) - bot1.example.com and bot2.example.com are one domain.
+  const registrableDomain = normalizeCompanyDomain(normalizedEmail) || domain;
 
   // ── 0.5. Journey correlation ID + attempt event (AUTH-001 §9/§10) ─────────
   // Reuses the journey ID from an earlier attempt (persisted on the pending
@@ -190,7 +197,14 @@ async function handler(
   // The first user of a domain is unaffected: their company row doesn't
   // exist yet at signup time, so there's nothing to match.
   {
-    const claimed = await resolveClaimedDomainRefusal({ normalizedEmail, domain, correlationId });
+    // Fail closed (P2): an unfinished claimed-domain lookup is a retryable 503, never "unclaimed".
+    let claimed: Awaited<ReturnType<typeof resolveClaimedDomainRefusal>>;
+    try {
+      claimed = await resolveClaimedDomainRefusal({ normalizedEmail, domain, correlationId });
+    } catch (err) {
+      logger.warn('signup_claimed_domain_lookup_failed', { message: err instanceof Error ? err.message : String(err) });
+      return res.status(503).json({ error: 'We could not verify your organization right now. Please try again in a moment.', code: 'IDENTITY_VALIDATION_UNAVAILABLE' });
+    }
     if (claimed) {
       await emitOutcome('CompanyExists', 'denied', 'CLAIMED_DOMAIN', claimed.companyId);
       return res.status(httpStatusFor('CLAIMED_DOMAIN')).json(claimed.body);
@@ -256,6 +270,31 @@ async function handler(
     });
   }
 
+  // ── 4.9 P2 signup ceilings (e1 2026-11-13; e9 ruling, 05 review) ──────────
+  // Counted on SUCCESSFUL signups only (peek now, record after step 6), so refused attempts from rotating IPs can
+  // never exhaust a budget and lock legitimate users - or a whole domain - out:
+  //   per registrable domain: SIGNUP_DOMAIN_HOURLY / SIGNUP_DOMAIN_DAILY  -> 429 SIGNUP_DOMAIN_LIMIT
+  //   global:                 SIGNUP_GLOBAL_HOURLY (hard)                  -> 503 SIGNUP_PAUSED (retryable)
+  // The per-IP limit at the top of the handler still counts every attempt.
+  const [domainHour, domainDay, globalHour] = await Promise.all([
+    peekRateLimit(registrableDomain, SIGNUP_DOMAIN_HOURLY),
+    peekRateLimit(registrableDomain, SIGNUP_DOMAIN_DAILY),
+    peekRateLimit('all', SIGNUP_GLOBAL_HOURLY),
+  ]);
+  if (!globalHour.allowed) {
+    logger.warn('auth.signup_global_ceiling_reached', { count: globalHour.count });
+    incrementAuthMetric('auth.signup.attempt', { outcome: 'global_ceiling' });
+    return res.status(503).json({ error: 'Signups are temporarily paused. Please try again shortly.', code: 'SIGNUP_PAUSED' });
+  }
+  if (!domainHour.allowed || !domainDay.allowed) {
+    logger.warn('auth.signup_domain_ceiling_reached', { registrable_domain: registrableDomain });
+    incrementAuthMetric('auth.signup.attempt', { outcome: 'domain_ceiling' });
+    return res.status(429).json({
+      error: "Too many new accounts from your organization's domain right now. Please try again later.",
+      code:  'SIGNUP_DOMAIN_LIMIT',
+    });
+  }
+
   // ── 5. Fresh signup path — upsert signup_intents and let the client proceed.
   // The validated identity is persisted on the intent so onboarding/setup-company
   // consume the verdict instead of re-deriving it (system-of-record handoff).
@@ -280,9 +319,51 @@ async function handler(
     return res.status(500).json({ error: 'Failed to initiate signup' });
   }
 
+  // ── 6. Create the auth identity - ONLY NOW (P2) ──────────────────────────
+  // ORDER IS LOAD-BEARING: every eligibility gate above runs BEFORE the identity exists, so a refused attempt writes
+  // NO auth.users row (pinned by p2SignupServerCreation.test.ts). The intent is minted first: if creation then fails,
+  // the retry re-uses the same pending intent. email_confirm:false - email confirmation stays ENFORCED.
+  const created = await supabase.auth.admin.createUser({ email: normalizedEmail, password, email_confirm: false });
+  const alreadyExists = !!created.error && /already (been )?registered|already exists/i.test(String(created.error.message ?? ''));
+  if (created.error && !alreadyExists) {
+    logger.error('auth_signup_identity_create_failed', { message: created.error.message, correlationId });
+    await emitOutcome('SystemFailure', 'denied', 'IDENTITY_CREATE_FAILED');
+    return res.status(500).json({ error: 'We could not create your account right now. Please try again.', code: 'IDENTITY_CREATE_FAILED' });
+  }
+
+  // ── 7. Confirmation link - the same primitive resend-verification uses; never creates a user.
+  // An identity that already existed (an unconfirmed earlier attempt) gets a fresh link; its password is unchanged.
+  const { error: linkError } = await supabase.auth.signInWithOtp({
+    email: normalizedEmail,
+    options: { shouldCreateUser: false, emailRedirectTo: `${getCanonicalAppUrl()}/auth/callback` },
+  });
+  if (linkError) logger.warn('auth_signup_confirmation_send_failed', { message: linkError.message, correlationId });
+
+  // ── 8. Record the SUCCESS against the ceilings; burst telemetry by registrable domain.
+  if (!alreadyExists) {
+    const [, , globalRecorded] = await Promise.all([
+      checkRateLimit(registrableDomain, SIGNUP_DOMAIN_HOURLY),
+      checkRateLimit(registrableDomain, SIGNUP_DOMAIN_DAILY),
+      checkRateLimit('all', SIGNUP_GLOBAL_HOURLY),
+    ]);
+    const createdThisHour = SIGNUP_GLOBAL_HOURLY.limit - globalRecorded.remaining;
+    if (createdThisHour >= SIGNUP_GLOBAL_ALERT_PER_HOUR) {
+      logger.warn('auth.signup_burst', { created_this_hour: createdThisHour, threshold: SIGNUP_GLOBAL_ALERT_PER_HOUR });
+      incrementAuthMetric('auth.signup.burst', {});
+    }
+  }
+  logger.info('auth.signup_attempt', { registrable_domain: registrableDomain, outcome: alreadyExists ? 'resumed' : 'created' });
+  incrementAuthMetric('auth.signup.attempt', { outcome: alreadyExists ? 'resumed' : 'created' });
+
   await emitOutcome('SignupValidated', 'allowed');
   return res.status(200).json({ proceed: true });
 }
+
+/** P2 success-only signup ceilings (e9 defaults 2026-11-13; the owner may change them). */
+const SIGNUP_DOMAIN_HOURLY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:domain:1h', limit: 3, windowSecs: 3600 };
+const SIGNUP_DOMAIN_DAILY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:domain:1d', limit: 10, windowSecs: 86400 };
+const SIGNUP_GLOBAL_HOURLY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:global:1h', limit: 200, windowSecs: 3600 };
+const SIGNUP_GLOBAL_ALERT_PER_HOUR = 30;
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
 export default __createApiRoute(handler, { route: '/api/auth/signup' });
