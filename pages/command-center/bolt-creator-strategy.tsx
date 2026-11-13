@@ -241,7 +241,16 @@ function StrategyCard({
 import { useBoltCreator } from '../../hooks/useBoltCreator';
 import BoltCreatorView from '../../components/BoltCreatorView';
 import PageLoader from '../../components/PageLoader';
+import CampaignWriteGate from '../../components/access/CampaignWriteGate';
+// F3: read-only roles get AccessRestricted; the BOLT hooks never run for them.
 export default function BoltCreatorPage() {
+  return (
+    <CampaignWriteGate>
+      <BoltCreatorPageInner />
+    </CampaignWriteGate>
+  );
+}
+function BoltCreatorPageInner() {
   const d = useBoltCreator();
   if (d._ef1) return <PageLoader message="Loading BOLT Creator…" />;
   if (d._ef2) return <PageLoader message="Loading BOLT Creator…" />;
