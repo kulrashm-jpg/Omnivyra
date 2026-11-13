@@ -10,6 +10,12 @@ import {
 } from './customerBillingStatusService';
 import { getOrganizationBetaTag } from './monetizationBetaAccessService';
 
+// Live prod settles token-priced work with ONE credit_transactions row of execution_phase 'confirm_partial' (C100,
+// 2026-11-13: the live apply_credit_partial_confirm); fixed-cost confirms write 'confirm'. Both are credits USED.
+// TODO(e1): replace with CONFIRM_PHASES from backend/services/billing/holdSettlementState.ts once the settle fix
+// (fix/settle-ambiguity-no-release-20261113) is on main - kept local so this customer-visible fix ships first.
+const CONFIRM_PHASES: readonly string[] = ['confirm', 'confirm_partial'];
+
 export type CustomerBillingEventType =
   | 'purchase'
   | 'grant'
@@ -98,7 +104,7 @@ function labelFor(row: {
   const phase = row.execution_phase;
   const referenceType = String(row.reference_type ?? '').replace(/_/g, ' ');
   if (phase === 'hold') return `Pending reservation${referenceType ? ` - ${referenceType}` : ''}`;
-  if (phase === 'confirm') return `Credits used${referenceType ? ` - ${referenceType}` : ''}`;
+  if (phase && CONFIRM_PHASES.includes(phase)) return `Credits used${referenceType ? ` - ${referenceType}` : ''}`;
   if (phase === 'release') return `Reservation released${referenceType ? ` - ${referenceType}` : ''}`;
   if (phase === 'grant') return `Credits granted${referenceType ? ` - ${referenceType}` : ''}`;
   if (phase === 'expire' || phase === 'expire_incentive') return 'Credits expired';
@@ -132,7 +138,7 @@ function mapCreditTransaction(row: any): CustomerBillingEvent | null {
       reference_id: row.reference_id ?? null,
     };
   }
-  if (phase === 'confirm') {
+  if (phase && CONFIRM_PHASES.includes(phase)) {
     const guidance = guidanceForCustomerState('credits_used');
     return {
       id: row.id,

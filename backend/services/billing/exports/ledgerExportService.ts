@@ -10,6 +10,12 @@
  */
 
 import { supabase } from '../../../db/supabaseClient';
+// Live prod settles token-priced work with ONE credit_transactions row of execution_phase 'confirm_partial' (C100,
+// 2026-11-13: the live apply_credit_partial_confirm); fixed-cost confirms write 'confirm'. Both are credits USED.
+// TODO(e1): replace with CONFIRM_PHASES from backend/services/billing/holdSettlementState.ts once the settle fix
+// (fix/settle-ambiguity-no-release-20261113) is on main - kept local so this customer-visible fix ships first.
+const CONFIRM_PHASES: readonly string[] = ['confirm', 'confirm_partial'];
+
 import { logger } from '../../logger';
 import { recordExportManifest, type ExportFormat, type ManifestResult, type ExportType } from './auditManifestService';
 
@@ -96,7 +102,7 @@ export async function exportCompanyUsage(args: {
     .from('credit_transactions')
     .select('id, organization_id, execution_phase, credits_delta, balance_after, usd_equivalent, reference_type, reference_id, note, performed_by, idempotency_key, parent_transaction_id, category, created_at')
     .eq('organization_id', args.organizationId)
-    .eq('execution_phase', 'confirm')
+    .in('execution_phase', [...CONFIRM_PHASES])
     .order('created_at', { ascending: false });
   if (args.periodStart) q = q.gte('created_at', args.periodStart);
   if (args.periodEnd)   q = q.lte('created_at', args.periodEnd);
@@ -128,7 +134,7 @@ export async function exportReservationLifecycle(args: {
   let q = supabase
     .from('credit_transactions')
     .select('id, organization_id, execution_phase, credits_delta, parent_transaction_id, idempotency_key, reference_type, reference_id, created_at, expires_at')
-    .in('execution_phase', ['hold', 'confirm', 'release'])
+    .in('execution_phase', ['hold', ...CONFIRM_PHASES, 'release'])
     .order('created_at', { ascending: false });
   if (args.organizationId) q = q.eq('organization_id', args.organizationId);
   if (args.periodStart)   q = q.gte('created_at', args.periodStart);
