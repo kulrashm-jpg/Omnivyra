@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -40,8 +41,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
 
-  const { error: updateError } = await supabase
-    .from('campaign_proposals')
+  // S2 tenant seam: the tenant is the proposal's company, which enforceCompanyAccess just authorized for
+  // access.userId; never a request value. A company that cannot form a context answers the route's existing
+  // not-found, and nothing is written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, organizationId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Proposal not found' });
+    throw err;
+  }
+
+  const { error: updateError } = await tenantTable('campaign_proposals', tenant)
     .update({ status: 'rejected', updated_at: new Date().toISOString() })
     .eq('id', proposalId);
 

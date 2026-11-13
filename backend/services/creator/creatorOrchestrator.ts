@@ -25,7 +25,7 @@
  */
 
 import { createHash } from 'crypto';
-import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../../db/tenantTable';
 import { createCreatorExecutionEngine } from '../executionEngines/creatorExecutionEngine';
 import { renderAsset, templateAssetSlotsForRenderPayload } from '../creatorAssetRenderer';
 import { resolveCompositionReferencesForRender } from './resolveCompositionReferencesForRender';
@@ -345,16 +345,26 @@ export async function persistCreatorAssetRow(input: {
     // Update this company's row in place; else INSERT; a unique violation means
     // the id appeared since — this company's concurrent write (the scoped update
     // now lands) or another company's row, which is refused and never touched.
-    const updateOwned = () => ownedDbTable('creator_assets')
-      .update(row)
-      .eq('id', assetId)
-      .eq('company_id', input.companyId)
-      .select('id')
-      .maybeSingle();
-    let result: { data: unknown; error: { message: string; code?: unknown } | null } = await updateOwned();
-    if (!result.error && !result.data) {
-      result = await ownedDbTable('creator_assets').insert(row).select('id').single();
-      if (result.error && String(result.error.code ?? '') === '23505') result = await updateOwned();
+    //
+    // S2 tenant seam: both writes go through the company this orchestration runs for (input.companyId: the
+    // job payload's / caller's system-resolved company, the orchestrator's authorization input). An unusable
+    // company id is reported like any other persist failure (warn + null), never written unscoped.
+    let result: { data: unknown; error: { message: string; code?: unknown } | null };
+    try {
+      const assets = tenantTable('creator_assets', systemTenantContext(input.companyId, 'creator orchestrator: persist BOLT-rendered creator asset'));
+      const updateOwned = () => assets
+        .update(row)
+        .eq('id', assetId)
+        .eq('company_id', input.companyId)
+        .select('id')
+        .maybeSingle();
+      result = await updateOwned();
+      if (!result.error && !result.data) {
+        result = await assets.insert(row).select('id').single();
+        if (result.error && String(result.error.code ?? '') === '23505') result = await updateOwned();
+      }
+    } catch (seamError) {
+      result = { data: null, error: { message: (seamError as Error)?.message ?? 'tenant seam refused' } };
     }
     const error = result.error ?? (result.data ? null : { message: 'creator asset id is not available to this company' });
     if (error) {

@@ -53,7 +53,7 @@ jest.mock('../../db/supabaseClient', () => ({
         limit: jest.fn(() => api),
         maybeSingle: jest.fn(async () => {
           if (table === 'daily_content_plans') return { data: planRow, error: null };
-          if (table === 'campaigns') return { data: { company_id: 'company-1' }, error: null };
+          if (table === 'campaigns') return { data: { company_id: 'c0100000-0000-4000-8000-000000000001' }, error: null };
           if (table === 'scheduled_posts') return { data: { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', social_account_id: 'sa-old', status: 'scheduled', error_code: null, platform_post_id: null }, error: null };
           if (table === 'social_accounts') return { data: socialAccountRow, error: null };
           return { data: null, error: null };
@@ -78,6 +78,8 @@ jest.mock('../../db/writeOwner', () => ({
       eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
       update: jest.fn((p: Row) => { updatePayload = p; return api; }),
       is: jest.fn((k: string, v: any) => { filters[`is:${k}`] = v; return api; }),
+      // The tenant seam re-reads the parent campaign (uuid company) through ownedDbTable before any write.
+      maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? { id: 'campaign-1', company_id: 'c0100000-0000-4000-8000-000000000001' } : null, error: null })),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload, filter: { ...filters } });
       // A compare-and-set update reports the row it matched (the post is in the
@@ -90,7 +92,7 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
-  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
+  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'c0100000-0000-4000-8000-000000000001' })),
 }));
 jest.mock('../../services/mediaUploadValidationService', () => ({
   validateMediaUpload: jest.fn(async () => ({ valid: true, validated_at: 'now', details: {} })),

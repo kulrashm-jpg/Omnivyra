@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, tenantChildTable, TenantSeamError } from '../db/tenantTable';
 import {
   makeScheduledPostIdempotencyKey,
   isIdempotencyCollision,
@@ -329,10 +330,28 @@ function buildBlogSlug(topic: string): string {
  *   - fully non-fatal — the campaign continues through the remaining slots
  *     whatever happens here, because visibility must never cost content.
  */
-async function annotateSemanticDrop(rowId: string, reason: string): Promise<void> {
+type CampaignPlanRows = Awaited<ReturnType<typeof tenantChildTable>>;
+
+/**
+ * S2 tenant seam: daily_content_plans writes for ONE campaign, under the tenant that owns it (read from
+ * campaigns.company_id by the seam itself, not from the caller's `campaign.company_id`, which may be the
+ * version-derived value) and pinned to that campaign. Lazy + memoised per run: resolved on the first write,
+ * and a refusal (TenantSeamError) is the same refusal for every later write of the run.
+ */
+function lazyCampaignPlanRows(campaignId: string): () => Promise<CampaignPlanRows> {
+  let handle: Promise<CampaignPlanRows> | null = null;
+  return () => (handle ??= (async () => {
+    const reason = 'bolt block processor: plan-row writes';
+    const ctx = await resolveTenantOfRow('campaigns', campaignId, reason);
+    if (!ctx) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `campaign ${campaignId} has no resolvable tenant`);
+    return tenantChildTable('daily_content_plans', ctx, campaignId);
+  })());
+}
+
+async function annotateSemanticDrop(planRows: () => Promise<CampaignPlanRows>, rowId: string, reason: string): Promise<void> {
   if (!rowId) return;
   try {
-    await ownedDbTable('daily_content_plans')
+    await (await planRows())
       .update({
         failure_type: 'semantic_validation',
         failure_reason: String(reason || 'semantic validation drop').slice(0, 500),
@@ -507,6 +526,9 @@ async function executeBlockScheduleRuntime(
   // bridge is not merely skipped at write time, it is never constructed, so the
   // campaign path is byte-identical to its pre-B4.1 behaviour.
   const canonicalPersistOn = isCanonicalPersistenceEnabled();
+
+  // S2 tenant seam: every daily_content_plans write of this run goes through this handle.
+  const planRows = lazyCampaignPlanRows(campaignId);
 
   console.log('[block-processor] START', {
     campaignId,
@@ -1041,7 +1063,7 @@ async function executeBlockScheduleRuntime(
           // the warn above via verdict.reason, so nothing diagnostic is lost here.
           emitPlannerDrop(plannerDropReasonFor(verdict), 1, 'weekly');
           // D3 — record WHY this plan row produced nothing, on the row itself.
-          await annotateSemanticDrop(row.id, verdict.reason);
+          await annotateSemanticDrop(planRows, row.id, verdict.reason);
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;
@@ -1165,8 +1187,11 @@ async function executeBlockScheduleRuntime(
         const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         await Promise.all(
           rowUpdates.flatMap(({ id, content: updatedContent, scheduled_post_id, scheduled_for }) => {
+            // S2: a tenant-seam refusal is reported through the SAME `{ error }` path as a DB error (warn /
+            // failure counter), so these writes stay best-effort exactly as before.
+            const seamRefusal = (seamError: unknown) => ({ error: { message: (seamError as Error)?.message ?? 'tenant seam refused' } });
             const ops = [
-              ownedDbTable('daily_content_plans')
+              planRows().then((plans) => plans
                 .update({
                   content: updatedContent,
                   // Effective publish slot → plan row (see write-back note above).
@@ -1175,7 +1200,7 @@ async function executeBlockScheduleRuntime(
                   day_of_week: dayNames[new Date(scheduled_for).getUTCDay()],
                   updated_at: new Date().toISOString(),
                 })
-                .eq('id', id)
+                .eq('id', id), seamRefusal)
                 .then(({ error }: { error: { message: string } | null }) => {
                   if (error) console.warn('[block-processor] daily_content_plans content update failed:', id, error.message);
                 }),
@@ -1185,9 +1210,9 @@ async function executeBlockScheduleRuntime(
               // scheduled_post_id column (pre-migration env) never blocks the
               // content persist above.
               ops.push(
-                ownedDbTable('daily_content_plans')
+                planRows().then((plans) => plans
                   .update({ scheduled_post_id })
-                  .eq('id', id)
+                  .eq('id', id), seamRefusal)
                   .then(({ error }: { error: { message: string } | null }) => {
                     // R2-IMPL B1 §13 — this link is the ONLY signal that a plan
                     // row produced a scheduled post; campaign readiness (C5) and

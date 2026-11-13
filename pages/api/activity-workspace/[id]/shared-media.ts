@@ -24,6 +24,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import { isCreatorWorkspaceLifecycleEnabled } from '@/backend/services/creator/intelligence/workspace';
 import {
   resolveSharedMediaInheritance, finalizeRowSharedMedia,
@@ -70,6 +71,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Company unresolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  // S2 tenant seam: the tenant is the campaign's company that enforceCompanyAccess just authorized for this
+  // principal (never a request value). Child handles below are made before the writes they guard; a seam refusal
+  // answers the route's existing company denial.
+  const seamDenied = () => res.status(403).json({ error: 'Company unresolved.' });
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenied();
+    throw err;
+  }
+  const seamRefused = (err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  };
 
   // Content core = card lineage; targets = the row's platform(s).
   let content: any = {};
@@ -118,7 +135,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (typeof body.override_policy === 'string') patch.override_policy = body.override_policy;
       if (typeof body.compatibility_policy === 'string') patch.compatibility_policy = body.compatibility_policy;
       if (typeof body.is_default_selected === 'boolean') patch.is_default_selected = body.is_default_selected;
-      await ownedDbTable('content_asset_attachment').update(patch).eq('id', att.id);
+      // S2: content_asset_attachment is a child of content_core_asset (by content_core_id); every core row of this
+      // content core must be this tenant's before the attachment is touched.
+      const attachmentTable = await tenantChildTable('content_asset_attachment', seamTenant, contentCoreId).catch(seamRefused);
+      if (!attachmentTable) return seamDenied();
+      await attachmentTable.update(patch).eq('id', att.id);
     } else if (action === 'override') {
       const att = await loadAttachment();
       if (!att) return res.status(409).json({ error: 'No attachment yet.', code: 'NO_ATTACHMENT' });
@@ -152,16 +173,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         uploadedBy: null,
         assetType: String((row as any).content_type || 'video'),
       });
-      await ownedDbTable('content_external_video_asset').upsert(
+      // S2: both lineage rows are stamped with this tenant by the seam (the builder already sets organization_id to
+      // the authorized company; a different value would be refused).
+      await tenantTable('content_external_video_asset', seamTenant).upsert(
         built.external_video_row, { onConflict: 'content_core_id,asset_id', ignoreDuplicates: true });
-      await ownedDbTable('content_core_asset').upsert(
+      await tenantTable('content_core_asset', seamTenant).upsert(
         built.core_asset_row, { onConflict: 'content_core_id,asset_id', ignoreDuplicates: true });
-      await ownedDbTable('content_asset_attachment').upsert(
+      // The attachment's parent is the content_core_asset row written just above, so this child handle can only be
+      // verified AFTER that write (on a first attach no core row exists before it). A refusal here leaves only the
+      // two tenant-stamped lineage rows above; it writes no attachment.
+      const attachmentTable = await tenantChildTable('content_asset_attachment', seamTenant, contentCoreId).catch(seamRefused);
+      if (!attachmentTable) return seamDenied();
+      await attachmentTable.upsert(
         { ...built.attachment_row, updated_at: nowIso },
         { onConflict: 'content_core_id,asset_id,attachment_role', ignoreDuplicates: true });
     } else if (action === 'finalize-video-publishing') {
       const att = await loadAttachment();
       if (!att) return res.status(409).json({ error: 'No attachment yet.', code: 'NO_ATTACHMENT' });
+      // S2: sibling plan rows are written through a handle pinned to this row's campaign, made before any write.
+      const plansTable = await tenantChildTable('daily_content_plans', seamTenant, (row as any).campaign_id).catch(seamRefused);
+      if (!plansTable) return seamDenied();
       const { data: ovRowsV } = await supabase
         .from('content_asset_platform_override')
         .select('platform, override_kind, override_asset_id, override_asset_url, override_thumbnail_url')
@@ -219,7 +250,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           } else {
             // No resolved URL for this platform (e.g. incompatible) → preserve
             // the prior content-only write; do NOT advance lifecycle.
-            await ownedDbTable('daily_content_plans')
+            await plansTable
               .update({ content: JSON.stringify(nextC), updated_at: nowIso })
               .eq('id', s.id).eq('intent_type', 'creator');
           }
@@ -233,6 +264,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // scheduler/Text untouched; compatibility fail-closed.
       const att = await loadAttachment();
       if (!att) return res.status(409).json({ error: 'No attachment yet.', code: 'NO_ATTACHMENT' });
+      // S2: sibling plan rows are written through a handle pinned to this row's campaign, made before any write.
+      const plansTable = await tenantChildTable('daily_content_plans', seamTenant, (row as any).campaign_id).catch(seamRefused);
+      if (!plansTable) return seamDenied();
       const { data: ovRowsF } = await supabase
         .from('content_asset_platform_override')
         .select('platform, override_kind, override_asset_id, override_asset_url')
@@ -279,7 +313,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           // CONTENT-ONLY: only uploaded_media_url; scheduler stays
           // delivery-only, no strategic/inheritance/render keys written.
           const nextContent = { ...sc, uploaded_media_url: fin.content_patch.uploaded_media_url };
-          await ownedDbTable('daily_content_plans')
+          await plansTable
             .update({ content: JSON.stringify(nextContent), updated_at: nowIso })
             .eq('id', s.id)
             .eq('intent_type', 'creator');

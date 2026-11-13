@@ -24,7 +24,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { ownedDbTable } from '../db/writeOwner';
+import { ownerOfChildRow, systemTenantContext, tenantChildTable, TenantSeamError } from '../db/tenantTable';
 import { logger } from './logger';
 import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
 import { recordAuditEntry } from './creatorAuditTrailService';
@@ -326,11 +326,23 @@ async function paginate<TRow>(
   }
 }
 
+/**
+ * S2 tenant seam: an auto-heal acts on ONE row. The audit scan may span every tenant (no companyId), so the
+ * heal derives the row's owning tenant and its direct parent from the row id inside the seam, and writes only
+ * through that tenant, pinned to that parent. An unresolvable owner throws TenantSeamError, which the caller's
+ * `.catch` logs as autoheal_failed (the same path as any other heal failure).
+ */
+async function healTarget(table: 'daily_content_plans' | 'queue_jobs', rowId: string, reason: string) {
+  const owner = await ownerOfChildRow(table, rowId, reason);
+  if (!owner) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `${table} row ${rowId} has no resolvable tenant`);
+  return tenantChildTable(table, systemTenantContext(owner.companyId, reason), owner.parentId);
+}
+
 async function applyAutoHeal(v: IntegrityViolation): Promise<void> {
   switch (v.kind) {
     case 'lifecycle_desync': {
       const lifecycleState = (v.detail as any).lifecycle_state as string;
-      await ownedDbTable('daily_content_plans')
+      await (await healTarget('daily_content_plans', v.entity_id, 'creator integrity audit: lifecycle_desync heal'))
         .update({ content_status: lifecycleState, updated_at: new Date().toISOString() })
         .eq('id', v.entity_id);
       recordAuditEntry({
@@ -345,7 +357,7 @@ async function applyAutoHeal(v: IntegrityViolation): Promise<void> {
     case 'missing_fk_linkage': {
       const scheduledPostId = (v.detail as any).content_scheduled_post_id as string;
       if (!scheduledPostId) return;
-      await ownedDbTable('daily_content_plans')
+      await (await healTarget('daily_content_plans', v.entity_id, 'creator integrity audit: missing_fk_linkage heal'))
         .update({ scheduled_post_id: scheduledPostId, updated_at: new Date().toISOString() })
         .eq('id', v.entity_id);
       recordAuditEntry({
@@ -359,7 +371,7 @@ async function applyAutoHeal(v: IntegrityViolation): Promise<void> {
       return;
     }
     case 'upload_session_corruption': {
-      await ownedDbTable('daily_content_plans')
+      await (await healTarget('daily_content_plans', v.entity_id, 'creator integrity audit: upload_session_corruption heal'))
         .update({ resumable_session_started_at: null, updated_at: new Date().toISOString() })
         .eq('id', v.entity_id);
       recordAuditEntry({
@@ -372,7 +384,7 @@ async function applyAutoHeal(v: IntegrityViolation): Promise<void> {
       return;
     }
     case 'queue_job_mismatch': {
-      await ownedDbTable('queue_jobs')
+      await (await healTarget('queue_jobs', v.entity_id, 'creator integrity audit: queue_job_mismatch heal'))
         .update({ status: 'cancelled', last_error: 'integrity_audit_reconcile', updated_at: new Date().toISOString() })
         .eq('id', v.entity_id);
       recordAuditEntry({

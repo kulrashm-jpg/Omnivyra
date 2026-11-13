@@ -45,6 +45,7 @@ import { randomInt, randomUUID } from 'crypto';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -323,6 +324,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
+  // S2 tenant seam: daily_content_plans and scheduled_posts are children of campaigns. The tenant is the campaign's
+  // company that enforceCompanyAccess just authorized for this principal; both handles are pinned to the row's
+  // campaign (the linked post is proven to belong to it below) and made before anything is written, so a refusal
+  // writes nothing and answers the route's existing campaign-company denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const seamRefused = (err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  };
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch(seamRefused);
+  const postsTable = await tenantChildTable('scheduled_posts', seamTenant, row.campaign_id).catch(seamRefused);
+  if (!plansTable || !postsTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {
     return res.status(409).json({
@@ -542,7 +562,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         throw error;
       }
-      await ownedDbTable('daily_content_plans')
+      await plansTable
         .update({
           content: JSON.stringify(transition.content),
           content_status: transition.contentStatus,
@@ -786,7 +806,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Pinned on the fence AND on what this request wrote: a non-reschedule
     // writer (unschedule, a publisher claim, …) that moved the post on since is
     // never clobbered — the undo then matches nothing (partial: true).
-    let undo = ownedDbTable('scheduled_posts')
+    let undo = postsTable
       .update(restorePatch)
       .eq('id', priorScheduledPostId)
       .eq('error_code', fence)
@@ -803,7 +823,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const releaseFence = async (): Promise<void> => {
     if (!priorScheduledPostId || !scheduledPostPatch) return;
     try {
-      await ownedDbTable('scheduled_posts')
+      await postsTable
         .update({ error_code: null })
         .eq('id', priorScheduledPostId)
         .eq('error_code', fence);
@@ -815,7 +835,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Compare-and-set on the plan version read: a plan row another reschedule
   // (or any writer) changed since this request read it is never overwritten
   // with this request's stale copy (Closure-014C).
-  let planQuery = ownedDbTable('daily_content_plans')
+  let planQuery = plansTable
     .update(dailyPlanPatch)
     .eq('id', id);
   planQuery = planVersionRead == null ? planQuery.is('updated_at', null) : planQuery.eq('updated_at', planVersionRead);
@@ -883,7 +903,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // has since rewritten the row is never overwritten with this request's
         // stale copy and a "repeat" hint for a time nobody wants any more.
         try {
-          const { data: markRows, error: markError } = await ownedDbTable('daily_content_plans')
+          const { data: markRows, error: markError } = await plansTable
             .update({ content: JSON.stringify(marked) })
             .eq('id', id)
             .eq('updated_at', planWriteAt)
@@ -964,7 +984,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // direct column lookup. Idempotent + tolerant of the column not yet
     // existing in environments where the migration hasn't run.
     try {
-      await ownedDbTable('daily_content_plans')
+      await plansTable
         .update({ scheduled_post_id: priorScheduledPostId })
         .eq('id', id);
     } catch (fkError) {

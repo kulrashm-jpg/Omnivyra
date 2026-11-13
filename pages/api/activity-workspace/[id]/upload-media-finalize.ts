@@ -39,7 +39,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -254,6 +254,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
   if (!access) return;
 
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the row's campaign and made
+  // before anything is written (row or storage), so a refusal writes nothing and answers the route's existing denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  });
+  if (!plansTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+
   // The caller-named object must belong to THIS authorized activity.
   if (!isActivityObjectPath(storagePath, id, companyId)) {
     return res.status(400).json({ error: 'storage_path is not an upload of this activity.', code: 'UPLOAD_PATH_OUT_OF_SCOPE' });
@@ -403,7 +419,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       throw error;
     }
-    await ownedDbTable('daily_content_plans')
+    await plansTable
       .update({
         content: JSON.stringify(transition.content),
         content_status: transition.contentStatus,
@@ -518,7 +534,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // F-H3-6: compare-and-swap on the row read at the start (updated_at), so a
   // concurrent finalize of a DIFFERENT session that committed in between is not
   // silently overwritten. `count: 'exact'` reports the matched rows; 0 = lost.
-  let rowWrite = ownedDbTable('daily_content_plans')
+  let rowWrite = plansTable
     .update({
       content: JSON.stringify(toReady.content),
       content_status: toReady.contentStatus,

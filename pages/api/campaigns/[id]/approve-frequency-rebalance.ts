@@ -5,6 +5,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { compareLatestVersionFirst, type getLatestCampaignVersion } from '../../../../backend/db/campaignVersionStore';
 import { resolveCampaignOwnership } from '../../../../backend/services/campaignOwnershipService';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
 
 type CampaignVersionRow = Awaited<ReturnType<typeof getLatestCampaignVersion>>;
 
@@ -89,6 +90,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 
+  // S2 tenant seam: platform_strategies is a child of campaigns. The tenant is the company resolveCampaignOwnership
+  // derived and getUserRole just authorized (COMPANY_ADMIN) for this principal. The handle is made (proving the
+  // campaign is in that tenant) before any write, so a refusal writes nothing and answers the route's 404.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor({ userId: user.id }, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    throw err;
+  }
+  const strategiesTable = await tenantChildTable('platform_strategies', seamTenant, id).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  });
+  if (!strategiesTable) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+
   const { failed: proposedFailed, row: proposedVersion } = await latestCompanyVersion(companyId, id, 'proposed_rebalance');
   if (proposedFailed) {
     return res.status(500).json({ error: 'Failed to load rebalance proposal' });
@@ -127,7 +146,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 
   if (upserts.length > 0) {
-    const { error: updateError } = await supabase.from('platform_strategies').upsert(upserts);
+    // No onConflict was ever passed, so PostgREST resolved this upsert on the primary key (id), which the payload
+    // never carries: it has always behaved as a plain INSERT. The seam refuses an upsert whose conflict key lacks
+    // campaign_id, so the statement now says what it does.
+    const { error: updateError } = await strategiesTable.insert(upserts);
     if (updateError) {
       return res.status(500).json({ error: 'Failed to apply frequency changes' });
     }

@@ -37,14 +37,28 @@ jest.mock('../../db/supabaseClient', () => ({
         };
       }
       if (table === 'daily_content_plans') {
+        // Writes go through the tenant seam (tenantChildTable), which pins `.eq('campaign_id', …)` before the
+        // caller's `.eq('id', …)`: record the row id filter, whatever its position in the chain.
         return {
-          update: (payload: Row) => ({
-            eq: (_c: string, id: string) => { planUpdates.push({ id, payload }); return Promise.resolve({ error: null }); },
-          }),
+          update: (payload: Row) => {
+            const b: Record<string, any> = {
+              eq: (c: string, v: string) => { if (c === 'id') planUpdates.push({ id: v, payload }); return b; },
+              then: (res: any, rej: any) => Promise.resolve({ error: null }).then(res, rej),
+            };
+            return b;
+          },
         };
       }
       if (table === 'blogs') return { insert: async () => ({ error: null }) };
-      if (table === 'campaigns') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { company_id: 'co-1' } }) }) }) };
+      // chainable: the tenant seam reads the campaign (resolveTenantOfRow, then the parent check) with extra .eq()s
+      if (table === 'campaigns') {
+        return {
+          select: () => {
+            const b: Record<string, any> = { eq: () => b, maybeSingle: async () => ({ data: { id: 'camp-1', company_id: 'c0100000-0000-4000-8000-000000000001' }, error: null }) };
+            return b;
+          },
+        };
+      }
       throw new Error(`Unexpected table: ${table}`);
     },
   },
@@ -86,7 +100,7 @@ import {
 const mockedMaster = generateMasterContentFromIntent as jest.Mock;
 const mockedVariants = buildPlatformVariantsFromMaster as jest.Mock;
 
-const CAMPAIGN = { start_date: '2099-01-04', user_id: 'user-1', company_id: 'co-1' };
+const CAMPAIGN = { start_date: '2099-01-04', user_id: 'user-1', company_id: 'c0100000-0000-4000-8000-000000000001' };
 const ACCOUNTS = new Map([['linkedin', 'acct-li'], ['x', 'acct-x']]);
 const normalize = (p: string) => (['linkedin', 'x', 'twitter'].includes(p) ? (p === 'twitter' ? 'x' : p) : null);
 

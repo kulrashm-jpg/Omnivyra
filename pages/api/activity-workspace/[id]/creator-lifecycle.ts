@@ -28,7 +28,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 // Phase-2 Step-3: creator-lifecycle persistence reconciles through the ONE
 // canonical write engine (preserves non-creator enrichments / prevents
 // blank-stale overwrite) while keeping the intent_type='creator' DB guard.
@@ -210,9 +210,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.log('[WRITE_CONFLICT]', JSON.stringify({ campaign_id: row.campaign_id, execution_id: row.execution_id ?? id, source_writer: 'creator-lifecycle', invariant_violations: rec.invariant_violations }));
   }
 
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess authorized for this principal, pinned to the row's campaign; the handle is made before the
+  // write, so a refusal writes nothing and answers the route's existing campaign-company denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  });
+  if (!plansTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+
   // Keep the belt-and-braces intent_type='creator' DB guard (never touch a
   // non-creator row) — canonical reconciliation decided WHAT to write.
-  const { error: updateError } = await ownedDbTable('daily_content_plans')
+  const { error: updateError } = await plansTable
     .update({ content: JSON.stringify(rec.merged), updated_at: nowIso })
     .eq('id', id)
     .eq('intent_type', 'creator');

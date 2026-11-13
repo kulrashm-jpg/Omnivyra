@@ -41,11 +41,15 @@ jest.mock('../../db/supabaseClient', () => ({
     storage: { from: (b: string) => mockMem.storage.from(b) },
   },
 }));
+// Company ids are uuid-shaped, as every real one: the tenant seam (tenantContextFor) refuses anything else.
 jest.mock('../../db/writeOwner', () => ({
-  ownedDbTable: () => {
+  ownedDbTable: (table: string) => {
     let payload: any = null;
     const filters: Array<[string, string, unknown]> = [];
     const api: any = {
+      // Read: the tenant seam re-reads the parent campaign under the tenant before handing back the write handle.
+      select: () => api,
+      maybeSingle: async () => ({ data: mockRows[table] ?? null, error: null }),
       update: (p: any) => { payload = p; return api; },
       eq: (c: string, v: unknown) => { filters.push(['eq', c, v]); return api; },
       is: (c: string, v: unknown) => { filters.push(['is', c, v]); return api; },
@@ -64,7 +68,7 @@ jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async () => ({ user: mockUser, error: null })),
 }));
 jest.mock('../../services/userContextService', () => ({
-  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-a', companyId: 'company-a' })),
+  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-a', companyId: 'c0a00000-0000-4000-8000-00000000000a' })),
 }));
 jest.mock('../../services/creator/creatorRowScheduler', () => ({
   autoScheduleReadyCreatorRowById: jest.fn(async () => ({ status: 'skipped', scheduledPostId: null })),
@@ -79,7 +83,7 @@ import {
 } from '../../services/activityWorkspace/quarantinedMediaUpload';
 import { readBodyBounded } from '../../../lib/security/boundedBodyRead';
 
-const KEY = 'company-a/plan-a/video/1700000000000-0123456789abcdef0123456789abcdef.mp4';
+const KEY = 'c0a00000-0000-4000-8000-00000000000a/plan-a/video/1700000000000-0123456789abcdef0123456789abcdef.mp4';
 const Q = 'media-quarantine';
 const D = 'media-uploads';
 const realFetch = (global as any).fetch;
@@ -134,7 +138,7 @@ function beforeNextMove(before: () => Promise<void> | void) {
 
 beforeEach(() => {
   mockMem.reset();
-  mockRows = { daily_content_plans: row(), campaigns: { company_id: 'company-a' } };
+  mockRows = { daily_content_plans: row(), campaigns: { company_id: 'c0a00000-0000-4000-8000-00000000000a' } };
   mockWrites.length = 0;
   mockWriteFilters.length = 0;
   mockWriteError = null;
@@ -225,7 +229,7 @@ describe('F-H3-1 FIXED (J3-1): a planted delivery object is never adopted', () =
 
 describe('F-H3-2 FIXED: the stored type is bound to the key minted at authorize', () => {
   it('reviewer repro inverted: a key minted for video/mp4 cannot be published as video/webm', async () => {
-    const minted = mintQuarantineObjectPath({ companyId: 'company-a', activityId: 'plan-a', mime: 'video/mp4' }).objectPath;
+    const minted = mintQuarantineObjectPath({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'plan-a', mime: 'video/mp4' }).objectPath;
     const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(44, 7)]);
     mockMem.put(Q, minted, WEBM, 'video/webm');
     const r = await finalize(body({ storage_path: minted, mime_type: 'video/webm', size_bytes: WEBM.length }));
@@ -236,7 +240,7 @@ describe('F-H3-2 FIXED: the stored type is bound to the key minted at authorize'
   });
 
   it('the matching type still finalizes', async () => {
-    const minted = mintQuarantineObjectPath({ companyId: 'company-a', activityId: 'plan-a', mime: 'video/webm' }).objectPath;
+    const minted = mintQuarantineObjectPath({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'plan-a', mime: 'video/webm' }).objectPath;
     const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(44, 7)]);
     mockMem.put(Q, minted, WEBM, 'video/webm');
     const r = await finalize(body({ storage_path: minted, mime_type: 'video/webm', size_bytes: WEBM.length }));
@@ -280,7 +284,8 @@ describe('F-H3-6 FIXED: the finalize row write is a compare-and-swap', () => {
     mockMem.put(Q, KEY, MP4, 'video/mp4');
     const r = await finalize(body());
     expect(r.statusCode).toBe(200);
-    expect(mockWriteFilters[mockWriteFilters.length - 1]).toEqual([['eq', 'id', 'plan-a'], ['eq', 'updated_at', '2026-11-01T00:00:00.000000+00:00']]);
+    // The tenant seam (tenantChildTable) pins the row's campaign first; the CAS filters follow unchanged.
+    expect(mockWriteFilters[mockWriteFilters.length - 1]).toEqual([['eq', 'campaign_id', 'camp-a'], ['eq', 'id', 'plan-a'], ['eq', 'updated_at', '2026-11-01T00:00:00.000000+00:00']]);
   });
   it('lost CAS (0 rows matched) -> 409 CONCURRENT_UPLOAD_CONFLICT and this request\'s promoted object is rolled back', async () => {
     mockRows.daily_content_plans = row({}, { updated_at: '2026-11-01T00:00:00.000000+00:00' });

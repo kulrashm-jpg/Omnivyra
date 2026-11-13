@@ -36,7 +36,7 @@ jest.mock('../../db/supabaseClient', () => ({
             if (bad.length) return { data: null, error: { code: '42703', message: `column daily_content_plans.${bad[0]} does not exist` } };
             return { data: { id: 'row-1', campaign_id: 'camp-1', content: JSON.stringify({ target_platforms: ['linkedin'] }), content_type: 'image', intent_type: 'creator' }, error: null };
           }
-          if (table === 'campaigns') return { data: { company_id: 'company-a' }, error: null };
+          if (table === 'campaigns') return { data: { company_id: 'c0a00000-0000-4000-8000-00000000000a' }, error: null };
           return { data: null, error: null };
         },
         then: (resolve: any) => resolve({ data: [], error: null }),
@@ -45,12 +45,27 @@ jest.mock('../../db/supabaseClient', () => ({
     },
   },
 }));
+// Company ids are uuid-shaped, as every real one: the tenant seam (tenantContextFor) refuses anything else.
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
+    const filters: Record<string, unknown> = {};
     const api: any = {
       upsert: async (row: any) => { writes.push({ table, op: 'upsert', row }); return { data: null, error: null }; },
       update: (row: any) => { writes.push({ table, op: 'update', row }); return api; },
       eq: async () => ({ data: null, error: null }),
+      // Read: tenantChildTable('content_asset_attachment', …) verifies its parent content_core_asset rows (by
+      // content_core_id) - served from the rows this request upserted, as the database would.
+      select: () => {
+        const r: any = {
+          eq: (k: string, v: unknown) => { filters[k] = v; return r; },
+          limit: async () => ({
+            data: writes.filter((w) => w.table === table && w.op === 'upsert'
+              && Object.entries(filters).every(([k, v]) => w.row[k] === v)).map((w) => w.row),
+            error: null,
+          }),
+        };
+        return r;
+      },
     };
     return api;
   },
@@ -61,7 +76,12 @@ jest.mock('../../services/creator/media', () => ({
   finalizeRowSharedVideo: jest.fn(() => ({})),
   buildExternalVideoAttachment: jest.fn((input: any) => {
     builtInputs.push(input);
-    return { external_video_row: { organization_id: input.organizationId }, core_asset_row: { organization_id: input.organizationId }, attachment_row: {} };
+    // content_core_id on the rows, as the real builder sets it: the attachment's tenant check reads the core row by it.
+    return {
+      external_video_row: { organization_id: input.organizationId, content_core_id: input.contentCoreId },
+      core_asset_row: { organization_id: input.organizationId, content_core_id: input.contentCoreId },
+      attachment_row: { content_core_id: input.contentCoreId },
+    };
   }),
 }));
 jest.mock('../../services/creator/finalizeCreatorRowMedia', () => ({ finalizeCreatorRowMediaLifecycle: jest.fn(async () => ({})) }));
@@ -88,17 +108,17 @@ describe('P-SM1 shared-media on the production schema', () => {
   });
 
   it('PATCH attach stamps content_core_asset with the authorised company, not a request value', async () => {
-    const r = await call('PATCH', { action: 'attach', asset_id: 'asset-1', organization_id: 'company-b' });
+    const r = await call('PATCH', { action: 'attach', asset_id: 'asset-1', organization_id: 'c0b00000-0000-4000-8000-00000000000b' });
     expect(r.statusCode).toBe(200);
     const core = writes.find((w) => w.table === 'content_core_asset');
-    expect(core?.row.organization_id).toBe('company-a');
+    expect(core?.row.organization_id).toBe('c0a00000-0000-4000-8000-00000000000a');
   });
 
   it('PATCH attach-external-video builds the attachment for the authorised company', async () => {
-    const r = await call('PATCH', { action: 'attach-external-video', external_video_url: 'https://video.example.test/v.mp4', organization_id: 'company-b' });
+    const r = await call('PATCH', { action: 'attach-external-video', external_video_url: 'https://video.example.test/v.mp4', organization_id: 'c0b00000-0000-4000-8000-00000000000b' });
     expect(r.statusCode).toBe(200);
-    expect(builtInputs[0]?.organizationId).toBe('company-a');
-    expect(writes.find((w) => w.table === 'content_external_video_asset')?.row.organization_id).toBe('company-a');
+    expect(builtInputs[0]?.organizationId).toBe('c0a00000-0000-4000-8000-00000000000a');
+    expect(writes.find((w) => w.table === 'content_external_video_asset')?.row.organization_id).toBe('c0a00000-0000-4000-8000-00000000000a');
   });
 
   it('a cross-tenant caller is refused (403) before any write', async () => {

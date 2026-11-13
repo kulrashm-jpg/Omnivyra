@@ -19,6 +19,7 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+import { resolveTenantOfRow, tenantChildTable, TenantSeamError } from '../../db/tenantTable';
 import { getUnifiedCampaignBlueprint } from '../campaignBlueprintService';
 import { getDailyPlans } from '../executionPlannerService';
 import {
@@ -231,6 +232,19 @@ function parseContent(row: Record<string, unknown> | null | undefined): Record<s
  * preserves legacy row shape, and emits write observability. Never creates
  * rows, never mutates the blueprint (legacy blueprint commit untouched).
  */
+/**
+ * S2 tenant seam: the write handle for ONE resolved plan row, under the tenant that owns the row's campaign
+ * (campaigns.company_id, resolved by the seam) and pinned to that campaign. Throws TenantSeamError when the
+ * row has no campaign or the campaign has no resolvable tenant; callers' try/catch turns that into
+ * `{ ok: false, reason }` (EXECUTION_WRITE_FAILED), the same path as any other write failure.
+ */
+async function planRowWriteHandle(row: Record<string, unknown>, reason: string) {
+  const campaignId = String(row.campaign_id ?? '');
+  const ctx = campaignId ? await resolveTenantOfRow('campaigns', campaignId, reason) : null;
+  if (!ctx) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `daily_content_plans row ${String(row.id ?? '')} has no resolvable tenant`);
+  return tenantChildTable('daily_content_plans', ctx, campaignId);
+}
+
 async function applyContentWrite(
   campaignId: string | null,
   key: string,
@@ -270,8 +284,8 @@ async function applyContentWrite(
       LOG('WRITE_CONFLICT', { campaign_id: campaignId, execution_id: key, source_writer: sourceWriter, invariant_violations: rec.invariant_violations });
     }
 
-    const { error } = await supabase
-      .from('daily_content_plans')
+    const planRows = await planRowWriteHandle(row as Record<string, unknown>, 'canonical execution adapter: content write');
+    const { error } = await planRows
       .update({ content: JSON.stringify(rec.merged), updated_at: new Date().toISOString() })
       .eq('id', (row as any).id);
 
@@ -434,8 +448,8 @@ export async function updateExecutionContentByActivity(
     LOG('WRITE_RECONCILE', { campaign_id: (row as any).campaign_id ?? null, execution_id: activityId, source_writer: sourceWriter, write_target: 'daily_content_plans', reconciliation_strategy: 'enrichment_priority_merge', changed_fields: rec.changed_fields, preserved_fields: rec.preserved_fields });
     if (rec.prevented.length > 0) LOG('STALE_OVERWRITE_PREVENTED', { execution_id: activityId, source_writer: sourceWriter, prevented: rec.prevented });
     if (rec.invariant_violations.length > 0) LOG('WRITE_CONFLICT', { execution_id: activityId, source_writer: sourceWriter, invariant_violations: rec.invariant_violations });
-    const write = supabase
-      .from('daily_content_plans')
+    const planRows = await planRowWriteHandle(row as Record<string, unknown>, 'canonical execution adapter: content write by activity');
+    const write = planRows
       .update({ content: JSON.stringify(rec.merged), updated_at: new Date().toISOString() })
       .eq('id', (row as any).id);
     const { error } = await (scope.campaignId ? write.eq('campaign_id', scope.campaignId) : write);

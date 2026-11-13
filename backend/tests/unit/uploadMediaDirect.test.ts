@@ -101,10 +101,10 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
-  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
+  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'c0100000-0000-4000-8000-000000000001' })),
   // STEP 3AH-91 SEC-E6: the route now authenticates before loading the row
   // (existence/content-type oracle); these tests run as an authenticated member.
-  resolveUserContext: jest.fn(async () => ({ userId: 'user-1', role: 'user', companyIds: ['company-1'], defaultCompanyId: 'company-1', authenticated: true })),
+  resolveUserContext: jest.fn(async () => ({ userId: 'user-1', role: 'user', companyIds: ['c0100000-0000-4000-8000-000000000001'], defaultCompanyId: 'c0100000-0000-4000-8000-000000000001', authenticated: true })),
 }));
 
 jest.mock('../../services/mediaUploadValidationService', () => ({
@@ -160,7 +160,7 @@ function setRow(opts: { id: string; content_type: string; campaign_id?: string; 
       content_status: 'awaiting_media_upload',
       platform: 'instagram',
     },
-    'campaigns:single': { company_id: 'company-1' },
+    'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' },
   };
 }
 
@@ -251,14 +251,14 @@ describe('upload-media-direct API', () => {
   });
 
   test('re-upload over a row with a prior uploaded_media_url replaces the old storage object', async () => {
-    const priorPublicUrl = 'https://supabase.test/storage/v1/object/public/media-uploads/company-1/plan-1/video/prior.mp4';
+    const priorPublicUrl = 'https://supabase.test/storage/v1/object/public/media-uploads/c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4';
     setRow({
       id: 'plan-1',
       content_type: 'reel',
       content: {
         creator_lifecycle_state: 'ready_for_schedule',
         uploaded_media_url: priorPublicUrl,
-        upload_storage_object_path: 'company-1/plan-1/video/prior.mp4',
+        upload_storage_object_path: 'c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4',
         upload_validation: { valid: true },
       },
     });
@@ -271,7 +271,7 @@ describe('upload-media-direct API', () => {
     expect(storageCalls.upload).toHaveLength(1);
     const newPath = storageCalls.upload[0].path;
     // Prior object deleted as part of replacement (best-effort; called after DB write)
-    expect(storageCalls.remove.some((removed) => removed.includes('company-1/plan-1/video/prior.mp4'))).toBe(true);
+    expect(storageCalls.remove.some((removed) => removed.includes('c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4'))).toBe(true);
     // And it's not deleting the new object
     expect(storageCalls.remove.some((removed) => removed.includes(newPath))).toBe(false);
   });
@@ -296,7 +296,7 @@ describe('upload-media-direct API', () => {
   });
 
   test('row-not-found returns 404', async () => {
-    supabaseRows = { 'daily_content_plans:single': null, 'campaigns:single': { company_id: 'company-1' } };
+    supabaseRows = { 'daily_content_plans:single': null, 'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' } };
     const res = await callHandler({}, { id: 'missing' });
 
     expect(res.status).toHaveBeenCalledWith(404);
@@ -393,8 +393,8 @@ describe('upload-media-direct API', () => {
       content_type: 'reel',
       content: {
         creator_lifecycle_state: 'scheduled',
-        uploaded_media_url: 'https://supabase.test/storage/v1/object/public/media-uploads/company-1/plan-1/video/prior.mp4',
-        upload_storage_object_path: 'company-1/plan-1/video/prior.mp4',
+        uploaded_media_url: 'https://supabase.test/storage/v1/object/public/media-uploads/c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4',
+        upload_storage_object_path: 'c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4',
         scheduled_post_id: 'sp-1',
         creator_lifecycle_history: [
           { to: 'awaiting_media_upload' },
@@ -413,7 +413,7 @@ describe('upload-media-direct API', () => {
     expect((res.body as any).intermediate).toBe('media_uploaded');
     expect((res.body as any).to).toBe('ready_for_schedule');
     // Prior storage object replaced
-    expect(storageCalls.remove.some((r) => r.includes('company-1/plan-1/video/prior.mp4'))).toBe(true);
+    expect(storageCalls.remove.some((r) => r.includes('c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4'))).toBe(true);
   });
 });
 

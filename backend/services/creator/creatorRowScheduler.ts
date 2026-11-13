@@ -28,6 +28,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { resolveTenantOfRow, tenantChildTable, TenantSeamError } from '../../db/tenantTable';
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import { getPlatformRules, listPlatformCatalog } from '../platformIntelligenceService';
 import { isIdempotencyCollision } from '../boltScheduleIdempotency';
@@ -151,6 +152,17 @@ function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | 
   return null;
 }
 
+/**
+ * S2 tenant seam: daily_content_plans writes for ONE campaign, under the tenant that owns that campaign
+ * (resolved from campaigns.company_id by the seam itself, never from caller input) and pinned to that
+ * campaign. Throws TenantSeamError when the campaign has no resolvable tenant (missing row / NULL company).
+ */
+async function campaignPlanRows(campaignId: string, reason: string) {
+  const ctx = await resolveTenantOfRow('campaigns', campaignId, reason);
+  if (!ctx) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `campaign ${campaignId} has no resolvable tenant`);
+  return tenantChildTable('daily_content_plans', ctx, campaignId);
+}
+
 // ── Public types ────────────────────────────────────────────────────────────
 
 export type CreatorAttachmentRow = {
@@ -259,6 +271,15 @@ async function scheduleCreatorRowPost(input: {
     designAttribution = await resolveCampaignAttribution({ campaignId, templateId, templateVersion }) as unknown as Record<string, unknown>;
   } catch { /* best-effort — attribution stays null, analytics loop simply skips this asset */ }
 
+  // S2 tenant seam: the plan-row writes below go through the campaign's own tenant. Resolved BEFORE the
+  // scheduled_posts insert, so a campaign with no resolvable tenant is refused without creating a post.
+  let planRows: Awaited<ReturnType<typeof campaignPlanRows>>;
+  try {
+    planRows = await campaignPlanRows(campaignId, 'creator row scheduler: plan-row lifecycle writes');
+  } catch (seamError: any) {
+    return { status: 'error', scheduledPostId: null, reason: seamError?.message ?? 'tenant_unresolved' };
+  }
+
   // (2) INSERT scheduled_posts with a deterministic idempotency_key.
   let scheduledPostId: string | null = null;
   const { data: inserted, error: insertError } = await ownedDbTable('scheduled_posts')
@@ -304,7 +325,7 @@ async function scheduleCreatorRowPost(input: {
       // Transient insert failure — leave the row at ready_for_schedule so a
       // retry (or the next pipeline run) can schedule it. Mirror the batch
       // path's failure annotation.
-      await ownedDbTable('daily_content_plans')
+      await planRows
         .update({
           content: JSON.stringify({ ...attachedContent, schedule_error: insertError.message }),
           content_status: variant.failureRestoreStatus,
@@ -358,7 +379,7 @@ async function scheduleCreatorRowPost(input: {
   };
 
   try {
-    await ownedDbTable('daily_content_plans')
+    await planRows
       .update({
         content: JSON.stringify(scheduledTransition.content),
         content_status: scheduledTransition.contentStatus,
@@ -372,7 +393,7 @@ async function scheduleCreatorRowPost(input: {
   } catch {
     // Pre-migration fallback (no `scheduled_post_id` column yet). The JSON
     // content already carries scheduled_post_id via the transition patch.
-    await ownedDbTable('daily_content_plans')
+    await planRows
       .update({
         content: JSON.stringify(scheduledTransition.content),
         content_status: scheduledTransition.contentStatus,
@@ -450,12 +471,14 @@ function readRenderedMediaUrls(content: Record<string, unknown>): string[] {
  */
 async function annotateAutonomousScheduleSkip(
   rowId: string,
+  campaignId: string,
   content: Record<string, unknown>,
   reason: string,
 ): Promise<void> {
   try {
     const nowIso = new Date().toISOString();
-    await ownedDbTable('daily_content_plans')
+    const planRows = await campaignPlanRows(campaignId, 'creator row scheduler: autonomous schedule-skip annotation');
+    await planRows
       .update({
         content: JSON.stringify({ ...content, ...buildAutonomousScheduleDiagnostic(reason, nowIso) }),
         updated_at: nowIso,
@@ -662,11 +685,11 @@ export async function scheduleRenderedAutonomousRowById(
         : null,
     });
     if (!eligibility.can_schedule_now) {
-      await annotateAutonomousScheduleSkip(row.id, attachedContent, eligibility.reason);
+      await annotateAutonomousScheduleSkip(row.id, String(row.campaign_id ?? ''), attachedContent, eligibility.reason);
       return { status: 'skipped', scheduledPostId: null, reason: eligibility.reason };
     }
     if (readRenderedMediaUrls(attachedContent).length === 0) {
-      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'no_rendered_media');
+      await annotateAutonomousScheduleSkip(row.id, String(row.campaign_id ?? ''), attachedContent, 'no_rendered_media');
       return { status: 'skipped', scheduledPostId: null, reason: 'no_rendered_media' };
     }
 
@@ -688,7 +711,7 @@ export async function scheduleRenderedAutonomousRowById(
       userId = (companyUser as { user_id?: string } | null)?.user_id ?? null;
     }
     if (!userId) {
-      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'no_user_for_campaign');
+      await annotateAutonomousScheduleSkip(row.id, String(row.campaign_id ?? ''), attachedContent, 'no_user_for_campaign');
       return { status: 'skipped', scheduledPostId: null, reason: 'no_user_for_campaign' };
     }
 
@@ -707,7 +730,7 @@ export async function scheduleRenderedAutonomousRowById(
 
     const platform = normalize(String(row.platform || ''));
     if (!platform) {
-      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'unrecognized_platform');
+      await annotateAutonomousScheduleSkip(row.id, String(row.campaign_id ?? ''), attachedContent, 'unrecognized_platform');
       return { status: 'skipped', scheduledPostId: null, reason: 'unrecognized_platform' };
     }
 
@@ -723,7 +746,7 @@ export async function scheduleRenderedAutonomousRowById(
     const socialAccountId = (accounts as Array<{ id: string; platform: string }> | null ?? [])
       .find((a) => normalize(a.platform) === platform)?.id ?? null;
     if (!socialAccountId) {
-      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'no_social_account');
+      await annotateAutonomousScheduleSkip(row.id, String(row.campaign_id ?? ''), attachedContent, 'no_social_account');
       return { status: 'skipped', scheduledPostId: null, reason: 'no_social_account' };
     }
 

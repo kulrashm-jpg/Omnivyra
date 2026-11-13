@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { ownerOfChildRow, resolveTenantOfRow, systemTenantContext, tenantChildTable, TenantSeamError } from '../db/tenantTable';
 /**
  * EXECUTION ENGINE WRITE BOUNDARY
  *
@@ -36,6 +37,25 @@ function log(source: ExecutionSource, msg: string, data?: Record<string, unknown
   }
 }
 
+/**
+ * S2 tenant seam. This boundary's signatures carry no tenant, so each write derives it INSIDE the seam from
+ * the data it is about to write: the campaign's own company (campaigns.company_id) for campaign-keyed writes,
+ * or the row's owner + parent campaign for row-id writes. Every write is then pinned to that campaign under
+ * that tenant (a payload naming another campaign is refused). Authorization of the caller stays with the
+ * caller (route access checks); this makes the write itself unable to leave the campaign it names.
+ */
+async function plansOfCampaign(campaignId: string, reason: string) {
+  const ctx = await resolveTenantOfRow('campaigns', campaignId, reason);
+  if (!ctx) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `campaign ${campaignId} has no resolvable tenant`);
+  return tenantChildTable('daily_content_plans', ctx, campaignId);
+}
+/** Row-id variant: null when the row (or its tenant) cannot be resolved. */
+async function plansOfActivity(activityId: string, reason: string) {
+  const owner = await ownerOfChildRow('daily_content_plans', activityId, reason);
+  if (!owner) return null;
+  return tenantChildTable('daily_content_plans', systemTenantContext(owner.companyId, reason), owner.parentId);
+}
+
 /** Error code when week has executing plans and forceOverride is false */
 export const WEEK_EXECUTION_LOCKED = 'WEEK_EXECUTION_LOCKED';
 
@@ -46,7 +66,10 @@ export const WEEK_EXECUTION_LOCKED = 'WEEK_EXECUTION_LOCKED';
 export async function deleteActivity(activityId: string): Promise<{ deleted: boolean }> {
   log('manual', 'deleteActivity', { activityId });
 
-  const { data, error } = await ownedDbTable('daily_content_plans')
+  // A row that does not exist (or has no resolvable tenant) deletes nothing: same outcome as before.
+  const plans = await plansOfActivity(activityId, 'execution planner: deleteActivity');
+  if (!plans) return { deleted: false };
+  const { data, error } = await plans
     .delete()
     .eq('id', activityId)
     .select('id')
@@ -137,6 +160,9 @@ export async function saveWeekPlans(
   options?: { forceOverride?: boolean }
 ): Promise<{ rowsInserted: number }> {
   log(source, 'saveWeekPlans', { campaignId, weekNumber, count: plans.length });
+  // S2: resolved BEFORE the delete, so a campaign with no resolvable tenant is refused without losing its week.
+  // Every inserted row is pinned to `campaignId` (a row naming another campaign is refused by the seam).
+  const plansDb = await plansOfCampaign(campaignId, 'execution planner: saveWeekPlans');
   await deleteWeekPlans(campaignId, weekNumber, { forceOverride: options?.forceOverride });
   if (plans.length === 0) {
     return { rowsInserted: 0 };
@@ -152,7 +178,7 @@ export async function saveWeekPlans(
   const CHUNK_SIZE = 20;
   for (let i = 0; i < rowsWithSource.length; i += CHUNK_SIZE) {
     const chunk = rowsWithSource.slice(i, i + CHUNK_SIZE);
-    const { error } = await ownedDbTable('daily_content_plans').insert(chunk);
+    const { error } = await plansDb.insert(chunk);
     if (error) {
       console.error('[EXECUTION_ENGINE] saveWeekPlans insert failed:', error);
       // Diagnostic: when the creator-payload constraint fires, dump
@@ -205,7 +231,8 @@ export async function insertActivity(
   log(source, 'insertActivity', { campaign_id: row.campaign_id, week_number: row.week_number });
   const sourceVal = VALID_SOURCES.includes(source) ? source : 'manual';
   const rowWithSource = { ...row, generation_source: sourceVal };
-  const { data, error } = await ownedDbTable('daily_content_plans')
+  const plans = await plansOfCampaign(String(row.campaign_id ?? ''), 'execution planner: insertActivity');
+  const { data, error } = await plans
     .insert(rowWithSource)
     .select('id')
     .single();
@@ -232,7 +259,10 @@ export async function updateActivity(
   delete sanitized.campaign_id;
   delete sanitized.created_at;
 
-  const { data, error } = await ownedDbTable('daily_content_plans')
+  // A row that does not exist (or has no resolvable tenant) updates nothing: same outcome as before.
+  const plans = await plansOfActivity(activityId, 'execution planner: updateActivity');
+  if (!plans) return { updated: false };
+  const { data, error } = await plans
     .update(sanitized)
     .eq('id', activityId)
     .select('id')

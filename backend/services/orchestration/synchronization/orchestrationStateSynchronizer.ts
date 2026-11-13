@@ -13,6 +13,7 @@
  */
 
 import { supabase } from '../../../db/supabaseClient';
+import { resolveTenantOfRow, tenantChildTable } from '../../../db/tenantTable';
 import { getExecutionItem, getExecutionItems, isSafeActivityKey } from '../canonicalExecutionAdapter';
 import { projectExecutionState } from './orchestrationStateProjector';
 import {
@@ -42,15 +43,22 @@ async function persistProjection(
   try {
     const { data: row } = await supabase
       .from('daily_content_plans')
-      .select('id, content')
+      .select('id, campaign_id, content')
       .eq('id', rowId)
       .maybeSingle();
     if (!row) return { ok: false, previous: null };
     const content = parseContent(row as Record<string, unknown>);
     const previous = (content.orchestration_state as ExecutionStateProjection | undefined) ?? null;
     const merged = { ...content, orchestration_state: projection };
-    const { error } = await supabase
-      .from('daily_content_plans')
+    // S2 tenant seam: write under the tenant that owns the row's campaign (campaigns.company_id, resolved by the
+    // seam), pinned to that campaign. Unresolvable -> not persisted (`ok: false`), like any other persist failure.
+    const campaignId = String((row as { campaign_id?: unknown }).campaign_id ?? '');
+    const ctx = campaignId
+      ? await resolveTenantOfRow('campaigns', campaignId, 'orchestration state synchronizer: persist projection')
+      : null;
+    if (!ctx) return { ok: false, previous };
+    const planRows = await tenantChildTable('daily_content_plans', ctx, campaignId);
+    const { error } = await planRows
       .update({ content: JSON.stringify(merged), updated_at: new Date().toISOString() })
       .eq('id', rowId);
     return { ok: !error, previous };

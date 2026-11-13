@@ -31,6 +31,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -115,6 +116,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  // S2 tenant seam: daily_content_plans and scheduled_posts are children of campaigns. The tenant is the campaign's
+  // company that enforceCompanyAccess just authorized for this principal; both handles are pinned to the row's
+  // campaign (the linked post is proven to belong to it below, and thread children inherit the root's campaign) and
+  // made before anything is written, so a refusal writes nothing and answers the route's existing denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const seamRefused = (err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  };
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch(seamRefused);
+  const postsTable = await tenantChildTable('scheduled_posts', seamTenant, row.campaign_id).catch(seamRefused);
+  if (!plansTable || !postsTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {
@@ -222,7 +242,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       for (const child of decision.threadChildren) {
         if (child.status === 'cancelled') continue;
         const childCancelled = await pinErrorCode(
-          ownedDbTable('scheduled_posts')
+          postsTable
             .update({ status: 'cancelled', error_message: cancelReason, updated_at: new Date().toISOString() })
             .eq('id', child.id)
             .eq('parent_post_id', linkedPost.id)
@@ -269,7 +289,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     throw error;
   }
 
-  const { error: writeError } = await ownedDbTable('daily_content_plans')
+  const { error: writeError } = await plansTable
     .update({
       content: JSON.stringify(transition.content),
       content_status: transition.contentStatus,

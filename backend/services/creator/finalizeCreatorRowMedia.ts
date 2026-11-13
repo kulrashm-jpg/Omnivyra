@@ -23,7 +23,7 @@
  * a caller iterating sibling rows can continue.
  */
 
-import { ownedDbTable } from '@/backend/db/writeOwner';
+import { ownerOfChildRow, systemTenantContext, tenantChildTable } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -75,6 +75,23 @@ export async function finalizeCreatorRowMediaLifecycle(
     return { rowId, ok: false, scheduled: false, reason: 'missing_media_url' };
   }
 
+  // S2 tenant seam: the row's plan writes go through the tenant that owns the row, pinned to the row's own
+  // campaign (both derived from the row id by the seam, never from caller input). The only caller
+  // (pages/api/activity-workspace/[id]/shared-media.ts) has already run enforceCompanyAccess on that
+  // campaign's company. An unresolvable owner is refused here, before any validation or write.
+  let planRows: Awaited<ReturnType<typeof tenantChildTable>>;
+  try {
+    const owner = await ownerOfChildRow('daily_content_plans', rowId, 'finalize creator row media: plan-row lifecycle writes');
+    if (!owner) return { rowId, ok: false, scheduled: false, reason: 'tenant_unresolved' };
+    planRows = await tenantChildTable(
+      'daily_content_plans',
+      systemTenantContext(owner.companyId, 'finalize creator row media: plan-row lifecycle writes'),
+      owner.parentId,
+    );
+  } catch (seamError) {
+    return { rowId, ok: false, scheduled: false, reason: `tenant_refused:${(seamError as Error)?.message ?? 'unknown'}` };
+  }
+
   const currentContent = input.content && typeof input.content === 'object' ? input.content : {};
   const currentState = readLifecycleState(currentContent);
 
@@ -98,7 +115,7 @@ export async function finalizeCreatorRowMediaLifecycle(
         contentPatch: failurePatch,
         reason: 'media_upload_validation_failed',
       });
-      await ownedDbTable('daily_content_plans')
+      await planRows
         .update({
           content: JSON.stringify(failed.content),
           content_status: failed.contentStatus,
@@ -146,7 +163,7 @@ export async function finalizeCreatorRowMediaLifecycle(
     reason: 'auto_transition_after_validation',
   });
 
-  const { error: writeError } = await ownedDbTable('daily_content_plans')
+  const { error: writeError } = await planRows
     .update({
       content: JSON.stringify(toReady.content),
       content_status: toReady.contentStatus,

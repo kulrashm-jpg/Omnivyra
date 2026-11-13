@@ -30,7 +30,17 @@ jest.mock('../../db/supabaseClient', () => ({
     storage: { from: () => ({}), listBuckets: async () => ({ data: [] }), createBucket: async () => ({}) },
   },
 }));
-jest.mock('../../db/writeOwner', () => ({ ownedDbTable: () => ({}) }));
+// The tenant seam re-reads the parent campaign (uuid company) through ownedDbTable before any write.
+jest.mock('../../db/writeOwner', () => ({
+  ownedDbTable: (table: string) => {
+    const api: any = {
+      select: () => api,
+      eq: () => api,
+      maybeSingle: async () => { mockDbReads.push(table); return { data: mockRows[table] ?? null, error: null }; },
+    };
+    return api;
+  },
+}));
 let mockUser: { id: string } | null = null;
 let mockMember = false;
 jest.mock('../../services/userContextService', () => ({
@@ -40,7 +50,7 @@ jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: async ({ res }: any) => {
     if (!mockUser) { res.status(401).json({ error: 'UNAUTHORIZED' }); return null; }
     if (!mockMember) { res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' }); return null; }
-    return { userId: mockUser.id, companyId: 'co-a' };
+    return { userId: mockUser.id, companyId: 'c0a00000-0000-4000-8000-00000000000a' };
   },
 }));
 const mockAbuseGate = jest.fn(async (..._a: unknown[]) => ({ allowed: false, reason: 'test_stop' }));
@@ -80,7 +90,7 @@ beforeEach(() => {
 
 describe('anonymous callers learn nothing', () => {
   it('existing and unknown ids both answer 401, with no database read', async () => {
-    mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'co-a' } };
+    mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'c0a00000-0000-4000-8000-00000000000a' } };
     const existing = await call('plan-1');
     mockRows = {};
     const unknown = await call('does-not-exist');
@@ -94,7 +104,7 @@ describe('anonymous callers learn nothing', () => {
 describe('authenticated non-members cannot read a row\'s format', () => {
   it('a foreign row answers 403 without echoing content_type', async () => {
     mockUser = { id: 'user-b' };
-    mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'co-a' } };
+    mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'c0a00000-0000-4000-8000-00000000000a' } };
     const out = await call('plan-1');
     expect(out.status).toBe(403);
     expect(JSON.stringify(out.body)).not.toContain('infographic');
@@ -105,7 +115,7 @@ describe('members keep the existing behaviour', () => {
   it('an autonomous-only format is still refused with 409 before any upload work', async () => {
     mockUser = { id: 'user-a' };
     mockMember = true;
-    mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'co-a' } };
+    mockRows = { daily_content_plans: INFOGRAPHIC_ROW, campaigns: { company_id: 'c0a00000-0000-4000-8000-00000000000a' } };
     const out = await call('plan-1');
     expect(out.status).toBe(409);
     expect(out.body.code).toBe('UPLOAD_NOT_VALID_FOR_FORMAT');

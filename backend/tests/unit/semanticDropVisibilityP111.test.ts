@@ -62,7 +62,13 @@ jest.mock('../../db/supabaseClient', () => ({
       }
       if (table === 'blogs') return { insert: async () => ({ error: null }) };
       if (table === 'campaigns') {
-        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { company_id: 'co-1' } }) }) }) };
+        // chainable: the tenant seam reads the campaign (resolveTenantOfRow, then the parent check) with extra .eq()s
+        return {
+          select: () => {
+            const b: Record<string, any> = { eq: () => b, maybeSingle: async () => ({ data: { id: 'camp-1', company_id: 'c0100000-0000-4000-8000-000000000001' }, error: null }) };
+            return b;
+          },
+        };
       }
       throw new Error(`Unexpected table: ${table}`);
     },
@@ -97,7 +103,7 @@ jest.mock('../../services/campaign/plannerMetrics', () => ({
 
 import { processBlockSchedule } from '../../services/boltScheduleBlockProcessor';
 
-const CAMPAIGN = { start_date: '2099-01-04', user_id: 'user-1', company_id: 'co-1' };
+const CAMPAIGN = { start_date: '2099-01-04', user_id: 'user-1', company_id: 'c0100000-0000-4000-8000-000000000001' };
 const ACCOUNTS = new Map([['linkedin', 'acct-li']]);
 const normalize = (p: string) => (p === 'linkedin' ? 'linkedin' : null);
 

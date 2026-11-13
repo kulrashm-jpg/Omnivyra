@@ -26,7 +26,7 @@ import { isQueueOperational } from './queueHealth';
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
-import { ownedDbTable } from '../db/writeOwner';
+import { resolveTenantOfRow, tenantChildTable, TenantSeamError, type TenantContext } from '../db/tenantTable';
 import {
   makeScheduledPostIdempotencyKey,
   isIdempotencyCollision,
@@ -67,6 +67,16 @@ function topicGroupKeyForQueue(row: DailyPlanRow): string {
   if (mid) return `master::${mid}::${week}`;
   if (eid) return `unique::${eid}::${week}`;
   return `topic::${topic}::${week}`;
+}
+
+/**
+ * S2 tenant seam: the tenant that owns `campaignId`, read from campaigns.company_id by the seam itself (never
+ * from a caller-supplied company). Throws TenantSeamError when the campaign has no resolvable tenant.
+ */
+async function campaignTenant(campaignId: string, reason: string): Promise<TenantContext> {
+  const ctx = await resolveTenantOfRow('campaigns', campaignId, reason);
+  if (!ctx) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `campaign ${campaignId} has no resolvable tenant`);
+  return ctx;
 }
 
 /**
@@ -177,12 +187,18 @@ export async function queueBoltContentJobs(
   const accountMapObj: Record<string, string> = {};
   accountMap.forEach((v, k) => { accountMapObj[k] = v; });
 
+  // S2 tenant seam: slots are pinned to this campaign and job rows to this run, both under the campaign's
+  // tenant (the seam also verifies the run belongs to that tenant). Refused before any row is written.
+  const seamCtx = await campaignTenant(campaignId, 'bolt queue: content jobs + platform slots');
+  const slotsDb = await tenantChildTable('platform_content_slots', seamCtx, campaignId);
+  const jobsDb = await tenantChildTable('bolt_content_jobs', seamCtx, runId);
+
   const queue = getContentQueue('bolt-content-jobs');
   let queued = 0;
 
   for (const jd of jobs) {
     // 1. Insert bolt_content_jobs row
-    const { data: jobRow, error: jobInsertErr } = await ownedDbTable('bolt_content_jobs')
+    const { data: jobRow, error: jobInsertErr } = await jobsDb
       .insert({
         run_id:         runId,
         campaign_id:    campaignId,
@@ -216,12 +232,12 @@ export async function queueBoltContentJobs(
     // Insert in batches of 50 to avoid Supabase payload limits
     for (let i = 0; i < slotRows.length; i += 50) {
       const batch = slotRows.slice(i, i + 50);
-      const { error: slotErr } = await ownedDbTable('platform_content_slots').insert(batch);
+      const { error: slotErr } = await slotsDb.insert(batch);
       if (slotErr) console.warn('[schedule] platform_content_slots insert error:', slotErr.message);
     }
 
     // 3. Mark job as queued and push to BullMQ
-    await ownedDbTable('bolt_content_jobs')
+    await jobsDb
       .update({ status: 'queued' })
       .eq('id', boltJobId);
 
@@ -287,6 +303,15 @@ export async function processCreatorStructuredSchedule(input: {
   let scheduledCount = 0;
   let skippedCount = 0;
 
+  // S2 tenant seam: every plan-row write below is pinned to this campaign under the campaign's own tenant
+  // (campaigns.company_id via the seam; `companyId` above is the version-derived value used for audit only).
+  // Resolved once, before the loop: a campaign with no resolvable tenant is refused before any row is touched.
+  const plansDb = await tenantChildTable(
+    'daily_content_plans',
+    await campaignTenant(campaignId, 'creator structured schedule: plan-row writes'),
+    campaignId,
+  );
+
   for (const row of dailyPlans) {
     const rowContentType = normalizeCreatorFormat(row.content_type || '');
     const rowGovernance = getCreatorGovernance(rowContentType);
@@ -314,7 +339,7 @@ export async function processCreatorStructuredSchedule(input: {
         const currentLifecycle = typeof attachedContent.creator_lifecycle_state === 'string'
           ? attachedContent.creator_lifecycle_state
           : CREATOR_LIFECYCLE_STATES.AWAITING_MEDIA_UPLOAD;
-        await ownedDbTable('daily_content_plans')
+        await plansDb
           .update({
             content_status: String(currentLifecycle),
             failure_reason: null,
@@ -372,7 +397,7 @@ export async function processCreatorStructuredSchedule(input: {
     } else if (rowGovernance && !rowGovernance.schedulable) {
       // Non-attachment non-schedulable formats (e.g. text-only post/thread
       // routed here in error) — preserve the old skip-and-hold behavior.
-      await ownedDbTable('daily_content_plans')
+      await plansDb
         .update({
           content_status: 'guidance_ready',
           failure_reason: null,
@@ -742,7 +767,7 @@ export async function processCreatorStructuredSchedule(input: {
         persisted.failure_reason = `Stale creator plan version ${planVersion}; current version is ${currentVersionBeforePersist}`;
         persisted.failure_type = 'stale';
       }
-      await ownedDbTable('daily_content_plans')
+      await plansDb
         .update({
           content: JSON.stringify(persisted),
           intent_type: 'creator',
@@ -840,7 +865,7 @@ export async function processCreatorStructuredSchedule(input: {
         },
       });
       if (!isLockConflict) {
-        await ownedDbTable('daily_content_plans')
+        await plansDb
           .update({
             plan_version: planVersion,
             retry_count: Math.min(

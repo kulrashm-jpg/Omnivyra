@@ -30,7 +30,7 @@ let dbState: DbState;
 function resetDbState() {
   dbState = {
     daily_content_plans_row: null,
-    campaign_row: { id: 'campaign-1', user_id: 'user-1', company_id: 'company-1' },
+    campaign_row: { id: 'campaign-1', user_id: 'user-1', company_id: 'c0100000-0000-4000-8000-000000000001' }, // uuid: the tenant seam refuses a non-uuid company
     company_user_row: { user_id: 'user-1' },
     social_accounts_rows: [{ id: 'acc-1', platform: 'instagram' }],
     scheduled_posts_insert: { data: { id: 'sp-1' }, error: null },

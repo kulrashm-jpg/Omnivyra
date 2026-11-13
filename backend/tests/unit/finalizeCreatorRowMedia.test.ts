@@ -14,12 +14,29 @@ jest.mock('@/backend/services/creator/creatorRowScheduler', () => ({
   autoScheduleReadyCreatorRowById: jest.fn(),
 }));
 
-// Capture DB writes through a chainable mock matching `.update(...).eq(...)`.
-const updateEq = jest.fn(() => Promise.resolve({ error: null }));
+// Capture DB writes through a chainable mock matching `.update(...).eq(...)[.eq(...)]` (the tenant seam pins
+// `.eq('campaign_id', …)` before the caller's `.eq('id', …)`).
+const updateChain: Record<string, unknown> = { then: (res: any, rej: any) => Promise.resolve({ error: null }).then(res, rej) };
+const updateEq = jest.fn(() => updateChain);
+updateChain.eq = updateEq;
 type UpdateArgs = Parameters<ReturnType<typeof import('@/backend/db/writeOwner')['ownedDbTable']>['update']>;
 const updateMock = jest.fn((..._a: UpdateArgs) => ({ eq: updateEq }));
 jest.mock('@/backend/db/writeOwner', () => ({
-  ownedDbTable: jest.fn(() => ({ update: updateMock })),
+  // Reads: the tenant seam derives the row's owner (row -> campaign -> company, uuid) and re-checks the campaign
+  // under that tenant before handing back the write handle.
+  ownedDbTable: jest.fn((table: string) => ({
+    update: updateMock,
+    select: () => {
+      const row = table === 'daily_content_plans' ? { campaign_id: 'campaign-1' }
+        : table === 'campaigns' ? { id: 'campaign-1', company_id: 'c0100000-0000-4000-8000-000000000001' } : null;
+      const b: Record<string, unknown> = {
+        eq: () => b,
+        limit: async () => ({ data: row ? [row] : [], error: null }),
+        maybeSingle: async () => ({ data: row, error: null }),
+      };
+      return b;
+    },
+  })),
 }));
 
 import { finalizeCreatorRowMediaLifecycle } from '@/backend/services/creator/finalizeCreatorRowMedia';

@@ -4,6 +4,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -38,9 +39,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(503).json({ error: 'Campaign lookup is temporarily unavailable. Please try again.' });
     }
     const existed = Boolean(existingCampaign || existingVersion);
+    let existingAccess: Awaited<ReturnType<typeof requireCampaignAccess>> = null;
     if (existed) {
-      const access = await requireCampaignAccess(req, res, campaignId);
-      if (!access) return;
+      existingAccess = await requireCampaignAccess(req, res, campaignId);
+      if (!existingAccess) return;
     }
 
     // TENANT: a NEW campaign is owned by an AUTHORIZED company, never created company-less (this
@@ -85,18 +87,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
-    const writeExisting = () =>
-      supabase.from('campaigns').update(payload).eq('id', campaignId).select().single();
+    // S2 tenant seam: an existing campaign is updated only inside the company requireCampaignAccess resolved and
+    // authorized for this principal (access.companyId), never a request value.
+    const writeExisting = (access: { userId: string; companyId: string }) =>
+      tenantTable('campaigns', tenantContextFor({ userId: access.userId }, access.companyId))
+        .update(payload).eq('id', campaignId).select().single();
 
-    let { data: campaign, error } = existed
-      ? await writeExisting()
+    let { data: campaign, error } = existingAccess
+      ? await writeExisting(existingAccess)
       : await supabase.from('campaigns').insert({ ...payload, company_id: newCampaignCompanyId }).select().single();
 
     // 23505 = unique_violation: we lost the create race for this id.
     if (!existed && (error as { code?: string } | null)?.code === '23505') {
       const access = await requireCampaignAccess(req, res, campaignId);
       if (!access) return;
-      ({ data: campaign, error } = await writeExisting());
+      ({ data: campaign, error } = await writeExisting(access));
     }
 
     if (error) {
@@ -110,6 +115,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     console.error('Error in save campaign API:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -17,7 +17,7 @@ import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { hasUncertainOutcome, PUBLISH_OUTCOME_UNCERTAIN } from '@/backend/queue/publishOutcome';
 import { grantEarnCredit } from '@/backend/services/earnCreditsService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
-import { tenantTable, tenantContextFor } from '@/backend/db/tenantTable';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 // Step-16: automatic pre-enqueue shared-media finalization. OUTSIDE
 // scheduler internals, flag-gated, hard fail-closed (cannot break
 // scheduling). Content-only Creator writes; Text untouched.
@@ -113,6 +113,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   companyId = campaignAccess.organizationId;
   console.log('[schedule] authorized companyId:', companyId);
 
+  // S2 tenant seam: the tenant is the company requireCampaignTenantAccess authorized above (never the body's
+  // companyId). scheduled_posts is a child of campaigns: the handle is pinned to the authorized campaign and made
+  // before anything is written, so a refusal writes nothing and answers the guard's own not-found.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor({ userId }, campaignAccess.organizationId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    throw err;
+  }
+  const postsTable = await tenantChildTable('scheduled_posts', tenant, campaignId).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  });
+  if (!postsTable) return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+
   // ── Step-16: automatic pre-enqueue shared-media finalization ──────────
   // Runs BEFORE any scheduled_posts persistence / enqueueScheduledPostAt,
   // OUTSIDE scheduler internals. Hard fail-closed: ANY error is swallowed
@@ -170,7 +186,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // published through B's social account. With no account in this company, social_account_id stays null
   // (nullable by design: the UI shows a "Connect" badge and the publish workers refuse a post without one).
   let socialAccountId: string | null = null;
-  const tenant = tenantContextFor({ userId }, campaignAccess.organizationId);
   try {
     const platformAlias = platformNorm === 'x' ? 'twitter' : platformNorm;
     const { data, error } = await tenantTable('social_accounts', tenant)
@@ -219,14 +234,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   };
 
   const tryInsert = async (row: Record<string, unknown>) => {
-    return supabase.from('scheduled_posts').insert(row).select('id').single();
+    return postsTable.insert(row).select('id').single();
   };
 
   const tryUpdate = async (id: string, row: Record<string, unknown>) => {
-    return supabase
-      .from('scheduled_posts')
+    // .select('id') reports the matched rows: the seam pins the update to this campaign, so a dedup match outside
+    // it matches nothing (see dedup strategy 2).
+    return postsTable
       .update({ ...row, updated_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id)
+      .select('id');
   };
 
   // ── Phase 1B.1: thread multi-row branch ─────────────────────────────────
@@ -389,8 +406,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // Repurpose lineage columns live on the root only. Defensive write
       // (the columns are additive — schema-mismatch is non-fatal).
       try {
-        await supabase
-          .from('scheduled_posts')
+        await postsTable
           .update({
             repurpose_parent_execution_id: executionIdStr || null,
             repurpose_index: Number.isFinite(Number(repurposeIndex)) ? Number(repurposeIndex) : 1,
@@ -522,22 +538,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
         if (existing?.id) {
           console.log('[schedule] dedup match (repurpose_id+platform), updating:', existing.id);
-          const { error: updateErr } = await tryUpdate(existing.id, fullRow);
+          const { data: updatedRows, error: updateErr } = await tryUpdate(existing.id, fullRow);
+          let matchedRows: unknown = updatedRows;
           if (updateErr) {
             // Retry without repurpose extras for: missing column (42703), type operator errors (42883)
             const isSchemaErr = updateErr.message?.includes('column') || updateErr.code === '42703'
               || updateErr.message?.includes('operator does not exist') || updateErr.code === '42883';
             if (isSchemaErr) {
               console.warn('[schedule] schema mismatch on update, retrying without repurpose extras:', updateErr.message);
-              const { error: retryErr } = await tryUpdate(existing.id, baseRow);
+              const { data: retryRows, error: retryErr } = await tryUpdate(existing.id, baseRow);
               if (retryErr) {
                 console.error('[activity-workspace/schedule] update retry error:', retryErr);
                 return res.status(500).json({ error: retryErr.message });
               }
+              matchedRows = retryRows;
             } else {
               console.error('[activity-workspace/schedule] update error:', updateErr);
               return res.status(500).json({ error: updateErr.message });
             }
+          }
+          // S2 tenant seam: this dedup lookup is not campaign-scoped (user + execution id + platform), so the match
+          // can be a post of ANOTHER campaign, which the seam-pinned update does not touch. That is a seam refusal:
+          // answer the guard's not-found instead of reporting (and later enqueuing) a post this request never wrote.
+          if (!Array.isArray(matchedRows) || matchedRows.length === 0) {
+            return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
           }
           scheduledPostId = existing.id;
         }

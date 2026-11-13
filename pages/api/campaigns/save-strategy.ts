@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 const RESTRICTED_KEY_FRAGMENTS = [
   'apikey',
@@ -58,6 +59,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
+    // S2 tenant seam: content_pillars and platform_strategies are children of campaigns. The tenant is the company
+    // requireCampaignTenantAccess resolved and authorized (access.organizationId). Both handles are made (proving the
+    // campaign is in that tenant) before any write below, so a refusal writes nothing.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+    const pillarsTable = await tenantChildTable('content_pillars', tenant, campaignId);
+    const platformStrategiesTable = await tenantChildTable('platform_strategies', tenant, campaignId);
+
     // Save campaign strategy (planning-only, no execution or automation).
     const { data: strategyData, error: strategyError } = await supabase
       .from('campaign_strategies')
@@ -97,9 +105,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         visual_style: pillar.visualStyle
       }));
 
-      const { error: pillarsError } = await supabase
-        .from('content_pillars')
-        .upsert(pillarsData);
+      // No onConflict was ever passed, so this upsert resolved on the primary key (id), which the payload never
+      // carries: it has always behaved as a plain INSERT. The seam refuses an upsert whose conflict key lacks
+      // campaign_id, so the statement now says what it does.
+      const { error: pillarsError } = await pillarsTable
+        .insert(pillarsData);
 
       if (pillarsError) {
         console.error('Error saving content pillars:', pillarsError);
@@ -122,9 +132,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }));
 
-      const { error: platformError } = await supabase
-        .from('platform_strategies')
-        .upsert(platformStrategies);
+      // Same as content_pillars above: a primary-key upsert without an id has always been a plain INSERT.
+      const { error: platformError } = await platformStrategiesTable
+        .insert(platformStrategies);
 
       if (platformError) {
         console.error('Error saving platform strategies:', platformError);
@@ -138,6 +148,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     console.error('Error in save-strategy API:', error);
     res.status(500).json({
       error: 'Internal server error',

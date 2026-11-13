@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -42,8 +43,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       thread_type: 'content_planning',
       status: 'saved_for_planning',
     };
-    let { data, error } = await supabase
-      .from('ai_threads')
+    // S2 tenant seam: ai_threads is a child of campaigns. The handle is built from the company
+    // requireCampaignTenantAccess resolved and authorized (access.organizationId) and the campaign it checked; it is
+    // made (proving the campaign is in that tenant) before the first write, so a refusal writes nothing.
+    const threadsTable = await tenantChildTable(
+      'ai_threads',
+      tenantContextFor({ userId: access.userId }, access.organizationId),
+      campaignId,
+    );
+    let { data, error } = await threadsTable
       .insert(extendedInsertPayload as any)
       .select();
 
@@ -58,8 +66,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         details.includes('saved_for_planning'));
 
     if (isMissingColumnError) {
-      const retry = await supabase
-        .from('ai_threads')
+      const retry = await threadsTable
         .insert(baseInsertPayload as any)
         .select();
       data = retry.data as any;
@@ -100,6 +107,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     console.error('Error in save-ai-content API:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

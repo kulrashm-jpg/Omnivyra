@@ -11,7 +11,8 @@
 const plans: any[] = [];
 const scheduledPosts: any[] = [];
 const queueJobs: any[] = [];
-const campaigns: any[] = [{ id: 'campaign-1', company_id: 'company-1' }];
+// uuid company: the tenant seam (systemTenantContext / resolved owner) refuses a non-uuid company id.
+const campaigns: any[] = [{ id: 'campaign-1', company_id: 'c0100000-0000-4000-8000-000000000001' }];
 
 const updates: Array<{ table: string; payload: Record<string, any>; filters: Record<string, any> }> = [];
 
@@ -65,6 +66,10 @@ jest.mock('../../db/writeOwner', () => ({
     const api: any = {
       update: jest.fn((p: any) => { payload = p; return api; }),
       eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
+      // Reads: the tenant seam resolves the heal target's owner / parent through ownedDbTable before the update.
+      select: jest.fn(() => api),
+      limit: jest.fn((n: number) => Promise.resolve({ data: query(table, filters, 0, n - 1), error: null })),
+      maybeSingle: jest.fn(async () => ({ data: query(table, filters, 0, 0)[0] ?? null, error: null })),
       then(resolve: any) {
         if (payload) updates.push({ table, payload, filters });
         return Promise.resolve({ data: null, error: null }).then(resolve);

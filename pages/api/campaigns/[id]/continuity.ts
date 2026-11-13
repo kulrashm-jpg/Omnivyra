@@ -12,6 +12,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { decideNextAction } from '../../../../backend/lib/campaigns/continuityDecisionEngine';
@@ -90,6 +91,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     allowedRoles: [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN],
   });
   if (!access) return;
+
+  // S2 tenant seam: the tenant is the campaign's owning company that enforceRole just authorized for access.userId;
+  // never a request value. Made before any write; a company that cannot form a context answers the route's
+  // existing not-found and nothing is written.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor({ userId: access.userId }, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(404).json({ error: 'Campaign not found' });
+    throw err;
+  }
 
   // Derive post count from daily_plan for effort signal
   const snapshot = versionRes.data?.campaign_snapshot as any;
@@ -354,8 +366,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const effortSignal = classifyEffortSignal(postCount, evaluationResult.score);
 
   // ── 9. Persist decision ───────────────────────────────────────────────────
-  await supabase
-    .from('campaign_performance')
+  await tenantTable('campaign_performance', tenant)
     .update({
       recommended_action:         decision.action,
       next_topic:                 decision.next_topic,

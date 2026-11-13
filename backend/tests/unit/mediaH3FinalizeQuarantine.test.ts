@@ -33,12 +33,16 @@ jest.mock('../../db/supabaseClient', () => ({
     storage: { from: (b: string) => mockMem.storage.from(b) },
   },
 }));
+// Company ids are uuid-shaped, as every real one: the tenant seam (tenantContextFor) refuses anything else.
 jest.mock('../../db/writeOwner', () => ({
-  ownedDbTable: () => {
+  ownedDbTable: (table: string) => {
     let payload: any = null;
     const api: any = {
       update: (p: any) => { payload = p; return api; },
       eq: () => api,
+      // Read: the tenant seam re-reads the parent campaign under the tenant before handing back the write handle.
+      select: () => api,
+      maybeSingle: async () => ({ data: mockRows[table] ?? null, error: null }),
       then(resolve: any) {
         if (mockOnWrite) mockOnWrite();
         if (payload && !mockWriteError) mockWrites.push(payload);
@@ -54,7 +58,7 @@ jest.mock('../../services/supabaseAuthService', () => ({
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async ({ res }: any) => {
     if (!mockAuthorized) { res.status(403).json({ error: 'FORBIDDEN' }); return null; }
-    return { userId: 'user-a', companyId: 'company-a' };
+    return { userId: 'user-a', companyId: 'c0a00000-0000-4000-8000-00000000000a' };
   }),
 }));
 jest.mock('../../services/creator/creatorRowScheduler', () => ({
@@ -64,8 +68,8 @@ jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unk
 
 import handler from '../../../pages/api/activity-workspace/[id]/upload-media-finalize';
 
-const KEY = 'company-a/plan-a/video/1700000000000-0123456789abcdef0123456789abcdef.mp4';
-const KEY2 = 'company-a/plan-a/video/1700000000001-fedcba9876543210fedcba9876543210.mp4';
+const KEY = 'c0a00000-0000-4000-8000-00000000000a/plan-a/video/1700000000000-0123456789abcdef0123456789abcdef.mp4';
+const KEY2 = 'c0a00000-0000-4000-8000-00000000000a/plan-a/video/1700000000001-fedcba9876543210fedcba9876543210.mp4';
 const Q = 'media-quarantine';
 const D = 'media-uploads';
 const realFetch = (global as any).fetch;
@@ -93,7 +97,7 @@ const deliveryKeys = () => [...mockMem.objects.keys()].filter((k) => k.startsWit
 
 beforeEach(() => {
   mockMem.reset();
-  mockRows = { daily_content_plans: row(), campaigns: { company_id: 'company-a' } };
+  mockRows = { daily_content_plans: row(), campaigns: { company_id: 'c0a00000-0000-4000-8000-00000000000a' } };
   mockWrites.length = 0;
   mockWriteError = null;
   mockOnWrite = null;
@@ -180,7 +184,7 @@ describe('authorization and scope (no storage access before both pass)', () => {
     expect(mockMem.has(Q, KEY)).toBe(true);
   });
   it('another tenant\'s quarantined key → 400 out of scope, zero storage calls', async () => {
-    const victim = 'company-b/plan-b/video/1700000000000-0123456789abcdef0123456789abcdef.mp4';
+    const victim = 'c0b00000-0000-4000-8000-00000000000b/plan-b/video/1700000000000-0123456789abcdef0123456789abcdef.mp4';
     mockMem.put(Q, victim, MP4, 'video/mp4');
     const r = await finalize(body({ storage_path: victim }));
     expect(r.statusCode).toBe(400);

@@ -64,6 +64,8 @@ jest.mock('../../db/writeOwner', () => ({
       eq: jest.fn(() => api),
       is: jest.fn(() => api),
       select: jest.fn(() => api),
+      // The tenant seam re-reads the parent campaign (uuid company) through ownedDbTable before any write.
+      maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? (supabaseRows['campaigns:single'] ?? null) : null, error: null })),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload });
       // A compare-and-set update reports the row it matched (the post is in the
@@ -76,7 +78,7 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
-  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
+  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'c0100000-0000-4000-8000-000000000001' })),
 }));
 
 jest.mock('../../scheduler/schedulerService', () => ({
@@ -114,7 +116,7 @@ function setRow(opts: {
       content_status: opts.lifecycle ?? 'scheduled',
       platform: 'instagram',
     },
-    'campaigns:single': { company_id: 'company-1' },
+    'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' },
     // The linked post belongs to the row's campaign (3AH-92 binding check).
     // ...and is owned by the authenticated caller, still unpublished (Closure-005).
     'scheduled_posts:single': { id: 'sp-1', campaign_id: 'campaign-1', user_id: 'user-1', status: 'scheduled', error_code: null, platform_post_id: null },
@@ -197,7 +199,7 @@ describe('unschedule API', () => {
   });
 
   test('row-not-found returns 404', async () => {
-    supabaseRows = { 'daily_content_plans:single': null, 'campaigns:single': { company_id: 'company-1' } };
+    supabaseRows = { 'daily_content_plans:single': null, 'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' } };
     const res = await callHandler({}, { id: 'missing' });
     expect(res.status).toHaveBeenCalledWith(404);
   });

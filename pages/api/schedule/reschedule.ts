@@ -30,6 +30,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -110,9 +111,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const campaignId = post.campaign_id ? String(post.campaign_id) : '';
+    /** The company requireCampaignAccess resolved and authorized for a campaign post (S2 tenant seam). */
+    let ownerCompanyId = '';
     if (campaignId) {
       const access = await requireCampaignAccess(req, res, campaignId);
       if (!access) return;
+      ownerCompanyId = access.companyId;
       if (requestedCompanyId && requestedCompanyId !== access.companyId) {
         return res.status(403).json({ error: 'Post not in company scope' });
       }
@@ -139,16 +143,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // The write repeats the ownership predicate it was authorized under, so a
     // post re-parented between the read and the write is left untouched.
-    const update = supabase
-      .from('scheduled_posts')
-      .update({
-        scheduled_for: newScheduledFor.toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', postId);
+    //
+    // S2 tenant seam: a campaign post is written through tenantChildTable, built from the company
+    // requireCampaignAccess authorized and pinned to the post's campaign (campaign_id = campaignId); the parent is
+    // verified before the update, so a refusal writes nothing and answers the route's campaign not-found (catch
+    // below). A post with NO campaign has no tenant: it is user-anchored (user_id = caller) and stays on the
+    // explicit `.is('campaign_id', null)` + owner predicate.
+    const patch = {
+      scheduled_for: newScheduledFor.toISOString(),
+      updated_at: new Date().toISOString(),
+    };
     const { error } = campaignId
-      ? await update.eq('campaign_id', campaignId)
-      : await update.is('campaign_id', null).eq('user_id', user.userId);
+      ? await (await tenantChildTable('scheduled_posts', tenantContextFor({ userId: user.userId }, ownerCompanyId), campaignId))
+          .update(patch)
+          .eq('id', postId)
+      : await supabase
+          .from('scheduled_posts')
+          .update(patch)
+          .eq('id', postId)
+          .is('campaign_id', null)
+          .eq('user_id', user.userId);
 
     if (error) {
       console.error('[schedule/reschedule]', error);
@@ -174,6 +188,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       new_date: newDate.toISOString().slice(0, 10),
     });
   } catch (err: unknown) {
+    if (err instanceof TenantSeamError) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
     console.error('[schedule/reschedule]', err);
     return res.status(500).json({ error: (err as Error)?.message || 'Internal error' });
   }

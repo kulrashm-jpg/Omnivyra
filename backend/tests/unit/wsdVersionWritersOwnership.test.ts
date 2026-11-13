@@ -31,7 +31,14 @@ import { as as asPrincipal, roleRows } from '../helpers/sec91W2AHarness';
 
 jest.mock('@/config', () => ({ config: { DEV_USER_ID: '', NODE_ENV: 'production' } }));
 jest.mock('../../db/supabaseClient', () => jest.requireActual('../helpers/wsdFaultClient').supabaseModule());
-jest.mock('../../db/writeOwner', () => jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule());
+// S2: the platform_strategies write moved from supabase.from to the tenant seam (tenantChildTable -> ownedDbTable).
+// Route that table's statements through the same fault-injecting client they used before, so a fault on it still
+// reaches the statement; every other ownedDbTable table keeps the plain harness builder, as before.
+jest.mock('../../db/writeOwner', () => {
+  const m = jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule();
+  const faulted = jest.requireActual('../helpers/wsdFaultClient').supabaseModule().supabase;
+  return { ...m, ownedDbTable: (t: string) => (t === 'platform_strategies' ? faulted.from(t) : m.ownedDbTable(t)) };
+});
 // Role-aware identities (same tokens for A / B / SUPER, plus same-company non-admin principals).
 jest.mock('../../services/supabaseAuthService', () => jest.requireActual('../helpers/sec91W2AHarness').authModule());
 jest.mock('../../security/IdentityResolver', () => jest.requireActual('../helpers/sec91W2AHarness').identityModule());
@@ -192,7 +199,9 @@ describe.each(WRITERS)('$name', (w) => {
   // authorized company. An orphan (versions, no campaigns row; C36: none in prod) or a company-less campaigns row is
   // the uniform 404 and NOTHING is written (the seam is checked before the version write). The other writers do
   // not touch a campaign child table and keep the version-owned contract.
-  const strictChild = w.name === 'revise-strategy';
+  // S2 tier 1 (55, same principle, e9 to confirm): approve-frequency-rebalance now writes platform_strategies - also a
+  // CHILD of campaigns - through the strict seam, so it joins the strict contract (handle made before any write).
+  const strictChild = w.name === 'revise-strategy' || w.name === 'approve-frequency-rebalance';
 
   it('orphan versions (no campaigns row): owned by their company; revise-strategy (strict child write) 404s, nothing written', async () => {
     world(null, VERSIONS_A);
@@ -348,13 +357,15 @@ describe('rebalance approve / reject select the proposal inside the owner compan
     // write that never ran. completedWrites() also excludes a statement the
     // model ERRORED. See the four outcomes in the harness.
     expect(completedWrites(['platform_strategies'])).toEqual([
-      expect.objectContaining({ op: 'upsert', payload: [expect.objectContaining({ campaign_id: X, platform: 'linkedin', content_frequency: 5 })] }),
+      // S2: the route now sends the same payload as an INSERT through the tenant seam (the option-less upsert never
+      // named a conflict key, so it was always an insert in effect; the seam refuses an upsert without campaign_id).
+      expect.objectContaining({ op: 'insert', payload: [expect.objectContaining({ campaign_id: X, platform: 'linkedin', content_frequency: 5 })] }),
     ]);
   });
 
   it('a failed platform_strategies apply → generic 500 and no approved version written', async () => {
     world({ company_id: CO_A }, VERSIONS_A);
-    faults.push({ table: 'platform_strategies', op: 'upsert', error: { code: 'XX000', message: 'forced failure' } });
+    faults.push({ table: 'platform_strategies', op: 'insert', error: { code: 'XX000', message: 'forced failure' } }); // S2: insert via the seam
     const r = await invoke(approveRebalance as never, { method: 'POST', as: 'A', query: { id: X } });
     expect(r.status).toBe(500);
     expect(r.body).toEqual({ error: 'Failed to apply frequency changes' });

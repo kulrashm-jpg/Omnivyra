@@ -81,7 +81,8 @@ function chain(table: string) {
     eq: jest.fn((k: string, v: any) => { filters[k] = v; return api; }),
     update: jest.fn((p: Record<string, any>) => { updatePayload = p; return api; }),
     is: jest.fn((k: string, v: any) => { filters[`is:${k}`] = v; return api; }),
-    maybeSingle: jest.fn(async () => ({ data: null, error: null })),
+    // The tenant seam re-reads the parent campaign (under the tenant) through ownedDbTable before any write.
+    maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? (supabaseRows['campaigns:single'] ?? null) : null, error: null })),
     then(resolve: any) {
       if (updatePayload) {
         ownedUpdates.push({ table, payload: updatePayload, filter: { ...filters } });
@@ -102,7 +103,7 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
-  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
+  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'c0100000-0000-4000-8000-000000000001' })),
 }));
 
 jest.mock('../../services/mediaUploadValidationService', () => ({
@@ -162,7 +163,7 @@ function setScheduledRow(opts?: { revision?: number; lifecycle?: string }) {
       content_type: 'reel',
       content: {
         creator_lifecycle_state: opts?.lifecycle ?? 'scheduled',
-        uploaded_media_url: 'https://supabase.test/storage/v1/object/public/media-uploads/company-1/plan-1/video/prior.mp4',
+        uploaded_media_url: 'https://supabase.test/storage/v1/object/public/media-uploads/c0100000-0000-4000-8000-000000000001/plan-1/video/prior.mp4',
         scheduled_post_id: 'sp-1',
         creator_lifecycle_history: history,
       },
@@ -171,7 +172,7 @@ function setScheduledRow(opts?: { revision?: number; lifecycle?: string }) {
       scheduled_time: null,
       date: '2030-01-01',
     },
-    'campaigns:single': { company_id: 'company-1' },
+    'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' },
   };
 }
 
@@ -214,7 +215,7 @@ describe('reschedule API', () => {
         content: { creator_lifecycle_state: 'render_ready' },
         content_status: 'render_ready', platform: 'instagram',
       },
-      'campaigns:single': { company_id: 'company-1' },
+      'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' },
     };
     const future = new Date(Date.now() + 3_600_000).toISOString();
     const res = await callHandler({ scheduled_at: future });
@@ -247,7 +248,7 @@ describe('reschedule API', () => {
 
   test('replace-media-only: validation runs, FSM transitions, scheduled_posts.media_urls updates', async () => {
     setScheduledRow({ revision: 4 });
-    const newUrl = 'https://supabase.test/storage/v1/object/public/media-uploads/company-1/plan-1/video/new.mp4';
+    const newUrl = 'https://supabase.test/storage/v1/object/public/media-uploads/c0100000-0000-4000-8000-000000000001/plan-1/video/new.mp4';
     const res = await callHandler({ media_url: newUrl, source: 'external_link' });
     expect(res.status).toHaveBeenCalledWith(200);
     expect((res.body as any).success).toBe(true);
@@ -269,7 +270,7 @@ describe('reschedule API', () => {
   test('replace-media + retime: both media_urls and scheduled_for update on scheduled_posts', async () => {
     setScheduledRow({ revision: 4 });
     const future = new Date(Date.now() + 3_600_000).toISOString();
-    const newUrl = 'https://supabase.test/storage/v1/object/public/media-uploads/company-1/plan-1/video/new.mp4';
+    const newUrl = 'https://supabase.test/storage/v1/object/public/media-uploads/c0100000-0000-4000-8000-000000000001/plan-1/video/new.mp4';
     const res = await callHandler({ media_url: newUrl, scheduled_at: future });
     expect(res.status).toHaveBeenCalledWith(200);
     expect((res.body as any).success).toBe(true);

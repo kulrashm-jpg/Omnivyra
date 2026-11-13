@@ -41,14 +41,16 @@ const storageCalls: { upload: Array<{ path: string }>; remove: string[][] } = { 
 let supabaseRows: Record<string, unknown> = {};
 let accessGranted = true;
 
-function chain() {
+// Company ids are uuid-shaped, as every real one: the tenant seam (tenantContextFor) refuses anything else.
+function chain(table?: string) {
   const api: any = {
     select: jest.fn(() => api),
     eq: jest.fn(() => api),
     in: jest.fn(() => api),
     update: jest.fn(() => api),
     insert: jest.fn(() => api),
-    maybeSingle: jest.fn(async () => ({ data: null, error: null })),
+    // The tenant seam re-reads the parent campaign (under the tenant) through ownedDbTable before any write.
+    maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? (supabaseRows['campaigns:single'] ?? null) : null, error: null })),
     single: jest.fn(async () => ({ data: null, error: null })),
     then(resolve: any) {
       return Promise.resolve({ data: null, error: null }).then(resolve);
@@ -89,7 +91,7 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 jest.mock('../../db/writeOwner', () => ({
-  ownedDbTable: jest.fn(() => chain()),
+  ownedDbTable: jest.fn((table: string) => chain(table)),
 }));
 
 jest.mock('../../services/userContextService', () => ({
@@ -99,12 +101,12 @@ jest.mock('../../services/userContextService', () => ({
   resolveUserContext: jest.fn(async () => ({
     userId: 'user-a',
     role: 'user',
-    companyIds: ['company-a'],
-    defaultCompanyId: 'company-a',
+    companyIds: ['c0a00000-0000-4000-8000-00000000000a'],
+    defaultCompanyId: 'c0a00000-0000-4000-8000-00000000000a',
     authenticated: true,
   })),
   enforceCompanyAccess: jest.fn(async ({ res }: any) => {
-    if (accessGranted) return { userId: 'user-a', companyId: 'company-a' };
+    if (accessGranted) return { userId: 'user-a', companyId: 'c0a00000-0000-4000-8000-00000000000a' };
     res.status(403).json({ error: 'Access denied to company' });
     return null;
   }),
@@ -136,7 +138,7 @@ jest.mock('formidable', () => jest.fn(() => ({
 })));
 
 const ACTIVITY = 'plan-a1';
-const COMPANY = 'company-a';
+const COMPANY = 'c0a00000-0000-4000-8000-00000000000a';
 const PUBLIC_PREFIX = 'https://supabase.test/storage/v1/object/public/media-uploads/';
 
 function setRow(priorUrl: string | null, state = 'ready_for_schedule') {
@@ -178,11 +180,11 @@ describe('upload-media-direct — prior-object cleanup is scoped to the authoriz
 
   describe('out-of-scope prior objects are NEVER deleted (and the upload still succeeds)', () => {
     const cases: Array<[string, string]> = [
-      ['another tenant\'s direct-upload object', `${PUBLIC_PREFIX}company-b/plan-b1/video/victim.mp4`],
+      ['another tenant\'s direct-upload object', `${PUBLIC_PREFIX}c0b00000-0000-4000-8000-00000000000b/plan-b1/video/victim.mp4`],
       ['another tenant\'s TUS object', `${PUBLIC_PREFIX}plan-b1/video/plan-b1-1700000000000-abcdefgh.mp4`],
       ['another activity of the SAME company', `${PUBLIC_PREFIX}${COMPANY}/plan-a2/video/sibling.mp4`],
-      ['a foreign host whose path names another tenant', `https://attacker.example/media-uploads/company-b/plan-b1/video/victim.mp4`],
-      ['an encoded-slash traversal out of this activity', `${PUBLIC_PREFIX}${ACTIVITY}/video/..%2F..%2Fcompany-b%2Fplan-b1%2Fvideo%2Fvictim.mp4`],
+      ['a foreign host whose path names another tenant', `https://attacker.example/media-uploads/c0b00000-0000-4000-8000-00000000000b/plan-b1/video/victim.mp4`],
+      ['an encoded-slash traversal out of this activity', `${PUBLIC_PREFIX}${ACTIVITY}/video/..%2F..%2Fc0b00000-0000-4000-8000-00000000000b%2Fplan-b1%2Fvideo%2Fvictim.mp4`],
       ['an encoded dot-segment that collapses to the activity folder', `${PUBLIC_PREFIX}${ACTIVITY}/video/%2e%2e`],
       ['a percent-encoded key under this activity', `${PUBLIC_PREFIX}${ACTIVITY}/video/%00x.mp4`],
       ['an activity-id prefix collision', `${PUBLIC_PREFIX}${ACTIVITY}0/video/other.mp4`],
@@ -202,7 +204,7 @@ describe('upload-media-direct — prior-object cleanup is scoped to the authoriz
     });
 
     test('a scheduled row (replace-media) with a foreign prior URL leaves it untouched', async () => {
-      setRow(`${PUBLIC_PREFIX}company-b/plan-b1/video/victim.mp4`, 'scheduled');
+      setRow(`${PUBLIC_PREFIX}c0b00000-0000-4000-8000-00000000000b/plan-b1/video/victim.mp4`, 'scheduled');
       const res = await callHandler();
       expect(res.status).toHaveBeenCalledWith(200);
       expect(removedPaths()).toEqual([]);

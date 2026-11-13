@@ -71,6 +71,10 @@ jest.mock('../../db/writeOwner', () => ({
     const api: any = {
       update: jest.fn((p: Record<string, any>) => { updatePayload = p; return api; }),
       eq: jest.fn(() => api),
+      // Company ids are uuid-shaped (the tenant seam refuses anything else); the seam re-reads the parent
+      // campaign under the tenant through ownedDbTable before any write.
+      select: jest.fn(() => api),
+      maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? (supabaseRows['campaigns:single'] ?? null) : null, error: null })),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload });
         return Promise.resolve({ data: null, error: null }).then(resolve);
@@ -86,7 +90,7 @@ jest.mock('../../services/supabaseAuthService', () => ({
 }));
 
 jest.mock('../../services/userContextService', () => ({
-  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'company-1' })),
+  enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1', companyId: 'c0100000-0000-4000-8000-000000000001' })),
 }));
 
 jest.mock('../../services/mediaUploadValidationService', () => ({
@@ -110,7 +114,7 @@ function setRow(opts: { contentType?: string; lifecycle?: string; revisionLength
       content_status: opts.lifecycle ?? 'awaiting_media_upload',
       platform: 'instagram',
     },
-    'campaigns:single': { company_id: 'company-1' },
+    'campaigns:single': { company_id: 'c0100000-0000-4000-8000-000000000001' },
   };
 }
 
@@ -137,7 +141,7 @@ describe('upload-media-finalize API', () => {
   test('happy path: storage_path + video/mp4 + valid sniff → ready_for_schedule', async () => {
     setRow({ contentType: 'reel' });
     const res = await callHandler({
-      storage_path: 'company-1/plan-1/video/abc.mp4',
+      storage_path: 'c0100000-0000-4000-8000-000000000001/plan-1/video/abc.mp4',
       mime_type: 'video/mp4',
       size_bytes: 1024,
       source: 'tus_upload',
@@ -156,7 +160,7 @@ describe('upload-media-finalize API', () => {
     // No orphan cleanup — the storage object is the final asset.
     expect(storageCalls.remove).toHaveLength(0);
     // MEDIA-H3: it became the final asset by a server-side promotion.
-    expect(storageCalls.move).toEqual([{ from: 'company-1/plan-1/video/abc.mp4', to: 'company-1/plan-1/video/abc.mp4', opts: { destinationBucket: 'media-uploads' } }]);
+    expect(storageCalls.move).toEqual([{ from: 'c0100000-0000-4000-8000-000000000001/plan-1/video/abc.mp4', to: 'c0100000-0000-4000-8000-000000000001/plan-1/video/abc.mp4', opts: { destinationBucket: 'media-uploads' } }]);
   });
 
   test('missing storage_path → 400', async () => {
@@ -244,7 +248,7 @@ describe('PC5-4 upload gate (CREATOR_MEDIA_UPLOADS_ENABLED)', () => {
     storageCalls.download.length = 0;
     storageCalls.move.length = 0;
     const res = await callHandler({
-      storage_path: 'company-1/plan-1/video/abc.mp4',
+      storage_path: 'c0100000-0000-4000-8000-000000000001/plan-1/video/abc.mp4',
       mime_type: 'video/mp4',
       size_bytes: 1000,
     });

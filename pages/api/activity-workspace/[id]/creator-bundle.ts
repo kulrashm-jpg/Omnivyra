@@ -24,7 +24,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   isCreatorWorkspaceLifecycleEnabled,
   loadCreatorWorkspace,
@@ -154,13 +154,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(422).json({ error: err instanceof Error ? err.message : String(err), code: 'SYNC_REJECTED' });
   }
 
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the anchor's campaign (every
+  // sibling was read by that campaign_id) and made before the first write, so a refusal writes nothing and answers
+  // the route's existing campaign-company denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, anchor.campaign_id).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  });
+  if (!plansTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+
   // Persist EVERY variant content-only (scheduler content_status untouched).
   const updates = buildBundlePersistUpdates(result.bundle);
   const failures: string[] = [];
   for (const u of updates) {
     const rowId = platformToRowId.get(u.platform);
     if (!rowId) { failures.push(`${u.platform}:no-row-id`); continue; }
-    const { error: upErr } = await ownedDbTable('daily_content_plans')
+    const { error: upErr } = await plansTable
       .update({ content: u.content, updated_at: nowIso })
       .eq('id', rowId)
       .eq('intent_type', 'creator');

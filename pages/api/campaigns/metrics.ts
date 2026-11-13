@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess, type CampaignAccessResult } from '../../../backend/services/campaignAccessService';
-import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -280,9 +280,8 @@ async function updateCampaignCompletion(access: CampaignAccessResult) {
       status = 'active';
     }
 
-    // Update campaign
-    await supabase
-      .from('campaigns')
+    // Update campaign (S2 tenant seam: the same tenant requireCampaignAccess authorized).
+    await tenantTable('campaigns', tenant)
       .update({
         status,
         updated_at: new Date().toISOString()

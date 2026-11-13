@@ -26,6 +26,7 @@ import { logPipelineEvent } from '../../lib/shared/observability';
 import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 import { ownedDbTable } from '../db/writeOwner';
+import { systemTenantContext, tenantChildTable, tenantTable } from '../db/tenantTable';
 import {
   makeScheduledPostIdempotencyKey,
   isIdempotencyCollision,
@@ -145,8 +146,16 @@ async function scheduleStructuredPlanRuntime(
       .maybeSingle();
     effectiveUserId = (companyUser as any)?.user_id ?? null;
     if (effectiveUserId) {
-      // Backfill the campaign's user_id so future queries work
-      await ownedDbTable('campaigns').update({ user_id: effectiveUserId }).eq('id', campaignId);
+      // Backfill the campaign's user_id so future queries work.
+      // S2 tenant seam: under the tenant on the campaign row read above (campaigns.company_id). Best-effort as
+      // before (the result was never checked): a campaign with no usable company id skips the backfill.
+      try {
+        await tenantTable('campaigns', systemTenantContext(String((campaign as any).company_id ?? ''), 'structured plan scheduler: campaign user_id backfill'))
+          .update({ user_id: effectiveUserId })
+          .eq('id', campaignId);
+      } catch (seamError) {
+        console.warn('[scheduleStructuredPlan] campaign user_id backfill skipped (tenant seam):', (seamError as Error)?.message, { campaignId });
+      }
     }
   }
   if (!effectiveUserId) {
@@ -788,7 +797,15 @@ async function scheduleStructuredPlanRuntime(
   // only the colliding rows are skipped. This is the retry-safe insert
   // contract the spec calls for.
   let insertedPosts: Array<{ id: string; user_id: string; social_account_id: string; scheduled_for: string }> = [];
-  const { data: bulkInsertedPosts, error: insertError } = await ownedDbTable('scheduled_posts')
+  // S2 tenant seam: every post is pinned to this campaign under the tenant on the campaign row read at the top
+  // of this run (campaigns.company_id); a post naming another campaign, or a campaign with no usable company
+  // id, is refused (TenantSeamError thrown, like the persistence failures below).
+  const postsDb = await tenantChildTable(
+    'scheduled_posts',
+    systemTenantContext(String((campaign as any).company_id ?? ''), 'structured plan scheduler: scheduled_posts insert'),
+    campaignId,
+  );
+  const { data: bulkInsertedPosts, error: insertError } = await postsDb
     .insert(postsToInsert)
     .select('id, user_id, social_account_id, scheduled_for');
   if (insertError) {
@@ -796,7 +813,7 @@ async function scheduleStructuredPlanRuntime(
       console.warn('[structuredPlanScheduler] idempotency collision in bulk insert; falling back to per-row');
       let collisionCount = 0;
       for (const post of postsToInsert) {
-        const { data: row, error: rowErr } = await ownedDbTable('scheduled_posts')
+        const { data: row, error: rowErr } = await postsDb
           .insert(post)
           .select('id, user_id, social_account_id, scheduled_for')
           .maybeSingle();

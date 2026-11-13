@@ -32,7 +32,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { ownedDbTable } from '@/backend/db/writeOwner';
+import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -146,6 +146,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the row's campaign and made
+  // before anything is written (row or storage), so a refusal writes nothing and answers the route's existing denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return null;
+    throw err;
+  });
+  if (!plansTable) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
+
   // ── Validate the media URL ─────────────────────────────────────────────
   const validation = await validateMediaUpload({
     mediaUrl,
@@ -204,7 +220,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       throw error;
     }
-    await ownedDbTable('daily_content_plans')
+    await plansTable
       .update({
         content: JSON.stringify(transition.content),
         content_status: transition.contentStatus,
@@ -257,7 +273,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reason: 'auto_transition_after_validation',
   });
 
-  const { error: readyWriteError } = await ownedDbTable('daily_content_plans')
+  const { error: readyWriteError } = await plansTable
     .update({
       content: JSON.stringify(toReady.content),
       content_status: toReady.contentStatus,

@@ -291,7 +291,7 @@ async function ownerThread(...contents: string[]): Promise<string> {
 beforeEach(() => {
   for (const k of Object.keys(store)) delete store[k];
   for (const t of ['scheduled_posts', 'queue_jobs', 'queue_job_logs', 'campaigns', 'daily_content_plans', 'worker_dead_letter_queue']) store[t] = [];
-  store.campaigns = [{ id: CAMPAIGN, status: 'active' }];
+  store.campaigns = [{ id: CAMPAIGN, company_id: COMPANY, status: 'active' }]; // company_id: the tenant seam re-reads the parent campaign under the tenant
   store.social_accounts = [
     { id: 'acct-owner', user_id: OWNER, is_active: true, company_id: COMPANY, platform: 'twitter' },
     { id: 'acct-other', user_id: OTHER, is_active: true, company_id: COMPANY, platform: 'twitter' },

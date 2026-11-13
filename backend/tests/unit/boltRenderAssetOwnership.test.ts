@@ -104,8 +104,9 @@ jest.mock('../../db/writeOwner', () => ({ ownedDbTable: (t: string) => tableApi(
 
 import { persistCreatorAssetRow } from '../../services/creator/creatorOrchestrator';
 
-const A = 'co-A';
-const B = 'co-B';
+// uuid-shaped, as every real company id: the tenant seam (systemTenantContext) refuses anything else.
+const A = 'c0a00000-0000-4000-8000-00000000000a';
+const B = 'c0b00000-0000-4000-8000-00000000000b';
 const A_SECRET = 'A-only confidential deck';
 
 const output = (caption = 'Launch week caption') => ({

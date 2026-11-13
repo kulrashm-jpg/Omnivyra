@@ -40,7 +40,20 @@ jest.mock('../../db/supabaseClient', () => {
   const supabase = { ...h.fakeSupabase, from: (t: string) => { mockEvents.push(`db:${t}`); return from(t); } };
   return { supabase, default: supabase, getSupabase: () => supabase, supabaseAdmin: supabase };
 });
-jest.mock('../../db/writeOwner', () => jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule());
+// A campaign post's update now goes through the tenant seam (tenantChildTable -> ownedDbTable), not supabase.from:
+// log its update into the same ordered event log as the supabase wrapper above.
+jest.mock('../../db/writeOwner', () => {
+  const m = jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule();
+  return {
+    ...m,
+    ownedDbTable: (t: string) => {
+      const b = m.ownedDbTable(t);
+      const update = b.update;
+      b.update = (p: unknown, o?: unknown) => { mockEvents.push(`db:update:${t}`); return update(p, o); };
+      return b;
+    },
+  };
+});
 jest.mock('../../services/supabaseAuthService', () => {
   const m = jest.requireActual('../helpers/routeAuthHarness').authModule();
   const inner = m.getSupabaseUserFromRequest;
