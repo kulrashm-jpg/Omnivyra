@@ -107,7 +107,9 @@ export default function CreateAccountPage() {
       const res  = await fetch('/api/auth/signup', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email: trimmed, companyName: trimmedCompany, captchaToken }),
+        // P2 (e1 2026-11-13): the server creates the account (after every signup check) and sends the
+        // confirmation email - the browser never calls supabase.auth.signUp.
+        body:    JSON.stringify({ email: trimmed, companyName: trimmedCompany, captchaToken, password }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -127,36 +129,17 @@ export default function CreateAccountPage() {
           setLoading(false);
           return;
         }
+        if (res.status === 429) {
+          setError(json.error ?? 'Too many signup attempts. Please wait a few minutes and try again.');
+          setLoading(false);
+          return;
+        }
         setError(json.error ?? 'Signup failed');
         setLoading(false);
         return;
       }
     } catch {
       setError('Network error. Please try again.');
-      setLoading(false);
-      return;
-    }
-
-    // Supabase sends the confirmation email. User clicks → /auth/callback
-    // exchanges the code and the session is established.
-    const origin = window.location.origin;
-    const { error: signUpError } = await getSupabaseBrowser().auth.signUp({
-      email: trimmed,
-      password,
-      options: { emailRedirectTo: `${origin}/auth/callback` },
-    });
-
-    if (signUpError) {
-      const msg = signUpError.message.toLowerCase();
-      if (msg.includes('already registered') || msg.includes('already been registered')) {
-        router.replace(`/login?email=${encodeURIComponent(trimmed)}&reason=resume_signup`);
-        return;
-      }
-      if (msg.includes('rate') || (signUpError as any).status === 429) {
-        setError('Too many signup attempts. Please wait a few minutes and try again.');
-      } else {
-        setError(signUpError.message);
-      }
       setLoading(false);
       return;
     }

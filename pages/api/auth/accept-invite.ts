@@ -99,11 +99,28 @@ async function handler(
   // the SMTP configured at the project level (your SES sender). This used
   // to wrap generateLink+SES SMTP in a custom transactional pipeline; that
   // is now redundant since Supabase SMTP handles delivery directly.
+  // P2 (e1 2026-11-13): identities are created ONLY through the admin API, by the server, for an address it has
+  // already authorized - here the INVITED address of a valid, just-consumed invitation. The OTP call below never
+  // creates a user, so this route keeps working once public signup is DISABLED at the provider. "Already
+  // registered" is the normal case for a returning invitee and is not an error.
   const origin = getCanonicalAppUrl();
+  const invitedEmail = String((invitation as any).email ?? '').trim().toLowerCase();
+  const created = await supabase.auth.admin.createUser({ email: invitedEmail, email_confirm: false });
+  if (created.error && !/already (been )?registered|already exists/i.test(String(created.error.message ?? ''))) {
+    await supabase
+      .from('invitations')
+      .update({ token_consumed_at: null })
+      .eq('id', (invitation as any).id);
+    logger.warn('accept_invite_identity_create_failed', {
+      invitationId: (invitation as any).id,
+      message: created.error.message,
+    });
+    return res.status(502).json({ error: 'Could not send sign-in link. Please try again.', code: 'OTP_SEND_FAILED' });
+  }
   const { error: otpError } = await supabase.auth.signInWithOtp({
-    email: (invitation as any).email,
+    email: invitedEmail,
     options: {
-      shouldCreateUser: true,
+      shouldCreateUser: false,
       emailRedirectTo: `${origin}/auth/callback`,
     },
   });

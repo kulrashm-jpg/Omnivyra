@@ -137,7 +137,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   }
 
   // ── Claimed domain (signup.ts §4) — same notify flow and response shape.
-  const claimed = await resolveClaimedDomainRefusal({ normalizedEmail, domain, correlationId });
+  // Fail closed (P2): an unfinished claimed-domain lookup is a retryable 503, never "unclaimed".
+  let claimed: Awaited<ReturnType<typeof resolveClaimedDomainRefusal>>;
+  try {
+    claimed = await resolveClaimedDomainRefusal({ normalizedEmail, domain, correlationId });
+  } catch (err) {
+    logger.warn('signup_claimed_domain_lookup_failed', { message: err instanceof Error ? err.message : String(err) });
+    return res.status(503).json({ error: 'We could not verify your organization right now. Please try again in a moment.', code: 'IDENTITY_VALIDATION_UNAVAILABLE' });
+  }
   if (claimed) {
     logger.info('onboarding_revalidate_signup_refused', { ...logCtx, reason: 'CLAIMED_DOMAIN', companyId: claimed.companyId });
     return res.status(httpStatusFor('CLAIMED_DOMAIN')).json(claimed.body);
