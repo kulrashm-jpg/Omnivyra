@@ -28,6 +28,9 @@
 --   2. CHECK provider_invoice_imports_period_nonempty: (provider = 'stripe' OR period_end > period_start). Required by
 --      the exclusion rule, not cosmetic: a '[)' range with start = end is EMPTY and overlaps nothing, so a zero-length
 --      invoice would slip past the constraint; start > end would make tstzrange() itself raise mid-insert.
+--      Sufficient ONLY because provider / period_start / period_end are NOT NULL (20260711:30-33, 05): the CHECK would
+--      PASS on NULL, tstzrange(NULL, NULL) is unbounded (it would overlap every row and block the provider), and a NULL
+--      provider would let the partial predicate escape the constraint. Keep those columns NOT NULL.
 --   3. EXCLUDE provider_invoice_imports_no_overlap USING gist (provider WITH =, tstzrange(period_start, period_end,
 --      '[)') WITH &&) WHERE (provider <> 'stripe'). Half-open: ADJACENT periods (one ends where the next starts) do not
 --      overlap and are accepted; identical and overlapping periods are refused with 23P01.
