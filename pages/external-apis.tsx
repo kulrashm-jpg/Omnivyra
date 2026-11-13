@@ -1,5 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
+import IntegrationHubNav from '../components/integrations/IntegrationHubNav';
 import { useExternalApisState } from '../hooks/useExternalApisState';
 import { AccountModal, PresetModal } from './external-apis-modals';
 import ExternalApisTabContent from '../components/ExternalApisTabContent';
@@ -196,6 +197,15 @@ export default function ExternalApisPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
+      {/* UI step 7a: the shared integration hub bar, so this page is reachable from and
+          back to every other integration area. Not in the super-admin platform catalog
+          mode, which has its own "Back to Super Admin" context. Kept outside the
+          space-y-6 block so its own bottom margin isn't doubled. */}
+      {!isPlatformCatalogMode && (
+        <div className="max-w-5xl mx-auto">
+          <IntegrationHubNav active="api" />
+        </div>
+      )}
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="bg-white rounded-lg shadow p-6">
           {isPlatformCatalogMode && (
@@ -220,7 +230,11 @@ export default function ExternalApisPage() {
             Manage external sources for trend and signal discovery.
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            Super admins manage the global catalog. Users should enable access on `/external-apis-access`.
+            Super admins manage the global catalog. Choose which APIs your company uses in{' '}
+            <Link href="/external-apis-access" className="font-medium text-indigo-600 hover:text-indigo-800">
+              Manage company access
+            </Link>
+            .
           </p>
           {isPlatformCatalogMode && (
             <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
