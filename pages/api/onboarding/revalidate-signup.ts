@@ -33,7 +33,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { httpStatusFor, ELIGIBILITY_MESSAGES } from '../../../lib/auth/domainEligibilityModel';
 import { logger } from '../../../backend/services/logger';
-import { notifySignupLimiterUnavailable, sendSignupBusy } from '../../../backend/services/opsAlertService';
+import { notifySignupLimiterUnavailable, notifySignupLimiterUnavailablePreAuth, sendSignupBusy } from '../../../backend/services/opsAlertService';
 import { ensureSignupCorrelationId, requestIp } from '../../../backend/services/signupEventService';
 import {
   lookupExistingAccount,
@@ -60,9 +60,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   // Owner ruling (e1 2026-11-13): limiter unavailable (Redis/Upstash down or over quota) -> FAIL CLOSED, retryable 503,
   // owner notified at most once per outage window. Same rule as /api/auth/signup.
   if (ipRl.bypassed) {
-    // Pre-authentication: answer the busy 503 but write nothing (the owner alert's DB marker is a write, and nothing
-    // may be written before auth on this route). The same outage is reported by /api/auth/signup and by this
-    // route's post-auth per-user check.
+    // Pre-authentication: nothing may be WRITTEN before auth on this route, so the alert skips its DB marker and
+    // uses the in-process window (one email per instance per window, hourly cap still applies) - never silence, and
+    // the log line + counter always fire (05 review).
+    void notifySignupLimiterUnavailablePreAuth('/api/onboarding/revalidate-signup', `per-ip limiter degraded (${ipRl.degradedMode ?? 'unknown'})`);
     return sendSignupBusy(res);
   }
   if (!ipRl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
