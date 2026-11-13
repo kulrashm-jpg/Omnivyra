@@ -17,6 +17,11 @@
 --     cannot UPDATE users), search_path pinned to '' and every name schema-qualified, EXECUTE revoked from PUBLIC,
 --     anon and authenticated (a trigger function is never called directly).
 --   * AFTER UPDATE OF status, company_id, user_id OR DELETE ON public.user_company_roles FOR EACH ROW.
+--     Row-level on a bulk path (e.g. the company-disable cascade) is correct because the action is IDEMPOTENT: if two of
+--     a user's memberships leave 'active' in one statement, the first invocation clears the pointer and the second finds
+--     it already NULL (its WHERE active_company_id = OLD.company_id matches nothing). No double effect, no ordering issue.
+--   * It CLEARS, it does not re-point (a deliberate, conservative choice): a user with another ACTIVE membership is
+--     pointer-less until the next login, where sync-supabase-user re-derives it in both branches.
 --
 -- INTERPLAY (checked against baseline + migrations):
 --   * trg_users_active_company_membership_guard (BEFORE UPDATE OF active_company_id ON users) returns early for a

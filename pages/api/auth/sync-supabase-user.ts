@@ -506,6 +506,10 @@ export async function tryFlipInvitedToActive(input: {
  * The user's current company re-derived from an ACTIVE membership (the earliest one, so the choice is deterministic),
  * or null when there is none or the read fails (a login never fails on this; the pointer simply stays empty).
  * Only an ACTIVE membership qualifies - trg_users_active_company_membership_guard would refuse anything else.
+ * DEPENDENCY (05, 2026-11-13): "earliest active" is sound only while NO active membership exists in a non-operational
+ * (inactive / suspended / deleted) company - C59 measured 0 on 2026-11-13, but nothing enforces it. If that ever stops
+ * holding, this must prefer an operational company (rbacPrimitives.pickOperationalMembership, inactive-company gate) or
+ * the user lands on a company the gate refuses while a usable membership exists.
  */
 async function deriveActiveCompanyPointer(userId: string): Promise<string | null> {
   try {
