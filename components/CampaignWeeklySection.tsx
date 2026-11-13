@@ -33,6 +33,7 @@ import {
 import CampaignAIChat from './CampaignAIChat';
 import AIGenerationProgress from './AIGenerationProgress';
 import { useCompanyContext } from './CompanyContext';
+import { canWriteCampaign } from '../lib/access/campaignWriteAccess';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 import { GovernanceStatusCard } from './governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from './governance/GovernanceAnalyticsCard';
@@ -69,6 +70,8 @@ import CampaignPlannerDiagnostics from './campaign/CampaignPlannerDiagnostics';
 import CampaignQualityPanel from './campaign/CampaignQualityPanel';
 
 export default function CampaignWeeklySection({ d }: { d: S }) {
+  // F3: Viewers / view-only / Engagers see the campaign but not its write or AI controls.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
   const {
     _ef1,
     _ef2,
@@ -304,6 +307,7 @@ export default function CampaignWeeklySection({ d }: { d: S }) {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {canWriteThisCampaign && (
                   <button
                     type="button"
                     onClick={enhanceAllWeeksWithAI}
@@ -320,6 +324,7 @@ export default function CampaignWeeklySection({ d }: { d: S }) {
                     )}
                     {isEnhancingAllWeeks ? 'Generating…' : 'Generate Daily Plans (AI)'}
                   </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => router.push(buildDailyPlanPageUrl(campaign.id))}
