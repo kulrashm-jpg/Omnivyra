@@ -53,3 +53,11 @@ describe('campaign details overview (D9b)', () => {
     expect(C.split('(top right)').length - 1).toBe(2);
   });
 });
+
+describe('campaign details copy (e9 rulings)', () => {
+  it('"Virality check" (not "Virality Review") and a "Settings" tab (not "Governance")', () => {
+    expect(C).toContain('<h2 className="text-xl font-semibold">Virality check</h2>');
+    expect(C).not.toMatch(/>Virality Review</);
+    expect(C).toMatch(/onClick=\{\(\) => setActiveTab\('governance'\)\}[\s\S]{0,400}?\n\s*Settings\n/);
+  });
+});
