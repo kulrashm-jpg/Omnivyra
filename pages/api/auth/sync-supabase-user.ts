@@ -175,7 +175,7 @@ async function handler(
   const normalizedEmail = email.toLowerCase().trim();
   const { data: existingByUid } = await supabase
     .from('users')
-    .select('id, is_deleted')
+    .select('id, is_deleted, active_company_id')
     .eq('supabase_uid', supabaseUid)
     .maybeSingle();
 
@@ -240,12 +240,21 @@ async function handler(
   // First try: existing row already has supabase_uid (returning user)
   if (existingByUid) {
     const existingUserId = (existingByUid as { id: string }).id;
+    // AUTH-001 §1: mirror the Supabase auth confirm state instead of
+    // unconditionally stamping true — the app-level verification gate
+    // reads this column and must not be forgeable by merely holding a session.
+    const byUidPayload: Record<string, unknown> = { is_email_verified: identity.emailVerified, last_sign_in_at: now, has_password: hasPassword };
+    // e1 2026-11-13: a returning user whose pointer was cleared (migration 20270217000042 clears it when its membership
+    // stops being active; D7 nulled the stale ones) gets it re-derived from an ACTIVE membership here, exactly as the
+    // first-link branch below always did. Before this, only the by-email branch re-derived, so a returning user stayed
+    // pointer-less.
+    if (!(existingByUid as { active_company_id?: string | null }).active_company_id) {
+      const derived = await deriveActiveCompanyPointer(existingUserId);
+      if (derived) byUidPayload.active_company_id = derived;
+    }
     await supabase
       .from('users')
-      // AUTH-001 §1: mirror the Supabase auth confirm state instead of
-      // unconditionally stamping true — the app-level verification gate
-      // reads this column and must not be forgeable by merely holding a session.
-      .update({ is_email_verified: identity.emailVerified, last_sign_in_at: now, has_password: hasPassword })
+      .update(byUidPayload)
       .eq('supabase_uid', supabaseUid);
     // Lifecycle transition: a status='invited' row that successfully completes
     // Supabase auth has, by definition, "completed first authenticated session"
@@ -292,14 +301,8 @@ async function handler(
       has_password:      hasPassword,
     };
     if (!(byEmail as any).active_company_id) {
-      const { data: roleRow } = await supabase
-        .from('user_company_roles')
-        .select('company_id')
-        .eq('user_id', (byEmail as any).id)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle();
-      if (roleRow) updatePayload.active_company_id = (roleRow as any).company_id;
+      const derived = await deriveActiveCompanyPointer((byEmail as any).id);
+      if (derived) updatePayload.active_company_id = derived;
     }
     await supabase.from('users').update(updatePayload).eq('id', (byEmail as any).id);
     const existingUserIdByEmail = (byEmail as { id: string }).id;
@@ -496,6 +499,32 @@ export async function tryFlipInvitedToActive(input: {
       message: err instanceof Error ? err.message : String(err),
     });
     return false;
+  }
+}
+
+/**
+ * The user's current company re-derived from an ACTIVE membership (the earliest one, so the choice is deterministic),
+ * or null when there is none or the read fails (a login never fails on this; the pointer simply stays empty).
+ * Only an ACTIVE membership qualifies - trg_users_active_company_membership_guard would refuse anything else.
+ */
+async function deriveActiveCompanyPointer(userId: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('user_company_roles')
+      .select('company_id')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      logger.warn('auth_sync_pointer_derive_failed', { userId, message: error.message });
+      return null;
+    }
+    return ((data as { company_id?: string | null } | null)?.company_id as string | undefined) ?? null;
+  } catch (err) {
+    logger.warn('auth_sync_pointer_derive_failed', { userId, message: err instanceof Error ? err.message : String(err) });
+    return null;
   }
 }
 
