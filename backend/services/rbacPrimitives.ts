@@ -19,8 +19,9 @@ import { supabase } from '../db/supabaseClient';
  *
  * EXEMPTIONS (resolved by the callers BEFORE they consult a membership role, and unchanged here):
  *   - platform SUPER_ADMIN administration (isPlatformSuperAdmin / isSuperAdmin / requireSuperAdminUser /
- *     the legacy super-admin session);
- *   - the content_architect platform principal (enforceRole / getUserCompanyRole / enforceCompanyAccess).
+ *     the legacy super-admin session).
+ *   (The former content_architect platform principal exemption is gone: that principal was removed pre-launch,
+ *   owner ruling 2026-11-13.)
  */
 export type CompanyRoleGate = 'active' | 'inactive' | 'unavailable';
 /**
