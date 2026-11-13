@@ -85,7 +85,7 @@ jest.mock('../../../lib/shared/capabilityRegistry', () => ({
   }),
 }));
 jest.mock('../../../config/commandCenterCards', () => ({
-  getVisibleCards: () => [{ id: 'blogs', title: 'Create Content', route: '/blogs', requirements: [], cta: 'Open' }],
+  getVisibleCards: () => [{ id: 'blogs', title: 'Create Content', route: '/blogs/create', requirements: [], cta: 'Open' }],
 }));
 
 const { useCommandCenter } = require('../../../hooks/useCommandCenterCore');

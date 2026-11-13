@@ -20,7 +20,7 @@ describe('W5-1 package import optimization', () => {
 describe('W5-2 dynamic loading', () => {
   test('tiptap is behind next/dynamic at all three audited consumers', () => {
     expect(read('components/RichTextEditorLazy.tsx')).toContain("dynamic(() => import('./RichTextEditor')");
-    expect(read('pages/activity-workspace/ActivityWorkspacePlatformCard.tsx')).toContain('RichTextEditorLazy');
+    // D10b: the dead pages/activity-workspace/ActivityWorkspacePlatformCard.tsx copy is deleted; the live card is below.
     expect(read('components/activity-workspace/WorkspacePlatformCard.tsx')).toContain('RichTextEditorLazy');
     expect(read('pages/admin/blog/content-editor.tsx')).toMatch(/dynamic\(\s*\n?\s*\(\) => import\('\.\.\/\.\.\/\.\.\/components\/blog\/RichTextEditor'\)/);
   });

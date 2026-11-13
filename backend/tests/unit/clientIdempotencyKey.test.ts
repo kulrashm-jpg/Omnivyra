@@ -88,7 +88,6 @@ describe('adopted call sites — complete in-scope inventory', () => {
     ['pages/billing/index.tsx', 'profileOp'],
     ['hooks/useActivityWorkspaceRefinementOps.ts', 'scheduleOp'],
     ['components/activity-workspace/creatorMediaUploadHandlers.ts', 'rescheduleOp'],
-    ['pages/activity-workspace/ActivityWorkspacePrimaryBrief.tsx', 'rescheduleOp'],
     ['pages/campaign-daily-plan/[id].tsx', 'repurposeOp'],
     ['components/campaign-ai/useStructuredPlanScheduling.ts', 'planOp'],
   ];
@@ -118,10 +117,13 @@ describe('adopted call sites — complete in-scope inventory', () => {
     expect(src).not.toMatch(/async function postJson[\s\S]{0,400}createIdempotentOperation/);
   });
 
-  it('both activity-workspace files cover reschedule AND unschedule', () => {
+  // D10b: the dead pages/activity-workspace/ActivityWorkspacePrimaryBrief.tsx copy (retired
+  // in runtime-shadow-authority.json, imported by nothing) is deleted. The live reschedule /
+  // unschedule calls are in creatorMediaUploadHandlers (mounted via ActivityWorkspaceBriefSection
+  // → ActivityWorkspaceView → pages/activity-workspace.tsx), with the same keys.
+  it('the live activity-workspace handler covers reschedule AND unschedule', () => {
     for (const rel of [
       'components/activity-workspace/creatorMediaUploadHandlers.ts',
-      'pages/activity-workspace/ActivityWorkspacePrimaryBrief.tsx',
     ]) {
       const src = read(rel);
       expect({ file: rel, reschedule: src.includes('...rescheduleOp.headers') })
