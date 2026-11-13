@@ -23,6 +23,25 @@ import path from 'path';
 const REPO = path.join(__dirname, '..', '..', '..');
 const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), 'utf8');
 const exists = (rel: string) => fs.existsSync(path.join(REPO, rel));
+/**
+ * e1 2026-11-13: adoption is detected on CODE, not text. A route that explains in a comment that it is NOT wrapped
+ * in withIdempotency (prospects/[id]/problems, prospect-identity/erasure-requests) is not an adopter; the former raw
+ * substring match counted those docblocks as adoptions.
+ */
+const code = (rel: string) => read(rel)
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+const adopts = (rel: string) => /withIdempotency\s*\(/.test(code(rel));
+
+/**
+ * Sanctioned PI adopters (e1 2026-11-13, verified by reading the middleware): the replay record is keyed by
+ * scope + the AUTHENTICATED caller (resolvePrincipal; no principal -> 401, never an unscoped lookup) + the key, and
+ * the stored request hash covers method + query + body - the company_id travels in the query - so a replay can never
+ * cross a user or a company.
+ */
+const SANCTIONED_PI: Array<[string, string]> = [
+  ['pages/api/prospect-sources/discovery.ts', 'pi-prospect-discovery-create'],
+];
 
 /** OR-08 Group A — the ONLY endpoints authorized to adopt. */
 const AUTHORIZED: Array<[string, string]> = [
@@ -78,7 +97,7 @@ describe('adoption gate — authorized endpoints', () => {
 describe('adoption gate — unauthorized endpoints must NOT adopt', () => {
   it.each(MUST_NOT_ADOPT)('%s remains unadopted', (rel) => {
     if (!exists(rel)) return; // route removed by a lifecycle decision
-    expect({ file: rel, adopted: read(rel).includes('withIdempotency') })
+    expect({ file: rel, adopted: adopts(rel) })
       .toEqual({ file: rel, adopted: false });
   });
 });
@@ -94,8 +113,8 @@ describe('adoption gate — no adoption outside the sanctioned set', () => {
   };
 
   it('only Group A and the 29 pre-existing adopters use the middleware', () => {
-    const adopters = walk('pages/api').filter((rel) => read(rel).includes('withIdempotency'));
-    const groupA = new Set(AUTHORIZED.map(([rel]) => rel));
+    const adopters = walk('pages/api').filter(adopts);
+    const groupA = new Set([...AUTHORIZED, ...SANCTIONED_PI].map(([rel]) => rel));
     const unexpected = adopters.filter(
       (rel) => !groupA.has(rel) && !/^pages\/api\/(admin|super-admin|team|company|credits\/claim-action)/.test(rel),
     );
@@ -104,9 +123,21 @@ describe('adoption gate — no adoption outside the sanctioned set', () => {
   });
 
   it('the pre-existing adopter count has not shrunk', () => {
-    const all = walk('pages/api').filter((rel) => read(rel).includes('withIdempotency'));
+    const all = walk('pages/api').filter(adopts);
     // 29 pre-existing + 7 Group A.
     expect(all.length).toBeGreaterThanOrEqual(36);
+  });
+});
+
+describe('sanctioned PI adopters', () => {
+  it.each(SANCTIONED_PI)('%s adopts with its own replay namespace (%s)', (rel, scope) => {
+    expect(adopts(rel)).toBe(true);
+    expect(code(rel)).toContain(`scope: '${scope}'`);
+  });
+  it('comment-only mentions are NOT adoptions (positive control for the code-based detector)', () => {
+    for (const rel of ['pages/api/prospects/[id]/problems.ts', 'pages/api/prospect-identity/erasure-requests/index.ts']) {
+      expect({ rel, mentions: read(rel).includes('withIdempotency'), adopts: adopts(rel) }).toEqual({ rel, mentions: true, adopts: false });
+    }
   });
 });
 
