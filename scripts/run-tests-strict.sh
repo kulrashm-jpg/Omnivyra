@@ -3,6 +3,7 @@
 #
 # Usage: scripts/run-tests-strict.sh <jest args / test paths...>      (run from the repo root)
 #
+# INCONCLUSIVE (exit 2) when `jest --listTests` fails or lists fewer suites than the floor (see below).
 # FAILS (exit 1) when ANY of these holds, and says which:
 #   - jest exited non-zero;
 #   - any suite failed, or failed to RUN (a load / compile error contributes 0 tests while "Tests:" can look green);
@@ -20,7 +21,21 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/strict-jest.XXXXXX")"
 JSON="$WORK/result.json"
 LOG="$WORK/output.txt"
 
-EXPECTED=$($JEST --listTests "$@" 2>/dev/null | grep -c '\.test\.')
+# The expected-suite count must itself be trustworthy: if `jest --listTests` fails or lists fewer suites than the
+# floor (at least 1, and at least one per explicit path argument that exists on disk), the "fewer suites than
+# expected" check would be vacuous - so the run is INCONCLUSIVE (exit 2), never PASS (05 review, 2026-11-13).
+LIST="$WORK/list.txt"
+$JEST --listTests "$@" > "$LIST" 2>"$WORK/list.err"
+LIST_RC=$?
+EXPECTED=$(grep -c '\.test\.' "$LIST")
+FLOOR=0
+for a in "$@"; do case "$a" in -*) ;; *) [ -e "$a" ] && FLOOR=$((FLOOR + 1)) ;; esac; done
+[ "$FLOOR" -lt 1 ] && FLOOR=1
+if [ "$LIST_RC" -ne 0 ] || [ "$EXPECTED" -lt "$FLOOR" ]; then
+  echo "STRICT INCONCLUSIVE: jest --listTests rc=$LIST_RC listed $EXPECTED suite(s), floor $FLOOR - the expected count"
+  echo "cannot be trusted, so nothing is claimed (not a pass). listTests stderr: $WORK/list.err"
+  exit 2
+fi
 $JEST --json --outputFile="$JSON" "$@" > "$LOG" 2>&1
 RC=$?
 

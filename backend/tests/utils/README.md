@@ -8,7 +8,10 @@ Standardized mocks for deterministic, infrastructure-free tests.
 > worktree, check `node scripts/testing/list-config-loading-suites.js`: those suites load the zod env config and
 > cannot run against a `node_modules` whose zod differs from the branch's. Gate every heavy local run (jest suites, tsc,
 > replays) on free memory: `bash scripts/testing/ramgate.sh && <command>` - it refuses below 2 GB (`MIN_GB` to
-> change) and when memory cannot be measured; a printed free-RAM number is not a check.
+> change) and when memory cannot be measured; a printed free-RAM number is not a check. The floor is defined once, in
+> `ramgate.sh` (`--print-floor` reads it): the shared typecheck lock (`C:/tmp/.omp-typecheck.lock`) is acquired only
+> after `ramgate.sh` passes, never against a separately written number. `run-tests-strict.sh` exits 2 (INCONCLUSIVE,
+> never PASS) when `jest --listTests` fails or lists fewer suites than one per path argument.
 
 ## 1. Request Mock – `createApiRequestMock`
 

@@ -8,8 +8,13 @@
 # 0.4 / 0.5 GB on 2026-11-13 because the number was only printed). MIN_GB defaults to 2 (the programme floor).
 # Exit 3 = refused (below the floor); exit 4 = free memory could not be measured (also refused - never assume).
 # Control: `MIN_GB=99 bash scripts/testing/ramgate.sh` must refuse.
+#
+# THE programme RAM floor lives HERE and only here. Anything else that needs it (the shared typecheck lock
+# convention, wrappers) gates with this script or reads the number via `--print-floor` - never its own copy.
 set -u
-MIN_GB="${MIN_GB:-2}"
+RAM_FLOOR_GB=2
+if [ "${1:-}" = "--print-floor" ]; then echo "$RAM_FLOOR_GB"; exit 0; fi
+MIN_GB="${MIN_GB:-$RAM_FLOOR_GB}"
 
 free_gb() {
   if command -v powershell >/dev/null 2>&1; then
