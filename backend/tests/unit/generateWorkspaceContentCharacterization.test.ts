@@ -26,6 +26,16 @@ jest.mock('../../services/userContextService', () => ({
 jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(async () => null),
 }));
+// The handler loads the profile through the canonical adapter (Wave 2C, dac9abbfa, 07-14)
+// and adds the company grounding guard (d9e506bea, 07-30). Both post-date this test
+// (30aad163f, 07-12), and without these mocks they hit the network and the handler 500s.
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(async () => null),
+}));
+jest.mock('../../services/context/canonicalContentContextResolver', () => ({
+  ...jest.requireActual('../../services/context/canonicalContentContextResolver'),
+  resolveCompanyGroundingGuard: jest.fn(async () => ''),
+}));
 jest.mock('../../services/companyContextService', () => ({
   buildCompanyContext: jest.fn(() => ({ identity: {}, brand: {}, customer: {} })),
 }));
