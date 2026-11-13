@@ -57,6 +57,14 @@ import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 import { HEADER_NAV_ITEMS, getRoleLabel, isPathMatch, useClickOutside, CreditPill, NavDropdown } from './GlobalHeaderNav';
 
+/** Owner decision 2026-11-13: "home" is the Command Center — the logo and the Home icon both go here. */
+export const HOME_ROUTE = '/command-center';
+
+/** Home is active only ON the Command Center itself; /command-center/* pages belong to their own sections. */
+export function isHomePath(pathname: string): boolean {
+  return pathname.replace(/\/+$/, '') === HOME_ROUTE;
+}
+
 function HelpFloatingButton({ onStartTour }: { onStartTour: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -407,7 +415,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
     <>
       <header className="sticky top-0 z-[70] border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-screen-xl items-center gap-3 px-3 sm:px-4 lg:px-6">
-          <Link href="/command-center" className="shrink-0" title="Command Center">
+          <Link href={HOME_ROUTE} className="shrink-0" title="Command Center">
             {/* W5-3 (audit B-30): next/image resizes the 898×278/187 KB source
                 to the rendered 36 px height + serves AVIF/WebP — this header
                 ships on every authenticated page. priority: above the fold. */}
@@ -426,12 +434,14 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
               logo link, and the mobile toggle). Destination and active-state
               behaviour are unchanged. The mobile drawer keeps its visible label.
             */}
+            {/* Owner decision 2026-11-13: Home = Command Center (same as the logo).
+                Exact match: /command-center/* pages belong to their own sections. */}
             <Link
-              href="/dashboard"
+              href={HOME_ROUTE}
               title="Home"
               aria-label="Home"
               className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold transition-colors ${
-                isPathMatch(router.pathname, '/dashboard')
+                isHomePath(router.pathname)
                   ? 'bg-sky-50 text-sky-700'
                   : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
               }`}
@@ -481,10 +491,10 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
           <div className="border-t border-slate-200 bg-white px-4 pb-4 pt-3 md:hidden">
             <div className="space-y-2">
               <Link
-                href="/dashboard"
+                href={HOME_ROUTE}
                 onClick={() => setMobileOpen(false)}
                 className={`flex items-center gap-3 rounded-2xl px-3 py-3 text-sm font-semibold ${
-                  isPathMatch(router.pathname, '/dashboard')
+                  isHomePath(router.pathname)
                     ? 'bg-sky-50 text-sky-700'
                     : 'bg-slate-50 text-slate-700'
                 }`}

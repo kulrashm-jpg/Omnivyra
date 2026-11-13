@@ -119,3 +119,21 @@ describe('/ops-center UI admin guard', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/website-intelligence/enterprise-readiness?company_id=co-1');
   });
 });
+
+describe('Home = Command Center (owner decision 2026-11-13)', () => {
+  // Required lazily so a header import problem fails only this block.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { HOME_ROUTE, isHomePath } = require('../../../components/layout/GlobalHeaderMain');
+
+  it('points home at the Command Center', () => {
+    expect(HOME_ROUTE).toBe('/command-center');
+  });
+
+  it('is active only on the Command Center itself', () => {
+    expect(isHomePath('/command-center')).toBe(true);
+    expect(isHomePath('/command-center/')).toBe(true);
+    expect(isHomePath('/command-center/content')).toBe(false);
+    expect(isHomePath('/command-center/bolt-text')).toBe(false);
+    expect(isHomePath('/dashboard')).toBe(false);
+  });
+});
