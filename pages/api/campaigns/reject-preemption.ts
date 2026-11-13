@@ -32,7 +32,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .eq('id', requestId)
       .maybeSingle();
 
-    if (fetchError || !request) {
+    // Reads contract: a FAILED read is not "not found" - refuse retryably instead of a permanent 404.
+    if (fetchError) {
+      console.error('[reject-preemption] request read failed', { requestId, message: fetchError.message });
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({ error: 'Preemption request could not be loaded. Please retry.', retryable: true });
+    }
+    if (!request) {
       return res.status(404).json({ error: 'Preemption request not found' });
     }
 
@@ -59,10 +65,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         rejected: true,
       });
     }
+    // e9: never echo internal error text (it can carry table names / seam detail) - log it, answer generically.
     console.error('[reject-preemption]', err);
-    return res.status(500).json({
-      error: err instanceof Error ? err.message : 'Internal server error',
-    });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
