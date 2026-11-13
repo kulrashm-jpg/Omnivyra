@@ -96,7 +96,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 
   if (!outcome.order || !outcome.provider) {
-    await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    // supabase-js returns write errors, it does not throw: read the result (financial-writes contract).
+    const { error: markErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    if (markErr) logger.error('checkout_purchase_mark_failed_unrecorded', { organizationId, purchaseId, message: markErr.message });
     logger.warn('payment_order_creation_failed', {
       organizationId, purchaseId, providerMode,
       attempts: outcome.attempts.map((a) => ({ provider: a.provider, ok: a.ok })),
@@ -104,9 +106,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(502).json({ ok: false, error: 'order_creation_failed', attempts: outcome.attempts });
   }
 
-  await supabase.from('credit_purchases')
+  // The purchase must carry its provider order: purchase closure resolves a paid order ONLY through
+  // provider_order_id. If this link is not recorded, the order id is NOT handed to the client - a customer must
+  // never be able to pay an order we cannot match (B1, financial-writes contract). The unpaid order expires.
+  const { data: linked, error: linkErr } = await supabase.from('credit_purchases')
     .update({ provider: outcome.provider, provider_order_id: outcome.order.providerOrderId })
-    .eq('id', purchaseId);
+    .eq('id', purchaseId)
+    .select('id');
+  if (linkErr || !Array.isArray(linked) || linked.length !== 1) {
+    logger.error('checkout_order_link_failed', {
+      organizationId, purchaseId, provider: outcome.provider, providerOrderId: outcome.order.providerOrderId,
+      message: linkErr?.message ?? `matched ${Array.isArray(linked) ? linked.length : 'no'} rows`,
+    });
+    const { error: markErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    if (markErr) logger.error('checkout_purchase_mark_failed_unrecorded', { organizationId, purchaseId, message: markErr.message });
+    return res.status(503).json({ ok: false, error: 'order_link_failed' });
+  }
 
   const keyId = outcome.provider === 'razorpay' ? getProviderCredentials('razorpay').keyId ?? null : null;
 

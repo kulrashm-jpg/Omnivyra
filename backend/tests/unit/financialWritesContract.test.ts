@@ -193,10 +193,6 @@ export const ALLOWLIST: Record<string, string> = {
     'N: usage telemetry insert unread - 6f fixes (logger.error + counter, never throws) [L434 @9cecd075f]',
   'pages/api/activity-workspace/[id]/render-image.ts:coerceGovernanceRow|billing_operations|insert|#1':
     'B3 BLOCKING: render billing HOLD/CONFIRM/RELEASE unread (6f fixes) [L156 @9cecd075f]',
-  'pages/api/billing/checkout/create-order.ts:parse|credit_purchases|update|#1':
-    'B1 BLOCKING: purchase/order link unread - a paid order can never be closed (6f fixes) [L99 @9cecd075f]',
-  'pages/api/billing/checkout/create-order.ts:parse|credit_purchases|update|#2':
-    'B1 BLOCKING: purchase/order link unread - a paid order can never be closed (6f fixes) [L107 @9cecd075f]',
   'pages/api/stripe/webhook.ts:markEvent|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L144 @9cecd075f]',
 };
