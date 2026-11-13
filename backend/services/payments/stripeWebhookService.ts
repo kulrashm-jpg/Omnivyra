@@ -28,6 +28,7 @@
  * separately for unit-testing without DB.
  */
 
+import { isTerminalLedgerReason } from '../billingSubscriptionService';
 import crypto from 'crypto';
 
 // ── Stripe event shapes (minimal subset we consume) ─────────────────────────
@@ -405,22 +406,27 @@ export class SubscriptionLedgerRetryableError extends Error {
 }
 
 /**
- * Ledger outcomes that are FINAL: retrying cannot change them, so the event is marked processed and answered 2xx.
- * applied; stale_event / duplicate_event (deliberate no-ops of the ordering fix); no_org / incomplete_event /
- * missing_event_ref (the event itself lacks what the ledger needs). Everything else (a read/write error, contention,
- * invalid_event_stamp, an unknown reason) is retryable.
+ * Ledger outcomes that are FINAL (marked processed, answered 2xx): applied, or a reason classified 'terminal' by
+ * billingSubscriptionService.classifySubscriptionLedgerReason. RULE: terminal = a property of the PAYLOAD only
+ * (immutable across retries); a database-state property (no_org, invalid_event_stamp, contention, db_error) is
+ * RETRYABLE. A missing / unknown reason is retryable. The classification is a never-exhaustive switch, so an
+ * unclassified new reason is a compile error. e1's general retry helper MUST inherit this classification.
  */
-export const TERMINAL_SUBSCRIPTION_SKIPS = ['stale_event', 'duplicate_event', 'no_org', 'incomplete_event', 'missing_event_ref'] as const;
+export const TERMINAL_SUBSCRIPTION_SKIPS = ['stale_event', 'duplicate_event', 'incomplete_event', 'missing_event_ref'] as const;
 export function isTerminalSubscriptionOutcome(outcome: { applied: boolean; reason?: string } | null | undefined): boolean {
   if (!outcome) return false;
   if (outcome.applied === true) return true;
-  return (TERMINAL_SUBSCRIPTION_SKIPS as readonly string[]).includes(String(outcome.reason));
+  return isTerminalLedgerReason(outcome.reason);
 }
 
 /**
  * A redelivered subscription event is reprocessed when its earlier attempt did not reach a terminal outcome
  * ('failed', or still 'recorded' / 'requeued'). Safe: the ordered ledger write is idempotent per provider event id
- * (a repeat of an applied event is a duplicate_event no-op). A 'processed' (or 'duplicate'/'ignored') event is never
+ * (a repeat of an applied event is a duplicate_event no-op). LOAD-BEARING CASE (05): the CRASH WINDOW - an attempt
+ * that applied the ledger write and died before markEvent('processed') leaves the row 'recorded' with the stamp
+ * already advanced; reprocessing it resolves to duplicate_event (terminal) and finally marks it processed. This is
+ * also why 'processed' is written only AFTER the apply. (On main today every mark is rejected by the
+ * payment_provider_events immutable_update trigger, so rows stay 'recorded' and every redelivery reprocesses.) A 'processed' (or 'duplicate'/'ignored') event is never
  * reprocessed, so a terminal outcome is not retried forever. Other actions keep the plain duplicate short-circuit.
  */
 export function shouldReprocessSubscriptionDuplicate(action: string, processingStatus: string | null | undefined): boolean {

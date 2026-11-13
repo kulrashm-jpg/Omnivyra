@@ -68,12 +68,13 @@ describe('ledger outcome → webhook result mapping', () => {
     { applied: true },
     { applied: false, reason: 'stale_event' },
     { applied: false, reason: 'duplicate_event' },
-    { applied: false, reason: 'no_org' },
     { applied: false, reason: 'incomplete_event' },
     { applied: false, reason: 'missing_event_ref' },
   ];
   const RETRYABLE: Outcome[] = [
+    { applied: false, reason: 'no_org' }, // DATABASE state (05/e9): the webhook can beat our customer->org write
     { applied: false, reason: 'subscription_event_contention' },
+    { applied: false, reason: 'db_error:connection reset' },
     { applied: false, reason: 'invalid_event_stamp' },
     { applied: false, reason: 'permission denied for table billing_subscriptions' }, // a raw read/write error message
     { applied: false, reason: 'failed to parse filter (metadata->stripe_last_event->>id)' }, // a PostgREST parse error
@@ -124,6 +125,29 @@ describe('redelivery', () => {
     expect(statusOf()).toBe('processed');
   });
 
+  it('no_org (the webhook beat our customer->org write) answers 500; the redelivery AFTER the mapping exists APPLIES', async () => {
+    // Faithful: the org comes from the purchase lookup, which only finds the row once our own write has committed;
+    // the ledger answers no_org exactly when it is given no organization.
+    let mappingCommitted = false;
+    const d: StripeWebhookDeps = {
+      ...deps(),
+      findPurchaseByProviderEventId: async (id: string) =>
+        mappingCommitted && id === 'sub_1' ? { id: 'cp_1', organization_id: 'org-A', status: 'pending', fulfillment_status: null } : null,
+      applySubscriptionEvent: async (_t, _o, organizationId) => {
+        ledgerCalls += 1;
+        return organizationId ? { applied: true } : { applied: false, reason: 'no_org' };
+      },
+    };
+    const noMeta = { ...subEvent(), data: { object: { id: 'sub_1' } } } as unknown as StripeEventPayload;
+    await expect(processStripeWebhookEvent(noMeta, d)).rejects.toThrow(/subscription_ledger_failed:no_org/);
+    expect(statusOf()).toBe('failed');
+    mappingCommitted = true;
+    const r = await processStripeWebhookEvent(noMeta, d); // Stripe's redelivery
+    expect(r).toMatchObject({ status: 'processed', organizationId: 'org-A' });
+    expect(ledgerCalls).toBe(2);
+    expect(statusOf()).toBe('processed');
+  });
+
   it('a row still "recorded" (a crash before any mark) is reprocessed too', async () => {
     store.set('evt_sub_1', { id: 'ppe_x', status: 'recorded' });
     const r = await processStripeWebhookEvent(subEvent(), deps());
@@ -132,7 +156,7 @@ describe('redelivery', () => {
   });
 
   it('a TERMINAL outcome is never retried: its redelivery is a duplicate and the ledger is NOT called again', async () => {
-    ledger = [{ applied: false, reason: 'no_org' }];
+    ledger = [{ applied: false, reason: 'incomplete_event' }];
     expect((await processStripeWebhookEvent(subEvent(), deps())).status).toBe('processed');
     for (let i = 0; i < 3; i++) {
       expect((await processStripeWebhookEvent(subEvent(), deps())).status).toBe('duplicate');
@@ -144,6 +168,27 @@ describe('redelivery', () => {
     await processStripeWebhookEvent(subEvent(), deps());
     expect((await processStripeWebhookEvent(subEvent(), deps())).status).toBe('duplicate');
     expect(ledgerCalls).toBe(1);
+  });
+
+  // PROD-FAITHFUL (e1, 2026-11-13; migration 20260663:88-91): payment_provider_events has a BEFORE UPDATE trigger that
+  // raises on EVERY update, and the route's markEvent ignores the error, so on main no state mark ever persists: every
+  // row stays 'recorded'. The retry contract must hold anyway: the 500/2xx answer does not depend on the mark, and a
+  // 'recorded' redelivery is reprocessed (idempotently).
+  it('PROD-FAITHFUL (state marks never persist): a failure still answers 500 and the redelivery still applies', async () => {
+    ledger = [{ applied: false, reason: 'subscription_event_contention' }, { applied: true }];
+    const d = { ...deps(), markEvent: async () => undefined }; // the UPDATE is rejected and the error ignored
+    await expect(processStripeWebhookEvent(subEvent(), d)).rejects.toBeInstanceOf(SubscriptionLedgerRetryableError);
+    expect(statusOf()).toBe('recorded');
+    expect((await processStripeWebhookEvent(subEvent(), d)).status).toBe('processed');
+    expect(ledgerCalls).toBe(2);
+  });
+
+  it('PROD-FAITHFUL: a terminal event redelivered while its row is stuck at "recorded" is reprocessed idempotently (2xx again, same outcome)', async () => {
+    ledger = [{ applied: false, reason: 'duplicate_event' }];
+    const d = { ...deps(), markEvent: async () => undefined };
+    expect((await processStripeWebhookEvent(subEvent(), d)).status).toBe('processed');
+    expect((await processStripeWebhookEvent(subEvent(), d)).status).toBe('processed');
+    expect(statusOf()).toBe('recorded');
   });
 
   it('scope: a NON-subscription event marked failed keeps the plain duplicate short-circuit (other branches unchanged)', async () => {

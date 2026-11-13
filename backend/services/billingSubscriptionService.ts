@@ -177,6 +177,52 @@ export interface BillingSubDeps {
 // instrument. As of 2026-11-13 prod had NO metrics backend, so getUnstampedOldEventsApplied /
 // getStaleSubscriptionEventsSkipped were INERT (re-check once Grafana Cloud lands before treating them as coverage): the log lines are the live control (log-based alerts, Grafana Cloud), not the counters.
 export interface ProviderEventRef { id: string; created: number }
+
+/**
+ * Every reason the subscription ledger can return without applying an event. A CLOSED union: a new literal reason
+ * that is not added here is a compile error at its return site, and one added here but not classified in
+ * classifySubscriptionLedgerReason is a compile error there (never-exhaustive switch). Database/transport errors are
+ * wrapped as `db_error:<message>`.
+ */
+export type SubscriptionLedgerReason =
+  | 'stale_event' | 'duplicate_event' | 'incomplete_event' | 'missing_event_ref'
+  | 'no_org' | 'invalid_event_stamp' | 'subscription_event_contention';
+export type SubscriptionLedgerFailure = SubscriptionLedgerReason | `db_error:${string}`;
+
+/**
+ * RULE (05 + e9, 2026-11-13): TERMINAL only for properties of the PAYLOAD, which is immutable across Stripe's
+ * retries, so a retry cannot change the outcome (stale_event, duplicate_event, incomplete_event, missing_event_ref).
+ * NEVER for database-state properties, which change: no_org (the webhook can beat our own customer->org write),
+ * invalid_event_stamp (needs a row repair), contention, any db_error. Those are RETRYABLE: terminal-when-transient
+ * drops money silently; retryable-when-permanent costs Stripe's retry window and then ends the same way.
+ */
+export function classifySubscriptionLedgerReason(reason: SubscriptionLedgerReason): 'terminal' | 'retryable' {
+  switch (reason) {
+    case 'stale_event':
+    case 'duplicate_event':
+    case 'incomplete_event':
+    case 'missing_event_ref':
+      return 'terminal';
+    case 'no_org':
+    case 'invalid_event_stamp':
+    case 'subscription_event_contention':
+      return 'retryable';
+    default: {
+      const unclassified: never = reason;
+      return unclassified;
+    }
+  }
+}
+
+const KNOWN_LEDGER_REASONS: readonly SubscriptionLedgerReason[] = [
+  'stale_event', 'duplicate_event', 'incomplete_event', 'missing_event_ref',
+  'no_org', 'invalid_event_stamp', 'subscription_event_contention',
+];
+/** Runtime classification of a reason string from the ledger; db_error / unknown / missing => retryable (fail toward retry). */
+export function isTerminalLedgerReason(reason: string | null | undefined): boolean {
+  if (typeof reason !== 'string' || !(KNOWN_LEDGER_REASONS as readonly string[]).includes(reason)) return false;
+  return classifySubscriptionLedgerReason(reason as SubscriptionLedgerReason) === 'terminal';
+}
 export type EventOrder = 'newer' | 'stale' | 'duplicate';
 
 export function isProviderEventRef(v: unknown): v is ProviderEventRef {
@@ -215,7 +261,7 @@ export async function applyOrderedSubscriptionWrite(
   event: ProviderEventRef,
   deps: BillingSubDeps,
   audit: { providerCustomerId?: string | null } = {},
-): Promise<{ ok: boolean; skipped?: 'stale_event' | 'duplicate_event'; error?: string }> {
+): Promise<{ ok: boolean; skipped?: 'stale_event' | 'duplicate_event'; error?: SubscriptionLedgerFailure }> {
   const nowMs = deps.now ? deps.now() : Date.now();
   const nowIso = new Date(nowMs).toISOString();
   const row = {
@@ -239,13 +285,13 @@ export async function applyOrderedSubscriptionWrite(
       .eq('provider', input.provider)
       .eq('provider_subscription_id', input.providerSubscriptionId)
       .maybeSingle();
-    if (readError) return { ok: false, error: readError.message };
+    if (readError) return { ok: false, error: `db_error:${readError.message}` };
 
     if (!existing) {
       const { error } = await deps.db.from('billing_subscriptions').insert({ ...row, metadata: { stripe_last_event: evt } });
       if (!error) return { ok: true };
       if ((error as { code?: string }).code === '23505') continue; // a concurrent delivery created it: re-decide
-      return { ok: false, error: error.message };
+      return { ok: false, error: `db_error:${error.message}` };
     }
 
     const current = existing as { id: string; metadata?: Record<string, unknown> | null; status?: string | null };
@@ -256,6 +302,9 @@ export async function applyOrderedSubscriptionWrite(
       console.error('[billingSubscription] malformed stripe_last_event stamp: event NOT applied (fail closed)', {
         provider_subscription_id: input.providerSubscriptionId, event_id: evt.id, stamp_type: rawStamp === null ? 'null' : typeof rawStamp,
       });
+      // TODO(e9 2026-11-13): page a human through e1's direct-send ops-alert path (ops_alert_markers, its own
+      // alert_kind e.g. 'billing_invalid_event_stamp') once that path lands on main. Until then this log line plus
+      // Stripe's retries (the outcome is RETRYABLE) are the only signal.
       return { ok: false, error: 'invalid_event_stamp' };
     }
     const stored: ProviderEventRef | null = hasStampKey ? (rawStamp as ProviderEventRef) : null;
@@ -278,7 +327,7 @@ export async function applyOrderedSubscriptionWrite(
       ? update.eq('metadata->stripe_last_event->>id', stored.id)
       : update.is('metadata->stripe_last_event', null);
     const { data: written, error: writeError } = await update.select('id');
-    if (writeError) return { ok: false, error: writeError.message };
+    if (writeError) return { ok: false, error: `db_error:${writeError.message}` };
     if (Array.isArray(written) && written.length === 1) {
       if (!stored) {
         const ageSeconds = Math.floor(nowMs / 1000) - evt.created;
@@ -311,7 +360,7 @@ export async function applyStripeSubscriptionEvent(
   organizationId: string | null,
   deps: BillingSubDeps,
   event?: ProviderEventRef,
-): Promise<{ applied: boolean; reason?: string; status?: LedgerSubStatus; planId?: string | null; planSource?: PlanResolutionSource }> {
+): Promise<{ applied: boolean; reason?: SubscriptionLedgerFailure; status?: LedgerSubStatus; planId?: string | null; planSource?: PlanResolutionSource }> {
   if (!organizationId) return { applied: false, reason: 'no_org' };
   // Fail closed: without the provider event's identity and time the order cannot be decided, so nothing is written.
   if (!event || typeof event.id !== 'string' || !event.id || typeof event.created !== 'number' || !Number.isFinite(event.created)) {
