@@ -503,3 +503,49 @@ describe('the fake is not kinder than PostgREST', () => {
     expect(mockDb.writes).toEqual([]);
   });
 });
+
+describe('05: a 23505 is ambiguous with two unique rules - never resume onto another invoice or period', () => {
+  const M = 'gpt-4o-mini';
+  const seed = () => {
+    mockLines = [line(M, 4.0)];
+    mockDb.tables.usage_events = [cust(ORG_A, 'openai', M, 2.0)];
+    mockDb.tables.platform_usage_events = [];
+  };
+  const ingestWin = (id: string, periodStart: string, periodEnd: string) =>
+    ingestOpenAiInvoice({ providerInvoiceId: id, periodStart, periodEnd, payload: {}, rates: {} as any });
+
+  it('a 23505 that NAMES the period index is refused, even when a row with this invoice id is stored', async () => {
+    seed();
+    mockDb.tables.provider_invoice_imports = [{ id: 'pi-1', provider: 'openai', provider_invoice_id: 'inv-1', period_start: WINDOW.periodStart, period_end: WINDOW.periodEnd, total_actual_usd: 4, line_items: mockLines }];
+    mockDb.fail['provider_invoice_imports:insert'] = { message: 'duplicate key value violates unique constraint "provider_invoice_imports_one_per_period_uidx"', code: '23505' };
+    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow(/refused by provider_invoice_imports_one_per_period_uidx/);
+    expect(mockDb.tables.cost_reconciliation_runs ?? []).toHaveLength(0);
+  });
+
+  it('e9: a DIFFERENT invoice id colliding on an already-imported period (the period index fires) is REFUSED, never resumed', async () => {
+    seed();
+    mockDb.tables.provider_invoice_imports = [{ id: 'pi-1', provider: 'openai', provider_invoice_id: 'inv-1', period_start: '2026-11-10T00:00:00+00:00', period_end: '2026-11-11T00:00:00+00:00', total_actual_usd: 4, line_items: [line('other-model', 4.0)] }];
+    // the app guard compares instants, so seed the race: the guard sees nothing (simulate by a far window), the DB index fires
+    mockDb.fail['provider_invoice_imports:insert'] = { message: 'duplicate key value violates unique constraint "provider_invoice_imports_one_per_period_uidx"', code: '23505', details: 'Key (provider, period_start, period_end)=(openai, ...) already exists.' } as any;
+    await expect(ingestWin('inv-2', '2026-12-10T00:00:00Z', '2026-12-11T00:00:00Z')).rejects.toThrow(/already belongs to another invoice/);
+    expect(mockDb.tables.cost_reconciliation_runs ?? []).toHaveLength(0);
+    expect(mockDb.tables.cost_reconciliation_adjustments ?? []).toHaveLength(0);
+  });
+
+  it('the SAME invoice id re-imported for ANOTHER period is refused, not resumed with the other period\'s lines', async () => {
+    seed();
+    await ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd);
+    const before = mockDb.writes.length;
+    await expect(ingestWin('inv-1', '2026-11-11T00:00:00Z', '2026-11-12T00:00:00Z')).rejects.toThrow(/was imported for .* not 2026-11-11/);
+    expect(mockDb.writes.length).toBe(before);
+  });
+
+  it('CONTROL: the same invoice, same period, written with another offset, still RESUMES (instants compared)', async () => {
+    seed();
+    mockDb.fail['cost_reconciliation_adjustments:insert'] = { message: 'x' };
+    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).rejects.toThrow();
+    // the run read uses .eq on the bounds, so keep the run's spelling; the stored import is compared as instants
+    (mockDb.tables.provider_invoice_imports[0] as any).period_start = '2026-11-10T05:30:00+05:30';
+    await expect(ingestWin('inv-1', WINDOW.periodStart, WINDOW.periodEnd)).resolves.toMatchObject({ status: 'ingested', resumed: true });
+  });
+});

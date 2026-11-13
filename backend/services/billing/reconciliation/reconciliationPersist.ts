@@ -26,6 +26,11 @@
  *   2. Import. 23505 (by code) means this invoice was imported before -> RESUME.
  *   3. Run upserted as 'running', carrying provider_invoice_id and a snapshot of
  *      the estimates it was matched against (sum, count, sha256).
+ *   NOT ATOMIC (05): the overlap check (1) is app-level - check, then insert. Two concurrent runs with
+ *      overlapping-but-not-identical periods could both pass it, and the DB index (identical bounds only) would
+ *      not stop them. Safe ONLY while the reconcilers run as one-at-a-time localhost CLIs (assertLocalhostOnly +
+ *      RECONCILE_LOCAL_RUNNER). A scheduled caller needs an exclusion constraint (btree_gist; a separate,
+ *      owner-level extension decision - see the register) or an advisory lock first.
  *   4. Adjustments: ONE insert statement (atomic). On resume, a run that already
  *      has adjustments is ONLY completed: its totals, buckets and estimates
  *      still describe those adjustments, so they are not rewritten.
@@ -62,6 +67,19 @@ export type PersistOutcome =
   | { status: 'ingested'; run_id: string; adjustments_written: number; totals: MatchResult['totals']; warnings: string[]; resumed: boolean };
 
 const UNIQUE_VIOLATION = '23505';
+/**
+ * provider_invoice_imports has TWO unique rules, so a 23505 alone is ambiguous (05):
+ *   - UNIQUE (provider, provider_invoice_id): the SAME invoice imported before -> resume;
+ *   - provider_invoice_imports_one_per_period_uidx (20270217000040): ANOTHER invoice holds this period -> refuse.
+ * SQLSTATE classifies the class; the constraint name (PostgREST puts it in message / details) identifies the
+ * rule. As a second line of defence the resume path also requires the stored row to be THIS invoice in THIS
+ * period, so a name the client cannot see still never resumes onto another invoice's or another period's data.
+ */
+const PERIOD_UNIQUE_INDEX = 'provider_invoice_imports_one_per_period_uidx';
+const sameInstant = (x: unknown, y: unknown): boolean => {
+  const a = Date.parse(String(x)), b = Date.parse(String(y));
+  return Number.isFinite(a) && a === b;
+};
 
 function fail(provider: string, event: string, message: string, extra: Record<string, unknown> = {}): never {
   logger.error(event, { provider, message, ...extra });
@@ -178,6 +196,11 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
     if ((insertErr as { code?: string }).code !== UNIQUE_VIOLATION) {
       fail(a.provider, 'reconcile_invoice_import_failed', `invoice import failed: ${insertErr.message}`);
     }
+    const errText = `${insertErr.message ?? ''} ${(insertErr as { details?: string }).details ?? ''}`;
+    if (errText.includes(PERIOD_UNIQUE_INDEX)) {
+      fail(a.provider, 'reconcile_period_has_other_invoice',
+        `import refused by ${PERIOD_UNIQUE_INDEX}: the period ${a.periodStart}..${a.periodEnd} already belongs to another invoice`);
+    }
     const { data: stored, error: readErr } = await supabase
       .from('provider_invoice_imports')
       .select('line_items, total_actual_usd, period_start, period_end')
@@ -187,7 +210,12 @@ export async function persistProviderReconciliation(a: PersistArgs): Promise<Per
     if (readErr) fail(a.provider, 'reconcile_import_read_failed', `stored import read failed: ${readErr.message}`);
     // 23505 without our own row: another invoice holds this period (the unique index won a race).
     if (!stored) fail(a.provider, 'reconcile_period_has_other_invoice', `import refused (23505) and invoice ${a.providerInvoiceId} is not stored: the period belongs to another invoice`);
-    const s = stored as { line_items: NormalizedInvoiceLine[]; total_actual_usd: number | string };
+    const s = stored as { line_items: NormalizedInvoiceLine[]; total_actual_usd: number | string; period_start: string; period_end: string };
+    // The same invoice id stored for ANOTHER period must never be resumed into this one.
+    if (!sameInstant(s.period_start, a.periodStart) || !sameInstant(s.period_end, a.periodEnd)) {
+      fail(a.provider, 'reconcile_invoice_period_mismatch',
+        `invoice ${a.providerInvoiceId} was imported for ${s.period_start}..${s.period_end}, not ${a.periodStart}..${a.periodEnd}`);
+    }
     if (roundCents(Number(s.total_actual_usd)) !== roundCents(total_actual_usd)) {
       fail(a.provider, 'reconcile_invoice_payload_mismatch',
         `invoice ${a.providerInvoiceId} was imported with total ${s.total_actual_usd}; this payload totals ${total_actual_usd}`);
