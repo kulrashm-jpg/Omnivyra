@@ -24,10 +24,13 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (table: string) => {
       const builder: any = {};
-      for (const op of ['select', 'eq', 'order', 'limit']) builder[op] = () => builder;
-      builder.range = (from: number, to: number) => ({
+      let after: string | null = null;
+      for (const op of ['select', 'eq', 'order']) builder[op] = () => builder;
+      // keyset paging (loadLedger: .gt('id', last).order('id').limit(n))
+      builder.gt = (_c: string, v: string) => { after = v; return builder; };
+      builder.limit = (n: number) => ({
         then: (res: any, rej: any) =>
-          Promise.resolve({ data: ledgerRows.slice(from, to + 1), error: null }).then(res, rej),
+          Promise.resolve({ data: ledgerRows.filter((r) => after === null || String(r.id) > after).slice(0, n), error: null }).then(res, rej),
       });
       builder.maybeSingle = () => ({
         then: (res: any, rej: any) =>
