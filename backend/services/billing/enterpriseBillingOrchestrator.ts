@@ -45,6 +45,7 @@ import {
 } from '../creditExecutionService';
 import {
   buildBillingIdempotencyKey,
+  resolveHttpAttemptRoot,
   type BillingIdempotencyArgs,
   type BillingIdempotencyKey,
 } from './billingIdempotencyService';
@@ -105,8 +106,17 @@ export async function runBilledOperation<T>(
       })
     : getBillingCorrelation({ module: opts.module });
 
-  // 2. Compute idempotency key
-  const idemKey = buildBillingIdempotencyKey(opts.idempotency);
+  // 2. Compute idempotency key. An http identity whose earlier attempt FAILED (released, not charged) is
+  //    reclaimed under the next attempt root, so the identical retry runs instead of answering already_released
+  //    forever; a CONFIRMED attempt still dedups (no second charge).
+  const builtKey = buildBillingIdempotencyKey(opts.idempotency);
+  const idemKey: BillingIdempotencyKey = opts.idempotency.kind === 'http'
+    ? await (async () => {
+        const { findCreditTransaction } = await import('../../repositories/creditExecutionRepository');
+        const root = await resolveHttpAttemptRoot(builtKey.root, findCreditTransaction);
+        return { ...builtKey, root, hold: `${root}:hold`, confirm: `${root}:confirm`, release: `${root}:release` };
+      })()
+    : builtKey;
 
   // 3. Open a billing_operations row (idempotent via UNIQUE on idempotency_key)
   const operationId = await openBillingOperation({

@@ -246,3 +246,12 @@ describe('suggest idempotency is per request body', () => {
     expect(modelCalls).toHaveLength(2);
   });
 });
+
+describe('billedAiHttpError: already_confirmed vs already_released are distinct (e1)', () => {
+  const { billedAiHttpError } = require('../../services/billing/billedAiHttpError');
+  const { BilledAiNotExecutedError } = require('../../services/billing/runBilledAiCompletion');
+  it('confirmed = already processed (charged); released = failed earlier, not charged', () => {
+    expect(billedAiHttpError(new BilledAiNotExecutedError('already_confirmed'))).toEqual({ status: 409, body: { error: 'This request was already processed.', code: 'ALREADY_PROCESSED' } });
+    expect(billedAiHttpError(new BilledAiNotExecutedError('already_released'))).toEqual({ status: 409, body: { error: 'An earlier attempt of this request failed and was not charged. Please try again.', code: 'ALREADY_RELEASED' } });
+  });
+});

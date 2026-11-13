@@ -18,6 +18,13 @@ export function billedAiHttpError(err: unknown): { status: number; body: Record<
       return { status: 403, body: { error: 'ORG_SCOPE_VIOLATION' } };
     case 'org_control_blocked':
       return { status: 403, body: { error: detail.code, detail: detail.reason } };
+    case 'already_confirmed':
+      // The identical request was already processed AND charged (double-click / network retry). Not a failure:
+      // the client should treat it as done and refresh.
+      return { status: 409, body: { error: 'This request was already processed.', code: 'ALREADY_PROCESSED' } };
+    case 'already_released':
+      // Only reachable past the http reclaim cap (or for non-http keys): the earlier attempt failed, nothing charged.
+      return { status: 409, body: { error: 'An earlier attempt of this request failed and was not charged. Please try again.', code: 'ALREADY_RELEASED' } };
     default:
       return { status: 409, body: { error: `Credit reservation is already settled: ${err.status}` } };
   }

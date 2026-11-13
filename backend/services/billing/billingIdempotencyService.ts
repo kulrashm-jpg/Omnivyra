@@ -114,6 +114,35 @@ function computeRoot(args: BillingIdempotencyArgs): string {
   }
 }
 
+/** Upper bound on reclaimed attempts for one http identity (each one is a failed, released attempt). */
+export const MAX_HTTP_RECLAIM_ATTEMPTS = 20;
+
+/**
+ * Reclaim a RELEASED http idempotency key (e1 review 2026-11-13, BLOCKING).
+ *
+ * An http key is a pure function of (actor, action, referenceId, body). When an attempt FAILED - its hold was
+ * released (provider error, rejected output, reaper) - nothing was charged, but the same identity used to answer
+ * `already_released` forever, so the user's natural retry of the same input was locked out with a 409.
+ *
+ * Attempt roots: `root`, `root:r1`, `root:r2`, ... The resolver returns the first attempt root that is either
+ * CONFIRMED (so a retry of a charged request still dedups to already_confirmed - never a second charge) or NOT
+ * released (a fresh or in-flight attempt). Deterministic: derived only from the ledger (no clock, no randomness), so
+ * concurrent retries resolve to the same attempt and dedup at the ledger. `lookup` reads a ledger row by
+ * idempotency key (findCreditTransaction).
+ */
+export async function resolveHttpAttemptRoot(
+  root: string,
+  lookup: (key: string) => Promise<unknown | null>,
+): Promise<string> {
+  for (let n = 0; n < MAX_HTTP_RECLAIM_ATTEMPTS; n++) {
+    const candidate = n === 0 ? root : `${root}:r${n}`;
+    const [confirmed, released] = await Promise.all([lookup(`${candidate}:confirm`), lookup(`${candidate}:release`)]);
+    if (confirmed || !released) return candidate;
+  }
+  // Cap reached: answer the last attempt (already_released) rather than loop without bound.
+  return `${root}:r${MAX_HTTP_RECLAIM_ATTEMPTS - 1}`;
+}
+
 function describeSource(args: BillingIdempotencyArgs): string {
   switch (args.kind) {
     case 'http':    return `http:${args.action}:actor=${args.actorUserId}`;
