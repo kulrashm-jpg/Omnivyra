@@ -106,11 +106,13 @@ describe('voice/transcribe', () => {
     expect(r.body.success).toBe(true);
     expect((mockCaptureCost.mock.calls[0][0] as any).organizationId).toBe(CO_A);
   });
-  it('signed-in without a company (the UI\'s call shape) → 200, unattributed', async () => {
+  // e9 2026-11-13 (F1, BLOCKING privilege): the company-less shape skipped the membership AND role gates, so a Viewer
+  // could dictate (spend). It is now refused; the client sends the active company (paired UI release).
+  it('signed-in without a company → 400 COMPANY_REQUIRED, no spend (was 200 and ungated)', async () => {
     const r = await invoke(transcribe, { method: 'POST', as: 'A', body: audio });
-    expect(r.status).toBe(200);
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockCaptureCost).not.toHaveBeenCalled();
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ code: 'COMPANY_REQUIRED' });
+    noSpend();
   });
 });
 

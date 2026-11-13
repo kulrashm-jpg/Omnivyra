@@ -30,20 +30,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     typeof (req.body as any)?.companyId === 'string' ? (req.body as any).companyId
     : typeof (req.body as any)?.organization_id === 'string' ? (req.body as any).organization_id
     : null;
-  let callerUserId: string;
-  if (voiceOrgId) {
-    const ctx = await enforceCompanyAccess({ req, res, companyId: voiceOrgId });
-    if (!ctx) return;
-    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
-    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(voiceOrgId), userId: String(ctx.userId), engagerException: 'voice_notes' }))) return;
-    callerUserId = ctx.userId;
-  } else {
+  // A company is REQUIRED (e9 2026-11-13, F1): without one, the membership and role gates below never ran, so a
+  // Viewer could dictate (spend) from any surface. No active-company inference: the client sends the active company.
+  // Released as a PAIR with the client change (ChatVoiceButton / VoiceNotesComponent send companyId).
+  if (!voiceOrgId) {
     const { user, error: authError } = await getSupabaseUserFromRequest(req);
     if (authError || !user) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
-    callerUserId = user.id;
+    return res.status(400).json({ error: 'A company is required to transcribe.', code: 'COMPANY_REQUIRED' });
   }
+  const ctx = await enforceCompanyAccess({ req, res, companyId: voiceOrgId });
+  if (!ctx) return;
+  // Campaign WRITE role guard (2026-11-13): Viewer / view-only -> 403; Engager allowed (voice_notes); creator-and-up.
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(voiceOrgId), userId: String(ctx.userId), engagerException: 'voice_notes' }))) return;
+  const callerUserId: string = ctx.userId;
 
   try {
     const { audioFile, provider = 'whisper', context = 'campaign-planning' } = req.body;
