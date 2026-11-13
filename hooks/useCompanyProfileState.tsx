@@ -20,7 +20,12 @@ import {
   buildSocialProfilesFromScalars,
 } from '../pages/company-profile.types';
 import { normalizeCanonicalWebsite } from '../utils/companyProfileValidation';
-import { mergeCampaignPurposeIntent } from '../utils/mergeCampaignPurposeIntent';
+import {
+  mergeCampaignPurposeIntent,
+  mergeNonEmptyFields,
+  TARGET_CUSTOMER_FIELDS,
+  MARKETING_INTELLIGENCE_FIELDS,
+} from '../utils/mergeCampaignPurposeIntent';
 
 const ONBOARDING_CHECKPOINT_PREFIX = 'company_profile_onboarding:';
 const ONBOARDING_REFINE_STALE_MS = 2 * 60 * 1000;
@@ -1411,7 +1416,8 @@ export function useCompanyProfileState() {
       if (data.done && data.structuredFields) {
         const updated = {
           ...activeProfile,
-          ...data.structuredFields,
+          // AI blank never overwrites a stored value; unexpected keys dropped (scalar audit).
+          ...mergeNonEmptyFields(activeProfile, data.structuredFields, TARGET_CUSTOMER_FIELDS),
           // MERGE, never replace: this chat returns 5 of the 8 keys (D3, 2026-11-13).
           ...(data.campaign_purpose_intent != null
             ? { campaign_purpose_intent: mergeCampaignPurposeIntent(activeProfile.campaign_purpose_intent, data.campaign_purpose_intent) }
@@ -1557,7 +1563,11 @@ export function useCompanyProfileState() {
       }
       const data = await response.json();
       if (data.done && data.structuredFields) {
-        const updated = { ...activeProfile, ...data.structuredFields };
+        // AI blank never overwrites a stored value; unexpected keys dropped (scalar audit).
+        const updated = {
+          ...activeProfile,
+          ...mergeNonEmptyFields(activeProfile, data.structuredFields, MARKETING_INTELLIGENCE_FIELDS),
+        };
         updateActiveProfile(updated);
         setMarketingIntelligencePendingSave(true);
         setMarketingIntelligenceMessages((prev) => [
@@ -1811,14 +1821,14 @@ export function useCompanyProfileState() {
       const updated = {
         ...activeProfile,
         core_problem_statement: sf.core_problem_statement ?? activeProfile.core_problem_statement,
-        pain_symptoms: Array.isArray(sf.pain_symptoms) ? sf.pain_symptoms : activeProfile.pain_symptoms ?? [],
+        pain_symptoms: Array.isArray(sf.pain_symptoms) && sf.pain_symptoms.length > 0 ? sf.pain_symptoms : activeProfile.pain_symptoms ?? [],
         awareness_gap: sf.awareness_gap ?? activeProfile.awareness_gap,
         problem_impact: sf.problem_impact ?? activeProfile.problem_impact,
         life_with_problem: sf.life_with_problem ?? activeProfile.life_with_problem,
         life_after_solution: sf.life_after_solution ?? activeProfile.life_after_solution,
         desired_transformation: sf.desired_transformation ?? activeProfile.desired_transformation,
         transformation_mechanism: sf.transformation_mechanism ?? activeProfile.transformation_mechanism,
-        authority_domains: Array.isArray(sf.authority_domains) ? sf.authority_domains : activeProfile.authority_domains ?? [],
+        authority_domains: Array.isArray(sf.authority_domains) && sf.authority_domains.length > 0 ? sf.authority_domains : activeProfile.authority_domains ?? [],
       };
       updateActiveProfile(updated);
       setProfile(updated);
@@ -1970,14 +1980,14 @@ export function useCompanyProfileState() {
         const updated = {
           ...activeProfile,
           core_problem_statement: sf.core_problem_statement ?? activeProfile.core_problem_statement,
-          pain_symptoms: Array.isArray(sf.pain_symptoms) ? sf.pain_symptoms : activeProfile.pain_symptoms ?? [],
+          pain_symptoms: Array.isArray(sf.pain_symptoms) && sf.pain_symptoms.length > 0 ? sf.pain_symptoms : activeProfile.pain_symptoms ?? [],
           awareness_gap: sf.awareness_gap ?? activeProfile.awareness_gap,
           problem_impact: sf.problem_impact ?? activeProfile.problem_impact,
           life_with_problem: sf.life_with_problem ?? activeProfile.life_with_problem,
           life_after_solution: sf.life_after_solution ?? activeProfile.life_after_solution,
           desired_transformation: sf.desired_transformation ?? activeProfile.desired_transformation,
           transformation_mechanism: sf.transformation_mechanism ?? activeProfile.transformation_mechanism,
-          authority_domains: Array.isArray(sf.authority_domains) ? sf.authority_domains : activeProfile.authority_domains ?? [],
+          authority_domains: Array.isArray(sf.authority_domains) && sf.authority_domains.length > 0 ? sf.authority_domains : activeProfile.authority_domains ?? [],
         };
         updateActiveProfile(updated);
         setProfile(updated);
@@ -2034,9 +2044,11 @@ export function useCompanyProfileState() {
       }
       const data = await response.json();
       const structuredFields = data.structuredFields || {};
+      // generate-marketing-intelligence returns '' for fields the model left empty: those
+      // must never wipe a stored value (scalar audit). Unexpected keys are dropped.
       updateActiveProfile({
         ...activeProfile,
-        ...structuredFields,
+        ...mergeNonEmptyFields(activeProfile, structuredFields, MARKETING_INTELLIGENCE_FIELDS),
       });
       setSuccessMessage('Marketing intelligence generated. Review, edit if needed, then click Save Profile to persist and lock.');
     } catch (e) {
