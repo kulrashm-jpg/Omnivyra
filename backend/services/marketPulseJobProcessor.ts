@@ -10,6 +10,7 @@ import { consolidateMarketPulseResults } from './marketPulseConsolidator';
 import { aggregateMarketPulseFromDb, type AggregatedPulseSignal } from './marketPulseAggregationService';
 import type { ConsolidatedPulseOutput } from './marketPulseConsolidator';
 import { BilledAiNotExecutedError } from './billing/runBilledAiCompletion';
+import { emitAnomaly } from './billing/billingAuditEmitter';
 import {
   describeMarketPulseShortfall,
   notifyMarketPulseSkipped,
@@ -23,6 +24,7 @@ type JobRow = {
   company_id: string;
   status: string;
   regions: string[];
+  region_results?: Record<string, unknown> | null;
   context_payload?: (MarketPulseContextPayload & { insight_source?: 'api' | 'llm' | 'hybrid'; triggered_by_user_id?: string | null }) | null;
 };
 
@@ -77,7 +79,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
   const now = new Date().toISOString();
 
   const { data: job, error: fetchError } = await ownedDbTable('market_pulse_jobs_v1')
-    .select('id, company_id, status, regions, context_payload')
+    .select('id, company_id, status, regions, context_payload, region_results')
     .eq('id', jobId)
     .single();
 
@@ -149,14 +151,19 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
     (contextPayload as { triggered_by_user_id?: unknown }).triggered_by_user_id,
   );
 
-  const regionResults: Record<string, { topics: { topic: string; spike_reason: string; shelf_life_days: number; risk_level: string; priority_score: number; velocity_score?: number; momentum_score?: number; narrative_phase?: string }[]; credits_charged?: number } | { error: true; message: string }> = {};
+  type RegionError = { error: true; message: string; code?: 'INSUFFICIENT_CREDITS' | 'CHARGED_NO_OUTPUT' | 'ALREADY_RELEASED'; charged?: boolean };
+  const regionResults: Record<string, { topics: { topic: string; spike_reason: string; shelf_life_days: number; risk_level: string; priority_score: number; velocity_score?: number; momentum_score?: number; narrative_phase?: string }[]; credits_charged?: number } | RegionError> = {};
+  // Results already stored by an earlier attempt of this job (a retry after a crash): a region whose charge was
+  // already confirmed keeps them instead of being overwritten (e1 review 2026-11-13).
+  const priorResults = (row.region_results && typeof row.region_results === 'object' ? row.region_results : {}) as Record<string, unknown>;
+  const chargedRegions: string[] = [];
   let creditStop: string | null = null;
 
   for (const region of regions) {
     if (await isCancelled()) return;
     if (creditStop) {
       // A region hold was refused: the remaining regions are not run (and not charged).
-      regionResults[region] = { error: true, message: creditStop };
+      regionResults[region] = { error: true, code: 'INSUFFICIENT_CREDITS', charged: false, message: creditStop };
       continue;
     }
     await ownedDbTable('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
@@ -169,6 +176,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
         { userId: billingUserId, jobId },
       );
       regionResults[region] = { topics: result.topics, credits_charged: result.creditsCharged };
+      chargedRegions.push(region);
 
       for (const t of result.topics) {
         await ownedDbTable('market_pulse_items_v1').insert({
@@ -186,11 +194,42 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
         });
       }
     } catch (err) {
-      if (err instanceof BilledAiNotExecutedError && err.status !== 'already_confirmed' && err.status !== 'already_released') {
-        // insufficient_credits / no_credit_account / org_control_blocked: stop the scan and tell the admins.
-        creditStop = `${err.status}: Market Pulse stopped before region ${region}; remaining regions were not run or charged`;
+      const prior = priorResults[region] as { topics?: unknown } | undefined;
+      if (err instanceof BilledAiNotExecutedError && err.status === 'already_confirmed') {
+        // This (job, region) was already CHARGED by an earlier attempt. Keep its stored output; if none was stored
+        // the customer paid for nothing - record it explicitly and raise an ops-visible anomaly for refund / re-run.
+        if (prior && Array.isArray(prior.topics)) {
+          regionResults[region] = prior as (typeof regionResults)[string];
+        } else {
+          regionResults[region] = {
+            error: true,
+            charged: true,
+            code: 'CHARGED_NO_OUTPUT',
+            message: `Region ${region} was charged by an earlier attempt of this scan but its result was not saved; flagged for an operator to refund or re-run`,
+          };
+          emitAnomaly({
+            organizationId: companyId,
+            kind: 'charged_no_output',
+            severity: 'critical',
+            message: 'market_pulse_region_charged_without_output',
+            metadata: { job_id: jobId, region, action: 'insight_generation' },
+          });
+        }
+      } else if (err instanceof BilledAiNotExecutedError && err.status === 'already_released') {
+        // An earlier attempt failed and its hold was released (nothing charged); the same key will not run again.
+        regionResults[region] = {
+          error: true,
+          charged: false,
+          code: 'ALREADY_RELEASED',
+          message: `Region ${region} failed in an earlier attempt of this scan and was not charged; start a new scan to retry it`,
+        };
+      } else if (err instanceof BilledAiNotExecutedError) {
+        // insufficient_credits / no_credit_account / org_control_blocked: stop the scan and tell the admins which
+        // regions completed (and were charged) before the stop.
+        const done = chargedRegions.length > 0 ? `completed and charged: ${chargedRegions.join(', ')}` : 'no region was completed or charged';
+        creditStop = `${err.status}: Market Pulse stopped before region ${region} (${done}); remaining regions were not run or charged`;
         await notifyMarketPulseSkipped(companyId, creditStop);
-        regionResults[region] = { error: true, message: creditStop };
+        regionResults[region] = { error: true, code: 'INSUFFICIENT_CREDITS', charged: false, message: creditStop };
       } else {
         regionResults[region] = { error: true, message: err instanceof Error ? err.message : 'Region analysis failed' };
       }

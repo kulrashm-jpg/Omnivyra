@@ -68,11 +68,15 @@ const PRICE = { actionKey: 'insight_generation', minCredits: 8, maxCredits: 80, 
 const PER_REGION = PRICE.minCredits;
 const wallet = { balance: 0 };
 const holds: Array<{ key: string; orgId: string; action: string; amount: number; state: 'held' | 'confirmed' | 'released' }> = [];
+const emitAnomaly = jest.fn();
+jest.mock('../../services/billing/billingAuditEmitter', () => ({ emitAnomaly: (...a: unknown[]) => emitAnomaly(...a) }));
 jest.mock('../../services/billing/enterpriseBillingOrchestrator', () => ({
   runBilledOperation: async (opts: any) => {
     const key = JSON.stringify(opts.idempotency);
     const prior = holds.find((h) => h.key === key);
     if (prior?.state === 'confirmed') return { operationId: 'op', correlationId: 'c', idempotencyKey: key, result: { status: 'already_confirmed' } };
+    // executeWithCredits answers already_released when the key's release row exists (a failed earlier attempt)
+    if (prior?.state === 'released') return { operationId: 'op', correlationId: 'c', idempotencyKey: key, result: { status: 'already_released' } };
     if (wallet.balance < PER_REGION) return { operationId: 'op', correlationId: 'c', idempotencyKey: key, result: { status: 'insufficient_credits', available: wallet.balance, required: PER_REGION } };
     const hold = { key, orgId: opts.orgId, action: opts.action, amount: PER_REGION, state: 'held' as const };
     holds.push(hold as any);
@@ -94,8 +98,8 @@ import { sumRegionCreditsCharged, resolveMarketPulseBillingUser } from '../../se
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const USER = '22222222-2222-4222-8222-222222222222';
-function seedJob(id: string, regions: string[], insight_source: 'llm' | 'hybrid' | 'api' = 'llm') {
-  tableRows('market_pulse_jobs_v1').push({ id, company_id: ORG, status: 'PENDING', regions, context_payload: { insight_source, triggered_by_user_id: USER }, error: null });
+function seedJob(id: string, regions: string[], insight_source: 'llm' | 'hybrid' | 'api' = 'llm', region_results: Record<string, unknown> | null = null) {
+  tableRows('market_pulse_jobs_v1').push({ id, company_id: ORG, status: 'PENDING', regions, context_payload: { insight_source, triggered_by_user_id: USER }, error: null, region_results });
 }
 const job = (id: string) => tableRows('market_pulse_jobs_v1').find((r) => r.id === id)!;
 
@@ -105,6 +109,7 @@ beforeEach(() => {
   handlesSeen.length = 0;
   llmOutputs.length = 0;
   runCompletionWithOperation.mockClear();
+  emitAnomaly.mockClear();
   runDiagnosticPrompt.mockReset();
   runDiagnosticPrompt.mockResolvedValue({ data: { topics: [] }, raw: '{}', model: 'm' });
   // prod shape (C79): the shared resolver returns the insight_generation floor at the org's rate (0.01 -> 8 credits)
@@ -159,8 +164,9 @@ describe('Market Pulse region charging', () => {
     expect(runCompletionWithOperation).toHaveBeenCalledTimes(1);
     expect(holds).toHaveLength(1);
     const rr = job('j4').region_results;
-    expect(rr.IN).toEqual({ error: true, message: expect.stringMatching(/^insufficient_credits: Market Pulse stopped before region IN/) });
-    expect(rr.UK).toEqual({ error: true, message: rr.IN.message });
+    expect(rr.IN).toEqual({ error: true, code: 'INSUFFICIENT_CREDITS', charged: false, message: expect.stringMatching(/^insufficient_credits: Market Pulse stopped before region IN \(completed and charged: US\)/) });
+    expect(rr.UK).toEqual({ error: true, code: 'INSUFFICIENT_CREDITS', charged: false, message: rr.IN.message });
+    expect(tableRows('notifications')[0].message).toContain('completed and charged: US');
     expect(job('j4').status).toBe('COMPLETED_WITH_WARNINGS');
     expect(tableRows('notifications')).toHaveLength(1);
   });
@@ -183,6 +189,38 @@ describe('Market Pulse region charging', () => {
     expect(holds).toHaveLength(1);
     expect(runCompletionWithOperation).toHaveBeenCalledTimes(1);
     expect(wallet.balance).toBe(100 - PER_REGION);
+  });
+
+  // e1 review (money): a retried job must never show a CHARGED region as a generic error.
+  const charge = (jobId: string, region: string) => generateMarketPulseForRegion(ORG, region, { insight_source: 'llm' }, undefined, { userId: USER, jobId });
+  it('retry, already_confirmed WITH a stored result -> the stored result is preserved (no second charge, no error)', async () => {
+    await charge('j8', 'US'); // the earlier attempt: charged
+    const stored = { topics: [{ topic: 'Earlier', spike_reason: 'x', shelf_life_days: 7, risk_level: 'LOW', priority_score: 0.5 }], credits_charged: PER_REGION };
+    seedJob('j8', ['US'], 'llm', { US: stored });
+    await processMarketPulseJobV1('j8');
+    expect(job('j8').region_results.US).toEqual(stored);
+    expect(holds).toHaveLength(1);
+    expect(runCompletionWithOperation).toHaveBeenCalledTimes(1);
+    expect(emitAnomaly).not.toHaveBeenCalled();
+    expect(job('j8').status).toBe('COMPLETED');
+  });
+  it('retry, already_confirmed with NO stored result -> CHARGED_NO_OUTPUT (charged:true) + a critical ops anomaly', async () => {
+    await charge('j9', 'US');
+    seedJob('j9', ['US']);
+    await processMarketPulseJobV1('j9');
+    expect(job('j9').region_results.US).toEqual({ error: true, charged: true, code: 'CHARGED_NO_OUTPUT', message: expect.stringContaining('was charged by an earlier attempt') });
+    expect(emitAnomaly).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG, kind: 'charged_no_output', severity: 'critical', metadata: expect.objectContaining({ job_id: 'j9', region: 'US' }) }));
+    expect(holds).toHaveLength(1);
+  });
+  it('retry, already_released -> ALREADY_RELEASED (charged:false), no LLM call, no charge', async () => {
+    llmOutputs.push('not json');
+    await expect(charge('j10', 'US')).rejects.toThrow('LLM response is not valid JSON'); // earlier attempt: released
+    runCompletionWithOperation.mockClear();
+    seedJob('j10', ['US']);
+    await processMarketPulseJobV1('j10');
+    expect(job('j10').region_results.US).toEqual({ error: true, charged: false, code: 'ALREADY_RELEASED', message: expect.stringContaining('was not charged') });
+    expect(runCompletionWithOperation).not.toHaveBeenCalled();
+    expect(wallet.balance).toBe(100);
   });
 
   it("CONTROL: an 'api' (DB-only) scan makes no LLM call and is not charged", async () => {
