@@ -9,7 +9,8 @@
 **Standard server shape**, keyed on status + `code` only:
 - 402 `{ error, code: INSUFFICIENT_CREDITS | NO_CREDIT_ACCOUNT | PRICING_UNAVAILABLE, required?, balance? }`
 - 409 `{ error, code: ALREADY_PROCESSED }`: success; refresh.
-- 409 `{ error, code: ALREADY_RELEASED }`: earlier attempt failed and wasn't charged; offer "try again" with a NEW key.
+- 500 `{ error, code: RECLAIM_CAP_EXHAUSTED, retryable: false }` (e1): our failure, nothing charged; offer "try again" with a NEW key. It replaces `ALREADY_RELEASED`, which never existed on main and is not handled.
+- `DAILY_LIMIT_UNVERIFIABLE` / `BUDGET_UNVERIFIABLE` (6f, coming; e9 2026-11-13; status TBC from 6f): "we couldn't confirm your spending limit right now; nothing was charged". Show a plain retry message ("We couldn't check your spending limit just now. Nothing was charged. Please try again in a moment."), NEVER a top-up prompt. Retry with the SAME Idempotency-Key. Note: `createBilledActionKeyGate` frees the key when the action ends, so a retry click gets a new key. Honouring "same key" needs the gate to KEEP the key after these two codes (open design point, raised with e9). Part of the flip-gate list.
 
 **A route is DONE when:** its server returns the standard shape (e1/55 confirm), AND every client file below sends the key and routes errors through the helper, AND a test pins both (pattern: `backend/tests/unit/billedResponseHelper.test.tsx`).
 
