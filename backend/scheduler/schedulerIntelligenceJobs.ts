@@ -91,9 +91,14 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
 
   if (configError || !enabledConfigRows?.length) {
     // Global fallback: no company configs — use all active API sources
+    // PLATFORM sources only (e9, BLOCKING, binding rule "central holds no tenant activity"): this poll runs with
+    // companyId null and writes intelligence_signals as PLATFORM rows. A tenant-owned source (company_id set) must
+    // never be polled here - its results would land in central. Tenant-owned sources are not auto-polled (product
+    // question with the owner).
     const { data: activeSources, error: sourcesError } = await ownedDbTable('external_api_sources')
       .select('id, name, rate_limit_per_min, is_enabled_global, is_whitelisted, category')
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .is('company_id', null);
 
     if (sourcesError || !activeSources?.length) {
       return { enqueued: 0, skipped: 0, reasons: { skipped_rate_limit: 0, skipped_disabled: 0 } };
@@ -110,9 +115,12 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
       const existing = pollingPriorityBySource.get(id);
       if (existing === undefined || p < existing) pollingPriorityBySource.set(id, p);
     }
+    // PLATFORM sources only, for the same reason: company configs choose WHICH platform sources to poll and how often,
+    // but the poll itself is a platform poll (companyId null), so a tenant-owned source is never selected.
     const { data: companySources, error: sourcesError } = await ownedDbTable('external_api_sources')
       .select('id, name, rate_limit_per_min, is_enabled_global, is_whitelisted, category')
       .eq('is_active', true)
+      .is('company_id', null)
       .in('id', enabledSourceIds);
 
     if (sourcesError || !companySources?.length) {
