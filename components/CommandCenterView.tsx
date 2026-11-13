@@ -3,6 +3,7 @@ import {
   BarChart3,
   ChevronDown,
   ChevronRight,
+  Loader2,
   MessageSquare,
   PenTool,
   Rocket,
@@ -26,6 +27,9 @@ type EnhancedCardLike = {
   // feature data was not readable this load, NOT that setup is outstanding.
   state: 'not_started' | 'in_progress' | 'ready' | 'unknown';
   hoverMessage?: string | null;
+  /** From useCommandCenterCore: true while a report is generating (Reports card). */
+  ctaDisabled?: boolean;
+  showSpinner?: boolean;
 };
 
 const CARD_ACTION_LABELS: Record<string, string> = {
@@ -128,19 +132,14 @@ function ActionCard({
   onOpen: (route: string, state: EnhancedCardLike['state']) => void;
 }) {
   const Icon = CARD_ICONS[card.id] ?? BarChart3;
-  const actionLabel = CARD_ACTION_LABELS[card.id] ?? card.ctaLabel;
+  // D1 (F1): while the hook says the action can't run (a report is generating), show its
+  // label ("Generating...") and disable the button; otherwise the short verb.
+  const ctaDisabled = Boolean(card.ctaDisabled);
+  const actionLabel = ctaDisabled ? card.ctaLabel : CARD_ACTION_LABELS[card.id] ?? card.ctaLabel;
   // `unknown` suppresses the setup nudge too — we have no basis for telling
   // someone what to set up when we could not read what they already have.
   const setupHoverMessage =
     card.state === 'ready' || card.state === 'unknown' ? null : card.hoverMessage || null;
-  const outcomeCopy =
-    card.id === 'reports'
-      ? 'See where your site stands now, understand the real gap, and get next actions you can apply immediately.'
-      : card.id === 'blogs'
-        ? 'Create content aligned to your business, capture current trends, and finish in minutes what used to take hours.'
-        : card.id === 'campaigns'
-          ? 'Turn strategy into an actual launch plan across channels with clearer execution, timing, and follow-through.'
-          : 'Track conversations, surface what matters first, and respond faster without chasing activity across multiple tabs.';
   // K2: `unknown` gets its own neutral treatment — it is not a warning and not a
   // reproach. The workspace may be fully configured; we just could not read the
   // feature data on this load.
@@ -154,19 +153,12 @@ function ActionCard({
           : 'bg-slate-100 text-slate-700 border-slate-200';
 
   return (
-    // Whole-card click mirrors the CTA — reuses the SAME onOpen handler
-    // (analytics → preflight → handleCardClick); no duplicate navigation path.
+    // D1 (owner rule 3): ONE control per card, the CTA button. The card body is no longer
+    // a second button for the same action, and it sizes to its content (no min-height),
+    // so all four CTAs sit above the fold on a laptop.
     <article
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(card.route, card.state)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen(card.route, card.state);
-        }
-      }}
-      className="flex h-full min-h-[560px] cursor-pointer flex-col rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+      data-testid={`command-center-card-${card.id}`}
+      className="flex h-full flex-col rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
@@ -183,18 +175,13 @@ function ActionCard({
         </span>
       </div>
 
-      <div className="mt-4 grid min-h-[184px] grid-rows-[48px_96px_40px]">
-        <h2 className="overflow-hidden text-lg font-semibold leading-7 text-slate-950">{card.title}</h2>
-        <p className="overflow-hidden text-sm leading-6 text-slate-600">{card.description}</p>
-        <p className="overflow-hidden text-sm leading-5 text-slate-500">{card.hint || ''}</p>
+      <div className="mt-3 flex-1">
+        <h2 className="text-lg font-semibold leading-7 text-slate-950">{card.title}</h2>
+        <p className="mt-1 text-sm leading-6 text-slate-600">{card.description}</p>
+        {card.hint ? <p className="mt-1 text-sm leading-5 text-slate-500">{card.hint}</p> : null}
       </div>
 
-      <div className="mt-6 grid min-h-[128px] grid-rows-[16px_1fr] rounded-2xl border border-slate-200 bg-slate-50 p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">What you can do here</p>
-        <p className="mt-2 overflow-hidden text-sm leading-6 text-slate-700">{outcomeCopy}</p>
-      </div>
-
-      <div className="group relative mt-5">
+      <div className="group relative mt-4">
         {setupHoverMessage ? (
           <div className="pointer-events-none absolute -top-11 left-1/2 z-10 hidden w-max max-w-[240px] -translate-x-1/2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-center text-xs font-medium text-slate-600 shadow-lg group-hover:block">
             {setupHoverMessage}
@@ -202,15 +189,14 @@ function ActionCard({
         ) : null}
         <button
           type="button"
-          onClick={(e) => {
-            // Stop bubbling so the card-level onClick doesn't fire onOpen twice.
-            e.stopPropagation();
-            onOpen(card.route, card.state);
-          }}
-          className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
+          disabled={ctaDisabled}
+          aria-busy={card.showSpinner ? true : undefined}
+          onClick={() => onOpen(card.route, card.state)}
+          className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
         >
+          {card.showSpinner ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
           {actionLabel}
-          <ChevronRight className="h-4 w-4" />
+          {card.showSpinner ? null : <ChevronRight className="h-4 w-4" />}
         </button>
       </div>
     </article>
@@ -269,15 +255,15 @@ export default function CommandCenterView({ d }: { d: S }) {
   const isFirstRun = (Number(setupPct) || 0) < 50;
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-6xl space-y-8">
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+    <div className="min-h-screen bg-slate-50 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl space-y-5">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px] xl:items-start xl:gap-8">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                 {isFirstRun ? 'Getting started' : 'Welcome'}
               </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
                 {isFirstRun ? `Welcome to OmniVyra, ${displayName}` : `Welcome back, ${displayName}`}
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
@@ -329,7 +315,7 @@ export default function CommandCenterView({ d }: { d: S }) {
         ) : null}
 
         <section>
-          <div className="mb-4">
+          <div className="mb-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Work Areas</p>
             <h2 className="mt-1 text-xl font-semibold text-slate-950">Choose where you want to work</h2>
           </div>
