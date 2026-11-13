@@ -28,7 +28,14 @@ import { computeReconciliationVariance, type ReconciliationSeverity } from '../r
 import type { NormalizedInvoiceLine } from './openaiAdapter';
 
 export interface UsageAggregate {
-  organization_id: string;
+  /**
+   * Customer company the estimated spend belongs to, or `null` for PLATFORM
+   * spend (usage_events.organization_id IS NULL, only legal together with
+   * metadata->>'billing_scope' = 'platform'). A platform aggregate takes part
+   * in its bucket like any other share, and its adjustment carries
+   * organization_id = null: it is never attributed (billed) to a company.
+   */
+  organization_id: string | null;
   period_day: string;
   model: string;
   estimated_usd: number;
@@ -67,6 +74,18 @@ export interface MatchResult {
 
 type BucketKey = string; // `${day}|${model}`
 const bk = (day: string, model: string): BucketKey => `${day}|${model}`;
+
+/**
+ * Null-safe, deterministic organization_id comparator. Platform (`null`)
+ * sorts FIRST; two non-null ids compare exactly as before
+ * (`localeCompare`), so ordering among customer orgs is unchanged.
+ */
+export function compareOrganizationId(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return -1;
+  if (b === null) return 1;
+  return a.localeCompare(b);
+}
 
 function roundCents(n: number): number {
   // Numeric stability for jsonb / numeric storage.
@@ -171,7 +190,7 @@ export function reconcileProviderInvoice(args: {
     const bucketAdjUsd = actual_usd - estimated_usd;
     // Deterministic order: by org id then by hold anchor.
     const sortedOrgs = [...u.orgs].sort((a, b) => {
-      const c = a.organization_id.localeCompare(b.organization_id);
+      const c = compareOrganizationId(a.organization_id, b.organization_id);
       if (c !== 0) return c;
       return String(a.ledger_hold_transaction_id ?? '').localeCompare(String(b.ledger_hold_transaction_id ?? ''));
     });

@@ -24,6 +24,13 @@ export interface OrphanUsageResult {
   estimatedUntrackedUsd: number;
   byOrgTop10:           Array<{ organizationId: string; orphanCount: number; estimatedUsd: number }>;
   byOperationTop10:     Array<{ operation: string; orphanCount: number }>;
+  /**
+   * usage_events rows with organization_id NULL (PLATFORM spend,
+   * billing_scope='platform'). They have no credit transaction BY DESIGN, so
+   * they are excluded from the orphan scan and counted here instead. They ARE
+   * included in `scanned`.
+   */
+  platformSkipped:      number;
 }
 
 export async function runOrphanUsageReconciliation(opts?: {
@@ -41,7 +48,7 @@ export async function runOrphanUsageReconciliation(opts?: {
     .limit(1);
   if (probeErr && /relation .* does not exist/i.test(probeErr.message)) {
     logger.warn('usage_events_table_missing', { message: probeErr.message });
-    return { scanned: 0, orphanCount: 0, estimatedUntrackedUsd: 0, byOrgTop10: [], byOperationTop10: [] };
+    return { scanned: 0, orphanCount: 0, estimatedUntrackedUsd: 0, byOrgTop10: [], byOperationTop10: [], platformSkipped: 0 };
   }
   void probe;
 
@@ -54,26 +61,35 @@ export async function runOrphanUsageReconciliation(opts?: {
 
   if (error) {
     logger.error('orphan_usage_query_failed', { message: error.message });
-    return { scanned: 0, orphanCount: 0, estimatedUntrackedUsd: 0, byOrgTop10: [], byOperationTop10: [] };
+    return { scanned: 0, orphanCount: 0, estimatedUntrackedUsd: 0, byOrgTop10: [], byOperationTop10: [], platformSkipped: 0 };
   }
-  const events = (rows ?? []) as Array<{ id: string; organization_id: string; operation: string; cost_usd: number | null; created_at: string }>;
+  const events = (rows ?? []) as Array<{ id: string; organization_id: string | null; operation: string; cost_usd: number | null; created_at: string }>;
 
   // For each event, check whether a credit_transactions CONFIRM exists in a small window
   // around the event (±5 min) for the same org. This is an O(N) scan; for high-volume
   // orgs the next iteration should switch to a window-bucketed join SQL query.
-  const orphans: typeof events = [];
+  const orphans: Array<(typeof events)[number] & { organization_id: string }> = [];
+  let platformSkipped = 0;
   for (const e of events) {
+    // PLATFORM spend (organization_id NULL) belongs to no company and has no
+    // credit transaction by design: never an orphan, never queried with
+    // `.eq('organization_id', null)`.
+    if (e.organization_id == null) { platformSkipped += 1; continue; }
+    const organizationId: string = e.organization_id;
     const lo = new Date(Date.parse(e.created_at) - 5 * 60 * 1000).toISOString();
     const hi = new Date(Date.parse(e.created_at) + 5 * 60 * 1000).toISOString();
     const { data: match } = await supabase
       .from('credit_transactions')
       .select('id')
-      .eq('organization_id', e.organization_id)
+      .eq('organization_id', organizationId)
       .eq('execution_phase', 'confirm')
       .gte('created_at', lo)
       .lte('created_at', hi)
       .limit(1);
-    if (!match || match.length === 0) orphans.push(e);
+    if (!match || match.length === 0) orphans.push({ ...e, organization_id: organizationId });
+  }
+  if (platformSkipped > 0) {
+    logger.info('orphan_usage_platform_rows_skipped', { platformSkipped, window_minutes: minutes });
   }
 
   // Aggregations
@@ -114,5 +130,6 @@ export async function runOrphanUsageReconciliation(opts?: {
     estimatedUntrackedUsd: totalUsd,
     byOrgTop10,
     byOperationTop10,
+    platformSkipped,
   };
 }

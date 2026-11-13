@@ -37,7 +37,7 @@ import {
   type ImageNormalizeResult,
 } from './imageAdapter';
 import type { RateTable } from './openaiAdapter';
-import { reconcileProviderInvoice, type UsageAggregate, type MatchResult } from './reconciliationMatcher';
+import { reconcileProviderInvoice, compareOrganizationId, type UsageAggregate, type MatchResult } from './reconciliationMatcher';
 
 export type ImageProviderTag = 'openai_image' | `image:${string}`;
 export type ImagePayloadKind = 'billing' | 'dalle_usage' | 'image_usage';
@@ -89,12 +89,15 @@ async function readUsageAggregates(
   }
   const map: Map<string, UsageAggregate> = new Map();
   for (const r of (data || []) as Array<Record<string, unknown>>) {
-    const org   = String(r.organization_id ?? '');
+    // NULL organization_id = PLATFORM spend (billing_scope='platform'): kept
+    // as its own null-org group, never coerced to '' (not a uuid) and never
+    // dropped (dropping it would push its invoice share onto customer orgs).
+    const org: string | null = r.organization_id == null ? null : String(r.organization_id);
     const model = String(r.model_name ?? '').trim();
     const ts    = String(r.created_at ?? '');
-    if (!org || !model || !ts) continue;
+    if (org === '' || !model || !ts) continue;
     const day = ts.slice(0, 10);
-    const key = `${org}|${day}|${model}`;
+    const key = `${org ?? ''}|${day}|${model}`; // '' cannot collide with a uuid
     const usd = Math.max(0, Number(r.total_cost_usd ?? 0) || 0);
     const ledgerAnchor = (r.ledger_hold_transaction_id as string | null) ?? null;
     const slot = map.get(key);
@@ -106,7 +109,7 @@ async function readUsageAggregates(
     }
   }
   return Array.from(map.values()).sort((a, b) => {
-    const c = a.organization_id.localeCompare(b.organization_id); if (c) return c;
+    const c = compareOrganizationId(a.organization_id, b.organization_id); if (c) return c;
     const d = a.period_day.localeCompare(b.period_day);            if (d) return d;
     return a.model.localeCompare(b.model);
   });
