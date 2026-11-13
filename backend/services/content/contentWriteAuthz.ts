@@ -32,9 +32,10 @@ import { enforceRole, Role } from '../rbacService';
 
 /**
  * POLICY - AI spend follows authoring (owner ruling "Viewers trigger no AI"; written down 2026-11-13 after 55, 6f and
- * e1 applied it independently): a POST that REACHES THE AI GATEWAY requires this write role even when it writes no
- * row - it spends the company's credits. A POST that reaches no AI gateway and writes nothing (e.g. a pure preview)
- * may stay membership-only. Apply this rule; do not re-decide it per route.
+ * e1 applied it independently): a POST that CAN REACH THE AI GATEWAY requires this write role even when it writes no
+ * row - it spends the company's credits. "Can reach", not "reaches": a route that serves a cache hit for free but calls
+ * the gateway on a miss still spends, so it is gated. A POST that can reach no AI gateway and writes nothing (e.g. a
+ * pure preview) may stay membership-only. Apply this rule; do not re-decide it per route.
  * Revisit if a role is ever introduced that may read and SPEND but not author (an analyst / reviewer archetype): then
  * spend needs its own role set, and the spend-only POSTs gated here (first: company blog brief-suggestions) move to it.
  */
