@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { getAiLookingAheadMessage } from '@/lib/aiLookingAheadMessage';
 import { getAiStrategicConfidence } from '@/lib/aiStrategicConfidence';
-import { getViewMode } from '@/utils/getViewMode';
 import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { apiFetch } from '@/lib/apiFetch';
@@ -44,7 +43,6 @@ export function useActivityWorkspace() {
   const [finalizedByScheduleId, setFinalizedByScheduleId] = useState<Record<string, boolean>>({});
   const [schedulingByScheduleId, setSchedulingByScheduleId] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
-  const [systemBlockExpanded, setSystemBlockExpanded] = useState(false);
   const [masterContentExpanded, setMasterContentExpanded] = useState(false);
   const [selectedVariantTab, setSelectedVariantTab] = useState<string>('');
   const [platformRulesByPlatform, setPlatformRulesByPlatform] = useState<Record<string, { guidelines: string[] }>>({});
@@ -159,7 +157,7 @@ export function useActivityWorkspace() {
   }, [payload?.campaignId]);
 
   const aiPreviewMessage = useMemo(() => getAiLookingAheadMessage(payload ?? null), [payload]);
-  const viewMode = getViewMode(user?.role);
+  // F2 follow-up: the workspace's view mode was always USER (user.role is 'admin' | 'user'), so it is gone.
   const aiConfidenceMessage = useMemo(() => getAiStrategicConfidence(payload ?? null), [payload]);
 
   useEffect(() => {
@@ -473,13 +471,11 @@ export function useActivityWorkspace() {
     setShowImagePickerByScheduleId,
     setShowRefineByScheduleId,
     setStrategicMemoryProfile,
-    setSystemBlockExpanded,
     showAddVariantForm,
     showImagePickerByScheduleId,
     showRefineByScheduleId,
     strategicMemoryProfile,
     suggestedPlatforms,
-    systemBlockExpanded,
     topicText,
     updateSchedule,
     upsertVariantForSchedule,
@@ -488,7 +484,6 @@ export function useActivityWorkspace() {
     variantStatusLabel,
     variantTabPlatforms,
     videoContentTypes,
-    viewMode,
     workspaceKey,
     writerBrief,
   };
