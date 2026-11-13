@@ -192,16 +192,20 @@ describe('POST /api/domain/track-event (company = caller\'s active company only)
     expect(mockLogDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ company_id: CO_A }));
     expect(JSON.stringify(mockLogDomainEvent.mock.calls)).not.toContain(CO_B);
   });
-  it('user with no active company cannot borrow one from the body (was: body.company_id fallback)', async () => {
+  // CONTRACT CHANGE (BLOCKING fix, e9 2026-11-13): the company is resolved from the caller's ACTIVE memberships
+  // (pointer honoured only with one; otherwise the first active membership). B has no pointer but IS an active member
+  // of CO_B in the harness, so the event is B's own company - and still never the CO_A named in the body.
+  it('user without a pointer cannot borrow a company from the body: attributed to their OWN active membership (B), never A', async () => {
     const r = await invoke(trackEventHandler, {
       method: 'POST', as: 'B',
       body: { event: 'DOMAIN_VERIFICATION_SKIPPED', company_id: CO_A, final_domain: 'b.test' },
     });
     expect(r.status).toBe(202);
-    expect(mockLogDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ company_id: null, user_id: USER_B }));
+    expect(mockLogDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ company_id: CO_B, user_id: USER_B }));
+    expect(JSON.stringify(mockLogDomainEvent.mock.calls)).not.toContain(CO_A);
     const reminders = writeCalls(['domain_reminders']);
     expect(reminders).toHaveLength(1);
-    expect((reminders[0].payload as any).company_id).toBeNull();
+    expect((reminders[0].payload as any).company_id).toBe(CO_B);
   });
   it('the UI\'s own request shape (no company_id) is unchanged', async () => {
     const r = await invoke(trackEventHandler, { method: 'POST', as: 'A', body: { event: 'VIEW_DOMAIN_VERIFICATION', final_domain: null, metadata: null } });

@@ -35,6 +35,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { resolveActiveCompanyForUser } from './activeCompanyResolver';
 import { buildActivationReadiness } from './activationReadinessService';
 import { listCmsProviders } from './cms/registry';
 import type { ConnectionState } from './integrations/connectionState';
@@ -421,19 +422,10 @@ async function collectSignals(userId: string): Promise<JourneySignals> {
     name?: string | null; is_email_verified?: boolean; active_company_id?: string | null;
   };
 
-  // Company: prefer active_company_id, fall back to first active membership.
-  let companyId: string | null = u.active_company_id ?? null;
-  if (!companyId) {
-    const { data: role } = await supabase
-      .from('user_company_roles')
-      .select('company_id')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    companyId = (role as { company_id?: string } | null)?.company_id ?? null;
-  }
+  // BLOCKING (e9 2026-11-13): the pointer used to be trusted as-is, so a stale active_company_id (a company the user
+  // LEFT) exposed that company's social / analytics / profile / CMS state and let journey actions write to it. The
+  // pointer now counts only with an ACTIVE membership; otherwise the first active membership; otherwise none.
+  const companyId: string | null = await resolveActiveCompanyForUser(userId, u.active_company_id ?? null);
 
   const base: JourneySignals = {
     user: {

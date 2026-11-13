@@ -25,6 +25,8 @@ import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { getTrustedClientIp } from '../../../lib/security/clientIp';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
 import { logger } from '../../../backend/services/logger';
+import { resolveActiveCompanyForUser } from '../../../backend/services/activeCompanyResolver';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 const REMINDER_DELAY_MS = 10 * 60 * 1000;
 
@@ -79,7 +81,11 @@ async function handler(
   // user write domain_events / domain_reminders rows attributed to any
   // company, polluting that tenant's funnel data. The only UI caller
   // (pages/onboarding/domain-verification.tsx) never sends company_id.
-  const companyId     = (userRow as any)?.active_company_id ?? null;
+  // BLOCKING (e9 2026-11-13): the raw pointer could name a company the user LEFT, so funnel events and reminders were
+  // written into another tenant. The company now comes from ACTIVE memberships only (pointer honoured only with one)
+  // and is authorized; a user with no active membership is logged with no company, as before for pre-company users.
+  const companyId     = userId ? await resolveActiveCompanyForUser(userId, (userRow as any)?.active_company_id ?? null) : null;
+  if (companyId && !(await enforceCompanyAccess({ req, res, companyId }))) return;
   const final_domain  = body?.final_domain ? String(body.final_domain) : null;
   const metadata      = body?.metadata && typeof body.metadata === 'object' ? body.metadata : null;
 

@@ -56,7 +56,7 @@ const byId = (j: Awaited<ReturnType<typeof buildOnboardingJourney>>, id: string)
 function activeUser(extra: Record<string, unknown> = {}) {
   return {
     users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: 'org1' },
-    user_company_roles: null,
+    user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
     company_setup_progress: { journey_state: {} },
     social_accounts: [],
     analytics_integrations: [],

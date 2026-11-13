@@ -72,7 +72,7 @@ describe('ONBOARD-001 §1 — stage derivation', () => {
   test('verified + named + company: mandatory stages completed, optionals pending', async () => {
     stub({
       users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: 'org1' },
-      user_company_roles: null,
+      user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
       company_setup_progress: { journey_state: {} },
       social_accounts: [],
       analytics_integrations: [],
@@ -91,7 +91,7 @@ describe('ONBOARD-001 §1 — stage derivation', () => {
     activation(true, true);
     stub({
       users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: 'org1' },
-      user_company_roles: null,
+      user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
       company_setup_progress: { journey_state: {} },
       social_accounts: [{ platform: 'linkedin', is_active: true, connection_state: 'CONNECTED' }],
       analytics_integrations: [
@@ -115,7 +115,7 @@ describe('ONBOARD-001 §5/§6 — overrides', () => {
     activation(true, true);
     stub({
       users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: 'org1' },
-      user_company_roles: null,
+      user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
       company_setup_progress: {
         journey_state: {
           company_review: { status: 'dismissed', at: 't', by: 'u1' },
@@ -146,7 +146,7 @@ describe('ONBOARD-001 §11 — Platform Ready is the single decision', () => {
   test('mandatory incomplete → never ready regardless of optionals', async () => {
     stub({
       users: { id: 'u1', name: null, is_email_verified: true, active_company_id: 'org1' }, // no name → profile pending
-      user_company_roles: null,
+      user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
       company_setup_progress: { journey_state: {
         company_review: { status: 'skipped', at: 't', by: 'u1' },
         social_accounts: { status: 'skipped', at: 't', by: 'u1' },
@@ -177,7 +177,7 @@ describe('ONBOARD-001 §8 — provider state mapping', () => {
   test('expired social token surfaces reconnect detail but stage stays actionable', async () => {
     stub({
       users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: 'org1' },
-      user_company_roles: null,
+      user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
       company_setup_progress: { journey_state: {} },
       social_accounts: [{ platform: 'linkedin', is_active: true, connection_state: 'TOKEN_EXPIRED' }],
       analytics_integrations: [],
@@ -193,7 +193,7 @@ describe('ONBOARD-001 §12 — recovery is deterministic', () => {
   test('same inputs → identical journey', async () => {
     stub({
       users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: 'org1' },
-      user_company_roles: null,
+      user_company_roles: [{ company_id: 'org1', created_at: '2026-01-01T00:00:00Z' }] /* active membership: the pointer counts only with one */,
       company_setup_progress: { journey_state: {} },
       social_accounts: [],
       analytics_integrations: [],
@@ -208,7 +208,7 @@ describe('ONBOARD-001 §12 — recovery is deterministic', () => {
   test('company via active membership when active_company_id is null', async () => {
     stub({
       users: { id: 'u1', name: 'Jo', is_email_verified: true, active_company_id: null },
-      user_company_roles: { company_id: 'org-from-role' },
+      user_company_roles: [{ company_id: 'org-from-role', created_at: '2026-01-01T00:00:00Z' }],
       company_setup_progress: { journey_state: {} },
       social_accounts: [],
       analytics_integrations: [],

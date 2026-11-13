@@ -14,6 +14,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { buildOnboardingJourney } from '../../../backend/services/onboardingJourneyService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
   getCompanyProfileProvenance,
   type CompanyProfileProvenance,
@@ -41,6 +42,8 @@ async function handler(
     return res.status(409).json({ error: 'No company yet.', code: 'NO_COMPANY' });
   }
 
+  // BLOCKING (e9 2026-11-13): the company comes from ACTIVE memberships only (journey service) and is authorized here.
+  if (!(await enforceCompanyAccess({ req, res, companyId: journey.companyId }))) return;
   const provenance = await getCompanyProfileProvenance(journey.companyId);
   return res.status(200).json(provenance);
 }

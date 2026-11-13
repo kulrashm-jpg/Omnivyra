@@ -18,6 +18,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { setPrivateCache, setPrivateNoStore, CACHE_TTL } from '../../../lib/platform/httpCache';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
   buildOnboardingJourney,
   applyJourneyStageAction,
@@ -44,6 +45,9 @@ async function handler(
 
   if (req.method === 'GET') {
     const journey = await buildOnboardingJourney(user.id);
+    // The journey's company is resolved from ACTIVE memberships only; it is still authorized (company status,
+    // platform rules) before any of its state is returned. No company = the pre-company onboarding journey.
+    if (journey.companyId && !(await enforceCompanyAccess({ req, res, companyId: journey.companyId }))) return;
     // OPT-002: state-dependent policy. An IN-PROGRESS journey is the client's
     // resume-from-server truth and must never be cached (P4 no-store); once
     // platformReady the payload is terminal and stable (P3, 300 s). The stage
@@ -75,6 +79,8 @@ async function handler(
     if (!journey.companyId) {
       return res.status(409).json({ error: 'Create your company before adjusting onboarding steps.', code: 'NO_COMPANY' });
     }
+    // BLOCKING (e9 2026-11-13): authorize the company before writing its journey state / milestones.
+    if (!(await enforceCompanyAccess({ req, res, companyId: journey.companyId }))) return;
 
     const result = await applyJourneyStageAction({
       companyId: journey.companyId,
