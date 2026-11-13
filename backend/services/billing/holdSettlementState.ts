@@ -6,7 +6,8 @@
  * fact committed (a timeout or dropped response after the server's commit), that release refunded credits the work had
  * already consumed - and the live apply_credit_reservation body has no already-settled guard to stop it. The caller now
  * reads the hold's state first and releases ONLY when the hold is provably open AND the error was a definitive database
- * refusal (nothing committed). Every other case is left for the reservation reconciler; a read error is no answer.
+ * refusal (nothing committed). Every other case returns the finished work with a SettlementPending marker and leaves the
+ * hold reserved for resolution; a read error is no answer.
  */
 import { supabase } from '../../db/supabaseClient';
 
@@ -15,14 +16,25 @@ export type HoldSettlementState =
   | { state: 'confirmed' | 'released'; transactionId: string }
   | { state: 'unreadable'; message: string };
 
-/** Typed refusal: the settle outcome is unknown; nothing more is written - the reconciler decides later. */
-export class CreditSettlementAmbiguousError extends Error {
-  readonly code = 'CREDIT_SETTLE_AMBIGUOUS';
-  readonly retryable = true;
-  constructor(readonly holdId: string | null, readonly detail: string) {
-    super(`[creditExecution] settle outcome unknown for hold ${holdId}; left for the reservation reconciler: ${detail}`);
-    this.name = 'CreditSettlementAmbiguousError';
-  }
+/**
+ * The AI work is DONE but its settle outcome is unknown. The caller gets its result (throwing would lose the content and
+ * invite a re-click: a new key, a new hold and a second charge) with this marker; the hold stays reserved and is
+ * resolved from the 'credit_settle_pending' ERROR log (one per occurrence, carrying everything a resolver needs).
+ */
+export type SettlementPending = {
+  code: 'CREDIT_SETTLE_AMBIGUOUS';
+  holdId: string | null;
+  state: HoldSettlementState['state'];
+  detail: string;
+};
+
+export function pendingSettlement(holdId: string | null, settled: HoldSettlementState, errorMessage: string): SettlementPending {
+  return {
+    code: 'CREDIT_SETTLE_AMBIGUOUS',
+    holdId,
+    state: settled.state,
+    detail: settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `hold ${settled.state}; ${errorMessage}`,
+  };
 }
 
 /**

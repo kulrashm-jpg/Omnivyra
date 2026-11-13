@@ -48,7 +48,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
-import { readHoldSettlementState, isDefinitiveDbRefusal, CreditSettlementAmbiguousError } from './billing/holdSettlementState';
+import { readHoldSettlementState, isDefinitiveDbRefusal, pendingSettlement } from './billing/holdSettlementState';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
@@ -436,8 +436,11 @@ export async function executeWithCredits<T>(
         logger.warn('credit_partial_confirm_error_but_committed', { orgId, action, idempotencyKey: baseKey, confirmId: settled.transactionId, message: msg });
         adoptedConfirmId = settled.transactionId;
       } else if (settled.state !== 'open' || !isDefinitiveDbRefusal(partialErr)) {
-        logger.error('credit_partial_confirm_ambiguous', { orgId, action, idempotencyKey: baseKey, holdId, settledState: settled.state, message: msg });
-        throw new CreditSettlementAmbiguousError(holdId, settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `hold ${settled.state}; ${msg}`);
+        // The work is done: return it (never throw - a re-click would be a new key, a new hold, a second charge). The
+        // hold stays reserved; credit_settle_pending carries everything a resolver needs.
+        const pending = pendingSettlement(holdId, settled, msg);
+        logger.error('credit_settle_pending', { path: 'partial_confirm', orgId, action, idempotencyKey: baseKey, holdId, confirmKey, releaseKey, intendedSplit: actualSplit, intendedCredits: actualCredits, settledState: settled.state, message: msg });
+        return { status: 'executed', result: executorResult, settlementPending: pending };
       }
     }
     if (partialErr && !adoptedConfirmId) {
@@ -517,8 +520,9 @@ export async function executeWithCredits<T>(
         logger.warn('credit_confirm_error_but_committed', { orgId, action, idempotencyKey: baseKey, confirmId: settled.transactionId, message: msg });
         adoptedFixedConfirmId = settled.transactionId;
       } else if (settled.state !== 'open' || !isDefinitiveDbRefusal(confirmErr)) {
-        logger.error('credit_confirm_ambiguous', { orgId, action, idempotencyKey: baseKey, holdId, settledState: settled.state, message: msg });
-        throw new CreditSettlementAmbiguousError(holdId, settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `hold ${settled.state}; ${msg}`);
+        const pending = pendingSettlement(holdId, settled, msg);
+        logger.error('credit_settle_pending', { path: 'confirm', orgId, action, idempotencyKey: baseKey, holdId, confirmKey, releaseKey, intendedSplit: usedSplit, intendedCredits: credits, settledState: settled.state, message: msg });
+        return { status: 'executed', result: executorResult, settlementPending: pending };
       }
     }
     if (confirmErr && !adoptedFixedConfirmId) {

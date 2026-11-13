@@ -4,9 +4,10 @@
  *
  *   committed confirm (timeout after commit)   -> adopt it, no release, no error
  *   open + definitive DB refusal (P0001 etc.)  -> release (old behaviour), throw
- *   open + non-definitive (network / timeout)  -> CREDIT_SETTLE_AMBIGUOUS, NO release
- *   state unreadable (read error)              -> CREDIT_SETTLE_AMBIGUOUS, NO release
- *   already released by someone else          -> CREDIT_SETTLE_AMBIGUOUS, NO second release
+ *   open + non-definitive (network / timeout)  -> the finished work is RETURNED with settlementPending, NO release
+ *   state unreadable (read error)              -> returned with settlementPending, NO release
+ *   already released by someone else          -> returned with settlementPending, NO second release
+ * (Throwing would lose the finished content and invite a re-click: a new key, a new hold, a second charge.)
  */
 export {};
 
@@ -65,7 +66,7 @@ jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jes
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { executeWithCredits } = require('../../services/creditExecutionServiceRuntimeCore');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { readHoldSettlementState, isDefinitiveDbRefusal, CreditSettlementAmbiguousError } = require('../../services/billing/holdSettlementState');
+const { readHoldSettlementState, isDefinitiveDbRefusal } = require('../../services/billing/holdSettlementState');
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const USER = '33333333-3333-4333-8333-333333333333';
@@ -116,11 +117,12 @@ describe('readHoldSettlementState', () => {
 });
 
 describe('executeWithCredits: partial_confirm error handling', () => {
-  it('a confirm that COMMITTED despite the error is adopted: no release, no throw', async () => {
+  it('a confirm that COMMITTED despite the error is adopted: no release, no marker', async () => {
     partialConfirm.mockResolvedValue({ error: { message: 'fetch failed' }, data: null });
     db.byParent = { data: [{ id: 'conf-1', execution_phase: 'confirm' }], error: null };
     const r = await run('pc-adopt');
     expect(r.status).toBe('executed');
+    expect(r.settlementPending).toBeUndefined();
     expect(releases()).toBe(0);
   });
 
@@ -130,27 +132,26 @@ describe('executeWithCredits: partial_confirm error handling', () => {
     expect(releases()).toBe(1);
   });
 
-  it('open hold + NON-definitive error (network / timeout): CREDIT_SETTLE_AMBIGUOUS, NO release', async () => {
+  it('open hold + NON-definitive error (network / timeout): returned with settlementPending, NO release', async () => {
     partialConfirm.mockResolvedValue({ error: { message: 'fetch failed: socket hang up' }, data: null });
-    const err = await run('pc-network').catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CreditSettlementAmbiguousError);
-    expect(err).toMatchObject({ code: 'CREDIT_SETTLE_AMBIGUOUS', retryable: true });
+    const r = await run('pc-network');
+    expect(r).toMatchObject({ status: 'executed', result: 'done', settlementPending: { code: 'CREDIT_SETTLE_AMBIGUOUS', state: 'open' } });
     expect(releases()).toBe(0);
   });
 
-  it('settled state UNREADABLE: CREDIT_SETTLE_AMBIGUOUS, NO release (a read error is no answer)', async () => {
+  it('settled state UNREADABLE: returned with settlementPending, NO release (a read error is no answer)', async () => {
     partialConfirm.mockResolvedValue({ error: { code: 'P0001', message: 'refused' }, data: null });
     db.byParent = { data: null, error: { message: 'read failed' } };
-    const err = await run('pc-unreadable').catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CreditSettlementAmbiguousError);
+    const r = await run('pc-unreadable');
+    expect(r).toMatchObject({ status: 'executed', settlementPending: { code: 'CREDIT_SETTLE_AMBIGUOUS', state: 'unreadable' } });
     expect(releases()).toBe(0);
   });
 
-  it('hold already RELEASED by someone else: CREDIT_SETTLE_AMBIGUOUS, NO second release', async () => {
+  it('hold already RELEASED by someone else: returned with settlementPending, NO second release', async () => {
     partialConfirm.mockResolvedValue({ error: { code: 'P0001', message: 'refused' }, data: null });
     db.byParent = { data: [{ id: 'rel-1', execution_phase: 'release' }], error: null };
-    const err = await run('pc-released').catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CreditSettlementAmbiguousError);
+    const r = await run('pc-released');
+    expect(r).toMatchObject({ status: 'executed', settlementPending: { state: 'released' } });
     expect(releases()).toBe(0);
   });
 });
@@ -175,10 +176,10 @@ describe('executeWithCredits: FIXED-cost confirm error handling (same rule)', ()
     expect(releases()).toBe(1);
   });
 
-  it('open + network error: CREDIT_SETTLE_AMBIGUOUS, NO release', async () => {
+  it('open + network error: returned with settlementPending, NO release', async () => {
     confirmPhaseError = { message: 'socket hang up' };
-    const err = await runFixed('fx-network').catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CreditSettlementAmbiguousError);
+    const r = await runFixed('fx-network');
+    expect(r).toMatchObject({ status: 'executed', result: 'done', settlementPending: { code: 'CREDIT_SETTLE_AMBIGUOUS', state: 'open' } });
     expect(releases()).toBe(0);
   });
 });

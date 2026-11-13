@@ -1,7 +1,7 @@
 /**
  * e9 ruling 2026-11-13: executeWithEntryConsumption's token settle (apply_credit_partial_confirm on the exposure hold)
  * must not RELEASE the exposure on an error unless the exposure is provably open AND the error was a definitive DB
- * refusal. A committed settle is adopted; anything else is CREDIT_SETTLE_AMBIGUOUS with no release (reconciler decides).
+ * refusal. A committed settle is adopted; anything else RETURNS the finished work with settlementPending and no release (the exposure stays reserved for resolution).
  * Scaffold copied from activityEntryConsumption.test.ts (same lower-layer mocks).
  */
 const settledState = { value: { state: 'open' } as Record<string, unknown> };
@@ -109,8 +109,6 @@ beforeEach(() => {
 });
 
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { CreditSettlementAmbiguousError } = jest.requireActual('../../services/billing/holdSettlementState');
 
 const runEntry = () => executeWithEntryConsumption({
   userId: USER, orgId: ORG, action: ACTION as any,
@@ -132,8 +130,9 @@ describe('executeWithEntryConsumption: exposure settle error handling', () => {
   it('a settle that COMMITTED despite the error is adopted: executed, no exposure release', async () => {
     repo.callCreditPartialConfirm.mockResolvedValue({ error: { message: 'fetch failed' }, data: null });
     settledState.value = { state: 'confirmed', transactionId: 'settle-committed' };
-    const res = await runEntry();
+    const res: any = await runEntry();
     expect(res.status).toBe('executed');
+    expect(res.settlementPending).toBeUndefined();
     expect(exposureReleases()).toBe(0);
   });
 
@@ -147,11 +146,12 @@ describe('executeWithEntryConsumption: exposure settle error handling', () => {
     ['open + network error', { state: 'open' }, { message: 'socket hang up' }],
     ['state unreadable', { state: 'unreadable', message: 'read failed' }, { code: 'P0001', message: 'refused' }],
     ['already released', { state: 'released', transactionId: 'r' }, { code: 'P0001', message: 'refused' }],
-  ])('%s: CREDIT_SETTLE_AMBIGUOUS, NO exposure release', async (_n, state, error) => {
+  ])('%s: the work is RETURNED with settlementPending, NO exposure release', async (_n, state, error) => {
     repo.callCreditPartialConfirm.mockResolvedValue({ error, data: null });
     settledState.value = state as Record<string, unknown>;
-    const err = await runEntry().catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CreditSettlementAmbiguousError);
+    const res: any = await runEntry();
+    expect(res).toMatchObject({ status: 'executed', result: 'OUTPUT', settlementPending: { code: 'CREDIT_SETTLE_AMBIGUOUS', state: (state as any).state } });
+    expect(res.settlement).toMatchObject({ entryConsumed: 2, additionalConsumed: 0, exposureReleased: 0 });
     expect(exposureReleases()).toBe(0);
   });
 });

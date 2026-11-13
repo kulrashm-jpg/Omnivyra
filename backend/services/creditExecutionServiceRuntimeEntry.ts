@@ -48,7 +48,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
-import { readHoldSettlementState, isDefinitiveDbRefusal, CreditSettlementAmbiguousError } from './billing/holdSettlementState';
+import { readHoldSettlementState, isDefinitiveDbRefusal, pendingSettlement, type SettlementPending } from './billing/holdSettlementState';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
@@ -78,7 +78,7 @@ export interface EntryConsumptionSettlement {
 }
 
 export type ExecuteWithEntryConsumptionResult<T> =
-  | { status: 'executed'; result: T; settlement: EntryConsumptionSettlement }
+  | { status: 'executed'; result: T; settlement: EntryConsumptionSettlement; settlementPending?: SettlementPending }
   | { status: 'already_settled' }
   | { status: 'already_released' }
   | { status: 'insufficient_credits'; available: number; required: number }
@@ -388,8 +388,17 @@ export async function executeWithEntryConsumption<T>(
         await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — settle failed` });
         throw new Error(`[entryConsumption] exposure settle failed: ${msg}`);
       } else {
-        logger.error('entry_consumption_settle_ambiguous', { orgId: opts.orgId, action, holdId: exposureHandle.holdTransactionId, settledState: settled.state, message: msg });
-        throw new CreditSettlementAmbiguousError(exposureHandle.holdTransactionId, settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `exposure ${settled.state}; ${msg}`);
+        // The work is done: return it with the entry already consumed; the exposure stays reserved for the resolver.
+        logger.error('credit_settle_pending', { path: 'entry_exposure_settle', orgId: opts.orgId, action, idempotencyKey: opts.idempotencyKey, holdId: exposureHandle.holdTransactionId, confirmKey: exposureConfirmKey, releaseKey: exposureReleaseKey, intendedSplit: actualSplit, intendedCredits: plan.additionalConsumption, settledState: settled.state, message: msg });
+        return {
+          status: 'executed',
+          result: executorResult,
+          settlement: {
+            entryConsumed, exposureReserved: reservation, additionalConsumed: 0, exposureReleased: 0,
+            totalConsumed: entryConsumed, underfunded: false, pricing,
+          },
+          settlementPending: pendingSettlement(exposureHandle.holdTransactionId, settled, msg),
+        };
       }
     }
     // A settle adopted after an error has no RPC payload: the planned amounts below are what was sent.

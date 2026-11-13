@@ -152,7 +152,7 @@ export interface SettlementReport {
 }
 
 export type ExecuteResult<T> =
-  | { status: 'executed';            result: T; settlement?: SettlementReport }
+  | { status: 'executed';            result: T; settlement?: SettlementReport; settlementPending?: import('./billing/holdSettlementState').SettlementPending }
   | { status: 'already_confirmed' }
   | { status: 'already_released' }
   | { status: 'insufficient_credits'; available: number; required: number }
