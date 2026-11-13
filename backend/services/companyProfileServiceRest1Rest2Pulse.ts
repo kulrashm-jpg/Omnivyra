@@ -74,7 +74,7 @@ export { generateMarketingIntelligenceDraft } from './companyProfile/marketingIn
 // ─── Private imports used by this module ─────────────────────────────────────
 import type { StrategyProfile, RecommendationContext, CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './companyProfile/types';
 import { COMMERCIAL_FIELD_NAMES, MARKETING_INTELLIGENCE_FIELD_NAMES, PROBLEM_TRANSFORMATION_FIELD_NAMES } from './companyProfile/fieldConstants';
-import { computeEditStamps, shouldLockMarketPulseDomains, MARKET_PULSE_SOLUTION_DOMAINS_LOCK } from './companyProfile/fieldProvenance';
+import { computeEditStamps, isDeliberateScalarClear, shouldLockMarketPulseDomains, MARKET_PULSE_SOLUTION_DOMAINS_LOCK } from './companyProfile/fieldProvenance';
 import {
   normalizeCompanyId,
   mergeStringArrays,
@@ -559,9 +559,14 @@ export async function saveProfile(
   // (re-saving an unchanged value does not re-stamp).
   const lockedThisSave: string[] = [];
   if (!options?.suppressUserLocks) {
+    // A deliberate CLEAR (USER save, non-empty stored scalar -> empty) is a manual edit too and is locked + stamped
+    // (e9 ruling 2026-11-13). Scope per the UI tab's audit: commercial + problem/transformation SCALARS only.
+    // NOT marketing-intelligence fields (an AI merge can post '' for them without the user) nor list fields (D1);
+    // those join only after the client AI-merge fix lands.
     for (const key of COMMERCIAL_FIELD_NAMES) {
       const val = input[key];
       if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
+      else if (isDeliberateScalarClear(source, val, existing?.[key])) { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
     }
     for (const key of MARKETING_INTELLIGENCE_FIELD_NAMES) {
       const val = input[key];
@@ -571,6 +576,7 @@ export async function saveProfile(
       const val = input[key as keyof CompanyProfile];
       const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
       if (hasVal) { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
+      else if (isDeliberateScalarClear(source, val, existing?.[key as keyof CompanyProfile])) { lockedSet.add(key); didLock = true; lockedThisSave.push(key); }
     }
     // Nested lock: a user's own Market Pulse solution domains (refine otherwise rewrites them from the AI
     // classification). Locked only when a USER save actually changes them.

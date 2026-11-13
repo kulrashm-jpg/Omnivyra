@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import {
-  valuesDiffer, guidanceMayOverwrite, computeEditStamps, shouldLockMarketPulseDomains, resolveRefinedSolutionDomains,
+  valuesDiffer, guidanceMayOverwrite, computeEditStamps, isDeliberateScalarClear, shouldLockMarketPulseDomains, resolveRefinedSolutionDomains,
   MARKET_PULSE_SOLUTION_DOMAINS_LOCK,
 } from '../../services/companyProfile/fieldProvenance';
 import { applyApprovedStrategicGuidance, normalizeUserGuidedIntelligence } from '../../services/companyProfile/userGuidance';
@@ -70,6 +70,36 @@ describe('computeEditStamps: only a real content change is stamped', () => {
     const r = computeEditStamps({ lockedKeysThisSave: ['pricing_model'], next: (k) => prev[k], prev: (k) => prev[k], prevEditedAt: null, nowIso: T1 });
     expect(r.changed).toBe(false);
     expect(r.editedAt).toEqual({});
+  });
+});
+
+describe('deliberate scalar CLEAR is a manual edit (e9 ruling 2026-11-13)', () => {
+  it('USER save of empty string over a non-empty stored scalar is a clear', () => {
+    expect(isDeliberateScalarClear('user', '', 'subscription')).toBe(true);
+    expect(isDeliberateScalarClear('user', '   ', 'subscription')).toBe(true);
+  });
+  it('not a clear: blank over blank / nothing, null or absent input, AI saves, non-empty input, list or object values', () => {
+    expect(isDeliberateScalarClear('user', '', '')).toBe(false);
+    expect(isDeliberateScalarClear('user', '', null)).toBe(false);
+    expect(isDeliberateScalarClear('user', null, 'subscription')).toBe(false); // save keeps the stored value on null
+    expect(isDeliberateScalarClear('user', undefined, 'subscription')).toBe(false);
+    expect(isDeliberateScalarClear('ai_refined', '', 'subscription')).toBe(false);
+    expect(isDeliberateScalarClear('user', 'usage', 'subscription')).toBe(false);
+    expect(isDeliberateScalarClear('user', '', ['a'])).toBe(false);
+    expect(isDeliberateScalarClear('user', '', { a: 1 })).toBe(false);
+  });
+  it('a clear is stamped (content changed); re-saving the cleared value is not re-stamped', () => {
+    const r1 = computeEditStamps({ lockedKeysThisSave: ['pricing_model'], next: () => '', prev: () => 'subscription', prevEditedAt: null, nowIso: T1 });
+    expect(r1).toEqual({ editedAt: { pricing_model: T1 }, changed: true });
+    const r2 = computeEditStamps({ lockedKeysThisSave: ['pricing_model'], next: () => '', prev: () => '', prevEditedAt: { pricing_model: T1 }, nowIso: '2026-11-20T00:00:00.000Z' });
+    expect(r2.changed).toBe(false);
+  });
+  it('wiring: commercial + problem/transformation loops lock a clear; marketing-intelligence does NOT (AI merge can post blanks)', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../services', 'companyProfileServiceRest1Rest2Pulse.ts'), 'utf8');
+    const loop = (name: string) => { const i = src.indexOf('for (const key of ' + name + ')'); return src.slice(i, src.indexOf('\n    }', i)); };
+    expect(loop('COMMERCIAL_FIELD_NAMES')).toContain('isDeliberateScalarClear(source, val, existing?.[key])');
+    expect(loop('PROBLEM_TRANSFORMATION_FIELD_NAMES')).toContain('isDeliberateScalarClear(source, val,');
+    expect(loop('MARKETING_INTELLIGENCE_FIELD_NAMES')).not.toMatch(/isDeliberateScalarClear/);
   });
 });
 

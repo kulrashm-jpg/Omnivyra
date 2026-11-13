@@ -10,6 +10,10 @@
  *
  * `valuesDiffer` compares by CONTENT (stable JSON, empty == empty), so re-saving an unchanged list or object does
  * not re-stamp it. e1's D2 ("did the user actually delete something") reuses it.
+ *
+ * THE RULE (05, 2026-11-13): EMPTY-BUT-PRESENT is not ABSENT. A value the user saved as empty ('' or []) is an edit and
+ * is protected; only an absent value (not in the input / not stored) falls back to AI. Comparisons here must keep the
+ * two apart. Both clocks used for precedence (field_edited_at and guidance updated_at) must stay SERVER-authoritative.
  */
 
 /** Nested lock key for the Market Pulse solution domains a user can edit (refine writes the AI value otherwise). */
@@ -92,6 +96,20 @@ export function computeEditStamps(params: {
     if (valuesDiffer(params.next(key), params.prev(key))) { editedAt[key] = params.nowIso; changed = true; }
   }
   return { editedAt, changed };
+}
+
+/**
+ * A deliberate CLEAR of a scalar field (e9 ruling 2026-11-13): a USER save whose input carries the field as an EMPTY
+ * STRING ('' / whitespace) over a NON-EMPTY stored scalar. '' over '' (or over nothing) is not a clear and is not
+ * locked. null / undefined are NOT clears: buildSavePayload keeps the stored value for them (input.x ?? existing.x),
+ * so locking would stamp an edit that never happened. Lists are out of scope (a list clear uses its own rule).
+ * Callers pass only fields whose client form initialises from the stored profile (UI tab audit 2026-11-13).
+ */
+export function isDeliberateScalarClear(source: string, next: unknown, prev: unknown): boolean {
+  if (source !== 'user') return false;
+  if (typeof next !== 'string' || next.trim() !== '') return false;
+  if (Array.isArray(prev) || (prev !== null && typeof prev === 'object')) return false;
+  return !isEmpty(prev);
 }
 
 /**
