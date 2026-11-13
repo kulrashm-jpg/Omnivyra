@@ -1,5 +1,6 @@
 /** RecommendationsSectionsA — verbatim JSX slice of RecommendationsContent (babel-verified). */
 import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
@@ -14,7 +15,6 @@ import TrendCampaignsTab from '../components/recommendations/tabs/TrendCampaigns
 import NextStrategicDirection from '../components/campaigns/NextStrategicDirection';
 import { useRecommendationViewMode } from '../components/recommendations/hooks/useRecommendationViewMode';
 import ActiveLeadsTab from '../components/recommendations/tabs/ActiveLeadsTab';
-import MarketPulseTab from '../components/recommendations/tabs/MarketPulseTab';
 import RecommendationStatusWidget from '../components/recommendations/RecommendationStatusWidget';
 import StrategySignalsWidget from '../components/dashboard/StrategySignalsWidget';
 import {
@@ -153,21 +153,16 @@ export default function RecommendationsSectionsA({ f }: { f: ReturnType<typeof u
                 onOverrideChange={(v) => setEngineOverride('LEAD', v)}
               />
             )}
+            {/* Owner ruling (d), 2026-11-13: Market Pulse has ONE customer entry, the
+                Executive room at /market-pulse. The legacy V1 tab is retired; selecting
+                PULSE redirects there (useRecommendationsState). This is the fallback. */}
             {activeOpportunityTab === 'PULSE' && (
-              <MarketPulseTab
-                companyId={selectedCompanyId}
-                regions={
-                  opportunityRegions.trim()
-                    ? opportunityRegions.split(',').map((r) => r.trim()).filter(Boolean)
-                    : undefined
-                }
-                onPromote={handleOpportunityPromote}
-                onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
-                onSwitchTab={setActiveOpportunityTab}
-                overrideText={engineOverrides['PULSE'] ?? ''}
-                onOverrideChange={(v) => setEngineOverride('PULSE', v)}
-              />
+              <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-700">
+                Market Pulse has moved.{' '}
+                <Link href="/market-pulse" className="font-semibold text-indigo-600 underline">
+                  Open Market Pulse
+                </Link>
+              </div>
             )}
           </div>
           </div>

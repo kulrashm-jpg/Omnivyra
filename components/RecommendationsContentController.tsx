@@ -14,7 +14,6 @@ import TrendCampaignsTab from '../components/recommendations/tabs/TrendCampaigns
 import NextStrategicDirection from '../components/campaigns/NextStrategicDirection';
 import { useRecommendationViewMode } from '../components/recommendations/hooks/useRecommendationViewMode';
 import ActiveLeadsTab from '../components/recommendations/tabs/ActiveLeadsTab';
-import MarketPulseTab from '../components/recommendations/tabs/MarketPulseTab';
 import RecommendationStatusWidget from '../components/recommendations/RecommendationStatusWidget';
 import StrategySignalsWidget from '../components/dashboard/StrategySignalsWidget';
 import {

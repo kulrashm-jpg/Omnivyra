@@ -14,7 +14,6 @@ import TrendCampaignsTab from '../components/recommendations/tabs/TrendCampaigns
 import NextStrategicDirection from '../components/campaigns/NextStrategicDirection';
 import { useRecommendationViewMode } from '../components/recommendations/hooks/useRecommendationViewMode';
 import ActiveLeadsTab from '../components/recommendations/tabs/ActiveLeadsTab';
-import MarketPulseTab from '../components/recommendations/tabs/MarketPulseTab';
 import RecommendationStatusWidget from '../components/recommendations/RecommendationStatusWidget';
 import StrategySignalsWidget from '../components/dashboard/StrategySignalsWidget';
 import {
@@ -289,9 +288,15 @@ export function useRecommendationsState() {
 
   useEffect(() => {
     if (!router.isReady) return;
-    if (activeOpportunityTab !== 'LEAD' && activeOpportunityTab !== 'PULSE') return;
-    const intelTab = activeOpportunityTab === 'LEAD' ? 'active-leads' : 'market-pulse';
-    void router.replace(`/dashboard?tab=intelligence&intelTab=${intelTab}`);
+    // Owner ruling (d), 2026-11-13: Market Pulse's one customer entry is the Executive
+    // room. The V2 scan console (dashboard intelligence workspace) is admin-only now
+    // (MARKET_PULSE_ADMIN_REQUIRED), so members must not be sent there.
+    if (activeOpportunityTab === 'PULSE') {
+      void router.replace('/market-pulse');
+      return;
+    }
+    if (activeOpportunityTab !== 'LEAD') return;
+    void router.replace('/dashboard?tab=intelligence&intelTab=active-leads');
   }, [activeOpportunityTab, router]);
 
   useEffect(() => {
