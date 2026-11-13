@@ -50,7 +50,14 @@ export function storedList(existing: Partial<CompanyProfile> | null | undefined,
   return mergeStringArrays([], Array.isArray(list) ? (list as string[]) : splitToList(e[REPLACEABLE_LISTS[field]] as string | null));
 }
 
-/** Bulk-removal guard (05): more than 5 items, or more than half of the list (and more than one item). */
+/**
+ * Bulk-removal guard (05): more than 5 items, or more than half of the list (and more than one item).
+ * Deliberate choices (05 review): harm is the NUMBER of items lost, not the fraction - a single removal never
+ * prompts (removing a 1-item list's only item is routine and visible); "more than half" is strict, so exactly 2 of 4
+ * does not prompt (modest loss, modest proportion). Competitors are NOT a replaceable list: the server re-ranks and
+ * caps them and a guidance overlay owns pinned / rejected / user-added names - removal already works through the
+ * REJECT path (rejected names are never re-added), and a generic replace would fight that overlay.
+ */
 export const BULK_REMOVAL_ABSOLUTE = 5;
 export function isBulkRemoval(stored: number, removed: number): boolean {
   return removed > BULK_REMOVAL_ABSOLUTE || (removed > 1 && removed * 2 > stored);
