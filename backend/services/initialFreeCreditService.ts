@@ -182,7 +182,9 @@ export async function grantInitialFreeCredit(input: {
       incentive_balance:  0,
       lifetime_purchased: 0,
       lifetime_consumed:  0,
-      credit_rate_usd:    0.001,
+      // credit_rate_usd is deliberately NOT written: the column DEFAULT (0.007 since 20270217000047, owner pricing
+      // ruling 2026-11-13) is the single source of the rate. A hard-coded 0.001 here put every onboarded wallet at
+      // 10x the schema default (C80); D-RATE equalised the existing wallets.
     },
     { onConflict: 'organization_id', ignoreDuplicates: true },
   );
