@@ -117,6 +117,7 @@ describe('decision 1+2: matching and binding', () => {
     expect(r.body).toMatchObject({ code: 'INVITE_REQUIRED', joinRequested: true });
     expect(r.body.error).toMatch(/asked your admin/);
     expect(bindingWrites()).toEqual([]);
+    expect(mockDb.user_company_roles ?? []).toEqual([]); // parity with the pre-rename test: no role row at all
     expect(mockGrants).toEqual([]);
     expect(mockNotified).toEqual([expect.objectContaining({ companyId: VICTIM, companyName: 'Acme', prospectEmail: 'newbie@acme.com', emailDomain: 'acme.com', prospectUserId: USER })]);
   });
