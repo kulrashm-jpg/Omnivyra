@@ -44,7 +44,6 @@ export default function LoginPage() {
   const [resetSent,    setResetSent]    = useState(false);
   const [magicSent,    setMagicSent]    = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
-  const [noAccount,    setNoAccount]    = useState(false);
   const [resumeStatus, setResumeStatus] = useState<ResumeSignupStatus>({
     ready: false,
     hasPassword: false,
@@ -283,48 +282,26 @@ export default function LoginPage() {
     setLoading('magic');
     setError(null);
 
-    // Pre-check: account must exist. Prevents Supabase from silently creating
-    // a new (passwordless) user for a typo, and lets us surface a clear
-    // "no account" state instead of Supabase's generic success response.
+    // The server sends the link (only when a usable account exists) and
+    // answers identically either way (P2-D: no enumeration signal), so the
+    // UI shows a neutral "if an account exists" confirmation.
     try {
-      const check = await fetch('/api/auth/magic-link', {
+      const res = await fetch('/api/auth/magic-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: trimmed }),
       });
-      const checkJson = await check.json();
-      if (!check.ok) {
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
         setLoading(null);
-        if (checkJson.code === 'INVALID_CREDENTIALS') {
-          setNoAccount(true);
-        } else {
-          setError(checkJson.error ?? 'Unable to send link. Please try again.');
-        }
+        setError(res.status === 429
+          ? (json.error ?? 'Too many attempts. Please wait a few minutes and try again.')
+          : (json.error ?? 'Unable to send link. Please try again.'));
         return;
       }
     } catch {
       setLoading(null);
       setError('Network error. Please try again.');
-      return;
-    }
-
-    // Supabase sends the magic-link email itself.
-    const { error: otpError } = await getSupabaseBrowser().auth.signInWithOtp({
-      email: trimmed,
-      options: {
-        shouldCreateUser:  false,
-        emailRedirectTo:   `${origin}/auth/callback?mode=passwordless`,
-      },
-    });
-
-    if (otpError) {
-      setLoading(null);
-      const msg = otpError.message.toLowerCase();
-      if (msg.includes('rate') || (otpError as any).status === 429) {
-        setError('Too many attempts. Please wait a few minutes and try again.');
-      } else {
-        setError(otpError.message);
-      }
       return;
     }
 
@@ -384,7 +361,7 @@ export default function LoginPage() {
               <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-3xl">📬</div>
               <h2 className="text-2xl font-bold text-[#0B1F33]">Check your inbox</h2>
               <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">
-                We sent a magic link to <strong className="text-[#0B1F33]">{email}</strong>.
+                If an account exists for <strong className="text-[#0B1F33]">{email}</strong>, we&apos;ve sent a sign-in link.
                 Click it to sign in — no password needed.
               </p>
               <button onClick={() => { setMagicSent(false); setError(null); }}
@@ -498,7 +475,7 @@ export default function LoginPage() {
                 <div className="mb-4">
                   <label htmlFor="email" className="block text-sm font-medium text-[#0B1F33] mb-1.5">Work email</label>
                   <input id="email" type="email" autoComplete="email" autoFocus required
-                    value={email} onChange={e => { setEmail(e.target.value); setError(null); setNoAccount(false); }}
+                    value={email} onChange={e => { setEmail(e.target.value); setError(null); }}
                     placeholder="you@company.com"
                     className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]" />
                 </div>
@@ -544,17 +521,6 @@ export default function LoginPage() {
                     {loading === 'magic' ? <Spinner label="Sending…" color="blue" /> : 'Send me a magic link'}
                   </button>
                 </form>
-                {noAccount && (
-                  <div className="mt-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                    <span className="mt-0.5 text-amber-500">⚠</span>
-                    <p className="text-sm text-amber-800">
-                      No account found.{' '}
-                      <Link href="/create-account" className="font-semibold underline">
-                        Create a free account →
-                      </Link>
-                    </p>
-                  </div>
-                )}
                 <p className="mt-2 text-center text-xs text-[#6B7C93]">
                   No password? Sign in with a one-time link sent to your email.
                 </p>
@@ -572,7 +538,7 @@ export default function LoginPage() {
                     autoFocus
                     required
                     value={email}
-                    onChange={e => { setEmail(e.target.value); setError(null); setNoAccount(false); }}
+                    onChange={e => { setEmail(e.target.value); setError(null); }}
                     placeholder="you@company.com"
                     className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
                   />
