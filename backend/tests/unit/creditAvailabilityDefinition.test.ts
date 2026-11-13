@@ -40,7 +40,9 @@ it('DB: the generated 053 hold branch uses the SAME definition (balance only, no
 });
 
 /** A balance/availability expression that subtracts a reserved amount. */
-const DOUBLE_SUBTRACT = /(balance|avail|free|paid|incentive|Credits)\b[^;\n]*-\s*[A-Za-z_.]*[Rr]eserv/;
+// [\w.(]* lets the subtrahend be wrapped: 05 found `Number(w.free_balance ?? 0) - Number(w.reserved_free ?? 0)`, which the
+// first version missed because '(' stopped the match.
+const DOUBLE_SUBTRACT = /(balance|avail|free|paid|incentive|Credits)\b[^;\n]*-\s*[\w.(]*[Rr]eserv/;
 // Not availability, with the reason:
 const ALLOWED = new Map<string, string>([
   ['backend/services/creditReconciliation.ts', 'observed-minus-expected reserved DIFF, not availability'],
@@ -68,4 +70,5 @@ it('no TS source reintroduces "balance - reserved" (positive control: the allowl
 it('the scan WOULD catch the old formula (mutation)', () => {
   expect(DOUBLE_SUBTRACT.test('  const free      = Math.max(0, wallet.free_balance      - wallet.reserved_free);')).toBe(true);
   expect(DOUBLE_SUBTRACT.test('    Math.max(0, free - reservedFree) +')).toBe(true);
+  expect(DOUBLE_SUBTRACT.test('        Math.max(0, Number(w.free_balance ?? 0) - Number(w.reserved_free ?? 0)) +')).toBe(true);
 });
