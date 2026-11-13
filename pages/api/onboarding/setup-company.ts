@@ -528,7 +528,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     // an email-derived or user-typed fallback (owner ruling). No intent -> RESUME prompt, never an error.
     // See backend/services/signupBootstrapGate.ts (and its companies.id invariant).
     const bootstrap = await resolveBootstrapIntent(user.email);
-    if (!bootstrap.ok) {
+    if (bootstrap.ok === false) {
       logCompanyBootstrapRefused('setup-company', bootstrap.reason, user.id);
       void emitCompanyEvent('CompanyCreated', 'denied', bootstrap.reason);
       if (bootstrap.reason === 'INTENT_LOOKUP_FAILED') {

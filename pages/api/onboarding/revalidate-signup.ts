@@ -145,7 +145,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
     source:       'onboarding_revalidate',
     refreshExpiredPending: true,
   });
-  if (!minted.ok) {
+  if (minted.ok === false) {
     logger.error('onboarding_revalidate_signup_mint_failed', { ...logCtx, stage: minted.stage, message: minted.error });
     return res.status(500).json({ error: 'Could not complete signup validation. Please try again.' });
   }

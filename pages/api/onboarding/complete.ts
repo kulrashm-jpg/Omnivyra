@@ -249,7 +249,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // `https://<email domain>` / 'https://example.com' website and the gate-less creation are gone - this route
       // has no UI caller and was a direct path to a company + initial credits for a bypass-created identity.
       const bootstrap = await resolveBootstrapIntent(authEmail);
-      if (!bootstrap.ok) {
+      if (bootstrap.ok === false) {
         logCompanyBootstrapRefused('onboarding/complete', bootstrap.reason, userId);
         if (bootstrap.reason === 'INTENT_LOOKUP_FAILED') {
           return res.status(503).json({ error: 'We could not confirm your signup right now. Please try again in a moment.', code: 'INTENT_LOOKUP_FAILED' });

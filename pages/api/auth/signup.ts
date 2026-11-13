@@ -274,7 +274,7 @@ async function handler(
 
   // A failed refresh of an existing pending intent was never surfaced here;
   // only a failed INSERT fails the request (unchanged behaviour).
-  if (!minted.ok && minted.stage === 'insert') {
+  if (minted.ok === false && minted.stage === 'insert') {
     logger.error('auth_signup_intent_insert_failed', { email: normalizedEmail, message: minted.error, correlationId });
     await emitOutcome('SystemFailure', 'denied', 'INTENT_INSERT_FAILED');
     return res.status(500).json({ error: 'Failed to initiate signup' });
