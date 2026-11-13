@@ -59,6 +59,7 @@ Batches group screens that share a feature, so each one can be reviewed and chec
 - [ ] `/api/content/quick-platform-adapt`: `components/blog/blogsNewMain.tsx`, `components/content/PromotionWorkspace.tsx`, `components/MultiPlatformSchedulerController.tsx`
 - [ ] `/api/ai/content-suggestions`: `components/activity-workspace/AISuggestionPanel.tsx`
 - [ ] `/api/engagement/refine-suggestion`: `components/engagement/AISuggestionPanel.tsx`
+- [ ] `/api/engagement/suggestions` (**GET**, surface `engagement.suggestions`): `components/engagement/AISuggestionPanel.tsx` (:34). Billed on e1's fix/engagement-replies-billed-20261113, dark until the flip. The key goes on a GET.
 - [ ] `/api/blogs/[id]/repurpose`: `pages/company-blog/[slug].tsx`
   - **source=public now requires login and is charged to the caller's company** (owner ruling via e9; 55's fix/public-repurpose-rate-limit-20261113). The client must ALWAYS send `company_id` = the selected company, so multi-company users never get 400.
   - New responses on the public source, which the client must handle:
@@ -81,6 +82,7 @@ Batches group screens that share a feature, so each one can be reviewed and chec
 - `/api/creator-intelligence/campaign-variant-estimate` (`components/variant-experience/CampaignVariantBillingEstimate.tsx`). e1 confirmed at main 9cecd075f: read-only, no charging and no AI call; a pure calculation from the persisted variant_strategy.
 
 ## Billed routes with NO client caller (nothing to migrate; listed so the flip review sees them)
+- `/api/engagement/thread/bulk-ai-reply` (POST, surface `engagement.bulk-ai-reply`; e1's fix/engagement-replies-billed-20261113). No client caller at main 69dc5027f (`git grep bulk-ai` over components/hooks/lib/pages finds nothing; control: the same grep finds ConversationView's `thread/bulk-resolve`). Any future caller needs the gate + helper. The same key on a retry → 409 ALREADY_PROCESSED (nothing sent twice).
 - `/api/admin/blog/rewrite-hook`
 - `/api/campaigns/planner/suggest-update`
 - `/api/ai/claude-chat`: its only caller, `components/MultiAIChat.tsx`, was dead code and is deleted (UI 55400bd54)
