@@ -112,6 +112,7 @@ import {
 } from './schedulerService';
 import { runOpportunitySlotsScheduler } from '../services/opportunitySlotsScheduler';
 import { runAllCompanyAudits } from '../jobs/governanceAuditJob';
+import { runAnomalousAccessScanJob } from '../jobs/anomalousAccessScanJob';
 import { runAutoOptimizationForEligibleCampaigns } from '../jobs/autoOptimizationJob';
 import { runPerformanceIngestion } from '../jobs/performanceIngestionJob';
 import { runPerformanceAggregation } from '../jobs/performanceAggregationJob';
@@ -169,6 +170,8 @@ const LIFECYCLE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // W6-6: retention sweep
 const BUYER_INTENT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+// Anomalous-access detector (pre-launch, owner ruling): every 5 min over a 10-min window; cooldown dedupes overlap.
+const ANOMALOUS_ACCESS_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // CSA-002 — daily Customer Readiness snapshot (activates readiness history).
 const READINESS_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
@@ -328,6 +331,7 @@ async function shouldRunPublishCycle(): Promise<boolean> {
 
 let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
+let lastAnomalousAccessScanRun = 0;
 let lastAutoOptimizationRun = 0;
 let lastReadinessSnapshotRun = 0; // CSA-002 — daily readiness snapshot
 let lastHealthSnapshotRun = 0;    // CSA-003 — daily health snapshot
@@ -573,6 +577,7 @@ async function startCron(opts: { hostOwnsShutdown?: boolean } = {}) {
   if (Object.keys(saved).length > 0) {
     lastOpportunitySlotsRun             = saved.opportunitySlots            ?? 0;
     lastGovernanceAuditRun              = saved.governanceAudit             ?? 0;
+    lastAnomalousAccessScanRun          = saved.anomalousAccessScan         ?? 0;
     lastAutoOptimizationRun             = saved.autoOptimization            ?? 0;
     lastEngagementPollingEnqueue        = saved.engagementPolling           ?? 0;
     lastIntelligencePollingEnqueue      = saved.intelligencePolling         ?? 0;
@@ -1041,6 +1046,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
   const _snap = {
     opportunitySlots:             lastOpportunitySlotsRun,
     governanceAudit:              lastGovernanceAuditRun,
+    anomalousAccessScan:          lastAnomalousAccessScanRun,
     autoOptimization:             lastAutoOptimizationRun,
     engagementPolling:            lastEngagementPollingEnqueue,
     intelligencePolling:          lastIntelligencePollingEnqueue,
@@ -1114,6 +1120,17 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
       console.log('✅ Governance audit completed');
     } catch (error: unknown) {
       console.error('❌ Governance audit error:', formatCaughtError(error));
+    }
+  }
+
+  // Anomalous-access detector (owner ruling: working before launch). Reads audit_logs / capability_audit_log /
+  // super_admin_audit_logs; emits `anomalous_access` lines (Grafana via Loki) + a heartbeat. ALWAYS_RUN_JOBS member.
+  if (shouldRunCronJob("anomalousAccessScan", ANOMALOUS_ACCESS_SCAN_INTERVAL_MS, lastAnomalousAccessScanRun)) {
+    lastAnomalousAccessScanRun = Date.now();
+    try {
+      await runAnomalousAccessScanJob();
+    } catch (error: unknown) {
+      console.error('❌ Anomalous access scan error:', formatCaughtError(error));
     }
   }
 
@@ -1786,6 +1803,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
   const _after: Record<string, number> = {
     opportunitySlots:             lastOpportunitySlotsRun,
     governanceAudit:              lastGovernanceAuditRun,
+    anomalousAccessScan:          lastAnomalousAccessScanRun,
     autoOptimization:             lastAutoOptimizationRun,
     engagementPolling:            lastEngagementPollingEnqueue,
     intelligencePolling:          lastIntelligencePollingEnqueue,
@@ -1823,6 +1841,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
   void cronGuard.save({
     opportunitySlots:             lastOpportunitySlotsRun,
     governanceAudit:              lastGovernanceAuditRun,
+    anomalousAccessScan:          lastAnomalousAccessScanRun,
     autoOptimization:             lastAutoOptimizationRun,
     engagementPolling:            lastEngagementPollingEnqueue,
     intelligencePolling:          lastIntelligencePollingEnqueue,

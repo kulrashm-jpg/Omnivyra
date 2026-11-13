@@ -157,6 +157,9 @@ const ALWAYS_RUN_JOBS = new Set([
   'engagementSignalArchive',
   'confidenceCalibration',
   'governanceAudit',      // compliance — run even on inactive orgs
+  // Security monitoring (owner ruling: the anomalous-access detector works before launch). It watches for misuse,
+  // which does not wait for company activity - and the activity gate never opens (recordUserActivity has no callers).
+  'anomalousAccessScan',
   'performanceAggregation', // lightweight daily aggregate
   // Infrastructure recovery, NOT feature work. `staleExecutionSweep` is the
   // only mechanism that transitions a BOLT execution out of `running` when its

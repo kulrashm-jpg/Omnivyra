@@ -154,7 +154,10 @@ export async function getAuditLogs(
 
   // Apply optional filters
   if (options?.userId) {
-    query = query.eq('user_id', options.userId);
+    // Interpolated into a PostgREST or() filter - only a UUID may reach it (no filter injection via , or ( ).
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(options.userId)) return [];
+    // canonical writers record actor_user_id; logAuditEvent records user_id - match either
+    query = query.or(`actor_user_id.eq.${options.userId},user_id.eq.${options.userId}`);
   }
   if (options?.table) {
     query = query.eq('table_name', options.table);
@@ -162,22 +165,23 @@ export async function getAuditLogs(
   if (options?.operation) {
     query = query.eq('operation', options.operation);
   }
+  // created_at is set on EVERY row (canonical and logAuditEvent); `timestamp` only on logAuditEvent rows.
   if (options?.startDate) {
-    query = query.gte('timestamp', options.startDate.toISOString());
+    query = query.gte('created_at', options.startDate.toISOString());
   }
   if (options?.endDate) {
-    query = query.lte('timestamp', options.endDate.toISOString());
+    query = query.lte('created_at', options.endDate.toISOString());
   }
 
   // Default to last 30 days if no date range specified
   if (!options?.startDate) {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    query = query.gte('timestamp', thirtyDaysAgo.toISOString());
+    query = query.gte('created_at', thirtyDaysAgo.toISOString());
   }
 
   query = query
-    .order('timestamp', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(options?.limit ?? 100);
 
   const { data, error } = await query;
@@ -190,57 +194,11 @@ export async function getAuditLogs(
   return data || [];
 }
 
-/**
- * Detect suspicious access patterns
- * Returns flags for manual review
+/*
+ * detectAnomalousAccess was REMOVED (2026-11-13): it never had a caller and read the legacy columns the canonical
+ * writer never writes. The working detector is backend/services/security/anomalousAccessDetector.ts (scheduled by
+ * backend/jobs/anomalousAccessScanJob.ts).
  */
-export async function detectAnomalousAccess(
-  companyId: string,
-  lookbackMinutes: number = 60
-): Promise<{ flagged: boolean; reason?: string; details: Record<string, unknown> }> {
-  const now = new Date();
-  const since = new Date(now.getTime() - lookbackMinutes * 60 * 1000);
-
-  const logs = await getAuditLogs(companyId, {
-    startDate: since,
-    endDate: now,
-    limit: 1000,
-  });
-
-  const details: Record<string, unknown> = {
-    period: `${lookbackMinutes} minutes`,
-    totalOperations: logs.length,
-  };
-
-  // Flag: Multiple failed access attempts
-  const failures = logs.filter((l) => !l.success);
-  if (failures.length > 10) {
-    details.failureCount = failures.length;
-    return { flagged: true, reason: 'High failure rate', details };
-  }
-
-  // Flag: Unusual user activity (accessing many records in short time)
-  const userOps = new Map<string, number>();
-  logs.forEach((l) => {
-    userOps.set(l.user_id, (userOps.get(l.user_id) ?? 0) + 1);
-  });
-
-  const anomalousUser = Array.from(userOps.entries()).find(([_, count]) => count > 100);
-  if (anomalousUser) {
-    details.suspiciousUser = anomalousUser[0];
-    details.operationCount = anomalousUser[1];
-    return { flagged: true, reason: 'Unusually high operation count by single user', details };
-  }
-
-  // Flag: Bulk delete operations
-  const deletes = logs.filter((l) => l.operation === 'DELETE');
-  if (deletes.length > 5) {
-    details.deleteCount = deletes.length;
-    return { flagged: true, reason: 'Multiple delete operations detected', details };
-  }
-
-  return { flagged: false, details };
-}
 
 /**
  * Ensure audit logs table exists (one-time initialization)

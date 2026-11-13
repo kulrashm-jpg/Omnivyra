@@ -70,8 +70,9 @@ describe('readinessSnapshot is exempt from the inactive-company gate', () => {
     expect(blocked).toHaveLength(7);
   });
 
-  test('the always-run set is exactly the previous ten jobs plus readinessSnapshot', () => {
+  test('the always-run set is exactly the previous ten jobs plus readinessSnapshot and anomalousAccessScan', () => {
     expect([...ALWAYS_RUN_JOBS].sort()).toEqual([
+      'anomalousAccessScan', // security monitoring (owner ruling) - never activity-gated
       'confidenceCalibration', 'connectorTokenRefresh', 'conversationTriageWorker', 'engagementSignalArchive',
       'findDuePostsAndEnqueue', 'governanceAudit', 'intelligenceEventCleanup', 'leadThreadQueueCleanup',
       'performanceAggregation', 'readinessSnapshot', 'staleExecutionSweep',
