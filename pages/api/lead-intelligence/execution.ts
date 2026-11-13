@@ -5,6 +5,7 @@ import { dispatchGuarded, previewDispatch } from '../../../backend/services/exec
 import { addSuppression, releaseSuppression, isSuppressed, isSuppressionReason, SUPPRESSION_REASONS } from '../../../backend/services/execution/suppressionService';
 import { setControl, killSwitch, isExecutionEnabled } from '../../../backend/services/execution/executionControlService';
 import { recordApproval, revokeApproval } from '../../../backend/services/execution/executionApprovalService';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 import { recordExecutionAudit } from '../../../backend/services/execution/executionAuditService';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
@@ -20,6 +21,16 @@ import { normalizePermissionRole, Role } from '../../../backend/services/rbacSer
  * server-owned (ES-101): the client cannot assert it. Denials emit telemetry (ES-104).
  */
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+/**
+ * e9 BLOCKING (outreach write roles): the actions that CHANGE state. They pass the membership write-role gate
+ * (view-only means view only) BEFORE their capability check - defence in depth: `suppress` had NO gate at all (any
+ * member, a Viewer included, could add a do-not-contact), the others keep their capability (admin-only).
+ * `preview` (pure computation) and `check_suppression` (a read) stay open to every member.
+ */
+export const EXECUTION_WRITE_ACTIONS: ReadonlySet<string> = new Set([
+  'dispatch_dry_run', 'approve', 'revoke_approval', 'suppress', 'release', 'set_control', 'kill_switch',
+]);
 
 function requireCap(user: any, cap: ExecutionCapability): boolean {
   return hasExecutionCapability(resolveExecutionCapabilities(user), cap);
@@ -78,6 +89,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (req.method === 'POST') {
       const b = req.body || {};
+      if (EXECUTION_WRITE_ACTIONS.has(str(b.action) ?? '') && !(await enforceCampaignWriteRole({ req, res, companyId, userId: actor }))) return;
       switch (str(b.action)) {
         case 'preview': return res.status(200).json(previewDispatch({ subject: String(b.subject ?? ''), body: String(b.body ?? '') }, String(b.recipient ?? '')));
 
