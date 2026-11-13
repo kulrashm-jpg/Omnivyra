@@ -266,7 +266,11 @@ export async function processStripeWebhookEvent(
     organizationId: resolved.organizationId,
     payload: evt as unknown as Record<string, unknown>,
   });
-  if (recorded.duplicate) {
+  // e1 F1: short-circuit a redelivery ONLY when the first delivery finished ('processed'). A delivery that threw
+  // (failPurchase's PurchaseStateWriteError, a completePurchase DB error) left the event 'received' and answered 500;
+  // Stripe's retry must RE-RUN it, or the purchase is stranded (it used to answer 'duplicate' / 200 for good).
+  // Re-running is safe: failPurchase is guarded on status='pending', completePurchase is idempotent on its own key.
+  if (recorded.duplicate && recorded.processingStatus === 'processed') {
     return { status: 'duplicate', eventId: evt.id, eventType: evt.type };
   }
 

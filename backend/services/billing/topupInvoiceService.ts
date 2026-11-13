@@ -17,7 +17,7 @@ import { emitAnomaly } from './billingAuditEmitter';
  */
 export class TopupInvoiceError extends Error {
   constructor(
-    public readonly code: 'TOPUP_INVOICE_READ_FAILED' | 'TOPUP_INVOICE_LINE_FAILED' | 'TOPUP_INVOICE_MARK_PAID_FAILED' | 'TOPUP_INVOICE_OWNERSHIP_MISMATCH',
+    public readonly code: 'TOPUP_INVOICE_READ_FAILED' | 'TOPUP_INVOICE_INSERT_FAILED' | 'TOPUP_INVOICE_LINE_FAILED' | 'TOPUP_INVOICE_MARK_PAID_FAILED' | 'TOPUP_INVOICE_OWNERSHIP_MISMATCH',
     public readonly retryable: boolean,
     message: string,
   ) {
@@ -104,13 +104,19 @@ export async function generateTopupInvoice(purchaseId: string): Promise<TopupInv
 
   // Race: another request created it first → resume THAT one (same ownership guard).
   if (invErr || !inv) {
-    const { data: raced } = await supabase
+    const { data: raced, error: racedErr } = await supabase
       .from('invoices')
       .select('id, invoice_number, status, total_amount, currency, metadata')
       .eq('invoice_number', invoiceNumber)
       .maybeSingle();
+    // e1 F3: both results are READ - a failed insert followed by a failed / empty re-read is a typed, retryable
+    // failure (it used to return null silently: no invoice, no signal).
+    if (racedErr) {
+      throw new TopupInvoiceError('TOPUP_INVOICE_READ_FAILED', true, `invoice re-read after insert failed for ${invoiceNumber}: ${racedErr.message}`);
+    }
     if (raced) return resumeExisting(raced as ExistingInvoice, p, invoiceNumber, amount, currency);
-    return null;
+    throw new TopupInvoiceError('TOPUP_INVOICE_INSERT_FAILED', true,
+      `invoice insert failed for ${invoiceNumber}: ${invErr?.message ?? 'no row returned'}`);
   }
   const invoiceId = (inv as any).id as string;
   await ensureLineAndMarkPaid(invoiceId, p, amount, currency);
@@ -146,6 +152,13 @@ async function resumeExisting(
       `invoice ${invoiceNumber} exists for purchase ${String(md.purchase_id ?? 'unknown')} (${String(existing.total_amount)} ${String(existing.currency)}), not ${p.id} (${amount} ${currency})`);
   }
   if (existing.status === 'paid') return { invoiceId: existing.id, invoiceNumber, created: false };
+  // e1 F2: ONLY a draft is resumable. 'voided' / 'refunded' / 'past_due' must never be rewritten to 'paid', and an
+  // 'issued' invoice is line-frozen (ili_freeze_on_issued) - resuming it would loop as "retryable" forever. Any
+  // other status is returned untouched, and said out loud.
+  if (existing.status !== 'draft') {
+    logger.warn('topup_invoice_not_resumable', { purchaseId: p.id, invoiceId: existing.id, invoiceNumber, status: existing.status });
+    return { invoiceId: existing.id, invoiceNumber, created: false };
+  }
   await ensureLineAndMarkPaid(existing.id, p, amount, currency);
   return { invoiceId: existing.id, invoiceNumber, created: false };
 }
@@ -183,6 +196,7 @@ async function ensureLineAndMarkPaid(invoiceId: string, p: PurchaseRow, amount: 
   const { data: paid, error: paidErr } = await supabase.from('invoices')
     .update({ status: 'paid', issued_at: now, paid_at: now, pdf_url: `/api/billing/invoices/${invoiceId}/pdf`, updated_at: now })
     .eq('id', invoiceId)
+    .eq('status', 'draft') // e1 F2: only a draft is ever marked paid (a status change since the read matches 0 rows)
     .select('id');
   if (paidErr || !Array.isArray(paid) || paid.length !== 1) {
     throw new TopupInvoiceError('TOPUP_INVOICE_MARK_PAID_FAILED', true,

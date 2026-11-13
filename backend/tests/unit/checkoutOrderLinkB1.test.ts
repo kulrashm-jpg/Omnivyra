@@ -9,9 +9,9 @@ export {};
 
 type Row = Record<string, unknown>;
 const mockState: {
-  purchases: Row[]; failUpdate: { message: string } | null; updateZeroRows: boolean; failMark: { message: string } | null;
+  purchases: Row[]; failUpdate: { message: string } | null; updateZeroRows: boolean; failMark: { message: string } | null; markZeroRows: boolean;
   orderOk: boolean; updates: Row[];
-} = { purchases: [], failUpdate: null, updateZeroRows: false, failMark: null, orderOk: true, updates: [] };
+} = { purchases: [], failUpdate: null, updateZeroRows: false, failMark: null, markZeroRows: false, orderOk: true, updates: [] };
 
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../middleware/withOrgAccess', () => ({
@@ -50,9 +50,15 @@ jest.mock('../../db/supabaseClient', () => ({
       const origSelect = b.select;
       b.select = (...a: unknown[]) => {
         if (!patch) return origSelect(...a);
-        // the link update: .update(...).eq(...).select('id')
+        // an update read with .select('id'): the link write, or (e1 F5) the mark-failed write
         return Promise.resolve((() => {
           mockState.updates.push({ ...patch });
+          if ((patch as Row).status === 'failed') {
+            if (mockState.failMark) return { data: null, error: mockState.failMark };
+            if (mockState.markZeroRows) return { data: [], error: null };
+            Object.assign(mockState.purchases[0] ?? {}, patch);
+            return { data: [{ id: 'pur-1' }], error: null };
+          }
           if (mockState.failUpdate) return { data: null, error: mockState.failUpdate };
           if (mockState.updateZeroRows) return { data: [], error: null };
           Object.assign(mockState.purchases[0], patch);
@@ -78,7 +84,7 @@ function call() {
 const errorEvents = () => (logger.error as jest.Mock).mock.calls.map((c: unknown[]) => c[0]);
 
 beforeEach(() => {
-  mockState.purchases = []; mockState.failUpdate = null; mockState.updateZeroRows = false; mockState.failMark = null;
+  mockState.purchases = []; mockState.failUpdate = null; mockState.updateZeroRows = false; mockState.failMark = null; mockState.markZeroRows = false;
   mockState.orderOk = true; mockState.updates = [];
   (logger.error as jest.Mock).mockClear();
 });
@@ -115,4 +121,20 @@ it('order creation fails AND the mark-failed write fails -> still 502, and the u
   const res = await call();
   expect(res.statusCode).toBe(502);
   expect(errorEvents()).toContain('checkout_purchase_mark_failed_unrecorded');
+});
+
+it('e1 F5: order creation fails and the mark-failed write matches 0 rows -> logged as unrecorded (not silent)', async () => {
+  mockState.orderOk = false;
+  mockState.markZeroRows = true;
+  const res = await call();
+  expect(res.statusCode).toBe(502);
+  expect((logger.error as jest.Mock).mock.calls.find((c: unknown[]) => c[0] === 'checkout_purchase_mark_failed_unrecorded')[1]).toMatchObject({ message: 'matched 0 rows' });
+});
+
+it('e1 F5 CONTROL: order creation fails and the mark-failed write lands -> no unrecorded log', async () => {
+  mockState.orderOk = false;
+  const res = await call();
+  expect(res.statusCode).toBe(502);
+  expect(mockState.purchases[0].status).toBe('failed');
+  expect(errorEvents()).not.toContain('checkout_purchase_mark_failed_unrecorded');
 });

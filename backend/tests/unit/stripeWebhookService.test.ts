@@ -51,6 +51,8 @@ interface MockState {
 function makeDeps(opts: {
   purchaseLookup?: (id: string) => { id: string; organization_id: string; status: string; fulfillment_status: string | null } | null;
   duplicateOn?: Set<string>;
+  duplicateStatus?: string | null;
+  completeThrows?: boolean;
   recordTransactionFails?: boolean;
 }): { deps: StripeWebhookDeps; state: MockState } {
   const state: MockState = {
@@ -61,7 +63,7 @@ function makeDeps(opts: {
   const deps: StripeWebhookDeps = {
     recordEvent: async (input) => {
       if (duplicates.has(input.providerEventId)) {
-        return { id: `existing_${input.providerEventId}`, duplicate: true, processingStatus: 'processed' };
+        return { id: `existing_${input.providerEventId}`, duplicate: true, processingStatus: opts.duplicateStatus === undefined ? 'processed' : opts.duplicateStatus };
       }
       const id = `evt_row_${state.recordedEvents.length + 1}`;
       state.recordedEvents.push({
@@ -75,6 +77,7 @@ function makeDeps(opts: {
     },
     findPurchaseByProviderEventId: async (id) => (opts.purchaseLookup ? opts.purchaseLookup(id) : null),
     completePurchase: async (purchaseId, referenceId) => {
+      if (opts.completeThrows) throw new Error('ledger unavailable');
       state.completedPurchases.push({ purchaseId, referenceId });
       return { success: true, purchaseId, creditsGranted: 500 };
     },
@@ -367,5 +370,39 @@ describe('processStripeWebhookEvent', () => {
     const r = await processStripeWebhookEvent({} as StripeEventPayload, deps);
     expect(r.status).toBe('failed');
     expect(state.recordedEvents).toHaveLength(0);
+  });
+});
+
+// ── e1 F1: a redelivery is short-circuited ONLY when the first delivery finished ───────────────
+describe('e1 F1: duplicate deliveries re-run unless the event is already processed', () => {
+  const PENDING = () => ({ id: 'cp-1', organization_id: 'org-A', status: 'pending', fulfillment_status: 'pending' });
+  const failEvt = () => makeEvent({ type: 'payment_intent.payment_failed', id: 'evt_f1', data: { object: { id: 'pi_1', amount: 10000, currency: 'usd' } } });
+  const paidEvt = () => makeEvent({ type: 'charge.succeeded', id: 'evt_p1', data: { object: { id: 'ch_p1', amount: 10000, currency: 'usd' } } });
+
+  test.each(['received', 'failed', null])('a duplicate fail_purchase event with status %p RE-RUNS failPurchase and is marked processed', async (status) => {
+    const { deps, state } = makeDeps({ purchaseLookup: PENDING, duplicateOn: new Set(['evt_f1']), duplicateStatus: status });
+    const r = await processStripeWebhookEvent(failEvt(), deps);
+    expect(r.status).toBe('processed');
+    expect(state.failedPurchases).toEqual([{ purchaseId: 'cp-1', referenceId: 'evt_f1' }]);
+    expect(state.marked).toEqual([{ id: 'existing_evt_f1', status: 'processed', reason: undefined }]);
+  });
+
+  test('CONTROL: a duplicate of a PROCESSED event is short-circuited - failPurchase not called', async () => {
+    const { deps, state } = makeDeps({ purchaseLookup: PENDING, duplicateOn: new Set(['evt_f1']), duplicateStatus: 'processed' });
+    const r = await processStripeWebhookEvent(failEvt(), deps);
+    expect(r.status).toBe('duplicate');
+    expect(state.failedPurchases).toHaveLength(0);
+    expect(state.marked).toHaveLength(0);
+  });
+
+  test('pre-existing complete_purchase strand: delivery 1 throws (event left received), the retry RE-RUNS completePurchase', async () => {
+    const first = makeDeps({ purchaseLookup: PENDING, completeThrows: true });
+    await expect(processStripeWebhookEvent(paidEvt(), first.deps)).rejects.toThrow('ledger unavailable');
+    expect(first.state.marked).toHaveLength(0); // never marked processed -> the row stays 'received'
+    const retry = makeDeps({ purchaseLookup: PENDING, duplicateOn: new Set(['evt_p1']), duplicateStatus: 'received' });
+    const r = await processStripeWebhookEvent(paidEvt(), retry.deps);
+    expect(r.status).toBe('processed');
+    expect(retry.state.completedPurchases).toEqual([{ purchaseId: 'cp-1', referenceId: 'evt_p1' }]);
+    expect(retry.state.marked).toEqual([{ id: 'existing_evt_p1', status: 'processed', reason: undefined }]);
   });
 });

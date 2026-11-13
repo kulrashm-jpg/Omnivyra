@@ -16,6 +16,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 import { getRequestContext } from './requestContext';
 import { logger } from './logger';
+import { recordMonetizationOperationalEvent } from './monetizationOpsService';
 
 /**
  * A purchase state write that did not happen (B6, financial-writes contract; e1's typed-error rule). supabase-js
@@ -204,6 +205,18 @@ export async function completePurchase(
       // B6: the grant failed AND the failure was not recorded - the purchase would look fine with no credits and no
       // retry would know to look at it. Never silent.
       logger.error('purchase_fulfillment_failure_unrecorded', { purchaseId, creditError: creditErr.message, message: markErr.message });
+      // e1 F5: a money-integrity event (paid, no credits, no fulfillment trace) - an alert-ready CRITICAL operational
+      // event (the same channel as B2), not just a log line. Never breaks the return path.
+      try {
+        await recordMonetizationOperationalEvent({
+          eventName: 'monetization.purchase_fulfillment_failure_unrecorded',
+          severity: 'CRITICAL',
+          organizationId: purchaseRow.organization_id,
+          purchaseId,
+          alertKey: 'purchase_fulfillment_failure_unrecorded',
+          metadata: { credit_error: creditErr.message, mark_error: markErr.message },
+        });
+      } catch { /* the logger.error above already recorded it */ }
     }
     return { success: false, reason: 'error', detail: creditErr.message };
   }

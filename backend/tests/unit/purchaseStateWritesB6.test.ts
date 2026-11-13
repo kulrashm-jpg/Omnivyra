@@ -12,6 +12,7 @@ const mockDb: { purchase: Row; failUpdate: Record<string, { message: string } | 
 };
 
 jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
+jest.mock('../../services/monetizationOpsService', () => ({ recordMonetizationOperationalEvent: jest.fn(async () => undefined) }));
 jest.mock('../../services/creditExecutionService', () => ({
   createCredit: jest.fn(async () => { throw new Error('ledger unavailable'); }),
   makeIdempotencyKey: (...p: string[]) => p.join(':'),
@@ -48,9 +49,10 @@ jest.mock('../../db/writeOwner', () => ({
 
 import { failPurchase, completePurchase, PurchaseStateWriteError } from '../../services/purchaseService';
 import { logger } from '../../services/logger';
+import { recordMonetizationOperationalEvent } from '../../services/monetizationOpsService';
 
 const PENDING = { id: 'pur-1', organization_id: 'org-1', credits: 100, status: 'pending', amount_paid: 5, currency: 'USD', fulfillment_status: 'pending' };
-beforeEach(() => { mockDb.purchase = { ...PENDING }; mockDb.failUpdate = {}; mockDb.zeroRows = false; mockDb.updates = []; (logger.error as jest.Mock).mockClear(); });
+beforeEach(() => { mockDb.purchase = { ...PENDING }; mockDb.failUpdate = {}; mockDb.zeroRows = false; mockDb.updates = []; (logger.error as jest.Mock).mockClear(); (recordMonetizationOperationalEvent as jest.Mock).mockClear(); });
 
 describe('failPurchase', () => {
   it('CONTROL: a recorded failure resolves and the purchase is failed', async () => {
@@ -75,12 +77,18 @@ describe('completePurchase - a failed grant whose failure is not recorded', () =
     const r = await completePurchase('pur-1');
     expect(r).toMatchObject({ success: false, reason: 'error' });
     expect((logger.error as jest.Mock).mock.calls.map((c: any[]) => c[0])).not.toContain('purchase_fulfillment_failure_unrecorded');
+    expect(recordMonetizationOperationalEvent).not.toHaveBeenCalled();
   });
   it('grant fails AND the fulfillment_status write fails -> logged (never silent)', async () => {
     mockDb.failUpdate.mark = { message: 'timeout' };
     const r = await completePurchase('pur-1');
     expect(r).toMatchObject({ success: false, reason: 'error' });
     expect(logger.error).toHaveBeenCalledWith('purchase_fulfillment_failure_unrecorded', expect.objectContaining({ purchaseId: 'pur-1', creditError: 'ledger unavailable', message: 'timeout' }));
+    // e1 F5: and an alert-ready CRITICAL operational event (money integrity: paid, no credits, no trace)
+    expect(recordMonetizationOperationalEvent).toHaveBeenCalledWith(expect.objectContaining({
+      eventName: 'monetization.purchase_fulfillment_failure_unrecorded', severity: 'CRITICAL', purchaseId: 'pur-1',
+      organizationId: 'org-1', alertKey: 'purchase_fulfillment_failure_unrecorded',
+    }));
   });
 });
 

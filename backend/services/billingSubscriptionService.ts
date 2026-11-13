@@ -189,6 +189,19 @@ export async function applyStripeSubscriptionEvent(
 }
 
 /**
+ * e1 F4 (typed-refusal rule): the expire write did not land. Retryable - the next cron pass selects the same
+ * past-grace rows again (the read is by status + date, not by a cursor), so nothing is lost by retrying.
+ */
+export class SubscriptionExpiryWriteError extends Error {
+  readonly code = 'SUBSCRIPTION_EXPIRE_FAILED' as const;
+  readonly retryable = true as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'SubscriptionExpiryWriteError';
+  }
+}
+
+/**
  * Expiry / renewal sweep: any active/trialing/past_due subscription whose period (+grace) has
  * passed without a renewal event advancing it transitions to EXPIRED. Renewal itself is
  * event-driven (a customer.subscription.updated upsert advances the period); this sweep handles
@@ -216,7 +229,7 @@ export async function markExpiredSubscriptions(deps: BillingSubDeps, graceDays =
     .in('id', ids)
     .select('id');
   if (updErr) {
-    throw new Error(`markExpiredSubscriptions: expire update failed for ${ids.length} subscription(s): ${updErr.message}`);
+    throw new SubscriptionExpiryWriteError(`markExpiredSubscriptions: expire update failed for ${ids.length} subscription(s): ${updErr.message}`);
   }
   const expiredIds: string[] = Array.isArray(updated) ? (updated as Array<{ id: string }>).map((r) => r.id) : [];
   return { expired: expiredIds.length, ids: expiredIds };

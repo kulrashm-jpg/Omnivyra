@@ -129,6 +129,8 @@ describe('markExpiredSubscriptions', () => {
     const captured = { upserts: [] as any[], updates: [] as any[] };
     const db = dbStub({ selectRows: [{ id: 'a' }, { id: 'b' }], updateError: { message: 'connection reset' } }, captured);
     await expect(markExpiredSubscriptions({ db: db as any, now: () => NOW })).rejects.toThrow(/expire update failed for 2 subscription\(s\): connection reset/);
+    // e1 F4: typed refusal { code, retryable }
+    await expect(markExpiredSubscriptions({ db: db as any, now: () => NOW })).rejects.toMatchObject({ name: 'SubscriptionExpiryWriteError', code: 'SUBSCRIPTION_EXPIRE_FAILED', retryable: true });
   });
   it('B5: expired = the rows ACTUALLY updated, not the rows selected', async () => {
     const captured = { upserts: [] as any[], updates: [] as any[] };

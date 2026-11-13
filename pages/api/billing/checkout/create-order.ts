@@ -97,8 +97,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!outcome.order || !outcome.provider) {
     // supabase-js returns write errors, it does not throw: read the result (financial-writes contract).
-    const { error: markErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
-    if (markErr) logger.error('checkout_purchase_mark_failed_unrecorded', { organizationId, purchaseId, message: markErr.message });
+    // e1 F5: read the ROWS too - a 0-row match is as unrecorded as an error.
+    const { data: markRows, error: markErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId).select('id');
+    if (markErr || !Array.isArray(markRows) || markRows.length !== 1) {
+      logger.error('checkout_purchase_mark_failed_unrecorded', { organizationId, purchaseId, message: markErr?.message ?? `matched ${Array.isArray(markRows) ? markRows.length : 'no'} rows` });
+    }
     logger.warn('payment_order_creation_failed', {
       organizationId, purchaseId, providerMode,
       attempts: outcome.attempts.map((a) => ({ provider: a.provider, ok: a.ok })),
@@ -118,8 +121,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       organizationId, purchaseId, provider: outcome.provider, providerOrderId: outcome.order.providerOrderId,
       message: linkErr?.message ?? `matched ${Array.isArray(linked) ? linked.length : 'no'} rows`,
     });
-    const { error: markErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
-    if (markErr) logger.error('checkout_purchase_mark_failed_unrecorded', { organizationId, purchaseId, message: markErr.message });
+    // e1 F5: read the ROWS too - a 0-row match is as unrecorded as an error.
+    const { data: markRows, error: markErr } = await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId).select('id');
+    if (markErr || !Array.isArray(markRows) || markRows.length !== 1) {
+      logger.error('checkout_purchase_mark_failed_unrecorded', { organizationId, purchaseId, message: markErr?.message ?? `matched ${Array.isArray(markRows) ? markRows.length : 'no'} rows` });
+    }
     return res.status(503).json({ ok: false, error: 'order_link_failed' });
   }
 
