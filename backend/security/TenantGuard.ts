@@ -634,10 +634,10 @@ export async function requireCampaignTenantAccess(
     if (!granted) return null;
     // Campaign WRITE role guard (2026-11-13): membership is not authority to mutate a campaign - view-only roles
     // are refused on POST/PUT/PATCH/DELETE (decided on the membership role as stored; super admins bypass).
-    const { campaignWriteDecision, ROLE_FORBIDDEN_BODY } = await import('../services/campaignWriteRole');
+    const { campaignWriteDecision, asRawMembershipRole, ROLE_FORBIDDEN_BODY } = await import('../services/campaignWriteRole');
     const decision = campaignWriteDecision({
       method: req.method,
-      rawRole: granted.role,
+      rawRole: asRawMembershipRole(granted.role), // TenantGuard's granted.role is the stored membership role
       bypass: granted.bypass || granted.isPlatformSuperAdmin,
       engagerException: options?.engagerCampaignWriteException ?? null,
     });

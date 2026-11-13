@@ -25,6 +25,11 @@ export const normalizePermissionRole = (role: string) => {
   return role;
 };
 
+/**
+ * NOTE (2026-11-13): normalizeRole folds VIEWER and CONTENT_ENGAGER into VIEW_ONLY. A normalized role must NEVER
+ * drive a campaign WRITE decision (the Engager exception depends on telling them apart) - use the stored role via
+ * campaignWriteRole.RawMembershipRole / campaignWriteDecision.
+ */
 export const normalizeRole = (value?: string | null): Role | null => {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   if (!trimmed) return null;

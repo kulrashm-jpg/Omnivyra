@@ -43,6 +43,7 @@ import {
 import {
   generateWorkspaceVariants, recordContentWriterRuntime, compareVariantParity,
 } from '../../../backend/services/contentWriter/contentWriterCapability';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 /**
  * P2 — load the campaign's own planner_state (the canonical server-side
@@ -139,6 +140,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await enforceCompanyAccess({ req, res, companyId: companyId.trim(), requireCampaignId: false });
     if (!access) return;
+    // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+    if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId.trim()), userId: String(access.userId) }))) return;
 
     // Credit check — 1 content_basic per platform requested
     const platformCount = (platforms as string[]).length;

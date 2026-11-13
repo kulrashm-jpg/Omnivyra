@@ -16,6 +16,18 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ownedDbTable } from '../db/writeOwner';
 import { normalizeRole, Role } from './rbacPrimitives';
+import { logger } from './logger';
+
+/**
+ * A membership role EXACTLY AS STORED (05 review): a distinct type so a NORMALIZED role can never drive a write
+ * decision - VIEWER and CONTENT_ENGAGER collapse to VIEW_ONLY under normalizeRole, which would erase the Engager
+ * exception (or, the other way round, a "tidy" normalize-once refactor would silently change who may write).
+ */
+export type RawMembershipRole = string & { readonly __rawMembershipRole: unique symbol };
+/** Brand a value read straight from a membership row (user_company_roles.role / TenantGuard's granted.role). */
+export function asRawMembershipRole(value: unknown): RawMembershipRole | null {
+  return typeof value === 'string' && value.trim() !== '' ? (value as RawMembershipRole) : null;
+}
 
 export const CAMPAIGN_WRITE_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -31,10 +43,10 @@ export function isCampaignWriteMethod(method: string | undefined | null): boolea
   return CAMPAIGN_WRITE_METHODS.has(String(method ?? '').toUpperCase());
 }
 
-/** Pure decision. `rawRole` = the membership row's role as stored (not normalized). */
+/** Pure decision. `rawRole` = the membership row's role as stored (never a normalized role - see RawMembershipRole). */
 export function campaignWriteDecision(input: {
   method: string | undefined | null;
-  rawRole: string | null | undefined;
+  rawRole: RawMembershipRole | null | undefined;
   bypass: boolean;
   engagerException?: EngagerCampaignWriteException | null;
 }): 'allow' | 'forbid' {
@@ -48,19 +60,26 @@ export function campaignWriteDecision(input: {
   return 'forbid';
 }
 
-/** The caller's ACTIVE membership role for the company, exactly as stored. null = none / unreadable. */
-export async function getActiveRawCompanyRole(userId: string, companyId: string): Promise<string | null> {
-  // Any read failure -> null: the caller treats it as view-only (reads keep working, WRITES fail closed).
+/**
+ * The caller's ACTIVE membership role for the company, exactly as stored. null = no active row OR unreadable.
+ * A read FAILURE is logged distinctly ('campaign_write_role_lookup_failed', 05 review) so an infrastructure blip that
+ * fails writes closed is never mistaken for a genuine view-only member.
+ */
+export async function getActiveRawCompanyRole(userId: string, companyId: string): Promise<RawMembershipRole | null> {
   try {
     const { data, error } = await ownedDbTable('user_company_roles')
       .select('role')
       .eq('user_id', userId)
       .eq('company_id', companyId)
       .eq('status', 'active');
-    if (error || !Array.isArray(data) || data.length === 0) return null;
-    const role = (data[0] as { role?: unknown }).role;
-    return typeof role === 'string' ? role : null;
-  } catch {
+    if (error) {
+      logger.warn('campaign_write_role_lookup_failed', { userId, companyId, reason: 'query_error', message: error.message });
+      return null;
+    }
+    if (!Array.isArray(data) || data.length === 0) return null;
+    return asRawMembershipRole((data[0] as { role?: unknown }).role);
+  } catch (err) {
+    logger.warn('campaign_write_role_lookup_failed', { userId, companyId, reason: 'exception', message: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }

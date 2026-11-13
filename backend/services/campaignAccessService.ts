@@ -20,7 +20,9 @@ import { normalizeRole } from './rbacPrimitives';
 import {
   campaignWriteDecision,
   getActiveRawCompanyRole,
+  asRawMembershipRole,
   ROLE_FORBIDDEN_BODY,
+  type RawMembershipRole,
   type EngagerCampaignWriteException,
 } from './campaignWriteRole';
 
@@ -152,7 +154,7 @@ export async function requireCampaignAccess(
 
   let role: (typeof Role)[keyof typeof Role] | null = null;
   // The caller's membership role AS STORED (Viewer vs Engager differ only here) - decides writes below.
-  let rawRole: string | null = null;
+  let rawRole: RawMembershipRole | null = null;
   let fastPath = false;
   if (hasEnvAccess) {
     // SEC-91 W2-A (STEP 3AH-91, W2A-5) — organization state. The fast path is
@@ -203,7 +205,7 @@ export async function requireCampaignAccess(
     // a member.
     const roleResult = await getUserCompanyRole(req, companyId);
     role = roleResult.role;
-    rawRole = role === Role.SUPER_ADMIN ? Role.SUPER_ADMIN : await getActiveRawCompanyRole(userId, companyId);
+    rawRole = role === Role.SUPER_ADMIN ? asRawMembershipRole(Role.SUPER_ADMIN) : await getActiveRawCompanyRole(userId, companyId);
     if (!role) {
       // SEC-91A (A6) — 403 for "exists, not yours" vs 404 for "no owner" is
       // kept deliberately: it is the platform-wide TenantGuard vocabulary
@@ -269,7 +271,8 @@ export async function requireCampaignAccess(
     const bypass = isContentArchitect || role === Role.SUPER_ADMIN;
     let decision = campaignWriteDecision({
       method: req.method,
-      rawRole: rawRole ?? role,
+      // The STORED role only - never fall back to the normalized `role` (it collapses Viewer and Engager).
+      rawRole,
       bypass,
       engagerException: options?.engagerException ?? null,
     });

@@ -44,6 +44,7 @@ import {
   type ExperimentLifecycleState,
 } from '../../../backend/services/creator/variantExperimentTracker';
 import { resolveVariant } from '../../../backend/services/creator/variantRegistry';
+import { enforceCampaignWriteRole } from '../../../backend/services/campaignWriteRole';
 
 const VALID_STATES: ReadonlyArray<ExperimentLifecycleState> = [
   'created', 'generated', 'published', 'engaged', 'completed',
@@ -100,6 +101,8 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   }
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const action = String(body.action || '').trim();
   switch (action) {

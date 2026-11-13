@@ -26,7 +26,7 @@ jest.mock('../../services/CampaignPrePlanningService', () => ({ runPrePlanning: 
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const H = require('../helpers/routeAuthHarness');
-const { campaignWriteDecision } = require('../../services/campaignWriteRole');
+const { campaignWriteDecision, asRawMembershipRole } = require('../../services/campaignWriteRole');
 const { requireCampaignAccess } = require('../../services/campaignAccessService');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
@@ -52,7 +52,7 @@ beforeEach(() => {
 
 describe('campaignWriteDecision (pure)', () => {
   const d = (method: string, rawRole: string | null, engagerException: string | null = null, bypass = false) =>
-    campaignWriteDecision({ method, rawRole, bypass, engagerException });
+    campaignWriteDecision({ method, rawRole: asRawMembershipRole(rawRole), bypass, engagerException });
   it('reads are never refused', () => {
     for (const r of ['VIEWER', 'VIEW_ONLY', 'CONTENT_ENGAGER', null]) expect(d('GET', r)).toBe('allow');
   });
@@ -158,17 +158,29 @@ describe('inventory: no campaign write route without a role gate', () => {
   const API = path.resolve(__dirname, '../../../pages/api');
   const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true })
     .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []));
-  const ROLE_GATES = /requireCampaignAccess\(|requireCampaignTenantAccess\(|enforceCampaignWriteRole\(|enforceRole\(|hasPermission\(|withRBAC\(handler, \[|isSuperAdmin\(|isPlatformSuperAdmin\(/;
+  const ROLE_GATES = /requireCampaignAccess\(|requireCampaignTenantAccess\(|enforceCampaignWriteRole\(|enforceRole\(|hasPermission\(|withRBAC\(handler, \[|isSuperAdmin\(|isPlatformSuperAdmin\(|enforceContentWriteRole\(/;
   const MEMBERSHIP_ONLY = /enforceCompanyAccess\(|requireTenantAccess\(|requireCompanyAccess\(|requireCompanyContext\(/;
   const WRITES = /\b(POST|PUT|PATCH|DELETE)\b/;
-  // Campaign-scoped areas named by the audit. A file here that answers a write method behind a membership-only
-  // gate must ALSO reach a role gate - a new route cannot regress silently.
-  const AREAS = ['campaigns', 'activity-workspace', 'bolt', 'scheduler', 'schedule', 'team', 'campaign', 'voice'];
-  const files = AREAS.flatMap((a) => (fs.existsSync(path.join(API, a)) ? walk(path.join(API, a)) : []));
+  // Scoped by the GATE, not by directory (05 review): EVERY route in pages/api that answers a write method behind a
+  // membership-only gate AND touches campaign data (a campaign table, campaignId / campaign_id) must reach a role
+  // gate - a campaign write moved or added anywhere cannot regress silently.
+  const CAMPAIGN_TOUCH = /\.from\(\s*['"][a-z_]*campaign[a-z_]*['"]|ownedDbTable\(\s*['"][a-z_]*campaign[a-z_]*['"]|\bcampaignId\b|\bcampaign_id\b/;
+  const files = walk(API).filter((f) => CAMPAIGN_TOUCH.test(fs.readFileSync(f, 'utf8')));
   it('the scan sees the routes it is meant to (positive control)', () => {
     expect(files.length).toBeGreaterThan(60);
     expect(files.some((f) => f.endsWith(path.join('campaigns', '[id]', 'release.ts')))).toBe(true);
+    expect(files.some((f) => f.endsWith(path.join('planner', 'generate-workspace-content.ts')))).toBe(true);
   });
+  // Surfaces that touch campaign ids but are NOT campaign mutations by the roles this guard governs - each reviewed.
+  const OTHER_SURFACES: Record<string, string> = {
+    'engagement/content-opportunities/lifecycle.ts': 'engagement surface (the Engager role\'s own work)',
+    'engagement/crm-export.ts': 'engagement surface',
+    'engagement/generate-response.ts': 'engagement surface (reply drafting)',
+    'engagement/refine-suggestion.ts': 'engagement surface',
+    'engagement/signal/status.ts': 'engagement surface (signal triage)',
+    'lead-intelligence/campaigns.ts': 'OUTREACH surface (6f/e1) - role review raised separately',
+    'lead-intelligence/execution.ts': 'OUTREACH surface (6f/e1) - role review raised separately',
+  };
   // POST used for READ-ONLY computation (no write, no AI, no side effect) - reviewed 2026-11-13, each with its reason.
   const READ_ONLY_POST: Record<string, string> = {
     'campaigns/health.ts': 'computes a health view from the profile; writes nothing',
@@ -182,8 +194,21 @@ describe('inventory: no campaign write route without a role gate', () => {
     const offenders = files.filter((f) => {
       const src = fs.readFileSync(f, 'utf8');
       return WRITES.test(src) && MEMBERSHIP_ONLY.test(src) && !ROLE_GATES.test(src);
-    }).map((f) => path.relative(API, f).replace(/\\/g, '/')).filter((r) => !(r in READ_ONLY_POST));
+    }).map((f) => path.relative(API, f).replace(/\\/g, '/')).filter((r) => !(r in READ_ONLY_POST) && !(r in OTHER_SURFACES));
     expect(offenders).toEqual([]);
+  });
+  // Per-wiring pin (83): every route that calls enforceCampaignWriteRole does so AFTER its membership gate (a guard
+  // placed before the gate would run without an authorized user/company; one never called would not be found by the
+  // stubbed suites).
+  it('every explicit enforceCampaignWriteRole call follows the route\'s membership gate', () => {
+    const wired = walk(API).filter((f) => fs.readFileSync(f, 'utf8').includes('enforceCampaignWriteRole('));
+    expect(wired.length).toBeGreaterThanOrEqual(50);
+    const misplaced = wired.filter((f) => {
+      const src = fs.readFileSync(f, 'utf8');
+      const gate = src.search(MEMBERSHIP_ONLY);
+      return gate < 0 || src.indexOf('enforceCampaignWriteRole(', src.indexOf('\n', src.indexOf('import { enforceCampaignWriteRole'))) < gate;
+    }).map((f) => path.relative(API, f).replace(/\\/g, '/'));
+    expect(misplaced).toEqual([]);
   });
   it('platform-plan / health-report (withRBAC ALL_ROLES) are still covered by requireCampaignTenantAccess', () => {
     for (const rel of ['campaigns/platform-plan.ts', 'campaigns/health-report.ts']) {

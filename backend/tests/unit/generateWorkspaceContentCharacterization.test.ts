@@ -20,6 +20,12 @@ let completionOutput = '{"linkedin": "raw linkedin copy", "x": "raw x copy"}';
 let chargeStatus: Row = { status: 'executed' };
 let admissionError: Error | null = null;
 
+// Campaign WRITE role guard (2026-11-13): this suite's caller is an authorized WRITER; the role gate itself is
+// covered by campaignWriteRoles.test.ts. Only enforceCampaignWriteRole is stubbed; the pure decision stays real.
+jest.mock('../../services/campaignWriteRole', () => ({
+  ...jest.requireActual('../../services/campaignWriteRole'),
+  enforceCampaignWriteRole: async () => true,
+}));
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1' })),
 }));

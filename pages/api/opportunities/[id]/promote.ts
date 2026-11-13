@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { promoteToCampaign } from '../../../../backend/services/opportunityService';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 /**
  * POST /api/opportunities/[id]/promote
@@ -28,6 +29,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     requireCampaignId: false,
   });
   if (!access) return;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const userId = access.userId ?? '';
   if (!userId) {
