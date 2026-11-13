@@ -159,12 +159,8 @@ export const ALLOWLIST: Record<string, string> = {
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L366 @9cecd075f]',
   'backend/services/payments/razorpayStagingService.ts:handleRazorpayStagingWebhook|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L482 @9cecd075f]',
-  'backend/services/payments/razorpayStagingService.ts:handleRazorpayStagingWebhook|credit_purchases|update|#1':
-    'B2 BLOCKING: credit_purchases payment link unread (6f fixes) [L594 @9cecd075f]',
   'backend/services/payments/razorpayStagingService.ts:verifyAndFulfillRazorpayStagingPayment|payment_provider_events|update|#1':
     'W7: event status write - covered by e1 fix/payment-event-state guarded writer [L711 @9cecd075f]',
-  'backend/services/payments/razorpayStagingService.ts:verifyAndFulfillRazorpayStagingPayment|credit_purchases|update|#1':
-    'B2 BLOCKING: credit_purchases payment link unread (6f fixes) [L794 @9cecd075f]',
   'backend/services/pricingService.ts:recordCostAnomaly|cost_anomalies|insert|#1':
     'N: telemetry / audit / dedup write unread - 6f fixes (non-blocking) [L661 @9cecd075f]',
   'backend/services/purchaseService.ts:completePurchase|credit_purchases|update|#2':

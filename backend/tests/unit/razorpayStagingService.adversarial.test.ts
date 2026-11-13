@@ -4,6 +4,16 @@ const mockOwnedDbTable = jest.fn();
 const mockCompletePurchase = jest.fn();
 const mockFailPurchase = jest.fn();
 const mockRecordPaymentProviderEvent = jest.fn();
+// B2: the payment-link update after completePurchase is READ. The update chain's .select() resolves to the rows it
+// changed (like PostgREST); mockLinkResult injects a failed / 0-row link. Events and error logs are captured.
+let mockLinkResult: { data: unknown; error: { message: string } | null } = { data: [{ id: 'purchase-1' }], error: null };
+const mockOpsEvents: Array<Record<string, any>> = [];
+const mockLoggerError = jest.fn();
+jest.mock('../../services/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: (...a: unknown[]) => mockLoggerError(...a), debug: jest.fn() } }));
+jest.mock('../../services/monetizationOpsService', () => {
+  const actual = jest.requireActual('../../services/monetizationOpsService');
+  return { ...actual, recordMonetizationOperationalEvent: jest.fn(async (e: Record<string, any>) => { mockOpsEvents.push(e); }) };
+});
 
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (...args: any[]) => mockOwnedDbTable(...args),
@@ -62,10 +72,11 @@ function tableChain(table: string) {
     : table === 'credit_packages'
       ? { id: 'pkg-1', credits: 100, price: 499, is_active: true }
       : null;
+  let updating = false;
   const chain: any = {
-    select: jest.fn(() => chain),
+    select: jest.fn(() => (updating && table === 'credit_purchases' ? Promise.resolve(mockLinkResult) : chain)),
     eq: jest.fn(() => chain),
-    update: jest.fn(() => chain),
+    update: jest.fn(() => { updating = true; return chain; }),
     insert: jest.fn(() => chain),
     maybeSingle: jest.fn(async () => ({ data: selectRow, error: null })),
     single: jest.fn(async () => ({ data: { id: 'inserted' }, error: null })),
@@ -84,6 +95,9 @@ describe('razorpayStagingService adversarial safety', () => {
     process.env.RAZORPAY_TEST_WEBHOOK_SECRET = 'webhook_secret';
     delete process.env.RAZORPAY_WEBHOOK_MAX_EVENT_AGE_SECONDS;
     mockOwnedDbTable.mockImplementation((table: string) => tableChain(table));
+    mockLinkResult = { data: [{ id: 'purchase-1' }], error: null };
+    mockOpsEvents.length = 0;
+    mockLoggerError.mockClear();
     mockRecordPaymentProviderEvent.mockResolvedValue({ id: 'provider-event-1', duplicate: false, processingStatus: 'recorded' });
     mockCompletePurchase.mockResolvedValue({ success: true, purchaseId: 'purchase-1', creditsGranted: 100 });
     mockFailPurchase.mockResolvedValue(undefined);
@@ -104,6 +118,37 @@ describe('razorpayStagingService adversarial safety', () => {
     expect(mockCompletePurchase).toHaveBeenCalledTimes(1);
     expect(mockCompletePurchase).toHaveBeenCalledWith('purchase-1', 'pay_test_1');
     expect(mockFailPurchase).not.toHaveBeenCalled();
+  });
+
+  it('B2 CONTROL: a recorded payment link emits no link-failure event', async () => {
+    const { handleRazorpayStagingWebhook } = await import('../../services/payments/razorpayStagingService');
+    const rawBody = capturedWebhook();
+    await handleRazorpayStagingWebhook({ rawBody, signature: signWebhook(rawBody) });
+    expect(mockOpsEvents.filter((e) => e.alertKey === 'purchase_payment_link_failed')).toEqual([]);
+  });
+
+  it('B2: a FAILED payment link (webhook) keeps processed - credits were granted - but is an ERROR event with re-link data', async () => {
+    mockLinkResult = { data: null, error: { message: 'connection reset' } };
+    const { handleRazorpayStagingWebhook } = await import('../../services/payments/razorpayStagingService');
+    const rawBody = capturedWebhook();
+    const result = await handleRazorpayStagingWebhook({ rawBody, signature: signWebhook(rawBody) });
+    expect(result).toMatchObject({ status: 'processed', purchaseId: 'purchase-1' });
+    expect(mockLoggerError).toHaveBeenCalledWith('purchase_payment_link_failed', expect.objectContaining({ purchaseId: 'purchase-1', providerPaymentId: 'pay_test_1', source: 'webhook' }));
+    expect(mockOpsEvents.filter((e) => e.alertKey === 'purchase_payment_link_failed')).toEqual([
+      expect.objectContaining({ eventName: 'monetization.purchase_payment_link_failed', severity: 'ERROR',
+        metadata: expect.objectContaining({ purchase_id: 'purchase-1', provider_payment_id: 'pay_test_1', error: 'connection reset' }) }),
+    ]);
+  });
+
+  it('B2: a payment link matching 0 rows (verify endpoint) is surfaced the same way', async () => {
+    mockLinkResult = { data: [], error: null };
+    mockRecordPaymentProviderEvent.mockResolvedValueOnce({ id: 'checkout-event-1', duplicate: false, processingStatus: 'recorded' });
+    const { verifyAndFulfillRazorpayStagingPayment } = await import('../../services/payments/razorpayStagingService');
+    const result = await verifyAndFulfillRazorpayStagingPayment({ orderId: 'order_test_1', paymentId: 'pay_test_1', signature: signPayment(), expectedOrganizationId: 'org-1' });
+    expect(result).toMatchObject({ status: 'processed' });
+    expect(mockOpsEvents.filter((e) => e.alertKey === 'purchase_payment_link_failed')).toEqual([
+      expect.objectContaining({ metadata: expect.objectContaining({ source: 'verify_endpoint', error: 'matched 0 rows' }) }),
+    ]);
   });
 
   it('treats processed duplicate webhooks as no-op and does not re-fulfill', async () => {

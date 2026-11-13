@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
+import { logger } from '../logger';
 import { completePurchase, failPurchase, recordPaymentProviderEvent } from '../purchaseService';
 import {
   assertMonetizationExposureModeConfigured,
@@ -14,6 +15,55 @@ import { resolvePrice } from '@/lib/billing/currency';
 const PROVIDER = 'razorpay';
 const PROVIDER_MODE = 'test';
 const RAZORPAY_API_BASE = 'https://api.razorpay.com/v1';
+
+
+/**
+ * B2 (financial-writes contract; e9 BLOCKING, e1 approved): stamp the provider event + payment on a purchase whose
+ * credits were ALREADY granted. supabase-js returns write errors instead of throwing, so the result is read and must
+ * change exactly one row. On failure the purchase keeps its credits but loses its payment trace (refunds /
+ * reconciliation) - it is NOT failed (the outcome stays 'processed'; failing the webhook would only retry a grant
+ * that already happened), and it is never silent: an ERROR log plus an ERROR operational event carrying everything an
+ * operator needs to re-link it (e1).
+ */
+async function stampPurchasePaymentLink(input: {
+  purchaseId: string;
+  organizationId: string;
+  providerEventId: string | null;
+  providerOrderId: string;
+  paymentId: string;
+  source: 'webhook' | 'verify_endpoint';
+  fields: Record<string, unknown>;
+}): Promise<void> {
+  const { data: linked, error: linkErr } = await ownedDbTable('credit_purchases')
+    .update(input.fields)
+    .eq('id', input.purchaseId)
+    .select('id');
+  if (!linkErr && Array.isArray(linked) && linked.length === 1) return;
+  const detail = linkErr?.message ?? `matched ${Array.isArray(linked) ? linked.length : 'no'} rows`;
+  logger.error('purchase_payment_link_failed', {
+    purchaseId: input.purchaseId, providerPaymentId: input.paymentId, providerEventId: input.providerEventId,
+    source: input.source, message: detail,
+  });
+  await recordMonetizationOperationalEvent({
+    eventName: 'monetization.purchase_payment_link_failed',
+    severity: 'ERROR',
+    organizationId: input.organizationId,
+    provider: PROVIDER,
+    providerEventId: input.providerEventId,
+    providerOrderId: input.providerOrderId,
+    paymentId: input.paymentId,
+    purchaseId: input.purchaseId,
+    fulfillmentStatus: 'completed',
+    alertKey: 'purchase_payment_link_failed',
+    metadata: {
+      purchase_id: input.purchaseId,
+      provider_payment_id: input.paymentId,
+      provider_event_id: input.providerEventId,
+      source: input.source,
+      error: detail,
+    },
+  });
+}
 
 export type RazorpayWebhookOutcome =
   | { status: 'processed'; purchaseId: string; paymentId: string; creditsGranted: number; duplicateEvent: boolean }
@@ -591,16 +641,22 @@ export async function handleRazorpayStagingWebhook(input: {
     return { status: 'failed', reason, eventId: providerEventId, purchaseId: String(purchase.id) };
   }
 
-  await ownedDbTable('credit_purchases')
-    .update({
+  await stampPurchasePaymentLink({
+    purchaseId: String(result.purchaseId),
+    organizationId: purchase.organization_id,
+    providerEventId,
+    providerOrderId: orderId,
+    paymentId,
+    source: 'webhook',
+    fields: {
       provider_event_id: providerEventId,
       provider_payment_id: paymentId,
       beta_cohort: betaTag.beta_cohort,
       beta_access_level: betaTag.beta_access_level,
       monetization_beta_enabled: betaTag.monetization_beta_enabled,
       updated_at: new Date().toISOString(),
-    })
-    .eq('id', result.purchaseId);
+    },
+  });
 
   if (event.id) await markProviderEvent({ eventId: event.id, status: 'processed' });
   await recordMonetizationOperationalEvent({
@@ -791,16 +847,22 @@ export async function verifyAndFulfillRazorpayStagingPayment(input: {
     return { status: 'failed', reason, purchaseId: String(purchase.id), paymentId: input.paymentId };
   }
 
-  await ownedDbTable('credit_purchases')
-    .update({
+  await stampPurchasePaymentLink({
+    purchaseId: String(result.purchaseId),
+    organizationId: purchase.organization_id,
+    providerEventId,
+    providerOrderId: input.orderId,
+    paymentId: input.paymentId,
+    source: 'verify_endpoint',
+    fields: {
       provider_event_id: providerEventId,
       provider_payment_id: input.paymentId,
       beta_cohort: betaAccess.beta_cohort,
       beta_access_level: betaAccess.access_level,
       monetization_beta_enabled: betaAccess.monetization_beta_enabled,
       updated_at: new Date().toISOString(),
-    })
-    .eq('id', result.purchaseId);
+    },
+  });
 
   if (!event.duplicate && event.id) await markProviderEvent({ eventId: event.id, status: 'processed' });
   await recordMonetizationOperationalEvent({
