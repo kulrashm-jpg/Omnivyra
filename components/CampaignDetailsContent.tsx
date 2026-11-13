@@ -33,6 +33,7 @@ import {
 import CampaignAIChat from './CampaignAIChat';
 import AIGenerationProgress from './AIGenerationProgress';
 import { useCompanyContext } from './CompanyContext';
+import { canWriteCampaign, ROLE_FORBIDDEN_MESSAGE } from '../lib/access/campaignWriteAccess';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 import { GovernanceStatusCard } from './governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from './governance/GovernanceAnalyticsCard';
@@ -67,6 +68,8 @@ type S = ReturnType<typeof useCampaignDetailsState>;
 import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, GateRequiredAction, DiagnosticSummary, ViralityAssessmentResponse, RecommendationSummary, PerformanceSummary } from '../pages/campaign-details/types';
 
 export default function CampaignDetailsContent({ d }: { d: S }) {
+  // F3: Viewers / view-only / Engagers see the campaign but not its write or AI controls.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
   const {
     _ef1,
     _ef2,
@@ -296,6 +299,11 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
           </div>
         </div>
       )}
+      {!canWriteThisCampaign && (
+        <div data-testid="campaign-read-only-notice" className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-center text-sm text-slate-700">
+          View only: {ROLE_FORBIDDEN_MESSAGE}
+        </div>
+      )}
       {/* Header — compact nav, title, status, actions */}
       <div className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
@@ -331,6 +339,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                   Policy
                 </button>
               )}
+              {canWriteThisCampaign && (
               <button
                 onClick={() => setShowAIChat(true)}
                 className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1.5"
@@ -338,6 +347,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                 <Sparkles className="h-3.5 w-3.5" />
                 AI Assistant
               </button>
+              )}
             </div>
           </div>
           <div>
@@ -674,6 +684,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                 <p className="text-amber-800 mb-4">
                   Duration is set. Generate a campaign blueprint to continue.
                 </p>
+                {canWriteThisCampaign && (
                 <button
                   onClick={async () => {
                     if (!campaign || !effectiveCompanyId) return;
@@ -722,6 +733,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                   {isRegeneratingBlueprint ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
                   Generate Campaign Blueprint
                 </button>
+                )}
                 {isRegeneratingBlueprint && (
                   <div className="mt-4">
                     <AIGenerationProgress
@@ -767,6 +779,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                     Use <strong>AI Assistant</strong> (purple button above) to generate a plan, or create one from your stored strategic theme and context:
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
+                    {canWriteThisCampaign && (
                     <button
                       type="button"
                       onClick={createWeekPlanFromStoredContext}
@@ -781,6 +794,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                       )}
                       Create week plan from stored context
                     </button>
+                    )}
                     {(campaign as { duration_weeks?: number })?.duration_weeks == null && (
                       <span className="text-xs text-amber-700">
                         Set start date and duration in pre-planning above first.
@@ -1092,6 +1106,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                   ((governanceStatus.latestGovernanceEvent?.eventType === 'PRE_PLANNING_EVALUATED' ||
                     governanceStatus.latestGovernanceEvent?.eventType === 'DURATION_NEGOTIATED') &&
                     governanceStatus.latestGovernanceEvent?.eventStatus === 'NEGOTIATE') && (
+                  canWriteThisCampaign && (
                   <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border">
                     <h3 className="text-lg font-semibold text-gray-900 mb-3">Refine your duration</h3>
                     <p className="text-sm text-gray-600 mb-3">
@@ -1172,6 +1187,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                       </div>
                     )}
                   </div>
+                  )
                 )}
                 <PreemptionHistory events={governanceEvents} />
                 <GovernanceTimeline events={governanceEvents} />
@@ -1247,6 +1263,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
 
       {/* AI Assistant - Campaign Chat with recommendation context, linked to campaign plan */}
       {campaign && !shouldForceWeeklyBlueprintView && (
+        canWriteThisCampaign && (
         <CampaignAIChat
           isOpen={showAIChat}
           onClose={() => {
@@ -1318,6 +1335,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
               : undefined
           }
         />
+        )
       )}
     </div>
   );
