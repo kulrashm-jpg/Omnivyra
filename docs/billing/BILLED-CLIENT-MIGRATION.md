@@ -13,7 +13,8 @@
 
 **A route is DONE when:** its server returns the standard shape (e1/55 confirm), AND every client file below sends the key and routes errors through the helper, AND a test pins both (pattern: `backend/tests/unit/billedResponseHelper.test.tsx`).
 
-**Start condition for the batches below:** e1's `fix/phase2-route-wiring-token-actual` lands and returns the standard shape.
+**Start condition for the batches below:** e1's `fix/phase2-route-wiring-token-actual-20261113` lands and returns the standard shape for the 18 wirePhase2Route routes plus `campaigns/[id]/virality/assess`.
+For those routes, `PRICING_UNAVAILABLE` arrives as **503** `{ code: PRICING_UNAVAILABLE }` (a config gap). The helper keys on the code, so it is classified correctly and never shows "top up".
 
 ## Done
 
@@ -41,6 +42,7 @@ Batches group screens that share a feature, so each one can be reviewed and chec
 - [ ] `/api/planner/chat-themes`: `components/planner/StrategyAIChat.tsx`
 - [ ] `/api/planner/skeleton-command`: `components/planner/SkeletonBuilderPanel.tsx`
 - [ ] `/api/campaign-content/assist`: `components/planner/ContentWorkspace.tsx`
+- [ ] `/api/campaigns/[id]/virality/assess`: `hooks/useCampaignDetailsHandlers.tsx` (:740). Billed per e1; joins the standard shape in e1's phase2 wiring.
 
 ### Batch 3: BOLT
 - [ ] `/api/bolt/campaign-chat`: `components/bolt/BoltCampaignChat.tsx`, `components/BoltCreatorViewMain.tsx`, `components/command-center/BoltCombinedStrategyMain.tsx`
@@ -62,11 +64,13 @@ Batches group screens that share a feature, so each one can be reviewed and chec
 ### Batch 5: Creator
 - [ ] `/api/creator-templates/chat-brief`: `components/creator/CreateWithAIChat.tsx`
 - [ ] `/api/creator-templates/field-assist`: `components/creator/AssetCreationWorkspace.tsx`, `components/creator/workflow/useCreatorWorkflowActions.tsx`
-- [ ] `/api/creator-intelligence/campaign-variant-estimate`: `components/variant-experience/CampaignVariantBillingEstimate.tsx` (an estimate: confirm with e1 whether it's actually billed)
 
 ### Batch 6: Admin blog (super-admin only)
 - [ ] `/api/admin/blog/brief-suggestions`: `pages/admin/blog/content-refine.tsx`, `pages/admin/blog/generate.tsx`
 - [ ] `/api/admin/blog/generate`: `pages/admin/blog/content-refine.tsx`, `lib/blog/hookAssessment.ts`, `lib/blog/runBlogGeneration.ts`
+
+## Not billed (no helper, no Idempotency-Key needed)
+- `/api/creator-intelligence/campaign-variant-estimate` (`components/variant-experience/CampaignVariantBillingEstimate.tsx`). e1 confirmed at main 9cecd075f: read-only, no charging and no AI call; a pure calculation from the persisted variant_strategy.
 
 ## Billed routes with NO client caller (nothing to migrate; listed so the flip review sees them)
 - `/api/admin/blog/rewrite-hook`
