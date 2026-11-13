@@ -151,7 +151,8 @@ describe('POST /api/engagement/thread/bulk-ai-reply', () => {
 describe('hold sizing', () => {
   it('reply_generation holds its own call bound (3000 in / 700 out = the service max_tokens), scaled by unitCalls', () => {
     expect(routeLlmPricingFor('reply_generation')).toMatchObject({ maxInputTokens: 3000, maxOutputTokens: 700 });
-    expect(routeLlmPricingFor('reply_generation', 20)).toMatchObject({ maxInputTokens: 60000, maxOutputTokens: 14000 });
+    expect(routeLlmPricingFor('reply_generation', 20)).toMatchObject({ maxInputTokens: 60000, maxOutputTokens: 14000, ceilingScale: 20 });
+    expect(routeLlmPricingFor('reply_generation')).not.toHaveProperty('ceilingScale');
   });
   it('unitCalls is capped and a non-integer falls back to the action default', () => {
     expect(routeLlmPricingFor('reply_generation', 10_000).maxOutputTokens).toBe(700 * MAX_ROUTE_UNIT_CALLS);

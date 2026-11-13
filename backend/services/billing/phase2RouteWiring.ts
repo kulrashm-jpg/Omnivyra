@@ -129,6 +129,9 @@ export function routeLlmPricingFor(action: CreditAction, unitCalls?: number) {
     actionKey: String(action),
     maxInputTokens: perCall.input * calls,
     maxOutputTokens: perCall.output * calls,
+    // a per-request unit size also scales the action's settlement ceiling (pricingService ceilingScale), so a
+    // 20-reply batch is not capped at one reply's price; the action's usual unit size needs no scale
+    ...(requested ? { ceilingScale: requested } : {}),
   };
 }
 
