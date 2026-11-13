@@ -100,9 +100,10 @@ export const STRATEGIC_FOCUS_OPTIONS = [
 ];
 
 export const INTELLIGENCE_SOURCES: { value: ThemeSource; label: string; desc: string }[] = [
-  { value: 'hybrid', label: 'Hybrid Intelligence', desc: 'Trend signals + AI reasoning' },
-  { value: 'api', label: 'API Intelligence', desc: 'Platform signals & market data' },
-  { value: 'ai', label: 'AI Strategic Engine', desc: 'Pure AI strategic planning' },
+  // D6 copy (e9): plain words. The values are unchanged; only the labels changed.
+  { value: 'hybrid', label: 'Trends + AI', desc: 'Trend signals + AI reasoning' },
+  { value: 'api', label: 'Trends only', desc: 'Platform signals & market data' },
+  { value: 'ai', label: 'AI only', desc: 'Pure AI strategic planning' },
 ];
 
 const CARD_THEMES = [

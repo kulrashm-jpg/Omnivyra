@@ -487,7 +487,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
               </div>
               {showMore && (
               <div className="p-5">
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Intelligence Source</label>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Ideas from</label>
                 <div className="flex flex-col gap-1.5">
                   {INTELLIGENCE_SOURCES.map((src) => (
                     <button key={src.value} type="button" onClick={() => setThemeSource(src.value)}
@@ -568,7 +568,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
             {/* View in row */}
             {showMore && (
             <div className="px-5 pt-4 pb-2 border-t border-gray-100">
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">View In</label>
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">After launch, open:</label>
               <div className="flex gap-2">
                 {[
                   { value: 'week_plan' as OutcomeView, label: 'Weekly' },

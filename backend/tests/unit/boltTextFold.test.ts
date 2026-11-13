@@ -31,9 +31,9 @@ describe('BOLT Text form fold (D6)', () => {
     ['Strategic Focus', '>Strategic Focus</label>', 'showMore'],
     ['Offerings', '>Offerings / Products</', 'showMore'],
     ['Content Format', 'Content Format <span', 'showMore'],
-    ['Intelligence Source', '>Intelligence Source</label>', 'showMore'],
+    ['Ideas from', '>Ideas from</label>', 'showMore'],
     ['Content Sharing', '>Content Sharing</label>', 'showMore'],
-    ['View In', '>View In</label>', 'showMore'],
+    ['After launch, open', '>After launch, open:</label>', 'showMore'],
   ])('%s is folded', (_name, marker, gate) => {
     expect(insideWriteGate(V, marker, gate)).toBe(true);
   });
@@ -46,6 +46,15 @@ describe('BOLT Text form fold (D6)', () => {
   ])('%s stays visible', (_name, marker) => {
     expect(insideWriteGate(V, marker, 'showMore')).toBe(false);
     expect(insideWriteGate(V, marker, 'showDetails')).toBe(false);
+  });
+  it('plain-language labels (e9 copy review)', () => {
+    const W = read('components/BoltStrategyViewWidgets.tsx');
+    expect(W).toContain("{ value: 'hybrid', label: 'Trends + AI'");
+    expect(W).toContain("{ value: 'api', label: 'Trends only'");
+    expect(W).toContain("{ value: 'ai', label: 'AI only'");
+    expect(V).not.toMatch(/>Intelligence Source<|>View In</);
+    expect(V).toContain('More options ▼');
+    expect(V).toContain('Fewer options ▲');
   });
   it('the brief section receives the fold from the page', () => {
     expect(V).toMatch(/showDetails=\{showMore\}/);
