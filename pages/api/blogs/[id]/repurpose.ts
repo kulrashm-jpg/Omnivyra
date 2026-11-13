@@ -16,12 +16,29 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
 import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { checkRateLimit, type RateLimitConfig } from '../../../../lib/auth/rateLimit';
+import { authRequestIpOrNull } from '../../../../backend/auth/requestClientIp';
+
+/**
+ * BLOCKING (money), 2026-11-13. source=public WAS an anonymous, unbilled model call (the gateway's AI guard saw no
+ * user and no IP for it, so only platform-wide fail-open caps applied). OWNER RULING (via e9): repurpose REQUIRES
+ * LOGIN and is CHARGED to the caller's company, like every AI feature - no anonymous free AI. A public blog is now
+ * just a SOURCE; the company billed is the CALLER's (explicit company_id, else their first ACTIVE membership; never
+ * the blog's, never the users.active_company_id pointer). Defence in depth: public-source requests are still
+ * limited per trusted client IP and globally, FAIL-CLOSED, before the blog read and the model call.
+ */
+export const PUBLIC_REPURPOSE_IP_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:public:blog-repurpose:ip', limit: 10, windowSecs: 3600, onRedisFailure: 'closed',
+};
+export const PUBLIC_REPURPOSE_GLOBAL_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:public:blog-repurpose:global', limit: 300, windowSecs: 3600, onRedisFailure: 'closed',
+};
 import { extractBlogContext } from '../../../../lib/blog/blockExtractor';
 import {
   buildRepurposeSystemPrompt,
@@ -87,19 +104,48 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ? req.body.tone as BlogRepurposeInput['tone']
     : 'professional';
 
-  // ── Auth: company blogs require company membership ────────────────────────
-  let companyId: string | null = null;
+  // ── Auth: EVERY repurpose is a signed-in, billed action for the caller's company ──
+  const companyIdParam =
+    typeof req.query.company_id === 'string' && req.query.company_id.trim() ? req.query.company_id.trim() :
+    typeof req.body?.company_id  === 'string' && req.body.company_id.trim()  ? req.body.company_id.trim()  : null;
 
+  let companyId: string;
   if (source === 'company') {
-    const companyIdParam =
-      typeof req.query.company_id === 'string' ? req.query.company_id :
-      typeof req.body?.company_id  === 'string' ? req.body.company_id : null;
-
     if (!companyIdParam) return res.status(400).json({ error: 'company_id is required for company blogs' });
-
     const access = await enforceCompanyAccess({ req, res, companyId: companyIdParam });
     if (!access) return;
     companyId = companyIdParam;
+  } else {
+    const user = await resolveUserContext(req);
+    if (!user?.userId) return res.status(401).json({ error: 'Sign in to repurpose a blog.', code: 'AUTH_REQUIRED' });
+    // The caller's company: the one they name, else their first ACTIVE membership (resolveUserContext never yields
+    // the raw pointer). Membership is enforced either way.
+    // DETERMINISTIC (e1): a multi-company caller must NAME the company to charge - never whichever membership row
+    // comes back first (two identical clicks could otherwise bill different companies under different keys).
+    if (!companyIdParam && (user.companyIds?.length ?? 0) > 1) {
+      return res.status(400).json({ error: 'company_id is required: you belong to more than one company.', code: 'COMPANY_REQUIRED' });
+    }
+    const callerCompanyId = companyIdParam ?? (user.defaultCompanyId || null);
+    if (!callerCompanyId) return res.status(403).json({ error: 'An active company membership is required.', code: 'NO_ACTIVE_COMPANY' });
+    const access = await enforceCompanyAccess({ req, res, companyId: callerCompanyId });
+    if (!access) return;
+    companyId = callerCompanyId;
+  }
+
+  // ── Public source: per-IP and global limits, fail-closed (defence in depth) ───
+  if (source === 'public') {
+    const ip = authRequestIpOrNull(req);
+    if (!ip) {
+      return res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
+    }
+    const perIp = await checkRateLimit(ip, PUBLIC_REPURPOSE_IP_LIMIT);
+    if (!perIp.allowed) {
+      return res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
+    }
+    const global = await checkRateLimit('all', PUBLIC_REPURPOSE_GLOBAL_LIMIT);
+    if (!global.allowed) {
+      return res.status(429).json({ error: 'Too many requests. Try again later.', code: 'RATE_LIMITED' });
+    }
   }
 
   // ── Fetch blog ────────────────────────────────────────────────────────────
@@ -111,7 +157,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .eq('id', id)
     .eq('status', 'published');
 
-  if (source === 'company' && companyId) {
+  if (source === 'company') {
     query.eq('company_id', companyId);
   }
 
@@ -152,19 +198,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 
   try {
-    // Public blogs have no company → nothing to charge; passthrough (honest).
-    const result = companyId
-      ? await wirePhase2Route({
-          surface:        'blogs.repurpose',
-          organizationId: companyId,
-          action:         'content_repurpose',
-          referenceType:  'content_repurpose',
-          referenceId:    createHash('sha256')
-            .update([companyId, String(id), String(tone)].join('|'))
-            .digest('hex').slice(0, 40),
-          run: runAi,
-        })
-      : await runAi();
+    // ONE billed path for both sources (owner ruling): the caller's company is charged through the same
+    // wirePhase2Route call as the authenticated company path. The source is part of the reference so a public and a
+    // company blog with the same id are distinct charges.
+    const result = await wirePhase2Route({
+      surface:        'blogs.repurpose',
+      organizationId: companyId,
+      action:         'content_repurpose',
+      referenceType:  'content_repurpose',
+      referenceId:    createHash('sha256')
+        .update([companyId, source, String(id), String(tone)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: runAi,
+    });
 
     const raw = result.output ? JSON.parse(result.output) : null;
     output = validateRepurposeOutput(raw);
