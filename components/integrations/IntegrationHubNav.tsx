@@ -70,7 +70,8 @@ export const INTEGRATION_HUB_AREAS: readonly IntegrationHubArea[] = Object.freez
     label: 'API Integrations',
     href: '/external-apis',
     ready: true,
-    description: 'Publishing, website and API connections',
+    // Reworded 2026-11-13 (PI hub owner e1 OK): website/publishing moved to website_data.
+    description: 'AI, trend and data API keys',
   },
   {
     key: 'prospect_sources',
