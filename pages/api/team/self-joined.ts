@@ -2,7 +2,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 /**
  * GET  /api/team/self-joined?companyId=xxx
- *   Returns all users who self-joined the company (join_source = 'self_joined').
+ *   Returns all users who self-joined the company (join_source in SELF_JOINED_JOIN_SOURCE_SPELLINGS: 'self_joined'
+ *   and the legacy 'self_registered' - the same list the membership integrity check uses).
  *   Requires COMPANY_ADMIN or SUPER_ADMIN.
  *
  * DELETE /api/team/self-joined?companyId=xxx&userId=yyy
@@ -19,6 +20,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
+import { SELF_JOINED_JOIN_SOURCE_SPELLINGS } from '../../../backend/services/companyMembershipIntegrityService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { companyId, userId } = req.query as { companyId?: string; userId?: string };
@@ -43,7 +45,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .from('user_company_roles')
       .select('user_id, role, status, created_at, join_source')
       .eq('company_id', companyId)
-      .eq('join_source', 'self_joined')
+      .in('join_source', [...SELF_JOINED_JOIN_SOURCE_SPELLINGS])
       .eq('status', 'active');
 
     if (error) return res.status(500).json({ error: error.message });
@@ -79,7 +81,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       })
       .eq('company_id', companyId)
       .eq('user_id', userId)
-      .eq('join_source', 'self_joined');
+      .in('join_source', [...SELF_JOINED_JOIN_SOURCE_SPELLINGS]);
 
     if (error) return res.status(500).json({ error: error.message });
 
@@ -105,7 +107,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .delete()
       .eq('company_id', companyId)
       .eq('user_id', userId)
-      .eq('join_source', 'self_joined');
+      .in('join_source', [...SELF_JOINED_JOIN_SOURCE_SPELLINGS]);
 
     if (error) return res.status(500).json({ error: error.message });
 

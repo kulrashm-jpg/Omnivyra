@@ -12,9 +12,17 @@ export type CompanyMembershipRoleRow = {
 
 export const SELF_REGISTERED_JOIN_SOURCE = 'self_joined';
 
+/**
+ * Every stored spelling of a self-joined membership. 'self_joined' is what current code writes; 'self_registered' is a
+ * legacy spelling still present on live rows (C99, 2026-11-13: 5 rows) until the owner-approved rename lands. Every
+ * reader that selects self-joined members uses THIS list, so the governance check and the admin screens can never
+ * disagree about who is self-joined (e9 ruling 2026-11-13, BLOCKING: the 5 legacy rows were governed but invisible).
+ */
+export const SELF_JOINED_JOIN_SOURCE_SPELLINGS = ['self_joined', 'self_registered'] as const;
+
 export function isSelfRegisteredJoinSource(joinSource?: string | null): boolean {
   const normalized = String(joinSource || '').trim().toLowerCase();
-  return normalized === 'self_joined' || normalized === 'self_registered';
+  return (SELF_JOINED_JOIN_SOURCE_SPELLINGS as readonly string[]).includes(normalized);
 }
 
 export function companyMembershipMatchesWorkEmail(params: {
