@@ -23,6 +23,8 @@ import { executeWithEntryConsumption, type ExecuteWithEntryConsumptionResult } f
 import { findCreditTransaction } from '../../repositories/creditExecutionRepository';
 import type { LlmPricingSpec } from '../creditExecutionServiceContracts';
 import type { CreditAction } from '../creditDeductionService';
+import { getTotalAvailable } from '../creditPriorityService';
+import { resolveActivityEconomics } from '../activityEconomyCatalog';
 
 export type EntryConsumptionHttpOutcome<T> =
   | { kind: 'legacy' }
@@ -46,9 +48,6 @@ export async function runEntryConsumptionForHttp<T>(args: {
   note?: string;
   executor: () => Promise<T>;
 }): Promise<EntryConsumptionHttpOutcome<T>> {
-  const mode = await getCreditEconomyExecutionMode({ organizationId: args.orgId, surface: args.surface });
-  if (mode !== 'enforce') return { kind: 'legacy' };
-
   const { root } = buildBillingIdempotencyKey({
     kind: 'http',
     actorUserId: args.actorUserId,
@@ -57,7 +56,29 @@ export async function runEntryConsumptionForHttp<T>(args: {
     requestBody: args.requestBody,
     requestHeaderIdempotency: args.requestHeaderIdempotency,
   });
-  const attemptRoot = await resolveHttpAttemptRoot(root, findCreditTransaction, entryConsumptionAttemptKeys);
+  return runEntryConsumptionBilled({ ...args, identityRoot: root });
+}
+
+/**
+ * The same, with an EXPLICIT identity root (e.g. the interactive planner's pollKey, shared by the inline and worker
+ * paths). A RELEASED attempt under that root is reclaimed exactly as for http identities.
+ */
+export async function runEntryConsumptionBilled<T>(args: {
+  surface: string;
+  actorUserId: string;
+  orgId: string;
+  action: CreditAction;
+  referenceType: string;
+  referenceId: string;
+  identityRoot: string;
+  llmPricing: LlmPricingSpec;
+  note?: string;
+  executor: () => Promise<T>;
+}): Promise<EntryConsumptionHttpOutcome<T>> {
+  const mode = await getCreditEconomyExecutionMode({ organizationId: args.orgId, surface: args.surface });
+  if (mode !== 'enforce') return { kind: 'legacy' };
+
+  const attemptRoot = await resolveHttpAttemptRoot(args.identityRoot, findCreditTransaction, entryConsumptionAttemptKeys);
 
   const result = await executeWithEntryConsumption<T>({
     userId: args.actorUserId,
@@ -75,6 +96,24 @@ export async function runEntryConsumptionForHttp<T>(args: {
     ),
   });
   return { kind: 'billed', result };
+}
+
+/**
+ * NON-RESERVING pre-check for work that will be billed LATER (e.g. a queued job): when the path is enforced and the
+ * balance is below the activity's max exposure - the engine's own admission rule - returns the shared 402 refusal.
+ * The worker stays the authority (the balance can change while queued). null = proceed.
+ */
+export async function precheckEntryConsumption(args: {
+  surface: string;
+  orgId: string;
+  action: CreditAction;
+}): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const mode = await getCreditEconomyExecutionMode({ organizationId: args.orgId, surface: args.surface });
+  if (mode !== 'enforce') return null;
+  const required = resolveActivityEconomics(args.action).maximumCredits;
+  const available = (await getTotalAvailable(args.orgId)) ?? 0;
+  if (available >= required) return null;
+  return { status: 402, body: { error: 'Insufficient credits to generate content', code: 'INSUFFICIENT_CREDITS', required, balance: available } };
 }
 
 /** Non-executed outcomes -> the SHARED billed-response shape (e9 2026-11-13). null for 'executed'. */

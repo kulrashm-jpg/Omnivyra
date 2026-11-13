@@ -23,6 +23,8 @@ import {
   PlanningGenerationError,
 } from '../../../../backend/services/planPreviewService';
 import { extractPlannerCommands } from '../../../../backend/services/plannerCommandExtractor';
+import { runInteractivePlanBilled, plannerActionFor, PLANNER_BILLING_SURFACE, type PlannerBillingKind } from '../../../../backend/services/billing/plannerBilling';
+import { runEntryConsumptionForHttp, entryConsumptionHttpError, precheckEntryConsumption } from '../../../../backend/services/billing/entryConsumptionHttp';
 import {
   applyPlannerCommands,
   PlannerCommandValidationError,
@@ -218,6 +220,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     //    fed, unchecked, to the previous-campaign-context read, the async
     //    rollout lookup and the enqueued job payload).
     let campaignAccess: CampaignAccessResult | null = null;
+    // C75: the authenticated caller, the billing actor for every billed planner path below.
+    let billingActorUserId = '';
     if (previewMode) {
       const previewCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
       const previewAccess = await getUserCompanyRole(req, previewCompanyId);
@@ -228,9 +232,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
       if (!previewAccess.userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
       if (!previewRole) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+      billingActorUserId = String(previewAccess.userId);
     } else {
       campaignAccess = await requireCampaignAccess(req, res, campaignId as string);
       if (!campaignAccess) return;
+      billingActorUserId = String(campaignAccess.userId);
       const clientCompanyId = typeof companyId === 'string' ? companyId.trim() : '';
       if (clientCompanyId && clientCompanyId !== campaignAccess.companyId) {
         return res.status(403).json({ error: 'Access denied to company' });
@@ -278,7 +284,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           return res.status(400).json({ error: 'calendar_plan with activities is required for planner_command mode' });
         }
         try {
-          const commands = await extractPlannerCommands(message, calPlan, resolvedCompanyId);
+          // C75: a planner command is a targeted calendar edit -> content_rewrite, token-actual (doubly dark).
+          const plannerCalPlan = calPlan;
+          const extract = () => extractPlannerCommands(message, plannerCalPlan, resolvedCompanyId);
+          const cmdBilling = await runEntryConsumptionForHttp({
+            surface:       PLANNER_BILLING_SURFACE,
+            actorUserId:   billingActorUserId,
+            orgId:         resolvedCompanyId,
+            action:        plannerActionFor('planner_command'),
+            referenceType: 'campaign_ai_plan',
+            referenceId:   `planner_command:${resolvedCompanyId}`,
+            requestBody:   body,
+            requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string' ? (req.headers['idempotency-key'] as string) : undefined,
+            llmPricing:    { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_rewrite', maxInputTokens: 8000, maxOutputTokens: 4000 },
+            note:          'planner command',
+            executor:      extract,
+          });
+          let commands: Awaited<ReturnType<typeof extract>>;
+          if (cmdBilling.kind === 'legacy') {
+            commands = await extract();
+          } else {
+            const refusal = entryConsumptionHttpError(cmdBilling.result);
+            if (refusal) return res.status(refusal.status).json(refusal.body);
+            commands = (cmdBilling.result as { status: 'executed'; result: typeof commands }).result;
+          }
           const platform_content_requests =
             effectivePlatformContentRequests && typeof effectivePlatformContentRequests === 'object' && !Array.isArray(effectivePlatformContentRequests)
               ? (effectivePlatformContentRequests as Record<string, Record<string, number>>)
@@ -324,7 +353,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           body.campaign_type === 'TEXT' || body.campaign_type === 'CREATOR' || body.campaign_type === 'HYBRID'
             ? body.campaign_type
             : undefined;
-        const previewResult = await generatePlanPreview({
+        // C75: the plan PREVIEW is its own customer entry -> content_rewrite (e1), token-actual (doubly dark).
+        const runPreview = () => generatePlanPreview({
           companyId: resolvedCompanyId,
           idea_spine: ideaSpine,
           strategy_context: strategyContext,
@@ -332,6 +362,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           platform_content_requests: platform_content_requests ?? undefined,
           campaign_type: campaign_type ?? undefined,
         });
+        const previewBilling = await runEntryConsumptionForHttp({
+          surface:       PLANNER_BILLING_SURFACE,
+          actorUserId:   billingActorUserId,
+          orgId:         resolvedCompanyId,
+          action:        plannerActionFor('plan_preview'),
+          referenceType: 'campaign_ai_plan',
+          referenceId:   `plan_preview:${resolvedCompanyId}`,
+          requestBody:   body,
+          requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string' ? (req.headers['idempotency-key'] as string) : undefined,
+          llmPricing:    { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_rewrite', maxInputTokens: 8000, maxOutputTokens: 4000 },
+          note:          'plan preview',
+          executor:      runPreview,
+        });
+        let previewResult: Awaited<ReturnType<typeof runPreview>>;
+        if (previewBilling.kind === 'legacy') {
+          previewResult = await runPreview();
+        } else {
+          const refusal = entryConsumptionHttpError(previewBilling.result);
+          if (refusal) return res.status(refusal.status).json(refusal.body);
+          previewResult = (previewBilling.result as { status: 'executed'; result: typeof previewResult }).result;
+        }
         return res.status(200).json({
           plan: previewResult.plan,
           ...(previewResult.recommended_goal ? { recommended_goal: previewResult.recommended_goal } : {}),
@@ -733,15 +784,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       targetDay: typeof targetDay === 'string' ? targetDay : undefined,
       platforms: Array.isArray(platforms) ? platforms : undefined,
     };
+    // C75: ONE identity for the plan inline and on the worker (e1) - the runway poll key of these exact inputs.
+    const planPollKey = buildRunwayPollKey('interactive-plan', String(resolvedCampaignId), {
+      m: messageForTone, d: effectiveDurationWeeks, c: finalCollectedPlanningContext ?? null,
+    });
     if (
       effectiveMode === 'generate_plan' &&
       resolveRolloutSync(ASYNC_PLANNER_FLAG, { tenantId: resolvedCompanyId }).mode === 'enforce'
     ) {
       // F-14: the enqueue/poll/result lifecycle now runs on the generalized
       // runway (extracted from this very implementation in Batch D).
-      const pollKey = buildRunwayPollKey('interactive-plan', String(resolvedCampaignId), {
-        m: messageForTone, d: effectiveDurationWeeks, c: finalCollectedPlanningContext ?? null,
-      });
+      const pollKey = planPollKey;
       const stored = await pollRunwayResult(pollKey);
       if (stored) return res.status(200).json(stored);
       // CERT-FIX P1: inspect the job before (re-)enqueueing so failures are
@@ -767,6 +820,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           retry_after_ms: 2_500,
         });
       }
+      // C75: refuse at ENQUEUE (402) when the balance cannot cover the plan's max exposure - non-reserving; the
+      // worker stays the authority (the balance can change while queued). Polls above never reach this.
+      const enqueueRefusal = await precheckEntryConsumption({
+        surface: PLANNER_BILLING_SURFACE,
+        orgId:   resolvedCompanyId,
+        action:  plannerActionFor('generate_plan'),
+      });
+      if (enqueueRefusal) return res.status(enqueueRefusal.status).json(enqueueRefusal.body);
       const envelope = await enqueueRunwayOperation({
         queue: getAiHeavyQueue(),
         queueName: 'ai-heavy',
@@ -788,7 +849,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(202).json(envelope);
     }
 
-    const result = await runCampaignAiPlan({
+    const runPlan = () => runCampaignAiPlan({
       ...plannerArgs,
       // Always pass conversationHistory so QA gating can detect answered questions
       // (even when planningInputs exist and we only use history for tone/context).
@@ -807,6 +868,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       previous_performance_insights: bodyPreviousPerformanceInsights && typeof bodyPreviousPerformanceInsights === 'object' ? bodyPreviousPerformanceInsights : undefined,
       previous_campaign_context: previousCampaignContext ?? undefined,
     });
+    // C75 (BLOCKING money; owner ruling via e9): billed token-actual, action by mode from the ONE planner table
+    // (generate_plan -> campaign_generation; refine_day / platform_customize -> content_rewrite). generate_plan's
+    // identity is the poll key, shared with the worker path. Doubly dark: off -> the legacy path.
+    const planBilling = await runInteractivePlanBilled({
+      kind:        effectiveMode as PlannerBillingKind,
+      companyId:   resolvedCompanyId,
+      actorUserId: billingActorUserId,
+      campaignId:  String(resolvedCampaignId),
+      pollKey:     planPollKey,
+      executor:    runPlan,
+    });
+    let result: Awaited<ReturnType<typeof runPlan>>;
+    if (planBilling.kind === 'legacy') {
+      result = await runPlan();
+    } else {
+      const refusal = entryConsumptionHttpError(planBilling.result);
+      if (refusal) return res.status(refusal.status).json(refusal.body);
+      result = (planBilling.result as { status: 'executed'; result: typeof result }).result;
+    }
 
     if (result?.validation_result?.status === 'invalid' && effectiveMode === 'generate_plan' && !result?.plan) {
       return res.status(422).json({

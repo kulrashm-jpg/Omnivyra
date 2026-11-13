@@ -384,7 +384,34 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
       // F-14: result persistence via the generalized runway completion.
       const { completeRunwayOperation } = await import('../../lib/platform/runway');
       const run = async () => {
-        const result = await runCampaignAiPlan(args as never);
+        // C75 (BLOCKING money): billed token-actual on the worker under the SAME identity as the inline path (the
+        // poll key) - an enqueued-then-inline request is ONE charge; a failed job releases its hold. Doubly dark.
+        const { runInteractivePlanBilled } = await import('../services/billing/plannerBilling');
+        const runPlan = () => runCampaignAiPlan(args as never);
+        const billed = await runInteractivePlanBilled({
+          kind: 'generate_plan',
+          companyId,
+          actorUserId,
+          campaignId: String(args?.campaignId ?? ''),
+          pollKey,
+          executor: runPlan,
+        });
+        let result: Awaited<ReturnType<typeof runPlan>>;
+        if (billed.kind === 'legacy') {
+          result = await runPlan();
+        } else if (billed.result.status === 'executed') {
+          result = billed.result.result;
+        } else {
+          if (billed.result.status === 'already_settled') {
+            // Charged by an earlier run of this poll key, but its result is not stored (else the poll would have
+            // returned it): surface for an operator, never re-run or re-charge.
+            const { emitAnomaly } = await import('../services/billing/billingAuditEmitter');
+            emitAnomaly({ organizationId: companyId, kind: 'charged_no_output', severity: 'critical', message: 'interactive_plan_charged_without_stored_result', metadata: { poll_key: pollKey } });
+          }
+          // Insufficient credits (checked again here: the balance can change while queued) etc. -> the job FAILS with
+          // the outcome code and no AI call; plan.ts surfaces failedReason to the client.
+          throw Object.assign(new Error(`${String(billed.result.status).toUpperCase()}: the plan was not generated`), { code: String(billed.result.status).toUpperCase() });
+        }
         await completeRunwayOperation({
           pollKey,
           action: 'interactive_plan',
