@@ -79,3 +79,19 @@ describe('membership-level by ruling: a payment already made always completes', 
     expect(r.status).not.toBe(403);
   });
 });
+
+describe('the gate compares the NORMALISED role (05): every company-admin spelling passes, view-only aliases do not', () => {
+  it.each(['ADMIN', 'COMPANYADMIN', 'company admin', 'Company_Admin', 'SUPER_ADMIN'])('stored role %j passes create-order and profile', async (role) => {
+    for (const [h, m] of [[createOrder, 'POST'], [profile, 'PUT']] as const) {
+      asRole(role);
+      const r = await run(h, m);
+      expect(r.body?.code).not.toBe('INSUFFICIENT_ROLE');
+    }
+  });
+  it.each(['VIEWER', 'CONTENT_ENGAGER', 'CONTENT_MANAGER', 'CONTENT_PLANNER', 'garbage-role'])('stored role %j -> 403 INSUFFICIENT_ROLE', async (role) => {
+    asRole(role);
+    const r = await run(checkoutSession, 'POST');
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ code: 'INSUFFICIENT_ROLE' });
+  });
+});

@@ -55,6 +55,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from './IdentityResolver';
 import { supabase } from '../db/supabaseClient';
 import { isPlatformSuperAdmin } from '../services/rbacService';
+import { normalizeRole } from '../services/rbacPrimitives';
 import { logger } from '../services/logger';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { seedRequestContextFromRequest } from '../services/requestContext';
@@ -101,6 +102,13 @@ export interface TenantAccessOptions {
    * this set. Platform super-admin bypass still applies.
    */
   requireRoleIn?: ReadonlyArray<string>;
+  /**
+   * Like requireRoleIn, but compares the membership role AFTER normalizeRole (rbacPrimitives): 'ADMIN', 'CompanyAdmin',
+   * 'company admin' and 'COMPANY_ADMIN' all count as COMPANY_ADMIN. requireRoleIn compares the RAW stored value, so a
+   * raw list must track every normaliser alias by hand and silently misses one (05, 2026-11-13: COMPANYADMIN). Use this
+   * for any role gate that means "this role, however it is spelled". List NORMALISED role names only.
+   */
+  requireNormalizedRoleIn?: ReadonlyArray<string>;
   /**
    * When true, the platform-super-admin bypass is disallowed. Use for
    * tenant-scoped operations that should NEVER be performed cross-tenant
@@ -289,6 +297,12 @@ async function assertTenantAccessBatched(input: TenantAccessInput): Promise<Tena
     const allowed = role && input.options.requireRoleIn.includes(role);
     if (!allowed) return { ok: false, reason: 'INSUFFICIENT_ROLE', userId };
   }
+  if (input.options?.requireNormalizedRoleIn && input.options.requireNormalizedRoleIn.length > 0) {
+    const normalized = normalizeRole(role);
+    if (!normalized || !input.options.requireNormalizedRoleIn.includes(normalized)) {
+      return { ok: false, reason: 'INSUFFICIENT_ROLE', userId };
+    }
+  }
 
   const { data: orgRow, error: orgErr } = org;
   if (orgErr) {
@@ -390,6 +404,12 @@ async function assertTenantAccessSequential(input: TenantAccessInput): Promise<T
   if (input.options?.requireRoleIn && input.options.requireRoleIn.length > 0) {
     const allowed = role && input.options.requireRoleIn.includes(role);
     if (!allowed) return { ok: false, reason: 'INSUFFICIENT_ROLE', userId };
+  }
+  if (input.options?.requireNormalizedRoleIn && input.options.requireNormalizedRoleIn.length > 0) {
+    const normalized = normalizeRole(role);
+    if (!normalized || !input.options.requireNormalizedRoleIn.includes(normalized)) {
+      return { ok: false, reason: 'INSUFFICIENT_ROLE', userId };
+    }
   }
 
   // Organization existence + state: status must be 'active'. deleted_at is

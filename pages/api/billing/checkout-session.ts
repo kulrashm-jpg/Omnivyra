@@ -75,7 +75,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
    * the body first would only decide which unauthorized request proceeds.
    */
   // Owner ruling 2026-11-13: billing writes are company admins only (BILLING_WRITE_ROLES).
-  const tenant = await requireTenantAccess(req, res, organizationId, { requireRoleIn: BILLING_WRITE_ROLES });
+  const tenant = await requireTenantAccess(req, res, organizationId, { requireNormalizedRoleIn: BILLING_WRITE_ROLES });
   if (!tenant) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});

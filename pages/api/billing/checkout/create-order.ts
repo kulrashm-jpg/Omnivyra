@@ -136,4 +136,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 // Owner ruling 2026-11-13: buying credits / starting a subscription is company admins only. verify and close stay
 // membership-level (a payment already made must always complete) - see BILLING_WRITE_ROLES.
-export default __createApiRoute(withOrgAccess(handler, undefined, { requireRoleIn: BILLING_WRITE_ROLES }), { route: '/api/billing/checkout/create-order' });
+export default __createApiRoute(withOrgAccess(handler, undefined, { requireNormalizedRoleIn: BILLING_WRITE_ROLES }), { route: '/api/billing/checkout/create-order' });

@@ -56,7 +56,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
    * need it, and a guard inside one branch would leave the other open.
    */
   // Owner ruling 2026-11-13: the PUT (a billing-context WRITE) is company admins only; the GET stays membership-level.
-  const tenant = await requireTenantAccess(req, res, organizationId, req.method === 'PUT' ? { requireRoleIn: BILLING_WRITE_ROLES } : undefined);
+  // Any other method already got 405 above, so a method added later fails closed unless it is added there too (05).
+  const tenant = await requireTenantAccess(req, res, organizationId, req.method === 'PUT' ? { requireNormalizedRoleIn: BILLING_WRITE_ROLES } : undefined);
   if (!tenant) return;
 
   // ── GET — resolved geography (read path UNCHANGED) ────────────────────────
