@@ -19,7 +19,17 @@ describe('no dead view-mode layers in campaign details (F2)', () => {
     const s = read(p);
     expect(s).not.toMatch(/VIEW_RULES|showCMOLayer|showSystemFields/);
   });
-  it('control: the matrix itself still exists (the activity workspace uses showCreatorBrief)', () => {
+  it('the activity workspace has no view mode either (its user.role is admin|user, so it was always USER)', () => {
+    expect(read('components/activity-workspace/ActivityWorkspaceBriefSection.tsx')).not.toMatch(/VIEW_RULES|viewMode|showSystemFields|systemBlockExpanded/);
+    expect(read('hooks/useActivityWorkspace.tsx')).not.toMatch(/getViewMode|viewMode|systemBlockExpanded/);
+  });
+  it('the CMO chip values are no longer computed or passed', () => {
+    for (const p of ['components/WeekCardController.tsx', 'components/WeekCard.tsx']) {
+      expect(read(p)).not.toMatch(/\b(executionRiskLabel|executionRiskClass|pressureLabel|pressureColorClass|capacityFitLabel|capacityFitClass|momentumLabel|executionBalancerRecommendations|expandedSystemWeek|viewMode)\b/);
+    }
+  });
+  it('control: the matrix still exists for its remaining (batch-2) campaign-details hook importers', () => {
     expect(read('utils/viewVisibilityMatrix.ts')).toMatch(/showCreatorBrief/);
+    expect(read('hooks/useCampaignDetailsCore.tsx')).toMatch(/getViewMode/);
   });
 });
