@@ -48,6 +48,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
+import { readHoldSettlementState, isDefinitiveDbRefusal, CreditSettlementAmbiguousError } from './billing/holdSettlementState';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
@@ -422,9 +423,25 @@ export async function executeWithCredits<T>(
       performedBy:    userId,
     });
 
+    // e9 ruling 2026-11-13 (BLOCKING for pricing): an error here does NOT prove the confirm failed - a timeout after the
+    // server's commit looks the same - and releasing the whole hold after a committed confirm refunds consumed
+    // credits. Read the hold's settled state first; release ONLY when the hold is provably open AND the error was a
+    // definitive database refusal. A committed confirm is adopted; anything else is left for the reconciler.
+    let adoptedConfirmId: string | null = null;
     if (partialErr) {
       const msg = (partialErr as any).message ?? '';
       logger.error('credit_partial_confirm_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
+      const settled = await readHoldSettlementState({ holdId, confirmKey, releaseKey });
+      if (settled.state === 'confirmed') {
+        logger.warn('credit_partial_confirm_error_but_committed', { orgId, action, idempotencyKey: baseKey, confirmId: settled.transactionId, message: msg });
+        adoptedConfirmId = settled.transactionId;
+      } else if (settled.state !== 'open' || !isDefinitiveDbRefusal(partialErr)) {
+        logger.error('credit_partial_confirm_ambiguous', { orgId, action, idempotencyKey: baseKey, holdId, settledState: settled.state, message: msg });
+        throw new CreditSettlementAmbiguousError(holdId, settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `hold ${settled.state}; ${msg}`);
+      }
+    }
+    if (partialErr && !adoptedConfirmId) {
+      const msg = (partialErr as any).message ?? '';
       const releaseResult = await callCreditReservation({
         orgId,
         phase:          'release',
@@ -442,7 +459,7 @@ export async function executeWithCredits<T>(
       throw new Error(`[creditExecution] partial_confirm failed: ${msg}`);
     }
 
-    confirmId = (partialData as any)?.id ?? null;
+    confirmId = adoptedConfirmId ?? (partialData as any)?.id ?? null;
     const underfunded = !!(partialData as any)?.is_underfunded;
     const consumedTotal = Number((partialData as any)?.total_consumed ?? actualCredits);
     const releasedTotal = Number((partialData as any)?.total_released ?? Math.max(0, credits - actualCredits));
@@ -489,9 +506,23 @@ export async function executeWithCredits<T>(
       parentId:       holdId ?? undefined,
     });
 
+    // e9 ruling 2026-11-13: same rule as the partial-confirm path - a confirm error is not proof that nothing
+    // committed. Release only a provably open hold after a definitive DB refusal; adopt a committed confirm.
+    let adoptedFixedConfirmId: string | null = null;
     if (confirmErr) {
       const msg = (confirmErr as any).message ?? '';
       logger.error('credit_confirm_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
+      const settled = await readHoldSettlementState({ holdId, confirmKey, releaseKey });
+      if (settled.state === 'confirmed') {
+        logger.warn('credit_confirm_error_but_committed', { orgId, action, idempotencyKey: baseKey, confirmId: settled.transactionId, message: msg });
+        adoptedFixedConfirmId = settled.transactionId;
+      } else if (settled.state !== 'open' || !isDefinitiveDbRefusal(confirmErr)) {
+        logger.error('credit_confirm_ambiguous', { orgId, action, idempotencyKey: baseKey, holdId, settledState: settled.state, message: msg });
+        throw new CreditSettlementAmbiguousError(holdId, settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `hold ${settled.state}; ${msg}`);
+      }
+    }
+    if (confirmErr && !adoptedFixedConfirmId) {
+      const msg = (confirmErr as any).message ?? '';
       const releaseResult = await callCreditReservation({
         orgId,
         phase:          'release',
@@ -509,7 +540,7 @@ export async function executeWithCredits<T>(
       throw new Error(`[creditExecution] confirm failed: ${msg}`);
     }
 
-    confirmId = transactionId;
+    confirmId = adoptedFixedConfirmId ?? transactionId;
     logger.info('credit_confirmed', { orgId, action, credits, confirmId });
 
     if (confirmId) {

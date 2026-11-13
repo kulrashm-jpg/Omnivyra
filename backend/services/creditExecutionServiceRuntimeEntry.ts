@@ -48,6 +48,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
+import { readHoldSettlementState, isDefinitiveDbRefusal, CreditSettlementAmbiguousError } from './billing/holdSettlementState';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
@@ -370,16 +371,32 @@ export async function executeWithEntryConsumption<T>(
       note:           `[SETTLE] ${opts.note ?? action}`,
       performedBy:    exposureHandle.userId,
     });
+    let adoptedConfirmId: string | null = null;
     if (settleErr) {
       const msg = (settleErr as any).message ?? '';
       logger.error('entry_consumption_settle_failed', { orgId: opts.orgId, action, message: msg });
-      await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — settle failed` });
-      throw new Error(`[entryConsumption] exposure settle failed: ${msg}`);
+      // e9 ruling 2026-11-13: an error does not prove the settle failed (see holdSettlementState). Release the
+      // exposure ONLY when it is provably open AND the error was a definitive DB refusal; adopt a committed settle;
+      // leave everything else for the reservation reconciler.
+      const settled = await readHoldSettlementState({
+        holdId: exposureHandle.holdTransactionId, confirmKey: exposureConfirmKey, releaseKey: exposureReleaseKey,
+      });
+      if (settled.state === 'confirmed') {
+        logger.warn('entry_consumption_settle_error_but_committed', { orgId: opts.orgId, action, confirmId: settled.transactionId, message: msg });
+        adoptedConfirmId = settled.transactionId;
+      } else if (settled.state === 'open' && isDefinitiveDbRefusal(settleErr)) {
+        await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — settle failed` });
+        throw new Error(`[entryConsumption] exposure settle failed: ${msg}`);
+      } else {
+        logger.error('entry_consumption_settle_ambiguous', { orgId: opts.orgId, action, holdId: exposureHandle.holdTransactionId, settledState: settled.state, message: msg });
+        throw new CreditSettlementAmbiguousError(exposureHandle.holdTransactionId, settled.state === 'unreadable' ? `state unreadable: ${settled.message}` : `exposure ${settled.state}; ${msg}`);
+      }
     }
+    // A settle adopted after an error has no RPC payload: the planned amounts below are what was sent.
     additionalConsumed = Number((settleData as any)?.total_consumed ?? plan.additionalConsumption);
     exposureReleased   = Number((settleData as any)?.total_released ?? plan.exposureReleased);
 
-    const settleConfirmId = (settleData as any)?.id ?? null;
+    const settleConfirmId = adoptedConfirmId ?? (settleData as any)?.id ?? null;
     if (settleConfirmId) {
       await trackUsage({
         orgId:                exposureHandle.orgId,
