@@ -13,8 +13,13 @@
 --   ceiling_usd        a CAP on the SETTLED price (a runaway guard), NOT the hold: estimateLlmHoldCredits computes the hold
 --                      from the caller's maxInput/maxOutputTokens with applyCeiling:false (pricingService.ts:510). So the
 --                      ceiling covers a whole billed UNIT (a multi-call workflow settles the SUM of its calls): observed
---                      per-call max x calls-per-unit x 15 x 1.5 headroom (campaign_generation 3 calls, insight_generation
---                      5 = one virality assessment, content_basic 7 = the longest blog template). With fewer than 30
+--                      per-call max x calls-per-unit x 15 x 1.5 headroom. CALLS PER UNIT are CODE-TRACED (read-only trace
+--                      2026-11-13, file:line evidence with e1) unless marked otherwise: insight_generation 5 (one virality
+--                      assessment); blog_generation 32 (planner 3 + 8 sections + 5 failed-section repairs + 8 scored repairs +
+--                      3 duplicate repairs + 5 for the compatibility core); profile_refine 6 (3 extraction + 3 enrichment);
+--                      content_basic = 2 per ITEM of a bulk queue job (its other two charge sites are FIXED-price and do not use
+--                      this row). 83's C94 usage proxy (max calls per org per 2 min) is an UPPER bound that merges units and is
+--                      not cited as per-unit. With fewer than 30
 --                      observed calls, or none, the ceiling is never below the previously prescribed credits at 0.007.
 --
 -- NOT TOUCHED (rows left exactly as they are): website_audit, deep_analysis, full_strategy (report pipelines stay
@@ -35,18 +40,23 @@
 --   async_campaign_planning          ceiling 0.3500  no observed calls; prior prescribed 50 credits at 0.007
 --   blogAnalyticsInsight             ceiling 0.0560  no observed calls; prior prescribed 8 credits at 0.007
 --   blog_brief_suggestions           ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
---   blog_generation                  ceiling 0.4200  no observed calls; prior prescribed 60 credits at 0.007
+--   blog_generation                  ceiling 8.1101  blogGeneration observed max 0.011264 (108 calls) x32 calls (traced) x15 x1.5
 --   blog_rewrite_hook                ceiling 0.0210  no observed calls; prior prescribed 3 credits at 0.007
 --   campaign_chat                    ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   campaign_creation                ceiling 0.2800  no observed calls; prior prescribed 40 credits at 0.007
---   campaign_generation              ceiling 0.3284  observed max 0.004864 x3 calls x15 x1.5 (170 calls)
+--   campaign_generation              ceiling 0.3284  observed max 0.004864 x3 x15 x1.5 - NOTE (trace): the only CHARGED path
+--                                    (autonomousCampaignAgent) makes NO LLM call and charges FIXED (credit_cost_config 50),
+--                                    so this row is inert there; pricing of that path is an open question with e9
 --   campaign_optimization            ceiling 0.2100  no observed calls; prior prescribed 30 credits at 0.007
 --   campaign_preplanning             ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   campaign_suggest_duration        ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   campaign_suggest_update          ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   chat_theme_refine                ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
 --   competitor_signals               ceiling 0.0560  no observed calls; prior prescribed 8 credits at 0.007
---   content_basic                    ceiling 1.7741  observed max 0.011264 x7 calls x15 x1.5 (177 calls)
+--   content_basic                    ceiling 1.7741  (unchanged value; basis CORRECTED) the token path is a bulk queue job: 2 calls
+--                                    per item (generateMasterContent max 0.001315 + generateContentAngles 0.000342) x15 x1.5 =
+--                                    0.0373/item -> covers ~47 items. Items are not capped in code (producer currently unused;
+--                                    cap requested). The old note's 0.011264 x7 was blogGeneration data (ledger label)
 --   content_generation               ceiling 0.0296  observed max 0.001315 x1 calls x15 x1.5 (377 calls)
 --   content_repurpose                ceiling 0.0350  no observed calls; prior prescribed 5 credits at 0.007
 --   content_rewrite                  ceiling 0.0637  observed max 0.002829 x1 calls x15 x1.5 (307 calls)
@@ -66,9 +76,9 @@
 --   prediction                       ceiling 0.0700  no observed calls; prior prescribed 10 credits at 0.007
 --   profile_enrichment               ceiling 0.1032  observed max 0.004586 x1 calls x15 x1.5 (66 calls)
 --   profile_extraction               ceiling 0.2441  observed max 0.010847 x1 calls x15 x1.5 (82 calls)
---   profile_refine                   ceiling 1.1826  NEW KEY (e9 2026-11-13: onboarding setup-company + manual
---                                    /api/company-profile/refine ran unpriced): one refine UNIT = up to 4 profileExtraction
---                                    (observed max 0.010847, 82 calls) + 2 profileEnrichment (0.004586, 66 calls) x15 x1.5
+--   profile_refine                   ceiling 1.1826  NEW KEY (e9 2026-11-13: onboarding + manual refine ran unpriced). One refine
+--                                    = 3 profileExtraction + 3 profileEnrichment (TRACED); the ceiling was set from a 4 + 2
+--                                    estimate (0.010847 x4 + 0.004586 x2 = 0.05256) which exceeds the traced 3 + 3 (0.04630) - kept
 --   quick_platform_adapt             ceiling 0.0210  no observed calls; prior prescribed 3 credits at 0.007
 --   recommendations_generate         ceiling 0.0560  no observed calls; prior prescribed 8 credits at 0.007
 --   recommendations_group_preview    ceiling 0.0070  no observed calls; prior prescribed 1 credits at 0.007
@@ -110,7 +120,7 @@ INSERT INTO m046_target (action_key, ceiling_usd) VALUES
   ('async_campaign_planning', 0.3500),
   ('blogAnalyticsInsight', 0.0560),
   ('blog_brief_suggestions', 0.0070),
-  ('blog_generation', 0.4200),
+  ('blog_generation', 8.1101),
   ('blog_rewrite_hook', 0.0210),
   ('campaign_chat', 0.0070),
   ('campaign_creation', 0.2800),
