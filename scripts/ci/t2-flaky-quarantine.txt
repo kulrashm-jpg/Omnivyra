@@ -1,0 +1,6 @@
+# Flaky-test quarantine for the T2 parity gate (e9 ruling 2026-11-12: reason + owner + tracking line, no retry loops).
+# Format: <id> # FLAKY-<ID> owner=<track> track=<log> expires=<YYYY-MM-DD> reason=<why>. Expired or stale entries are warned.
+# A listed test still runs; a HEAD-only failure of it is reported as QUARANTINED, not counted. Removing a line restores
+# the normal rule. Gate file (#27): changes are reviewed by virality-05.
+backend/tests/unit/themeAngleEngine.test.ts::themeAngleEngine generateThemeFromTopic executes in under 1ms # FLAKY-THEME-001 owner=content-theme-engine track=post-launch-register:replace-wall-clock-assertion expires=2026-12-31 reason=a sub-millisecond wall-clock bound on a shared CI runner fails at random (CI-193 run 43223111103; e1 quarantined it as it.skip in 0de9fa05d)
+backend/tests/unit/encryptionKeyRingReadiness.test.ts::malformed ciphertext fails closed uppercase key id → typed malformed/unknown error, input never returned # FLAKY-KEYRING-001 owner=virality-83 track=fixed-in-tenancy/seam-s1-20261112 expires=2026-11-20 reason=FIXED, not a timing flake: the random key id is all-digit in ~2.3% of runs so toUpperCase() is a no-op; the fixture fix (lettered key id + precondition case) ships with S1 - listed ONLY until S1 is on main, remove then
