@@ -47,9 +47,17 @@ export default function ExternalApisTabContent({ d }: { d: ExternalApisState }) 
   return (
     <>
         {(isApiCategoryTab || activeTab === 'usage') && (
-          <div className="bg-white rounded-lg shadow p-3">
-            <HealthBadgeLegend />
-          </div>
+          isPlatformCatalogMode ? (
+            <div className="bg-white rounded-lg shadow p-3">
+              <HealthBadgeLegend />
+            </div>
+          ) : (
+            // UI step 7c: reference material, collapsed by default in company mode.
+            <details className="bg-white rounded-lg shadow p-3">
+              <summary className="cursor-pointer text-sm font-medium text-gray-700">What do the health badges mean?</summary>
+              <div className="mt-2"><HealthBadgeLegend /></div>
+            </details>
+          )
         )}
 
       <ExternalApisSectionsA f={f} />
