@@ -231,6 +231,8 @@ export type RunResponse = {
     confidence_index?: number | null;
     legacy_status?: string | null;
     legacy_error?: string | null;
+    /** Per-region outcomes of a part-way run, keyed by code (55's charging). Optional until the run API includes them. */
+    region_issues?: Array<{ region: string; code?: string | null; charged?: boolean; message?: string | null }> | null;
     /** Phase 1A: previously-dropped fields, now surfaced from consolidated_result. */
     strategic_summary?: string | null;
     risk_alerts?: string[] | null;

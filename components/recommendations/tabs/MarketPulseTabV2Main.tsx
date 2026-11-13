@@ -8,6 +8,7 @@ import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 import { MARKET_PULSE_CATEGORIES, type ContextResponse, type AutomationResponse, SOURCE_STRATEGIES, type MarketPulseFinding, type RunResponse, type HistoryItem, type PendingRunState, type MarketDimension, type AttentionFilter, MARKET_DIMENSIONS, ATTENTION_FILTERS, findingMatchesDimension, findingMatchesAttention, sortBySignalAttention, SignalExplainability } from './MarketPulseTabV2Model';
 import { SignificanceBadge, SignalMovement, ExecutiveScanStrip, SinceLastPulseStrip, filterDeltaSummary, DimensionFilters, AttentionFilters, MarketNarrativesSection, type MarketPulseLoadError, OBJECTIVES, toTitle, buildResolvedRegionPreview, buildFocusedCategoryDefaults, buildExpandedCategoryDefaults, wait, FeedSection, ExecutivePanels } from './MarketPulseTabV2Widgets';
 import { useMarketPulseTabController } from './MarketPulseTabV2Controller';
+import { MarketPulseCreditNotice, MarketPulseRunWarnings } from './MarketPulseCreditNotices';
 
 export default function MarketPulseTabV2(props: OpportunityTabProps) {
   const f = useMarketPulseTabController(props);
@@ -15,7 +16,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     actioningFindingId, activeAttentionFilter, activeDimension, activeScanStatusPanel,
     allVisibleRankedFindings, attentionCounts, automationEnabled, automationLoading, cancelLoading, changeDiff,
     companyId, competitorScope, context, creditAcknowledged, customDirection, customRegions, dimensionCounts,
-    dimensionRankedFindings, errorMessage, fetchWithAuth, filteredMarketDeltaSummary, findingStateOverrides,
+    creditNotice, dimensionRankedFindings, errorMessage, fetchWithAuth, filteredMarketDeltaSummary, findingStateOverrides,
     groupedFindings, hasPrioritizedFeed, history, loadMostRecentRunResult, loadRunResult, loadingContext, mode,
     objective, pendingRun, performFindingAction, regionScope, resolvedRegionPreview, runId, runResult, runScan,
     running, saveAutomation, scanSetupAutoOpened, scanSetupOpen, selectedCategories, setActioningFindingId,
@@ -48,6 +49,8 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
       </div>
 
       {errorMessage && <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">{errorMessage}</div>}
+      <MarketPulseCreditNotice notice={creditNotice} />
+      {runResult && <MarketPulseRunWarnings status={runResult.run.status} regionIssues={runResult.run.region_issues} />}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-6">
