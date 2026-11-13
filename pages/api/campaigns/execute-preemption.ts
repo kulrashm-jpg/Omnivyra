@@ -13,6 +13,7 @@ import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdown
 import {
   executeCampaignPreemption,
   PreemptionValidationError,
+  PreemptionOwnershipError,
   type ApprovalRequiredResult,
   type ExecutePreemptionResult,
 } from '../../../backend/services/CampaignPreemptionService';
@@ -58,6 +59,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: true,
     });
     if (!access) return;
+    // CROSS-TENANT FIX: the PREEMPTED campaign is written too - bind it to the same company (404 if it is another
+    // company's). The service re-checks both (canonical owner must equal companyId).
+    const targetAccess = await enforceCompanyAccess({
+      req,
+      res,
+      companyId,
+      campaignId: preemptedCampaignId,
+      requireCampaignId: true,
+    });
+    if (!targetAccess) return;
 
     const justificationTrimmed = typeof justification === 'string' ? justification.trim() : '';
     if (!justificationTrimmed || justificationTrimmed.length < 15) {
@@ -151,6 +162,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         code: 'INVALID_EXECUTION_TRANSITION',
         message: 'Illegal execution state transition',
       });
+    }
+    if (err instanceof PreemptionOwnershipError) {
+      // A campaign of another company (or none) is "not found" - never an existence oracle.
+      return err.kind === 'unverified'
+        ? res.status(503).json({ error: 'Campaign ownership check is temporarily unavailable. Please try again.', code: 'CAMPAIGN_LOOKUP_ERROR', retryable: true })
+        : res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     }
     if (err instanceof PreemptionValidationError) {
       return res.status(400).json({

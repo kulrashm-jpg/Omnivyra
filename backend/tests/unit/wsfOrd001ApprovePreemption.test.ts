@@ -39,6 +39,7 @@ const mockExecutePreemption = jest.fn(async (..._a: unknown[]) => ({
 jest.mock('../../services/CampaignPreemptionService', () => ({
   executePreemptionFromRequest: (...a: unknown[]) => mockExecutePreemption(...a),
   PreemptionValidationError: class PreemptionValidationError extends Error {},
+  PreemptionOwnershipError: class PreemptionOwnershipError extends Error {},
 }));
 
 const mockRunPrePlanning = jest.fn(async (..._a: unknown[]) => ({ ok: true }));
@@ -52,13 +53,27 @@ const approvePreemption = require('../../../pages/api/campaigns/approve-preempti
 
 const REQ_A = 'preq-a-0000-0000-0000-00000000000a';
 const REQ_B = 'preq-b-0000-0000-0000-00000000000b';
+// Every real request row names its TARGET (createApprovalRequest always inserts target_campaign_id, NOT NULL in
+// the schema): a second campaign of the same company. REQ_X is a pre-fix row whose target is ANOTHER company's.
+const CAMPAIGN_A2 = 'camp-a2-0-0000-0000-0000000000a2';
+const CAMPAIGN_B2 = 'camp-b2-0-0000-0000-0000000000b2';
+const REQ_X = 'preq-x-0000-0000-0000-00000000000c';
 const JUSTIFICATION = 'A sufficiently long justification for the preemption.';
 
 function world(finalized: boolean) {
   seed({
     campaign_preemption_requests: [
-      { id: REQ_A, initiator_campaign_id: CAMPAIGN_A, status: 'PENDING' },
-      { id: REQ_B, initiator_campaign_id: CAMPAIGN_B, status: 'PENDING' },
+      { id: REQ_A, initiator_campaign_id: CAMPAIGN_A, target_campaign_id: CAMPAIGN_A2, status: 'PENDING' },
+      { id: REQ_B, initiator_campaign_id: CAMPAIGN_B, target_campaign_id: CAMPAIGN_B2, status: 'PENDING' },
+      { id: REQ_X, initiator_campaign_id: CAMPAIGN_A, target_campaign_id: CAMPAIGN_B, status: 'PENDING' },
+    ],
+    campaigns: [
+      { id: CAMPAIGN_A2, company_id: CO_A, name: 'Campaign A2', status: 'planning' },
+      { id: CAMPAIGN_B2, company_id: CO_B, name: 'Campaign B2', status: 'planning' },
+    ],
+    campaign_versions: [
+      { campaign_id: CAMPAIGN_A2, company_id: CO_A, version: 1, created_at: '2026-01-01', campaign_snapshot: {} },
+      { campaign_id: CAMPAIGN_B2, company_id: CO_B, version: 1, created_at: '2026-01-01', campaign_snapshot: {} },
     ],
   });
   if (finalized) {
@@ -135,6 +150,15 @@ describe('WSF-ORD-001 — campaigns/approve-preemption ordering', () => {
       expect(r.status).toBe(200);
       expect(r.body).toMatchObject({ status: 'EXECUTED' });
       expect(mockExecutePreemption).toHaveBeenCalledWith(REQ_A, JUSTIFICATION.trim(), CO_A);
+    });
+
+    it("CROSS-TENANT FIX: a request of A whose TARGET is B's campaign -> 404; nothing executed, nothing recorded", async () => {
+      world(false);
+      const r = await invoke(approvePreemption, { method: 'POST', as: 'A', body: body(REQ_X, CO_A) });
+      expect(r.status).toBe(404);
+      expect(r.body).toMatchObject({ code: 'CAMPAIGN_NOT_FOUND' });
+      expect(mockExecutePreemption).not.toHaveBeenCalled();
+      expect(mockRecordGovernanceEvent).not.toHaveBeenCalled();
     });
 
     it('an unknown request id for an authorized company still answers 404', async () => {
