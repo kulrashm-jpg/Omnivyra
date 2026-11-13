@@ -10,11 +10,13 @@ const __dbReads: string[] = [];
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: (t: string) => { __dbReads.push(t); throw new Error(`no database read expected (from ${t})`); } },
 }));
+jest.mock('../../services/logger', () => ({ logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
+import { logger } from '../../services/logger';
 
 import { resolveBillingAmount, HIDDEN_BILLING_RETIRED_REASON } from '../../services/billing/payments/billingAmountResolver';
 import * as resolverModule from '../../services/billing/payments/billingAmountResolver';
 
-beforeEach(() => { __dbReads.length = 0; });
+beforeEach(() => { __dbReads.length = 0; (logger.warn as jest.Mock).mockClear(); });
 
 describe('billingAmountResolver - retired: every well-formed reference refuses', () => {
   test.each([
@@ -26,6 +28,17 @@ describe('billingAmountResolver - retired: every well-formed reference refuses',
     const r = await resolveBillingAmount({ intentType, reference });
     expect(r).toEqual({ ok: false, code: 'disabled_reference', reason: HIDDEN_BILLING_RETIRED_REASON });
     expect(__dbReads).toEqual([]);
+  });
+
+  test('diagnostics separate "resolver retired" from "this reference is disabled" (05)', async () => {
+    await resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' });
+    expect(logger.warn).toHaveBeenCalledWith('billing_amount_resolver_retired',
+      { intentType: 'topup', reference: 'topup_credits_500', retired: true });
+  });
+
+  test('a malformed reference is not logged as a retirement', async () => {
+    await resolveBillingAmount({ intentType: 'topup', reference: 'Bad Ref!' });
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   test('never resolves ok for any intent type', async () => {

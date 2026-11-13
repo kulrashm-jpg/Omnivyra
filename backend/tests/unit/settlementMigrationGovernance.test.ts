@@ -13,6 +13,8 @@ import {
   REQUIRED_SETTLEMENT_TABLES,
   REQUIRED_SETTLEMENT_FUNCTIONS,
   REQUIRED_IMMUTABILITY_TRIGGERS,
+  RETIRED_HIDDEN_BILLING_TABLES,
+  RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS,
   type MigrationFacts,
 } from '../../services/billing/payments/settlementMigrationGovernance';
 
@@ -33,7 +35,7 @@ describe('migration governance — fully ready', () => {
     const report = evaluateSettlementMigrationReadiness(completeFacts());
     expect(report.ok).toBe(true);
     expect(report.failures).toEqual([]);
-    expect(report.checks).toHaveLength(6);
+    expect(report.checks).toHaveLength(7);
   });
 });
 
@@ -109,6 +111,7 @@ describe('migration governance — dry-run governance validation', () => {
     expect(names).toEqual([
       'ledger_reconciliation', 'migration_ordering_integrity', 'settlement_tables_present',
       'rollup_prune_rpc_present', 'append_only_immutability_triggers', 'pricing_blind',
+      'retired_hidden_billing_frozen',
     ]);
   });
 });
@@ -129,7 +132,7 @@ describe('migration governance — immutability verification', () => {
     expect(failed(facts)).toContain('append_only_immutability_triggers');
   });
 
-  test('all 8 immutability triggers present → no immutability gap', () => {
+  test('all required immutability triggers present → no immutability gap', () => {
     expect(failed(completeFacts())).not.toContain('append_only_immutability_triggers');
   });
 });
@@ -151,6 +154,43 @@ describe('migration governance — hidden-pricing preservation', () => {
     const serialized = JSON.stringify(report).toLowerCase();
     for (const f of ['"amount"', '"price"', '"pricing"', '"revenue"', '"invoice"', '"subtotal"']) {
       expect(serialized).not.toContain(f);
+    }
+  });
+});
+
+describe('migration governance — retired hidden billing stays frozen (e9 C97 1(a); 05)', () => {
+  const frozen = (facts: MigrationFacts) =>
+    evaluateSettlementMigrationReadiness(facts).checks.find((c) => c.name === 'retired_hidden_billing_frozen')!;
+
+  test('retired tables absent → passes (not required)', () => {
+    const c = frozen(completeFacts());
+    expect(c.ok).toBe(true);
+    expect(c.detail).toBe('retired hidden-billing tables absent');
+  });
+
+  test('retired tables present WITH both audit triggers → passes, presence reported', () => {
+    const facts = completeFacts();
+    facts.tables.push(...RETIRED_HIDDEN_BILLING_TABLES);
+    facts.triggers.push(...RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.map((t) => ({ ...t })));
+    const c = frozen(facts);
+    expect(c.ok).toBe(true);
+    expect(c.detail).toContain('present and frozen');
+  });
+
+  test.each(RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.map((t) => t.trigger))(
+    'audit table present but %s missing → retired_hidden_billing_frozen FAILS', (missing) => {
+      const facts = completeFacts();
+      facts.tables.push('hidden_billing_catalog_audit');
+      facts.triggers.push(...RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.filter((t) => t.trigger !== missing).map((t) => ({ ...t })));
+      const report = evaluateSettlementMigrationReadiness(facts);
+      expect(report.failures).toEqual(['retired_hidden_billing_frozen']);
+      expect(frozen(facts).detail).toContain(missing);
+    });
+
+  test('retired objects are no longer REQUIRED', () => {
+    for (const t of RETIRED_HIDDEN_BILLING_TABLES) expect(REQUIRED_SETTLEMENT_TABLES as readonly string[]).not.toContain(t);
+    for (const t of RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS) {
+      expect(REQUIRED_IMMUTABILITY_TRIGGERS.map((r) => r.trigger) as string[]).not.toContain(t.trigger);
     }
   });
 });

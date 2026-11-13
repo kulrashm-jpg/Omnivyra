@@ -1,7 +1,7 @@
 /**
  * Billing amount resolution for the provider-neutral checkout-session orchestrator - RETIRED.
  *
- * This resolver priced checkouts from the hidden operator-managed `hidden_billing_catalog` (migration 20260717),
+ * This resolver priced checkouts from the hidden operator-managed billing catalog table (migration 20260717),
  * falling back to a compiled copy of its seed on any read error. The OWNER RETIRED the hidden-billing stack, and e9
  * ruled (2026-11-13, C97 item 1(a)): a checkout must never price from a retired catalog. So every reference now resolves
  * to 'disabled_reference' - no catalog read, no compiled fallback, no amount.
@@ -13,6 +13,8 @@
  *
  * The exported types are kept so the orchestrator's contract is unchanged.
  */
+
+import { logger } from '../../logger';
 
 export type BillingReferenceKind = 'subscription' | 'topup';
 
@@ -45,5 +47,7 @@ export async function resolveBillingAmount(args: {
   if (!REFERENCE_PATTERN.test(ref)) {
     return { ok: false, code: 'malformed_reference', reason: 'reference does not match the expected identifier shape' };
   }
+  // 05: the code names the REFERENCE, the truth is about the FEATURE - keep the two separable in diagnostics.
+  logger.warn('billing_amount_resolver_retired', { intentType: args.intentType, reference: ref, retired: true });
   return { ok: false, code: 'disabled_reference', reason: HIDDEN_BILLING_RETIRED_REASON };
 }

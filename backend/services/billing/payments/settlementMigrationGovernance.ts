@@ -26,9 +26,9 @@ export const SETTLEMENT_MIGRATION_VERSIONS = [
 
 /**
  * Tables the settlement foundation must have created. The hidden billing catalog and its audit table (20260717/18)
- * are RETIRED (owner; e9 C97 1(a), 2026-11-13): nothing reads or writes them, so readiness no longer requires them.
- * Their migration files stay in the version list below - applied files are immutable and 20260718 also creates
- * billing_checkout_sessions.
+ * are RETIRED (owner; e9 C97 1(a), 2026-11-13): nothing reads or writes them, so readiness no longer requires them -
+ * but governance does not stop looking at them: see RETIRED_HIDDEN_BILLING_* and the 'retired_hidden_billing_frozen'
+ * check. Their migration files stay in the version list below because applied migration files are immutable.
  */
 export const REQUIRED_SETTLEMENT_TABLES = [
   'payment_provider_config',
@@ -58,6 +58,16 @@ export const REQUIRED_IMMUTABILITY_TRIGGERS = [
   { table: 'settlement_operational_metrics', trigger: 'som_retention_gated_delete' },
   { table: 'settlement_metrics_rollup', trigger: 'smr_immutable_update' },
   { table: 'settlement_metrics_rollup', trigger: 'smr_immutable_delete' },
+] as const;
+
+/**
+ * RETIRED hidden-billing objects (owner; e9 C97 1(a)). Not required - but if the audit table exists (it may hold
+ * historical rows) its append-only triggers MUST still exist: retiring the feature must not unfreeze its audit trail.
+ */
+export const RETIRED_HIDDEN_BILLING_TABLES = ['hidden_billing_catalog', 'hidden_billing_catalog_audit'] as const;
+export const RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS = [
+  { table: 'hidden_billing_catalog_audit', trigger: 'hbca_audit_immutable_update' },
+  { table: 'hidden_billing_catalog_audit', trigger: 'hbca_audit_immutable_delete' },
 ] as const;
 
 /** Settlement operational/runtime tables that MUST stay pricing-blind. The
@@ -150,7 +160,7 @@ export function evaluateSettlementMigrationReadiness(facts: MigrationFacts): Gov
     name: 'settlement_tables_present',
     ok: missingTables.length === 0,
     detail: missingTables.length === 0
-      ? 'all 8 settlement tables present'
+      ? `all ${REQUIRED_SETTLEMENT_TABLES.length} settlement tables present`
       : `partial application — missing tables: ${missingTables.join(', ')}`,
   });
 
@@ -172,7 +182,7 @@ export function evaluateSettlementMigrationReadiness(facts: MigrationFacts): Gov
     name: 'append_only_immutability_triggers',
     ok: missingTriggers.length === 0,
     detail: missingTriggers.length === 0
-      ? 'all 8 append-only / retention-gated triggers present'
+      ? `all ${REQUIRED_IMMUTABILITY_TRIGGERS.length} append-only / retention-gated triggers present`
       : `immutability gap — missing: ${missingTriggers.map((t) => `${t.table}.${t.trigger}`).join(', ')}`,
   });
 
@@ -183,6 +193,21 @@ export function evaluateSettlementMigrationReadiness(facts: MigrationFacts): Gov
     detail: facts.pricingColumns.length === 0
       ? 'no pricing columns on settlement operational tables'
       : `pricing leakage: ${facts.pricingColumns.map((c) => `${c.table}.${c.column}`).join(', ')}`,
+  });
+
+  // 7. Retired hidden billing stays FROZEN: absent is fine; a present audit table keeps both append-only triggers.
+  const presentRetired = RETIRED_HIDDEN_BILLING_TABLES.filter((t) => tableSet.has(t));
+  const unfrozen = tableSet.has('hidden_billing_catalog_audit')
+    ? RETIRED_HIDDEN_BILLING_AUDIT_TRIGGERS.filter((t) => !triggerSet.has(`${t.table}.${t.trigger}`))
+    : [];
+  checks.push({
+    name: 'retired_hidden_billing_frozen',
+    ok: unfrozen.length === 0,
+    detail: unfrozen.length > 0
+      ? `retired audit trail unfrozen - missing: ${unfrozen.map((t) => `${t.table}.${t.trigger}`).join(', ')}`
+      : presentRetired.length === 0
+        ? 'retired hidden-billing tables absent'
+        : `retired hidden-billing tables present and frozen: ${presentRetired.join(', ')}`,
   });
 
   const failures = checks.filter((c) => !c.ok).map((c) => c.name);
