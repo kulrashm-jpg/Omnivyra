@@ -26,7 +26,8 @@ import { useCompanyProfileFormController } from './companyProfileFormController'
 import CompanyProfileFormSectionsA from './CompanyProfileFormSectionsA';
 import CompanyProfileFormSectionsB from './CompanyProfileFormSectionsB';
 import CompanyProfileFormSectionsC from './CompanyProfileFormSectionsC';
-import { WizardStepper, WizardStepNav } from './company/profileWizard/WizardStepper';
+import { WizardStepper, WizardStepNav, StepEditedNotice } from './company/profileWizard/WizardStepper';
+import { editedFieldsForStep } from './company/profileWizard/wizardSteps';
 
 export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const f = useCompanyProfileFormController(d);
@@ -257,12 +258,13 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           <div className="space-y-6">
             {/* UI step 6: the wizard step bar appears once the profile exists. */}
             {showOnboardingContinuation && <WizardStepper current={wizardStep} onSelect={setWizardStep} />}
+            {showOnboardingContinuation && <StepEditedNotice fields={editedFieldsForStep(wizardStep, activeProfile)} />}
             <CompanyProfileFormSectionsA f={f} />
             {showOnboardingContinuation ? (
               <>
                 <CompanyProfileFormSectionsB f={f} />
                 <CompanyProfileFormSectionsC f={f} />
-                <WizardStepNav current={wizardStep} onSelect={setWizardStep} />
+                <WizardStepNav current={wizardStep} onSelect={setWizardStep} onSave={isEditing ? () => saveProfile() : undefined} saving={isSaving} />
               </>
             ) : (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">

@@ -44,3 +44,44 @@ export function previousStepId(id: WizardStepId): WizardStepId | null {
   const i = stepIndex(id);
   return i > 0 ? WIZARD_STEPS[i - 1].id : null;
 }
+
+/**
+ * Profile columns edited on each step (6.5), used for the "edited by you" notice.
+ * Labels match the form.
+ */
+export const STEP_FIELDS: Readonly<Partial<Record<WizardStepId, ReadonlyArray<readonly [string, string]>>>> = Object.freeze({
+  basics: [['name', 'Company name'], ['industry', 'Industry'], ['category', 'Category'], ['geography', 'Geography']],
+  offering: [['products_services', 'What you offer'], ['unique_value', 'Unique value'], ['pricing_model', 'Pricing model']],
+  audience: [
+    ['target_audience', 'Target audience'], ['competitors', 'Competitors'], ['target_customer_segment', 'Target customer segment'],
+    ['ideal_customer_profile', 'Ideal customer profile'], ['sales_motion', 'Sales motion'], ['avg_deal_size', 'Avg deal size'],
+    ['sales_cycle', 'Sales cycle'],
+  ],
+  voice: [
+    ['brand_voice', 'Brand voice'], ['content_themes', 'Content themes'], ['brand_positioning', 'Brand positioning'],
+    ['competitive_advantages', 'Competitive advantages'], ['key_messages', 'Key messages'], ['marketing_channels', 'Marketing channels'],
+    ['content_strategy', 'Content strategy'], ['campaign_focus', 'Campaign focus'],
+  ],
+  problem: [
+    ['core_problem_statement', 'Core problem'], ['pain_symptoms', 'Pain symptoms'], ['awareness_gap', 'Awareness gap'],
+    ['problem_impact', 'Problem impact'], ['desired_transformation', 'Desired transformation'],
+  ],
+  goals: [['goals', 'Goals'], ['key_metrics', 'Key metrics'], ['growth_priorities', 'Growth priorities']],
+});
+
+/**
+ * Fields on this step the user edited (55's provenance: user_locked_fields, and
+ * report_settings.field_edited_at for when). Read-only and optional: works before the
+ * provenance branch lands (nothing listed).
+ */
+export function editedFieldsForStep(
+  stepId: WizardStepId,
+  profile: { user_locked_fields?: string[] | null; report_settings?: unknown } | null | undefined,
+): Array<{ field: string; label: string; editedAt: string | null }> {
+  const locked = new Set(Array.isArray(profile?.user_locked_fields) ? profile!.user_locked_fields! : []);
+  const rs = (profile?.report_settings && typeof profile.report_settings === 'object' ? profile.report_settings : {}) as Record<string, unknown>;
+  const editedAt = (rs.field_edited_at && typeof rs.field_edited_at === 'object' ? rs.field_edited_at : {}) as Record<string, unknown>;
+  return (STEP_FIELDS[stepId] ?? [])
+    .filter(([field]) => locked.has(field))
+    .map(([field, label]) => ({ field, label, editedAt: typeof editedAt[field] === 'string' ? (editedAt[field] as string) : null }));
+}

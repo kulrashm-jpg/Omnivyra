@@ -49,9 +49,28 @@ export function WizardStepper({ current, onSelect }: { current: WizardStepId; on
   );
 }
 
-export function WizardStepNav({ current, onSelect }: { current: WizardStepId; onSelect: (id: WizardStepId) => void }) {
+export function WizardStepNav({
+  current,
+  onSelect,
+  onSave,
+  saving = false,
+}: {
+  current: WizardStepId;
+  onSelect: (id: WizardStepId) => void;
+  /** 6.5: when editing, Next saves first and only moves on if the save succeeds. */
+  onSave?: () => Promise<boolean>;
+  saving?: boolean;
+}) {
   const prev = previousStepId(current);
   const next = nextStepId(current);
+  const goNext = async () => {
+    if (!next) return;
+    if (onSave) {
+      const ok = await onSave();
+      if (!ok) return;
+    }
+    onSelect(next);
+  };
   return (
     <div className="flex items-center justify-between gap-3">
       <button
@@ -65,12 +84,27 @@ export function WizardStepNav({ current, onSelect }: { current: WizardStepId; on
       {next ? (
         <button
           type="button"
-          onClick={() => onSelect(next)}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white"
+          onClick={() => { void goNext(); }}
+          disabled={saving}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          Next: {WIZARD_STEPS[stepIndex(next)].title}
+          {saving ? 'Saving…' : `${onSave ? 'Save & continue' : 'Next'}: ${WIZARD_STEPS[stepIndex(next)].title}`}
         </button>
       ) : null}
     </div>
+  );
+}
+
+/** 6.5: which fields on this step the user edited; AI refresh keeps them (55's provenance). */
+export function StepEditedNotice({ fields }: { fields: Array<{ field: string; label: string; editedAt: string | null }> }) {
+  if (fields.length === 0) return null;
+  return (
+    <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900" data-testid="step-edited-notice">
+      Edited by you:{' '}
+      {fields
+        .map((f) => (f.editedAt ? `${f.label} (${new Date(f.editedAt).toLocaleDateString()})` : f.label))
+        .join(', ')}
+      . AI refresh keeps your edits.
+    </p>
   );
 }
