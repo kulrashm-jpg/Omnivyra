@@ -7,6 +7,7 @@ import {
 } from '../../../backend/services/companyProfileService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { mergeAiScalarFields } from '../../../backend/services/companyProfile/aiProfileMerge';
 
 const OUTPUT_FIELDS = [
   'marketing_channels',
@@ -42,12 +43,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const draft = await generateMarketingIntelligenceDraft(profile);
 
-    const structuredFields: Record<string, string> = {};
-    for (const key of OUTPUT_FIELDS) {
-      const value = draft[key];
-      structuredFields[key] =
-        value !== undefined && value !== null ? String(value).trim() : '';
-    }
+    // e1 2026-11-13: an empty model field used to come back as '' and overwrite the stored value (the client spreads
+    // this into the profile). Now, like define-marketing-intelligence: a non-empty draft value wins, else the current
+    // stored value, else the key is omitted - never ''. Gates 55's scalar clear-lock ('' = a deliberate user clear).
+    const structuredFields = mergeAiScalarFields(OUTPUT_FIELDS, draft as Record<string, unknown>, profile as unknown as Record<string, unknown>);
 
     try {
       await supabase.from('audit_logs').insert({
