@@ -491,6 +491,9 @@ export const hasPermission = async (role: string | null, action: string): Promis
   return allowed.includes(normalized);
 };
 
+/** getUserRole's typed READ-FAILURE marker: the role is UNKNOWN (retryable), never "no role". */
+export const ROLE_LOOKUP_FAILED = 'ROLE_LOOKUP_FAILED';
+
 export const getUserRole = async (
   userId: string,
   companyId: string
@@ -503,7 +506,11 @@ export const getUserRole = async (
     .eq('status', 'active')
     .limit(1);
   if (error) {
-    return { role: null, error: null, membershipType: undefined };
+    // e9/05 2026-11-13: a FAILED read is NOT "no role". It used to return { role: null, error: null } - identical to a
+    // genuine non-member - so any caller that reads a null role as "not a member" and then creates / joins / grants
+    // would fail OPEN on a transient DB error. It is now a typed, retryable lookup failure; gates answer 503.
+    logger.warn('get_user_role_lookup_failed', { userId, companyId, message: error.message });
+    return { role: null, error: ROLE_LOOKUP_FAILED, membershipType: undefined };
   }
   if (data && data.length > 0) {
     const row = data[0] as { role: string; status?: string };
@@ -522,7 +529,10 @@ export const getUserRole = async (
     .select('role')
     .eq('user_id', userId)
     .limit(1);
-  if (anyRoleError) return { role: null, error: null, membershipType: undefined };
+  if (anyRoleError) {
+    logger.warn('get_user_role_lookup_failed', { userId, companyId, stage: 'any_role', message: anyRoleError.message });
+    return { role: null, error: ROLE_LOOKUP_FAILED, membershipType: undefined };
+  }
   if (anyRoleRows && anyRoleRows.length > 0) {
     return { role: null, error: 'COMPANY_ACCESS_DENIED', membershipType: undefined };
   }
@@ -629,6 +639,11 @@ export const enforceRole = async (input: {
   }
 
   const { role, error } = userRoleResult;
+  if (error === ROLE_LOOKUP_FAILED) {
+    // Unknown, not denied: a retryable 503 that says why (never a 403 the client would treat as final).
+    input.res.status(503).json({ error: 'ROLE_LOOKUP_FAILED', retryable: true });
+    return null;
+  }
   if (error === 'COMPANY_ACCESS_DENIED') {
     input.res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION' });
     return null;

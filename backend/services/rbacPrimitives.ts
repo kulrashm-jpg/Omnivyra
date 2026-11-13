@@ -16,7 +16,13 @@ export const Role = {
 
 export type Role = (typeof Role)[keyof typeof Role];
 
-export const normalizePermissionRole = (role: string) => {
+export const normalizePermissionRole = (rawRole: string) => {
+  // Conditioning (e9/05 2026-11-13): the SAME as normalizeRole - trim, uppercase, inner whitespace -> '_', and the
+  // 'COMPANYADMIN' / 'CONTENTPLANNER' aliases. user_company_roles has NO role CHECK, so ' admin ', 'company admin' or 'CompanyAdmin' are
+  // storable; they used to fall through here verbatim and miss every comparison (one caller patched .toUpperCase()).
+  // The MAPPING below is unchanged. An unmatched value now comes back conditioned (uppercased), not verbatim.
+  const conditioned = typeof rawRole === 'string' ? rawRole.trim().toUpperCase().replace(/\s+/g, '_') : '';
+  const role = conditioned === 'COMPANYADMIN' ? Role.COMPANY_ADMIN : conditioned === 'CONTENTPLANNER' ? Role.CONTENT_CREATOR : conditioned;
   if (role === Role.ADMIN) return Role.COMPANY_ADMIN;
   if (role === Role.CONTENT_MANAGER) return Role.CONTENT_CREATOR;
   if (role === Role.CONTENT_PLANNER) return Role.CONTENT_CREATOR;

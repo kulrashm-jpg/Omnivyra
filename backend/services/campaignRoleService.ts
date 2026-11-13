@@ -5,7 +5,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getUserRole } from './rbacService';
+import { getUserRole, ROLE_LOOKUP_FAILED } from './rbacService';
 
 // -----------------------------------------------------------------------------
 // Campaign-scoped role constants (Level 2). Use these in campaign_user_roles.role.
@@ -88,12 +88,28 @@ export type EffectiveCampaignRoleResult = {
   error: string | null;
 };
 
+/** The company role could not be READ (retryable): never treated as "no company role". */
+export class RoleLookupFailedError extends Error {
+  readonly code = ROLE_LOOKUP_FAILED;
+  readonly retryable = true;
+  constructor(readonly userId: string, readonly companyId: string) {
+    super('Could not read your role in this company. Please try again.');
+    this.name = 'RoleLookupFailedError';
+  }
+}
+
 export async function resolveEffectiveCampaignRole(
   userId: string,
   campaignId: string,
   companyId: string
 ): Promise<EffectiveCampaignRoleResult> {
   const companyResult = await getUserRole(userId, companyId);
+  if (companyResult.error === ROLE_LOOKUP_FAILED) {
+    // e9/05 2026-11-13: the company role is UNKNOWN (a failed read), not absent. This function's consumers refuse only
+    // on specific codes, so returning it as a field would fall through to campaign-role-only access. THROW instead -
+    // a failed lookup stops the request (fail closed); it never silently narrows to the campaign role.
+    throw new RoleLookupFailedError(userId, companyId);
+  }
   if (companyResult.error === 'COMPANY_ACCESS_DENIED') {
     return {
       companyRole: null,

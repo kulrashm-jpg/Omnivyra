@@ -89,7 +89,10 @@ jest.mock('../../db/supabaseClient', () => {
     const resolve = () => {
       queries.push({ table, filters: { ...filters } });
       const d = rows();
-      return { data: d, count: d.length, error: d.length ? null : { message: 'not found' } };
+      // PostgREST semantics: a LIST read of zero rows is { data: [], error: null } - only .single() errors on zero rows
+      // (below). The old fake errored on an empty list; getUserRole now treats a read ERROR as ROLE_LOOKUP_FAILED (503),
+      // which is correct, so the fake must not fabricate one (e1 2026-11-13).
+      return { data: d, count: d.length, error: null };
     };
     b.maybeSingle = () => { const r = resolve(); return Promise.resolve({ data: r.data[0] ?? null, error: null }); };
     b.single = () => { const r = resolve(); return Promise.resolve({ data: r.data[0] ?? null, error: r.data.length ? null : { message: 'not found' } }); };
