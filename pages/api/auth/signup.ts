@@ -33,6 +33,7 @@ import { validatePassword } from '../../../lib/auth/passwordPolicy';
 import { normalizeCompanyDomain } from '../../../lib/shared/domain/companyDomain';
 import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 import { incrementAuthMetric } from '../../../backend/services/authMetrics';
+import { notifySignupLimiterUnavailable, sendSignupBusy } from '../../../backend/services/opsAlertService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
@@ -60,7 +61,17 @@ async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
   const ip = authRequestIp(req);
-  const rl = await checkRateLimit(ip, { ...EMAIL_LINK_LIMIT, keyPrefix: 'rl:auth:signup', limit: 5, windowSecs: 3600 });
+  // onRedisFailure:'closed' pins THIS limit's degraded mode (never the global sensitive-mode env, which would close
+  // login too). A degraded limiter reports bypassed and is answered below with the retryable 503.
+  const rl = await checkRateLimit(ip, { ...EMAIL_LINK_LIMIT, keyPrefix: 'rl:auth:signup', limit: 5, windowSecs: 3600, onRedisFailure: 'closed' });
+  // Owner ruling (e1 2026-11-13): with no CAPTCHA, the limiter IS the defence - if Redis/Upstash is unreachable or
+  // over quota (the limiter reports `bypassed`), signup FAILS CLOSED with a retryable 503 (never a 500, never a
+  // silent pass) and the owner is notified at most once per outage window. Login and the rest of the app are not
+  // affected by this rule.
+  if (rl.bypassed) {
+    void notifySignupLimiterUnavailable('/api/auth/signup', `per-ip limiter degraded (${rl.degradedMode ?? 'unknown'})`);
+    return sendSignupBusy(res);
+  }
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -281,6 +292,10 @@ async function handler(
     peekRateLimit(registrableDomain, SIGNUP_DOMAIN_DAILY),
     peekRateLimit('all', SIGNUP_GLOBAL_HOURLY),
   ]);
+  if (domainHour.bypassed || domainDay.bypassed || globalHour.bypassed) {
+    void notifySignupLimiterUnavailable('/api/auth/signup', 'success-ceiling limiter degraded');
+    return sendSignupBusy(res);
+  }
   if (!globalHour.allowed) {
     logger.warn('auth.signup_global_ceiling_reached', { count: globalHour.count });
     incrementAuthMetric('auth.signup.attempt', { outcome: 'global_ceiling' });
@@ -359,10 +374,11 @@ async function handler(
   return res.status(200).json({ proceed: true });
 }
 
+
 /** P2 success-only signup ceilings (e9 defaults 2026-11-13; the owner may change them). */
-const SIGNUP_DOMAIN_HOURLY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:domain:1h', limit: 3, windowSecs: 3600 };
-const SIGNUP_DOMAIN_DAILY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:domain:1d', limit: 10, windowSecs: 86400 };
-const SIGNUP_GLOBAL_HOURLY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:global:1h', limit: 200, windowSecs: 3600 };
+const SIGNUP_DOMAIN_HOURLY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:domain:1h', limit: 3, windowSecs: 3600, onRedisFailure: 'closed' };
+const SIGNUP_DOMAIN_DAILY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:domain:1d', limit: 10, windowSecs: 86400, onRedisFailure: 'closed' };
+const SIGNUP_GLOBAL_HOURLY: RateLimitConfig = { keyPrefix: 'rl:auth:signup-ok:global:1h', limit: 200, windowSecs: 3600, onRedisFailure: 'closed' };
 const SIGNUP_GLOBAL_ALERT_PER_HOUR = 30;
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
