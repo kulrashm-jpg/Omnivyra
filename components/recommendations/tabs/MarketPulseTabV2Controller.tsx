@@ -7,6 +7,7 @@ import EngineJobStatusPanel from '../../engines/EngineJobStatusPanel';
 
 import { MARKET_PULSE_CATEGORIES, type ContextResponse, type AutomationResponse, SOURCE_STRATEGIES, type MarketPulseFinding, type RunResponse, type HistoryItem, type PendingRunState, type MarketDimension, type AttentionFilter, MARKET_DIMENSIONS, ATTENTION_FILTERS, findingMatchesDimension, findingMatchesAttention, sortBySignalAttention, SignalExplainability } from './MarketPulseTabV2Model';
 import { SignificanceBadge, SignalMovement, ExecutiveScanStrip, SinceLastPulseStrip, filterDeltaSummary, DimensionFilters, AttentionFilters, MarketNarrativesSection, type MarketPulseLoadError, OBJECTIVES, toTitle, buildResolvedRegionPreview, buildFocusedCategoryDefaults, buildExpandedCategoryDefaults, wait, FeedSection, ExecutivePanels } from './MarketPulseTabV2Widgets';
+import { parseRunStartError, type CreditNotice } from './MarketPulseCreditNotices';
 
 export function useMarketPulseTabController(props: OpportunityTabProps) {
   const { companyId, fetchWithAuth } = props;
@@ -29,6 +30,8 @@ export function useMarketPulseTabController(props: OpportunityTabProps) {
   const [cancelLoading, setCancelLoading] = useState(false);
   const [automationEnabled, setAutomationEnabled] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // 55's charging: a 402 on run start is shown as a credit notice, never as a raw code.
+  const [creditNotice, setCreditNotice] = useState<CreditNotice | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   // Phase 1B: feed-first UX state.
   // Default: setup collapsed UNLESS the user has never run a scan yet (no
@@ -420,6 +423,7 @@ export function useMarketPulseTabController(props: OpportunityTabProps) {
     if (!companyId) return;
     setRunning(true);
     setErrorMessage(null);
+    setCreditNotice(null);
     setRunResult(null);
     setPendingRun({
       created_at: new Date().toISOString(),
@@ -446,7 +450,14 @@ export function useMarketPulseTabController(props: OpportunityTabProps) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err?.error || 'Failed to start Market Pulse run');
+        const parsed = parseRunStartError(res.status, err);
+        if (parsed.kind === 'credits') {
+          setCreditNotice(parsed);
+          setPendingRun(null);
+          setRunning(false);
+          return;
+        }
+        throw new Error(parsed.message);
       }
       const data = await res.json();
       const nextRunId = String(data.runId);
@@ -592,6 +603,7 @@ export function useMarketPulseTabController(props: OpportunityTabProps) {
 
   return {
     noCompanySelected,
+    creditNotice,
     actioningFindingId, activeAttentionFilter, activeDimension, activeScanStatusPanel,
     allVisibleRankedFindings, attentionCounts, automationEnabled, automationLoading, cancelLoading, changeDiff,
     companyId, competitorScope, context, creditAcknowledged, customDirection, customRegions, dimensionCounts,
