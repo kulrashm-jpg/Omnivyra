@@ -6,6 +6,10 @@
 --   each matched against that full estimate - the variance was counted twice - and, since cost_reconciliation_runs
 --   is unique per (provider, period), the second run overwrote the first one's totals. The intended semantics are
 --   ONE invoice per (provider, period_start, period_end); a split invoice is merged into one manifest by the operator.
+--   SCOPE (e1): IDENTICAL bounds are enforced here, in the DB; OVERLAPPING periods are enforced in the app only
+--   (reconciliationPersist refuses any other invoice with period_start < :end AND period_end > :start, half-open).
+--   A DB overlap rule would need EXCLUDE USING gist (provider WITH =, tstzrange(...) WITH &&), i.e. btree_gist,
+--   which is not installed (not in baseline, migrations or bootstrap) - so it is not proposed here.
 --   The app already refuses a second invoice (reconciliationPersist, fix/reconciler-platform-usage-20261113); this
 --   index makes the rule hold for ANY caller, not only the single-operator localhost CLI (e1), and closes the
 --   check-then-insert race. The app treats a 23505 for an invoice it cannot find stored as "the period belongs to
@@ -93,6 +97,12 @@ BEGIN
     FOREACH p IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'] LOOP
       IF has_table_privilege(r, 'public.provider_invoice_imports', p) THEN
         RAISE EXCEPTION '040 postcondition: % still holds % on provider_invoice_imports', r, p;
+      END IF;
+    END LOOP;
+    -- has_table_privilege does NOT see column-level grants (e1): check those separately.
+    FOREACH p IN ARRAY ARRAY['SELECT', 'INSERT', 'UPDATE', 'REFERENCES'] LOOP
+      IF has_any_column_privilege(r, 'public.provider_invoice_imports', p) THEN
+        RAISE EXCEPTION '040 postcondition: % holds a column-level % on provider_invoice_imports', r, p;
       END IF;
     END LOOP;
   END LOOP;
