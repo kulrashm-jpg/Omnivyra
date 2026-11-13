@@ -16,7 +16,7 @@ import {
   Sparkles,
   Brain
 } from 'lucide-react';
-import { transcriptionErrorMessage } from './ChatVoiceButton';
+import { transcriptionErrorMessage, AUDIO_BITS_PER_SECOND, MAX_RECORDING_MS } from './ChatVoiceButton';
 import { useCompanyContext } from './CompanyContext';
 import { canPostCampaignMessages } from '../lib/access/campaignWriteAccess';
 
@@ -53,6 +53,8 @@ export default function VoiceNotesComponent({
   // Viewers / view-only users can't record (Engagers can: voice_notes exception).
   const { selectedCompanyId, userRole } = useCompanyContext();
   const mayRecord = canPostCampaignMessages(userRole);
+  const capTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (capTimerRef.current) clearTimeout(capTimerRef.current); }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
@@ -104,8 +106,8 @@ export default function VoiceNotesComponent({
       streamRef.current = stream;
       const recorder = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus',
-        // Speech bitrate keeps a long note inside the transcribe route's body limit.
-        audioBitsPerSecond: 32_000,
+        // Speech bitrate keeps a long note inside the transcribe route's body limit (shared constant).
+        audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
       });
       
       const chunks: Blob[] = [];
@@ -117,6 +119,7 @@ export default function VoiceNotesComponent({
       };
       
       recorder.onstop = () => {
+        if (capTimerRef.current) { clearTimeout(capTimerRef.current); capTimerRef.current = null; }
         const audioBlob = new Blob(chunks, { type: 'audio/webm' });
         setAudioChunks(chunks);
         processRecording(audioBlob);
@@ -125,6 +128,13 @@ export default function VoiceNotesComponent({
       recorder.start();
       setMediaRecorder(recorder);
       setIsRecording(true);
+      // Auto-stop at the 5-minute limit (same cap as ChatVoiceButton); the note is then
+      // transcribed as usual instead of failing with a 413.
+      capTimerRef.current = setTimeout(() => {
+        if (recorder.state !== 'inactive') recorder.stop();
+        setIsRecording(false);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+      }, MAX_RECORDING_MS);
       
     } catch (error) {
       console.error('Error starting recording:', error);
@@ -320,6 +330,7 @@ export default function VoiceNotesComponent({
               Stop Recording
             </button>
           )}
+          {mayRecord && <span className="text-xs text-gray-500">Recordings are limited to 5 minutes</span>}
         </div>
       </div>
 

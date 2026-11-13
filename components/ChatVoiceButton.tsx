@@ -23,7 +23,8 @@ type Status = 'idle' | 'recording' | 'transcribing';
  * body limit even as base64. Before this, ~30-60 s of speech exceeded the old 1 MB limit
  * and failed as a bare "Transcription failed" (prod 413s, 2026-10-26).
  */
-const AUDIO_BITS_PER_SECOND = 32_000;
+/** Speech bitrate; the transcribe route bounds the body size from it (55), so every recorder uses this one value. */
+export const AUDIO_BITS_PER_SECOND = 32_000;
 export const MAX_RECORDING_MS = 5 * 60 * 1000;
 
 /** A readable message for a failed transcription response. */
