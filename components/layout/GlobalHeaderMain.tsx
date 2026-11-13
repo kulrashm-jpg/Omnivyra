@@ -57,13 +57,9 @@ import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 import { HEADER_NAV_ITEMS, getRoleLabel, isPathMatch, useClickOutside, CreditPill, NavDropdown } from './GlobalHeaderNav';
 
-/** Owner decision 2026-11-13: "home" is the Command Center — the logo and the Home icon both go here. */
-export const HOME_ROUTE = '/command-center';
-
-/** Home is active only ON the Command Center itself; /command-center/* pages belong to their own sections. */
-export function isHomePath(pathname: string): boolean {
-  return pathname.replace(/\/+$/, '') === HOME_ROUTE;
-}
+// D2: one definition of Home, shared with Breadcrumbs (re-exported for existing importers).
+import { HOME_ROUTE, isHomePath } from './homeRoute';
+export { HOME_ROUTE, isHomePath };
 
 function HelpFloatingButton({ onStartTour }: { onStartTour: () => void }) {
   const [open, setOpen] = useState(false);
