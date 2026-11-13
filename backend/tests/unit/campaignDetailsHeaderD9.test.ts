@@ -37,3 +37,19 @@ describe('campaign details header (D9a)', () => {
     expect(C).not.toMatch(/Drift: \{executionDrift\.state\}/);
   });
 });
+
+describe('campaign details overview (D9b)', () => {
+  const W = fs.readFileSync(path.join(process.cwd(), 'components/CampaignWeeklySection.tsx'), 'utf8');
+  it('the blueprint counts are one compact line (no 4 large tiles)', () => {
+    expect(C).toContain('data-testid="blueprint-counts"');
+    expect(C).not.toContain('>Total Weeks<');
+  });
+  it('no scroll-jump links between the blueprint and the weeks', () => {
+    expect(C).not.toContain('Jump to Weekly Content');
+    expect(W).not.toContain('Back to Content Blueprint');
+  });
+  it('the copy points to the AI Assistant where it is (top right), never "below"/"purple"/"pre-planning above"', () => {
+    expect(C).not.toMatch(/AI Assistant<\/strong> below|purple button above|pre-planning above/);
+    expect(C.split('(top right)').length - 1).toBe(2);
+  });
+});

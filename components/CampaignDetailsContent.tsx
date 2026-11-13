@@ -640,7 +640,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
               <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-3">
                 <p className="text-emerald-800 text-sm flex items-center gap-2">
                   <CheckCircle className="h-5 w-5 flex-shrink-0" />
-                  Blueprint generated! Use the <strong>AI Assistant</strong> below to refine it.
+                  Blueprint generated! Use the <strong>AI Assistant</strong> (top right) to refine it.
                 </p>
                 <button
                   type="button"
@@ -737,18 +737,11 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
             )}
 
             {/* Content Blueprint — your created plan; weekly content in weeks below */}
-            <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border mb-8" id="content-blueprint">
+            {/* D9b (owner rule 1): a compact blueprint card so Weekly Content (the daily task)
+                starts near the top; no scroll-jump links needed. */}
+            <div className="bg-white rounded-xl p-4 sm:p-5 shadow-sm border mb-5" id="content-blueprint">
               <h2 className="text-xl font-semibold mb-1">Content Blueprint</h2>
-              <p className="text-sm text-gray-500 mb-4">
-                Your submitted plan; weekly content is listed in the weeks below.
-                <button
-                  type="button"
-                  onClick={() => document.getElementById('weekly-content')?.scrollIntoView({ behavior: 'smooth' })}
-                  className="ml-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium underline"
-                >
-                  Jump to Weekly Content ↓
-                </button>
-              </p>
+              <p className="text-sm text-gray-500 mb-3">Your submitted plan; weekly content is listed below.</p>
               {campaign?.description && <p className="text-gray-600 mb-4">{campaign.description}</p>}
               {weeklyPlans.length > 0 ? (
                 <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-100">
@@ -766,7 +759,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                     No content blueprint yet
                   </p>
                   <p className="text-sm text-amber-800 mb-4">
-                    Use <strong>AI Assistant</strong> (purple button above) to generate a plan, or create one from your stored strategic theme and context:
+                    Use the <strong>AI Assistant</strong> (top right) to generate a plan, or create one from your stored strategic theme and context:
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
                     {canWriteThisCampaign && (
@@ -774,7 +767,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                       type="button"
                       onClick={createWeekPlanFromStoredContext}
                       disabled={isRegeneratingBlueprint || blueprintImmutable || governanceLocked || (campaign as { duration_weeks?: number })?.duration_weeks == null}
-                      title={(campaign as { duration_weeks?: number })?.duration_weeks == null ? 'Set campaign duration first (complete pre-planning above)' : undefined}
+                      title={(campaign as { duration_weeks?: number })?.duration_weeks == null ? 'Set the campaign duration first' : undefined}
                       className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                     >
                       {isRegeneratingBlueprint ? (
@@ -787,7 +780,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                     )}
                     {(campaign as { duration_weeks?: number })?.duration_weeks == null && (
                       <span className="text-xs text-amber-700">
-                        Set start date and duration in pre-planning above first.
+                        Set the campaign's start date and duration first.
                       </span>
                     )}
                   </div>
@@ -796,30 +789,12 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                   )}
                 </div>
               )}
-              <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-purple-600 mb-1">{durationWeeks}</div>
-                  <div className="text-sm text-gray-600">Total Weeks</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600 mb-1">
-                    {weeklyPlans.filter(w => w.status === 'completed').length}
-                  </div>
-                  <div className="text-sm text-gray-600">Completed</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-600 mb-1">
-                    {weeklyPlans.filter(w => w.status === 'in_progress').length}
-                  </div>
-                  <div className="text-sm text-gray-600">In Progress</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-yellow-600 mb-1">
-                    {weeklyPlans.filter(w => w.status === 'planned').length}
-                  </div>
-                  <div className="text-sm text-gray-600">Planned</div>
-                </div>
-              </div>
+              <p className="text-sm text-gray-700" data-testid="blueprint-counts">
+                <span className="font-semibold text-purple-700">{durationWeeks} weeks</span>
+                {' · '}<span className="text-green-700">{weeklyPlans.filter(w => w.status === 'completed').length} completed</span>
+                {' · '}<span className="text-blue-700">{weeklyPlans.filter(w => w.status === 'in_progress').length} in progress</span>
+                {' · '}<span className="text-yellow-700">{weeklyPlans.filter(w => w.status === 'planned').length} planned</span>
+              </p>
             </div>
 
             <CampaignWeeklySection d={d} />

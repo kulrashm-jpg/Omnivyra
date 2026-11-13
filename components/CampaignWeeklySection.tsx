@@ -296,13 +296,6 @@ export default function CampaignWeeklySection({ d }: { d: S }) {
                   <h2 className="text-xl font-semibold">Weekly Content</h2>
                   <p className="text-sm text-gray-500 mt-0.5">
                     Blueprint per week; expand each week for details.
-                    <button
-                      type="button"
-                      onClick={() => document.getElementById('content-blueprint')?.scrollIntoView({ behavior: 'smooth' })}
-                      className="ml-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium underline"
-                    >
-                      ↑ Back to Content Blueprint
-                    </button>
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
