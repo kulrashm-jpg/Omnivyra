@@ -102,6 +102,29 @@ beforeEach(() => {
   persistFails = false;
 });
 
+// NO-NETWORK GUARD (e9, PL-14 triage): a stale mock must fail loudly here, never reach a live provider / DB.
+const realFetch = global.fetch;
+beforeAll(() => {
+  (global as { fetch?: unknown }).fetch = jest.fn(async (url: unknown) => {
+    throw new Error(`[aiRuntimeFinalValidation] network call attempted in a unit test: ${String(url)}`);
+  });
+});
+afterAll(() => { (global as { fetch?: unknown }).fetch = realFetch; });
+
+describe('the route\'s CURRENT IO seams are the ones stubbed (stale-mock guard)', () => {
+  test('a generate runs through the canonical profile adapter and the grounding guard stubs, with no network', async () => {
+    const profileAdapter = require('../../services/context/canonicalProfileAdapter');
+    const grounding = require('../../services/context/canonicalContentContextResolver');
+    profileAdapter.getCanonicalProfile.mockClear();
+    grounding.resolveCompanyGroundingGuard.mockClear();
+    const res = await generate();
+    expect(res.statusCode).toBe(200);
+    expect(profileAdapter.getCanonicalProfile).toHaveBeenCalled();
+    expect(grounding.resolveCompanyGroundingGuard).toHaveBeenCalled();
+    expect(global.fetch as jest.Mock).not.toHaveBeenCalled();
+  });
+});
+
 describe('IMPL-005A — final runtime validation', () => {
   test('S1/S2/S9/S10 — refresh / timeout / server restart / worker restart: retry after interruption resumes with one charge, one LLM call, one artifact', async () => {
     const first = await generate();
