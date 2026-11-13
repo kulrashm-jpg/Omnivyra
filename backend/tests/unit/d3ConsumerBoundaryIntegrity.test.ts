@@ -148,21 +148,65 @@ async function compose(decisions: PersistedDecisionObject[]) {
 
 const serialize = (report: unknown) => JSON.stringify(report);
 
+/**
+ * A private value as a NUMBER, not a substring (6f, 2026-11-13; CI-265 flake). The report stamps the clock (e.g.
+ * `observed_at`), and an ISO timestamp like `...T08:31:12.456Z` CONTAINS "12.4" - so `not.toContain('12.4')` failed
+ * whenever a run's clock had seconds 12 and milliseconds 4xx. A leak prints the value as a NUMBER: no digit or '.'
+ * directly before it, no digit directly after. (An ISO timestamp always carries three millisecond digits, so its
+ * "12.4" is always followed by a digit and never matches; a JSON field "value":12.4 does - ':' is NOT excluded, or
+ * the most likely leak shape would be missed. The CONTROL case below pins both.)
+ */
+const asNumber = (n: number): RegExp =>
+  new RegExp(String.raw`(?<![\d.])` + String(n).replace(/\./g, '\\.') + String.raw`(?!\d)`);
+const REAL_TIMERS = ['nextTick', 'setImmediate', 'setTimeout', 'setInterval', 'queueMicrotask',
+  'clearTimeout', 'clearInterval', 'clearImmediate'] as const;
+
 describe('D3 follow-up — private Search Console values cannot reach Report 1', () => {
+  // Deterministic: the report's clock-stamped fields are pinned to the fixture's NOW (only Date is faked).
+  beforeAll(() => {
+    jest.useFakeTimers({ doNotFake: [...REAL_TIMERS] });
+    jest.setSystemTime(new Date(NOW));
+  });
+  afterAll(() => jest.useRealTimers());
+
   it('case 1: avg_position is never printed in Report 1 prose', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
     const payload = serialize(report);
 
     // The exact leak: "opportunity gap signal; crm software avg position 12.4".
     expect(payload).not.toMatch(/avg position/i);
-    expect(payload).not.toContain(String(GSC_AVG_POSITION));
+    expect(payload).not.toMatch(asNumber(GSC_AVG_POSITION));
+  });
+
+  it('REGRESSION (CI-265): at a clock instant whose timestamp contains "12.4", case 1 still holds', async () => {
+    jest.setSystemTime(new Date('2026-11-13T08:31:12.456Z'));
+    try {
+      const payload = serialize(await compose([gscDecision(), publicDecision()]));
+      // The hazard is really present at this instant (the old substring assertion would have failed here) ...
+      expect(payload).toContain(String(GSC_AVG_POSITION));
+      // ... and the number match is not fooled by it.
+      expect(payload).not.toMatch(asNumber(GSC_AVG_POSITION));
+      expect(payload).not.toMatch(/avg position/i);
+    } finally {
+      jest.setSystemTime(new Date(NOW));
+    }
+  });
+
+  it('CONTROL: the number matcher does catch the real leak shape, and ignores digits inside other numbers', () => {
+    expect('crm software avg position 12.4.').toMatch(asNumber(GSC_AVG_POSITION));
+    expect('"value":12.4}').toMatch(asNumber(GSC_AVG_POSITION));
+    expect('T08:31:12.456Z').not.toMatch(asNumber(GSC_AVG_POSITION));
+    expect('112.4').not.toMatch(asNumber(GSC_AVG_POSITION));
+    expect('"impressions":12000,').toMatch(asNumber(GSC_IMPRESSIONS));
+    expect('120000').not.toMatch(asNumber(GSC_IMPRESSIONS));
+    expect('ctr 0.025').toMatch(asNumber(GSC_CTR));
   });
 
   it('case 2: impressions cannot populate Report 1 traffic impact', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
     const payload = serialize(report);
 
-    expect(payload).not.toContain(String(GSC_IMPRESSIONS));
+    expect(payload).not.toMatch(asNumber(GSC_IMPRESSIONS));
     // The decision whose impact_traffic was computed FROM those impressions is absent.
     expect(payload).not.toContain('gsc-1');
     expect(report.pipeline_audit.final_decisions).toBe(1);
@@ -170,12 +214,12 @@ describe('D3 follow-up — private Search Console values cannot reach Report 1',
 
   it('case 3: clicks cannot populate Report 1 traffic impact', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
-    expect(serialize(report)).not.toContain(String(GSC_CLICKS));
+    expect(serialize(report)).not.toMatch(asNumber(GSC_CLICKS));
   });
 
   it('case 4: CTR cannot become public evidence', async () => {
     const report = await compose([gscDecision(), publicDecision()]);
-    expect(serialize(report)).not.toContain(String(GSC_CTR));
+    expect(serialize(report)).not.toMatch(asNumber(GSC_CTR));
   });
 
   it('case 5: GSC-derived priority cannot lead the Report 1 recommendation ranking', async () => {
