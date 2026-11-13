@@ -209,7 +209,7 @@ jest.mock('../../services/publishNowService', () => {
 });
 jest.mock('../../services/publishReadinessValidator', () => ({ validatePublishReadiness: jest.fn(() => ({ ok: true, warnings: [] })) }));
 jest.mock('../../services/mediaReferenceResolver', () => ({ refreshDurableMediaBeforePublish: jest.fn(async () => undefined) }));
-jest.mock('../../services/creator/publishingOrganizationResolver', () => ({ resolvePublishingOrganization: jest.fn(async () => null) }));
+jest.mock('../../services/creator/publishingOrganizationResolver', () => ({ resolvePublishingOrganization: jest.fn(async () => null), resolvePostRecordCompany: jest.fn(async () => null) }));
 jest.mock('../../services/creator/creatorPublishResolution', () => ({ resolvePublishMedia: jest.fn(async () => ({ mediaUrls: [], resolvedCount: 0 })) }));
 jest.mock('../../services/creatorQueueReliabilityService', () => ({ recordPublishFailure: jest.fn(async () => undefined) }));
 jest.mock('../../services/errorRecoveryService', () => ({

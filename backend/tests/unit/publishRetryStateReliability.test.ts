@@ -278,6 +278,7 @@ jest.mock('../../services/publishNowService', () => {
 });
 jest.mock('../../services/creator/publishingOrganizationResolver', () => ({
   resolvePublishingOrganization: jest.fn(async () => null),
+  resolvePostRecordCompany: jest.fn(async () => null),
 }));
 jest.mock('../../services/creator/creatorPublishResolution', () => ({
   resolvePublishMedia: jest.fn(async () => ({ mediaUrls: [], resolvedCount: 0 })),

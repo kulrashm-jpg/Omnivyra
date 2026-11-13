@@ -27,7 +27,7 @@ import { validatePlatformContentCompatibility } from './platformContentValidator
 import { validatePublishReadiness } from './publishReadinessValidator';
 import { refreshDurableMediaBeforePublish } from './mediaReferenceResolver';
 import { resolvePublishMedia } from './creator/creatorPublishResolution';
-import { resolvePublishingOrganization } from './creator/publishingOrganizationResolver';
+import { resolvePublishingOrganization, resolvePostRecordCompany } from './creator/publishingOrganizationResolver';
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { logger } from './logger';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
@@ -740,6 +740,13 @@ async function runSingleRowPublish(
   // are unavailable. Mutates scheduledPost.media_urls in place.
   await refreshScheduledPostMediaFromRefs({ scheduledPostId: scheduled_post_id, userId: user_id, post: scheduledPost as unknown as Record<string, unknown> });
 
+  // The post's company for creator_audit_log / creator_operational_events (83 C91: both tables were written with
+  // company_id NULL). Campaign first (campaigns.company_id), then the connected account. Fail-soft: null = unknown.
+  const postCompanyId = await resolvePostRecordCompany({
+    campaignId: scheduledPost.campaign_id ?? null,
+    socialAccountId: (scheduledPost as { social_account_id?: string | null }).social_account_id ?? social_account_id ?? null,
+  });
+
   // Authoritative capability validation. Runs BEFORE adapter selection, account
   // resolution, or any media upload — so queue workers, scheduled jobs, and
   // super-admin/API callers all reject incompatible publishes at the same
@@ -804,6 +811,7 @@ async function runSingleRowPublish(
       severity: 'critical',
       scheduledPostId: scheduled_post_id,
       campaignId: scheduledPost.campaign_id,
+      companyId: postCompanyId,
       creatorFormat: String(scheduledPost.content_type ?? ''),
       metadata: {
         errors: creatorPublishValidation.errors,
@@ -837,6 +845,7 @@ async function runSingleRowPublish(
       severity: 'critical',
       scheduledPostId: scheduled_post_id,
       campaignId: scheduledPost.campaign_id,
+      companyId: postCompanyId,
       creatorFormat: String(scheduledPost.content_type ?? ''),
       metadata: { reason: failure.reason, errors: failure.errors, source: input.publish_source ?? 'unknown' },
     });
@@ -913,6 +922,7 @@ async function runSingleRowPublish(
     event: CREATOR_EVENTS.PUBLISH_VALIDATION_PASSED,
     scheduledPostId: scheduled_post_id,
     campaignId: scheduledPost.campaign_id,
+    companyId: postCompanyId,
     creatorFormat: String(scheduledPost.content_type ?? ''),
     metadata: { source: input.publish_source ?? 'unknown' },
   });
@@ -978,6 +988,7 @@ async function runSingleRowPublish(
       event: CREATOR_EVENTS.ATTACHMENT_PUBLISH_SUCCESS,
       scheduledPostId: scheduled_post_id,
       campaignId: scheduledPost.campaign_id,
+      companyId: postCompanyId,
       creatorFormat: String(scheduledPost.content_type ?? ''),
       metadata: { platform_post_id: result.platform_post_id, platform: scheduledPost.platform },
     });
@@ -988,6 +999,7 @@ async function runSingleRowPublish(
       source: 'worker',
       scheduledPostId: scheduled_post_id,
       campaignId: scheduledPost.campaign_id,
+      companyId: postCompanyId,
       newState: { platform_post_id: result.platform_post_id, post_url: result.post_url ?? null },
     });
 
@@ -1059,6 +1071,7 @@ async function runSingleRowPublish(
     severity: 'critical',
     scheduledPostId: scheduled_post_id,
     campaignId: scheduledPost.campaign_id,
+    companyId: postCompanyId,
     creatorFormat: String(scheduledPost.content_type ?? ''),
     metadata: { error_code: platformError.code, error_message: errorDetail, platform: scheduledPost.platform },
   });
@@ -1075,6 +1088,7 @@ async function runSingleRowPublish(
     source: 'worker',
     scheduledPostId: scheduled_post_id,
     campaignId: scheduledPost.campaign_id,
+    companyId: postCompanyId,
     metadata: { error_code: platformError.code, error_message: errorDetail },
   });
 

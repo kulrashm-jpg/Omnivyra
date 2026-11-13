@@ -30,3 +30,20 @@ describe('Canonical publishing organization resolver', () => {
     expect(await resolvePublishingOrganization({})).toBeNull();
   });
 });
+
+import { resolvePostRecordCompany } from '../../services/creator/publishingOrganizationResolver';
+
+describe('resolvePostRecordCompany (creator audit / telemetry rows, 83 C91)', () => {
+  it('prefers the CAMPAIGN company (the backfill rule) over the account company', async () => {
+    tables.campaigns = { company_id: 'org-campaign' };
+    tables.social_accounts = { company_id: 'org-account' };
+    expect(await resolvePostRecordCompany({ campaignId: 'c1', socialAccountId: 'a1' })).toBe('org-campaign');
+  });
+  it('a campaign-less post falls back to the account company', async () => {
+    tables.social_accounts = { company_id: 'org-account' };
+    expect(await resolvePostRecordCompany({ campaignId: null, socialAccountId: 'a1' })).toBe('org-account');
+  });
+  it('nothing resolvable -> null (never a guess)', async () => {
+    expect(await resolvePostRecordCompany({})).toBeNull();
+  });
+});

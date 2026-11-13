@@ -176,6 +176,7 @@ jest.mock('../../services/publishNowService', () => {
 });
 jest.mock('../../services/creator/publishingOrganizationResolver', () => ({
   resolvePublishingOrganization: jest.fn(async () => null),
+  resolvePostRecordCompany: jest.fn(async () => null),
 }));
 // Stubbed for module-load reasons, not behavioural ones: the real module
 // transitively imports the creator asset renderers, which import `config/` and

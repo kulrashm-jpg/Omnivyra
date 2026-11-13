@@ -188,6 +188,7 @@ jest.mock('../../services/creator/creatorPublishResolution', () => ({
 }));
 jest.mock('../../services/creator/publishingOrganizationResolver', () => ({
   resolvePublishingOrganization: jest.fn(async () => null),
+  resolvePostRecordCompany: jest.fn(async () => null),
 }));
 jest.mock('../../services/creatorQueueReliabilityService', () => ({
   recordPublishFailure: jest.fn(async () => undefined),
@@ -754,5 +755,42 @@ describe('Closure-004 — publish-now refuses a thread child', () => {
     expect(r.message).toMatch(/thread/i);
     expect(publishesFor('sp-child')).toBe(0);
     expect(post('sp-child')).toEqual(before);
+  });
+});
+
+describe('C91 — creator audit / telemetry rows carry the post\'s company', () => {
+  const resolver = jest.requireMock('../../services/creator/publishingOrganizationResolver') as { resolvePostRecordCompany: jest.Mock };
+  const audit = jest.requireMock('../../services/creatorAuditTrailService') as { recordAuditEntry: jest.Mock };
+  const telemetry = jest.requireMock('../../services/creatorOperationalTelemetryService') as { emitCreatorEvent: jest.Mock };
+  const CO = '00000000-0000-0000-0000-00000000c0c0';
+  beforeEach(() => {
+    resolver.resolvePostRecordCompany.mockReset().mockResolvedValue(CO);
+    audit.recordAuditEntry.mockClear();
+    telemetry.emitCreatorEvent.mockClear();
+  });
+  afterEach(() => resolver.resolvePostRecordCompany.mockReset().mockResolvedValue(null));
+
+  test.each(['success', 'failure'] as const)('platform %s: every audit row and creator event is stamped', async (outcome) => {
+    platformOutcome = outcome;
+    seedPost('sp-co', { campaign_id: 'camp-1' });
+    await run('sp-co', 'scheduler');
+    expect(resolver.resolvePostRecordCompany).toHaveBeenCalledWith({ campaignId: 'camp-1', socialAccountId: ACCOUNT });
+    const audits = audit.recordAuditEntry.mock.calls.map((c) => c[0]);
+    const events = telemetry.emitCreatorEvent.mock.calls.map((c) => c[0]);
+    expect(audits.map((a) => a.action)).toEqual([outcome === 'success' ? 'publish_succeeded' : 'publish_failed']);
+    expect(events.length).toBeGreaterThanOrEqual(2); // validation passed + attachment success/failure
+    for (const row of [...audits, ...events]) expect(row.companyId).toBe(CO);
+  });
+});
+
+describe('C91 — static pin: no creator record in publishNowService is written without a company', () => {
+  test('every emitCreatorEvent / recordAuditEntry call passes companyId', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs') as typeof import('fs');
+    const src = fs.readFileSync(require.resolve('../../services/publishNowService'), 'utf8') as string;
+    const calls = [...src.matchAll(/(emitCreatorEvent|recordAuditEntry)\(\{([\s\S]*?)\n\s*\}\);/g)];
+    expect(calls.length).toBe(7); // positive control: 5 events + 2 audit rows (incl. the 2 validation-failure events)
+    const missing = calls.filter((m) => !/\bcompanyId:/.test(m[2])).map((m) => `${m[1]}: ${m[2].trim().split('\n')[0]}`);
+    expect(missing).toEqual([]);
   });
 });

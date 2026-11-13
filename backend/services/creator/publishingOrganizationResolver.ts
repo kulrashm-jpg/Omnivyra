@@ -38,6 +38,19 @@ async function companyOfCampaign(id: string): Promise<string | null> {
 }
 
 /**
+ * The company a scheduled post's RECORDS belong to (creator audit / telemetry rows): the campaign's company first
+ * (campaigns.company_id - the same rule the C91 backfill uses), then the connected account's. null = unknown.
+ */
+export async function resolvePostRecordCompany(input: { campaignId?: string | null; socialAccountId?: string | null }): Promise<string | null> {
+  if (input.campaignId) {
+    const org = await companyOfCampaign(String(input.campaignId));
+    if (org) return org;
+  }
+  if (input.socialAccountId) return companyOfSocialAccount(String(input.socialAccountId));
+  return null;
+}
+
+/**
  * Resolve the canonical organization id for a publish. Order: connected account →
  * campaign → (scheduled post's account/campaign). Returns null only when none resolve.
  */
