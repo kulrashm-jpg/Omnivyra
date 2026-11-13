@@ -84,6 +84,15 @@ import scheduleStructuredPlanHandler from '../../../pages/api/campaigns/[id]/sch
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from '../../services/GovernanceEventService';
 import { supabase } from '../../db/supabaseClient';
 
+// Cross-tenant fix (6f, 2026-11-13): a preemption now REQUIRES companyId and both campaigns canonically owned by it.
+// This suite tests preemption RULES, not tenancy (s2PreemptionCrossTenant pins that): it names a test company and
+// answers ownership 'owned'.
+const PREEMPT_TEST_COMPANY = '9e9e9e9e-0000-4000-8000-000000000001';
+jest.mock('../../services/campaignOwnershipService', () => ({
+  ...jest.requireActual('../../services/campaignOwnershipService'),
+  checkCampaignOwnership: jest.fn(async () => 'owned'),
+}));
+
 const COMPANY_ID = 'company-final-123';
 const CAMPAIGN_ID = 'campaign-final-456';
 

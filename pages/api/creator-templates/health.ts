@@ -1,17 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess, enforceCompanyAccessUniform, UNIFORM_NOT_FOUND } from '../../../backend/services/userContextService';
-import { getTemplateHealth, getTemplateOperationalDashboard } from '../../../backend/services/creator/templateHealthService';
-import { getUserTemplateCompanyId, getUserTemplateForCompany } from '../../../backend/services/creator/userTemplateService';
-import { getTemplateById } from '../../../lib/creator-templates';
-
-/**
- * A PLATFORM (system) template: catalog metadata every tenant may read. NOT "any id the registry
- * resolves" - the registry also serves runtime-registered USER templates, which are tenant data.
- */
-function isSystemTemplateId(id: string): boolean {
-  return getTemplateById(id)?.ownership === 'system';
-}
+import { getTemplateHealth, getTemplateOperationalDashboard, isSystemTemplate } from '../../../backend/services/creator/templateHealthService';
+import { getUserTemplateCompanyId } from '../../../backend/services/creator/userTemplateService';
 
 /**
  * GET /api/creator-templates/health?id=<templateId>            — one template's health
@@ -36,13 +27,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (id) {
-    if (!isSystemTemplateId(id)) {
+    // System: catalog metadata, any authenticated tenant. User: authorize on the OWNING company.
+    // For a SYSTEM template `scope` is never read (isSystemTemplate short-circuits inside the
+    // service) - the caller's company does not affect a system template's answer.
+    let scope = user.defaultCompanyId;
+    if (!isSystemTemplate(id)) {
       const owner = await getUserTemplateCompanyId(id);
       if (!owner) return res.status(404).json(UNIFORM_NOT_FOUND);
       const allowed = await enforceCompanyAccessUniform({ req, res, companyId: owner });
       if (!allowed) return;
+      scope = owner;
     }
-    return res.status(200).json({ health: await getTemplateHealth(id) });
+    const health = await getTemplateHealth(id, scope);
+    if (!health) return res.status(404).json(UNIFORM_NOT_FOUND);
+    return res.status(200).json({ health });
   }
 
   const companyId = String((req.query.company_id ?? user.defaultCompanyId) || '').trim();
@@ -51,18 +49,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!access) return;
 
   const requested = typeof req.query.ids === 'string' ? req.query.ids.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
-  // Only this company's own templates (or platform system templates) - another tenant's id is
-  // dropped exactly like an unknown one, before any health is resolved.
-  let extra: string[] | undefined;
-  if (requested) {
-    const keep = await Promise.all([...new Set(requested)].map(async (tid) =>
-      (isSystemTemplateId(tid) || (await getUserTemplateForCompany(tid, companyId))) ? tid : null));
-    extra = keep.filter((x): x is string => x !== null);
-    if (extra.length === 0) {
-      return res.status(200).json({ templates: [], system: { noUsage: [], repeatedFailures: [], failingValidation: [], deprecatedVersions: [], neverPublished: [], safeToArchive: [] } });
-    }
-  }
-  return res.status(200).json(await getTemplateOperationalDashboard({ companyId, templateIds: extra }));
+  // The service scopes every id to this (authorized) company: another tenant's id is dropped
+  // exactly like an unknown one, before any of its data is read.
+  return res.status(200).json(await getTemplateOperationalDashboard({ companyId, templateIds: requested }));
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
