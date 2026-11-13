@@ -6,6 +6,9 @@
  * (rollups preserve exact totals), and hidden-pricing preservation. The
  * retention backend is dependency-injected — NO DB.
  */
+// The settlement foundation's jobs are default-OFF (settlementFoundationGate, e9 C97 1(b)); this suite exercises
+// the ACTIVE foundation, so it enables the gate explicitly.
+process.env.SETTLEMENT_FOUNDATION_ENABLED = 'true';
 
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => ({}) } }));
 

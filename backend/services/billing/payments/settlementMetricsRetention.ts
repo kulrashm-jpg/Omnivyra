@@ -26,6 +26,7 @@
 import { supabase } from '../../../db/supabaseClient';
 import { logger } from '../../logger';
 import { SETTLEMENT_METRIC_NAMES, type SettlementMetricName } from './settlementMetrics';
+import { isSettlementFoundationActive } from './settlementFoundationGate';
 
 /** Default rollup bucket — one hour. */
 const DEFAULT_PERIOD_MS = 60 * 60 * 1000;
@@ -122,6 +123,8 @@ export async function runSettlementMetricsRetention(
   const currentPeriodStart = Math.floor(nowMs / periodMs) * periodMs;
 
   const result: RetentionResult = { ok: true, periodsRolledUp: 0, rollupRowsWritten: 0, rawRowsCompacted: 0 };
+  // e9 (C97 1(b)): default-OFF while the sandbox foundation is dormant - no read, no write.
+  if (!isSettlementFoundationActive()) return result;
 
   try {
     const rawRows = await deps.readRawMetricRows();
@@ -261,6 +264,8 @@ export async function pruneRolledSettlementMetrics(
     ok: true, eligiblePeriods: 0, prunedRows: 0,
     rejectedPartial: 0, rejectedCorrupt: 0, alreadyPruned: 0,
   };
+  // e9 (C97 1(b)): default-OFF while the sandbox foundation is dormant - no read, no delete.
+  if (!isSettlementFoundationActive()) return result;
 
   try {
     const rollupRows = await deps.readRollupRows();

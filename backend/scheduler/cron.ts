@@ -150,6 +150,7 @@ import { runOpportunityLearningWorker } from '../workers/opportunityLearningWork
 import { runInfluencerLearningWorker } from '../workers/influencerLearningWorker';
 import { runInsightLearningWorker } from '../workers/insightLearningWorker';
 import { runBuyerIntentLearningWorker } from '../workers/buyerIntentLearningWorker';
+import { isSettlementFoundationActive } from '../services/billing/payments/settlementFoundationGate';
 
 const CRON_INTERVAL_MS = (config.CRON_INTERVAL_SECONDS ?? 900) * 1000; // default 15 min
 const LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
@@ -1533,7 +1534,8 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
   // Sandbox settlement-expiry sweep — stale created/pending checkout sessions
   // → expired. The job carries its own re-entrancy lock; CronGuard already
   // guarantees single-instance cron execution. Deterministic + idempotent.
-  if (shouldRunCronJob("settlementExpirySweep", SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS, lastSettlementExpirySweepRun)) {
+  // e9 (C97 1(b)): the dormant settlement foundation's jobs are default-OFF (SETTLEMENT_FOUNDATION_ENABLED).
+  if (isSettlementFoundationActive() && shouldRunCronJob("settlementExpirySweep", SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS, lastSettlementExpirySweepRun)) {
     lastSettlementExpirySweepRun = Date.now();
     try {
       const result = await runSettlementExpirySweepJob();
@@ -1589,7 +1591,7 @@ async function runSchedulerCycleBody(opts: { includePublishSafetyNet?: boolean }
   // Settlement metrics rollup — compact closed buckets of the append-only
   // settlement_operational_metrics ledger. Deterministic + idempotent (an
   // already-rolled bucket is skipped); the open period is never touched.
-  if (shouldRunCronJob("settlementMetricsRetention", SETTLEMENT_METRICS_RETENTION_INTERVAL_MS, lastSettlementMetricsRetentionRun)) {
+  if (isSettlementFoundationActive() && shouldRunCronJob("settlementMetricsRetention", SETTLEMENT_METRICS_RETENTION_INTERVAL_MS, lastSettlementMetricsRetentionRun)) {
     lastSettlementMetricsRetentionRun = Date.now();
     try {
       const result = await runSettlementMetricsRetention();

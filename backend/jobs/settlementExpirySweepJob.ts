@@ -30,6 +30,7 @@ import {
   releaseSettlementLock,
 } from '../services/billing/payments/settlementRuntimeLock';
 import { incrementSettlementMetric } from '../services/billing/payments/settlementMetrics';
+import { isSettlementFoundationActive } from '../services/billing/payments/settlementFoundationGate';
 
 /** The distributed lock key for the expiry sweep. */
 export const SETTLEMENT_SWEEP_LOCK_KEY = 'settlement_expiry_sweep';
@@ -37,8 +38,10 @@ export const SETTLEMENT_SWEEP_LOCK_KEY = 'settlement_expiry_sweep';
 const SWEEP_LOCK_TTL_MS = 15 * 60 * 1000;
 
 export interface SettlementExpirySweepReport {
-  /** false → the distributed lock was held elsewhere; this run was a no-op. */
+  /** false → the distributed lock was held elsewhere, or the foundation is dormant; this run was a no-op. */
   ran: boolean;
+  /** true → SETTLEMENT_FOUNDATION_ENABLED is off (the default): nothing was read or locked (e9, C97 1(b)). */
+  dormant?: boolean;
   candidates: number;
   expired: number;
   duplicateSuppressed: number;
@@ -72,6 +75,8 @@ export async function runSettlementExpirySweepJob(
   sweeperDeps?: Partial<ExpirySweeperDeps>,
   runtimeOverride?: Partial<SweepJobRuntimeDeps>,
 ): Promise<SettlementExpirySweepReport> {
+  // e9 (C97 1(b)): default-OFF while the sandbox foundation is dormant - no lock, no read, no metric.
+  if (!isSettlementFoundationActive()) return { ...SKIPPED_LOCKED, dormant: true };
   const rt: SweepJobRuntimeDeps = { ...DEFAULT_RUNTIME, ...runtimeOverride };
 
   const lock = await rt.acquireLock(SETTLEMENT_SWEEP_LOCK_KEY, { ttlMs: SWEEP_LOCK_TTL_MS });
