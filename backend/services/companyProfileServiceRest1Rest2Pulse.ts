@@ -14,6 +14,7 @@ import { memoRequest } from './requestScopedMemo';
 import { randomUUID } from 'crypto';
 import { runCompletionWithOperation } from './aiGateway';
 import { refineLanguageOutput } from './languageRefinementService';
+import { logger } from './logger';
 import { supabase } from '../db/supabaseClient';
 
 // ─── Re-export everything public so existing imports continue to work ─────────
@@ -716,6 +717,12 @@ const PROFILE_CACHE_FLAG = defineRolloutFlag({
   description: 'W4-5: request-memoized profile reads + opt-in autoRefine (audit B-35)',
 });
 
+/** Process-lifetime count of getProfile auto-refines that failed and fell back to the unrefined profile. */
+let profileAutoRefineFailureCount = 0;
+export function getProfileAutoRefineFailureCount(): number {
+  return profileAutoRefineFailureCount;
+}
+
 export async function getProfile(
   companyId?: string,
   options?: { autoRefine?: boolean; languageRefine?: boolean; includeStoredCompetitors?: boolean }
@@ -730,7 +737,19 @@ export async function getProfile(
   let result: CompanyProfile | null = profile;
   const autoRefineDefault = cacheOn ? false : true; // W4-5: opt-in under the flag
   if ((options?.autoRefine ?? autoRefineDefault) && shouldRefineProfile(profile.last_refined_at)) {
-    result = await refineProfileWithAI(profile, { force: true });
+    // The staleness refine is BACKGROUND work for the read: it must never fail the caller's request (e9, PL 11-13).
+    // On any refine error, serve the unrefined profile; log + count so a broken refine stays visible.
+    try {
+      result = await refineProfileWithAI(profile, { force: true });
+    } catch (err) {
+      profileAutoRefineFailureCount += 1;
+      logger.warn('profile_auto_refine_failed', {
+        companyId: resolvedCompanyId,
+        failures: profileAutoRefineFailureCount,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      result = profile;
+    }
   }
   if ((options?.languageRefine ?? false) && result) {
     result = await refineProfileForPrompts(result);
