@@ -24,11 +24,14 @@ export const SETTLEMENT_MIGRATION_VERSIONS = [
   '20260722', // settlement_metrics_prune
 ] as const;
 
-/** Tables the settlement foundation must have created. */
+/**
+ * Tables the settlement foundation must have created. The hidden billing catalog and its audit table (20260717/18)
+ * are RETIRED (owner; e9 C97 1(a), 2026-11-13): nothing reads or writes them, so readiness no longer requires them.
+ * Their migration files stay in the version list below - applied files are immutable and 20260718 also creates
+ * billing_checkout_sessions.
+ */
 export const REQUIRED_SETTLEMENT_TABLES = [
   'payment_provider_config',
-  'hidden_billing_catalog',
-  'hidden_billing_catalog_audit',
   'billing_checkout_sessions',
   'billing_settlement_events',
   'settlement_runtime_locks',
@@ -49,8 +52,6 @@ export const REQUIRED_SETTLEMENT_FUNCTIONS = [
  * replaces it with the retention-gated som_retention_gated_delete.
  */
 export const REQUIRED_IMMUTABILITY_TRIGGERS = [
-  { table: 'hidden_billing_catalog_audit', trigger: 'hbca_audit_immutable_update' },
-  { table: 'hidden_billing_catalog_audit', trigger: 'hbca_audit_immutable_delete' },
   { table: 'billing_settlement_events', trigger: 'bse_immutable_update' },
   { table: 'billing_settlement_events', trigger: 'bse_immutable_delete' },
   { table: 'settlement_operational_metrics', trigger: 'som_immutable_update' },

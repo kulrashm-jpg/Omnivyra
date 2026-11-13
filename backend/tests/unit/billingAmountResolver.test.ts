@@ -1,136 +1,60 @@
 /**
- * billingAmountResolver — DB-backed hidden amount-resolution tests.
+ * billingAmountResolver - RETIRED hidden-billing resolution (owner; e9 C97 1(a), 2026-11-13).
  *
- * Covers: DB-backed resolution, minor→major conversion, compiled-fallback
- * default-preserving behavior, malformed/unknown/disabled rejection,
- * determinism, never-throws, and hidden-pricing preservation.
+ * The hidden billing catalog is retired and a checkout must never price from it: every well-formed reference refuses
+ * with 'disabled_reference', a malformed one with 'malformed_reference'; no database read, no compiled fallback, no
+ * amount - including the references the catalog / compiled fallback used to price (the regression these cases replace).
  */
 
-// Controlled supabase mock: the resolver awaits
-// supabase.from('hidden_billing_catalog').select(..).eq(..).maybeSingle().
-let __row: any = null;
-let __error: any = null;
-let __throw = false;
+const __dbReads: string[] = [];
+jest.mock('../../db/supabaseClient', () => ({
+  supabase: { from: (t: string) => { __dbReads.push(t); throw new Error(`no database read expected (from ${t})`); } },
+}));
 
-jest.mock('../../db/supabaseClient', () => {
-  const builder: any = {};
-  builder.select = () => builder;
-  builder.eq = () => builder;
-  builder.maybeSingle = () => {
-    if (__throw) return Promise.reject(new Error('relation "hidden_billing_catalog" does not exist'));
-    return Promise.resolve({ data: __row, error: __error });
-  };
-  return { supabase: { from: () => builder } };
-});
-
-import { resolveBillingAmount } from '../../services/billing/payments/billingAmountResolver';
+import { resolveBillingAmount, HIDDEN_BILLING_RETIRED_REASON } from '../../services/billing/payments/billingAmountResolver';
 import * as resolverModule from '../../services/billing/payments/billingAmountResolver';
 
-function reset() { __row = null; __error = null; __throw = false; }
-beforeEach(reset);
+beforeEach(() => { __dbReads.length = 0; });
 
-describe('billingAmountResolver — DB-backed resolution', () => {
-  test('resolves an enabled topup from the catalog row (minor→major)', async () => {
-    __row = { kind: 'topup', amount_minor: 50000, currency: 'INR', enabled: true };
-    const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.amount).toEqual({ amount: 500, currency: 'INR' }); // 50000 paise → ₹500
+describe('billingAmountResolver - retired: every well-formed reference refuses', () => {
+  test.each([
+    ['topup', 'topup_credits_500'],        // priced by the catalog seed AND the compiled fallback before retirement
+    ['subscription', 'plan_pro_monthly'],  // ditto
+    ['subscription', 'plan_legacy_v1'],
+    ['topup', 'topup_not_in_fallback'],
+  ] as const)('%s %p -> disabled_reference, no amount, no DB read', async (intentType, reference) => {
+    const r = await resolveBillingAmount({ intentType, reference });
+    expect(r).toEqual({ ok: false, code: 'disabled_reference', reason: HIDDEN_BILLING_RETIRED_REASON });
+    expect(__dbReads).toEqual([]);
   });
 
-  test('resolves an enabled subscription from the catalog row', async () => {
-    __row = { kind: 'subscription', amount_minor: 199900, currency: 'INR', enabled: true };
-    const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_pro_monthly' });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.amount).toEqual({ amount: 1999, currency: 'INR' });
-  });
-
-  test('zero-decimal currency is not divided (JPY)', async () => {
-    __row = { kind: 'topup', amount_minor: 1000, currency: 'JPY', enabled: true };
-    const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.amount).toEqual({ amount: 1000, currency: 'JPY' });
+  test('never resolves ok for any intent type', async () => {
+    for (const intentType of ['subscription', 'topup'] as const) {
+      const r = await resolveBillingAmount({ intentType, reference: 'plan_pro_monthly' });
+      expect(r.ok).toBe(false);
+    }
   });
 });
 
-describe('billingAmountResolver — rejection behavior', () => {
+describe('billingAmountResolver - malformed input is still named', () => {
   test.each(['', '   ', 'x', 'Plan_Pro', 'plan pro', 'plan-pro', '1plan', 'plan!@#'])(
-    'malformed reference %p → malformed_reference (no DB read)',
+    'malformed reference %p -> malformed_reference (no DB read)',
     async (ref) => {
       const r = await resolveBillingAmount({ intentType: 'subscription', reference: ref });
       expect(r.ok).toBe(false);
       if (r.ok === false) expect(r.code).toBe('malformed_reference');
+      expect(__dbReads).toEqual([]);
     },
   );
 
-  test('table exists but no such row → unknown_reference', async () => {
-    __row = null; __error = null;
-    const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_does_not_exist' });
-    expect(r.ok).toBe(false);
-    if (r.ok === false) expect(r.code).toBe('unknown_reference');
-  });
-
-  test('kind mismatch → unknown_reference', async () => {
-    __row = { kind: 'topup', amount_minor: 50000, currency: 'INR', enabled: true };
-    const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'topup_credits_500' });
-    expect(r.ok).toBe(false);
-    if (r.ok === false) expect(r.code).toBe('unknown_reference');
-  });
-
-  test('disabled catalog entry → disabled_reference', async () => {
-    __row = { kind: 'subscription', amount_minor: 99900, currency: 'INR', enabled: false };
-    const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_legacy_v1' });
-    expect(r.ok).toBe(false);
-    if (r.ok === false) expect(r.code).toBe('disabled_reference');
+  test('a non-string reference is malformed, not a throw', async () => {
+    await expect(resolveBillingAmount({ intentType: 'topup', reference: undefined as unknown as string }))
+      .resolves.toMatchObject({ ok: false, code: 'malformed_reference' });
   });
 });
 
-describe('billingAmountResolver — compiled-fallback (default-preserving)', () => {
-  test('table absent (query throws) → resolves from COMPILED_FALLBACK', async () => {
-    __throw = true;
-    const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.amount).toEqual({ amount: 500, currency: 'INR' });
-  });
-
-  test('DB error → resolves from COMPILED_FALLBACK', async () => {
-    __error = { message: 'permission denied' };
-    const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_pro_monthly' });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.amount).toEqual({ amount: 1999, currency: 'INR' });
-  });
-
-  test('fallback preserves disabled rejection (retired entry)', async () => {
-    __throw = true;
-    const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_legacy_pack' });
-    expect(r.ok).toBe(false);
-    if (r.ok === false) expect(r.code).toBe('disabled_reference');
-  });
-
-  test('fallback preserves unknown rejection (no fallback entry)', async () => {
-    __throw = true;
-    const r = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_not_in_fallback' });
-    expect(r.ok).toBe(false);
-    if (r.ok === false) expect(r.code).toBe('unknown_reference');
-  });
-
-  test('never throws even when the DB read rejects', async () => {
-    __throw = true;
-    await expect(resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' }))
-      .resolves.toBeDefined();
-  });
-});
-
-describe('billingAmountResolver — determinism', () => {
-  test('identical input → identical result (DB row)', async () => {
-    __row = { kind: 'topup', amount_minor: 50000, currency: 'INR', enabled: true };
-    const a = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' });
-    const b = await resolveBillingAmount({ intentType: 'topup', reference: 'topup_credits_500' });
-    expect(b).toEqual(a);
-  });
-});
-
-describe('billingAmountResolver — hidden-pricing preservation', () => {
-  test('module exports ONLY the resolver — no registry/catalog/price table', () => {
+describe('billingAmountResolver - no pricing surface remains', () => {
+  test('module exports no registry/catalog/fallback/price table', () => {
     const exported = Object.keys(resolverModule);
     expect(exported).toContain('resolveBillingAmount');
     for (const name of exported) {
@@ -138,21 +62,8 @@ describe('billingAmountResolver — hidden-pricing preservation', () => {
     }
   });
 
-  test('successful result exposes ONLY amount + currency — no catalog leak', async () => {
-    __row = { kind: 'subscription', amount_minor: 199900, currency: 'INR', enabled: true };
+  test('a refusal carries no pricing data', async () => {
     const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_pro_monthly' });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(Object.keys(r.amount).sort()).toEqual(['amount', 'currency']);
-    for (const f of ['kind', 'enabled', 'amount_minor', 'internal_label', 'reference_key']) {
-      expect(r.amount).not.toHaveProperty(f);
-    }
-  });
-
-  test('rejection result carries no pricing data', async () => {
-    __row = { kind: 'subscription', amount_minor: 99900, currency: 'INR', enabled: false };
-    const r = await resolveBillingAmount({ intentType: 'subscription', reference: 'plan_legacy_v1' });
-    expect(r.ok).toBe(false);
     const serialized = JSON.stringify(r).toLowerCase();
     for (const f of ['amount', 'amount_minor', 'price', 'currency', 'internal_label']) {
       expect(serialized).not.toContain(`"${f}"`);

@@ -24,7 +24,26 @@ const BASE_ARGS: OrchestrateCheckoutArgs = {
   initiatedByUserId: 'user-1',
   provider: 'razorpay',
   intentType: 'topup',
-  reference: 'topup_credits_500', // real hidden-registry key → amount 500 INR
+  reference: 'topup_credits_500', // TEST_PRICES key → amount 500 INR (test-local; the hidden catalog is retired)
+};
+
+/**
+ * The hidden billing catalog is RETIRED (owner; e9 C97 1(a)): the real resolver refuses every reference (see the
+ * 'retired hidden catalog' describe below). The orchestrator's own logic - geography, currency compatibility,
+ * normalization, idempotency, rejection propagation - is exercised through this INJECTED test-local resolver, which
+ * reproduces the four outcomes the orchestrator must handle. It is not a pricing source.
+ */
+const TEST_PRICES: Record<string, { kind: 'topup' | 'subscription'; amount: number; currency: string; enabled: boolean }> = {
+  topup_credits_500: { kind: 'topup', amount: 500, currency: 'INR', enabled: true },
+  plan_pro_monthly: { kind: 'subscription', amount: 1999, currency: 'INR', enabled: true },
+  topup_legacy_pack: { kind: 'topup', amount: 100, currency: 'INR', enabled: false },
+};
+const testResolveBillingAmount: OrchestratorDeps['resolveBillingAmount'] = async ({ intentType, reference }) => {
+  if (!/^[a-z][a-z0-9_]{2,63}$/.test(reference)) return { ok: false, code: 'malformed_reference', reason: 'malformed' };
+  const e = TEST_PRICES[reference];
+  if (!e || e.kind !== intentType) return { ok: false, code: 'unknown_reference', reason: 'unknown' };
+  if (!e.enabled) return { ok: false, code: 'disabled_reference', reason: 'disabled' };
+  return { ok: true, amount: { amount: e.amount, currency: e.currency } };
 };
 
 interface FakeOpts {
@@ -37,6 +56,8 @@ interface FakeOpts {
   gateReason?: string;
   dispatch?: OrchestratorDeps['dispatchCheckout'];
   providerMode?: 'test' | 'live' | 'unknown';
+  /** Use the REAL (retired, always-refusing) resolver instead of the test-local one. */
+  realResolver?: boolean;
 }
 
 function makeDeps(opts: FakeOpts = {}): { deps: Partial<OrchestratorDeps>; dispatchCalls: any[] } {
@@ -85,6 +106,7 @@ function makeDeps(opts: FakeOpts = {}): { deps: Partial<OrchestratorDeps>; dispa
       handleWebhook: async () => ({}) as any,
     })) as any,
   };
+  if (!opts.realResolver) deps.resolveBillingAmount = testResolveBillingAmount;
   // Wrap dispatch to also record calls when a custom dispatch is supplied.
   if (opts.dispatch) {
     const inner = opts.dispatch;
@@ -253,10 +275,10 @@ describe('orchestrator — hidden-pricing preservation', () => {
     }
   });
 
-  test('dispatches the backend-resolved amount (hidden registry), not 0', async () => {
+  test('dispatches the backend-resolved amount (injected resolver), not 0', async () => {
     const { deps, dispatchCalls } = makeDeps();
     await orchestrateCheckoutSession(BASE_ARGS, deps);
-    // topup_credits_500 → ₹500 from the hidden pricing registry.
+    // topup_credits_500 → ₹500 from the injected test resolver.
     expect(dispatchCalls[0].amount).toBe(500);
     expect(dispatchCalls[0].currency).toBe('INR');
   });
@@ -292,7 +314,20 @@ describe('orchestrator — amount-resolution rejection', () => {
     const r = await orchestrateCheckoutSession(
       { ...BASE_ARGS, intentType: 'subscription', reference: 'plan_pro_monthly' }, deps);
     expect(r.ok).toBe(true);
-    expect(dispatchCalls[0].amount).toBe(1999); // ₹1999 from the hidden catalog
+    expect(dispatchCalls[0].amount).toBe(1999); // ₹1999 from the injected test resolver
+  });
+});
+
+describe('orchestrator — retired hidden catalog (default resolver)', () => {
+  test.each([
+    ['topup', 'topup_credits_500'],
+    ['subscription', 'plan_pro_monthly'],
+  ] as const)('%s %p → disabled_reference before any provider session (no dispatch)', async (intentType, reference) => {
+    const { deps, dispatchCalls } = makeDeps({ realResolver: true });
+    const r = await orchestrateCheckoutSession({ ...BASE_ARGS, intentType, reference }, deps);
+    expect(r.ok).toBe(false);
+    if (r.ok === false) expect(r.code).toBe('disabled_reference');
+    expect(dispatchCalls).toHaveLength(0);
   });
 });
 

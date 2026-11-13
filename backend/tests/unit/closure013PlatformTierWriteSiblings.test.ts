@@ -151,7 +151,6 @@ const SIBLINGS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['admin/platform-oauth-configs/index', ['POST']],
   ['admin/queue-config', ['POST']],
   ['admin/revoke-super-admin', ['POST']],
-  ['super-admin/billing-catalog/index', ['POST', 'PATCH']],
   ['super-admin/community-ai-policy', ['POST']],
   ['super-admin/companies/archive-abandoned', ['POST']],
   ['super-admin/companies/promote-admin', ['POST']],
