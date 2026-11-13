@@ -5,6 +5,8 @@ import ActivityWorkspaceTabs from './activity-workspace/ActivityWorkspaceTabs';
 import ActivityWorkspaceCommunityPanels from './activity-workspace/ActivityWorkspaceCommunityPanels';
 import ActivityWorkspaceBriefSection from './activity-workspace/ActivityWorkspaceBriefSection';
 import CreatorWorkspaceOrchestrator from './activity-workspace/CreatorWorkspaceOrchestrator';
+import { useCompanyContext } from './CompanyContext';
+import { canWriteCampaign } from '../lib/access/campaignWriteAccess';
 
 type S = ReturnType<typeof useActivityWorkspace>;
 
@@ -25,6 +27,8 @@ export default function ActivityWorkspaceView({ d }: { d: S }) {
       ? (d.payload as any).creator_workspace
       : null;
   const showCreatorWorkspace = CREATOR_UI_ENABLED && Boolean(creatorTask);
+  // F3f: read-only roles see the creator workspace but cannot act in it.
+  const canWriteThisCampaign = canWriteCampaign(useCompanyContext().userRole);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -33,7 +37,9 @@ export default function ActivityWorkspaceView({ d }: { d: S }) {
         <ActivityWorkspaceTabs d={d} />
         {d.activityTab === 'content' ? (
           showCreatorWorkspace ? (
+            <fieldset disabled={!canWriteThisCampaign} data-testid="workspace-creator-orchestrator" className="m-0 min-w-0 border-0 p-0">
             <CreatorWorkspaceOrchestrator d={d} />
+            </fieldset>
           ) : (
             <ActivityWorkspaceBriefSection d={d} />
           )
