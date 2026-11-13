@@ -728,6 +728,15 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                       isActive={true}
                       message="Generating campaign blueprint…"
                       expectedSeconds={50}
+                      // Mirrors /api/campaigns/regenerate-blueprint: load campaign + existing
+                      // blueprint, gather topics (profile, recommendations, strategic themes),
+                      // runCampaignAiPlan, saveCampaignBlueprintFromLegacy.
+                      stages={[
+                        { label: 'Reading your campaign', etaSeconds: 4 },
+                        { label: 'Gathering topics from your profile and trends', etaSeconds: 10 },
+                        { label: 'Planning the weeks with AI', etaSeconds: 30 },
+                        { label: 'Saving the blueprint', etaSeconds: 6 },
+                      ]}
                     />
                   </div>
                 )}
