@@ -26,6 +26,12 @@ jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn(async () => ({ userId: 'user-1' })),
 }));
 jest.mock('../../services/companyProfileService', () => ({ getProfile: jest.fn(async () => null) }));
+// STALE-TEST FIX (2026-11-13, pre-launch triage): the route moved to the canonical profile adapter + grounding
+// guard (Wave 2C / P2-P3); without these seams the REAL adapters built a DB client and the env-isolation guard
+// refused every request (8/9 failing on main). Same IO-seam policy as the rest of this file.
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({ getCanonicalProfile: jest.fn(async () => null) }));
+jest.mock('../../services/context/canonicalContentContextResolver', () => ({ resolveCompanyGroundingGuard: jest.fn(async () => ({ directive: '', brand: null, allowedNames: [] })) }));
+jest.mock('../../services/campaignAccessService', () => ({ resolveCampaignCompanyId: jest.fn(async () => null) }));
 jest.mock('../../services/companyContextService', () => ({ buildCompanyContext: jest.fn(() => ({ identity: {}, brand: {}, customer: {} })) }));
 jest.mock('../../services/aiGateway', () => ({
   runCompletionWithOperation: jest.fn(async () => {
