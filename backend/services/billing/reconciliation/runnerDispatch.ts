@@ -189,6 +189,17 @@ export async function dispatchReconciliation(
 }
 
 /**
+ * SINGLE-WRITER ASSUMPTION - the ONE recorded statement for the whole reconciliation family (05, 2026-11-13).
+ * Every reconciler's persist step (the shared provider persist, reconciliationPersist, and the Stripe path,
+ * stripeReconciler.ingestStripeInvoice) assumes ONE writer per (provider, period): their overlap refusals, run reads and
+ * "count adjustments, then insert" resume logic are check-then-act, not atomic. That is safe ONLY because this
+ * localhost-guarded, opt-in CLI is the sole caller. Moving any reconciler to a scheduled job or a server route makes
+ * ALL of them unsafe at once: first add pg_advisory_xact_lock(hashtext(provider || period)) around each persist, or
+ * a unique (run_id, bucket key) on adjustments plus an exclusion constraint on invoice periods (btree_gist).
+ */
+export const RECONCILE_SINGLE_WRITER_ASSUMPTION = 'one writer per (provider, period): the localhost reconciliation CLI';
+
+/**
  * Localhost-only execution guard. Refuses to run when the configured Supabase
  * URL is anywhere other than localhost, and requires an explicit opt-in env
  * flag so a stale shell can't accidentally fire it.

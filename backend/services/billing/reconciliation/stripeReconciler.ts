@@ -12,6 +12,9 @@
  * (separate task). This orchestrator only records financial-flow
  * reconciliation against our own ledger.
  *
+ * CONCURRENCY: single writer only - see RECONCILE_SINGLE_WRITER_ASSUMPTION (runnerDispatch.ts), which this path
+ * shares with the provider persist step. A scheduled caller makes both unsafe at once.
+ *
  * REPLAY SAFETY:
  *   - DB-level idempotency via UNIQUE(provider='stripe', provider_invoice_id).
  *   - cost_reconciliation_runs upsert on UNIQUE(provider, period_start, period_end).
