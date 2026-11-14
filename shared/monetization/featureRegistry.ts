@@ -77,6 +77,18 @@ export interface MonetizationFeatureRegistryEntry {
 }
 
 const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
+  // OWNER 2026-11-14: Market Pulse is its own billed feature (8 credits per AI region, marketPulseBilling.ts). Declared
+  // here (not only as a simple entry) so its AI operation resolves to market_pulse, not insight_generation.
+  {
+    ...feature('intelligence.market_pulse', 'intelligence', 'Market Pulse', 'Insights & Trends', 'bg-blue-500'),
+    process_type_mapping: ['generateMarketPulseForRegion'],
+    pricing_keys: {
+      action_key: 'market_pulse',
+      credit_cost_config: 'market_pulse',
+      action_pricing_config: 'market_pulse',
+      usage_action_key: 'market_pulse',
+    },
+  },
   {
     feature_key: 'reports.snapshot',
     category: 'reports',
@@ -410,7 +422,8 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'qualifyLead',
       'qualifyPredictiveLead',
       'generateTrendRecommendationForRegion',
-      'generateMarketPulseForRegion',
+      // generateMarketPulseForRegion moved to intelligence.market_pulse (05, 2026-11-14): Market Pulse AI calls
+      // must not be metered as insight_generation - that data feeds the per-key ceiling measurement.
       'consolidateRegionalResults',
       // F0 — idea/recommendation surfaces that produce candidate insights,
       // identical in billable shape to generateContentIdeas / generateRecommendation.

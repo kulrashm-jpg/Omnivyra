@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../../backend/services/userContextService';
 import { supabase } from '../../../../../backend/db/supabaseClient';
+import { cancelMarketPulseJob } from '../../../../../backend/services/marketPulse/marketPulseBilling';
 
 const CANCELLED_ERROR = 'Cancelled by user';
 
@@ -37,17 +38,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Job is already finished and cannot be cancelled' });
   }
 
-  const { error: updateError } = await supabase
-    .from('market_pulse_jobs_v1')
-    .update({
-      status: 'FAILED',
-      error: CANCELLED_ERROR,
-      completed_at: new Date().toISOString(),
-    })
-    .eq('id', jobId)
-    .in('status', ['PENDING', 'RUNNING']);
+  // 05 (2026-11-14): a PENDING cancel releases the run's credit hold (the processor will never claim it); a RUNNING
+  // cancel is settled by the processor (completed regions charged, the rest released).
+  const cancelled = await cancelMarketPulseJob(jobId, CANCELLED_ERROR);
 
-  if (updateError) {
+  if (!cancelled.ok) {
     return res.status(500).json({ error: 'Failed to cancel job' });
   }
 

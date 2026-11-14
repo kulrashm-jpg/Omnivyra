@@ -17,18 +17,28 @@ let jobRow: any = null;
 let cancelled = false;
 const regionOutcome: Record<string, 'ok' | 'fail'> = {};
 const updates: any[] = [];
+let claimWins = true;          // the conditional PENDING -> RUNNING claim affects one row
+/** update(...).eq(...)[.eq(...)][.select(...)] - awaitable at any point; .select answers the claim. */
+function updateChain(table: string, u: any) {
+  updates.push({ table, u });
+  const c: any = {};
+  c.eq = () => c; c.in = () => c;
+  c.select = async () => ({ data: claimWins ? [{ id: 'job', context_payload: jobRow?.context_payload }] : [], error: null });
+  c.then = (ok: any) => ok({ error: null });
+  return c;
+}
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (table: string) => {
     const b: any = {};
     b.select = () => b; b.eq = () => b;
     b.single = async () => (table === 'market_pulse_jobs_v1'
       ? { data: cancelled ? { ...jobRow, error: 'Cancelled by user' } : jobRow, error: null } : { data: null, error: null });
-    b.update = (u: any) => { updates.push({ table, u }); return { eq: async () => ({ error: null }) }; };
+    b.update = (u: any) => updateChain(table, u);
     b.insert = async () => ({ error: null });
     return b;
   },
 }));
-jest.mock('../../db/supabaseClient', () => ({ supabase: { from: () => { throw new Error('no supabase read expected'); } } }));
+jest.mock('../../db/supabaseClient', () => ({ supabase: { from: (t: string) => ({ update: (u: any) => updateChain(t, u) }) } }));
 const aiCalls: string[] = [];
 jest.mock('../../services/opportunityGenerators', () => ({
   generateMarketPulseForRegion: async (_c: string, region: string) => {
@@ -40,7 +50,7 @@ jest.mock('../../services/opportunityGenerators', () => ({
 jest.mock('../../services/marketPulseAggregationService', () => ({ aggregateMarketPulseFromDb: async () => [] }));
 
 import {
-  billableRegionCount, holdMarketPulseRun, isMarketPulseRunDue, settleMarketPulseRun, MARKET_PULSE_CREDITS_PER_REGION,
+  billableRegionCount, cancelMarketPulseJob, holdMarketPulseRun, isMarketPulseRunDue, settleMarketPulseRun, MARKET_PULSE_CREDITS_PER_REGION,
 } from '../../services/marketPulse/marketPulseBilling';
 import { processMarketPulseJobV1 } from '../../services/marketPulseJobProcessor';
 
@@ -50,7 +60,7 @@ const handle = (credits: number) => ({ orgId: ORG, userId: ORG, action: 'market_
   idempotencyKey: 'k', holdTransactionId: 'h', creditsReserved: credits, split: { free: credits, paid: 0, incentive: 0 } });
 const REGIONS15 = Array.from({ length: 15 }, (_, i) => `R${i}`);
 
-beforeEach(() => { calls.length = 0; updates.length = 0; aiCalls.length = 0; cancelled = false; for (const k of Object.keys(regionOutcome)) delete regionOutcome[k]; });
+beforeEach(() => { calls.length = 0; updates.length = 0; aiCalls.length = 0; cancelled = false; claimWins = true; for (const k of Object.keys(regionOutcome)) delete regionOutcome[k]; });
 
 describe('hold', () => {
   test('a 15-region run holds 120 (8 x 15) as action market_pulse, keyed on the job id', async () => {
@@ -160,4 +170,57 @@ describe('processor settles the claimed job', () => {
   });
 
   test('constant: 8 credits per region', () => { expect(MARKET_PULSE_CREDITS_PER_REGION).toBe(8); });
+
+  test('05: a LOST atomic claim (another invocation won) runs no AI and settles nothing', async () => {
+    jobRow = job(['A', 'B'], 16);
+    claimWins = false;
+    await processMarketPulseJobV1(JOB);
+    expect(aiCalls).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  test('05: a billable job with NO persisted hold fails closed - no AI call, job closed', async () => {
+    jobRow = { id: JOB, company_id: ORG, status: 'PENDING', regions: ['A'], context_payload: { insight_source: 'llm' } };
+    const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await processMarketPulseJobV1(JOB);
+    expect(aiCalls).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(updates).toEqual(expect.arrayContaining([expect.objectContaining({ u: expect.objectContaining({ status: 'FAILED' }) })]));
+    expect(err).toHaveBeenCalledWith('[marketPulse] market_pulse_no_credit_reservation', expect.objectContaining({ jobId: JOB }));
+    err.mockRestore();
+  });
+
+  test("05 invariant: an 'api'-source run makes NO provider call and settles nothing (it was never held)", async () => {
+    jobRow = { id: JOB, company_id: ORG, status: 'PENDING', regions: ['A', 'B'], context_payload: { insight_source: 'api' } };
+    await processMarketPulseJobV1(JOB);
+    expect(aiCalls).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('cancel owns the hold correctly (05)', () => {
+  test('cancelling a PENDING job (its conditional update wins) releases the hold', async () => {
+    jobRow = { context_payload: { credit_reservation: handle(16) } };
+    claimWins = true;
+    expect(await cancelMarketPulseJob(JOB, 'Cancelled by user')).toEqual({ ok: true, wasPending: true });
+    expect(calls.map((c) => c.fn)).toEqual(['release']);
+  });
+  test('cancelling a RUNNING job releases nothing (the processor settles completed regions)', async () => {
+    jobRow = { context_payload: { credit_reservation: handle(16) } };
+    claimWins = false;
+    expect(await cancelMarketPulseJob(JOB, 'Cancelled by user')).toEqual({ ok: true, wasPending: false });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('registry (05: the mapping precedes the ceiling measurement)', () => {
+  const reg = require('../../../shared/monetization/featureRegistry');
+  test("generateMarketPulseForRegion resolves to market_pulse, not insight_generation", () => {
+    expect(reg.resolveFeatureFromProcessType('generateMarketPulseForRegion')?.pricing_keys.action_key).toBe('market_pulse');
+    expect(reg.resolveActionKeyFromProcessType('generateMarketPulseForRegion')).toBe('market_pulse');
+  });
+  test('market_pulse appears exactly once in the registry (base entry; the simple entry is filtered)', () => {
+    const n = reg.MONETIZATION_FEATURE_REGISTRY.filter((e: any) => e.pricing_keys.action_key === 'market_pulse').length;
+    expect(n).toBe(1);
+  });
 });

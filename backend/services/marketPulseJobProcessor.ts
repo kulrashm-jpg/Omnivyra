@@ -9,7 +9,7 @@ import { generateMarketPulseForRegion, type MarketPulseContextPayload } from './
 import { consolidateMarketPulseResults } from './marketPulseConsolidator';
 import { aggregateMarketPulseFromDb, type AggregatedPulseSignal } from './marketPulseAggregationService';
 import type { ConsolidatedPulseOutput } from './marketPulseConsolidator';
-import { readPersistedReservation, settleMarketPulseRun } from './marketPulse/marketPulseBilling';
+import { billableRegionCount, readPersistedReservation, settleMarketPulseRun } from './marketPulse/marketPulseBilling';
 
 type JobRow = {
   id: string;
@@ -95,15 +95,32 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
 
   if (await isCancelled()) return;
 
-  await ownedDbTable('market_pulse_jobs_v1')
+  // 05 (2026-11-14): the claim is ATOMIC - a conditional PENDING -> RUNNING update that must affect exactly one row.
+  // Two concurrent first invocations can no longer both run the AI (we would pay the provider twice for one charge);
+  // a cancel of a PENDING job (same conditional on PENDING, which releases the hold itself) and this claim are mutually
+  // exclusive, so exactly one of them owns the hold.
+  const { data: claimed, error: claimError } = await ownedDbTable('market_pulse_jobs_v1')
     .update({ status: 'RUNNING', progress_stage: 'INITIALIZING' })
-    .eq('id', jobId);
+    .eq('id', jobId)
+    .eq('status', 'PENDING')
+    .select('id');
+  if (claimError || !Array.isArray(claimed) || claimed.length !== 1) return;
 
-  // OWNER 2026-11-14 (marketPulseBilling): ONLY the invocation that claimed the job (PENDING -> RUNNING above) settles
-  // its hold - a second invocation returned at the status check, so it can never release a hold in use. Whatever happens
+  // OWNER 2026-11-14 (marketPulseBilling): ONLY the invocation that claimed the job settles its hold. Whatever happens
   // next (finished, cancelled, partial failure, throw), the finally settles 8 x completed AI regions capped at the hold
   // and releases the rest; no completed region = full release.
   const reservation = readPersistedReservation(row.context_payload);
+  const claimedRegions = Array.isArray(row.regions) && row.regions.length > 0 ? row.regions : ['GLOBAL'];
+  const claimedSource = (row.context_payload as { insight_source?: 'api' | 'llm' | 'hybrid' } | null)?.insight_source;
+  if (!reservation && billableRegionCount(claimedRegions, claimedSource) > 0) {
+    // 05: a missing handle is "I cannot settle this", not "nothing to settle" - and an AI run with no hold is unbilled
+    // spend. Fail CLOSED: no AI call, the job is closed, the condition is logged loudly.
+    console.error('[marketPulse] market_pulse_no_credit_reservation', { jobId, regions: claimedRegions.length, insightSource: claimedSource ?? 'hybrid' });
+    await ownedDbTable('market_pulse_jobs_v1')
+      .update({ status: 'FAILED', progress_stage: 'FINISHED', error: 'Not started: no credit reservation for this run', completed_at: now })
+      .eq('id', jobId);
+    return;
+  }
   const billing = { completedRegions: 0 };
   try {
 

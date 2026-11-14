@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { supabase } from '../../../../../backend/db/supabaseClient';
 import { syncLegacyJobIntoRun } from '../../../../../backend/services/marketPulseV2Service';
+import { cancelMarketPulseJob } from '../../../../../backend/services/marketPulse/marketPulseBilling';
 
 const CANCELLED_ERROR = 'Cancelled by user';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled']);
@@ -67,15 +68,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
-      await supabase
-        .from('market_pulse_jobs_v1')
-        .update({
-          status: 'FAILED',
-          error: CANCELLED_ERROR,
-          completed_at: new Date().toISOString(),
-        })
-        .eq('id', legacyJobId)
-        .in('status', ['PENDING', 'RUNNING']);
+      // 05 (2026-11-14): PENDING cancel releases the hold; RUNNING cancel is settled by the processor.
+      await cancelMarketPulseJob(legacyJobId, CANCELLED_ERROR);
     }
 
     const { error: updateError } = await supabase

@@ -131,3 +131,24 @@ export function isMarketPulseRunDue(cadence: string | null | undefined, lastRunA
   const periodHours = cadence === 'daily' ? 24 : 7 * 24;
   return now.getTime() - last >= (periodHours - 1) * 3600_000;
 }
+
+/**
+ * Cancel a Market Pulse job, owning its hold correctly (05, 2026-11-14). A PENDING job was never claimed by the
+ * processor, so nothing else will ever settle it: the conditional PENDING -> FAILED update (mutually exclusive with the
+ * processor's conditional PENDING -> RUNNING claim) releases the hold when IT wins. A RUNNING job is cancelled by status
+ * only - the processor observes the cancel and its finally settles the completed regions and releases the rest.
+ */
+export async function cancelMarketPulseJob(jobId: string, cancelledError: string): Promise<{ ok: boolean; wasPending: boolean }> {
+  const { supabase } = await import('../../db/supabaseClient');
+  const patch = { status: 'FAILED', error: cancelledError, completed_at: new Date().toISOString() };
+  const pending = await supabase.from('market_pulse_jobs_v1').update(patch)
+    .eq('id', jobId).eq('status', 'PENDING').select('id, context_payload');
+  if (pending.error) return { ok: false, wasPending: false };
+  const rows = (pending.data ?? []) as Array<{ context_payload?: unknown }>;
+  if (rows.length === 1) {
+    await releaseMarketPulseHold(readPersistedReservation(rows[0].context_payload), 'cancelled before start');
+    return { ok: true, wasPending: true };
+  }
+  const running = await supabase.from('market_pulse_jobs_v1').update(patch).eq('id', jobId).eq('status', 'RUNNING');
+  return { ok: !running.error, wasPending: false };
+}
