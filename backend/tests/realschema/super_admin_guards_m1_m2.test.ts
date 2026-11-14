@@ -101,15 +101,28 @@ describe('M1 / M2 super-admin guards (real Postgres, separate connections)', () 
     }
   });
 
-  it('M2: an unknown future users.status also does not count (allowlist on active)', async () => {
-    await grant(U[0]); await grant(U[1]);
-    const { rows } = await db.query(`SELECT data_type FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='status'`);
-    if (rows[0]?.data_type !== 'text' && rows[0]?.data_type !== 'character varying') return; // an enum/CHECK would refuse the probe value
-    await db.query(`UPDATE public.users SET status = 'some_future_status' WHERE id = $1`, [U[1]]);
-    try {
-      expect(await attemptOn(extra[0], REVOKE, [U[0]])).toMatch(/LAST_SUPER_ADMIN/);
-    } finally {
-      await db.query(`UPDATE public.users SET status = 'active' WHERE id = $1`, [U[1]]);
+  it('M2: EVERY non-active users.status does not count (allowlist on active, not a suspended denylist)', async () => {
+    // CI-487: users.status carries users_status_check (20260638: invited/active/suspended/deleted), so an unknown future
+    // value is unrepresentable while the CHECK exists. The allowlist is proven over every non-active value the LIVE CHECK
+    // admits ('invited' and 'deleted' would both count under a status<>'suspended' denylist); an unknown value is added
+    // only when no CHECK exists.
+    const { rows: chk } = await db.query(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+        WHERE conrelid = 'public.users'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%status%'`);
+    const allowed = chk.length === 0 ? null
+      : [...new Set(chk.flatMap((r: { def: string }) => [...r.def.matchAll(/'([^']+)'/g)].map((m) => m[1])))];
+    const probes = (allowed ?? ['invited', 'suspended', 'deleted', 'some_future_status']).filter((s) => s !== 'active');
+    expect(probes.length).toBeGreaterThanOrEqual(2);   // non-vacuity: at least two non-active states exercised
+    if (allowed) expect(allowed).toContain('active');  // the parse found the real value list
+    for (const status of probes) {
+      await grant(U[0]); await grant(U[1]);
+      await db.query(`UPDATE public.users SET status = $2 WHERE id = $1`, [U[1], status]);
+      try {
+        expect(`${status}:${await attemptOn(extra[0], REVOKE, [U[0]])}`).toMatch(new RegExp(`^${status}:.*LAST_SUPER_ADMIN`));
+        expect(await activeSa(U[0])).toBe(1);
+      } finally {
+        await db.query(`UPDATE public.users SET status = 'active' WHERE id = $1`, [U[1]]);
+      }
     }
   });
 
@@ -136,9 +149,11 @@ describe('M1 / M2 super-admin guards (real Postgres, separate connections)', () 
   async function revokeWithFaultAt(table: 'users' | 'user_company_roles'): Promise<string> {
     await db.query('BEGIN');
     try {
+      // CI-487: plpgsql does not short-circuit a field reference, so NEW.user_id on users raised "record new has no
+      // field user_id" instead of the fault. The key column is chosen per table here, not inside the trigger.
+      const keyCol = table === 'users' ? 'id' : 'user_id';
       await db.query(`CREATE FUNCTION pg_temp.m2_fault() RETURNS trigger LANGUAGE plpgsql AS $f$
-        BEGIN IF NEW.id IS NOT NULL AND (TG_TABLE_NAME = 'users' AND NEW.id = '${U[1]}'::uuid
-                                          OR TG_TABLE_NAME = 'user_company_roles' AND NEW.user_id = '${U[1]}'::uuid)
+        BEGIN IF NEW.${keyCol} = '${U[1]}'::uuid
               THEN RAISE EXCEPTION 'M2_INJECTED_FAULT at %', TG_TABLE_NAME; END IF; RETURN NEW; END $f$`);
       await db.query(`CREATE TRIGGER m2_fault BEFORE UPDATE ON public.${table} FOR EACH ROW EXECUTE FUNCTION pg_temp.m2_fault()`);
       await db.query('SAVEPOINT rv');
