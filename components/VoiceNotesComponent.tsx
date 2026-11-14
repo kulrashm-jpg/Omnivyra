@@ -19,6 +19,7 @@ import {
 import { transcriptionErrorMessage, AUDIO_BITS_PER_SECOND, MAX_RECORDING_MS } from './ChatVoiceButton';
 import { useCompanyContext } from './CompanyContext';
 import { canPostCampaignMessages } from '../lib/access/campaignWriteAccess';
+import { useVoiceEnabled } from '../hooks/useVoiceEnabled';
 
 interface VoiceNote {
   id: string;
@@ -52,7 +53,9 @@ export default function VoiceNotesComponent({
   // Transcription is authorised against the ACTIVE company (paired with 55's server change);
   // Viewers / view-only users can't record (Engagers can: voice_notes exception).
   const { selectedCompanyId, userRole } = useCompanyContext();
-  const mayRecord = canPostCampaignMessages(userRole);
+  // e9: no recording until voice is charged; the server switch decides (fails closed).
+  const voiceEnabled = useVoiceEnabled();
+  const mayRecord = voiceEnabled && canPostCampaignMessages(userRole);
   const capTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (capTimerRef.current) clearTimeout(capTimerRef.current); }, []);
   const [isRecording, setIsRecording] = useState(false);

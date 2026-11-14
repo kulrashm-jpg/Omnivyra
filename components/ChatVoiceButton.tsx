@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Loader2 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { canPostCampaignMessages } from '../lib/access/campaignWriteAccess';
+import { useVoiceEnabled } from '../hooks/useVoiceEnabled';
 
 export type ChatVoiceButtonProps = {
   /** Called once with the final transcript when transcription completes. */
@@ -77,7 +78,9 @@ export default function ChatVoiceButton({
   const { selectedCompanyId, userRole } = useCompanyContext();
   const companyIdRef = useRef(selectedCompanyId);
   companyIdRef.current = selectedCompanyId;
-  const mayDictate = canPostCampaignMessages(userRole);
+  // e9: no mic until voice is charged; the server switch decides (fails closed).
+  const voiceEnabled = useVoiceEnabled();
+  const mayDictate = voiceEnabled && canPostCampaignMessages(userRole);
 
   const stopStream = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
