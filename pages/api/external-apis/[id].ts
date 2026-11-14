@@ -1,3 +1,4 @@
+import { TENANT_SOURCE_COLUMNS, PLATFORM_ADMIN_SOURCE_COLUMNS } from '../../../backend/services/externalApi/sourceColumns';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -103,19 +104,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const platformScopeGranted = platformScopeRequested && hasPlatformScope;
 
   if (req.method === 'GET') {
+    // EXPLICIT columns (e9 2026-11-14): never the encrypted OAuth pair; tenants get no headers / query params / key names.
     let query = supabase
       .from('external_api_sources')
-      .select('*')
+      .select(platformScopeGranted ? PLATFORM_ADMIN_SOURCE_COLUMNS : TENANT_SOURCE_COLUMNS)
       .eq('id', id);
     if (!platformScopeGranted) {
       query = query.eq('company_id', companyId);
     }
-    const { data, error } = await query.single();
+    // S2 (e9 2026-11-14): a row outside the caller's scope - e.g. a PLATFORM row (company_id NULL) read in ordinary
+    // company scope - is "not found" (404), never a 500; and the DB error text never reaches the client.
+    // The 404 is DELIBERATE CONCEALMENT: it answers the same for a missing row and for a row outside the caller's scope,
+    // so it does not reveal whether the row exists. It is NOT read-error-as-absent: a failed read (error set) stays a
+    // 500 below and is never reported as "not found".
+    const { data, error } = await query.maybeSingle();
     if (error) {
-      return res.status(500).json({
-        error: 'Failed to load external API',
-        detail: error.message,
-      });
+      return res.status(500).json({ error: 'Failed to load external API' });
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'External API not found' });
     }
     const { data: healthData } = await supabase
       .from('external_api_health')
@@ -300,7 +307,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!platformScopeGranted) {
       updateQuery = updateQuery.eq('company_id', companyId);
     }
-    const { data, error } = await updateQuery.select('*').single();
+    const { data, error } = await updateQuery.select(platformScopeGranted ? PLATFORM_ADMIN_SOURCE_COLUMNS : TENANT_SOURCE_COLUMNS).single();
 
     if (error) {
       return res.status(500).json({
@@ -320,12 +327,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!hasPlatformScope) {
       deleteQuery.eq('company_id', companyId);
     }
-    const { error } = await deleteQuery;
+    // S2: a delete that matched nothing (another scope's row, or a PLATFORM row in ordinary company scope) is a 404,
+    // not a silent 200 "success"; the DB error text never reaches the client.
+    const { data: deleted, error } = await deleteQuery.select('id');
     if (error) {
-      return res.status(500).json({
-        error: 'Failed to delete external API',
-        detail: error.message,
-      });
+      return res.status(500).json({ error: 'Failed to delete external API' });
+    }
+    if (!Array.isArray(deleted) || deleted.length === 0) {
+      return res.status(404).json({ error: 'External API not found' });
     }
     await invalidateCompanyConfigCacheForApiSource(id);
     return res.status(200).json({ success: true });

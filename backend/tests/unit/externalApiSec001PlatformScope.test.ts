@@ -105,24 +105,39 @@ jest.mock('../../db/supabaseClient', () => ({
       let op = 'select';
       let payload: Row | undefined;
       const builder: any = {};
-      builder.select = () => builder;
+      let columns: string | undefined;
+      // Projects the selected columns like PostgREST, so an explicit select list is observable.
+      builder.select = (cols?: string) => { if (typeof cols === 'string' && cols !== '*') columns = cols; return builder; };
       builder.eq = (col: string, val: unknown) => { filters[col] = val; return builder; };
       builder.update = (p: Row) => { op = 'update'; payload = p; return builder; };
       builder.delete = () => { op = 'delete'; return builder; };
-      const resolve = () => {
+      // PostgREST shapes (S2): .single() on no row -> an error; .maybeSingle() -> { data: null, error: null };
+      // a plain/array statement (e.g. delete().select()) -> { data: [], error: null }.
+      const resolve = (mode: 'single' | 'maybe' | 'many') => {
         if (table !== 'external_api_sources') return { data: null, error: null };
         const id = filters.id as string;
         const owner = id in ROW_OWNER ? ROW_OWNER[id] : undefined;
-        if (owner === undefined) return { data: null, error: { message: 'no rows' } };
         // A company filter is applied only when the route asked for one.
-        if ('company_id' in filters && filters.company_id !== owner) {
-          return { data: null, error: { message: 'no rows' } };
+        const matched = owner !== undefined && !('company_id' in filters && filters.company_id !== owner);
+        if (!matched) {
+          if (mode === 'single') return { data: null, error: { message: 'no rows' } };
+          return { data: mode === 'many' ? [] : null, error: null };
         }
         if (op !== 'select') writes.push({ op, filters: { ...filters }, payload });
-        return { data: { id, company_id: owner, name: 'catalog entry', base_url: 'https://real.example' }, error: null };
+        const full: Row = {
+          id, company_id: owner, name: 'catalog entry', base_url: 'https://real.example',
+          headers: { Authorization: 'Bearer real-secret' }, query_params: { key: 'k-secret' },
+          api_key_env_name: 'PLATFORM_KEY_VAR', api_key_name: 'x-api-key',
+          oauth_client_id_encrypted: 'enc-id', oauth_client_secret_encrypted: 'enc-secret',
+        };
+        const row: Row = columns
+          ? Object.fromEntries(columns.split(',').map((c) => c.trim()).filter((c) => c in full).map((c) => [c, full[c]]))
+          : full;
+        return { data: mode === 'many' ? [row] : row, error: null };
       };
-      builder.single = () => Promise.resolve(resolve());
-      builder.then = (r: any) => Promise.resolve(resolve()).then(r);
+      builder.single = () => Promise.resolve(resolve('single'));
+      builder.maybeSingle = () => Promise.resolve(resolve('maybe'));
+      builder.then = (r: any) => Promise.resolve(resolve('many')).then(r);
       return builder;
     },
   },
@@ -196,6 +211,43 @@ describe('C — a tenant admin cannot claim platform scope', () => {
   it('DELETE was already correct and stays correct', async () => {
     await call({ as: ATTACKER, method: 'DELETE', id: PLATFORM_ROW, scope: 'platform', companyId: COMPANY_A });
     expect(writes.filter((w) => w.op === 'delete')).toEqual([]);
+  });
+});
+
+/* ── S2 (e9 2026-11-14): ordinary company scope never reaches a PLATFORM row (company_id NULL) ── */
+describe('S2 — a company admin in ordinary scope cannot read, update or delete a PLATFORM row', () => {
+  it('GET (no flag) of a platform row: 404, no row returned', async () => {
+    const res = await call({ as: ATTACKER, method: 'GET', id: PLATFORM_ROW, companyId: COMPANY_A });
+    expect(res.statusCode).toBe(404);
+    expect(res.body?.api).toBeUndefined();
+  });
+  it('PUT (no flag) of a platform row: 404, no write', async () => {
+    const res = await call({ as: ATTACKER, method: 'PUT', id: PLATFORM_ROW, companyId: COMPANY_A, body: { name: 'pwned' } });
+    expect(res.statusCode).toBe(404);
+    expect(writes.filter((w) => w.op === 'update')).toEqual([]);
+  });
+  it('DELETE (no flag) of a platform row: 404, no delete', async () => {
+    const res = await call({ as: ATTACKER, method: 'DELETE', id: PLATFORM_ROW, companyId: COMPANY_A });
+    expect(res.statusCode).toBe(404);
+    expect(writes.filter((w) => w.op === 'delete')).toEqual([]);
+  });
+});
+
+/* ── e9 2026-11-14: EXPLICIT select lists - no OAuth material to anyone; no request config to tenants ── */
+describe('response columns are explicit', () => {
+  const SECRET_KEYS = ['oauth_client_id_encrypted', 'oauth_client_secret_encrypted'];
+  const TENANT_HIDDEN = [...SECRET_KEYS, 'headers', 'query_params', 'api_key_env_name', 'api_key_name'];
+  it('a company member GETting its OWN row gets no headers / query params / key names / OAuth', async () => {
+    const res = await call({ as: MEMBER_B, method: 'GET', id: TENANT_B_ROW, companyId: COMPANY_B });
+    expect(res.statusCode).toBe(200);
+    for (const k of TENANT_HIDDEN) expect(res.body.api).not.toHaveProperty(k);
+    expect(res.body.api).toMatchObject({ id: TENANT_B_ROW, name: 'catalog entry' }); // positive control
+  });
+  it('a platform admin GET keeps request config but never the OAuth pair', async () => {
+    const res = await call({ as: OWNER, method: 'GET', id: PLATFORM_ROW, scope: 'platform' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.api).toHaveProperty('headers');
+    for (const k of SECRET_KEYS) expect(res.body.api).not.toHaveProperty(k);
   });
 });
 
@@ -300,5 +352,18 @@ describe('F — a nonexistent id', () => {
   it('a missing id is rejected before any method dispatch', async () => {
     const res = await call({ as: MEMBER_B, method: 'GET', id: '' });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+/* ── e9 2026-11-14: the TENANT presets listing (static pin; the integration suite covers behaviour) ── */
+describe('presets GET, tenant branch', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const src: string = require('fs').readFileSync(require('path').resolve(__dirname, '../../../pages/api/external-apis/presets.ts'), 'utf8');
+  const tenantBranch = src.slice(src.indexOf('// TENANT branch (e9 2026-11-14)'));
+  it('lists PLATFORM presets only, via the explicit template columns, and never a key-variable name', () => {
+    expect(tenantBranch.length).toBeGreaterThan(100); // positive control: the branch was found
+    expect(tenantBranch).toMatch(/\.select\(TENANT_PRESET_TEMPLATE_COLUMNS\)\s*\n\s*\.eq\('is_preset', true\)\s*\n\s*\.is\('company_id', null\)/);
+    expect(tenantBranch).toMatch(/api_key_env_name: null,/);
+    expect(src).not.toMatch(/\.select\('\*'\)/);
   });
 });
