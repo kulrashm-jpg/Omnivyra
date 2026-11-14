@@ -21,6 +21,8 @@ import { quickEstimateCost } from '../../../../backend/services/jobCostEstimator
 import { resolveOrganizationPlanLimits } from '../../../../backend/services/planResolutionService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import type { CampaignPlanningJobPayload } from '../../../../backend/queue/jobProcessors/campaignPlanningProcessor';
 
 const BLOCKED_PLANS = new Set(['free', 'trial']);
@@ -74,6 +76,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'Access denied to company' });
   }
   const userId = access.userId;
+
+  // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess just authorized for access.userId.
+  // A company that cannot form a context answers the route's existing company denial.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, access.companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Access denied to company' });
+    throw err;
+  }
 
   // ── Validate input ────────────────────────────────────────────────────────
   if (!validateInput(body)) {
@@ -130,8 +142,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── Edge case #7: day-bucket cache version ────────────────────────────────
   let cacheVersion = toDayBucket();
   try {
-    const { data: campaign } = await supabase
-      .from('campaigns')
+    const { data: campaign } = await tenantTable('campaigns', tenant)
       .select('updated_at')
       .eq('id', campaignId as string)
       .maybeSingle();

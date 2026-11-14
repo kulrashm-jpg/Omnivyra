@@ -13,7 +13,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { decideNextAction } from '../../../../backend/lib/campaigns/continuityDecisionEngine';
@@ -57,26 +57,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'Authentication required. Please sign in again.', code: 'UNAUTHENTICATED' });
   }
 
-  // ── 1. Load campaign + resolve company_id ─────────────────────────────────
-  const [campaignRes, versionRes] = await Promise.all([
-    supabase
-      .from('campaigns')
-      .select('id, name, goal_type, topic_seed, source_blog_id')
-      .eq('id', id)
-      .maybeSingle(),
-    supabase
-      .from('campaign_versions')
-      .select('company_id, campaign_snapshot')
-      .eq('campaign_id', id)
-      .order('version', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-
-  const campaign = campaignRes.data;
-  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
-
-  const companyId = versionRes.data?.company_id ?? null;
+  // ── 1. Resolve company_id (derive-then-authorize) ──────────────────────────
+  // S2 derive-then-authorize (e9 ruling, as campaigns/[id]/source-recommendation): ownerCompanyOfRow answers ONLY
+  // which company owns the campaign (campaigns.company_id, NOT NULL since 20270217000025). SOURCE-OF-TRUTH MOVE: the
+  // company used to come from the newest campaign_versions row; C36: 0 mismatches in prod. The campaign row and its
+  // newest version are read below, after enforceRole, through the seam. Missing / unreadable / company-less: 404.
+  const companyId = await ownerCompanyOfRow('campaigns', id, 'campaign continuity: owner of the campaign');
   if (!companyId) {
     return res.status(404).json({ error: 'Campaign not found' });
   }
@@ -104,6 +90,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     throw err;
   }
 
+  // ── 1b. Load campaign + newest version under the authorized tenant ─────────
+  // Both answers are unchanged for an owned campaign: a missing campaign row, or one with no version in this
+  // company (the old "no company on the newest version" case), is still 404.
+  const [campaignRes, versionRes] = await Promise.all([
+    tenantTable('campaigns', tenant)
+      .select('id, name, goal_type, topic_seed, source_blog_id')
+      .eq('id', id)
+      .maybeSingle(),
+    tenantTable('campaign_versions', tenant)
+      .select('company_id, campaign_snapshot')
+      .eq('campaign_id', id)
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  const campaign = campaignRes.data;
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  if (!versionRes.data?.company_id) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+
   // Derive post count from daily_plan for effort signal
   const snapshot = versionRes.data?.campaign_snapshot as any;
   const postCount: number | null = Array.isArray(snapshot?.daily_plan)
@@ -111,8 +119,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     : null;
 
   // ── 2. Latest performance snapshot ────────────────────────────────────────
-  const { data: perf } = await supabase
-    .from('campaign_performance')
+  const { data: perf } = await tenantTable('campaign_performance', tenant)
     .select('evaluation_status, evaluation_score, evaluation_summary, metric_breakdown, confidence_level, confidence_reason, next_topic, suggested_blog_id, suggested_blog_type')
     .eq('campaign_id', id)
     .order('recorded_at', { ascending: false })
@@ -180,8 +187,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (historyPerf && historyPerf.length > 0) {
       // Join with campaigns to get names, topics, goal_types
       const campIds = [...new Set((historyPerf as any[]).map((p) => p.campaign_id as string))];
-      const { data: histCampaigns } = await supabase
-        .from('campaigns')
+      const { data: histCampaigns } = await tenantTable('campaigns', tenant)
         .select('id, name, goal_type, topic_seed')
         .in('id', campIds);
 
@@ -228,8 +234,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (recentPerf && recentPerf.length > 0) {
       const prevIds = (recentPerf as any[]).map((p) => p.campaign_id as string);
-      const { data: prevCampaigns } = await supabase
-        .from('campaigns')
+      const { data: prevCampaigns } = await tenantTable('campaigns', tenant)
         .select('id, name, goal_type, topic_seed')
         .in('id', prevIds);
 

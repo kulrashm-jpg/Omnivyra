@@ -16,6 +16,8 @@ import { getUnifiedCampaignBlueprint, assertBlueprintMutable, BlueprintImmutable
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { generatePrePlanningExplanation } from '../../../backend/services/aiGateway';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
@@ -58,8 +60,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const { data: campaign, error: campError } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is companyId, the company enforceCompanyAccess just authorized for access.userId (and
+    // bound this campaign to). A company that cannot form a context answers the route's campaign not-found.
+    let tenant: TenantContext;
+    try {
+      tenant = tenantContextFor({ userId: access.userId }, companyId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
+      throw err;
+    }
+
+    const { data: campaign, error: campError } = await tenantTable('campaigns', tenant)
       // R5: execution_status is absent in production; naming it 42703-failed
       // the whole read, so this route answered 404 for every campaign.
       // Pre-planning never branched on the value.
@@ -148,8 +159,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           });
         }
         if (err instanceof BlueprintImmutableError) {
-          const { data: camp } = await supabase
-            .from('campaigns')
+          const { data: camp } = await tenantTable('campaigns', tenant)
             .select(campaignLifecycleSelect())
             .eq('id', campaignId)
             .maybeSingle();

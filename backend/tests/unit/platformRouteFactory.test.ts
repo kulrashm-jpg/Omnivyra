@@ -89,6 +89,25 @@ describe('F-01 route factory', () => {
     expect(counter!.labels?.route).toBe('/api/platform-test');
   });
 
+  test('S2: an UNHANDLED retryable tenant-seam error -> 503 + Retry-After (not a 500, not a denial)', async () => {
+    const seamErr = Object.assign(new Error('TENANT_PARENT_UNREADABLE: campaigns: owner link unreadable (57014)'), {
+      name: 'TenantSeamError', code: 'TENANT_PARENT_UNREADABLE', retryable: true,
+    });
+    const wrapped = createApiRoute(async () => { throw seamErr; }, { route: '/api/platform-test' });
+    const res = fakeRes();
+    await wrapped(fakeReq(), res);
+    expect(res._status).toBe(503);
+    expect(res._headers['Retry-After']).toBe('5');
+    expect(res._json).toEqual({ error: "We couldn't load this right now. Please try again.", code: 'TEMPORARILY_UNAVAILABLE' });
+    expect(JSON.stringify(res._json)).not.toMatch(/57014|campaigns/);
+  });
+
+  test('S2 CONTROL: a NON-retryable seam error (and any other error) is still rethrown unchanged', async () => {
+    const denial = Object.assign(new Error('TENANT_MISMATCH: x'), { name: 'TenantSeamError', code: 'TENANT_MISMATCH', retryable: false });
+    const wrapped = createApiRoute(async () => { throw denial; }, { route: '/api/platform-test' });
+    await expect(wrapped(fakeReq(), fakeRes())).rejects.toBe(denial);
+  });
+
   test('exposeRequestId opt-in sets the header (off by default)', async () => {
     const wrapped = createApiRoute(async (_req, res) => { res.status(200).json({}); }, {
       exposeRequestId: true,

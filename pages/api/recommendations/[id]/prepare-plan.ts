@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole, Role } from '../../../../backend/services/rbacService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { seamDenial } from '../../../../backend/db/seamDenial';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
@@ -22,23 +24,43 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
-  const { data: recommendation, error: recError } = await supabase
+  // S2: pre-authorization BOOTSTRAP read, kept raw and narrowed to the owning company only. The access check below
+  // is getUserRole + a role allow-list (not a require*/enforce*/assert* primitive, so ownerCompanyOfRow's R10 shape
+  // cannot be met without changing the check). The snapshot itself is read through the seam after the role check.
+  const { data: owner, error: recError } = await supabase
     .from('recommendation_snapshots')
-    .select('*')
+    .select('company_id')
     .eq('id', id)
     .single();
 
-  if (recError || !recommendation) {
+  if (recError || !owner) {
     return res.status(404).json({ error: 'Recommendation not found' });
   }
 
-  const companyId = String(recommendation.company_id);
+  const companyId = String(owner.company_id);
   const { role, error: roleError } = await getUserRole(user.id, companyId);
   if (roleError === 'COMPANY_ACCESS_DENIED') {
     return res.status(403).json({ error: 'COMPANY_ACCESS_DENIED' });
   }
   if (!role || !(allowedRoles as Set<string>).has(role)) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+  }
+
+  // S2 tenant seam: the tenant is the snapshot's company, which getUserRole just authorized for this user. A company
+  // that cannot form a context answers the same 404 as a missing row.
+  let recommendationSnapshots: ReturnType<typeof tenantTable>;
+  try {
+    recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor({ userId: user.id }, companyId));
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Recommendation not found' });
+    throw err;
+  }
+  const { data: recommendation, error: snapshotError } = await recommendationSnapshots
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (snapshotError || !recommendation) {
+    return res.status(404).json({ error: 'Recommendation not found' });
   }
 
   const recommendationContext = {

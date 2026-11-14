@@ -57,8 +57,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const playbookContext = await fetchPlaybookContext(companyId, playbookReferenceId);
 
     let campaignOrigin: string | null = null;
-    const { data: campRow } = await supabase
-      .from('campaigns')
+    const { data: campRow } = await tenantTable('campaigns', tenant)
       .select('origin_source')
       .eq('id', campaignId)
       .maybeSingle();

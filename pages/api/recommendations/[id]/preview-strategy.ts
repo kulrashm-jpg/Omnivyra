@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole, Role } from '../../../../backend/services/rbacService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { previewStrategy } from '../../../../backend/services/aiGateway';
 import { createHash } from 'crypto';
@@ -29,18 +31,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const previewContext = req.body?.preview_context ?? null;
   const previewCompanyId = req.body?.company_id ?? null;
-  const { data: recommendation, error: recError } = await supabase
+  // S2: pre-authorization BOOTSTRAP read, kept raw and narrowed to the owning company only. The access check below
+  // is getUserRole + a role allow-list (not a require*/enforce*/assert* primitive, so ownerCompanyOfRow's R10 shape
+  // cannot be met without changing the check). The snapshot itself is read through the seam after the role check.
+  const { data: owner, error: recError } = await supabase
     .from('recommendation_snapshots')
-    .select('*')
+    .select('company_id')
     .eq('id', id)
     .single();
 
-  if ((recError || !recommendation) && !previewContext) {
+  if ((recError || !owner) && !previewContext) {
     return res.status(404).json({ error: 'Recommendation not found' });
   }
 
-  const companyId = recommendation?.company_id
-    ? String(recommendation.company_id)
+  const companyId = owner?.company_id
+    ? String(owner.company_id)
     : previewCompanyId
     ? String(previewCompanyId)
     : null;
@@ -53,6 +58,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   if (!role || !(allowedRoles as Set<string>).has(role)) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+  }
+
+  // S2 tenant seam: when the snapshot exists, the tenant is ITS company (never the body's company_id), which
+  // getUserRole just authorized for this user; the snapshot is read under it. A preview without a snapshot reads none.
+  let recommendation: any = null;
+  if (owner?.company_id) {
+    let recommendationSnapshots: ReturnType<typeof tenantTable>;
+    try {
+      recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor({ userId: user.id }, companyId));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Recommendation not found' });
+      throw err;
+    }
+    const { data: snapshotRow, error: snapshotError } = await recommendationSnapshots
+      .select('*')
+      .eq('id', id)
+      .single();
+    if ((snapshotError || !snapshotRow) && !previewContext) {
+      return res.status(404).json({ error: 'Recommendation not found' });
+    }
+    recommendation = snapshotRow ?? null;
   }
 
   const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });

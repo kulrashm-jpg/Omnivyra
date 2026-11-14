@@ -37,6 +37,7 @@ import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUserCompanyRole, getCompanyRoleIncludingInvited } from '../../../../backend/services/rbacService';
 import { requireCampaignAccess, type CampaignAccessResult } from '../../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor } from '../../../../backend/db/tenantTable';
 import { resolveEffectiveCampaignRole, isCompanyOverrideRole } from '../../../../backend/services/campaignRoleService';
 import {
   getLatestCampaignContextForCompany,
@@ -848,8 +849,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       : null;
     if (tentativeStart && /^\d{4}-\d{2}-\d{2}$/.test(tentativeStart) && supabase) {
       try {
-        const { data: campaignRow } = await supabase
-          .from('campaigns')
+        // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess authorized for this principal
+        // (campaignAccess, bound before moderation). Non-blocking like the rest of this check: a seam refusal is
+        // caught below and only skips the conflict warning.
+        const { data: campaignRow } = await tenantTable('campaigns', tenantContextFor(campaignAccess!, resolvedCompanyId))
           .select('user_id')
           .eq('id', resolvedCampaignId)
           .maybeSingle();

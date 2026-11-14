@@ -2,6 +2,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,9 +21,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId as string);
     if (!access) return;
 
-    // Get campaign summary data
-    const { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
+    // Get campaign summary data.
+    // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess just authorized for access.userId.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    const { data: campaign, error: campaignError } = await tenantTable('campaigns', tenant)
       .select('*')
       .eq('id', access.campaignId)
       .single();
@@ -72,6 +75,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found' });
     console.error('Error in campaign-summary API:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

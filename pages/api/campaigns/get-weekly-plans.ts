@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { detectExecutionDrift, type PublishedContent } from '../../../backend/services/executionDriftDetector';
 import type { WeekPlanLike } from '../../../backend/services/executionMomentumTracker';
 import { computeExecutionHealthScore, type ExecutionPressure, type ExecutionMomentum, type ExecutionDrift } from '../../../backend/services/executionHealthScorer';
@@ -141,8 +143,8 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
     let executionDrift: { state: string; signals: { schedule: number; topic: number; format: number }; driftScore: number; warnings?: string[] } | null = null;
     const plannedWeeks: WeekPlanLike[] = Array.isArray(blueprint?.weeks) ? (blueprint.weeks as unknown as WeekPlanLike[]) : [];
     if (plannedWeeks.length > 0) {
-      const { data: campaignRow } = await supabase
-        .from('campaigns')
+      // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess authorized for access.userId.
+      const { data: campaignRow } = await tenantTable('campaigns', tenantContextFor({ userId: access.userId }, access.companyId))
         .select('start_date')
         .eq('id', access.campaignId)
         .maybeSingle();
@@ -185,6 +187,7 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found' });
     console.error('Error in get-weekly-plans API:', error);
     res.status(500).json({
       error: 'Internal server error',

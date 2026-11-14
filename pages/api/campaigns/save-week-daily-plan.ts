@@ -1,10 +1,9 @@
 import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { updateActivity } from '../../../backend/services/executionPlannerService';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
-import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -62,8 +61,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
 
-    const { data: campaign } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is the company requireCampaignTenantAccess authorized (access.organizationId) for this
+    // principal and campaignId; every read and write below goes through it.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+
+    const { data: campaign } = await tenantTable('campaigns', tenant)
       .select('id, start_date')
       .eq('id', campaignId)
       .maybeSingle();
@@ -92,7 +94,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // reached through tenantChildTable, with the tenant built from the company requireCampaignTenantAccess
     // authorized (access.organizationId) for this campaignId. Both handles are made (and the campaign proven to
     // be in that tenant) BEFORE any write below, so a refusal writes nothing.
-    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
     const dailyPlansTable = await tenantChildTable('daily_content_plans', tenant, campaignId);
     const refinementsTable = await tenantChildTable('weekly_content_refinements', tenant, campaignId);
 

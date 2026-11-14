@@ -1,9 +1,10 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { updateActivity } from '../../../backend/services/executionPlannerService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
@@ -23,20 +24,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (authError || !user) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
-    const { data: dayPlan, error: dayPlanError } = await supabase
-      .from('daily_content_plans')
-      .select('id, campaign_id')
-      .eq('id', dayPlanId)
-      .maybeSingle();
-    if (dayPlanError) {
-      console.error('Error loading day plan for platform update:', dayPlanError);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
-    if (!dayPlan?.campaign_id) {
+    // S2 derive-then-authorize (ownerOfChildRow, R10): the day-plan row yields ONLY its campaign id (null for a
+    // missing, unreadable or campaign-less row: the 404 below; an unreadable row used to answer 500). That campaign
+    // is authorized right below by requireCampaignAccess, before anything else.
+    const dayPlanOwner = await ownerOfChildRow('daily_content_plans', String(dayPlanId), 'update platforms: campaign of the day plan');
+    if (!dayPlanOwner) {
       return res.status(404).json({ error: 'Day plan not found' });
     }
-    const access = await requireCampaignAccess(req, res, String(dayPlan.campaign_id));
+    const access = await requireCampaignAccess(req, res, dayPlanOwner.parentId);
     if (!access) return;
+
+    // S2 tenant seam: the plan rows are read through the campaign child handle, built from the company
+    // requireCampaignAccess authorized for access.userId and the campaign it checked.
+    const dailyPlansTable = await tenantChildTable('daily_content_plans', tenantContextFor({ userId: access.userId }, access.companyId), access.campaignId);
 
     // Platform mapping for smart suggestions
     const platformMapping: { [key: string]: string[] } = {
@@ -59,11 +59,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       'board'
     );
 
-    const { data: updatedPlan } = await supabase
-      .from('daily_content_plans')
+    const { data: updatedPlan } = await dailyPlansTable
       .select('*')
       .eq('id', dayPlanId)
-      .eq('campaign_id', access.campaignId)
       .maybeSingle();
 
     // Return suggested platforms based on content type
@@ -79,6 +77,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Day plan not found' });
     console.error('Error in update platforms API:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

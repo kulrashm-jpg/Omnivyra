@@ -15,6 +15,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
+import { ownerCompanyOfRow } from '../../../../backend/db/tenantTable';
 import { evaluateOutcome, getDefaultBenchmarks, type CampaignActuals } from '../../../../backend/lib/campaigns/outcomeEvaluator';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -35,22 +36,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // never trust ?companyId= from query/body. Without this gate, any caller
   // could authenticate against their own company and read another company's
   // campaign by guessing the path id.
-  const { data: campRow } = await supabase
-    .from('campaigns')
-    .select('company_id')
-    .eq('id', id)
-    .maybeSingle();
-  let campaignCompanyId = (campRow as { company_id?: string | null } | null)?.company_id ?? null;
-  if (!campaignCompanyId) {
-    const { data: versionRow } = await supabase
-      .from('campaign_versions')
-      .select('company_id')
-      .eq('campaign_id', id)
-      .order('version', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    campaignCompanyId = versionRow?.company_id ?? null;
-  }
+  //
+  // S2 derive-then-authorize (e9 ruling, as campaigns/[id]/source-recommendation): ownerCompanyOfRow answers ONLY
+  // which company owns the campaign (campaigns.company_id, NOT NULL since 20270217000025). The old fallback to the
+  // newest campaign_versions row is gone: it only fired for a missing or company-less campaigns row, and the campaign
+  // read below (pinned to that company) already answered 404 for both. Missing / unreadable / company-less: 404.
+  const campaignCompanyId = await ownerCompanyOfRow('campaigns', id, 'campaign performance: owner of the campaign');
   if (!campaignCompanyId) {
     return res.status(404).json({ error: 'Campaign not found' });
   }

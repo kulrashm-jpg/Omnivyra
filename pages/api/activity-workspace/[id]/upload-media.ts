@@ -31,9 +31,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
+import { tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -100,9 +99,36 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'source must be "user_upload" or "external_link".' });
   }
 
+  // ── Auth via campaign company ──────────────────────────────────────────
+  // S2 derive-then-authorize (R10): ownerOfChildRow answers ONLY the plan row's campaign id and that campaign's
+  // company (null for a missing, unreadable or company-less row at any hop: the route's not-found). The company is
+  // authorized right below, before the row itself is read through the seam.
+  const owner = await ownerOfChildRow('daily_content_plans', id, 'upload-media: owning campaign of the plan row');
+  if (!owner) {
+    return res.status(404).json({ error: `Row not found: ${id}` });
+  }
+  const access = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
+  if (!access) return;
+  const companyId = owner.companyId;
+
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the row's campaign and made
+  // before anything is read or written (row or storage), so a refusal writes nothing and answers the route's existing denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, owner.parentId).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return err;
+    throw err;
+  });
+  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+
   // ── Load row + assert it's attachment-required ─────────────────────────
-  const { data: rowData, error: rowError } = await supabase
-    .from('daily_content_plans')
+  const { data: rowData, error: rowError } = await plansTable
     .select('id, campaign_id, content_type, content, content_status, platform')
     .eq('id', id)
     .maybeSingle();
@@ -128,40 +154,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       code: 'UPLOAD_NOT_VALID_FOR_FORMAT',
     });
   }
-
-  // ── Auth via campaign company ──────────────────────────────────────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) {
-    return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  }
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
-
-  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
-  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the row's campaign and made
-  // before anything is written (row or storage), so a refusal writes nothing and answers the route's existing denial.
-  let seamTenant: TenantContext;
-  try {
-    seamTenant = tenantContextFor(access, companyId);
-  } catch (err) {
-    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
-    throw err;
-  }
-  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
-    if (err instanceof TenantSeamError) return err;
-    throw err;
-  });
-  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
 
   // ── Validate the media URL ─────────────────────────────────────────────
   const validation = await validateMediaUpload({

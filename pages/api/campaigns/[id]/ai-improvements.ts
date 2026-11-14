@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole } from '../../../../backend/services/rbacService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
+import { seamDenial } from '../../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -41,6 +43,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   }
 
+  // S2 tenant seam: the tenant is the campaign's company that getUserRole just authorized for this user (derived
+  // above from the campaign's versions, never a request value). A company that cannot form a context answers the
+  // route's existing campaign 404.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor({ userId: user.id }, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
+    throw err;
+  }
+
   const { data, error } = await supabase
     .from('ai_improvements')
     .select('id, improvement_type, suggestion, impact_score, implementation_status, created_at')
@@ -51,8 +64,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Failed to fetch AI improvements' });
   }
 
-  const { data: learningRow } = await supabase
-    .from('campaign_learnings')
+  const { data: learningRow } = await tenantTable('campaign_learnings', tenant)
     .select('performance, metrics, created_at')
     .eq('campaign_id', id)
     .order('created_at', { ascending: false })

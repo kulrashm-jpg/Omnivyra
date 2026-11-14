@@ -50,8 +50,17 @@ function chain(table?: string) {
     update: jest.fn(() => api),
     insert: jest.fn(() => api),
     // The tenant seam re-reads the parent campaign (under the tenant) through ownedDbTable before any write.
-    maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? (supabaseRows['campaigns:single'] ?? null) : null, error: null })),
+    // S2 tier 2: the plan row itself is now read through the seam handle too (the same fixture row as before).
+    maybeSingle: jest.fn(async () => ({
+      data: table === 'campaigns' || table === 'daily_content_plans' ? (supabaseRows[`${table}:single`] ?? null) : null,
+      error: null,
+    })),
     single: jest.fn(async () => ({ data: null, error: null })),
+    // S2 tier 2: ownerOfChildRow reads the owner links (plan -> campaign_id, campaign -> company_id) with .limit().
+    limit: jest.fn(async () => {
+      const r = table === 'campaigns' || table === 'daily_content_plans' ? (supabaseRows[`${table}:single`] as Record<string, unknown> | undefined | null) : null;
+      return { data: r ? [r] : [], error: null };
+    }),
     then(resolve: any) {
       return Promise.resolve({ data: null, error: null }).then(resolve);
     },

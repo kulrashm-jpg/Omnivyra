@@ -74,7 +74,12 @@ jest.mock('../../db/writeOwner', () => ({
       // Company ids are uuid-shaped (the tenant seam refuses anything else); the seam re-reads the parent
       // campaign under the tenant through ownedDbTable before any write.
       select: jest.fn(() => api),
-      maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? (supabaseRows['campaigns:single'] ?? null) : null, error: null })),
+      // S2 tier 2: the plan row itself is now read through the seam handle after authorization (the same fixture
+      // row as before).
+      maybeSingle: jest.fn(async () => ({
+        data: table === 'campaigns' || table === 'daily_content_plans' ? (supabaseRows[`${table}:single`] ?? null) : null,
+        error: null,
+      })),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload });
         return Promise.resolve({ data: null, error: null }).then(resolve);

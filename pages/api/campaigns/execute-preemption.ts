@@ -8,7 +8,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import {
   executeCampaignPreemption,
@@ -22,6 +21,8 @@ import { InvalidExecutionTransitionError, normalizeExecutionState } from '../../
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 function isApprovalRequired(
   r: ApprovalRequiredResult | ExecutePreemptionResult
@@ -70,6 +71,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!targetAccess) return;
 
+    // S2 tenant seam: the tenant is the company enforceCompanyAccess just authorized for this principal (and bound
+    // both campaigns to). A company that cannot form a context answers the route's campaign not-found.
+    let tenant: TenantContext;
+    try {
+      tenant = tenantContextFor({ userId: access.userId }, companyId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+      throw err;
+    }
+
     const justificationTrimmed = typeof justification === 'string' ? justification.trim() : '';
     if (!justificationTrimmed || justificationTrimmed.length < 15) {
       return res.status(400).json({
@@ -79,8 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const { data: initiatorCampaign, error: initErr } = await supabase
-      .from('campaigns')
+    const { data: initiatorCampaign, error: initErr } = await tenantTable('campaigns', tenant)
       .select('id, execution_status')
       .eq('id', initiatorCampaignId)
       .maybeSingle();
@@ -124,8 +134,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const { data: initiator } = await supabase
-      .from('campaigns')
+    const { data: initiator } = await tenantTable('campaigns', tenant)
       .select('id, duration_weeks')
       .eq('id', initiatorCampaignId)
       .maybeSingle();

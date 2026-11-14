@@ -7,7 +7,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runDurationNegotiation } from '../../../backend/services/CampaignNegotiationService';
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError, BlueprintMutabilityReadError } from '../../../backend/services/campaignBlueprintService';
@@ -15,6 +14,8 @@ import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../bac
 import { normalizeExecutionState } from '../../../backend/governance/ExecutionStateMachine';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -47,8 +48,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
-    const { data: campaign, error: campError } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is companyId, the company enforceCompanyAccess just authorized for access.userId (and
+    // bound this campaign to). A company that cannot form a context answers the route's campaign not-found.
+    let tenant: TenantContext;
+    try {
+      tenant = tenantContextFor({ userId: access.userId }, companyId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
+      throw err;
+    }
+
+    const { data: campaign, error: campError } = await tenantTable('campaigns', tenant)
       .select('id, duration_weeks, execution_status, blueprint_status')
       .eq('id', campaignId)
       .maybeSingle();

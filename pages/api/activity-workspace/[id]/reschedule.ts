@@ -46,7 +46,7 @@ import { randomInt, randomUUID } from 'crypto';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
-import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
+import { tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   normalizeCreatorFormat,
   isAttachmentRequiredFormat,
@@ -281,9 +281,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'publication_slot must be 60 characters or fewer.', code: 'MOVE_INVALID_SLOT' });
   }
 
+  // ── Resolve company + auth — BEFORE anything about the row's state is
+  // disclosed (format, lifecycle state, revision) ────────────────────────
+  // S2 derive-then-authorize (R10): ownerOfChildRow answers ONLY the row's campaign id and that campaign's company
+  // (null for a missing, unreadable or company-less row at any hop: the route's not-found). The company is
+  // authorized right below, before the row itself is read through the seam.
+  const owner = await ownerOfChildRow('daily_content_plans', id, 'activity reschedule: owning campaign of the plan row');
+  if (!owner) return res.status(404).json({ error: `Row not found: ${id}` });
+  const access = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
+  if (!access) return;
+  const companyId = owner.companyId;
+
+  // S2 tenant seam: daily_content_plans and scheduled_posts are children of campaigns. The tenant is the campaign's
+  // company that enforceCompanyAccess just authorized for this principal; both handles are pinned to the row's
+  // campaign (the linked post is proven to belong to it below) and made before anything is read or written, so a
+  // refusal writes nothing and answers the route's existing campaign-company denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  // The seam error itself (not null), so a RETRYABLE one answers 503 via seamDenial (05, 2026-11-14).
+  const seamRefused = (err: unknown): TenantSeamError => {
+    if (err instanceof TenantSeamError) return err;
+    throw err;
+  };
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, owner.parentId).catch(seamRefused);
+  const postsTable = await tenantChildTable('scheduled_posts', seamTenant, owner.parentId).catch(seamRefused);
+  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+  if (postsTable instanceof TenantSeamError) return seamDenial(res, postsTable, 403, { error: 'Campaign company could not be resolved.' });
+
   // ── Load row + assert attachment-required + currently scheduled-ish ────
-  const { data: rowData, error: rowError } = await supabase
-    .from('daily_content_plans')
+  const { data: rowData, error: rowError } = await plansTable
     .select('id, campaign_id, content_type, content, content_status, platform, scheduled_time, date, execution_id, week_number, updated_at')
     .eq('id', id)
     .maybeSingle();
@@ -308,44 +339,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // The plan version this request read (Closure-014C): copied now, it is what
   // the plan write below compares against.
   const planVersionRead: string | null = row.updated_at ?? null;
-  // ── Resolve company + auth — BEFORE anything about the row's state is
-  // disclosed (format, lifecycle state, revision) ────────────────────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
-
-  // S2 tenant seam: daily_content_plans and scheduled_posts are children of campaigns. The tenant is the campaign's
-  // company that enforceCompanyAccess just authorized for this principal; both handles are pinned to the row's
-  // campaign (the linked post is proven to belong to it below) and made before anything is written, so a refusal
-  // writes nothing and answers the route's existing campaign-company denial.
-  let seamTenant: TenantContext;
-  try {
-    seamTenant = tenantContextFor(access, companyId);
-  } catch (err) {
-    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
-    throw err;
-  }
-  // The seam error itself (not null), so a RETRYABLE one answers 503 via seamDenial (05, 2026-11-14).
-  const seamRefused = (err: unknown): TenantSeamError => {
-    if (err instanceof TenantSeamError) return err;
-    throw err;
-  };
-  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch(seamRefused);
-  const postsTable = await tenantChildTable('scheduled_posts', seamTenant, row.campaign_id).catch(seamRefused);
-  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
-  if (postsTable instanceof TenantSeamError) return seamDenial(res, postsTable, 403, { error: 'Campaign company could not be resolved.' });
-
   const contentType = normalizeCreatorFormat(row.content_type || '');
   if (!isAttachmentRequiredFormat(contentType)) {
     return res.status(409).json({

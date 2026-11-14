@@ -1,9 +1,8 @@
 import { seamDenial } from '../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
-import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -55,8 +54,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.log('No weekly refinements found:', error?.message);
       
       // Fallback to campaigns.weekly_themes if weekly refinements table doesn't exist
-      const { data: campaign } = await supabase
-        .from('campaigns')
+      const { data: campaign } = await tenantTable('campaigns', tenant)
         .select('weekly_themes, ai_generated_summary')
         .eq('id', access.campaignId)
         .single();

@@ -6,9 +6,10 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Used by ComprehensivePlanningInterface when generating daily plans from weekly plan.
  */
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { saveWeekPlans } from '../../../backend/services/executionPlannerService';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -57,8 +58,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
 
-    const { data: campaign } = await supabase
-      .from('campaigns')
+    // S2 tenant seam: the tenant is the company requireCampaignTenantAccess authorized (access.organizationId) for
+    // this principal and campaignId.
+    const tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+    const { data: campaign } = await tenantTable('campaigns', tenant)
       .select('id, start_date')
       .eq('id', campaignId)
       .maybeSingle();
@@ -126,6 +129,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       rowsInserted,
     });
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     console.error('Error in save-ai-daily-plans API:', error);
     return res.status(500).json({
       error: 'Internal server error',

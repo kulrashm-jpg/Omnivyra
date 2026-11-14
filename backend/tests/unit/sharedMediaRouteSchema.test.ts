@@ -14,6 +14,13 @@ const PLAN_COLUMNS_IN_PRODUCTION = ['id', 'campaign_id', 'content', 'content_typ
 const writes: Array<{ table: string; op: string; row: any }> = [];
 let accessGranted = true;
 const builtInputs: any[] = [];
+// The plan row as PostgREST serves it: a select naming a column production does not have fails 42703. Shared by the
+// raw client and the seam path (S2 tier 2: the owner link and the row itself are now read through ownedDbTable).
+function mockPlanRead(cols: string): { data: any; error: any } {
+  const bad = cols.split(',').map((s) => s.trim()).filter((c) => !PLAN_COLUMNS_IN_PRODUCTION.includes(c));
+  if (bad.length) return { data: null, error: { code: '42703', message: `column daily_content_plans.${bad[0]} does not exist` } };
+  return { data: { id: 'row-1', campaign_id: 'camp-1', content: JSON.stringify({ target_platforms: ['linkedin'] }), content_type: 'image', intent_type: 'creator' }, error: null };
+}
 
 jest.mock('../../../lib/platform/routeFactory', () => ({ createApiRoute: (h: unknown) => h }));
 jest.mock('../../services/creator/intelligence/workspace', () => ({ isCreatorWorkspaceLifecycleEnabled: () => true }));
@@ -31,11 +38,7 @@ jest.mock('../../db/supabaseClient', () => ({
         select: (c: string) => { cols = c; return api; },
         eq: () => api, limit: () => api, order: () => api, in: () => api,
         maybeSingle: async () => {
-          if (table === 'daily_content_plans') {
-            const bad = cols.split(',').map((s) => s.trim()).filter((c) => !PLAN_COLUMNS_IN_PRODUCTION.includes(c));
-            if (bad.length) return { data: null, error: { code: '42703', message: `column daily_content_plans.${bad[0]} does not exist` } };
-            return { data: { id: 'row-1', campaign_id: 'camp-1', content: JSON.stringify({ target_platforms: ['linkedin'] }), content_type: 'image', intent_type: 'creator' }, error: null };
-          }
+          if (table === 'daily_content_plans') return mockPlanRead(cols);
           if (table === 'campaigns') return { data: { company_id: 'c0a00000-0000-4000-8000-00000000000a' }, error: null };
           return { data: null, error: null };
         },
@@ -55,14 +58,31 @@ jest.mock('../../db/writeOwner', () => ({
       eq: async () => ({ data: null, error: null }),
       // Read: tenantChildTable('content_asset_attachment', …) verifies its parent content_core_asset rows (by
       // content_core_id) - served from the rows this request upserted, as the database would.
-      select: () => {
+      select: (c?: string) => {
+        const cols = c ?? '*';
         const r: any = {
           eq: (k: string, v: unknown) => { filters[k] = v; return r; },
-          limit: async () => ({
-            data: writes.filter((w) => w.table === table && w.op === 'upsert'
-              && Object.entries(filters).every(([k, v]) => w.row[k] === v)).map((w) => w.row),
-            error: null,
-          }),
+          limit: async () => {
+            // S2 tier 2: ownerOfChildRow reads the plan's campaign link, then the campaign's company, through the seam.
+            if (table === 'daily_content_plans') {
+              const out = mockPlanRead(cols);
+              return out.error ? out : { data: [out.data], error: null };
+            }
+            if (table === 'campaigns') return { data: [{ id: 'camp-1', company_id: 'c0a00000-0000-4000-8000-00000000000a' }], error: null };
+            return {
+              data: writes.filter((w) => w.table === table && w.op === 'upsert'
+                && Object.entries(filters).every(([k, v]) => w.row[k] === v)).map((w) => w.row),
+              error: null,
+            };
+          },
+          // S2 tier 2: the tenantChildTable parent re-read (campaigns under the tenant), the plan row itself, and the
+          // lineage reads (content_external_video_asset / content_core_asset, now under the tenant) - the same answers
+          // the raw client gave for them.
+          maybeSingle: async () => {
+            if (table === 'daily_content_plans') return mockPlanRead(cols);
+            if (table === 'campaigns') return { data: { id: 'camp-1', company_id: 'c0a00000-0000-4000-8000-00000000000a' }, error: null };
+            return { data: null, error: null };
+          },
         };
         return r;
       },
@@ -130,8 +150,14 @@ describe('P-SM1 shared-media on the production schema', () => {
 
   it('source guard: the plan select never asks for organization_id again', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../../pages/api/activity-workspace/[id]/shared-media.ts'), 'utf8');
-    const sel = src.match(/from\('daily_content_plans'\)[\s\S]*?\.select\('([^']*)'\)/);
-    expect(sel).not.toBeNull();
-    expect(sel![1].split(',').map((s) => s.trim())).not.toContain('organization_id');
+    // S2 tier 2: the plan row is read through the seam handle (tenantChildTable('daily_content_plans', ...) -> rowTable)
+    // as well as raw sibling reads. EVERY plan select is checked, and the seam read must be among them (positive control).
+    const raw = [...src.matchAll(/from\('daily_content_plans'\)[\s\S]*?\.select\('([^']*)'\)/g)].map((m) => m[1]);
+    const seam = [...src.matchAll(/tenantChildTable\('daily_content_plans'[\s\S]*?\.select\('([^']*)'\)/g)].map((m) => m[1]);
+    expect(seam.length).toBeGreaterThan(0);
+    expect(seam[0]).toContain('intent_type');
+    for (const sel of [...raw, ...seam]) {
+      expect(sel.split(',').map((s) => s.trim())).not.toContain('organization_id');
+    }
   });
 });

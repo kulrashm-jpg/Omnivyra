@@ -27,9 +27,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
+import { tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 // Phase-2 Step-3: creator-lifecycle persistence reconciles through the ONE
 // canonical write engine (preserves non-creator enrichments / prevents
 // blank-stale overwrite) while keeping the intent_type='creator' DB guard.
@@ -70,9 +69,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'daily_content_plans id is required in the path' });
   }
 
+  // ── Auth via campaign company (same pattern as upload-media) ───────────
+  // S2 derive-then-authorize (R10): ownerOfChildRow answers ONLY the row's campaign id and that campaign's company
+  // (null for a missing, unreadable or company-less row at any hop: the route's not-found). The company is
+  // authorized right below, before the row itself is read through the seam.
+  const owner = await ownerOfChildRow('daily_content_plans', id, 'creator-lifecycle: owning campaign of the plan row');
+  if (!owner) {
+    return res.status(404).json({ error: `Row not found: ${id}` });
+  }
+  const access = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
+  if (!access) return;
+  const companyId = owner.companyId;
+
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal, pinned to the row's campaign; the handle is made before
+  // the row is read or written, so a refusal reads and writes nothing and answers the route's existing
+  // campaign-company denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, owner.parentId).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return err;
+    throw err;
+  });
+  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+
   // ── Load row ───────────────────────────────────────────────────────────
-  const { data: rowData, error: rowError } = await supabase
-    .from('daily_content_plans')
+  const { data: rowData, error: rowError } = await plansTable
     .select(
       'id, campaign_id, execution_id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title',
     )
@@ -85,24 +112,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(404).json({ error: `Row not found: ${id}` });
   }
   const row = rowData as DailyContentPlanRow & { campaign_id: string };
-
-  // ── Auth via campaign company (same pattern as upload-media) ───────────
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns')
-      .select('company_id')
-      .eq('id', row.campaign_id)
-      .maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch {
-    /* fall through */
-  }
-  if (!companyId) {
-    return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  }
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
 
   const nowIso = new Date().toISOString();
 
@@ -211,21 +220,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.log('[WRITE_CONFLICT]', JSON.stringify({ campaign_id: row.campaign_id, execution_id: row.execution_id ?? id, source_writer: 'creator-lifecycle', invariant_violations: rec.invariant_violations }));
   }
 
-  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
-  // enforceCompanyAccess authorized for this principal, pinned to the row's campaign; the handle is made before the
-  // write, so a refusal writes nothing and answers the route's existing campaign-company denial.
-  let seamTenant: TenantContext;
-  try {
-    seamTenant = tenantContextFor(access, companyId);
-  } catch (err) {
-    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
-    throw err;
-  }
-  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
-    if (err instanceof TenantSeamError) return err;
-    throw err;
-  });
-  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+  // (S2: the seam handle pinned to the row's campaign was made right after authorization, above.)
 
   // Keep the belt-and-braces intent_type='creator' DB guard (never touch a
   // non-creator row) — canonical reconciliation decided WHAT to write.

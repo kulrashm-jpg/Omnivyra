@@ -1,10 +1,9 @@
 import { seamDenial } from '../../../../backend/db/seamDenial';
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
-import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
+import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError } from '../../../../backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -24,11 +23,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId);
     if (!access) return;
 
+    // S2 tenant seam: every read below goes through the seam with the tenant built from the company
+    // requireCampaignAccess authorized and the campaign id it checked (never the raw query value).
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+
     // Get campaign details (scoped by resolved company for defense-in-depth)
-    const { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
+    const { data: campaign, error: campaignError } = await tenantTable('campaigns', tenant)
       .select('*')
-      .eq('id', campaignId)
+      .eq('id', access.campaignId)
       .single();
 
     if (campaignError) {
@@ -36,10 +38,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: 'Failed to fetch campaign' });
     }
 
-    // Get weekly content refinements.
-    // S2 tenant seam: read through tenantChildTable (child of campaigns), with the tenant built from the
-    // company requireCampaignAccess authorized and the campaign id it checked (never the raw query value).
-    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    // Get weekly content refinements (child of campaigns, through tenantChildTable).
     const refinementsTable = await tenantChildTable('weekly_content_refinements', tenant, access.campaignId);
     const { data: refinements, error: refinementsError } = await refinementsTable
       .select('*')
@@ -50,10 +49,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Get performance data
-    const { data: performance, error: performanceError } = await supabase
-      .from('campaign_performance')
+    const { data: performance, error: performanceError } = await tenantTable('campaign_performance', tenant)
       .select('*')
-      .eq('campaign_id', campaignId)
+      .eq('campaign_id', access.campaignId)
       .order('week_number', { ascending: true });
 
     if (performanceError) {

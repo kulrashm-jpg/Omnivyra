@@ -7,7 +7,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
+import { seamDenial } from '../../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -20,8 +21,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Proposal id required' });
   }
 
-  const { data: proposal, error } = await supabase
-    .from('campaign_proposals')
+  // S2 derive-then-authorize (e9 ruling, as proposals/convert): ownerCompanyOfRow answers ONLY which company owns the
+  // proposal (null for a missing, unreadable or company-less row: the 404; an unreadable row used to answer 500
+  // before the access check). enforceCompanyAccess authorizes the caller for exactly that company, and only then is
+  // the proposal read, through the seam.
+  const organizationId = await ownerCompanyOfRow('campaign_proposals', id, 'proposal detail');
+  if (!organizationId) {
+    return res.status(404).json({ error: 'Proposal not found' });
+  }
+
+  const access = await enforceCompanyAccess({
+    req,
+    res,
+    companyId: organizationId,
+  });
+  if (!access) return;
+
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, organizationId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Proposal not found' });
+    throw err;
+  }
+
+  const { data: proposal, error } = await tenantTable('campaign_proposals', tenant)
     .select('*')
     .eq('id', id)
     .maybeSingle();
@@ -33,13 +57,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!proposal) {
     return res.status(404).json({ error: 'Proposal not found' });
   }
-
-  const access = await enforceCompanyAccess({
-    req,
-    res,
-    companyId: proposal.organization_id as string,
-  });
-  if (!access) return;
 
   const pd = (proposal.proposal_data as Record<string, unknown>) || {};
   return res.status(200).json({

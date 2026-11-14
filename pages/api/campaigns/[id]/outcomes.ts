@@ -9,17 +9,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { measureOutcomeScore, getOutcomeSnapshot } from '../../../../backend/services/outcomeTrackingService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { ownerCompanyOfRow } from '../../../../backend/db/tenantTable';
 import { requireAuth, requireCompanyAccess } from '../../../../backend/middleware/authMiddleware';
-
-async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from('campaigns')
-    .select('company_id')
-    .eq('id', campaignId)
-    .maybeSingle();
-  return (data as any)?.company_id ?? null;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
@@ -29,8 +20,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireAuth(req, res);
   if (!auth) return;
 
-  // Look up company ownership before checking access
-  const companyId = await getCompanyId(campaignId);
+  // Look up company ownership before checking access.
+  // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the campaign (the same
+  // campaigns.company_id as before; null for a missing, unreadable or company-less row: the same 404), and
+  // requireCompanyAccess authorizes the caller for exactly that company before anything else runs.
+  const companyId = await ownerCompanyOfRow('campaigns', campaignId, 'campaign outcomes: owner of the campaign');
   if (!companyId) return res.status(404).json({ error: 'Campaign not found' });
 
   const allowed = await requireCompanyAccess(auth.user.id, companyId, res);

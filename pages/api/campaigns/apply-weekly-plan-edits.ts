@@ -23,6 +23,8 @@ import {
 } from '../../../backend/db/campaignPlanStore';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -40,6 +42,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
+
+    // S2 tenant seam: the tenant is the company requireCampaignTenantAccess resolved and authorized for this
+    // principal (access.organizationId), never a request value. A company that cannot form a context answers the
+    // campaign not-found.
+    let tenant: TenantContext;
+    try {
+      tenant = tenantContextFor({ userId: access.userId }, access.organizationId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+      throw err;
+    }
 
     const weekNum = Math.floor(Number(weekNumber));
     if (!Number.isFinite(weekNum) || weekNum < 1) {
@@ -92,20 +105,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const result = applyWeeklyPlanEdits(week as Record<string, unknown>, ops);
 
-    const campaignRow = await supabase
-      .from('campaigns')
+    const campaignRow = await tenantTable('campaigns', tenant)
       .select('start_date')
       .eq('id', campaignId)
       .maybeSingle()
-      .then((r) => r.data);
-    const versionRow = await supabase
-      .from('campaign_versions')
+      .then((r: { data: unknown }) => r.data);
+    const versionRow = await tenantTable('campaign_versions', tenant)
       .select('company_id')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-      .then((r) => r.data);
+      .then((r: { data: { company_id?: string | null } | null }) => r.data);
 
     const companyId = versionRow?.company_id ? String(versionRow.company_id) : null;
     const campaignStartDate =

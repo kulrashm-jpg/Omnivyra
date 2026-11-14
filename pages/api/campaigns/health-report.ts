@@ -13,6 +13,8 @@ import { getLatestAnalyticsReport, getLatestLearningInsights } from '../../../ba
 import { ALL_ROLES } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -22,20 +24,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     let { companyId, campaignId } = req.body || {};
-    if (!companyId && campaignId) {
-      const { data, error } = await supabase
-        .from('campaign_versions')
-        .select('company_id')
-        .eq('campaign_id', campaignId)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      if (error) {
-        return res.status(500).json({ error: 'Failed to resolve company for campaign' });
-      }
-      companyId = data?.[0]?.company_id;
-    }
-
-    if (!companyId || !campaignId) {
+    // S2 tenant seam: the body-less case used to DERIVE companyId from any campaign_versions row BEFORE the access
+    // check (a raw cross-tenant read whose value was then discarded: companyId is replaced by the authorized
+    // organization below). Its only effect was the 404 for a campaign with no version; that check now runs AFTER
+    // requireCampaignTenantAccess, through the seam, with the same 500 / 404 answers.
+    const bodyNamedCompany = Boolean(companyId);
+    if (!campaignId) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
     }
 
@@ -60,6 +54,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const campaignAccess = await requireCampaignTenantAccess(req, res, String(campaignId));
     if (!campaignAccess) return;
     companyId = campaignAccess.organizationId;
+
+    let tenant: TenantContext;
+    try {
+      tenant = tenantContextFor({ userId: campaignAccess.userId }, campaignAccess.organizationId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { status: 'blocked', reason: 'campaign not found' });
+      throw err;
+    }
+    if (!bodyNamedCompany) {
+      const { data, error } = await tenantTable('campaign_versions', tenant)
+        .select('company_id')
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (error) {
+        return res.status(500).json({ error: 'Failed to resolve company for campaign' });
+      }
+      if (!data?.[0]?.company_id) {
+        return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
+      }
+    }
 
     const { data: ownershipRows, error: ownershipError } = await supabase
       .from('campaign_versions')

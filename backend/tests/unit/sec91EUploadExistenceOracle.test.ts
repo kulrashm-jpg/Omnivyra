@@ -37,6 +37,13 @@ jest.mock('../../db/writeOwner', () => ({
       select: () => api,
       eq: () => api,
       maybeSingle: async () => { mockDbReads.push(table); return { data: mockRows[table] ?? null, error: null }; },
+      // S2 tier 2: ownerOfChildRow reads the owner links (plan -> campaign_id, campaign -> company_id) with .limit();
+      // the same fixture rows are served (and recorded as reads) from the seam path.
+      limit: async () => {
+        mockDbReads.push(table);
+        const r = mockRows[table];
+        return { data: r ? [r] : [], error: null };
+      },
     };
     return api;
   },

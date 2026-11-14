@@ -4,6 +4,8 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -50,12 +52,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId);
     if (!access) return;
 
+    // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess just authorized for access.userId.
+    const tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+
     switch (action) {
       case 'get-overview':
         // Get campaign data — try campaigns table first, then campaign_versions snapshot (opportunity-promoted)
         let campaign: { id: string; name?: string; description?: string; status?: string; created_at?: string; weekly_themes?: unknown } | null = null;
-        const { data: campaignRow, error: campaignError } = await supabase
-          .from('campaigns')
+        const { data: campaignRow, error: campaignError } = await tenantTable('campaigns', tenant)
           .select('id, name, description, status, created_at, weekly_themes, company_id, duration_weeks')
           .eq('id', campaignId)
           .maybeSingle();
@@ -64,8 +68,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           campaign = campaignRow;
         }
         if (!campaign) {
-          const { data: versionRow } = await supabase
-            .from('campaign_versions')
+          const { data: versionRow } = await tenantTable('campaign_versions', tenant)
             .select('campaign_snapshot')
             .eq('campaign_id', campaignId)
             .order('created_at', { ascending: false })
@@ -231,6 +234,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { success: false, error: 'Campaign not found' });
     console.error('Error in hierarchical-navigation API:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

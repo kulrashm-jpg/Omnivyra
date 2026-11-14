@@ -7,8 +7,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 import {
   suggestDurationForOpportunity,
   suggestDurationFromQuestionnaire,
@@ -47,9 +48,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
     if (!access) return;
 
+    // S2 tenant seam: the tenant is companyId, the company enforceCompanyAccess just authorized for access.userId (and
+    // bound this campaign to). A company that cannot form a context answers the route's campaign not-found.
+    let tenant: TenantContext;
+    try {
+      tenant = tenantContextFor({ userId: access.userId }, companyId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
+      throw err;
+    }
+
     // DB first: if campaign already has duration (e.g. after restart), return it — never contradict
-    const { data: campRow } = await supabase
-      .from('campaigns')
+    const { data: campRow } = await tenantTable('campaigns', tenant)
       .select('duration_weeks')
       .eq('id', campaignId)
       .maybeSingle();

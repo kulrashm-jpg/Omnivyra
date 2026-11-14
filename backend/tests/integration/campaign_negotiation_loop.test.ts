@@ -23,7 +23,7 @@ import { recordGovernanceEvent } from '../../services/GovernanceEventService';
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
 import { supabase } from '../../db/supabaseClient';
 
-const COMPANY_ID = 'company-123';
+const COMPANY_ID = 'c0123000-0000-4000-8000-000000000123'; // S2: a real (uuid) company id - the tenant seam refuses non-uuid tenants
 const CAMPAIGN_ID = 'campaign-456';
 
 type ChainResult = { data: any; error: any };

@@ -120,10 +120,12 @@ const deleteStorageObject = discardQuarantinedObject;
  * non-image object already at the delivery key is the validated one. Unlike
  * committedRowReferencesObject this is fail-closed: a read error is "no".
  */
-async function readCommittedPromotion(id: string, objectPath: string): Promise<Record<string, unknown> | null> {
+/** S2: the caller's seam handle for daily_content_plans, pinned to the authorized row's campaign. */
+type PlansTable = Awaited<ReturnType<typeof tenantChildTable>>;
+
+async function readCommittedPromotion(plansTable: PlansTable, id: string, objectPath: string): Promise<Record<string, unknown> | null> {
   try {
-    const { data, error } = await supabase
-      .from('daily_content_plans')
+    const { data, error } = await plansTable
       .select('content')
       .eq('id', id)
       .maybeSingle();
@@ -143,10 +145,10 @@ async function readCommittedPromotion(id: string, objectPath: string): Promise<R
 /** Bounded wait for a concurrent winner's row commit (F-H3-1). */
 const PROMOTION_PROOF_ATTEMPTS = 5;
 const PROMOTION_PROOF_DELAY_MS = 250;
-async function awaitCommittedPromotion(id: string, objectPath: string): Promise<Record<string, unknown> | null> {
+async function awaitCommittedPromotion(plansTable: PlansTable, id: string, objectPath: string): Promise<Record<string, unknown> | null> {
   for (let attempt = 0; attempt < PROMOTION_PROOF_ATTEMPTS; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, PROMOTION_PROOF_DELAY_MS));
-    const committed = await readCommittedPromotion(id, objectPath);
+    const committed = await readCommittedPromotion(plansTable, id, objectPath);
     if (committed) return committed;
   }
   return null;
@@ -161,10 +163,9 @@ async function deletePriorDeliveredObject(objectPath: string): Promise<void> {
  * J1 H3-2 - does the committed row reference `objectPath` as its delivered
  * object? true also when the row cannot be read (fail safe: keep the object).
  */
-async function committedRowReferencesObject(id: string, objectPath: string): Promise<boolean> {
+async function committedRowReferencesObject(plansTable: PlansTable, id: string, objectPath: string): Promise<boolean> {
   try {
-    const { data, error } = await supabase
-      .from('daily_content_plans')
+    const { data, error } = await plansTable
       .select('content')
       .eq('id', id)
       .maybeSingle();
@@ -229,14 +230,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // a company the caller is an active member of. An activity that cannot be
   // loaded or authorized leaves the object alone: the caller has not shown it
   // is theirs to delete.
-  const { data: rowData, error: rowError } = await supabase
+  // S2: this pre-authorization BOOTSTRAP read stays raw and reads ONLY the row's campaign link: the route answers a
+  // failed company lookup 503 COMPANY_LOOKUP_FAILED (retryable) and a failed row read 500, which ownerOfChildRow
+  // would collapse into its uniform null. The row's content is read through the seam after authorization (below).
+  const { data: linkData, error: rowError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, content_type, content, content_status, platform, updated_at')
+    .select('campaign_id')
     .eq('id', id)
     .maybeSingle();
   if (rowError) return res.status(500).json({ error: 'Failed to load row.' });
-  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown; updated_at?: string | null };
+  if (!linkData) return res.status(404).json({ error: `Row not found: ${id}` });
+  const rowLink = linkData as { campaign_id: string };
 
   // ── Resolve company + authorize ───────────────────────────────────────
   let companyId: string | null = null;
@@ -244,7 +248,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { data: campaignRow, error: campaignError } = await supabase
       .from('campaigns')
       .select('company_id')
-      .eq('id', row.campaign_id)
+      .eq('id', rowLink.campaign_id)
       .maybeSingle();
     if (campaignError) throw campaignError;
     companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
@@ -252,7 +256,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(503).json({ error: 'Campaign company lookup failed. Please retry.', code: 'COMPANY_LOOKUP_FAILED' });
   }
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
+  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: rowLink.campaign_id });
   if (!access) return;
 
   // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
@@ -265,11 +269,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
     throw err;
   }
-  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, row.campaign_id).catch((err: unknown) => {
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, rowLink.campaign_id).catch((err: unknown) => {
     if (err instanceof TenantSeamError) return err;
     throw err;
   });
   if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+
+  // The activity itself, read through the seam now that its company is authorized (same columns and answers as the
+  // pre-S2 load; nothing has touched storage yet).
+  const { data: rowData, error: rowReadError } = await plansTable
+    .select('id, campaign_id, content_type, content, content_status, platform, updated_at')
+    .eq('id', id)
+    .maybeSingle();
+  if (rowReadError) return res.status(500).json({ error: 'Failed to load row.' });
+  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
+  const row = rowData as { id: string; campaign_id: string; content_type: string; content: unknown; updated_at?: string | null };
 
   // The caller-named object must belong to THIS authorized activity.
   if (!isActivityObjectPath(storagePath, id, companyId)) {
@@ -496,7 +510,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // move did not put it there. Accept it only if a concurrent winner has
     // COMMITTED a row recording this key as promoted (that winner's move is the
     // proof); otherwise refuse, retryably, and record nothing.
-    const committed = await awaitCommittedPromotion(id, storagePath);
+    const committed = await awaitCommittedPromotion(plansTable, id, storagePath);
     if (committed) {
       return res.status(200).json({
         success: true,
@@ -559,7 +573,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // points at it. Re-read the row and delete only when no committed row
     // references the key. If the re-read fails, keep the object (an orphan is
     // recoverable; a dangling public reference on a committed row is not).
-    if (!promotion.alreadyPromoted && !(await committedRowReferencesObject(id, storagePath))) {
+    if (!promotion.alreadyPromoted && !(await committedRowReferencesObject(plansTable, id, storagePath))) {
       await removeDeliveryObject(storagePath);
     }
     if (lostRace) {

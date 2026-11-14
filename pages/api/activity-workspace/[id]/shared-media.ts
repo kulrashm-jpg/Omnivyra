@@ -25,7 +25,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
-import { tenantTable, tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
+import { tenantTable, tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import { isCreatorWorkspaceLifecycleEnabled } from '@/backend/services/creator/intelligence/workspace';
 import {
   resolveSharedMediaInheritance, finalizeRowSharedMedia,
@@ -49,29 +49,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'daily_content_plans id required' });
 
-  const { data: row, error: rErr } = await supabase
-    .from('daily_content_plans')
-    // P-SM1: daily_content_plans has no organization_id column (selecting it failed every request);
-    // the tenant is the campaign's company, resolved and authorised below.
-    .select('id, campaign_id, content, content_type, intent_type')
-    .eq('id', id)
-    .maybeSingle();
-  if (rErr) return res.status(500).json({ error: 'load failed' });
-  if (!row) return res.status(404).json({ error: `Row not found: ${id}` });
-  if ((row as any).intent_type !== 'creator') {
-    return res.status(409).json({ error: 'Not a Creator row.', code: 'NOT_A_CREATOR_ROW' });
-  }
-
   // Auth via campaign company.
-  let companyId: string | null = null;
-  try {
-    const { data: c } = await supabase.from('campaigns').select('company_id')
-      .eq('id', (row as any).campaign_id).maybeSingle();
-    companyId = (c as any)?.company_id ?? null;
-  } catch { /* noop */ }
-  if (!companyId) return res.status(403).json({ error: 'Company unresolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
+  // S2 derive-then-authorize (R10): ownerOfChildRow answers ONLY the row's campaign id and that campaign's company
+  // (null for a missing, unreadable or company-less row at any hop: the route's not-found). The company is
+  // authorized right below, before the row itself is read through the seam.
+  const owner = await ownerOfChildRow('daily_content_plans', id, 'shared-media: owning campaign of the plan row');
+  if (!owner) return res.status(404).json({ error: `Row not found: ${id}` });
+  const access = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
   if (!access) return;
+  const companyId = owner.companyId;
 
   // S2 tenant seam: the tenant is the campaign's company that enforceCompanyAccess just authorized for this
   // principal (never a request value). Child handles below are made before the writes they guard; a seam refusal
@@ -89,6 +75,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (err instanceof TenantSeamError) return err;
     throw err;
   };
+
+  // The row itself, read through a handle pinned to its campaign (authorized above).
+  const rowTable = await tenantChildTable('daily_content_plans', seamTenant, owner.parentId).catch(seamRefused);
+  if (rowTable instanceof TenantSeamError) return seamDenied(rowTable);
+  const { data: row, error: rErr } = await rowTable
+    // P-SM1: daily_content_plans has no organization_id column (selecting it failed every request);
+    // the tenant is the campaign's company, resolved and authorised above.
+    .select('id, campaign_id, content, content_type, intent_type')
+    .eq('id', id)
+    .maybeSingle();
+  if (rErr) return res.status(500).json({ error: 'load failed' });
+  if (!row) return res.status(404).json({ error: `Row not found: ${id}` });
+  if ((row as any).intent_type !== 'creator') {
+    return res.status(409).json({ error: 'Not a Creator row.', code: 'NOT_A_CREATOR_ROW' });
+  }
 
   // Content core = card lineage; targets = the row's platform(s).
   let content: any = {};
@@ -203,12 +204,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       for (const o of (ovRowsV as any[]) ?? []) {
         ovMap[o.platform] = { kind: o.override_kind, asset_id: o.override_asset_id ?? undefined, asset_url: o.override_asset_url ?? null, thumbnail_url: o.override_thumbnail_url ?? null };
       }
-      const { data: ev } = await supabase
-        .from('content_external_video_asset')
+      // S2: lineage rows are read under this tenant (organization_id), never another tenant's same-key row.
+      const { data: ev } = await tenantTable('content_external_video_asset', seamTenant)
         .select('external_video_url, duration_seconds, aspect_ratio')
         .eq('content_core_id', contentCoreId).eq('asset_id', att.asset_id).maybeSingle();
-      const { data: ca2 } = await supabase
-        .from('content_core_asset').select('asset_url')
+      const { data: ca2 } = await tenantTable('content_core_asset', seamTenant).select('asset_url')
         .eq('content_core_id', contentCoreId).eq('asset_id', att.asset_id).maybeSingle();
       const { data: sibsV } = await supabase
         .from('daily_content_plans')
@@ -277,8 +277,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       for (const o of (ovRowsF as any[]) ?? []) {
         ovMap[o.platform] = { kind: o.override_kind, asset_id: o.override_asset_id ?? undefined, asset_url: o.override_asset_url ?? null };
       }
-      const { data: coreAsset } = await supabase
-        .from('content_core_asset').select('asset_url')
+      // S2: the core asset is read under this tenant (organization_id), never another tenant's same-key row.
+      const { data: coreAsset } = await tenantTable('content_core_asset', seamTenant).select('asset_url')
         .eq('content_core_id', contentCoreId).eq('asset_id', att.asset_id).maybeSingle();
 
       const { data: sibs } = await supabase

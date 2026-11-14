@@ -41,8 +41,19 @@ jest.mock('../../db/supabaseClient', () => {
 jest.mock('../../db/writeOwner', () => ({
   ownedDbTable: (t: string) => {
     const b = jest.requireActual('../helpers/routeAuthHarness').writeOwnerModule().ownedDbTable(t);
+    let wrote = false;
     const update = b.update;
-    b.update = (p: unknown) => { mockEvents.push(`db:update:${t}`); return update(p); };
+    b.update = (p: unknown) => { wrote = true; mockEvents.push(`db:update:${t}`); return update(p); };
+    for (const m of ['insert', 'upsert', 'delete']) {
+      const verb = b[m];
+      b[m] = (...a: unknown[]) => { wrote = true; return verb(...a); };
+    }
+    // S2 tier 2: owner lookups (ownerOfChildRow: plan -> campaign -> company) and the seam's parent re-read now read
+    // through ownedDbTable, not supabase.from - record a READ here exactly as the raw client records one (`db:<table>`),
+    // so the authorization-before-delete ordering pin keeps its meaning. A `.select()` chained after a write verb
+    // (returning the written rows) is not a read.
+    const select = b.select;
+    b.select = (...a: unknown[]) => { if (!wrote) mockEvents.push(`db:${t}`); return select(...a); };
     return b;
   },
 }));

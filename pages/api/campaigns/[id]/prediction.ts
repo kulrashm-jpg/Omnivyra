@@ -15,7 +15,7 @@ import { PaymentRequiredError } from '@/backend/services/billing/phase2Enforceme
 import { evaluatePredictionAccuracy } from '@/backend/services/predictionAccuracyService';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { supabase as adminSupabase } from '@/backend/db/supabaseClient';
-import { tenantChildTable, tenantContextFor, TenantSeamError } from '@/backend/db/tenantTable';
+import { tenantChildTable, tenantContextFor, ownerCompanyOfRow, TenantSeamError } from '@/backend/db/tenantTable';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
@@ -25,18 +25,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireAuth(req, res);
   if (!auth) return;
 
-  // Look up campaign's company (service-role to guarantee lookup succeeds)
-  const { data: campaign, error: campaignErr } = await adminSupabase
-    .from('campaigns')
-    .select('id, company_id, name, status')
-    .eq('id', campaignId)
-    .maybeSingle();
-
-  if (campaignErr || !campaign) {
+  // Look up campaign's company.
+  // S2 derive-then-authorize (e9 ruling): ownerCompanyOfRow answers ONLY which company owns the campaign (the same
+  // campaigns.company_id as before; name/status were never used). Missing, unreadable or company-less: the same 404
+  // (a company-less campaign used to reach requireCompanyAccess with a null company and be denied there).
+  const campaignCompanyId = await ownerCompanyOfRow('campaigns', campaignId, 'campaign prediction: owner of the campaign');
+  if (!campaignCompanyId) {
     return res.status(404).json({ error: 'Campaign not found' });
   }
 
-  const allowed = await requireCompanyAccess(auth.user.id, campaign.company_id, res);
+  const allowed = await requireCompanyAccess(auth.user.id, campaignCompanyId, res);
   if (!allowed) return;
 
   // ── POST .../accuracy ─────────────────────────────────────────────────────
@@ -54,11 +52,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET — fetch latest stored prediction ──────────────────────────────────
   if (req.method === 'GET') {
     // S2 tenant seam: campaign_predictions is a child of campaigns; read through tenantChildTable with the
-    // tenant built from the company requireCompanyAccess just authorized (campaign.company_id) for this user.
+    // tenant built from the company requireCompanyAccess just authorized (campaignCompanyId) for this user.
     let predictionsTable: Awaited<ReturnType<typeof tenantChildTable>>;
     try {
-      const tenant = tenantContextFor({ userId: auth.user.id }, campaign.company_id);
-      predictionsTable = await tenantChildTable('campaign_predictions', tenant, campaign.id);
+      const tenant = tenantContextFor({ userId: auth.user.id }, campaignCompanyId);
+      predictionsTable = await tenantChildTable('campaign_predictions', tenant, campaignId);
     } catch (err) {
       if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
       throw err;
@@ -103,14 +101,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const { data: company } = await adminSupabase
         .from('companies')
         .select('description, name')
-        .eq('id', campaign.company_id)
+        .eq('id', campaignCompanyId)
         .maybeSingle();
       description = (company as any)?.description ?? (company as any)?.name ?? '';
     }
 
     const planInput: CampaignPlanInput = {
       campaign_id:       campaignId,
-      company_id:        campaign.company_id,
+      company_id:        campaignCompanyId,
       description,
       strategy_context:  strategyContext,
       content_samples:   body.content_samples,

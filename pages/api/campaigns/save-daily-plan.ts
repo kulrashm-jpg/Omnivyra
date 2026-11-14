@@ -1,9 +1,10 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { applyDefaultRetention } from '../../../backend/services/contentRetentionLifecycle';
 import { buildDailyExecutionMetadata } from '../../../lib/dailyExecutionMetadata';
 import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 function warnDailyNormalizationIssue(input: { execution_id?: string; source_type?: string; platform?: string; content_type?: string }, context: string): void {
   if (!String(input.execution_id ?? '').trim()) {
@@ -34,6 +35,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const access = await requireCampaignTenantAccess(req, res, campaignId);
     if (!access) return;
+
+    // S2 tenant seam: daily_content_plans is a child of campaigns. The handle is built from the company
+    // requireCampaignTenantAccess authorized (access.organizationId) for this principal and pinned to the campaign it
+    // checked; every read of the plan rows below goes through it.
+    const dailyPlansTable = await tenantChildTable('daily_content_plans', tenantContextFor({ userId: access.userId }, access.organizationId), campaignId);
 
     const dailyExecutionRaw = dailyPlan?.dailyExecutionItem && typeof dailyPlan.dailyExecutionItem === 'object'
       ? dailyPlan.dailyExecutionItem
@@ -86,10 +92,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Save daily plan via execution engine (updateActivity or insertActivity)
     const platform = dailyExecution?.platform ?? dailyPlan.platform ?? 'linkedin';
     const contentType = dailyExecution?.content_type ?? dailyPlan.contentType ?? 'post';
-    const { data: existing } = await supabase
-      .from('daily_content_plans')
+    const { data: existing } = await dailyPlansTable
       .select('id')
-      .eq('campaign_id', campaignId)
       .eq('week_number', dailyPlan.weekNumber)
       .eq('day_of_week', dailyPlan.dayOfWeek)
       .eq('platform', platform)
@@ -117,8 +121,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (existing?.id) {
       await updateActivity(existing.id, updates, 'board');
-      const { data } = await supabase
-        .from('daily_content_plans')
+      const { data } = await dailyPlansTable
         .select('*')
         .eq('id', existing.id)
         .single();
@@ -136,8 +139,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         ...updates,
       };
       const { id } = await insertActivity(row as any, 'board');
-      const { data } = await supabase
-        .from('daily_content_plans')
+      const { data } = await dailyPlansTable
         .select('*')
         .eq('id', id)
         .single();
@@ -151,6 +153,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
     console.error('Error in save-daily-plan API:', error);
     res.status(500).json({
       error: 'Internal server error',

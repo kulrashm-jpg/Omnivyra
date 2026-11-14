@@ -3,6 +3,8 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -17,11 +19,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // query; POST/PUT: body). Bind THAT id to the caller's tenant before any
   // read/write (foreign/unknown → 404, non-member → 403).
   let callerId = user.id;
+  // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess authorized for access.userId.
+  let tenant: TenantContext | null = null;
   if (method === 'GET' || method === 'POST' || method === 'PUT') {
     const boundCampaignId = method === 'GET' ? campaignId : req.body?.campaignId;
     const access = await requireCampaignAccess(req, res, typeof boundCampaignId === 'string' ? boundCampaignId : '');
     if (!access) return;
     callerId = access.userId;
+    try {
+      tenant = tenantContextFor({ userId: access.userId }, access.companyId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Campaign not found' });
+      throw err;
+    }
   }
 
   try {
@@ -30,9 +40,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (action === 'weekly-alignments') {
           return await getWeeklyAlignments(campaignId as string, res);
         } else if (action === 'plan-overview') {
-          return await get12WeekPlanOverview(campaignId as string, res);
+          return await get12WeekPlanOverview(campaignId as string, tenant!, res);
         } else if (action === 'week-details') {
-          return await getWeekDetails(campaignId as string, weekNumber as string, res);
+          return await getWeekDetails(campaignId as string, weekNumber as string, tenant!, res);
         }
         break;
 
@@ -148,11 +158,10 @@ async function getWeeklyAlignments(campaignId: string, res: NextApiResponse) {
 }
 
 // Get 12-week plan overview
-async function get12WeekPlanOverview(campaignId: string, res: NextApiResponse) {
+async function get12WeekPlanOverview(campaignId: string, tenant: TenantContext, res: NextApiResponse) {
   try {
-    // Get campaign details
-    const { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
+    // Get campaign details (S2: through the seam, under the authorized tenant)
+    const { data: campaign, error: campaignError } = await tenantTable('campaigns', tenant)
       .select('*')
       .eq('id', campaignId)
       .single();
@@ -189,7 +198,7 @@ async function get12WeekPlanOverview(campaignId: string, res: NextApiResponse) {
 }
 
 // Get specific week details
-async function getWeekDetails(campaignId: string, weekNumber: string, res: NextApiResponse) {
+async function getWeekDetails(campaignId: string, weekNumber: string, tenant: TenantContext, res: NextApiResponse) {
   try {
     const { data: weekContent, error } = await supabase
       .from('content_plans')
@@ -203,9 +212,8 @@ async function getWeekDetails(campaignId: string, weekNumber: string, res: NextA
 
     if (error) throw error;
 
-    // Get performance data for the week
-    const { data: performance, error: perfError } = await supabase
-      .from('campaign_performance')
+    // Get performance data for the week (S2: through the seam, under the authorized tenant)
+    const { data: performance, error: perfError } = await tenantTable('campaign_performance', tenant)
       .select('*')
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber)

@@ -1,7 +1,8 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,9 +20,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await requireCampaignAccess(req, res, campaignId as string);
     if (!access) return;
 
-    // Get performance data for the campaign
-    const { data: performance, error } = await supabase
-      .from('campaign_performance')
+    // Get performance data for the campaign.
+    // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess authorized for access.userId.
+    const { data: performance, error } = await tenantTable('campaign_performance', tenantContextFor({ userId: access.userId }, access.companyId))
       .select('*')
       .eq('campaign_id', access.campaignId);
 
@@ -75,6 +76,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
   } catch (error) {
+    if (error instanceof TenantSeamError) return seamDenial(res, error, 404, { error: 'Campaign not found' });
     console.error('Error in performance-data API:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

@@ -526,8 +526,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       try {
         // ACTIVITY-SEC-001: same ownership scope. `executionId` is caller
         // supplied, so this lookup was likewise able to select another user's row.
-        const { data: existing } = await supabase
-          .from('scheduled_posts')
+        // S2 tenant seam: read through the handle pinned to the authorized campaign, so a post of ANOTHER campaign
+        // (or tenant) with the same user + execution id + platform is no longer matched at all.
+        const { data: existing } = await postsTable
           .select('id, status, error_code, platform_post_id')
           .eq('user_id', userId)
           .eq('repurpose_parent_execution_id', executionIdStr)
@@ -558,9 +559,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               return res.status(500).json({ error: updateErr.message });
             }
           }
-          // S2 tenant seam: this dedup lookup is not campaign-scoped (user + execution id + platform), so the match
-          // can be a post of ANOTHER campaign, which the seam-pinned update does not touch. That is a seam refusal:
-          // answer the guard's not-found instead of reporting (and later enqueuing) a post this request never wrote.
+          // S2 tenant seam: the lookup and the update are both pinned to the authorized campaign. If the update still
+          // matched nothing (the row left the campaign in between), answer the guard's not-found instead of reporting
+          // (and later enqueuing) a post this request never wrote.
           if (!Array.isArray(matchedRows) || matchedRows.length === 0) {
             return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
           }

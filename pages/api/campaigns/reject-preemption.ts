@@ -7,7 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { ownerOfChildRow } from '../../../backend/db/tenantTable';
 import { rejectPreemptionRequest, PreemptionValidationError } from '../../../backend/services/CampaignPreemptionService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
@@ -26,13 +26,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const { data: request, error: fetchError } = await supabase
-      .from('campaign_preemption_requests')
-      .select('id, initiator_campaign_id')
-      .eq('id', requestId)
-      .maybeSingle();
-
-    if (fetchError || !request) {
+    // S2 derive-then-authorize (ownerOfChildRow, R10): the request row (a child of its initiator campaign) yields ONLY
+    // that campaign id (null for a missing / unreadable / company-less request: the same 404). The campaign is bound
+    // to the caller's authorized company right below, before anything else; the row itself was never read further.
+    const requestOwner = await ownerOfChildRow('campaign_preemption_requests', String(requestId), 'reject preemption: initiator campaign of the request');
+    if (!requestOwner) {
       return res.status(404).json({ error: 'Preemption request not found' });
     }
 
@@ -40,7 +38,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       req,
       res,
       companyId,
-      campaignId: request.initiator_campaign_id,
+      campaignId: requestOwner.parentId,
       requireCampaignId: true,
     });
     if (!access) return;

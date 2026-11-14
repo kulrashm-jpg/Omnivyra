@@ -61,7 +61,7 @@ beforeEach(() => {
   mockDbReads.length = 0;
   mockRows = {
     daily_content_plans: { id: 'plan-a', campaign_id: 'camp-a', content_type: 'reel' },
-    campaigns: { company_id: 'company-a' },
+    campaigns: { company_id: 'c0a00000-0000-4000-8000-00000000000a' },  // S2: a real (uuid) company id - the tenant seam refuses non-uuid tenants
   };
   mockUser = { id: 'user-a' };
   mockAuthorized = true;
@@ -76,8 +76,8 @@ it('issues a no-overwrite signed token for a server-minted key in the PRIVATE qu
   expect(r.headers['Cache-Control']).toBe('no-store');
   expect(r.body.bucket).toBe('media-quarantine');
   expect(r.body.resumable_endpoint).toBe('/storage/v1/upload/resumable/sign');
-  expect(r.body.object_path).toMatch(/^company-a\/plan-a\/video\/\d+-[0-9a-f]{32}\.mp4$/);
-  expect(isActivityObjectPath(r.body.object_path, 'plan-a', 'company-a')).toBe(true);
+  expect(r.body.object_path).toMatch(/^c0a00000-0000-4000-8000-00000000000a\/plan-a\/video\/\d+-[0-9a-f]{32}\.mp4$/);
+  expect(isActivityObjectPath(r.body.object_path, 'plan-a', 'c0a00000-0000-4000-8000-00000000000a')).toBe(true);
   expect(r.body.token).toBe(`tok:media-quarantine:${r.body.object_path}`);
   expect(mockMem.events).toEqual([`sign-upload:media-quarantine:${r.body.object_path}:upsert=false`]);
 });
@@ -94,8 +94,8 @@ it('caller-supplied bucket / key / company are ignored', async () => {
     object_path: 'company-b/plan-b/video/x.mp4', storage_path: 'company-b/x.mp4', company_id: 'company-b',
   });
   expect(r.body.bucket).toBe('media-quarantine');
-  expect(r.body.object_path.startsWith('company-a/plan-a/')).toBe(true);
-  expect(mockMem.events.every((e) => e.startsWith('sign-upload:media-quarantine:company-a/plan-a/'))).toBe(true);
+  expect(r.body.object_path.startsWith('c0a00000-0000-4000-8000-00000000000a/plan-a/')).toBe(true);
+  expect(mockMem.events.every((e) => e.startsWith('sign-upload:media-quarantine:c0a00000-0000-4000-8000-00000000000a/plan-a/'))).toBe(true);
 });
 
 it('unauthenticated → 401 before any DB read or storage call', async () => {

@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
+import { ownerOfChildRow } from '../../../backend/db/tenantTable';
 import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -24,15 +25,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (method === 'GET' || method === 'POST' || method === 'PUT') {
     let requested: unknown = method === 'GET' ? campaignId : req.body?.campaignId;
     if (method === 'PUT' && !requested && req.body?.refinementId) {
-      const { data: refinementRow } = await supabase
-        .from('weekly_content_refinements')
-        .select('campaign_id')
-        .eq('id', String(req.body.refinementId))
-        .maybeSingle();
-      if (!refinementRow?.campaign_id) {
+      // S2 derive-then-authorize (ownerOfChildRow, R10): the refinement row yields ONLY its campaign id (null for a
+      // missing, unreadable or campaign-less row: the same 404). That campaign is authorized IN THIS BLOCK, as R10
+      // requires; the unconditional check below stays so every path visibly authorizes the same campaign.
+      const refinementOwner = await ownerOfChildRow('weekly_content_refinements', String(req.body.refinementId), 'weekly refinement PUT: campaign of the refinement');
+      if (!refinementOwner) {
         return res.status(404).json({ error: 'Refinement not found' });
       }
-      requested = String(refinementRow.campaign_id);
+      const refinementAccess = await requireCampaignAccess(req, res, refinementOwner.parentId);
+      if (!refinementAccess) return;
+      requested = refinementOwner.parentId;
     }
     const access = await requireCampaignAccess(req, res, typeof requested === 'string' ? requested : '');
     if (!access) return;

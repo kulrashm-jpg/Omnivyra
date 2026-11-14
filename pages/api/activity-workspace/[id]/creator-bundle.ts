@@ -25,7 +25,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { tenantChildTable, tenantContextFor, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
+import { tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError, type TenantContext } from '@/backend/db/tenantTable';
 import {
   isCreatorWorkspaceLifecycleEnabled,
   loadCreatorWorkspace,
@@ -49,26 +49,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'daily_content_plans id is required in the path' });
 
+  // Auth via campaign company (same pattern as upload-media / creator-lifecycle)
+  // S2 derive-then-authorize (R10): ownerOfChildRow answers ONLY the anchor row's campaign id and that campaign's
+  // company (null for a missing, unreadable or company-less row at any hop: the route's not-found). The company is
+  // authorized right below, before the anchor itself is read through the seam.
+  const owner = await ownerOfChildRow('daily_content_plans', id, 'creator-bundle: owning campaign of the anchor row');
+  if (!owner) return res.status(404).json({ error: `Row not found: ${id}` });
+  const access = await enforceCompanyAccess({ req, res, companyId: owner.companyId });
+  if (!access) return;
+  const companyId = owner.companyId;
+
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the anchor's campaign (every
+  // sibling is read by that campaign_id) and made before the anchor read and the first write, so a refusal reads and
+  // writes nothing and answers the route's existing campaign-company denial.
+  let seamTenant: TenantContext;
+  try {
+    seamTenant = tenantContextFor(access, companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, owner.parentId).catch((err: unknown) => {
+    if (err instanceof TenantSeamError) return err;
+    throw err;
+  });
+  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+
   // ── Anchor row ─────────────────────────────────────────────────────────
-  const { data: anchorData, error: anchorErr } = await supabase
-    .from('daily_content_plans')
+  const { data: anchorData, error: anchorErr } = await plansTable
     .select('id, campaign_id, execution_id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title')
     .eq('id', id)
     .maybeSingle();
   if (anchorErr) return res.status(500).json({ error: 'Failed to load row.' });
   if (!anchorData) return res.status(404).json({ error: `Row not found: ${id}` });
   const anchor = anchorData as DailyContentPlanRow & { campaign_id: string };
-
-  // Auth via campaign company (same pattern as upload-media / creator-lifecycle)
-  let companyId: string | null = null;
-  try {
-    const { data: campaignRow } = await supabase
-      .from('campaigns').select('company_id').eq('id', anchor.campaign_id).maybeSingle();
-    companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
-  } catch { /* fall through */ }
-  if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
 
   const nowIso = new Date().toISOString();
 
@@ -155,22 +170,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(422).json({ error: err instanceof Error ? err.message : String(err), code: 'SYNC_REJECTED' });
   }
 
-  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
-  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the anchor's campaign (every
-  // sibling was read by that campaign_id) and made before the first write, so a refusal writes nothing and answers
-  // the route's existing campaign-company denial.
-  let seamTenant: TenantContext;
-  try {
-    seamTenant = tenantContextFor(access, companyId);
-  } catch (err) {
-    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
-    throw err;
-  }
-  const plansTable = await tenantChildTable('daily_content_plans', seamTenant, anchor.campaign_id).catch((err: unknown) => {
-    if (err instanceof TenantSeamError) return err;
-    throw err;
-  });
-  if (plansTable instanceof TenantSeamError) return seamDenial(res, plansTable, 403, { error: 'Campaign company could not be resolved.' });
+  // (S2: the seam handle pinned to the anchor's campaign was made right after authorization, above.)
 
   // Persist EVERY variant content-only (scheduler content_status untouched).
   const updates = buildBundlePersistUpdates(result.bundle);

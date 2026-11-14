@@ -79,7 +79,18 @@ jest.mock('../../db/writeOwner', () => ({
       update: jest.fn((p: Row) => { updatePayload = p; return api; }),
       is: jest.fn((k: string, v: any) => { filters[`is:${k}`] = v; return api; }),
       // The tenant seam re-reads the parent campaign (uuid company) through ownedDbTable before any write.
-      maybeSingle: jest.fn(async () => ({ data: table === 'campaigns' ? { id: 'campaign-1', company_id: 'c0100000-0000-4000-8000-000000000001' } : null, error: null })),
+      // S2 tier 2: the plan row itself is now read through the seam handle too (the same fixture row as before).
+      maybeSingle: jest.fn(async () => ({
+        data: table === 'campaigns' ? { id: 'campaign-1', company_id: 'c0100000-0000-4000-8000-000000000001' }
+          : table === 'daily_content_plans' ? planRow : null,
+        error: null,
+      })),
+      // S2 tier 2: ownerOfChildRow reads the owner links (plan -> campaign_id, campaign -> company_id) with .limit().
+      limit: jest.fn(async () => {
+        if (table === 'daily_content_plans') return { data: planRow ? [planRow] : [], error: null };
+        if (table === 'campaigns') return { data: [{ id: 'campaign-1', company_id: 'c0100000-0000-4000-8000-000000000001' }], error: null };
+        return { data: [], error: null };
+      }),
       then(resolve: any) {
         if (updatePayload) ownedUpdates.push({ table, payload: updatePayload, filter: { ...filters } });
       // A compare-and-set update reports the row it matched (the post is in the

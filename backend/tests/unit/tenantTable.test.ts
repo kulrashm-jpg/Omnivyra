@@ -268,11 +268,15 @@ describe('ownerCompanyOfRow (derive-then-authorize, R10)', () => {
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'playbook by id')).resolves.toBe(HEX);
     expect(calls.map((c) => [c.op, c.args])).toEqual([['select', [col]], ['eq', ['id', 'c-1']], ['limit', [51]]]);
   });
-  it('missing, unreadable, NULL-tenant or non-uuid tenant -> null (uniform 404); a reason is required', async () => {
+  it('missing, NULL-tenant or non-uuid tenant -> null (uniform 404); an UNREADABLE row THROWS a retryable seam error; a reason is required', async () => {
     limitRows.campaigns = [];
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
     limitRows.campaigns = [{ [col]: A }]; limitError.campaigns = { code: '57014' };
-    await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
+    // S2 tier 2 (2026-11-14): a failed read is NOT an absent row - 503 via seamDenial / the route factory, never 404.
+    const unreadable = await ownerCompanyOfRow('campaigns', 'c-1', 'by id').then(() => null, (e: unknown) => e);
+    expect(unreadable).toBeInstanceOf(TenantSeamError);
+    expect((unreadable as TenantSeamError).code).toBe('TENANT_PARENT_UNREADABLE');
+    expect((unreadable as TenantSeamError).retryable).toBe(true);
     limitError = {}; limitRows.campaigns = [{ [col]: null }];
     await expect(ownerCompanyOfRow('campaigns', 'c-1', 'by id')).resolves.toBeNull();
     limitRows.campaigns = [{ [col]: 'not-a-uuid' }];

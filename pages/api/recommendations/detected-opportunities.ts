@@ -5,6 +5,8 @@ import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiSe
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
@@ -41,6 +43,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       requireCampaignId: true,
     });
     if (!access) return;
+
+    // S2 tenant seam: the tenant is the company enforceCompanyAccess just authorized for this principal (bound to the
+    // campaign). The snapshot lookups below are keyed by hashes / ids taken from audit metadata, so without the seam a
+    // value shared with another tenant's snapshot would pull that tenant's row in. A company that cannot form a
+    // context answers the guard's company denial.
+    let recommendationSnapshots: ReturnType<typeof tenantTable>;
+    try {
+      recommendationSnapshots = tenantTable('recommendation_snapshots', tenantContextFor(access, companyId));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Access denied to company' });
+      throw err;
+    }
 
     const defaultApiIds = await getCompanyDefaultApiIds(companyId);
     const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
@@ -109,8 +123,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
 
     if (snapshotHashes.size > 0) {
-      const { data: snapshotRows, error: snapshotError } = await supabase
-        .from('recommendation_snapshots')
+      const { data: snapshotRows, error: snapshotError } = await recommendationSnapshots
         .select('trend_topic,final_score,confidence,snapshot_hash')
         .in('snapshot_hash', Array.from(snapshotHashes));
       if (snapshotError) {
@@ -131,8 +144,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (recommendationIds.size > 0) {
-      const { data: recRows, error: recError } = await supabase
-        .from('recommendation_snapshots')
+      const { data: recRows, error: recError } = await recommendationSnapshots
         .select('trend_topic,final_score,confidence,id')
         .in('id', Array.from(recommendationIds));
       if (recError) {

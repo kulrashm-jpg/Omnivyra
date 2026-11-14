@@ -54,6 +54,12 @@ function chain(table: string) {
     update: jest.fn((p: Record<string, any>) => { updatePayload = p; return api; }),
     maybeSingle: jest.fn(async () => ({ data: supabaseRows[`${table}:single`] ?? null, error: null })),
     single: jest.fn(async () => ({ data: supabaseRows[`${table}:single`] ?? null, error: null })),
+    // S2 tier 2: ownerOfChildRow reads the owner links (plan -> campaign_id, campaign -> company_id) with .limit();
+    // the same fixture rows are served from the seam path.
+    limit: jest.fn(async () => {
+      const r = supabaseRows[`${table}:single`] as Record<string, unknown> | undefined | null;
+      return { data: r ? [r] : [], error: null };
+    }),
     then(resolve: any) {
       if (updatePayload) {
         ownedUpdates.push({ table, payload: updatePayload, filter: { ...filters } });
@@ -446,6 +452,8 @@ describe('PC5-4 upload gate and no bucket auto-creation', () => {
     expect((res.body as any).code).toBe('UPLOADS_UNAVAILABLE');
     expect((res.body as any).retryable).toBe(false);
     expect(mockedSupabase().from).not.toHaveBeenCalled();
+    // S2 tier 2: the row/owner lookups now go through the seam (ownedDbTable) - no seam read either.
+    expect(jest.requireMock('../../db/writeOwner').ownedDbTable).not.toHaveBeenCalled();
     expect(storageCalls.listBuckets).toBe(0);
     expect(mockedSupabase().storage.createBucket).not.toHaveBeenCalled();
     expect(storageCalls.upload).toHaveLength(0);

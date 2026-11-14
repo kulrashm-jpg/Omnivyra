@@ -14,6 +14,8 @@ import { withIdempotency } from '../../../../backend/middleware/withIdempotency'
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
+import { seamDenial } from '../../../../backend/db/seamDenial';
 import { evaluateScheduleEligibility } from '../../../../backend/services/campaignScheduleEligibilityService';
 import { scheduleStructuredPlan, ScheduleEligibilityError } from '../../../../backend/services/structuredPlanScheduler';
 import { acquireSchedulerLock, releaseSchedulerLock, SchedulerLockError } from '../../../../backend/services/SchedulerLockService';
@@ -33,12 +35,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const campaignId = access.campaignId;
 
+  // S2 tenant seam: the tenant is the campaign's company requireCampaignAccess just authorized for access.userId.
+  // A company that cannot form a context answers the route's existing campaign 404.
+  let tenant: TenantContext;
+  try {
+    tenant = tenantContextFor(access, access.companyId);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { success: false, error: 'Campaign not found' });
+    throw err;
+  }
+
   let lockId: string | null = null;
 
   try {
     // FIX 3: Ensure campaign has start_date
-    const { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
+    const { data: campaign, error: campaignError } = await tenantTable('campaigns', tenant)
       .select('start_date')
       .eq('id', campaignId)
       .single();
@@ -75,8 +86,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         error: 'No daily plans found for this campaign. Generate daily plans first.',
       });
     }
-    const { data: versionRow } = await supabase
-      .from('campaign_versions')
+    const { data: versionRow } = await tenantTable('campaign_versions', tenant)
       .select('campaign_snapshot')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })

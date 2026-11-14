@@ -376,9 +376,9 @@ export async function tenantChildTableOf(table: TenantChildTableName, ctx: Tenan
  * data, so by itself it grants nothing. The route MUST then run its access check on that company
  * (enforceCompanyAccessUniform / requireCapabilityUniform / requireTenantAccess) before any read or write of the row,
  * and only then build tenantContextFor(principal, owner). The tenant-seam gate allows this in pages/api and enforces
- * the order (rule R10). A NULL tenant, a missing or an unreadable row returns null: answer the uniform 404.
+ * the order (rule R10). A NULL tenant or a missing row returns null: answer the uniform 404. An UNREADABLE row throws a retryable TenantSeamError (TENANT_PARENT_UNREADABLE): 503, never 404.
  * A CHILD table (55, e9 ruling) is followed up its registered parent chain to the root's company: the row's link
- * column is read by id, then each hop by its parent key, up to MAX_HOPS. A missing / unreadable / NULL / non-uuid
+ * column is read by id, then each hop by its parent key, up to MAX_HOPS. A missing / NULL / non-uuid
  * value at ANY hop, a non-unique parent key whose rows disagree (or exceed MAX_PARENT_ROWS), or a chain that does not
  * reach a direct table -> null (the uniform 404). Never a guess.
  */
@@ -395,7 +395,7 @@ export async function ownerCompanyOfRow(table: TenantTableName | TenantChildTabl
  * Like ownerCompanyOfRow for a CHILD row, but also returns the row's DIRECT parent link (55: campaigns/index.ts
  * handleContentPlan only has a daily_content_plans id, and authorizes by CAMPAIGN with requireCampaignAccess plus a
  * campaign-mismatch check). Returns { companyId, parentId } - the owning company and the value of the row's link
- * column (e.g. its campaign_id) - and NOTHING else from the row. Same rules: null on any missing / unreadable / NULL /
+ * column (e.g. its campaign_id) - and NOTHING else from the row. Same rules: null on any missing / NULL /
  * ambiguous hop. The route must then authorize (by company or by the parent) before any read or write: rule R10.
  */
 export async function ownerOfChildRow(table: TenantChildTableName, id: string, reason: string): Promise<{ companyId: string; parentId: string } | null> {
@@ -414,7 +414,10 @@ export async function ownerOfChildRow(table: TenantChildTableName, id: string, r
 /** The single distinct non-empty value of `column` over rows where key = value (bounded); null otherwise. */
 async function readSingleLink(table: string, column: string, key: string, value: string): Promise<string | null> {
   const { data, error } = await (ownedDbTable(table as TenantTableName) as any).select(column).eq(key, value).limit(MAX_PARENT_ROWS + 1);
-  if (error) return null;
+  // A FAILED read is not an absent row (S2 tier 2, 2026-11-14): the owner lookups (ownerCompanyOfRow / ownerOfChildRow)
+  // throw a RETRYABLE seam error instead of returning null, so a statement timeout is a 503 (seamDenial / the route
+  // factory), never a permanent 404. Absent / NULL / ambiguous links still return null (the uniform 404).
+  if (error) throw new TenantSeamError('TENANT_PARENT_UNREADABLE', `${table}: owner link unreadable (${(error as { code?: string }).code ?? 'error'})`);
   const rows = (data ?? []) as Row[];
   if (rows.length === 0 || rows.length > MAX_PARENT_ROWS) return null;
   const vals = new Set(rows.map((r) => (r[column] === null || r[column] === undefined ? '' : String(r[column]))));

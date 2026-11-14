@@ -25,6 +25,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantChildTable, tenantContextFor, TenantSeamError } from '@/backend/db/tenantTable';
+import { seamDenial } from '@/backend/db/seamDenial';
 import { normalizeCreatorFormat, isAttachmentRequiredFormat } from '@/lib/shared/creatorGovernanceRegistry';
 import { resolveExpectedCategory } from '@/backend/services/mediaUploadValidationService';
 import { checkUploadAttemptAllowed } from '@/backend/services/creatorUploadAbuseGuardService';
@@ -61,21 +63,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!mime) return res.status(400).json({ error: 'mime_type is required.' });
   if (!sizeBytes || sizeBytes <= 0) return res.status(400).json({ error: 'size_bytes must be > 0.' });
 
-  const { data: rowData, error: rowError } = await supabase
+  // S2: this pre-authorization BOOTSTRAP read stays raw and reads ONLY the row's campaign link: the route answers a
+  // failed company lookup 503 COMPANY_LOOKUP_FAILED (retryable) and a failed row read 500, which ownerOfChildRow
+  // would collapse into its uniform null. The row itself is read through the seam after authorization (below).
+  const { data: linkData, error: rowError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, content_type')
+    .select('campaign_id')
     .eq('id', id)
     .maybeSingle();
   if (rowError) return res.status(500).json({ error: 'Failed to load row.' });
-  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
-  const row = rowData as { id: string; campaign_id: string; content_type: string };
+  if (!linkData) return res.status(404).json({ error: `Row not found: ${id}` });
+  const rowLink = linkData as { campaign_id: string };
 
   let companyId: string | null = null;
   try {
     const { data: campaignRow, error: campaignError } = await supabase
       .from('campaigns')
       .select('company_id')
-      .eq('id', row.campaign_id)
+      .eq('id', rowLink.campaign_id)
       .maybeSingle();
     if (campaignError) throw campaignError;
     companyId = (campaignRow as { company_id?: string } | null)?.company_id ?? null;
@@ -83,8 +88,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(503).json({ error: 'Campaign company lookup failed. Please retry.', code: 'COMPANY_LOOKUP_FAILED' });
   }
   if (!companyId) return res.status(403).json({ error: 'Campaign company could not be resolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: row.campaign_id });
+  const access = await enforceCompanyAccess({ req, res, companyId, campaignId: rowLink.campaign_id });
   if (!access) return;
+
+  // S2 tenant seam: daily_content_plans is a child of campaigns. The tenant is the campaign's company that
+  // enforceCompanyAccess just authorized for this principal; the handle is pinned to the row's campaign. A seam
+  // refusal answers the route's existing company denial (a failed parent read: 503 via seamDenial).
+  let plansTable: Awaited<ReturnType<typeof tenantChildTable>>;
+  try {
+    plansTable = await tenantChildTable('daily_content_plans', tenantContextFor(access, companyId), rowLink.campaign_id);
+  } catch (err) {
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Campaign company could not be resolved.' });
+    throw err;
+  }
+  const { data: rowData, error: rowReadError } = await plansTable
+    .select('id, campaign_id, content_type')
+    .eq('id', id)
+    .maybeSingle();
+  if (rowReadError) return res.status(500).json({ error: 'Failed to load row.' });
+  if (!rowData) return res.status(404).json({ error: `Row not found: ${id}` });
+  const row = rowData as { id: string; campaign_id: string; content_type: string };
 
   const contentType = normalizeCreatorFormat(row.content_type || '');
   const expectedCategory = isAttachmentRequiredFormat(contentType) ? resolveExpectedCategory(contentType) : null;

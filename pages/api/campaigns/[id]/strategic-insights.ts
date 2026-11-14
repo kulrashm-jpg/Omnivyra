@@ -7,27 +7,11 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { ownerCompanyOfRow } from '../../../../backend/db/tenantTable';
 import { getTrendSnapshots } from '../../../../backend/db/campaignVersionStore';
 import { getDecisionReportView } from '../../../../backend/services/decisionReportService';
 import { requireCompanyContext } from '../../../../backend/services/companyContextGuardService';
 import { runInApiReadContext } from '../../../../backend/services/intelligenceExecutionContext';
-
-async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data: ver } = await supabase
-    .from('campaign_versions')
-    .select('company_id')
-    .eq('campaign_id', campaignId)
-    .limit(1)
-    .maybeSingle();
-  if (ver?.company_id) return ver.company_id as string;
-  const { data: camp } = await supabase
-    .from('campaigns')
-    .select('company_id')
-    .eq('id', campaignId)
-    .maybeSingle();
-  return camp?.company_id ? (camp.company_id as string) : null;
-}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -42,13 +26,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = id;
 
   try {
-    const companyId =
-      (await getCompanyId(campaignId)) ??
-      (typeof req.query.companyId === 'string' ? req.query.companyId : null);
+    // S2 derive-then-authorize (e9 ruling, as campaigns/[id]/source-recommendation): ownerCompanyOfRow answers ONLY
+    // which company owns the campaign (campaigns.company_id, NOT NULL since 20270217000025), no longer "any
+    // campaign_versions row" (an unordered .limit(1) read). SOURCE-OF-TRUTH MOVE: versions -> campaigns; C36: 0
+    // mismatches in prod. The ?companyId= fallback for a campaign with no owner is unchanged, and the access check
+    // still binds the campaign to whichever company it authorizes (checkCampaignOwnership).
+    const ownerCompanyId = await ownerCompanyOfRow('campaigns', campaignId, 'campaign strategic insights: owner of the campaign');
+    const queryCompanyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
     const companyContext = await requireCompanyContext({
       req,
       res,
-      companyId,
+      companyId: ownerCompanyId ?? queryCompanyId,
       campaignId,
       requireCampaignId: false,
     });

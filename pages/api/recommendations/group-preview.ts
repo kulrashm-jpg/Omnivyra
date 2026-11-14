@@ -5,6 +5,8 @@ import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { tenantTable, tenantContextFor, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
@@ -43,7 +45,7 @@ const extractContentType = (utmContent?: string | null) => {
   return prefix ? prefix.toLowerCase() : null;
 };
 
-const loadLearningSignals = async (companyId: string) => {
+const loadLearningSignals = async (companyId: string, learningsTable: ReturnType<typeof tenantTable>) => {
   const { data: latestVersion } = await supabase
     .from('campaign_versions')
     .select('campaign_id, created_at')
@@ -57,8 +59,8 @@ const loadLearningSignals = async (companyId: string) => {
   }
 
   const campaignId = String(latestVersion.campaign_id);
-  const { data: learningRow } = await supabase
-    .from('campaign_learnings')
+  // S2 tenant seam: campaign_learnings is read under the company requireCompanyAccess authorized (the handle's tenant).
+  const { data: learningRow } = await learningsTable
     .select('performance, metrics, created_at')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
@@ -176,10 +178,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!(await requireCompanyAccess(rbacUserId, String(company_id), res))) return;
 
+    // S2 tenant seam: the tenant is exactly the company requireCompanyAccess just authorized for this principal
+    // (RECOMMENDATIONS-SEC-001 binds the authorization to the identifier that reaches the sinks). A company that
+    // cannot form a context answers the same denial as a non-member.
+    let learningsTable: ReturnType<typeof tenantTable>;
+    try {
+      learningsTable = tenantTable('campaign_learnings', tenantContextFor({ userId: rbacUserId }, String(company_id)));
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 403, { error: 'Access denied — you are not a member of this company' });
+      throw err;
+    }
+
     const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     let learningSignals: any = null;
     try {
-      learningSignals = await loadLearningSignals(company_id);
+      learningSignals = await loadLearningSignals(company_id, learningsTable);
     } catch {
       learningSignals = null;
     }

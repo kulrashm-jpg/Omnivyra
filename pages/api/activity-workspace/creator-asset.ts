@@ -9,6 +9,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { tenantTable, tenantContextFor, TenantSeamError } from '@/backend/db/tenantTable';
+import { seamDenial } from '@/backend/db/seamDenial';
 import { updateActivity, insertActivity } from '@/backend/services/executionPlannerService';
 import {
   isContentArchitectSession,
@@ -202,9 +204,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (camp?.company_id) companyId = camp.company_id as string;
     }
 
+    // S2: the principal the access check below authorized for companyId (seam context source).
+    let seamPrincipal: { userId: string | null | undefined } | null = null;
     if (isContentArchitectSession(req)) {
       const archAccess = checkContentArchitectAccess(req, res, companyId ?? undefined);
       if (archAccess === null) return;
+      seamPrincipal = archAccess ?? null;
     } else {
       const access = await enforceCompanyAccess({
         req,
@@ -214,6 +219,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         requireCampaignId: true,
       });
       if (!access) return;
+      seamPrincipal = access;
     }
 
     const validWeek = Number.isFinite(weekNumber) && weekNumber > 0 ? weekNumber : 1;
@@ -299,13 +305,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     };
 
-    const { data: latestCampaignVersion } = await supabase
-      .from('campaign_versions')
-      .select('version')
-      .eq('campaign_id', campaignId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // S2 tenant seam: campaign_versions is read under the company the access check above authorized (resolved from
+    // the campaign, never a request value). A Content Architect session on a company-less campaign authorizes no
+    // company, so there is no tenant to read under: the plan version then defaults to 1, as for a campaign with no
+    // version row.
+    let latestCampaignVersion: unknown = null;
+    if (companyId && seamPrincipal) {
+      let versionsTable: ReturnType<typeof tenantTable>;
+      try {
+        versionsTable = tenantTable('campaign_versions', tenantContextFor(seamPrincipal, companyId));
+      } catch (err) {
+        if (err instanceof TenantSeamError) return seamDenial(res, err, 500, { error: 'Failed to process creator asset request' });
+        throw err;
+      }
+      const { data } = await versionsTable
+        .select('version')
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      latestCampaignVersion = data;
+    }
     const currentPlanVersion = Math.max(1, Number((latestCampaignVersion as any)?.version || 1));
 
     const updatePayload: Record<string, unknown> = {

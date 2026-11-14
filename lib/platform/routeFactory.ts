@@ -145,6 +145,14 @@ export function createApiRoute(
             class: classifyError(err),
           });
         } catch { /* fail-safe */ }
+        // A RETRYABLE tenant-seam error (a parent / owner row that could not be READ) that the route did not handle is
+        // answered 503 + Retry-After, never a permanent denial or a 500 (S2, 2026-11-14). Duck-typed so lib/ takes no
+        // import on backend/. Every other error is rethrown exactly as before.
+        const seamErr = err as { name?: unknown; retryable?: unknown } | null;
+        if (seamErr && seamErr.name === 'TenantSeamError' && seamErr.retryable === true && !res.headersSent) {
+          res.setHeader('Retry-After', '5');
+          return res.status(503).json({ error: "We couldn't load this right now. Please try again.", code: 'TEMPORARILY_UNAVAILABLE' });
+        }
         // Rethrow — Next.js error handling stays byte-identical to today.
         throw err;
       }

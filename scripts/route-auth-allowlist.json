@@ -225,8 +225,8 @@
     },
     "pages/api/campaigns/[id]/continuity.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaign_versions; enforceRole on that company before reads/update.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceRole\\("
+      "reason": "S2 tier 2 (55, 2026-11-14): the campaign's own company is derived inside the seam (ownerCompanyOfRow('campaigns')) and immediately authorized with enforceRole; every later read goes through tenantTable.",
+      "evidence": "ownerCompanyOfRow\\('campaigns', id,[\\s\\S]*?enforceRole\\("
     },
     "pages/api/campaigns/[id]/forecast-vs-actual.ts": {
       "kind": "inline-binding",
@@ -250,13 +250,13 @@
     },
     "pages/api/campaigns/[id]/outcomes.ts": {
       "kind": "inline-binding",
-      "reason": "Company taken from the campaign row (getCompanyId), then requireCompanyAccess on it.",
-      "evidence": "getCompanyId\\(campaignId\\)[\\s\\S]*?requireCompanyAccess\\(auth\\.user\\.id, companyId"
+      "reason": "S2 tier 2 (55, 2026-11-14): ownerCompanyOfRow('campaigns') derives the campaign's own company, then requireCompanyAccess on exactly that company.",
+      "evidence": "ownerCompanyOfRow\\('campaigns', campaignId,[\\s\\S]*?requireCompanyAccess\\(auth\\.user\\.id, companyId"
     },
     "pages/api/campaigns/[id]/performance.ts": {
       "kind": "inline-binding",
-      "reason": "Company derived from campaigns/campaign_versions, enforceRole on it, and queries filter company_id.",
-      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceRole\\([\\s\\S]*?\\.eq\\('company_id', campaignCompanyId\\)"
+      "reason": "S2 tier 2 (55, 2026-11-14): ownerCompanyOfRow('campaigns') derives the campaign's own company, enforceRole authorizes it, and the read is scoped to that company.",
+      "evidence": "ownerCompanyOfRow\\('campaigns', id,[\\s\\S]*?enforceRole\\([\\s\\S]*?\\.eq\\('company_id', campaignCompanyId\\)"
     },
     "pages/api/campaigns/[id]/platform-allocation-advice.ts": {
       "kind": "inline-binding",
@@ -265,8 +265,8 @@
     },
     "pages/api/campaigns/[id]/prediction.ts": {
       "kind": "inline-binding",
-      "reason": "Campaign row loaded, then requireCompanyAccess on the campaign's own company_id.",
-      "evidence": "requireCompanyAccess\\(auth\\.user\\.id, campaign\\.company_id"
+      "reason": "S2 tier 2 (55, 2026-11-14): ownerCompanyOfRow('campaigns') derives the campaign's own company, then requireCompanyAccess on exactly that company.",
+      "evidence": "ownerCompanyOfRow\\('campaigns', campaignId,[\\s\\S]*?requireCompanyAccess\\(auth\\.user\\.id, campaignCompanyId"
     },
     "pages/api/campaigns/[id]/propose-frequency-rebalance.ts": {
       "kind": "inline-binding",

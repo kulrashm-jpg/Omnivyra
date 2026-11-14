@@ -7,7 +7,6 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import {
   executePreemptionFromRequest,
@@ -19,6 +18,8 @@ import { InvalidExecutionTransitionError, normalizeExecutionState } from '../../
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { tenantTable, tenantChildTable, tenantContextFor, ownerOfChildRow, TenantSeamError, type TenantContext } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -61,8 +62,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const companyAccess = await enforceCompanyAccess({ req, res, companyId });
     if (!companyAccess) return;
 
-    const { data: request, error: fetchError } = await supabase
-      .from('campaign_preemption_requests')
+    // S2 derive-then-authorize (ownerOfChildRow, R10): campaign_preemption_requests is a child of its INITIATOR
+    // campaign. ownerOfChildRow yields ONLY that campaign id and its company (null for a missing / unreadable /
+    // company-less request: the same 404 as before). The initiator campaign is bound to the authorized companyId
+    // right here, before the request row itself is read; a foreign request answers the binding's 404, exactly what
+    // the (unchanged) initiator binding below answered before. The request is then read through the seam.
+    const requestOwner = await ownerOfChildRow('campaign_preemption_requests', String(requestId), 'approve preemption: initiator campaign of the request');
+    if (!requestOwner) {
+      return res.status(404).json({ error: 'Preemption request not found' });
+    }
+    const requestOwnerAccess = await enforceCompanyAccess({ req, res, companyId, campaignId: requestOwner.parentId, requireCampaignId: true });
+    if (!requestOwnerAccess) return;
+
+    // S2 tenant seam: the tenant is the company enforceCompanyAccess authorized for this principal above.
+    let tenant: TenantContext;
+    let requestsTable: Awaited<ReturnType<typeof tenantChildTable>>;
+    try {
+      tenant = tenantContextFor({ userId: companyAccess.userId }, companyId);
+      requestsTable = await tenantChildTable('campaign_preemption_requests', tenant, requestOwner.parentId);
+    } catch (err) {
+      if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Preemption request not found' });
+      throw err;
+    }
+
+    const { data: request, error: fetchError } = await requestsTable
       .select('id, initiator_campaign_id, target_campaign_id, status')
       .eq('id', requestId)
       .maybeSingle();
@@ -71,8 +94,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Preemption request not found' });
     }
 
-    const { data: initiatorCampaign, error: initErr } = await supabase
-      .from('campaigns')
+    const { data: initiatorCampaign, error: initErr } = await tenantTable('campaigns', tenant)
       .select('id, execution_status')
       .eq('id', request.initiator_campaign_id)
       .maybeSingle();
@@ -97,8 +119,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // CROSS-TENANT FIX: the request's TARGET is the campaign the approval preempts - bind it to the same company
     // (a request row created before the fix may name a target OWNED BY ANOTHER COMPANY). The service re-checks both.
     // ORDER MATTERS: both bindings precede assertCampaignNotFinalized, whose BLOCKED branch is a governance write.
-    // (The request and initiator reads above are deliberately unbound: they only find the campaigns to bind; no write
-    // happens before both bindings, and a foreign / unknown row answers the same 404.)
+    // (The request and initiator reads above only find the campaigns to bind - S2: both now run through the seam under the
+    // authorized company; no write happens before both bindings, and a foreign / unknown row answers a 404.)
     const targetAccess = await enforceCompanyAccess({
       req,
       res,
@@ -130,8 +152,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const result = await executePreemptionFromRequest(requestId, justificationTrimmed, companyId);
 
-    const { data: initiator } = await supabase
-      .from('campaigns')
+    const { data: initiator } = await tenantTable('campaigns', tenant)
       .select('id, duration_weeks')
       .eq('id', request.initiator_campaign_id)
       .maybeSingle();
